@@ -1,0 +1,6 @@
+# For dynamic scraping and download of papers.cool.
+# Install: pip install -r requirements.txt
+# Then: playwright install chromium (for fetch_paper_dynamic, download_paper, etc.)
+playwright>=1.40.0
+requests>=2.28.0
+beautifulsoup4>=4.12.0

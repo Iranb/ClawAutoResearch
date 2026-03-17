@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "title": "A Great Paper on Transformers",
+      "link": "https://arxiv.org/abs/2401.00001",
+      "published": "2024-01-01",
+      "summary": "We propose...",
+      "feed_title": "NeurIPS",
+      "feed_url": "https://papers.cool/venue/NeurIPS/feed"
+    },
+    {
+      "title": "CVPR 2024 Paper",
+      "link": "https://papers.cool/arxiv/2402.12345",
+      "published": "2024-02-01",
+      "summary": "Abstract here.",
+      "feed_title": "CVPR",
+      "feed_url": "https://papers.cool/venue/CVPR/feed"
+    },
+    {
+      "title": "Random Blog Post",
+      "link": "https://example.com/blog/123",
+      "published": "2024-03-01",
+      "summary": "Not a paper.",
+      "feed_title": "Blog",
+      "feed_url": "https://example.com/feed"
+    }
+  ],
+  "feeds_count": 2
+}

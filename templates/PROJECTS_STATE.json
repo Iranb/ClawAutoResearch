@@ -1,0 +1,12 @@
+{
+  "_comment": "Master registry for all parallel research projects. Updated by /research-queue after every stage transition.",
+  "updated_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "gpu_allocation": {
+    "0": null,
+    "1": null,
+    "2": null,
+    "3": null
+  },
+  "total_gpu_hours_used": 0,
+  "projects": []
+}

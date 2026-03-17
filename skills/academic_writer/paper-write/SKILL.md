@@ -1,0 +1,147 @@
+---
+name: paper-write
+description: "Write paper sections in LaTeX following PAPER_PLAN. Each section is reviewed by Cross-Reviewer Agent before moving to the next. Fetches real citations from DBLP/CrossRef."
+argument-hint: "[section name or 'all']"
+allowed-tools:
+  - Bash(*)
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
+  - Agent
+---
+
+# Paper Write
+
+Section-by-section LaTeX generation with Cross-Reviewer quality gate after each section.
+
+## Input
+
+> **File ownership**: Write ONLY to `{PROJ}/academic_writer/`. Read from `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/analyzer/`, `{PROJ}/researcher/`.
+> `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+
+- `{PROJ}/academic_writer/PAPER_PLAN.md` — outline, claims, figure assignments
+- `{PROJ}/analyzer/NARRATIVE_REPORT.md` — experimental results
+- `{PROJ}/academic_writer/paper/figures/` — figures (copied from `{PROJ}/analyzer/figures/` at paper-phase start)
+- `{PROJ}/researcher/LITERATURE.md` — related work for citations
+
+## Writing Order
+
+Write sections in this order (each gated by Cross-Reviewer):
+
+```
+1. Method        (most factual, clearest to write)
+2. Experiments   (directly from NARRATIVE_REPORT)
+3. Related Work  (from LITERATURE.md)
+4. Introduction  (after contributions are clear)
+5. Conclusion    (after full paper is drafted)
+6. Abstract      (very last — 4-5 sentence summary)
+```
+
+## Per-Section Process
+
+### Step A: Write Draft
+
+Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
+
+**Citation rule**: Fetch every citation from real APIs — do not invent BibTeX:
+```
+# DBLP (preferred for CS papers)
+web_fetch https://dblp.org/search/publ/api?q=[author+title keywords]&format=bibtex&h=3
+
+# CrossRef (fallback)
+web_fetch https://api.crossref.org/works?query=[title]&rows=3
+```
+
+Add each entry to `{PROJ}/academic_writer/paper/refs.bib`. Use `[CITATION NEEDED: author year]` as placeholder if a paper cannot be found — never invent BibTeX.
+
+**Writing standards** (from Academic Writer Agent SOUL.md):
+- Abstract: 4-5 sentences (motivation / problem / method / result / implication)
+- Introduction: end with numbered contribution list
+- All tables: `\booktabs` package (no vertical rules)
+- All figures: vector PDF format
+- Avoid: "In this paper, we…", "It is worth noting that…"
+
+### Step B: Cross-Reviewer Prose Check
+
+After drafting each section, send it to the **Cross-Reviewer Agent**:
+
+```
+sessions_send agent="cross-reviewer":
+
+CROSS_REVIEW_REQUEST
+mode: prose
+context: [paper domain, target venue, section position in paper]
+
+Section: [section name]
+Key claims this section must support:
+[list from PAPER_PLAN.md Claims-Evidence Matrix]
+
+LaTeX source:
+[full section .tex content]
+
+END_REQUEST
+```
+
+Wait for response. Parse the structured `## Prose Review` output:
+
+- **PUBLICATION_READY** → save section, move to next
+- **NEEDS_REVISION** → apply all line-level edits, re-save (no second review pass)
+- **REWRITE_REQUIRED** → use Cross-Reviewer's revised paragraph as starting point, rewrite section
+
+### Step C: Apply Edits & Finalize
+
+For each line-level edit from Cross-Reviewer:
+1. Apply the edit
+2. Mark resolved with `% RESOLVED: [edit description]` comment
+3. Add any `[CITATION NEEDED]` markers found to a list for final pass
+
+After all edits: remove all `% RESOLVED` comments before next section.
+
+## Main File
+
+After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`:
+
+```latex
+\documentclass{article}
+\usepackage{booktabs, graphicx, amsmath, hyperref}
+% Add venue-specific package here (e.g., neurips_2026)
+
+\title{[Paper Title]}
+\author{...}
+
+\begin{document}
+\maketitle
+\input{sections/abstract}
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/method}
+\input{sections/experiments}
+\input{sections/conclusion}
+\bibliography{refs}
+\bibliographystyle{plain}
+\end{document}
+```
+
+## Completion Signal
+
+```
+## Paper Draft Complete
+
+Sections written: abstract, introduction, related_work, method, experiments, conclusion
+Cross-Reviewer status per section:
+  - method:       PUBLICATION_READY
+  - experiments:  NEEDS_REVISION → revised and finalized
+  - related_work: PUBLICATION_READY
+  - introduction: NEEDS_REVISION → revised and finalized
+  - conclusion:   PUBLICATION_READY
+  - abstract:     PUBLICATION_READY
+
+Pending [CITATION NEEDED] markers: N
+Estimated pages: ~X (based on word count)
+
+Next: /paper-compile to verify LaTeX builds without errors
+```

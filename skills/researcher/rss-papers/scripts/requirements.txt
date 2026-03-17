@@ -1,0 +1,4 @@
+# RSS/OPML and HTTP for rss-papers skill.
+# 使用标准库解析 RSS/Atom，无需 feedparser（避免 Python 3.12 + setuptools 兼容问题）。
+requests>=2.28.0
+beautifulsoup4>=4.12.0

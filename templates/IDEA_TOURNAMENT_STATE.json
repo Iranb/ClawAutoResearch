@@ -1,0 +1,12 @@
+{
+  "_comment": "State for idea-tournament skill. Used for crash recovery and resumption.",
+  "round": 1,
+  "status": "pending",
+  "pilots": [],
+  "completed_pilots": [],
+  "advancing_ideas": [],
+  "combined": false,
+  "combination_proposal": null,
+  "started_at": null,
+  "timeout_at": null
+}
