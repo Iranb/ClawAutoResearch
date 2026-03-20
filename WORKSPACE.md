@@ -1,39 +1,43 @@
 # WORKSPACE.md — Directory Architecture
 
-> This is the **canonical reference** for all file paths in the openclaw-research plugin.
+> This is the canonical reference for all file paths in the openclaw-research plugin.
 > Every agent MUST read this file and follow its ownership rules.
 > Rule summary: **write only to your own folder; read from any folder**.
-> **项目目录独立于 agent workspace**，通过可配置的 `projectsRoot` 存放，所有 agent 均可访问。
+> Project directories are separate from agent workspaces and live under the configurable `projectsRoot`, accessible to all agents.
 
 ---
 
-## 路径解析约定
+## Path Resolution Conventions
 
-- **{PROJECTS_ROOT}**：项目根目录，**可配置**，与各 agent 的 workspace 分离。
-  - 解析顺序：环境变量 `OPENCLAW_PROJECTS_ROOT` → 文件 `~/.openclaw/openclaw-research.json` 的 `projectsRoot` 键 → 默认 `~/.openclaw/projects`。
-  - 在 `openclaw.json` 中通过顶层键 **`projectsRoot`** 配置（如 `"~/ResearchProjects"`），运行时或 install 会将其同步到 `~/.openclaw/openclaw-research.json` 供 agent 读取。
-- **{PROJ}** = `{PROJECTS_ROOT}/{proj-id}` — 单个项目目录。
-- **{WS}** = 当前 agent 的 workspace（如 `~/.openclaw/workspace-researcher`），仅存放身份、流程定义等，**不**存放项目数据。
-- **{PMEM}** = `{PROJ}/memory` — **项目级记忆**（ideation、experiment、每日日志），位于项目根下，所有 agent 可读；写入权限见下表。
+- **{PROJECTS_ROOT}**: configurable project root, separate from all agent workspaces.
+  - Resolution order: environment variable `OPENCLAW_PROJECTS_ROOT` → `projectsRoot` in `~/.openclaw/openclaw-research.json` → default `~/.openclaw/projects`.
+  - Configure it via the top-level `projectsRoot` key in `openclaw.json` (for example `"~/ResearchProjects"`). Runtime or install can mirror it into `~/.openclaw/openclaw-research.json` for agent-side resolution.
+- **{PROJ}** = `{PROJECTS_ROOT}/{proj-id}` — one project directory.
+- **{WS}** = the current agent workspace (for example `~/.openclaw/workspace-researcher`), containing identity and process definitions only, not project data.
+- **{PMEM}** = `{PROJ}/memory` — project-level memory (ideation, experiment, daily logs), readable by all agents; write permissions are defined below.
 
 ---
 
 ## Top-Level Structure
 
-```
-{PROJECTS_ROOT}/                     ← 可配置，例如 ~/.openclaw/projects 或 ~/ResearchProjects
+```text
+{PROJECTS_ROOT}/                     ← configurable, e.g. ~/.openclaw/projects or ~/ResearchProjects
 │
-├── PROJECTS_STATE.json              ← 多项目注册表（researcher 写，所有 agent 可读）
+├── PROJECTS_STATE.json              ← multi-project registry (written by researcher, readable by all agents)
 │
-└── {proj-id}/                       ← 一个目录对应一个研究项目
-    ├── README.md                    ← OWNED BY: researcher（项目概述）
-    ├── WORKFLOW.md                  ← 本项目使用的 workflow 快照
-    ├── servers.json                 ← 可选；本项目专用服务器配置，覆盖全局 servers（不同方向可不同）
+└── {proj-id}/                       ← one directory per research project
+    ├── README.md                    ← OWNED BY: researcher (project overview)
+    ├── WORKFLOW.md                  ← workflow snapshot used by this project
+    ├── PROJECT_MANIFEST.json        ← OWNED BY: researcher (project state manifest)
+    ├── TRACK_REGISTRY.json          ← OWNED BY: researcher (multiple hypothesis tracks)
+    ├── CLAIM_POLICY.md              ← OWNED BY: researcher (claim support and writing constraints)
+    ├── servers.json                 ← optional; project-specific server config overriding global servers
+    ├── graph/                       ← OWNED BY: researcher (PaperNexus graph state and subgraphs)
     │
-    ├── memory/                      ← 项目级记忆（所有 agent 可读；researcher 负责写入）
+    ├── memory/                      ← project-level memory (readable by all agents; written by researcher)
     │   ├── ideation-memory.md
     │   ├── experiment-memory.md
-    │   └── YYYY-MM-DD.md            ← 按项目每日日志（append-only）
+    │   └── YYYY-MM-DD.md            ← per-project daily log (append-only)
     │
     ├── researcher/                  ← OWNED BY: researcher
     ├── orchestrator/                ← OWNED BY: orchestrator
@@ -44,7 +48,7 @@
     └── cross-reviewer/              ← OWNED BY: cross-reviewer
 ```
 
-Agent 的 workspace（如 `~/.openclaw/workspace-researcher`）内仅保留：SOUL.md、AGENTS.md、WORKFLOW.md、BOOTSTRAP.md、HEARTBEAT.md 等身份与流程定义；**项目数据一律在 {PROJECTS_ROOT} 下**。
+Agent workspaces (for example `~/.openclaw/workspace-researcher`) keep only identity and process definitions such as `SOUL.md`, `AGENTS.md`, `WORKFLOW.md`, `BOOTSTRAP.md`, and `HEARTBEAT.md`; all project data lives under `{PROJECTS_ROOT}`.
 
 ---
 
@@ -52,37 +56,40 @@ Agent 的 workspace（如 `~/.openclaw/workspace-researcher`）内仅保留：SO
 
 | Agent | Owns (write) | Can read |
 |-------|---------------|----------|
-| **researcher** | `{PROJECTS_ROOT}/PROJECTS_STATE.json`, `{PROJ}/researcher/`, `{PROJ}/README.md`, `{PROJ}/memory/`, `{PROJ}/servers.json` | 全部 |
-| **orchestrator** | `{PROJ}/orchestrator/` | 全部 under `{PROJ}/` |
+| **researcher** | `{PROJECTS_ROOT}/PROJECTS_STATE.json`, `{PROJ}/researcher/`, `{PROJ}/README.md`, `{PROJ}/PROJECT_MANIFEST.json`, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/graph/`, `{PROJ}/memory/`, `{PROJ}/servers.json` | everything |
+| **orchestrator** | `{PROJ}/orchestrator/` | everything under `{PROJ}/` |
 | **coder** | `{PROJ}/coder/` | `{PROJ}/orchestrator/`, `{PROJ}/researcher/` |
 | **analyzer** | `{PROJ}/analyzer/` | `{PROJ}/researcher/`, `{PROJ}/orchestrator/` |
 | **academic_writer** | `{PROJ}/academic_writer/` | `{PROJ}/researcher/`, `{PROJ}/analyzer/`, `{PROJ}/reviewer/` |
 | **reviewer** | `{PROJ}/reviewer/` | `{PROJ}/researcher/`, `{PROJ}/analyzer/` |
 | **cross-reviewer** | `{PROJ}/cross-reviewer/` | `{PROJ}/researcher/`, `{PROJ}/analyzer/`, `{PROJ}/academic_writer/` |
 
-> **Enforcement**: Each agent's `AGENTS.md` specifies these rules explicitly.
+> **Enforcement**: each agent's `AGENTS.md` specifies these rules explicitly.
 > Agents MUST NOT create files outside their owned directory.
-> Agents CAN read from `{PROJ}/memory/` and any other agent's directory under `{PROJ}/`.
+> Agents CAN read from `{PROJ}/memory/` and any other agent directory under `{PROJ}/`.
 
 ---
 
 ## Per-Project Directory Contents
 
-### `{PROJ}/memory/` — 项目级记忆（所有 agent 可读）
+### `{PROJ}/memory/` — Project-Level Memory
 
-```
+```text
 memory/
-├── ideation-memory.md       ← 选题记忆（有效模式 + 失败分类）
-├── experiment-memory.md     ← 实验策略记忆（有效超参、数据处理技巧）
-└── YYYY-MM-DD.md            ← 按项目每日日志（append-only）
+├── ideation-memory.md       ← idea memory (successful patterns + failure classes)
+├── experiment-memory.md     ← experiment strategy memory (effective hyperparameters, data-handling tactics)
+└── YYYY-MM-DD.md            ← per-project daily log (append-only)
 ```
 
 ### `{PROJ}/researcher/`
 
-```
+```text
 researcher/
 ├── LITERATURE.md
+├── FRONTIER_REPORT.md
 ├── IDEA_REPORT.md
+├── GATE_STATE.json
+├── GATES_LOG.md
 ├── EXPERIMENT_LOG.md
 ├── EXPERIMENT_REGISTRY.md
 ├── IDEA_TOURNAMENT_STATE.json
@@ -96,9 +103,46 @@ researcher/
     └── logs/
 ```
 
+### `{PROJ}/TRACK_REGISTRY.json`
+
+Unified registry for multiple hypothesis tracks within a project. It should contain at least:
+
+- `track_id`
+- `lens`
+- `hypothesis`
+- `status` (`candidate` / `active` / `parked` / `killed` / `merged`)
+- `stage`
+- `novelty_status`
+- `evidence_status`
+- `linked_graph_nodes`
+- `relation_patterns`
+- `why_now`
+- `weakest_assumption`
+- `falsification_test`
+- `compute_budget_gpu_h`
+- `last_decision`
+
+### `{PROJ}/CLAIM_POLICY.md`
+
+Controls how claims can flow from analysis into writing:
+
+- `SUPPORTED`: may appear in abstract / contribution bullets / conclusion
+- `PARTIAL`: may only be stated conservatively
+- `UNSUPPORTED`: may not appear as a headline contribution
+
+### `{PROJ}/graph/`
+
+```text
+graph/
+├── PAPERNEXUS_STATUS.json
+├── GRAPH_BUILD_REPORT.md
+└── subgraphs/
+    └── *.md
+```
+
 ### `{PROJ}/orchestrator/`
 
-```
+```text
 orchestrator/
 ├── PLAN.md
 └── TODOS.md
@@ -106,7 +150,47 @@ orchestrator/
 
 ### `{PROJ}/coder/` … `{PROJ}/cross-reviewer/`
 
-与原有约定一致（见插件内各 agent 的 AGENTS.md）。
+Follow the existing ownership rules in each agent's `AGENTS.md`.
+
+### `{PROJ}/analyzer/`
+
+Key additional state files:
+
+```text
+analyzer/
+├── NARRATIVE_REPORT.md
+├── CLAIM_EVIDENCE_MATRIX.md
+├── TRACK_VERDICTS.md
+├── UNSUPPORTED_CLAIMS.md
+├── THEORY_SUPPORT_NOTE.md
+├── figures/
+└── tables/
+```
+
+`THEORY_SUPPORT_NOTE.md` only outputs a coarse `green / red` signal:
+
+- `green`: there is enough theory intuition, mechanism explanation, or lightweight derivation to write naturally
+- `red`: theory is still weak, but it does not block a first draft; Writer should use more conservative phrasing and leave it for human review
+
+### `{PROJ}/academic_writer/`
+
+Soft-constraint state files for the writing stage:
+
+```text
+academic_writer/
+├── PAPER_PLAN.md
+├── STORYLINE_SKETCH.md
+├── WRITING_SIGNALS.md
+└── paper/
+```
+
+`WRITING_SIGNALS.md` only maintains three advisory fields:
+
+- `theory: green | red`
+- `storyline: green | red`
+- `paragraph_logic: green | red`
+
+These states are advisory only and must not block first-draft generation.
 
 ---
 
@@ -114,33 +198,33 @@ orchestrator/
 
 | Variable | Resolves to |
 |----------|-------------|
-| `{PROJECTS_ROOT}` | 配置的项目根目录（env 或 ~/.openclaw/openclaw-research.json） |
+| `{PROJECTS_ROOT}` | configured project root (env or `~/.openclaw/openclaw-research.json`) |
 | `{PROJ}` | `{PROJECTS_ROOT}/{proj-id}` |
 | `{PMEM}` | `{PROJ}/memory` |
-| `{WS}` | 当前 agent 的 workspace（如 ~/.openclaw/workspace-researcher） |
+| `{WS}` | current agent workspace (for example `~/.openclaw/workspace-researcher`) |
 
-Example: `{PROJ}/researcher/IDEA_REPORT.md`，`{PMEM}/ideation-memory.md`
-
----
-
-## 记忆隔离（按项目）
-
-长期记忆全部在 **项目级** `{PROJ}/memory/` 下，不同 `{proj-id}` 天然隔离，多项目/多方向并行互不干扰。无需改 workspace 或 agent 配置。
+Example: `{PROJ}/researcher/IDEA_REPORT.md`, `{PMEM}/ideation-memory.md`
 
 ---
 
-## 多台服务器
+## Memory Isolation (Per Project)
 
-实验阶段通过 SSH 部署到远程 GPU。全局默认 **`servers`** 放在 `~/.openclaw/openclaw-research.json`；**按项目/方向**可在项目下放 **`{PROJ}/servers.json`** 覆盖该项目的服务器列表，不同 proj 可使用不同服务器。详见 CONFIG.md。
+Long-term memory lives entirely under the project-level `{PROJ}/memory/`. Different `{proj-id}` values are naturally isolated, so multiple projects or directions can run in parallel without interference. No workspace or agent changes are required.
+
+---
+
+## Multiple Servers
+
+The experiment stage deploys through SSH to remote GPUs. The global default `servers` configuration lives in `~/.openclaw/openclaw-research.json`; for a specific project or direction, place `{PROJ}/servers.json` under the project to override the server list. Different projects can use different servers. See `CONFIG.md` for details.
 
 ---
 
 ## TODOS.md Convention (shared file)
 
-`{PROJ}/orchestrator/TODOS.md` 的读写约定与原先一致（多 agent 协作更新）。
+The read/write convention for `{PROJ}/orchestrator/TODOS.md` remains unchanged and supports multi-agent collaborative updates.
 
 ---
 
 ## Cross-Reviewer / Reviewer Output Convention
 
-与原先一致：调用方将审稿结果写入 `{PROJ}/cross-reviewer/` 或 `{PROJ}/reviewer/`。
+As before, the calling agent writes review output into `{PROJ}/cross-reviewer/` or `{PROJ}/reviewer/`.

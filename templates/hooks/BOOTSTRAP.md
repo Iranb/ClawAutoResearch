@@ -2,6 +2,7 @@
 
 > This file is read by OpenClaw's `boot-md` internal hook at the start of every session.
 > It replaces the default "Hello, World" bootstrap with research-workflow-aware startup.
+> Deployed from plugin `templates/hooks/` to each agent's workspace root by install script.
 
 ## Step 1: Load Identity & Workflow
 
@@ -36,6 +37,13 @@ If {PROJECTS_ROOT}/*/researcher/GATE_STATE.json exists:
   → If gate_status = "waiting" AND AUTO_PROCEED=false:
       Re-post the gate message (user may have missed it)
   → Else: resume pipeline at current_stage
+
+If {PROJ}/PROJECT_MANIFEST.json exists:
+  → Confirm `project_id`, `owner_agent`, `next_action`, `resume_action`, and `memory_scope.project_isolated`
+  → If this workspace was previously working on another project:
+      Run `/resume-pipeline` before any fresh write
+  → If your agent is not the recorded owner and no explicit task has been assigned:
+      Stay in background-duty mode from AGENTS.md instead of inventing a new stage
 
 If resuming at stage CODE (or about to enter CODE) and either {PROJ}/orchestrator/PLAN.md or {PROJ}/orchestrator/TODOS.md is missing:
   → **Wake Orchestrator first**: spawn Orchestrator with instruction "Run /plan-research using {PROJ}/researcher/IDEA_REPORT.md; write PLAN.md and TODOS.md to {PROJ}/orchestrator/."
@@ -78,6 +86,7 @@ Output before first response:
 - Agent: [Researcher / Reviewer / Planner / Coder / Analyzer / Writer]
 - Active project: [title if any, else "none"]
 - Current stage: [IDEA / PLAN / CODE / EXPERIMENT / ANALYZE / REVIEW / WRITE / SUBMIT / none]
+- Current owner: [researcher / orchestrator / coder / analyzer / academic_writer / reviewer / none]
 - Pending gate: [GATE-N waiting / none]
 - Pending tasks: [N tasks, next: "..."]
 - Running experiments: [name if any, else "none"]

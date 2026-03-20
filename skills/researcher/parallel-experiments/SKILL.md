@@ -1,6 +1,6 @@
 ---
 name: parallel-experiments
-description: "Dispatch multiple independent experiments to different GPUs simultaneously. Handles GPU allocation, parallel launch, joint monitoring, and result aggregation. Use when PLAN.md contains multiple independent experiment stages."
+description: "Dispatch multiple independent experiments to different GPUs simultaneously. Researcher owns scheduling and monitoring; atomic remote launch is delegated to Coder via /run-experiment."
 argument-hint: "[experiment group name, or 'all' to dispatch all pending from EXPERIMENT_REGISTRY.md]"
 allowed-tools:
   - Bash(*)
@@ -13,7 +13,7 @@ allowed-tools:
 
 # Parallel Experiments
 
-L1 parallelism: run multiple independent experiments (seeds, ablations, baselines vs proposed) simultaneously across available GPUs.
+L1 parallelism: schedule multiple independent experiments (seeds, ablations, baselines vs proposed) across available GPUs, then assign each atomic launch to Coder.
 
 ## Constants
 
@@ -24,16 +24,16 @@ L1 parallelism: run multiple independent experiments (seeds, ablations, baseline
 
 ## Resolve servers for this project
 
-**不同方向/项目可使用不同服务器**。在选 host 前先解析当前项目的服务器配置：
+**Different directions or projects may use different servers.** Before choosing a host, resolve the current project's server config first:
 
-1. 若存在 **`{PROJ}/servers.json`**（格式：`{"default":"host","list":["host1","host2"]}`），则本项目**仅**使用其中的 `default` 与 `list`。
-2. 否则使用全局配置（`~/.openclaw/openclaw-research.json` 的 `servers` 或运行环境提供的默认值）。
+1. If **`{PROJ}/servers.json`** exists (format: `{"default":"host","list":["host1","host2"]}`), this project uses only its `default` and `list`.
+2. Otherwise use the global config from `~/.openclaw/openclaw-research.json` or the runtime default.
 
-下文中 `<server>` 即从上述解析得到的 `list` 中选取的 host。
+Below, `<server>` means a host chosen from the resolved `list`.
 
 ## Decision: What to Parallelize
 
-> **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+> **File ownership**: Write ONLY to `{PROJ}/researcher/`, `{PROJ}/PROJECT_MANIFEST.json`, and `{PROJ}/TRACK_REGISTRY.json`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 Read `{PROJ}/orchestrator/PLAN.md` and classify each experiment:
 
@@ -46,6 +46,11 @@ Read `{PROJ}/orchestrator/PLAN.md` and classify each experiment:
 - Hyperparameter tuning (each round uses previous result)
 - Debug → fix → re-run (must observe before proceeding)
 - Ablation that builds on proposed method (need proposed results first)
+
+Read `{PROJ}/TRACK_REGISTRY.json` and apply:
+- active tracks may consume GPU
+- parked / killed tracks may not
+- if two active tracks compete for the same GPU budget, higher-evidence track wins
 
 ## Phase 1: Build Experiment Queue
 
@@ -113,6 +118,10 @@ If insufficient free GPUs:
 
 ## Phase 3: Code Sync (once, shared)
 
+Choose one:
+- shared rsync upfront by Researcher for a whole group
+- per-bundle sync inside Coder `/run-experiment` for better restart safety
+
 ```bash
 rsync -avz \
   --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
@@ -127,24 +136,20 @@ ssh <server> "cd <remote_code_dir> && UV_INDEX_URL=https://pypi.tuna.tsinghua.ed
 
 ## Phase 4: Parallel Launch (Group A)
 
-Launch ALL Group A experiments simultaneously:
+Assign ALL Group A experiments simultaneously:
 
-```bash
-# For each experiment in the group, launch in sequence (but all run in background via screen)
-for exp in [e001 e002 e003]:
-  ssh <server> "screen -dmS <screen_name> bash -c \
-    'cd <remote_dir> && \
-     CUDA_VISIBLE_DEVICES=<gpu_id> uv run python train.py \
-     --config <config> --seed <seed> \
-     --output_dir results/<exp_name> \
-     > logs/<screen_name>.log 2>&1; \
-     echo EXIT_CODE=\$? >> logs/<screen_name>.log'"
+```text
+for each pending experiment in Group A:
+  spawn / assign Coder:
+    /run-experiment "<experiment-name> --config <config> --seed <seed> --gpu <gpu_id>"
 ```
 
-Verify all launched:
-```bash
-ssh <server> "screen -ls"
-```
+Coder returns launch metadata including:
+- `server`
+- `screen_name`
+- `gpu_id`
+- `REMOTE_RUN.json` path
+- initial log tail
 
 Update EXPERIMENT_REGISTRY.md: set Status=running, Started=now, ETA=now+estimated_h.
 Update PARALLEL_STATE.json: set active_screens=[list].
@@ -209,12 +214,15 @@ Build summary:
 Update PARALLEL_STATE.json to `"status": "completed"`.
 Update EXPERIMENT_REGISTRY.md: all rows finalized.
 
+Then update `{PROJ}/TRACK_REGISTRY.json` with per-track experiment outcomes and recommended next action.
+
 Pass control to `/analyze-results` for figure generation and narrative report.
 
 ## Error Recovery
 
 | Scenario | Detection | Response |
 |----------|-----------|---------|
+| Two active tracks cannot both fit budget | registry shows both active but GPU budget exhausted | complete the stronger track first, park the weaker one |
 | Screen died (crash) | Not in `screen -ls`, EXIT_CODE ≠ 0 | Check log for error, fix and requeue on same GPU |
 | CUDA OOM | `CUDA out of memory` in log | Halve batch_size, relaunch |
 | SSH timeout | Connection refused | Retry 3× with 30s backoff |

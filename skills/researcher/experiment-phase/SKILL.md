@@ -1,6 +1,6 @@
 ---
 name: experiment-phase
-description: "Deploy and run experiments on remote GPU server via SSH. Supports parallel multi-experiment dispatch via EXPERIMENT_REGISTRY. Use after idea is confirmed and PLAN.md exists."
+description: "Orchestrate remote experiment execution across tracks and GPUs. Researcher owns scheduling and monitoring; atomic remote launch is delegated to Coder via /run-experiment."
 argument-hint: "[experiment plan or empty to read from PLAN.md]"
 allowed-tools:
   - Bash(*)
@@ -15,7 +15,7 @@ allowed-tools:
 
 # Experiment Phase
 
-Orchestrate full experiment execution: classify dependencies → parallel dispatch → monitor → analyze.
+Orchestrate full experiment execution: classify dependencies → track-aware dispatch → assign atomic launches to Coder → monitor → decide → analyze.
 
 ## Prerequisites
 
@@ -28,12 +28,12 @@ Orchestrate full experiment execution: classify dependencies → parallel dispat
 
 ## Resolve servers for this project
 
-**不同方向/项目可使用不同服务器**。在选 host 前先解析当前项目的服务器配置：
+**Different directions or projects may use different servers.** Before choosing a host, resolve the current project's server config first:
 
-1. 若存在 **`{PROJ}/servers.json`**（格式：`{"default":"host","list":["host1","host2"]}`），则本项目**仅**使用其中的 `default` 与 `list`。
-2. 否则使用全局配置（`~/.openclaw/openclaw-research.json` 的 `servers` 或运行环境提供的默认值）。
+1. If **`{PROJ}/servers.json`** exists (format: `{"default":"host","list":["host1","host2"]}`), this project uses only its `default` and `list`.
+2. Otherwise use the global config from `~/.openclaw/openclaw-research.json` or the runtime default.
 
-下文中 `<server>` 即从上述解析得到的 `list` 中选取的 host（默认用 `default`；多机时按负载或策略从 `list` 选）。
+Below, `<server>` means a host chosen from the resolved `list` (defaulting to `default`; with multiple machines, choose from `list` by load or policy).
 
 ## Pipeline Overview
 
@@ -46,7 +46,7 @@ Resource Check (nvidia-smi)
         ↓
 Code Sync (rsync)
         ↓
-Parallel Launch (screen × N GPUs)    ← L1 parallelism
+Parallel Launch (Coder /run-experiment × N GPUs)    ← L1 parallelism
         ↓
 Joint Monitoring (poll all screens)
         ↓
@@ -68,6 +68,12 @@ Read `{PROJ}/orchestrator/PLAN.md`. For each experiment stage, classify:
 - Multiple seeds for same config (can be parallel within Group B after Group A validates)
 - Hyperparameter sweep (each round informs the next)
 - Ablations that depend on proposed method results
+
+Read `{PROJ}/TRACK_REGISTRY.json` before dispatch:
+
+- prioritize `active` tracks only
+- do not spend GPU on `parked` / `killed` tracks
+- if a track is still in pilot stage, run pilot before any full experiment
 
 Write dispatch plan and initialize `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`:
 
@@ -109,6 +115,10 @@ Parse GPU availability. If insufficient free GPUs for Group A:
 
 ## Phase 3: Code Sync
 
+Code sync may happen in either of two ways:
+- **preferred for one bundle / restart-safe relaunch**: let Coder `/run-experiment` sync its assigned bundle
+- **preferred for many bundles sharing one codebase**: Researcher performs one shared rsync first, then Coder only launches
+
 ```bash
 rsync -avz \
   --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
@@ -123,14 +133,15 @@ ssh <server> "cd <remote_dir> && UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/
 
 ## Phase 4: Parallel Launch
 
-Use `/parallel-experiments` for full parallel dispatch and monitoring:
+Use `/parallel-experiments` for full parallel dispatch and monitoring. Actual per-bundle remote launch is delegated to the **Coder Agent** via `/run-experiment`:
 
 ```
 /parallel-experiments "[project-id] — Group A"
 ```
 
 This handles:
-- Simultaneous launch of all Group A experiments
+- Simultaneous dispatch of all Group A experiments
+- Spawning / assigning Coder for each atomic `/run-experiment`
 - Joint monitoring with exponential backoff
 - Automatic Group B trigger when Group A completes
 - Error recovery (OOM, stall, crash)
@@ -163,6 +174,21 @@ rsync -avz <server>:<remote_dir>/results/ {PROJ}/researcher/artifacts/results/
 rsync -avz <server>:<remote_dir>/logs/ {PROJ}/researcher/artifacts/logs/
 ```
 
+## Phase 6.5: Track Decision
+
+After pilot or experiment completion, update `{PROJ}/TRACK_REGISTRY.json` with one of:
+
+- `advance` — strong positive signal, merits more budget
+- `merge` — overlaps heavily with a stronger track
+- `park` — interesting but not currently budget-worthy
+- `kill` — falsified or low-value
+
+Also update `{PROJ}/PROJECT_MANIFEST.json`:
+- `current_stage: "experiment"`
+- `current_micro_stage: "track_decision_made"`
+- `budget.gpu_hours_used`
+- `updated_at`
+
 ## Phase 7: Analysis
 
 ```
@@ -171,6 +197,7 @@ rsync -avz <server>:<remote_dir>/logs/ {PROJ}/researcher/artifacts/logs/
 
 Produces (written by Analyzer Agent to its own folder):
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md`
+- `{PROJ}/analyzer/TRACK_VERDICTS.md`
 - `{PROJ}/analyzer/figures/`
 - `{PROJ}/analyzer/tables/`
 
@@ -190,6 +217,7 @@ After phase completes, update project-isolated memory files (`{PMEM}` = `{PROJ}/
 
 | Scenario | Detection | Action |
 |----------|-----------|--------|
+| Weak pilot on secondary track | improvement below planned threshold | Park or kill the track instead of escalating to full run |
 | Screen died | Not in `screen -ls`, EXIT_CODE ≠ 0 | Read log, fix error, relaunch |
 | CUDA OOM | `CUDA out of memory` in log | Halve batch_size, update config, relaunch |
 | SSH timeout | Connection refused | Retry 3× with 30s backoff |

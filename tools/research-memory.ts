@@ -1,51 +1,70 @@
 /**
- * research-memory tool
+ * research-memory tool backend
  *
- * Manages structured research memory files.
- *
- * Preferred (project-isolated) locations when `OPENCLAW_PROJECT` is set:
- *   - {PROJ}/memory/ideation-memory.md  (IDE/IVE patterns)
- *   - {PROJ}/memory/experiment-memory.md (ESE patterns)
- *   - {PROJ}/researcher/REVIEW_STATE.json (review loop state)
- *
- * Legacy fallback (workspace-level) when `OPENCLAW_PROJECT` is not set:
- *   - memory/ideation-memory.md
- *   - memory/experiment-memory.md
- *   - research/REVIEW_STATE.json
- *
- * Exposed as an OpenClaw custom tool. Agents call it via the tool API
- * rather than writing raw markdown, ensuring consistent formatting and
- * preventing accidental overwrites.
+ * Centralizes project-isolated research memory writes so agents do not edit
+ * memory markdown or review state files by hand.
  */
 
 import * as fs from "fs/promises";
 import * as path from "path";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+export interface ResearchMemoryPolicy {
+  allowWorkspaceFallback?: boolean;
+  requireProjectIsolation?: boolean;
+  requireProjectIdInEntries?: boolean;
+  requireTrackId?: boolean;
+  requireEvidencePointers?: boolean;
+  reviewStateMaxAgeHours?: number;
+}
 
-interface IdeaEntry {
+interface CommonEntryFields {
+  projectId?: string;
+  trackId?: string;
+  sourceStage?: string;
+  signature?: string;
+  evidencePointers?: string[];
+  confidence?: number;
+  tags?: string[];
+}
+
+interface IdeaEntry extends CommonEntryFields {
   title: string;
   domain: string;
   hypothesis: string;
   outcome: "success" | "abandoned";
-  // success fields
   whyNovel?: string;
   pilotResult?: string;
   generalizablePattern?: string;
-  // failure fields
+  closestPriorWork?: string;
   failureMode?: string;
+  failureBucket?: string;
   retryCondition?: string;
 }
 
-interface ExperimentEntry {
+interface ExperimentEntry extends CommonEntryFields {
   name: string;
   taskType: string;
   dataset: string;
+  model?: string;
   hyperparams: Record<string, string | number>;
   result: string;
   trainingTimeHours: number;
   gpuType: string;
   reuseCondition: string;
+}
+
+interface FailedExperimentEntry extends CommonEntryFields {
+  name: string;
+  taskType: string;
+  dataset: string;
+  model?: string;
+  hyperparams?: Record<string, string | number>;
+  resultSummary?: string;
+  failureMode: string;
+  failureBucket?: string;
+  retryCondition?: string;
+  trainingTimeHours?: number;
+  gpuType?: string;
 }
 
 interface ReviewState {
@@ -57,28 +76,127 @@ interface ReviewState {
   timestamp: string;
 }
 
-// ─── Path helpers ─────────────────────────────────────────────────────────────
+const DEFAULT_POLICY: Required<ResearchMemoryPolicy> = {
+  allowWorkspaceFallback: false,
+  requireProjectIsolation: true,
+  requireProjectIdInEntries: true,
+  requireTrackId: true,
+  requireEvidencePointers: true,
+  reviewStateMaxAgeHours: 24,
+};
+
+function normalizePolicy(
+  policy: ResearchMemoryPolicy = {}
+): Required<ResearchMemoryPolicy> {
+  return {
+    allowWorkspaceFallback:
+      policy.allowWorkspaceFallback ?? DEFAULT_POLICY.allowWorkspaceFallback,
+    requireProjectIsolation:
+      policy.requireProjectIsolation ?? DEFAULT_POLICY.requireProjectIsolation,
+    requireProjectIdInEntries:
+      policy.requireProjectIdInEntries ??
+      DEFAULT_POLICY.requireProjectIdInEntries,
+    requireTrackId: policy.requireTrackId ?? DEFAULT_POLICY.requireTrackId,
+    requireEvidencePointers:
+      policy.requireEvidencePointers ?? DEFAULT_POLICY.requireEvidencePointers,
+    reviewStateMaxAgeHours:
+      policy.reviewStateMaxAgeHours ?? DEFAULT_POLICY.reviewStateMaxAgeHours,
+  };
+}
 
 function getWorkspaceRoot(): string {
   return process.env.OPENCLAW_WORKSPACE ?? process.cwd();
 }
 
 function getProjectRoot(): string | null {
-  const p = process.env.OPENCLAW_PROJECT;
-  if (!p) return null;
-  return p;
+  return process.env.OPENCLAW_PROJECT ?? null;
 }
 
-function memoryPath(filename: string): string {
-  const proj = getProjectRoot();
-  if (proj) return path.join(proj, "memory", filename);
-  return path.join(getWorkspaceRoot(), "memory", filename);
+function inferProjectId(projectRoot: string | null): string | undefined {
+  if (!projectRoot) return undefined;
+  return path.basename(projectRoot);
 }
 
-function researchPath(filename: string): string {
-  const proj = getProjectRoot();
-  if (proj) return path.join(proj, "researcher", filename);
-  return path.join(getWorkspaceRoot(), "research", filename);
+function ensureProjectScope(policy: Required<ResearchMemoryPolicy>): void {
+  if (policy.requireProjectIsolation && !getProjectRoot()) {
+    throw new Error(
+      "OPENCLAW_PROJECT is required for project-isolated research memory writes."
+    );
+  }
+}
+
+function resolveBaseDir(
+  policy: Required<ResearchMemoryPolicy>,
+  kind: "memory" | "researcher"
+): string {
+  const projectRoot = getProjectRoot();
+  if (projectRoot) {
+    return path.join(projectRoot, kind === "memory" ? "memory" : "researcher");
+  }
+
+  if (!policy.allowWorkspaceFallback) {
+    throw new Error(
+      "Workspace fallback is disabled for research memory. Set OPENCLAW_PROJECT or relax plugin policy."
+    );
+  }
+
+  const workspaceRoot = getWorkspaceRoot();
+  return path.join(workspaceRoot, kind === "memory" ? "memory" : "research");
+}
+
+function memoryPath(
+  filename: string,
+  policy: Required<ResearchMemoryPolicy>
+): string {
+  return path.join(resolveBaseDir(policy, "memory"), filename);
+}
+
+function researchPath(
+  filename: string,
+  policy: Required<ResearchMemoryPolicy>
+): string {
+  return path.join(resolveBaseDir(policy, "researcher"), filename);
+}
+
+export function getResolvedResearchMemoryPaths(
+  policy: ResearchMemoryPolicy = {}
+) {
+  const normalized = normalizePolicy(policy);
+  const projectRoot = getProjectRoot();
+  const workspaceRoot = getWorkspaceRoot();
+  const projectIsolationSatisfied = !normalized.requireProjectIsolation
+    ? true
+    : Boolean(projectRoot);
+  const usingWorkspaceFallback = !projectRoot && normalized.allowWorkspaceFallback;
+  const memoryDir = projectRoot
+    ? path.join(projectRoot, "memory")
+    : usingWorkspaceFallback
+      ? path.join(workspaceRoot, "memory")
+      : null;
+  const researcherDir = projectRoot
+    ? path.join(projectRoot, "researcher")
+    : usingWorkspaceFallback
+      ? path.join(workspaceRoot, "research")
+      : null;
+
+  return {
+    policy: normalized,
+    mode: projectRoot ? "project" : "workspace",
+    projectIsolationSatisfied,
+    usingWorkspaceFallback,
+    workspaceRoot,
+    projectRoot,
+    inferredProjectId: inferProjectId(projectRoot),
+    ideationMemoryPath: memoryDir
+      ? path.join(memoryDir, "ideation-memory.md")
+      : null,
+    experimentMemoryPath: memoryDir
+      ? path.join(memoryDir, "experiment-memory.md")
+      : null,
+    reviewStatePath: researcherDir
+      ? path.join(researcherDir, "REVIEW_STATE.json")
+      : null,
+  };
 }
 
 async function readFileSafe(filepath: string): Promise<string> {
@@ -89,126 +207,291 @@ async function readFileSafe(filepath: string): Promise<string> {
   }
 }
 
+async function writeFileEnsured(filepath: string, content: string): Promise<void> {
+  await fs.mkdir(path.dirname(filepath), { recursive: true });
+  await fs.writeFile(filepath, content, "utf-8");
+}
+
 async function appendToFile(filepath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(filepath), { recursive: true });
   await fs.appendFile(filepath, content, "utf-8");
 }
 
-// ─── Ideation Memory ──────────────────────────────────────────────────────────
+function uniqueStrings(items: string[] | undefined): string[] {
+  if (!items || items.length === 0) return [];
+  return Array.from(
+    new Set(
+      items
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+}
 
-/**
- * Append an idea entry to ideation-memory.md.
- * Called after idea-phase completes (success or abandon).
- */
-export async function recordIdeaEntry(entry: IdeaEntry): Promise<string> {
-  const date = new Date().toISOString().split("T")[0];
-  const statusLabel = entry.outcome === "abandoned" ? " (ABANDONED)" : "";
+function formatBulletList(items: string[] | undefined, indent = "  "): string {
+  const normalized = uniqueStrings(items);
+  if (normalized.length === 0) return `${indent}- —`;
+  return normalized.map((item) => `${indent}- ${item}`).join("\n");
+}
 
-  let block: string;
-  if (entry.outcome === "success") {
-    block = `
-### ${entry.title} — ${date}
-- **Domain**: ${entry.domain}
-- **Core hypothesis**: ${entry.hypothesis}
-- **Why novel**: ${entry.whyNovel ?? "—"}
-- **Pilot result**: ${entry.pilotResult ?? "—"}
-- **Generalizable pattern**: ${entry.generalizablePattern ?? "—"}
-`;
-  } else {
-    block = `
-### ${entry.title} — ${date}${statusLabel}
-- **Domain**: ${entry.domain}
-- **Failure mode**: ${entry.failureMode ?? "—"}
-- **Do not retry unless**: ${entry.retryCondition ?? "—"}
-`;
+function formatKeyValueList(
+  values: Record<string, string | number> | undefined
+): string {
+  if (!values || Object.keys(values).length === 0) return "  - —";
+  return Object.entries(values)
+    .map(([key, value]) => `  - ${key}: ${value}`)
+    .join("\n");
+}
+
+function formatCommonFields(entry: CommonEntryFields): string {
+  const lines: string[] = [];
+  if (entry.projectId) lines.push(`- **Project ID**: ${entry.projectId}`);
+  if (entry.trackId) lines.push(`- **Track ID**: ${entry.trackId}`);
+  if (entry.sourceStage) lines.push(`- **Source stage**: ${entry.sourceStage}`);
+  if (entry.signature) lines.push(`- **Signature**: ${entry.signature}`);
+  if (entry.confidence !== undefined) {
+    lines.push(`- **Confidence**: ${entry.confidence}`);
+  }
+  if (entry.tags && entry.tags.length > 0) {
+    lines.push(`- **Tags**: ${entry.tags.join(", ")}`);
+  }
+  if (entry.evidencePointers && entry.evidencePointers.length > 0) {
+    lines.push(`- **Evidence pointers**:\n${formatBulletList(entry.evidencePointers)}`);
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
+function buildSignature(defaultParts: string[], explicit?: string): string {
+  if (explicit && explicit.trim()) return explicit.trim();
+  return defaultParts.map((part) => part.trim()).filter(Boolean).join("::");
+}
+
+function validateConfidence(value: number | undefined, label: string): void {
+  if (value === undefined) return;
+  if (Number.isNaN(value) || value < 0 || value > 1) {
+    throw new Error(`${label} must be between 0 and 1.`);
+  }
+}
+
+function finalizeCommonFields<T extends CommonEntryFields>(
+  entry: T,
+  policy: Required<ResearchMemoryPolicy>,
+  signatureParts: string[]
+): T {
+  const projectRoot = getProjectRoot();
+  const projectId = entry.projectId ?? inferProjectId(projectRoot);
+  const evidencePointers = uniqueStrings(entry.evidencePointers);
+  const tags = uniqueStrings(entry.tags);
+  const finalized = {
+    ...entry,
+    projectId,
+    evidencePointers,
+    tags,
+    signature: buildSignature(signatureParts, entry.signature),
+  };
+
+  validateConfidence(finalized.confidence, "confidence");
+
+  if (policy.requireProjectIdInEntries && !finalized.projectId) {
+    throw new Error("projectId is required for research memory entries.");
   }
 
+  if (policy.requireTrackId && !finalized.trackId) {
+    throw new Error("trackId is required for research memory entries.");
+  }
+
+  if (policy.requireEvidencePointers && finalized.evidencePointers.length === 0) {
+    throw new Error(
+      "evidencePointers are required for research memory entries."
+    );
+  }
+
+  return finalized;
+}
+
+function ensureNoDuplicateSignature(existing: string, signature: string): void {
+  if (!signature) return;
+  if (existing.includes(`**Signature**: ${signature}`)) {
+    throw new Error(`A memory entry with signature "${signature}" already exists.`);
+  }
+}
+
+function insertAfterSection(
+  existing: string,
+  section: string,
+  block: string
+): string {
+  if (existing.includes(section)) {
+    return existing.replace(section, `${section}\n${block}`);
+  }
+  const prefix = existing.trimEnd();
+  return `${prefix}\n\n${section}\n${block}`;
+}
+
+function updateComputeBudgetLog(content: string, row: string): string {
+  const placeholder = "| *(add entries)* | | | | |\n";
+  if (content.includes(placeholder)) {
+    return content.replace(placeholder, `${row}${placeholder}`);
+  }
+
+  const header =
+    "| Project | Experiment | GPU Type | Hours | Date |\n|---------|-----------|----------|-------|------|\n";
+  if (content.includes(header)) {
+    return content.replace(header, `${header}${row}`);
+  }
+
+  return `${content.trimEnd()}\n\n## Compute Budget Log\n\n| Project | Experiment | GPU Type | Hours | Date |\n|---------|-----------|----------|-------|------|\n${row}`;
+}
+
+export async function recordIdeaEntry(
+  entry: IdeaEntry,
+  policy: ResearchMemoryPolicy = {}
+): Promise<string> {
+  const normalized = normalizePolicy(policy);
+  ensureProjectScope(normalized);
+
+  const finalized = finalizeCommonFields(entry, normalized, [
+    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.trackId ?? "",
+    entry.title,
+    entry.outcome,
+  ]);
+
+  const date = new Date().toISOString().split("T")[0];
+  const statusLabel = finalized.outcome === "abandoned" ? " (ABANDONED)" : "";
+  const common = formatCommonFields(finalized);
+
+  const block =
+    finalized.outcome === "success"
+      ? `### ${finalized.title} — ${date}
+${common}- **Domain**: ${finalized.domain}
+- **Core hypothesis**: ${finalized.hypothesis}
+- **Closest prior work**: ${finalized.closestPriorWork ?? "—"}
+- **Why novel**: ${finalized.whyNovel ?? "—"}
+- **Pilot result**: ${finalized.pilotResult ?? "—"}
+- **Generalizable pattern**: ${finalized.generalizablePattern ?? "—"}
+`
+      : `### ${finalized.title} — ${date}${statusLabel}
+${common}- **Domain**: ${finalized.domain}
+- **Hypothesis**: ${finalized.hypothesis}
+- **Failure bucket**: ${finalized.failureBucket ?? "—"}
+- **Failure mode**: ${finalized.failureMode ?? "—"}
+- **Do not retry unless**: ${finalized.retryCondition ?? "—"}
+`;
+
   const section =
-    entry.outcome === "success"
+    finalized.outcome === "success"
       ? "## Successful Idea Patterns"
       : "## Failed Idea Catalog";
 
-  const filepath = memoryPath("ideation-memory.md");
+  const filepath = memoryPath("ideation-memory.md", normalized);
   const existing = await readFileSafe(filepath);
+  ensureNoDuplicateSignature(existing, finalized.signature ?? "");
+  await writeFileEnsured(filepath, insertAfterSection(existing, section, block));
 
-  if (existing.includes(section)) {
-    // Insert after section header
-    const updated = existing.replace(section, `${section}\n${block}`);
-    await fs.writeFile(filepath, updated, "utf-8");
-  } else {
-    await appendToFile(filepath, `\n${section}\n${block}`);
-  }
-
-  return `Ideation memory updated: ${entry.title} (${entry.outcome})`;
+  return `Ideation memory updated: ${finalized.title} (${finalized.outcome})`;
 }
 
-// ─── Experiment Memory ────────────────────────────────────────────────────────
-
-/**
- * Append an experiment strategy entry to experiment-memory.md.
- * Called after experiment-phase completes with results.
- */
 export async function recordExperimentEntry(
-  entry: ExperimentEntry
+  entry: ExperimentEntry,
+  policy: ResearchMemoryPolicy = {}
 ): Promise<string> {
+  const normalized = normalizePolicy(policy);
+  ensureProjectScope(normalized);
+
+  const finalized = finalizeCommonFields(entry, normalized, [
+    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.trackId ?? "",
+    entry.name,
+    "success",
+  ]);
+
   const date = new Date().toISOString().split("T")[0];
-
-  const hyperparamStr = Object.entries(entry.hyperparams)
-    .map(([k, v]) => `  - ${k}: ${v}`)
-    .join("\n");
-
-  const block = `
-### ${entry.name} — ${date}
-- **Task**: ${entry.taskType}
-- **Dataset**: ${entry.dataset}
+  const common = formatCommonFields(finalized);
+  const block = `### ${finalized.name} — ${date}
+${common}- **Task**: ${finalized.taskType}
+- **Dataset**: ${finalized.dataset}
+- **Model**: ${finalized.model ?? "—"}
 - **Key hyperparameters**:
-${hyperparamStr}
-- **Result**: ${entry.result}
-- **Training time**: ~${entry.trainingTimeHours}h on ${entry.gpuType}
-- **Reuse condition**: ${entry.reuseCondition}
+${formatKeyValueList(finalized.hyperparams)}
+- **Result**: ${finalized.result}
+- **Training time**: ~${finalized.trainingTimeHours}h on ${finalized.gpuType}
+- **Reuse condition**: ${finalized.reuseCondition}
 `;
 
-  const section = "## Proven Experiment Strategies";
-  const filepath = memoryPath("experiment-memory.md");
+  const filepath = memoryPath("experiment-memory.md", normalized);
   const existing = await readFileSafe(filepath);
+  ensureNoDuplicateSignature(existing, finalized.signature ?? "");
 
-  if (existing.includes(section)) {
-    const updated = existing.replace(section, `${section}\n${block}`);
-    await fs.writeFile(filepath, updated, "utf-8");
-  } else {
-    await appendToFile(filepath, `\n${section}\n${block}`);
-  }
+  const withStrategy = insertAfterSection(
+    existing,
+    "## Proven Experiment Strategies",
+    block
+  );
 
-  // Also update compute budget log
-  const budgetEntry = `| ${entry.name} | — | ${entry.gpuType} | ${entry.trainingTimeHours} | ${date} |\n`;
-  const budgetSection = "## Compute Budget Log";
-  const budgetFilepath = memoryPath("experiment-memory.md");
-  const afterUpdate = await readFileSafe(budgetFilepath);
-  if (afterUpdate.includes("| *(add entries)*")) {
-    await fs.writeFile(
-      budgetFilepath,
-      afterUpdate.replace("| *(add entries)* | | | | |\n", budgetEntry),
-      "utf-8"
-    );
-  } else if (afterUpdate.includes(budgetSection)) {
-    // append row after table header (simple approach)
-    const updated2 = afterUpdate.replace(
-      "| *(add entries)* |",
-      `${budgetEntry}| *(add entries)* |`
-    );
-    await fs.writeFile(budgetFilepath, updated2, "utf-8");
-  }
+  const budgetRow = `| ${finalized.projectId ?? "—"} | ${finalized.name} | ${finalized.gpuType} | ${finalized.trainingTimeHours} | ${date} |\n`;
+  await writeFileEnsured(filepath, updateComputeBudgetLog(withStrategy, budgetRow));
 
-  return `Experiment memory updated: ${entry.name}`;
+  return `Experiment memory updated: ${finalized.name}`;
 }
 
-// ─── Review State ─────────────────────────────────────────────────────────────
+export async function recordFailedExperimentEntry(
+  entry: FailedExperimentEntry,
+  policy: ResearchMemoryPolicy = {}
+): Promise<string> {
+  const normalized = normalizePolicy(policy);
+  ensureProjectScope(normalized);
 
-/**
- * Read current review state. Returns null if no state file exists.
- */
-export async function getReviewState(): Promise<ReviewState | null> {
-  const filepath = researchPath("REVIEW_STATE.json");
+  const finalized = finalizeCommonFields(entry, normalized, [
+    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.trackId ?? "",
+    entry.name,
+    "failure",
+  ]);
+
+  const date = new Date().toISOString().split("T")[0];
+  const common = formatCommonFields(finalized);
+  const block = `### ${finalized.name} — ${date} (FAILED)
+${common}- **Task**: ${finalized.taskType}
+- **Dataset**: ${finalized.dataset}
+- **Model**: ${finalized.model ?? "—"}
+- **Key hyperparameters**:
+${formatKeyValueList(finalized.hyperparams)}
+- **Result summary**: ${finalized.resultSummary ?? "—"}
+- **Failure bucket**: ${finalized.failureBucket ?? "—"}
+- **Failure mode**: ${finalized.failureMode}
+- **Do not retry unless**: ${finalized.retryCondition ?? "—"}
+- **Training time**: ${
+    finalized.trainingTimeHours !== undefined && finalized.gpuType
+      ? `~${finalized.trainingTimeHours}h on ${finalized.gpuType}`
+      : "—"
+  }
+`;
+
+  const filepath = memoryPath("experiment-memory.md", normalized);
+  const existing = await readFileSafe(filepath);
+  ensureNoDuplicateSignature(existing, finalized.signature ?? "");
+
+  let updated = insertAfterSection(
+    existing,
+    "## Failed Experiment Catalog",
+    block
+  );
+
+  if (finalized.trainingTimeHours !== undefined && finalized.gpuType) {
+    const budgetRow = `| ${finalized.projectId ?? "—"} | ${finalized.name} | ${finalized.gpuType} | ${finalized.trainingTimeHours} | ${date} |\n`;
+    updated = updateComputeBudgetLog(updated, budgetRow);
+  }
+
+  await writeFileEnsured(filepath, updated);
+  return `Failed experiment memory updated: ${finalized.name}`;
+}
+
+export async function getReviewState(
+  policy: ResearchMemoryPolicy = {}
+): Promise<ReviewState | null> {
+  const normalized = normalizePolicy(policy);
+  const filepath = researchPath("REVIEW_STATE.json", normalized);
   const content = await readFileSafe(filepath);
   if (!content) return null;
   try {
@@ -218,26 +501,27 @@ export async function getReviewState(): Promise<ReviewState | null> {
   }
 }
 
-/**
- * Write review state. Called at the end of each review round.
- */
-export async function setReviewState(state: ReviewState): Promise<string> {
-  const filepath = researchPath("REVIEW_STATE.json");
-  await fs.mkdir(path.dirname(filepath), { recursive: true });
-  await fs.writeFile(filepath, JSON.stringify(state, null, 2), "utf-8");
+export async function setReviewState(
+  state: ReviewState,
+  policy: ResearchMemoryPolicy = {}
+): Promise<string> {
+  const normalized = normalizePolicy(policy);
+  ensureProjectScope(normalized);
+
+  const filepath = researchPath("REVIEW_STATE.json", normalized);
+  await writeFileEnsured(filepath, `${JSON.stringify(state, null, 2)}\n`);
   return `Review state saved: round=${state.round}, status=${state.status}, score=${state.lastScore}`;
 }
 
-/**
- * Check whether a review loop should be resumed or restarted.
- * Returns: "resume" | "restart" | "none"
- */
-export async function checkReviewResumability(): Promise<{
+export async function checkReviewResumability(
+  policy: ResearchMemoryPolicy = {}
+): Promise<{
   action: "resume" | "restart" | "none";
   state: ReviewState | null;
   reason: string;
 }> {
-  const state = await getReviewState();
+  const normalized = normalizePolicy(policy);
+  const state = await getReviewState(normalized);
 
   if (!state) {
     return { action: "none", state: null, reason: "No review state found." };
@@ -251,15 +535,16 @@ export async function checkReviewResumability(): Promise<{
     };
   }
 
-  const stateAge =
-    Date.now() - new Date(state.timestamp).getTime();
-  const twentyFourHours = 24 * 60 * 60 * 1000;
+  const stateAgeMs = Date.now() - new Date(state.timestamp).getTime();
+  const maxAgeMs = normalized.reviewStateMaxAgeHours * 60 * 60 * 1000;
 
-  if (stateAge > twentyFourHours) {
+  if (stateAgeMs > maxAgeMs) {
     return {
       action: "restart",
       state,
-      reason: `Review state expired (last updated ${Math.floor(stateAge / 3600000)}h ago). Restarting.`,
+      reason: `Review state expired (last updated ${Math.floor(
+        stateAgeMs / 3600000
+      )}h ago). Restarting.`,
     };
   }
 
@@ -270,25 +555,27 @@ export async function checkReviewResumability(): Promise<{
   };
 }
 
-// ─── Daily Log ────────────────────────────────────────────────────────────────
+export async function appendDailyLog(
+  params: {
+    phase: string;
+    whatWasDone: string[];
+    keyDecisions: string[];
+    results?: string[];
+    nextSteps: string[];
+  },
+  policy: ResearchMemoryPolicy = {}
+): Promise<string> {
+  const normalized = normalizePolicy(policy);
+  ensureProjectScope(normalized);
 
-/**
- * Append a session summary to the daily memory log.
- * Called by the before-compaction hook.
- */
-export async function appendDailyLog(params: {
-  phase: string;
-  whatWasDone: string[];
-  keyDecisions: string[];
-  results?: string[];
-  nextSteps: string[];
-}): Promise<string> {
   const now = new Date();
   const dateStr = now.toISOString().split("T")[0];
   const timeStr = now.toTimeString().slice(0, 5);
 
   const formatList = (items: string[]) =>
-    items.map((i) => `- ${i}`).join("\n");
+    uniqueStrings(items)
+      .map((item) => `- ${item}`)
+      .join("\n");
 
   const block = `
 ## ${timeStr} — Session Summary
@@ -305,17 +592,13 @@ ${
 ${formatList(params.nextSteps)}
 `;
 
-  const filepath = memoryPath(`${dateStr}.md`);
+  const filepath = memoryPath(`${dateStr}.md`, normalized);
   const existing = await readFileSafe(filepath);
   if (!existing) {
-    await fs.writeFile(
-      filepath,
-      `# Research Log — ${dateStr}\n${block}`,
-      "utf-8"
-    );
+    await writeFileEnsured(filepath, `# Research Log — ${dateStr}\n${block}`);
   } else {
     await appendToFile(filepath, block);
   }
 
-  return `Daily log appended: memory/${dateStr}.md`;
+  return `Daily log appended: ${filepath}`;
 }

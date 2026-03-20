@@ -1,51 +1,101 @@
 # openclaw-research
 
-基于 OpenClaw 的自动化科研 Plugin，实现从选题到论文的端到端闭环。
+An OpenClaw plugin for end-to-end automated research, from topic discovery to paper draft.
+
+The current version emphasizes three things:
+
+- Build a local PaperNexus graph before idea discovery
+- Use file-backed state to support multi-project execution and reduce memory leakage across projects
+- Enforce a `CLAIM_EVIDENCE_MATRIX` evidence gate before paper writing
+
+It also upgrades the workflow from a simple ordered checklist to a state machine with a track portfolio:
+
+- `PROJECT_MANIFEST.json` maintains coarse stage, micro-stage, budget, and gate state
+- `TRACK_REGISTRY.json` maintains candidate / active / parked / killed hypothesis tracks
+- `CLAIM_POLICY.md` defines how claims can move from analysis into writing
 
 ## Architecture
 
-**双 Agent 架构**（记忆隔离）：
+**Dual-agent architecture** (with memory isolation):
 
-- **Researcher Agent** — 执行侧：选题、实验、代码、分析（SSH 远程 GPU）
-- **Reviewer Agent** — 审稿侧：独立评审，不看实现细节（只读，无代码执行权限）
+- **Researcher Agent** — orchestration side: topic discovery, track decisions, stage progression, and recovery
+- **Coder Agent** — execution side: experiment implementation and atomic remote experiment launch
+- **Reviewer Agent** — review side: independent evaluation without implementation details (read-only, no code execution)
 
-**混合审稿模式**：
-- 日常迭代：同模型反思（快速修复）
-- 关键节点：跨 Agent 审稿（独立评审，避免自评盲区）
+**Hybrid review mode**:
 
-**记忆系统**：
-- QMD 后端，per-agent 隔离
-- 按项目隔离：项目目录可配置（`projectsRoot`），记忆在 `{PROJ}/memory/` 下（ideation-memory、experiment-memory、每日日志），多 agent 可访问同一项目根
-- 记忆进化：IDE（选题发现）/ IVE（失败验证）/ ESE（实验策略）
+- Day-to-day iteration: same-model reflection for fast fixes
+- Critical checkpoints: cross-agent review for independent evaluation and reduced self-review blind spots
+
+**Memory system**:
+
+- QMD backend with per-agent isolation
+- Project-level isolation: the project root is configurable via `projectsRoot`, and memory lives under `{PROJ}/memory/` (`ideation-memory`, `experiment-memory`, daily logs)
+- Memory evolution types: IDE (idea discovery), IVE (idea validation failure), ESE (experiment strategy evolution)
+
+**Graph-enhanced ideation**:
+
+- Use PaperNexus to turn local PDF / Markdown literature into an explicit knowledge graph
+- Run `research-lit` before brainstorming, pull full text for key papers, then run `graph-build` and `frontier-mapping`
+- Let `idea-generator` read `FRONTIER_REPORT.md` and ideate from limitation / contradiction / transfer / composition frontiers
+- If `papers-cool` finds a key paper that is not yet in the graph, ingest it before novelty or innovation analysis
+- Maintain a track portfolio instead of picking a single top-1 idea, then apply `advance / merge / park / kill` after pilots
+
+**Pre-writing quality gate**:
+
+- Analyzer must produce `CLAIM_EVIDENCE_MATRIX.md`
+- Analyzer also produces `TRACK_VERDICTS.md` to state whether each track should continue
+- Writer may only elevate evidence-backed claims; unsupported claims must be downgraded to exploratory wording or sent back for more evidence
+
+**Soft writing constraints**:
+
+- Analyzer provides `THEORY_SUPPORT_NOTE.md` with only `green / red`
+- Writer produces `STORYLINE_SKETCH.md` first, then summarizes theory / storyline / paragraph logic in `WRITING_SIGNALS.md`
+- `red` does not block draft generation; it only requires more conservative automated writing and explicit risk handoff to human review
 
 ## Skills
 
-| 技能 | 类型 | 说明 |
+| Skill | Type | Description |
 |------|------|------|
-| `research-pipeline` | 编排 | 端到端全流程 |
-| `idea-phase` | 编排 | 选题阶段 |
-| `research-lit` | 原子 | 文献调研 |
-| `idea-generator` | 原子 | 想法生成 + pilot |
-| `novelty-check` | 原子 | 新颖性验证 |
-| `experiment-phase` | 编排 | 实验阶段 |
-| `run-experiment` | 原子 | SSH 部署实验 |
-| `monitor-experiment` | 原子 | 监控实验 |
-| `analyze-results` | 原子 | 结果分析 |
-| `review-phase` | 编排 | 混合审稿循环 |
-| `paper-phase` | 编排 | 论文阶段 |
-| `paper-plan` | 原子 | 论文大纲 |
-| `paper-write` | 原子 | LaTeX 写作 |
-| `paper-compile` | 原子 | 编译 PDF |
-| `research-reflect` | 原子 | 反思检查点 |
+| `research-pipeline` | Orchestration | End-to-end pipeline |
+| `graph-build` | Atomic | Build or refresh the project-scoped PaperNexus literature graph |
+| `frontier-mapping` | Atomic | Extract limitation / contradiction / transfer / composition frontiers from the graph |
+| `idea-phase` | Orchestration | Idea discovery stage |
+| `research-lit` | Atomic | Literature research |
+| `papernexus` | Atomic | PaperNexus corpus/status/watch/refresh operations |
+| `papernexus-agentic-reasoning` | Atomic | Structured graph-grounded innovation analysis |
+| `idea-generator` | Atomic | Idea generation plus pilots |
+| `novelty-check` | Atomic | Novelty verification |
+| `experiment-phase` | Orchestration | Experiment stage |
+| `run-experiment` | Atomic | SSH-based experiment deployment |
+| `monitor-experiment` | Atomic | Experiment monitoring |
+| `resume-pipeline` | Recovery | Per-agent pipeline recovery from state files |
+| `analyze-results` | Atomic | Result analysis |
+| `papernexus-reflection` | Atomic | Use reflection overlays to explain why experiments succeeded or failed |
+| `review-phase` | Orchestration | Hybrid review loop |
+| `paperreview-submit` | Atomic | Submit a PDF to paperreview.ai for external AI review |
+| `paper-phase` | Orchestration | Paper-writing stage |
+| `paper-plan` | Atomic | Paper outline generation |
+| `paper-write` | Atomic | LaTeX writing |
+| `paper-compile` | Atomic | PDF compilation |
+| `research-reflect` | Atomic | Reflection checkpoint |
 
 ## Quick Start
 
-1. 配置 `openclaw.json`（参考 `openclaw.json` 模板）
-2. 编辑 `agents/researcher/SERVER.md` 填入你的 GPU 服务器信息
-3. 确保 SSH 免密登录已配置
-4. 启动：`/research-pipeline "your research topic"`
+1. Configure `openclaw.json` (see the bundled `openclaw.json` template)
+2. Edit [agents/researcher/SERVER.md](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/agents/researcher/SERVER.md) with your GPU server information
+3. Make sure passwordless SSH is configured
+4. Make sure the `PaperNexus` repository is reachable: prefer `PAPERNEXUS_ROOT`, otherwise the plugin looks for a sibling `PaperNexus/` directory
+5. Launch: `/research-pipeline "your research topic"`
+
+After the first initialization, the project root should contain:
+
+- `PROJECT_MANIFEST.json`
+- `TRACK_REGISTRY.json`
+- `CLAIM_POLICY.md`
+- `graph/`
 
 ## Design References
 
-- **EvoScientist** — 多 Agent 协作 + 记忆进化 + think_tool 反思
-- **ARIS** — Claude Code 技能编排 + 跨模型审稿 + 文件驱动状态
+- **EvoScientist** — multi-agent collaboration, memory evolution, and think_tool-style reflection
+- **ARIS** — Claude Code-style skill orchestration, cross-model review, and file-driven state

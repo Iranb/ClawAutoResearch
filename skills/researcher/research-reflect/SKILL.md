@@ -11,25 +11,26 @@ allowed-tools:
 
 # Research Reflect
 
-结构化反思检查点，借鉴 EvoScientist 的 think_tool 设计。
+Structured reflection checkpoint inspired by EvoScientist's `think_tool` design. Use it to make explicit `advance / merge / park / kill` decisions.
 
 ## When to Trigger
 
-- 基线实验完成（有了参考点）
-- 引入新数据集/模型/训练方法（风险：混淆变量）
-- 连续两次迭代未提升主指标
-- 结果异常（指标不匹配、训练不稳定、意外退化）
+- Baseline experiment completed (you now have a reference point)
+- A new dataset / model / training method was introduced (risk: confounded variables)
+- The primary metric failed to improve for two consecutive iterations
+- Results are abnormal (metric mismatch, unstable training, unexpected regression)
 
 ## Reflection Dimensions
 
-每次反思选取 2-3 个最相关的维度，不必全部覆盖：
+Select the 2-3 most relevant dimensions for each reflection; you do not need to cover all of them:
 
-1. **Progress** — 已完成什么？剩余哪些具体步骤？
-2. **Evidence quality** — 证据是否经得住审稿人质疑？有 CI/error bars 吗？
-3. **Prior knowledge** — 检查 `{PMEM}/ideation-memory.md` 和 `{PMEM}/experiment-memory.md`，是否有可复用的已验证策略或需要避开的失败路径？`{PMEM}` = `{PROJ}/memory`
-4. **Strategy** — 继续当前方案 / 调整 / 换方向？有什么证据支持这个决策？
-5. **Resource & compute** — 预估剩余实验的 GPU 时间和内存需求。需要缩减规模还是可以全量跑？
-6. **Handoff** — 当前阶段的输出是否清晰、完整，可以交给下一阶段？
+1. **Progress** — What has been completed? What concrete steps remain?
+2. **Evidence quality** — Would the evidence survive reviewer scrutiny? Do you have CIs / error bars?
+3. **Prior knowledge** — Check `{PMEM}/ideation-memory.md` and `{PMEM}/experiment-memory.md` for reusable validated strategies or failure paths to avoid. `{PMEM}` = `{PROJ}/memory`
+4. **Strategy** — Continue, adjust, or switch direction? What evidence supports that decision?
+5. **Resource & compute** — Estimate remaining GPU time and memory needs. Should you scale down or run at full scale?
+6. **Handoff** — Are the current outputs clear and complete enough for the next stage?
+7. **Track portfolio** — Which tracks should continue, merge, pause, or terminate?
 
 ## Output Format
 
@@ -37,6 +38,10 @@ allowed-tools:
 {
   "completed": ["Stage 1: baseline on CIFAR-10"],
   "unmet_success_signals": ["Acc gap vs SOTA > 2%"],
+  "track_decisions": [
+    {"track_id": "track_a", "action": "advance", "reason": "pilot positive and novelty intact"},
+    {"track_id": "track_b", "action": "park", "reason": "interesting but lower evidence / budget pressure"}
+  ],
   "stage_modifications": [
     {"stage": "Stage 2", "change": "Add data augmentation ablation"}
   ],
@@ -57,4 +62,11 @@ allowed-tools:
 }
 ```
 
-反思后更新 `{PROJ}/orchestrator/PLAN.md` 和 `{PROJ}/orchestrator/TODOS.md`。`{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+After reflection, update:
+
+- `{PROJ}/TRACK_REGISTRY.json`
+- `{PROJ}/PROJECT_MANIFEST.json`
+- `{PROJ}/orchestrator/PLAN.md`
+- `{PROJ}/orchestrator/TODOS.md`
+
+`{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`

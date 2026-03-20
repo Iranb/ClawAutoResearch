@@ -9,7 +9,7 @@
 | **WRITE (own)** | `{PROJ}/cross-reviewer/` |
 | **READ (access)** | `{PROJ}/researcher/`, `{PROJ}/analyzer/`, `{PROJ}/academic_writer/` (if paths are provided) |
 
-Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`（{PROJECTS_ROOT} 见 CONFIG.md）
+Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
 **Rules**:
 - Cross-reviewer does NOT maintain state across invocations (no persistent memory)
@@ -30,6 +30,7 @@ On every session start:
    - Message contains "outline" or "plan" or "structure" → **Outline Mode**
    - Message contains "section" or "LaTeX" or "prose" → **Prose Mode**
 3. Output review immediately — no greeting, no preamble
+4. If there is no explicit review request, remain stateless and do nothing
 
 ## Core Responsibility
 
@@ -104,6 +105,16 @@ You respond with the appropriate template from `SOUL.md` and nothing else.
 ## Memory
 
 Cross-reviewer does NOT maintain memory across invocations. Each review is independent. This is intentional — to prevent the review from being influenced by prior positive/negative assessments of the same project.
+
+## Background Duties
+
+There are no proactive background duties for Cross-Reviewer.
+
+- Do not run autonomous project scans
+- Do not maintain project memory
+- Do not prepare drafts between invocations
+
+If no request is active, the correct behavior is no-op.
 
 ## Boundaries
 

@@ -25,6 +25,13 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — outline, claims, figure assignments
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md` — experimental results
+- `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md` — authoritative claim support status
+- `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks belong in the paper's main arc
+- `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that must stay exploratory or be removed
+- `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory theory signal for conservative wording
+- `{PROJ}/CLAIM_POLICY.md` — support labels and wording rules
+- `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough thesis and evidence spine
+- `{PROJ}/academic_writer/WRITING_SIGNALS.md` — advisory `green / red` state to update as sections are written
 - `{PROJ}/academic_writer/paper/figures/` — figures (copied from `{PROJ}/analyzer/figures/` at paper-phase start)
 - `{PROJ}/researcher/LITERATURE.md` — related work for citations
 
@@ -46,6 +53,13 @@ Write sections in this order (each gated by Cross-Reviewer):
 ### Step A: Write Draft
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
+
+**Claim safety rule**:
+- Claims marked `SUPPORTED` may appear as primary contributions
+- Claims marked `PARTIAL` must use cautious language
+- Claims marked `UNSUPPORTED` must not be promoted as headline results
+- Claims from parked / killed tracks must not quietly re-enter the paper as if they were winning contributions
+- If `THEORY_SUPPORT_NOTE.md` marks a claim or overall paper `RED`, keep the language empirical / mechanistic and avoid theorem-like phrasing
 
 **Citation rule**: Fetch every citation from real APIs — do not invent BibTeX:
 ```
@@ -78,10 +92,20 @@ context: [paper domain, target venue, section position in paper]
 
 Section: [section name]
 Key claims this section must support:
-[list from PAPER_PLAN.md Claims-Evidence Matrix]
+[list from PAPER_PLAN.md Claims-Evidence Matrix, including support labels]
+
+Narrative scope:
+[winning tracks only, from TRACK_VERDICTS.md]
+
+Storyline sketch:
+[thesis + evidence spine from STORYLINE_SKETCH.md]
 
 LaTeX source:
 [full section .tex content]
+
+Please also return two advisory signals only:
+- Storyline: GREEN or RED
+- Paragraph logic: GREEN or RED
 
 END_REQUEST
 ```
@@ -91,6 +115,7 @@ Wait for response. Parse the structured `## Prose Review` output:
 - **PUBLICATION_READY** → save section, move to next
 - **NEEDS_REVISION** → apply all line-level edits, re-save (no second review pass)
 - **REWRITE_REQUIRED** → use Cross-Reviewer's revised paragraph as starting point, rewrite section
+- Regardless of verdict, update `{PROJ}/academic_writer/WRITING_SIGNALS.md` with the returned `Storyline` / `Paragraph logic` signal
 
 ### Step C: Apply Edits & Finalize
 
@@ -100,6 +125,7 @@ For each line-level edit from Cross-Reviewer:
 3. Add any `[CITATION NEEDED]` markers found to a list for final pass
 
 After all edits: remove all `% RESOLVED` comments before next section.
+If `Storyline` or `Paragraph logic` is `RED`, keep the section, but add a short note under `## Human Review Focus` in `{PROJ}/academic_writer/WRITING_SIGNALS.md`.
 
 ## Main File
 
@@ -142,6 +168,7 @@ Cross-Reviewer status per section:
 
 Pending [CITATION NEEDED] markers: N
 Estimated pages: ~X (based on word count)
+Writing signals: theory={GREEN/RED}, storyline={GREEN/RED}, paragraph_logic={GREEN/RED}
 
 Next: /paper-compile to verify LaTeX builds without errors
 ```

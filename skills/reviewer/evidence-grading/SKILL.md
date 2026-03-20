@@ -53,6 +53,12 @@ evidence_grading.suggest_language(
 ## Output Format
 Returns grade, level label, confidence score, and rationale. For claim-level grading, returns aggregate grade with per-paper breakdown. Hedging language output is ready-to-use prose.
 
+When used inside `openclaw-research`, map the grading result onto workflow-safe labels:
+
+- `strong` / `replicated_benchmark` → `SUPPORTED`
+- `moderate` / `preliminary_benchmark` → `PARTIAL`
+- `weak` / contradicted / anecdotal → `UNSUPPORTED`
+
 ## Notes
 - Grade rubrics are domain-aware: ML/CS standards differ from clinical/biomedical standards
 - Preprints are graded conservatively until peer review is confirmed

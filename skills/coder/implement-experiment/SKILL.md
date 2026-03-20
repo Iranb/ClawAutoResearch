@@ -130,7 +130,7 @@ uv run python train.py --config configs/proposed.yaml --seed 42 \
 Expected: no crash, loss printed, no NaN.
 
 If dry-run fails:
-- ImportError → `uv pip install <package> --index-url https://pypi.tuna.tsinghua.edu.cn/simple`，更新 `requirements.txt`
+- ImportError → `uv pip install <package> --index-url https://pypi.tuna.tsinghua.edu.cn/simple`, then update `requirements.txt`
 - CUDA OOM → halve `batch_size` in config
 - NaN loss → add `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`
 - Shape error → fix with exact shape values from assertion message
@@ -189,6 +189,6 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 
 - Never skip dry-run validation
 - Never write to any folder outside `{PROJ}/coder/`
-- Never run on remote server (Researcher does SSH deployment)
+- Remote deployment is handled separately by `/run-experiment` on the Coder agent when Researcher / `experiment-phase` explicitly assigns it
 - Never modify baseline code from other papers without flagging it
 - If a specification is ambiguous, use the most conservative interpretation and flag it

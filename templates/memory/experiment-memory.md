@@ -13,6 +13,11 @@ Hyperparameter configurations and training strategies that reliably work.
 ### Template Entry
 ```
 ### [Strategy Name] — YYYY-MM-DD
+- **Project ID**: [proj-id]
+- **Track ID**: [track-id]
+- **Signature**: [stable dedupe signature]
+- **Evidence pointers**:
+  - [artifact path / report / log]
 - **Task type**: [classification / generation / RL / etc.]
 - **Dataset**: [name + size]
 - **Model**: [architecture]
@@ -29,6 +34,31 @@ Hyperparameter configurations and training strategies that reliably work.
 ```
 
 <!-- Add entries below as strategies prove effective -->
+
+---
+
+## Failed Experiment Catalog
+
+Experiments that consumed budget but failed, so future agents can avoid near-duplicate retries.
+
+### Template Entry
+```
+### [Experiment Name] — YYYY-MM-DD (FAILED)
+- **Project ID**: [proj-id]
+- **Track ID**: [track-id]
+- **Signature**: [stable dedupe signature]
+- **Evidence pointers**:
+  - [artifact path / report / log]
+- **Task**: [task type]
+- **Dataset**: [dataset]
+- **Model**: [architecture]
+- **Result summary**: [what happened]
+- **Failure bucket**: [optimization / implementation / compute / data / evaluation]
+- **Failure mode**: [why it failed]
+- **Do not retry unless**: [condition that would materially change the outcome]
+```
+
+<!-- Add failed entries below as experiments fail -->
 
 ---
 

@@ -6,6 +6,26 @@
   // ── 项目根目录：独立于各 agent 的 workspace，所有 agent 均可访问（可指定为任意路径）
   projectsRoot: "~/.openclaw/projects",
 
+  plugins: {
+    enabled: true,
+    load: {
+      paths: ["."]
+    },
+    entries: {
+      "openclaw-research": {
+        enabled: true,
+        config: {
+          allowWorkspaceFallback: false,
+          requireProjectIsolation: true,
+          requireProjectIdInEntries: true,
+          requireTrackId: true,
+          requireEvidencePointers: true,
+          reviewStateMaxAgeHours: 24
+        }
+      }
+    }
+  },
+
   agents: {
     list: [
       // ── Main Orchestrator ──────────────────────────────────────────
@@ -22,7 +42,7 @@
         skills: ["~/.openclaw/skills", "./skills/researcher"],
         subagents: {
           maxSpawnDepth: 2,
-          allowAgents: ["orchestrator", "coder", "analyzer", "academic_writer", "reviewer"]
+          allowAgents: ["orchestrator", "coder", "analyzer", "academic_writer", "reviewer", "cross-reviewer"]
         },
         sandbox: {
           mode: "off"  // needs SSH access to remote GPU servers
@@ -48,7 +68,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit"],
+          allow: ["read", "write", "edit", "research_memory"],
           deny: ["bash", "exec", "process"]
         }
       },
@@ -62,14 +82,14 @@
         model: {
           default: "modelstudio/glm-5"
         },
-        // Coder has only its own implementation skill
+        // Coder owns implementation plus atomic remote execution / resume skills
         skills: ["~/.openclaw/skills", "./skills/coder"],
         sandbox: {
-          mode: "non-main"
+          mode: "off"
         },
         tools: {
-          allow: ["read", "write", "edit", "bash"],
-          // bash allowed for local dry-run validation only (no SSH)
+          allow: ["read", "write", "edit", "bash", "research_memory"],
+          // bash allowed for local dry-run validation and remote SSH execution
           deny: []
         }
       },
@@ -89,7 +109,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit", "bash"],
+          allow: ["read", "write", "edit", "bash", "research_memory"],
           // bash allowed for running Python analysis/plotting scripts
           deny: []
         }
@@ -110,7 +130,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit", "web_search", "web_fetch"],
+          allow: ["read", "write", "edit", "web_search", "web_fetch", "research_memory"],
           deny: ["bash", "exec", "process"]
         }
       },
@@ -128,15 +148,15 @@
           // Examples: "modelstudio/glm-5", "modelstudio/kimi-k2.5"
           default: "modelstudio/glm-5"
         },
-        // Reviewer has only review-phase skill
+        // Reviewer handles both internal review and external AI review submission.
         skills: ["~/.openclaw/skills", "./skills/reviewer"],
         sandbox: {
           mode: "all",
           scope: "agent"
         },
         tools: {
-          allow: ["read", "write", "edit", "memory_search", "memory_get", "web_search", "web_fetch"],
-          deny: ["bash", "exec", "process"]
+          allow: ["read", "write", "edit", "bash", "memory_search", "memory_get", "web_search", "web_fetch", "research_memory"],
+          deny: ["exec", "process"]
         }
       },
 
@@ -151,6 +171,7 @@
         model: {
           default: "modelstudio/glm-5"
         },
+        skills: ["~/.openclaw/skills", "./skills/cross-reviewer"],
         sandbox: {
           mode: "all",
           scope: "agent"

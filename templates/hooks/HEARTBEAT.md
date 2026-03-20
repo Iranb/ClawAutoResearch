@@ -3,6 +3,7 @@
 > This file is read by OpenClaw's heartbeat mechanism (every 2h by default).
 > On each heartbeat trigger, execute ALL applicable steps below.
 > This replaces the "before-compaction" hook with a time-based state flush.
+> Deployed from plugin `templates/hooks/` to workspace roots by install script.
 
 ## When to Execute
 
@@ -16,7 +17,7 @@ If any project is active, ensure `{PROJ}/orchestrator/TODOS.md` is current:
 - Add any new tasks discovered since last heartbeat
 - Record any blocked items with blocking reason
 
-(`{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`，{PROJECTS_ROOT} 见 CONFIG.md)
+(`{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`; see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
 ## Step 2: Save Daily Log
 

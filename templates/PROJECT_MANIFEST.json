@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "project_id": "proj_xxx",
+  "title": "replace me",
+  "domain": null,
+  "status": "active",
+  "owner_agent": "researcher",
+  "current_stage": "setup",
+  "current_micro_stage": "project_init",
+  "target_venues": [],
+  "primary_metric": null,
+  "active_track_ids": [],
+  "parked_track_ids": [],
+  "killed_track_ids": [],
+  "primary_track_id": null,
+  "next_action": null,
+  "resume_action": null,
+  "blocking_reason": null,
+  "required_artifacts": [],
+  "last_heartbeat_at": null,
+  "last_handoff_at": null,
+  "papernexus_root": null,
+  "papernexus_corpus": null,
+  "paper_source_dir": null,
+  "graph_source_dir": null,
+  "graph_last_built_at": null,
+  "frontier_report": null,
+  "graph_reasoning": {
+    "required": true,
+    "last_reasoning_refresh_at": null,
+    "last_question_packet_dir": null,
+    "last_trace_path": null,
+    "last_synthesis_packet_path": null,
+    "stop_status": "unknown",
+    "stop_reason": null
+  },
+  "paper_ingestion": {
+    "last_ingested_at": null,
+    "last_graph_sync_at": null,
+    "new_files_since_graph": 0,
+    "changed_files_since_graph": 0,
+    "refresh_required": false,
+    "refresh_reason": null,
+    "graph_presence_checked_at": null
+  },
+  "graph_watch": {
+    "enabled": false,
+    "status": "unknown",
+    "last_started_at": null,
+    "last_checked_at": null
+  },
+  "memory_scope": {
+    "project_isolated": true,
+    "allow_domain_promotion": false,
+    "last_promotion_at": null
+  },
+  "audit": {
+    "last_stage_audited": null,
+    "idea_audit_path": null,
+    "plan_audit_path": null,
+    "quality_audit_path": null,
+    "writing_audit_path": null,
+    "last_audit_at": null
+  },
+  "handoff": {
+    "from_agent": null,
+    "to_agent": null,
+    "reason": null,
+    "timestamp": null
+  },
+  "claim_policy_path": "CLAIM_POLICY.md",
+  "budget": {
+    "gpu_hours_total": null,
+    "gpu_hours_used": 0,
+    "api_budget_usd": null,
+    "deadline": null
+  },
+  "gates": {
+    "quality": "pending",
+    "budget": "pending",
+    "risk": "pending",
+    "scope": "pending",
+    "publishability": "pending"
+  },
+  "created_at": "1970-01-01T00:00:00Z",
+  "updated_at": "1970-01-01T00:00:00Z"
+}

@@ -1,0 +1,71 @@
+{
+  "id": "openclaw-research",
+  "name": "OpenClaw Research",
+  "description": "Multi-agent research workflow: ideation, experiment, analysis, paper, review.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowWorkspaceFallback": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow research memory writes to fall back to workspace-level memory when OPENCLAW_PROJECT is unset."
+      },
+      "requireProjectIsolation": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require OPENCLAW_PROJECT for research memory writes."
+      },
+      "requireProjectIdInEntries": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require each structured memory entry to resolve to a project id."
+      },
+      "requireTrackId": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require track ids for idea and experiment memory writes."
+      },
+      "requireEvidencePointers": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require evidence pointers when writing structured research memory."
+      },
+      "reviewStateMaxAgeHours": {
+        "type": "number",
+        "minimum": 1,
+        "default": 24,
+        "description": "Maximum age of REVIEW_STATE.json before review resumability suggests a restart."
+      }
+    }
+  },
+  "uiHints": {
+    "allowWorkspaceFallback": {
+      "label": "Allow Workspace Fallback"
+    },
+    "requireProjectIsolation": {
+      "label": "Require Project Isolation"
+    },
+    "requireProjectIdInEntries": {
+      "label": "Require Project ID"
+    },
+    "requireTrackId": {
+      "label": "Require Track ID"
+    },
+    "requireEvidencePointers": {
+      "label": "Require Evidence Pointers"
+    },
+    "reviewStateMaxAgeHours": {
+      "label": "Review State Max Age (Hours)"
+    }
+  },
+  "skills": [
+    "./skills/researcher",
+    "./skills/reviewer",
+    "./skills/orchestrator",
+    "./skills/coder",
+    "./skills/analyzer",
+    "./skills/academic_writer",
+    "./skills/cross-reviewer"
+  ]
+}

@@ -9,11 +9,11 @@
 | **WRITE (own)** | `{PROJ}/orchestrator/` |
 | **READ (access)** | Everything under `{PROJ}/` |
 
-Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`（{PROJECTS_ROOT} 见 CONFIG.md）
+Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
 **Rules**:
 - Create files ONLY inside `{PROJ}/orchestrator/`
-- NEVER write to researcher/, coder/, analyzer/, writer/, reviewer/ folders
+- NEVER write to researcher/, coder/, analyzer/, academic_writer/, reviewer/ folders
 - `{PROJ}/orchestrator/TODOS.md` is a shared file — other agents append to it, do NOT restructure or delete their entries
 
 ## Session Startup
@@ -21,24 +21,51 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`（{PROJECTS_ROOT} 见 CON
 On every session start:
 1. Read `SOUL.md` (identity and principles)
 2. Check `{PROJ}/researcher/IDEA_REPORT.md` — understand the confirmed research idea
-3. Check `{PROJ}/orchestrator/PLAN.md` — if exists, understand current plan state
-4. Check `{PROJ}/orchestrator/TODOS.md` — if exists, understand current progress
+3. Check `{PROJ}/TRACK_REGISTRY.json` — understand active / parked tracks and latest decisions
+4. Check `{PROJ}/orchestrator/PLAN.md` — if exists, understand current plan state
+5. Check `{PROJ}/orchestrator/TODOS.md` — if exists, understand current progress
+6. Check `{PROJ}/researcher/FRONTIER_REPORT.md` and `{PROJ}/graph/subgraphs/` when available — preserve graph-backed innovation evidence during planning
+7. Check `{PROJ}/researcher/reasoning/` when available — inherit the latest question packets, working memory, and synthesis packets for active tracks
+8. Check `{PROJ}/PROJECT_MANIFEST.json` — confirm `project_id`, current owner, active stage, and current `next_action`
 
 ## Core Responsibilities
 
 You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Design the experiment plan from a confirmed idea (`IDEA_REPORT.md`)
+- Turn graph-backed opportunities into a bounded innovation package before planning details
+- Convert graph reasoning packets into executable hypotheses, baselines, rollback rules, and measurement plans
+- Convert a track portfolio into a bounded experiment program
 - Break the plan into sequenced, atomic tasks in `TODOS.md`
 - Update the plan when experiments reveal unexpected results
 - Define clear success criteria and fallback strategies
+- Write `{PROJ}/orchestrator/PLAN_AUDIT.md` so Researcher can safely advance to CODE
 
 ## Input → Output Contract
 
-**Input**: `{PROJ}/researcher/IDEA_REPORT.md` (confirmed idea with pilot results)
+**Input**: `{PROJ}/researcher/IDEA_REPORT.md` (confirmed idea with pilot results), `{PROJ}/TRACK_REGISTRY.json`
 
 **Output**:
 - `{PROJ}/orchestrator/PLAN.md` — full experiment plan
 - `{PROJ}/orchestrator/TODOS.md` — tracked task list
+- `{PROJ}/orchestrator/PLAN_AUDIT.md` — baseline / control / compute / rollback audit
+- one plan section per active track, including stop / rollback / kill criteria
+
+## Background Duties (when waiting)
+
+If Researcher has not yet advanced the project but planning context already exists, you may do bounded planning-side background work under `{PROJ}/orchestrator/`:
+
+- tighten compute estimates and fallback trees
+- precompute ablation / baseline coverage checklists
+- stress-test stop / rollback / kill rules
+- refine innovation packaging from graph evidence without changing the chosen active tracks
+- tighten plans against unresolved anchors, weakest assumptions, and explicit falsifiers captured in the reasoning packet
+- maintain a risk register or blocked-task notes in planning docs
+
+Do not:
+
+- execute code or launch experiments
+- rewrite another agent's files
+- silently broaden scope or reactivate parked/killed tracks
 
 ## PLAN.md Template
 
@@ -99,3 +126,5 @@ If Stage 2 fails (< baseline): [specific alternative]
 - Do not write analysis or paper sections
 - Do not modify files in any other agent's folder
 - Deliver plan and todos, then yield control back to Researcher
+- Prefer narrowing to 1–2 strong tracks over keeping a bloated portfolio
+- Emit a structured handoff summary when blocked or complete so Researcher can update the manifest

@@ -20,6 +20,11 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 ## Input
 
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md` — key results and analysis
+- `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md` — authoritative claim support ledger from Analyzer
+- `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks are writing-safe to foreground
+- `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that cannot yet be elevated
+- `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory theory / mechanism signal
+- `{PROJ}/CLAIM_POLICY.md` — label-to-wording constraints
 - `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback from experiment review cycle
 - `{PROJ}/analyzer/figures/` — available figures
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
@@ -28,9 +33,12 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 
 ### 1. Extract Claims
 
-From `NARRATIVE_REPORT.md`, extract all claims the paper will make:
-- Each claim must have a corresponding experiment result as evidence
-- Build a Claims-Evidence matrix:
+Start from `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, not from free-form memory:
+- preserve `SUPPORTED / PARTIAL / UNSUPPORTED` labels
+- each primary paper claim must map to concrete evidence
+- if a claim is `UNSUPPORTED`, it cannot remain a headline contribution
+- only claims from tracks endorsed by `TRACK_VERDICTS.md` may become paper contributions
+- build or refine the Claims-Evidence matrix used by the writer:
 
 ```markdown
 | # | Claim | Evidence | Figure/Table | Section |
@@ -40,9 +48,30 @@ From `NARRATIVE_REPORT.md`, extract all claims the paper will make:
 | 3 | Method scales to larger datasets | Fig 3: consistent gains on Z | Fig 3 | §5.3 |
 ```
 
-Flag any claim without evidence — either find evidence or remove the claim.
+Flag any claim without evidence — either find evidence, downgrade the wording, or remove the claim.
 
-### 2. Section Outline
+### 2. Storyline Sketch
+
+Before expanding the outline, write `{PROJ}/academic_writer/STORYLINE_SKETCH.md`:
+
+```markdown
+# Storyline Sketch
+
+- Thesis: [one-sentence paper claim]
+- Problem: [what matters]
+- Gap / tension: [what prior work misses]
+- Core idea: [what this paper does]
+- Evidence spine: [claim 1 -> evidence, claim 2 -> evidence]
+- Limitation boundary: [what the paper does not prove]
+- Storyline signal: [GREEN or RED]
+```
+
+Rules:
+- Only use `GREEN` or `RED`
+- `RED` means the storyline is still loose, not that writing must stop
+- If `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` is `RED`, reflect that in the limitation boundary instead of inventing stronger theory
+
+### 3. Section Outline
 
 Write the section-level outline with concrete targets:
 
@@ -74,7 +103,7 @@ Write the section-level outline with concrete targets:
 - Summary, limitations, future work
 ```
 
-### 3. Figure Plan
+### 4. Figure Plan
 
 For each planned figure, specify:
 ```markdown
@@ -85,7 +114,7 @@ For each planned figure, specify:
 | Fig 3 | Line plot | results/scaling_*.json | Consistent gains | §4.4 |
 ```
 
-### 4. Cross-Reviewer Validation
+### 5. Cross-Reviewer Validation
 
 Send the complete outline to the **Cross-Reviewer Agent**:
 
@@ -103,13 +132,23 @@ Claims-Evidence Matrix:
 [full matrix from Step 1]
 
 Section Outline:
-[full outline from Step 2]
+[full outline from Step 3]
 
 Figure Plan:
-[full figure plan from Step 3]
+[full figure plan from Step 4]
 
 Key results summary:
 [3-sentence summary of main experimental findings]
+
+Winning track scope:
+[summary derived from TRACK_VERDICTS.md]
+
+Theory support note:
+[summary from THEORY_SUPPORT_NOTE.md]
+
+Please also return two advisory signals only:
+- Theory: GREEN or RED
+- Storyline: GREEN or RED
 
 END_REQUEST
 ```
@@ -118,13 +157,33 @@ Wait for Cross-Reviewer response. Parse:
 - **Overall quality** assessment
 - **Missing elements** checklist → add missing experiments to TODOS.md if any
 - **Priority fixes** list → resolve before writing begins
+- **Advisory signals** → update `{PROJ}/academic_writer/WRITING_SIGNALS.md`
 
-### 5. Resolve Blockers
+### 6. Resolve Blockers
 
 For each item in Cross-Reviewer's "Priority Fixes":
 1. If it requires a new experiment → add task to `{PROJ}/orchestrator/TODOS.md`, mark outline section as `[PENDING EXPERIMENT]`
 2. If it's a structural fix → update the outline in-place
 3. If it's minor → note as TODO for writing phase
+4. If it is an unsupported primary claim → remove it from the contribution list or explicitly downgrade it
+5. If the paper is too broad → cut the weaker track or move it to limitations / future work
+6. If Theory or Storyline is `RED` → continue, but write the risk explicitly into `{PROJ}/academic_writer/WRITING_SIGNALS.md` for human review
+
+Write `{PROJ}/academic_writer/WRITING_SIGNALS.md` with:
+
+```markdown
+# Writing Signals
+
+- Theory: GREEN
+- Storyline: RED
+- Paragraph logic: RED
+
+## Human Review Focus
+- Tighten opening thesis in Introduction
+- Revisit paragraph transitions in Related Work and Conclusion
+```
+
+At this stage, `paragraph_logic` defaults to `RED` until `/paper-write` performs section-level checks.
 
 Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
@@ -132,7 +191,12 @@ Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date
 
 `{PROJ}/academic_writer/PAPER_PLAN.md` containing:
 - Claims-Evidence Matrix (verified)
+- Storyline Sketch reference
 - Section Outline (validated by Cross-Reviewer)
 - Figure Plan
 - Cross-Reviewer assessment (appended verbatim)
 - List of any pending experiments needed before writing
+
+Also write:
+- `{PROJ}/academic_writer/STORYLINE_SKETCH.md`
+- `{PROJ}/academic_writer/WRITING_SIGNALS.md`

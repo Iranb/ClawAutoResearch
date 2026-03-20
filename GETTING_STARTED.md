@@ -1,190 +1,227 @@
-## 第一次运行指南 — openclaw-research 插件
+## First Run Guide — openclaw-research plugin
 
-> 本文档介绍：插件安装完成后，如何启动第一次「自动化科研」运行。  
-> **多科研方向并行**或**多台 GPU 服务器**配置见 [CONFIG.md](./CONFIG.md)。
+> This document explains how to start your first automated research run after installing the plugin.
+> For multiple research directions or multiple GPU servers, see [CONFIG.md](./CONFIG.md).
 
 ---
 
-## Install 后需要配置的内容
+## Configuration Required After Installation
 
-安装脚本**不会修改**你本机的 `openclaw.json`，只会在 `~/.openclaw/` 下创建 workspace、技能、`openclaw-research.json` 等，并输出修改建议到 `openclaw-research-suggested-changes.txt`。完成 install 后，按需完成下面配置即可运行。
+The install script does **not** modify your existing `openclaw.json`. It only creates workspaces, skills, `openclaw-research.json`, and related files under `~/.openclaw/`, then writes suggested changes to `openclaw-research-suggested-changes.txt`. After installation, complete the following configuration as needed.
 
-| 配置项 | 是否必选 | 说明 |
+| Item | Required | Notes |
 |--------|----------|------|
-| **OpenClaw 主配置** | **必选** | 确保 OpenClaw 使用的 `openclaw.json`（通常在 `~/.openclaw/openclaw.json` 或你指定的路径）里包含 researcher / orchestrator / coder / analyzer / academic_writer / reviewer / cross-reviewer 等 agent 定义，以及各 agent 的 `workspace`、`skills`、`subagents.allowAgents` 等。可直接参考插件内的 `openclaw.json`，或按 `openclaw-research-suggested-changes.txt` 中的建议**手动**编辑。 |
-| **项目根目录 projectsRoot** | 可选 | 若希望项目不在默认 `~/.openclaw/projects` 下，在 openclaw.json 顶层增加 `projectsRoot: "你的路径"`（如 `"~/ResearchProjects"`）。安装脚本不会改 openclaw.json；若你已手动配置 projectsRoot，可同时把相同值写入 `~/.openclaw/openclaw-research.json` 的 `projectsRoot` 键，供 agent 解析。 |
-| **运行模式（AUTO_PROCEED / PROJECT_MODE）** | 推荐 | 编辑 `~/.openclaw/workspace-researcher/WORKFLOW.md` 顶部：`AUTO_PROCEED: false`（每阶段等人）、`PROJECT_MODE: single`（单项目）。 |
-| **GPU 服务器 servers** | 需要跑实验时必选 | **不在 openclaw.json 配置**。全局默认写在 `~/.openclaw/openclaw-research.json` 的 `servers`；或在该项目目录下放 `{PROJ}/servers.json` 覆盖（见 [CONFIG.md](./CONFIG.md)）。并确保 SSH 免密、`nvidia-smi`、`screen`、`uv` 等在该主机可用。 |
-| **Researcher 服务器信息（SERVER.md）** | 需要跑实验时推荐 | 在 researcher 的 agent 目录或 workspace 下提供 `SERVER.md`（SSH 别名、远程目录、uv 路径等），供 `/experiment-phase` 使用。具体路径以你当前 OpenClaw/agent 布局为准。 |
-| **项目目录** | 可选 | 首次跑 pipeline 前可先建项目目录，例如 `mkdir -p ~/.openclaw/projects/我的项目id`（若改了 projectsRoot 则在其下建）。不建也可，由 researcher 在运行时创建。 |
+| **OpenClaw main config** | **Required** | Make sure the `openclaw.json` used by OpenClaw (usually `~/.openclaw/openclaw.json` or a custom path) contains agent definitions for researcher / orchestrator / coder / analyzer / academic_writer / reviewer / cross-reviewer, plus each agent's `workspace`, `skills`, and `subagents.allowAgents`. You can copy from the plugin's `openclaw.json` or manually apply the suggestions from `openclaw-research-suggested-changes.txt`. |
+| **Project root `projectsRoot`** | Optional | If you do not want projects under the default `~/.openclaw/projects`, add `projectsRoot: "your path"` at the top level of `openclaw.json`, for example `"~/ResearchProjects"`. The install script will not modify `openclaw.json`; if you already set `projectsRoot` manually, you can also write the same value into `~/.openclaw/openclaw-research.json` for agent-side resolution. |
+| **Run mode (`AUTO_PROCEED` / `PROJECT_MODE`)** | Recommended | Edit `~/.openclaw/workspace-researcher/WORKFLOW.md` and set `AUTO_PROCEED: false` and `PROJECT_MODE: single` for an interactive first run. |
+| **PaperNexus path** | Recommended | The new pipeline starts with graph build. Make sure the `PaperNexus` repository is adjacent to this plugin, or set the `PAPERNEXUS_ROOT` environment variable. |
+| **GPU servers** | Required when running experiments | Do **not** put this in `openclaw.json`. The global default lives in `~/.openclaw/openclaw-research.json` under `servers`, or you can override it per project with `{PROJ}/servers.json` (see [CONFIG.md](./CONFIG.md)). Make sure passwordless SSH, `nvidia-smi`, `screen`, and `uv` are available on the target host. |
+| **Researcher / Coder server info (`SERVER.md`)** | Recommended when running experiments | Provide `SERVER.md` in the researcher agent directory or workspace with SSH aliases, remote directories, uv path, and similar deployment info. `researcher:/experiment-phase` and `coder:/run-experiment` read from it. |
+| **Project directory** | Optional | You may create the project directory before the first pipeline run, for example `mkdir -p ~/.openclaw/projects/my_project_id`. If you do not create it, Researcher can initialize it at runtime. |
 
-以上都配好后，在 OpenClaw 中启动 **researcher** 会话，即可执行 `/research-pipeline` 或分阶段技能。
+Once those are in place, start a **researcher** session in OpenClaw and run `/research-pipeline` or individual stage skills.
 
----
+If `OpenClaw gateway restart` happens, or the session is lost or the window is closed, the recommended recovery order is:
 
-### 1. 选择入口 Agent
-
-- **推荐首次入口：`researcher`**
-  - 单项目端到端：从选题 → 实验 → 分析 → 写论文。
-  - 使用本地 `~/.openclaw/workspace-researcher` 及插件提供的 skills。
-- **高级用法：`orchestrator`**
-  - 适合 Discord 多人协作、多个项目并行时使用。
-  - 先熟悉 `researcher` 单项目流程，再切换 orchestrator 做「PI」视角统筹。
-
-在 OpenClaw 中，启动一个新的 **researcher 会话** 作为第一次尝试。
+1. Run `/resume-pipeline` in the `researcher` session first
+2. If the recovery result shows that another agent owns the current stage, run that agent's own `/resume-pipeline`
+3. Only continue with new stage work after state has been reconciled
 
 ---
 
-### 2. 配置运行模式（AUTO_PROCEED 与 Gate）
+### 1. Choose the Entry Agent
 
-打开：
+- **Recommended first entry: `researcher`**
+  - Single-project end-to-end flow: from topic discovery to experiments, analysis, and paper writing
+  - Uses local `~/.openclaw/workspace-researcher` plus the plugin-provided skills
+- **Advanced usage: `orchestrator`**
+  - Better for multi-person collaboration or multiple concurrent projects
+  - Learn the single-project `researcher` flow first, then switch to `orchestrator` for a PI-style coordination view
+
+For your first attempt, start a new **researcher** session in OpenClaw.
+
+---
+
+### 2. Configure Run Mode (`AUTO_PROCEED` and Gates)
+
+Open:
 
 - `~/.openclaw/workspace-researcher/WORKFLOW.md`
 
-检查顶部配置：
+Check the top-level settings:
 
 ```text
-AUTO_PROCEED: false        # true = 全自动，false = 每个 Gate 等你确认
+AUTO_PROCEED: false        # true = fully automatic, false = wait for confirmation at each gate
 GATE_TIMEOUT_HOURS: 24
 PROJECT_MODE: single       # single | queue
 ```
 
-**第一次推荐设置：**
+**Recommended settings for the first run:**
 
-- `AUTO_PROCEED: false`  —— 半自动模式，每个关键阶段会停下来等你决策。
-- `PROJECT_MODE: single` —— 只跑一个项目，不开多项目队列。
+- `AUTO_PROCEED: false` — semi-automatic mode; each key stage pauses for your decision
+- `PROJECT_MODE: single` — one project only; no multi-project queue yet
 
-修改后，**重启 researcher 会话**，让其重新读取最新的 `WORKFLOW.md`。
+After editing, **restart the researcher session** so it reloads the updated `WORKFLOW.md`.
 
 ---
 
-### 3. 准备一个项目目录（可选，但推荐）
+### 3. Prepare a Project Directory (Optional but Recommended)
 
-在**项目根目录**（默认 `~/.openclaw/projects`，可在 openclaw.json 中通过 `projectsRoot` 指定）下新建项目目录，例如：
+Create a project directory under the **project root** (default `~/.openclaw/projects`, configurable via `projectsRoot` in `openclaw.json`), for example:
 
 ```bash
 mkdir -p ~/.openclaw/projects/gcd_v1
 ```
 
-第一次执行 `/research-pipeline` 时，researcher 会：
+The first time you run `/research-pipeline`, Researcher will:
 
-- 在 `{PROJECTS_ROOT}/<proj-id>/` 下创建分工子目录（含 `memory/`、`researcher/`、`orchestrator/` 等）：
-  - `researcher/`、`orchestrator/`、`coder/`、`analyzer/`、`academic_writer/`、`reviewer/`、`cross-reviewer/`
-- 按 `WORKSPACE.md` 和 `WORKFLOW.md` 规定的 ownership 写入文件。
+- Create project state files and agent-owned subdirectories under `{PROJECTS_ROOT}/<proj-id>/`:
+  - `PROJECT_MANIFEST.json`
+  - `TRACK_REGISTRY.json`
+  - `CLAIM_POLICY.md`
+  - `graph/`
+  - `memory/`, `researcher/`, `orchestrator/`, `coder/`, `analyzer/`, `academic_writer/`, `reviewer/`, `cross-reviewer/`
+- Write files according to the ownership rules in `WORKSPACE.md` and `WORKFLOW.md`
 
-你也可以不提前建目录，直接让 researcher 选择合适的 `proj-id` 并初始化。
+You can also skip the manual directory creation and let Researcher choose a suitable `proj-id` and initialize it.
 
 ---
 
-### 4. 启动端到端流水线
+### 4. Launch the End-to-End Pipeline
 
-在 **researcher 会话** 中输入一条指令，附上你想做的研究问题描述，例如：
+In the **researcher session**, enter a command with your research problem description, for example:
 
 ```text
-/research-pipeline "在 ImageNet 上做 Generalized Category Discovery 的自动化实验流水线（baseline + 新方法）"
+/research-pipeline "Automated experiment pipeline for Generalized Category Discovery on ImageNet (baseline + new method)"
 ```
 
-内部会按插件定义的阶段自动推进：
+Internally, the plugin will progress through the defined stages:
 
-1. **IDEA 阶段**
-   - 调用 `/idea-phase`、`/idea-generator`、`/novelty-check`、`/idea-tournament`
-   - 输出：`{PROJ}/researcher/IDEA_REPORT.md`、`LITERATURE.md`
-   - 在 **GATE-1** 停下来向你汇报候选 idea 与新颖性评估。
+1. **GRAPH_BUILD**
+   - Run `/research-lit` first for coarse `papers-cool` discovery and full-text acquisition of key papers
+   - Prefer `/hugging-face-paper-pages` when Markdown is available
+   - If the graph does not yet contain the key papers, refresh the graph before calling `/graph-build`
+   - Output: `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `GRAPH_BUILD_REPORT.md`
+   - This organizes the literature into a queryable PaperNexus corpus
 
-2. **PLAN 阶段**
-   - spawn `orchestrator`（原 planner）执行 `/plan-research`
-   - 输出：`{PROJ}/orchestrator/PLAN.md`、`{PROJ}/orchestrator/TODOS.md`
-   - 在 **GATE-2** 停下来让你确认实验设计与算力预算。
+2. **FRONTIER_MAPPING**
+   - Run `/frontier-mapping`
+   - Output: `{PROJ}/researcher/FRONTIER_REPORT.md` and `graph/subgraphs/`
+   - Extract candidate directions from limitation / contradiction / transfer / composition frontiers
 
-3. **CODE 阶段**
-   - spawn `coder` 执行 `/implement-experiment`
-   - 输出：`{PROJ}/coder/<experiment-name>/` 代码与 `README.md`
+3. **IDEA**
+   - Run `/idea-phase`, `/idea-generator`, `/novelty-check`, and `/idea-tournament`
+   - Input: `LITERATURE.md` + `FRONTIER_REPORT.md`
+   - Output: `{PROJ}/researcher/IDEA_REPORT.md`, `LITERATURE.md`, `TRACK_REGISTRY.json`
+   - Instead of betting on a single idea, it first forms 2-3 active tracks and at most 1 parked track
+   - It pauses at **GATE-1** to report candidate ideas and novelty evaluation
 
-4. **EXPERIMENT 阶段**
-   - researcher 运行 `/experiment-phase`（内部使用 `uv` + 清华源、SSH 到远程 GPU）
-   - 输出：`{PROJ}/researcher/artifacts/results/`、`EXPERIMENT_REGISTRY.md`
-   - 在 **GATE-3** 停下来展示关键指标与相对 baseline 的提升。
+4. **PLAN**
+   - Spawn `orchestrator` to run `/plan-research`
+   - Input: `TRACK_REGISTRY.json`
+   - Output: `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`
+   - Orchestrator uses graph evidence packets to turn innovation ideas into executable plans
+   - `PLAN.md` breaks experiments, budgets, and stop/rollback rules down by track
+   - It pauses at **GATE-2** for experiment design and compute budget confirmation
 
-5. **ANALYZE 阶段**
-   - spawn `analyzer` 调用 `/analyze-results`（+ `scientific-figures`）
-   - 输出：`{PROJ}/analyzer/NARRATIVE_REPORT.md`、`figures/`、`tables/`
+5. **CODE**
+   - Spawn `coder` to run `/implement-experiment`
+   - Output: code and `README.md` under `{PROJ}/coder/<experiment-name>/`
 
-6. **REVIEW（内部审稿）阶段**
-   - spawn `reviewer` 执行 `/review-phase` + `/evidence-grading`
-   - 输出：`{PROJ}/reviewer/REVIEW_REPORT.md`、`REVIEW_STATE.json`
+6. **EXPERIMENT**
+   - Researcher runs `/experiment-phase` (internally using `uv` and SSH to remote GPUs)
+   - Output: `{PROJ}/researcher/artifacts/results/`, `EXPERIMENT_REGISTRY.md`
+   - After each round it decides `advance / merge / park / kill` for each track
+   - It pauses at **GATE-3** to show key metrics and relative baseline gains
 
-7. **WRITE 阶段**
-   - spawn `academic_writer` 执行 `/paper-plan`、`/paper-write`、`/paper-compile`
-   - 调用 `cross-reviewer` 做大纲与段落级审稿
-   - 输出：`{PROJ}/academic_writer/PAPER_PLAN.md`、`paper/sections/`、`paper/main.pdf`
-   - 在 **GATE-4** 停下来让你确认论文稿是否进入外部审稿。
+7. **ANALYZE**
+   - Spawn `analyzer` to run `/analyze-results` (plus `scientific-figures`)
+   - Output: `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, `UNSUPPORTED_CLAIMS.md`, `THEORY_SUPPORT_NOTE.md`, `figures/`, `tables/`
+   - `THEORY_SUPPORT_NOTE.md` only gives a coarse `green / red` signal and does not block draft generation
 
-8. **SUBMIT / 外部 AI 审稿**
-   - 在 reviewer 会话中运行 `/paperreview-submit`
-   - 输出：外部 AI 审稿意见与初稿 rebuttal
-   - 在 **GATE-5（必停 Gate）** 由你决定是否大修 / 小修 / 接受。
+8. **REVIEW (internal)**
+   - Spawn `reviewer` to run `/review-phase` and `/evidence-grading`
+   - Output: `{PROJ}/reviewer/REVIEW_REPORT.md`, `REVIEW_STATE.json`
+   - This checks whether primary claims are marked `SUPPORTED` in `CLAIM_EVIDENCE_MATRIX.md`
+   - It also checks scope, risk, and publishability to avoid endless unnecessary experimentation
+   - If theory support is still weak, Reviewer only marks the theory signal as `red`; it does not block writing
 
-因为 `AUTO_PROCEED=false`，每个 Gate（GATE-1 ~ GATE-4 + GATE-5）都会：
+9. **WRITE**
+   - Spawn `academic_writer` to run `/paper-plan`, `/paper-write`, and `/paper-compile`
+   - Use `cross-reviewer` for outline- and prose-level review
+   - Primary `UNSUPPORTED` claims cannot be written as headline contributions
+   - Generate `STORYLINE_SKETCH.md` and `WRITING_SIGNALS.md`
+   - Theory / storyline / paragraph logic are tracked only with `green / red`; even `red` still allows a first draft, followed by human review
+   - Output: `{PROJ}/academic_writer/PAPER_PLAN.md`, `STORYLINE_SKETCH.md`, `WRITING_SIGNALS.md`, `paper/sections/`, `paper/main.pdf`
+   - It pauses at **GATE-4** for your approval before external review
 
-- 打印结构化总结（当前阶段做了什么、关键指标、文件路径）
-- 提供可选指令（继续 / 修改 / 停止 / 回到前一阶段）
-- 等待你的自然语言指示后再继续。
+10. **SUBMIT / External AI review**
+   - Run `/paperreview-submit` in the reviewer session
+   - Output: external AI review plus a first rebuttal draft
+   - This stage is mandatory, not optional; once `paper/main.pdf` exists, it must go through this step
+   - At **GATE-5 (mandatory stop)**, you decide whether to major revise, minor revise, or accept
+
+Because `AUTO_PROCEED=false`, each gate (GATE-1 through GATE-4 plus GATE-5) will:
+
+- print a structured summary of what the stage did, key metrics, and file paths
+- offer actionable next-step choices (continue / modify / stop / go back)
+- wait for your natural-language instruction before continuing
 
 ---
 
-### 5. 分阶段手动驾驶（更精细的控制）
+### 5. Stage-by-Stage Manual Driving
 
-如果你暂时不想一次跑完，可以只调用某些阶段的技能，例如：
+If you do not want to run everything at once, you can invoke only selected stage skills, for example:
 
-- 只想做选题与文献：
+- Only topic discovery and literature:
+  - `/graph-build`
+  - `/frontier-mapping`
   - `/idea-phase`
   - `/research-lit`
   - `/novelty-check`
-- 只想调度并行实验：
+  - `/research-reflect`
+- Only parallel experiment dispatch:
   - `/experiment-phase`
   - `/parallel-experiments`
-- 只想写论文：
-  - 在已有 `NARRATIVE_REPORT.md` 和 `figures/` 的前提下，让 `academic_writer` 执行：
+- Only paper writing:
+  - If `NARRATIVE_REPORT.md` and `figures/` already exist, let `academic_writer` run:
     - `/paper-plan`
     - `/paper-write`
     - `/paper-compile`
 
-你可以在任何阶段插话，例如：
+You can interrupt or steer the process at any stage, for example:
 
 ```text
-这次先只做到 PLAN 阶段，不要启动任何远程实验。
+This time stop at the PLAN stage and do not start any remote experiments.
 ```
 
-或者：
+Or:
 
 ```text
-在 PLAN 里强制加入一个 reproduce baseline 的 stage，再继续。
+Force an additional reproduce-baseline stage into PLAN, then continue.
 ```
 
-researcher / orchestrator 会把这些要求写回 `PLAN.md` 和 `TODOS.md` 后再推进。
+Researcher / Orchestrator will write those requirements back into `PLAN.md` and `TODOS.md` before continuing.
 
 ---
 
-### 6. 建议的首轮「练手」流程
+### 6. Suggested First Practice Run
 
-1. **启动 researcher 会话**，确认开场自检输出中包含：
-   - 当前 `AUTO_PROCEED` 模式
-   - 是否检测到已有项目 / `TODOS.md`
-2. **只跑 IDEA 阶段**：
-   - 执行 `/idea-phase`，检查 `{PROJ}/researcher/IDEA_REPORT.md` 与 `LITERATURE.md` 是否符合你预期的选题与综述风格。
-3. **跑一次完整 `/research-pipeline`**：
-   - 选择一个你已经熟悉的小问题作为项目（便于你判断合理性）。
-   - 在每个 Gate 仔细查看总结和生成的文件。
-4. **根据体验调整**：
-   - 在 `WORKFLOW.md` 调整哪些 Gate 必须等待你、哪些可以在 `AUTO_PROCEED=true` 时自动跳过。
-   - 在 `WORKSPACE.md` 扩展或收紧各 agent 的读写权限。
-   - 针对你的 GPU 集群和实验习惯，微调 `experiment-phase` 与 `parallel-experiments` 的默认参数。
+1. **Start a researcher session** and confirm that the startup self-check shows:
+   - the current `AUTO_PROCEED` mode
+   - whether it detected an existing project or `TODOS.md`
+2. **Run only the IDEA stage**:
+   - first execute `/graph-build` and `/frontier-mapping`
+   - then execute `/idea-phase`, and inspect `{PROJ}/researcher/IDEA_REPORT.md`, `LITERATURE.md`, `FRONTIER_REPORT.md`, and `TRACK_REGISTRY.json`
+3. **Run one complete `/research-pipeline`**:
+   - choose a small problem you already understand well
+   - inspect every gate summary and generated file carefully
+4. **Tune the system from experience**:
+   - adjust which gates must wait and which can be skipped when `AUTO_PROCEED=true` in `WORKFLOW.md`
+   - widen or tighten per-agent read/write permissions in `WORKSPACE.md`
+   - tune default parameters in `experiment-phase` and `parallel-experiments` for your GPU cluster and workflow habits
 
-完成以上步骤后，你就有了一个可控的「自动化科研流水线」，可以选择：
+After that, you will have a controllable automated research pipeline, and you can choose to:
 
-- 白天用 Gate 模式（`AUTO_PROCEED=false`）和它协作；
-- 晚上改成 `AUTO_PROCEED=true`，把一个项目交给它「通宵跑」，第二天回来查看结果与生成的报告/论文草稿。
-
-
-
-
+- collaborate during the day with gate mode (`AUTO_PROCEED=false`)
+- switch to `AUTO_PROCEED=true` at night, let it run a project unattended, and review the results, reports, and paper draft the next day

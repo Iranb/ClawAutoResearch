@@ -2,33 +2,32 @@
 # OpenClaw Research Plugin Installer
 # Usage: bash install.sh [--dry-run]
 #
-# Safety guarantees:
-#   1. Pre-flight: all source files verified before any writes begin
-#   2. SOUL/AGENTS: replaced from plugin in each agent workspace (timestamped backup)
-#   3. Memory protection: templates only installed if no existing file
-#   4. openclaw.json: never modified; script prints modification suggestions only
-#   5. Rollback list printed on failure (for workspaces only)
-#   6. dry-run: no writes, suggestions still printed
+# 功能：
+#   1. 检查插件中是否存在对应 agent 定义；若本机尚未配置该 agent，则使用 openclaw agents add 添加
+#   2. 将技能复制到各 Agent 默认工作区的 skills 目录；若发现重复 skill，则仅保留 self-improving-agent，其他删除前会确认
+#   3. 从 templates/memory 与 templates/hooks 复制模板到工作区（已存在则跳过）
+#   4. 不修改现有 openclaw.json，仅输出建议配置到 openclaw-research-suggested-changes.txt
+#   5. 同步 Researcher/Analyzer 的 PaperNexus graph skills 到共享工作区，供 Researcher/Orchestrator/Analyzer 使用
 set -euo pipefail
 
-PLUGIN_DIR="/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research"
-OC_DIR="$HOME/.openclaw"
-DATE=$(date +%Y%m%d_%H%M%S)
+PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+OC_DIR="${OPENCLAW_HOME:-$HOME/.openclaw}"
 DRY_RUN=false
-ROLLBACK_FILES=()   # track (backup_path original_path) pairs for rollback
 
-# ── CLI ────────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=true
 fi
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+expand_path() {
+  echo "${1//\~/$HOME}"
+}
 
-# run CMD [ARGS...]  — execute or print depending on DRY_RUN
-# Uses "$@" instead of eval to safely handle paths with spaces
+OC_DIR_EXPANDED=$(expand_path "$OC_DIR")
+OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OC_DIR_EXPANDED/openclaw.json}"
+SUGGESTED_CHANGES_FILE="$OC_DIR_EXPANDED/openclaw-research-suggested-changes.txt"
+
 run() {
   if $DRY_RUN; then
-    # Show the command with human-readable arg quoting
     printf '  [dry-run]'
     for arg in "$@"; do
       printf ' %q' "$arg"
@@ -39,342 +38,353 @@ run() {
   fi
 }
 
-# backup_and_copy SRC DST  — backup DST (if exists), then cp SRC→DST
-backup_and_copy() {
-  local src="$1" dst="$2"
-  if $DRY_RUN; then
-    [ -f "$dst" ] && echo "  [dry-run] backup $(basename "$dst") → $(basename "$dst").bak.$DATE"
-    printf '  [dry-run] cp %q → %q\n' "$src" "$dst"
-    return
-  fi
-  if [ -f "$dst" ]; then
-    cp "$dst" "${dst}.bak.${DATE}"
-    ROLLBACK_FILES+=("${dst}.bak.${DATE}" "$dst")
-  fi
-  cp "$src" "$dst"
+highlight() {
+  printf '\033[1;33m%s\033[0m\n' "$1"
 }
 
-# copy_if_absent SRC DST  — only copy if DST does not exist (protects live data)
-# In dry-run mode, checks the REAL file system (to show what would actually happen)
-copy_if_absent() {
-  local src="$1" dst="$2" label="${3:-$(basename "$dst")}"
-  if [ -f "$dst" ]; then
-    local lines
-    lines=$(wc -l < "$dst" 2>/dev/null || echo "?")
-    echo "  → SKIP $label (already exists, ${lines} lines — not overwriting live data)"
-  else
-    run cp "$src" "$dst"
-    echo "  → $label installed (was absent)"
-  fi
-}
-
-# die MSG  — print error and rollback
 die() {
   echo ""
   echo "✗ ERROR: $1" >&2
-  if [ ${#ROLLBACK_FILES[@]} -gt 0 ]; then
-    echo ""
-    echo "Rollback instructions:" >&2
-    for ((i=0; i<${#ROLLBACK_FILES[@]}; i+=2)); do
-      echo "  cp '${ROLLBACK_FILES[$i]}' '${ROLLBACK_FILES[$((i+1))]}'" >&2
-    done
-  fi
   exit 1
 }
 
-# ── Banner ─────────────────────────────────────────────────────────────────
+get_existing_agent_ids() {
+  local json
+  json=$(openclaw agents list --json 2>/dev/null) || true
+  if [[ -z "$json" ]]; then
+    return 0
+  fi
+  if command -v jq &>/dev/null; then
+    echo "$json" | jq -r '.[].id'
+  else
+    echo "$json" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+  fi
+}
+
+agent_exists() {
+  local id="$1"
+  local existing
+  existing=$(get_existing_agent_ids)
+  echo "$existing" | grep -Fxq "$id" 2>/dev/null || false
+}
+
+workspace_for_agent() {
+  case "$1" in
+    researcher) echo "workspace-researcher" ;;
+    reviewer) echo "workspace-reviewer" ;;
+    orchestrator) echo "workspace-researcher" ;;
+    coder) echo "workspace-researcher" ;;
+    analyzer) echo "workspace-researcher" ;;
+    academic_writer) echo "workspace-researcher" ;;
+    cross-reviewer) echo "workspace-cross-reviewer" ;;
+    *) echo "workspace-$1" ;;
+  esac
+}
+
+path_seen() {
+  local needle="$1"
+  local haystack="${2:-}"
+  printf '%s\n' "$haystack" | grep -Fxq "$needle" 2>/dev/null || false
+}
+
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║   OpenClaw Research Plugin — Installer               ║"
+echo "║   OpenClaw Research Plugin — Installer              ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 echo "  Plugin:  $PLUGIN_DIR"
-echo "  Target:  $OC_DIR"
+echo "  Target:  $OC_DIR_EXPANDED"
 echo "  Mode:    $([ "$DRY_RUN" = true ] && echo 'DRY RUN (no changes)' || echo 'LIVE')"
 echo ""
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PRE-FLIGHT: verify all source files exist BEFORE touching anything
-# ═══════════════════════════════════════════════════════════════════════════
-echo "[ Pre-flight checks ]"
+echo "[ Pre-flight ]"
 
-MISSING=0
-check_file() {
-  if [ ! -f "$1" ]; then
-    echo "  ✗ MISSING: $1"
-    MISSING=$((MISSING+1))
-  fi
-}
-check_dir() {
-  if [ ! -d "$1" ]; then
-    echo "  ✗ MISSING DIR: $1"
-    MISSING=$((MISSING+1))
-  fi
-}
+if ! command -v openclaw &>/dev/null; then
+  die "未找到 openclaw 命令，请先安装 OpenClaw CLI 并确保在 PATH 中。"
+fi
 
-# Agent identity files
+if [[ ! -d "$PLUGIN_DIR" ]]; then
+  die "插件目录不存在: $PLUGIN_DIR"
+fi
+
+if [[ ! -d "$OC_DIR_EXPANDED" ]]; then
+  if $DRY_RUN; then
+    echo "  [dry-run] 将创建目录: $OC_DIR_EXPANDED"
+  else
+    mkdir -p "$OC_DIR_EXPANDED"
+    echo "  → 已创建 $OC_DIR_EXPANDED"
+  fi
+fi
+
+if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
+  echo "  ⚠ 未找到 $OPENCLAW_CONFIG_PATH"
+  echo "    脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
+fi
+
+echo "  ✓ openclaw 可用，配置目录就绪"
+echo ""
+
+echo "[1/4] 添加 Agents（openclaw agents add）..."
+
+AGENTS=(
+  "researcher|Researcher|workspace-researcher"
+  "reviewer|Reviewer|workspace-reviewer"
+  "orchestrator|Orchestrator|workspace-researcher"
+  "coder|Coder|workspace-researcher"
+  "analyzer|Analyzer|workspace-researcher"
+  "academic_writer|Writer|workspace-researcher"
+  "cross-reviewer|Cross-Reviewer|workspace-cross-reviewer"
+)
+
+for entry in "${AGENTS[@]}"; do
+  IFS='|' read -r id name workspace_rel <<< "$entry"
+  workspace_abs="$OC_DIR_EXPANDED/$workspace_rel"
+
+  if [[ ! -d "$PLUGIN_DIR/agents/$id" ]]; then
+    echo "  → SKIP $id (插件内缺少 agents/$id)"
+    continue
+  fi
+
+  if agent_exists "$id"; then
+    echo "  → SKIP $id (已存在)"
+    continue
+  fi
+
+  if ! $DRY_RUN && [[ ! -d "$workspace_abs" ]]; then
+    mkdir -p "$workspace_abs"
+  fi
+
+  if run openclaw agents add "$id" --workspace "$workspace_abs" --model "modelstudio/glm-5" --non-interactive 2>/dev/null; then
+    echo "  → ADD $id"
+    if ! $DRY_RUN; then
+      run openclaw agents set-identity --agent "$id" --name "$name" --workspace "$workspace_abs" 2>/dev/null || true
+    fi
+  else
+    if ! $DRY_RUN && ! agent_exists "$id"; then
+      echo "  ⚠ $id 添加失败，请检查 openclaw 与当前配置后重试"
+    fi
+  fi
+done
+
+echo ""
+
+echo "[2/4] 检查重复技能..."
+
+DUPLICATES=()
+
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
-  check_file "$PLUGIN_DIR/agents/$agent/SOUL.md"
-  check_file "$PLUGIN_DIR/agents/$agent/AGENTS.md"
-done
+  skill_src="$PLUGIN_DIR/skills/$agent"
+  ws_rel="$(workspace_for_agent "$agent")"
+  ws_skills="$OC_DIR_EXPANDED/$ws_rel/skills"
 
-# Workflow definition
-check_file "$PLUGIN_DIR/WORKFLOW.md"
+  [[ -d "$skill_src" ]] || continue
+  [[ -d "$ws_skills" ]] || continue
 
-# Hook files
-check_file "$PLUGIN_DIR/hooks/BOOTSTRAP.md"
-check_file "$PLUGIN_DIR/hooks/HEARTBEAT.md"
-
-# Memory templates
-check_file "$PLUGIN_DIR/memory/ideation-memory.md"
-check_file "$PLUGIN_DIR/memory/experiment-memory.md"
-
-# Target dir must exist (openclaw.json may be missing — we only print suggestions)
-check_dir  "$OC_DIR"
-check_dir  "$OC_DIR/workspace-researcher"
-
-# Skill dirs
-check_dir "$PLUGIN_DIR/skills/researcher"
-check_dir "$PLUGIN_DIR/skills/reviewer"
-
-# Python3 optional (used only to validate existing openclaw.json)
-if ! command -v python3 &>/dev/null; then
-  echo "  ⚠ python3 not found; will skip openclaw.json validation (suggestions still printed)"
-fi
-
-if [ "$MISSING" -gt 0 ]; then
-  die "Pre-flight failed: $MISSING missing file(s). Nothing was changed."
-fi
-echo "  ✓ All source files present"
-
-# Validate existing openclaw.json if present (we do not modify it; suggestions printed either way)
-if [ -f "$OC_DIR/openclaw.json" ]; then
-  if command -v python3 &>/dev/null; then
-    python3 -c "import json; json.load(open('$OC_DIR/openclaw.json'))" 2>/dev/null \
-      && echo "  ✓ openclaw.json is valid JSON" \
-      || echo "  ⚠ openclaw.json exists but is not valid JSON (may use // comments); suggestions still printed."
-  else
-    echo "  ✓ openclaw.json found (validation skipped, no python3)"
-  fi
-else
-  echo "  ⚠ openclaw.json not found; step 6 will print suggested content."
-fi
-echo ""
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 1: Researcher workspace files (SOUL/AGENTS replaced from plugin)
-# ═══════════════════════════════════════════════════════════════════════════
-echo "[1/6] Updating researcher workspace (SOUL.md + AGENTS.md replaced from plugin)..."
-backup_and_copy "$PLUGIN_DIR/agents/researcher/SOUL.md"   "$OC_DIR/workspace-researcher/SOUL.md"
-backup_and_copy "$PLUGIN_DIR/agents/researcher/AGENTS.md" "$OC_DIR/workspace-researcher/AGENTS.md"
-
-# WORKFLOW.md: global pipeline definition (overwrite — always keep current)
-backup_and_copy "$PLUGIN_DIR/WORKFLOW.md" "$OC_DIR/workspace-researcher/WORKFLOW.md"
-
-# BOOTSTRAP.md: overwrite (it is the hook, should always be current)
-backup_and_copy "$PLUGIN_DIR/hooks/BOOTSTRAP.md"  "$OC_DIR/workspace-researcher/BOOTSTRAP.md"
-
-# HEARTBEAT.md: overwrite
-backup_and_copy "$PLUGIN_DIR/hooks/HEARTBEAT.md"  "$OC_DIR/workspace-researcher/HEARTBEAT.md"
-
-echo "  → SOUL.md, AGENTS.md, WORKFLOW.md, BOOTSTRAP.md, HEARTBEAT.md updated"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 2: Reviewer workspace files (SOUL/AGENTS replaced from plugin)
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "[2/6] Updating reviewer workspace (SOUL.md + AGENTS.md replaced from plugin)..."
-run mkdir -p "$OC_DIR/workspace-reviewer"
-backup_and_copy "$PLUGIN_DIR/agents/reviewer/SOUL.md"   "$OC_DIR/workspace-reviewer/SOUL.md"
-backup_and_copy "$PLUGIN_DIR/agents/reviewer/AGENTS.md" "$OC_DIR/workspace-reviewer/AGENTS.md"
-echo "  → SOUL.md, AGENTS.md updated"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 3: Install skills (always overwrite — skills are versioned by the plugin)
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "[3/6] Installing skills..."
-
-install_skills() {
-  local agent="$1"
-  local ws="$2"
-  local skill_src="$PLUGIN_DIR/skills/$agent"
-  [ -d "$skill_src" ] || return 0
-  run mkdir -p "$ws/skills"
   for skill_dir in "$skill_src"/*/; do
-    [ -d "$skill_dir" ] || continue
-    local skill_name
+    [[ -d "$skill_dir" ]] || continue
     skill_name=$(basename "$skill_dir")
-    run cp -r "$skill_dir" "$ws/skills/$skill_name"
-    echo "    → $agent/$skill_name"
+    dst="$ws_skills/$skill_name"
+    if [[ -d "$dst" && "$skill_name" != "self-improving-agent" ]]; then
+      DUPLICATES+=("$agent|$skill_name|$dst")
+    fi
   done
-}
-
-install_skills researcher "$OC_DIR/workspace-researcher"
-install_skills reviewer   "$OC_DIR/workspace-reviewer"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 4: Create sub-agent workspaces (SOUL/AGENTS replaced from plugin)
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "[4/6] Creating sub-agent workspaces (SOUL.md + AGENTS.md replaced from plugin)..."
-
-for agent in orchestrator coder analyzer academic_writer cross-reviewer; do
-  WS="$OC_DIR/workspace-$agent"
-  run mkdir -p "$WS/skills"
-  run mkdir -p "$OC_DIR/agents/$agent/agent"
-
-  backup_and_copy "$PLUGIN_DIR/agents/$agent/SOUL.md"   "$WS/SOUL.md"
-  backup_and_copy "$PLUGIN_DIR/agents/$agent/AGENTS.md" "$WS/AGENTS.md"
-  # BOOTSTRAP: shared hook (overwrite always)
-  run cp "$PLUGIN_DIR/hooks/BOOTSTRAP.md" "$WS/BOOTSTRAP.md"
-  # Sub-agents don't need heartbeat tasks
-  if ! $DRY_RUN; then
-    printf '# HEARTBEAT.md\n# Sub-agent: no periodic tasks needed.\n' > "$WS/HEARTBEAT.md"
-  else
-    echo "  [dry-run] write empty HEARTBEAT.md → $WS/HEARTBEAT.md"
-  fi
-
-  install_skills "$agent" "$WS"
-  echo "  → workspace-$agent ready"
 done
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 5: Memory templates  ← PROTECTED: only install if absent
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "[5/6] Installing memory templates (protected — skip if data exists)..."
-run mkdir -p "$OC_DIR/workspace-researcher/memory"
-copy_if_absent \
-  "$PLUGIN_DIR/memory/ideation-memory.md" \
-  "$OC_DIR/workspace-researcher/memory/ideation-memory.md" \
-  "ideation-memory.md"
-copy_if_absent \
-  "$PLUGIN_DIR/memory/experiment-memory.md" \
-  "$OC_DIR/workspace-researcher/memory/experiment-memory.md" \
-  "experiment-memory.md"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 5b: Projects root directory + openclaw-research.json（供 agent 解析 PROJECTS_ROOT）
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "[5b/6] Ensuring projects root and openclaw-research.json..."
-PROJECTS_ROOT_DEFAULT="$OC_DIR/projects"
-if [ -f "$OC_DIR/openclaw.json" ]; then
-  # Try to read projectsRoot from user's openclaw.json (strip // comments, then grep)
-  _pr=$(grep -E '"projectsRoot"' "$OC_DIR/openclaw.json" 2>/dev/null | sed -E 's/.*"projectsRoot"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' | head -1)
-  [ -n "$_pr" ] && PROJECTS_ROOT_DEFAULT="$_pr"
-fi
-# Expand ~ to $HOME for mkdir
-PROJECTS_ROOT_EXPANDED="${PROJECTS_ROOT_DEFAULT/#\~/$HOME}"
-run mkdir -p "$PROJECTS_ROOT_EXPANDED"
-echo "  → Projects root: $PROJECTS_ROOT_DEFAULT (created if absent)"
-RESEARCH_JSON="$OC_DIR/openclaw-research.json"
-if ! $DRY_RUN; then
-  if [ ! -f "$RESEARCH_JSON" ]; then
-    printf '%s\n' "{\"projectsRoot\": \"$PROJECTS_ROOT_DEFAULT\", \"servers\": {\"default\": \"\", \"list\": []}}" > "$RESEARCH_JSON"
-    echo "  → Created $RESEARCH_JSON (agents read projectsRoot/servers from here)"
+DELETE_DUPLICATES=false
+if [[ ${#DUPLICATES[@]} -gt 0 ]]; then
+  echo "  发现重复 skills："
+  for entry in "${DUPLICATES[@]}"; do
+    IFS='|' read -r agent skill_name dst <<< "$entry"
+    echo "    - $agent/$skill_name -> $dst"
+  done
+  echo "  规则：若为重复 skill，仅保留 self-improving-agent；其余重复项删除后再复制插件版本。"
+  if $DRY_RUN; then
+    echo "  [dry-run] 实际执行时会先询问你是否删除这些重复 skills。"
   else
-    echo "  → $RESEARCH_JSON already exists (not overwritten)"
+    read -r -p "  确认删除上述重复 skills 并用插件版本覆盖吗？[y/N] " confirm_delete
+    if [[ "$confirm_delete" =~ ^[Yy]$ ]]; then
+      DELETE_DUPLICATES=true
+    fi
   fi
 else
-  echo "  [dry-run] would ensure $RESEARCH_JSON with projectsRoot: $PROJECTS_ROOT_DEFAULT"
+  echo "  → 未发现需要确认删除的重复 skills"
 fi
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 6: openclaw.json — 不修改系统配置，仅输出修改建议
-# ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "[6/6] openclaw.json: 不修改系统文件，仅输出修改建议..."
-SUGGEST_FILE="$OC_DIR/openclaw-research-suggested-changes.txt"
-print_openclaw_suggestions() {
-  echo "═══════════════════════════════════════════════════════════════════════"
-  echo "  ~/.openclaw/openclaw.json — 修改建议（本安装脚本不会自动修改该文件）"
-  echo "═══════════════════════════════════════════════════════════════════════"
-  echo ""
-  echo "请手动编辑 ~/.openclaw/openclaw.json，确保包含以下内容："
-  echo ""
-  echo "1) agents.list 中应包含以下 id，且 workspace 路径一致："
-  echo "   - researcher    workspace: \"~/.openclaw/workspace-researcher\""
-  echo "   - orchestrator   workspace: \"~/.openclaw/workspace-researcher\"  (与 researcher 共享)"
-  echo "   - coder         workspace: \"~/.openclaw/workspace-researcher\""
-  echo "   - analyzer      workspace: \"~/.openclaw/workspace-researcher\""
-  echo "   - academic_writer workspace: \"~/.openclaw/workspace-researcher\""
-  echo "   - reviewer      workspace: \"~/.openclaw/workspace-reviewer\"   (独立)"
-  echo "   - cross-reviewer workspace: \"~/.openclaw/workspace-cross-reviewer\""
-  echo ""
-  echo "2) researcher 的 subagents.allowAgents 应包含："
-  echo "   [ \"orchestrator\", \"coder\", \"analyzer\", \"academic_writer\", \"reviewer\" ]"
-  echo ""
-  echo "3) 各 agent 的 skills 需指向插件安装的目录，例如："
-  echo "   researcher: [ \"~/.openclaw/skills\", \"<插件目录>/skills/researcher\" ]"
-  echo "   或使用已部署到 ~/.openclaw/workspace-<agent>/skills 的路径。"
-  echo ""
-  echo "4) 项目根目录（可选）：在 openclaw.json 顶层增加 projectsRoot，例如："
-  echo "   projectsRoot: \"~/.openclaw/projects\""
-  echo "   可改为任意路径（如 ~/ResearchProjects），所有 agent 将从此目录读写项目；"
-  echo "   安装脚本会同步/创建 ~/.openclaw/openclaw-research.json 供 agent 解析。"
-  echo ""
-  echo "5) 服务器配置（推荐不放在 openclaw.json）：请编辑 ~/.openclaw/openclaw-research.json 的 servers:"
-  echo "   { \"servers\": { \"default\": \"gpu-host\", \"list\": [\"gpu-host\", \"gpu-host-2\"] } }"
-  echo "   或在具体项目下创建 {PROJ}/servers.json 覆盖。"
-  echo ""
-  echo "6) 完整参考配置（可含 // 注释，合并时请按需去除注释）："
-  echo "   $PLUGIN_DIR/openclaw.json"
-  echo ""
-  echo "7) 若尚未配置 openclaw.json，可直接复制参考后按需修改："
-  echo "   cp \"$PLUGIN_DIR/openclaw.json\" \"$OC_DIR/openclaw.json\""
-  echo "   （注意：参考文件可能含 // 注释，若工具要求纯 JSON，请手动去掉注释）"
-  echo ""
-}
-if $DRY_RUN; then
-  print_openclaw_suggestions
-  echo "  [dry-run] 未写入 $SUGGEST_FILE"
-else
-  print_openclaw_suggestions | tee "$SUGGEST_FILE"
-  echo "  → 建议已保存到: $SUGGEST_FILE"
+
+echo "[3/4] 复制技能到 Agent 工作区 skills..."
+
+PLANNED_DESTS=""
+
+for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
+  skill_src="$PLUGIN_DIR/skills/$agent"
+  ws_rel="$(workspace_for_agent "$agent")"
+  ws_skills="$OC_DIR_EXPANDED/$ws_rel/skills"
+
+  [[ -d "$skill_src" ]] || continue
+
+  if ! $DRY_RUN; then
+    mkdir -p "$ws_skills"
+  fi
+
+  for skill_dir in "$skill_src"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    skill_name=$(basename "$skill_dir")
+    dst="$ws_skills/$skill_name"
+
+    if [[ "$skill_name" != "self-improving-agent" ]] && path_seen "$dst" "$PLANNED_DESTS"; then
+      echo "  → SKIP $agent/$skill_name (本次安装中已有同名目标路径，避免重复覆盖)"
+      continue
+    fi
+
+    PLANNED_DESTS="${PLANNED_DESTS}"$'\n'"$dst"
+
+    if [[ -d "$dst" ]]; then
+      if [[ "$skill_name" == "self-improving-agent" ]]; then
+        echo "  → KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
+      elif $DELETE_DUPLICATES; then
+        run rm -rf "$dst"
+        run cp -r "$skill_dir" "$dst"
+        echo "  → REPLACE $agent/$skill_name (已确认删除重复 skill)"
+      else
+        echo "  → SKIP $agent/$skill_name (已存在；未确认删除重复项)"
+      fi
+    else
+      run cp -r "$skill_dir" "$dst"
+      echo "  → COPY $agent/$skill_name"
+    fi
+  done
+done
+
+echo ""
+
+echo "[4/4] 复制模板（templates/memory、templates/hooks）到工作区（已存在则跳过）..."
+
+if [[ -d "$PLUGIN_DIR/templates/memory" ]]; then
+  ws_memory="$OC_DIR_EXPANDED/workspace-researcher/memory"
+  if ! $DRY_RUN; then mkdir -p "$ws_memory"; fi
+  for f in ideation-memory.md experiment-memory.md; do
+    [[ -f "$PLUGIN_DIR/templates/memory/$f" ]] || continue
+    dst="$ws_memory/$f"
+    if [[ -f "$dst" ]]; then
+      echo "  → SKIP memory/$f (已存在)"
+    else
+      run cp "$PLUGIN_DIR/templates/memory/$f" "$dst"
+      echo "  → COPY memory/$f"
+    fi
+  done
 fi
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Summary
-# ═══════════════════════════════════════════════════════════════════════════
+HOOK_WORKSPACES=( "workspace-researcher" "workspace-reviewer" "workspace-cross-reviewer" )
+for ws_rel in "${HOOK_WORKSPACES[@]}"; do
+  ws_root="$OC_DIR_EXPANDED/$ws_rel"
+  [[ -d "$ws_root" ]] || continue
+  for hook in BOOTSTRAP.md HEARTBEAT.md; do
+    src="$PLUGIN_DIR/templates/hooks/$hook"
+    [[ -f "$src" ]] || continue
+    dst="$ws_root/$hook"
+    if [[ -f "$dst" ]]; then
+      echo "  → SKIP $ws_rel/$hook (已存在)"
+    else
+      run cp "$src" "$dst"
+      echo "  → COPY $ws_rel/$hook"
+    fi
+  done
+done
+
+if $DRY_RUN; then
+  echo ""
+  echo "  [dry-run] 将生成建议配置文件: $SUGGESTED_CHANGES_FILE"
+else
+  cat > "$SUGGESTED_CHANGES_FILE" <<EOF
+OpenClaw Research suggested manual config changes
+===============================================
+
+This installer does NOT modify your existing openclaw.json.
+Please manually ensure your active OpenClaw config includes the following:
+
+1. Agents that should exist
+   - researcher
+   - reviewer
+   - orchestrator
+   - coder
+   - analyzer
+   - academic_writer
+   - cross-reviewer
+
+2. Suggested workspaces
+   - researcher: $OC_DIR_EXPANDED/workspace-researcher
+   - reviewer: $OC_DIR_EXPANDED/workspace-reviewer
+   - orchestrator: $OC_DIR_EXPANDED/workspace-researcher
+   - coder: $OC_DIR_EXPANDED/workspace-researcher
+   - analyzer: $OC_DIR_EXPANDED/workspace-researcher
+   - academic_writer: $OC_DIR_EXPANDED/workspace-researcher
+   - cross-reviewer: $OC_DIR_EXPANDED/workspace-cross-reviewer
+
+3. Suggested skills roots
+   - researcher: ["~/.openclaw/skills", "./skills/researcher"]
+   - reviewer: ["~/.openclaw/skills", "./skills/reviewer"]
+   - orchestrator: ["~/.openclaw/skills", "./skills/orchestrator"]
+   - coder: ["~/.openclaw/skills", "./skills/coder"]
+   - analyzer: ["~/.openclaw/skills", "./skills/analyzer"]
+   - academic_writer: ["~/.openclaw/skills", "./skills/academic_writer"]
+   - cross-reviewer: ["~/.openclaw/skills", "./skills/cross-reviewer"]
+
+4. Suggested researcher subagents.allowAgents
+   - orchestrator
+   - coder
+   - analyzer
+   - academic_writer
+   - reviewer
+   - cross-reviewer
+
+5. Suggested top-level projectsRoot
+   - ~/.openclaw/projects
+
+6. Suggested tools / sandbox highlights
+   - researcher sandbox off, allow ["*"]
+   - coder allow bash
+   - analyzer allow bash
+   - reviewer allow bash if you use paperreview-submit / reviewloop
+   - allow the plugin tool `research_memory` for agents that write structured project memory
+
+7. Suggested default agent
+   - researcher
+
+8. Suggested plugin settings
+   - enable plugin: openclaw-research
+   - load path should include this plugin root or install/link the plugin directory
+   - plugin config:
+     * allowWorkspaceFallback: false
+     * requireProjectIsolation: true
+     * requireProjectIdInEntries: true
+     * requireTrackId: true
+     * requireEvidencePointers: true
+     * reviewStateMaxAgeHours: 24
+
+9. Shared graph-skill highlights
+   - keep `papernexus` and `papernexus-agentic-reasoning` installed in the shared researcher workspace
+   - keep `papernexus-reflection` installed for analyzer-side reflection and verdict writing
+
+Reference file in plugin:
+  $PLUGIN_DIR/openclaw.json
+EOF
+fi
+
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete            ' || echo 'Complete ✓                  ')║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "  Updated workspaces:   researcher, reviewer"
-echo "  New workspaces:       orchestrator, coder, analyzer, academic_writer, cross-reviewer"
-echo "  SOUL/AGENTS:          各 workspace 的 SOUL.md、AGENTS.md 已由插件版本替换（旧版已备份）"
-echo "  Model (sub-agents):   modelstudio/glm-5"
-echo "  Memory templates:     installed only if absent"
-echo "  Projects root:        ~/.openclaw/projects (or from openclaw.json projectsRoot)"
-echo "  openclaw-research.json: created/kept for agent path resolution (projectsRoot)"
-echo "  openclaw.json:        未修改；修改建议已输出并保存到 openclaw-research-suggested-changes.txt"
-echo "  Hooks:"
-echo "    BOOTSTRAP.md  → all agent workspaces (session startup)"
-echo "    HEARTBEAT.md  → workspace-researcher/ (every 2h state save)"
+echo "  1. Agents: 已按插件内 agent 定义添加/跳过（researcher, reviewer, orchestrator, coder, analyzer, academic_writer, cross-reviewer）"
+echo "  2. Skills: 已复制到各 Agent 工作区 skills；重复项仅在你确认后删除并覆盖，self-improving-agent 保留"
+echo "  3. Template: templates/memory、templates/hooks 已复制到工作区，已存在项已跳过"
+echo "  4. Config: 未修改你的 openclaw.json，只生成了建议配置清单"
 echo ""
-echo "  Skills installed per agent:"
-echo "    researcher   papers-cool, brainstorming-research-ideas, creative-thinking-for-research,"
-echo "                 rss-papers, crawl4ai-search, scrapling, paper2md, github-download,"
-echo "                 idea-generator, idea-phase, idea-tournament, novelty-check, research-lit,"
-echo "                 research-pipeline, research-queue, research-reflect, experiment-phase,"
-echo "                 parallel-experiments, run-experiment, monitor-experiment,"
-echo "                 consensus-mapping, gap-detection, cross-paper-synthesis"
-echo "    coder        implement-experiment, github-download"
-echo "    analyzer     analyze-results, scientific-figures"
-echo "    academic_writer paper-plan, paper-write, paper-phase, paper-compile,"
-echo "                 ai-research-prompt, research-paper-writing"
-echo "    orchestrator plan-research"
-echo "    reviewer     review-phase, evidence-grading, review-response, paperreview-submit"
+highlight "  请手动检查以下配置项：agents、workspaces、skills roots、researcher subagents.allowAgents、projectsRoot、reviewer bash"
+echo "  建议清单：$SUGGESTED_CHANGES_FILE"
 echo ""
 if $DRY_RUN; then
-  echo "  Run without --dry-run to apply changes."
-else
-  echo "  openclaw.json 未被修改；修改建议见: $OC_DIR/openclaw-research-suggested-changes.txt"
-  echo ""
-  echo "  To rollback researcher workspace SOUL/AGENTS:"
-  echo "    cp '$OC_DIR/workspace-researcher/SOUL.md.bak.$DATE' '$OC_DIR/workspace-researcher/SOUL.md'"
+  echo "  使用不带 --dry-run 的方式运行以应用更改。"
 fi
 echo ""

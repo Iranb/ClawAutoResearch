@@ -1,36 +1,37 @@
-# SERVER.md — 远程服务器配置
+# SERVER.md — Remote Server Configuration
 
-> 请根据你的实际服务器信息修改此文件。
+> Replace this file with your actual server information.
+
 ssh claw@211.71.76.29
 
 ## GPU Server
 
-- **SSH 别名**: `ssh claw@211.71.76.29`
-- **GPU**: 4x 5880 42GB
-- **uv 路径**: `~/.local/bin/uv`（如未安装: `curl -LsSf https://astral.sh/uv/install.sh | sh`）
-- **PyPI 镜像**: `UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
-- **代码目录**: `/home/<user>/experiments/`
-- **数据目录**: `/data/datasets/`
-- **日志目录**: `/home/<user>/experiments/logs/`
-- **结果目录**: `/home/<user>/experiments/results/`
+- **SSH alias**: `ssh claw@211.71.76.29`
+- **GPU**: `4x 5880 42GB`
+- **uv path**: `~/.local/bin/uv` (if missing: `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- **PyPI mirror**: `UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+- **Code directory**: `/home/<user>/experiments/`
+- **Data directory**: `/data/datasets/`
+- **Log directory**: `/home/<user>/experiments/logs/`
+- **Result directory**: `/home/<user>/experiments/results/`
 
-## 资源检查命令
+## Resource Check Commands
 
 ```bash
-# GPU 状态
+# GPU status
 ssh gpu-server "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader"
 
-# 内存和磁盘
+# Memory and disk
 ssh gpu-server "free -h && echo '---' && df -h /home /data16T"
 
-# 运行中的实验
+# Running experiments
 ssh gpu-server "screen -ls"
 
-# 查看实验日志（最近 50 行）
+# View experiment logs (last 50 lines)
 ssh gpu-server "tail -50 /home/<user>/experiments/logs/<exp_name>.log"
 ```
 
-## 本地项目目录
+## Local Project Directory
 
-- **代码**: `~/research/code/`
-- **rsync 排除**: `.git`, `__pycache__`, `*.pyc`, `wandb/`, `checkpoints/`
+- **Code**: `~/research/code/`
+- **rsync excludes**: `.git`, `__pycache__`, `*.pyc`, `wandb/`, `checkpoints/`

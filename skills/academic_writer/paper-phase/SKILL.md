@@ -39,12 +39,14 @@ main_final.pdf
 /paper-plan
 ```
 
-Builds claims-evidence matrix, section outline, and figure plan.
+Validates the Analyzer's `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, `CLAIM_POLICY.md`, and advisory `THEORY_SUPPORT_NOTE.md`, then builds section outline and figure plan.
 Cross-Reviewer validates outline **before** writing begins.
 
-Blockers (missing experiments flagged by Cross-Reviewer) must be resolved before Phase 2.
+Only hard blockers (missing experiments flagged by Cross-Reviewer, or unresolved unsupported primary claims) must be resolved before Phase 2.
+`theory`, `storyline`, or `paragraph_logic` marked `RED` are advisory only and must not block Phase 2.
+If multiple tracks survived review, narrow to the winning narrative before drafting prose.
 
-**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md` with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
+**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
 ## Phase 2: Paper Write
 
@@ -55,7 +57,15 @@ Blockers (missing experiments flagged by Cross-Reviewer) must be resolved before
 Writes LaTeX section-by-section with Cross-Reviewer prose gate after each section.
 See `/paper-write` for per-section protocol.
 
-**Output**: `{PROJ}/academic_writer/paper/sections/*.tex` + `refs.bib` + `main.tex`. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
+Primary claims marked `UNSUPPORTED` must not appear as headline contributions. They must be:
+- removed
+- sent back for more experiments
+- or rewritten with explicit exploratory language
+
+Only tracks recommended as `advance` or equivalent by `TRACK_VERDICTS.md` may be treated as core paper narrative.
+If theory / storyline / paragraph logic are `RED`, continue drafting but preserve the red signal in `{PROJ}/academic_writer/WRITING_SIGNALS.md` for human review.
+
+**Output**: `{PROJ}/academic_writer/paper/sections/*.tex` + `refs.bib` + `main.tex` + updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
 
 ## Phase 3: Paper Compile
 
@@ -93,7 +103,7 @@ context: [domain, target venue, stage: final pre-submission polish]
 
 Section: FULL PAPER (final pass)
 Key claims (all):
-[Claims-Evidence Matrix from PAPER_PLAN.md]
+[Claims-Evidence Matrix from PAPER_PLAN.md, preserving Analyzer support labels]
 
 LaTeX source (all sections concatenated):
 [content of all sections/*.tex]
@@ -103,6 +113,8 @@ Focus on:
 2. Introduction contributions — do they match actual results?
 3. Cross-section consistency (method description ↔ experiments ↔ conclusion)
 4. Any remaining vague claims ("significantly", "large improvement")
+5. Whether the paper scope is tighter than the full internal track portfolio
+6. Advisory signals only: Theory / Storyline / Paragraph logic → return each as `GREEN` or `RED`
 
 END_REQUEST
 ```
@@ -131,6 +143,7 @@ Pages: X (limit: Y) ✓ / ✗
 Figures: N (all referenced) ✓
 Citations: N (no [CITATION NEEDED]) ✓
 Cross-Reviewer final assessment: PUBLICATION_READY / NEEDS_REVISION
+Advisory writing signals: theory={GREEN/RED}, storyline={GREEN/RED}, paragraph_logic={GREEN/RED}
 
 Cross-Reviewer top concerns (if any):
 1. [concern]
@@ -150,3 +163,4 @@ Recommended: [submit / one more revision pass]
 | Cross-Reviewer unavailable | Continue without gate, add manual review note in TODOS.md |
 | Page limit exceeded | Identify longest section, request Academic Writer Agent to condense |
 | Missing citations after full search | Use `[CITATION NEEDED: author year]` and flag in completion report |
+| Theory / storyline / paragraph signal is RED | Continue drafting, record it in `WRITING_SIGNALS.md`, and surface it in the completion report for human review |

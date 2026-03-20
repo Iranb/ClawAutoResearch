@@ -1,9 +1,9 @@
 # Agent Bootstrap Hook (Reference / Archive)
 
 > **Note**: This file is NOT directly read by OpenClaw.
-> The active version is `BOOTSTRAP.md` (same directory), which is deployed to each agent's
-> workspace root by `install.sh`. OpenClaw reads `BOOTSTRAP.md` via its `boot-md` internal hook.
-> This file is kept for reference only.
+> The active version is `BOOTSTRAP.md` in this directory (`templates/hooks/`), which is deployed
+> to each agent's workspace root by the install script. OpenClaw reads `BOOTSTRAP.md` via its
+> `boot-md` internal hook. This file is kept for reference only.
 
 Injected at the start of every agent session. Execute these steps before responding to any user request.
 

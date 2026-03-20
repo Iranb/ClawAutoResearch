@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "project_id": "proj_xxx",
+  "updated_at": "1970-01-01T00:00:00Z",
+  "required_track_fields": [
+    "track_id",
+    "title",
+    "status",
+    "stage",
+    "hypothesis",
+    "novelty_status",
+    "evidence_status",
+    "linked_graph_nodes",
+    "relation_patterns",
+    "closest_prior_work",
+    "why_now",
+    "weakest_assumption",
+    "falsification_test",
+    "reasoning_packet_dir",
+    "working_memory_path",
+    "synthesis_packet_path",
+    "exploration_status",
+    "current_anchor_nodes",
+    "failure_signature",
+    "retry_condition",
+    "evidence_pointers",
+    "portfolio_role",
+    "last_decision",
+    "last_decision_reason",
+    "owner_agent",
+    "created_at",
+    "updated_at"
+  ],
+  "selection_policy": {
+    "max_active_tracks": 2,
+    "max_parked_tracks": 1
+  },
+  "tracks": []
+}

@@ -17,7 +17,7 @@ allowed-tools:
 
 # Research Pipeline
 
-End-to-end automated research pipeline with three levels of parallelism.
+End-to-end automated research pipeline with three levels of parallelism and state-machine control.
 
 ## Constants
 
@@ -35,7 +35,7 @@ End-to-end automated research pipeline with three levels of parallelism.
 ## Path Variables
 
 - `{WS}` = `~/.openclaw/workspace-researcher`
-- `{PROJECTS_ROOT}` = 配置的项目根（见 CONFIG.md），`{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+- `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
@@ -52,7 +52,50 @@ When starting a **new workflow run** for a project (i.e., when `{PROJ}/` is crea
 
 2. **Ensure project memory dir exists**  
    - Create `{PROJ}/memory/` if absent.  
-   - If `{PMEM}/ideation-memory.md` or `{PMEM}/experiment-memory.md` do not exist, create them (empty with minimal section headers, or copy from plugin `memory/` templates if present).
+   - If `{PMEM}/ideation-memory.md` or `{PMEM}/experiment-memory.md` do not exist, create them (empty with minimal section headers, or copy from plugin `templates/memory/` templates if present).
+
+3. **Ensure graph + state-machine files exist**
+   - Create `{PROJ}/graph/` if absent.
+   - If `{PROJ}/PROJECT_MANIFEST.json` does not exist, initialize it from `templates/PROJECT_MANIFEST.json`.
+   - If `{PROJ}/TRACK_REGISTRY.json` does not exist, initialize it from `templates/TRACK_REGISTRY.json`.
+   - If `{PROJ}/CLAIM_POLICY.md` does not exist, initialize it from `templates/CLAIM_POLICY.md`.
+   - Update `{PROJ}/PROJECT_MANIFEST.json` with:
+     - `project_id`
+     - `title`
+     - `created_at`
+     - `status`
+     - `current_stage: "setup"`
+     - `current_micro_stage: "state_templates_ready"`
+
+### Stage 0.5: Graph Foundation (Mandatory for new projects)
+
+Before graph build, the Researcher must first gather papers and full text into a PaperNexus-readable source tree, then build a project-local graph frontier:
+
+```
+/research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + paper_source_dir
+/graph-build "$ARGUMENTS"           → {PROJ}/graph/PAPERNEXUS_STATUS.json
+/frontier-mapping "$ARGUMENTS"      → {PROJ}/researcher/FRONTIER_REPORT.md
+/papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
+```
+
+Rules:
+- `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
+- after `/papers-cool` finds key papers, Researcher must verify graph presence; if the graph lacks a key paper, refresh graph state before innovation analysis
+- Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
+- Do **not** enter idea selection if `{PROJ}/graph/subgraphs/` is empty
+- Do **not** lock or advance a serious track without a reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/`
+- If local literature changes materially during Stage 1, refresh graph state:
+  - `/research-lit "$ARGUMENTS"` if the corpus itself needs more papers or refreshed full text
+  - `/graph-build --force`
+  - `/frontier-mapping "$ARGUMENTS"`
+  - `/papernexus-agentic-reasoning "$ARGUMENTS"` for the surviving track or frontier item whose evidence changed
+- After Stage 0.5, ensure `{PROJ}/PROJECT_MANIFEST.json` points to the latest corpus and frontier report
+
+Graph refresh trigger:
+- refresh immediately if 1 new paper changes the closest-prior-work or novelty picture
+- refresh when 3+ genuinely new canonical papers accumulate since the last graph sync
+- refresh when 2+ new recent venue papers materially overlap with the active topic
+- otherwise defer to the next major checkpoint
 
 ## Mode A: Single Project Pipeline
 
@@ -62,10 +105,39 @@ Default mode (`MULTI=false`). All state under `{PROJ}/`.
 
 ```
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md
-/idea-generator "$ARGUMENTS"        → {PROJ}/researcher/IDEA_REPORT.md (candidates)
+/papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
+/idea-generator "$ARGUMENTS"        → {PROJ}/researcher/IDEA_REPORT.md (candidates) + {PROJ}/TRACK_REGISTRY.json
 /novelty-check "[top ideas]"        → novelty verdicts + {PROJ}/cross-reviewer/novelty/*.md
+/research-reflect "idea portfolio"  → track decisions
 /idea-tournament                    → parallel pilots + ranking
 ```
+
+`/idea-generator` must read both:
+- `{PROJ}/researcher/LITERATURE.md`
+- `{PROJ}/researcher/FRONTIER_REPORT.md`
+- `{PROJ}/graph/subgraphs/`
+- `{PROJ}/researcher/reasoning/<track-id>/SYNTHESIS_PACKET.md` when it exists
+- `{PROJ}/researcher/reasoning/<track-id>/WORKING_MEMORY.json` for surviving or re-opened tracks
+
+Idea-stage control rules:
+- generate 4–8 candidate tracks
+- diverge from multiple graph lenses, then converge before locking the portfolio
+- use graph-backed innovation evidence, not abstract-only summaries, for each surviving track
+- for each serious candidate, first anchor the question, then explore the graph with an explicit working-memory loop before turning it into a track
+- each reasoning step must decide `expand`, `refine_query`, `answer_try`, or `stop`; do not traverse blindly
+- rejected branches, false-positive relations, and unresolved entities must be written into the reasoning packet
+- a surviving track must have a bounded synthesis packet that separates direct evidence, inference, and open uncertainty
+- if needed, ask Orchestrator to turn a surviving graph-backed opportunity into a tighter innovation package before plan locking
+- keep at most 2 `active` tracks
+- keep at most 1 `parked` track
+- all other tracks must be `merged` or `killed`
+- persist every decision in `{PROJ}/TRACK_REGISTRY.json`
+
+Researcher continuous-duty rule:
+- when Orchestrator / Coder / Analyzer / Writer are working, Researcher should continue literature watch, papers ingestion, graph refresh preparation, and innovation analysis instead of idling
+- new papers discovered during execution should be added to `paper_source_dir`; if they materially change the frontier, refresh graph state before the next major idea or revision decision
+- prefer `papernexus watch` for active projects with steady paper inflow, and make `/resume-pipeline` reconcile watcher status after restarts
+- use waiting time to reopen unresolved graph questions, compact working memory, and refresh synthesis packets for active or parked tracks without silently changing track ownership
 
 **Gate 1 — Idea Selection:**
 
@@ -76,27 +148,36 @@ Display: Tournament results table
   [Combination option if applicable]
 
 AUTO_PROCEED=false → wait for user:
-  - "proceed"         → advance top-K to experiment
-  - "combine 1 3"     → merge ideas 1 and 3
-  - "only 1"          → advance only rank 1
-  - "rerun 2"         → re-pilot idea 2 at larger scale
+  - "proceed"         → advance selected tracks to planning
+  - "combine 1 3"     → merge tracks 1 and 3
+  - "only 1"          → keep only track 1 active
+  - "park 2"          → keep track 2 parked
+  - "rerun 2"         → re-pilot track 2 at larger scale
   - "generate more"   → back to idea-generator with new constraints
 
 AUTO_PROCEED=true → wait 15s → auto-select top-K by score
-  Log: "AUTO_PROCEED: advancing Idea 1 ({title}) and Idea 2 ({title})"
+  Log: "AUTO_PROCEED: advancing Track 1 ({title}) and Track 2 ({title})"
 ```
 
-**Output**: Confirmed ideas in `{PROJ}/researcher/IDEA_REPORT.md`
+**Output**:
+- Confirmed leading idea in `{PROJ}/researcher/IDEA_REPORT.md`
+- Full portfolio in `{PROJ}/TRACK_REGISTRY.json`
+- `{PROJ}/PROJECT_MANIFEST.json` updated with active / parked track ids
 
 ### Stage 2: Planning
 
-For EACH confirmed idea (parallel if TOP_K_IDEAS > 1):
+For EACH active track (parallel if TOP_K_IDEAS > 1):
 
 ```
-spawn orchestrator → /plan-research "[idea title]" (input: {PROJ}/researcher/IDEA_REPORT.md)
+spawn orchestrator → /plan-research "[track title]" (input: {PROJ}/researcher/IDEA_REPORT.md + {PROJ}/TRACK_REGISTRY.json)
 ```
 
 **Output:** `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`
+
+Planning rules:
+- one plan section per active track
+- one compute budget per active track
+- one explicit `stop / rollback / kill` rule set per active track
 
 **Mandatory before Stage 3:** Do **not** advance to Implementation or spawn Coder until **both** `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` exist. **Proactively wake Orchestrator** when either file is missing: spawn Orchestrator with `/plan-research`, wait for session completion or poll until both files appear; if still missing after timeout, re-spawn. Do not assume someone else will run Orchestrator.
 
@@ -122,19 +203,24 @@ Coder produces code + dry-run validation for each idea.
 ```
 
 Multi-level parallelism:
-- **Within one idea**: baseline + proposed + ablations run simultaneously
-- **Across top-K ideas**: if TOP_K_IDEAS > 1 and enough GPUs, run both ideas' experiments in parallel
+- **Within one track**: baseline + proposed + ablations run simultaneously
+- **Across active tracks**: if TOP_K_IDEAS > 1 and enough GPUs, run both tracks' experiments in parallel
 
-GPU allocation across ideas:
+GPU allocation across tracks:
 ```
-If total GPU slots ≥ Idea1_exps + Idea2_exps:
+If total GPU slots ≥ Track1_exps + Track2_exps:
   → launch all simultaneously
 Else:
-  → priority: Idea 1 (higher pilot signal) gets more slots
-  → Idea 2 queued, launched when Idea 1 slots free up
+  → priority: higher-signal track gets more slots
+  → lower-priority track queued, launched when slots free up
 ```
 
-**Output**: `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`, `{PROJ}/researcher/EXPERIMENT_LOG.md`, `{PROJ}/researcher/artifacts/`
+**Output**: `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`, `{PROJ}/researcher/EXPERIMENT_LOG.md`, `{PROJ}/researcher/artifacts/`, updated `{PROJ}/TRACK_REGISTRY.json`
+
+Experiment control rules:
+- every round must end with a track decision (`advance` / `merge` / `park` / `kill`)
+- do not enter full experiments for a weak track that failed its pilot
+- if budget is tight, prefer one strong track over two marginal ones
 
 ### Stage 5: Auto Review
 
@@ -142,9 +228,9 @@ Else:
 /review-phase                        → cross-agent review loop
 ```
 
-If multiple ideas were pursued, review each independently:
-- Idea 1 gets first review slot (highest priority)
-- Idea 2 reviewed when Idea 1 review completes or in parallel if reviewer agent allows
+If multiple tracks were pursued, review each independently:
+- strongest track gets first review slot
+- secondary track reviewed when the first completes or in parallel if reviewer agent allows
 - Review output saved to `{PROJ}/reviewer/AUTO_REVIEW.md`
 
 **Gate 3** (per-idea, controlled by HUMAN_CHECKPOINT):
@@ -152,10 +238,10 @@ If multiple ideas were pursued, review each independently:
 - `HUMAN_CHECKPOINT=true`: pause each round
 - `HUMAN_CHECKPOINT=false`: auto-fix and continue
 
-**Divergence handling**: If Idea 1 passes review but Idea 2 does not:
-- Idea 1 proceeds to paper
-- Idea 2 enters repair loop (up to MAX_REVIEW_ROUNDS)
-- If Idea 2 still fails: archive it, focus on Idea 1
+**Divergence handling**: If Track 1 passes review but Track 2 does not:
+- Track 1 proceeds to paper
+- Track 2 enters repair loop (up to MAX_REVIEW_ROUNDS)
+- If Track 2 still fails: park or kill it, focus on Track 1
 
 ### Stage 6: Paper Writing
 
@@ -163,13 +249,13 @@ If multiple ideas were pursued, review each independently:
 spawn academic_writer → /paper-phase
 ```
 
-If TOP_K_IDEAS > 1 and both ideas pass review:
-- **Combined paper**: both ideas become contributions in a single paper
-  - Idea 1 = Main Method
-  - Idea 2 = Variant or Extension
+If multiple tracks survive review:
+- **Combined paper**: both tracks become contributions in a single paper
+  - strongest track = Main Method
+  - secondary track = Variant or Extension
   - Strengthens the contribution narrative
-- **Separate papers**: if ideas are too different to combine (different tasks/domains)
-  - Each gets its own paper directory: `{PROJ}/academic_writer/paper_idea1/` and `paper_idea2/`
+- **Separate papers**: if tracks are too different to combine (different tasks/domains)
+  - Each gets its own paper directory: `{PROJ}/academic_writer/paper_track1/` and `paper_track2/`
   - Researcher decides at Gate 4
 
 **Gate 4 — Paper Strategy:**
@@ -177,6 +263,21 @@ If TOP_K_IDEAS > 1 and both ideas pass review:
 - `AUTO_PROCEED=true`: combine if same task/domain, else separate
 
 **Output**: `{PROJ}/academic_writer/paper/main.pdf` (or two papers)
+
+### Stage 7: External AI Review (Mandatory)
+
+Once `main.pdf` exists, the pipeline must enter the reviewer-led external review stage:
+
+```
+spawn reviewer → /paperreview-submit
+spawn reviewer → /review-response
+```
+
+Rules:
+- do **not** mark the project as done immediately after PDF compilation
+- external AI review is mandatory before completion
+- save the external review and rebuttal under `{PROJ}/reviewer/`
+- always stop at the final human decision gate after the external review arrives
 
 ---
 
@@ -203,12 +304,22 @@ Typical overnight workflow:
 
 ```
 {PROJ}/
+├── PROJECT_MANIFEST.json           ← OWNED BY: researcher
+├── TRACK_REGISTRY.json             ← OWNED BY: researcher
+├── CLAIM_POLICY.md                 ← OWNED BY: researcher
+│
 ├── README.md                        ← OWNED BY: researcher
+│
+├── graph/                           ← OWNED BY: researcher
+│   ├── PAPERNEXUS_STATUS.json       Stage 0.5 output (corpus metadata)
+│   ├── GRAPH_BUILD_REPORT.md        Stage 0.5 output (build log)
+│   └── subgraphs/                   Stage 0.5 output (frontier snapshots)
 │
 ├── researcher/                      ← OWNED BY: researcher
 │   ├── IDEA_REPORT.md               Stage 1 output (tournament results)
 │   ├── IDEA_TOURNAMENT_STATE.json   Pilot tracking + recovery
 │   ├── LITERATURE.md                Stage 1 output (landscape)
+│   ├── FRONTIER_REPORT.md           Stage 0.5 output (graph-grounded frontier)
 │   ├── EXPERIMENT_REGISTRY.md       Stage 4 tracking (all GPU slots)
 │   ├── PARALLEL_STATE.json          Stage 4 recovery
 │   ├── EXPERIMENT_LOG.md            Stage 4 output (final log)
@@ -219,7 +330,7 @@ Typical overnight workflow:
 │       └── logs/                    Stage 4 server logs (rsync'd)
 │
 ├── orchestrator/                    ← OWNED BY: orchestrator
-│   ├── PLAN.md                      Stage 2 output (experiment plan)
+│   ├── PLAN.md                      Stage 2 output (track-aware experiment plan)
 │   └── TODOS.md                     Stage 2–6 shared task list
 │
 ├── coder/                           ← OWNED BY: coder
@@ -227,6 +338,9 @@ Typical overnight workflow:
 │
 ├── analyzer/                        ← OWNED BY: analyzer
 │   ├── NARRATIVE_REPORT.md          Stage 4 output (analysis report)
+│   ├── CLAIM_EVIDENCE_MATRIX.md     Stage 4 output (writing-safe claim ledger)
+│   ├── TRACK_VERDICTS.md            Stage 4 output (advance / merge / park / kill memo)
+│   ├── UNSUPPORTED_CLAIMS.md        Stage 4 output (claims needing downgrade or more evidence)
 │   ├── figures/                     Stage 4 output (plots)
 │   └── tables/                      Stage 4 output (LaTeX tables)
 │
@@ -252,10 +366,13 @@ Typical overnight workflow:
 ## Key Rules
 
 - Gate control is determined by `AUTO_PROCEED`
+- **Never skip Stage 0.5 (Graph Foundation)** on a new project: build PaperNexus corpus and frontier report before idea selection
+- **Always maintain the state machine**: update `{PROJ}/PROJECT_MANIFEST.json` and `{PROJ}/TRACK_REGISTRY.json` at each stage transition
+- **Never let the track portfolio drift**: keep at most 2 active tracks unless budget explicitly allows more
 - **Never skip Stage 2 (Planning):** even when AUTO_PROCEED=true, wait for `PLAN.md` and `TODOS.md` before spawning Coder. When either is missing, **proactively wake Orchestrator** (spawn with /plan-research) to produce them. See WORKFLOW.md "Stage transition preconditions" and "Wake Orchestrator on demand".
 - Stages 3–6 can run autonomously after Gate 1 (overnight mode)
 - Review max 4 rounds; if exceeded → stop and report
-- Multi-idea mode: both ideas share the same memory files
+- Multi-track mode: all tracks share the same project memory files but must remain explicitly separated in `TRACK_REGISTRY.json`
 - Failed ideas always update `{PMEM}/ideation-memory.md` (IVE)
 - Successful experiments always update `{PMEM}/experiment-memory.md` (ESE)
 - Each agent writes ONLY to its owned subfolder — see `WORKSPACE.md`

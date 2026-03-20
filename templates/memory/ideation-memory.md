@@ -13,8 +13,14 @@ Patterns from ideas that passed review and produced publishable results.
 ### Template Entry
 ```
 ### [Project/Idea Name] — YYYY-MM-DD
+- **Project ID**: [proj-id]
+- **Track ID**: [track-id]
+- **Signature**: [stable dedupe signature]
+- **Evidence pointers**:
+  - [artifact path / report / log]
 - **Domain**: [NLP / CV / RL / etc.]
 - **Core hypothesis**: [one sentence]
+- **Closest prior work**: [paper or baseline]
 - **What worked**: [specific technique or insight]
 - **Key metric**: [e.g., +3.2% on X dataset over baseline Y]
 - **Generalizable pattern**: [abstract lesson for future ideas]
@@ -31,8 +37,14 @@ Ideas that were pursued but failed or were abandoned. Use this to avoid dead end
 ### Template Entry
 ```
 ### [Idea Name] — YYYY-MM-DD
+- **Project ID**: [proj-id]
+- **Track ID**: [track-id]
+- **Signature**: [stable dedupe signature]
+- **Evidence pointers**:
+  - [artifact path / report / log]
 - **Domain**: [domain]
 - **Hypothesis**: [what we thought would work]
+- **Failure bucket**: [novelty / feasibility / implementation / data / compute]
 - **Failure mode**: [why it didn't work]
   - [ ] Hypothesis was wrong (expected: X, got: Y)
   - [ ] Implementation issue (bug found at stage: ...)

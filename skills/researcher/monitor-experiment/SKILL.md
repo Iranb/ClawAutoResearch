@@ -12,7 +12,7 @@ allowed-tools:
 
 # Monitor Experiment
 
-监控远程服务器上的实验状态。
+Monitor experiment status on a remote server.
 
 ## Process
 
@@ -34,28 +34,28 @@ ssh <server> "tail -30 <remote_dst>/logs/<exp_name>.log"
 ssh <server> "ls -lt <remote_dst>/results/*.json 2>/dev/null | head -5"
 ```
 
-如果有结果文件：
+If result files exist:
 ```bash
 ssh <server> "cat <remote_dst>/results/<latest>.json"
 ```
 
 ### 4. Detect Completion
 
-实验完成标志：
-- screen 会话不存在（`screen -ls` 不包含 `<exp_name>`）
-- 日志末尾包含 `EXIT_CODE=0`
-- 结果文件已生成
+Experiment completion signals:
+- the `screen` session no longer exists (`screen -ls` does not contain `<exp_name>`)
+- the log tail contains `EXIT_CODE=0`
+- result files have been generated
 
 ### 5. Polling Strategy
 
-- 首次检查：启动后 30 秒
-- 短实验（< 10 min）：每 30s 检查
-- 中等实验（10-60 min）：每 2min 检查
-- 长实验（> 60 min）：每 5min 检查
+- first check: 30 seconds after launch
+- short experiments (< 10 min): check every 30s
+- medium experiments (10-60 min): check every 2 min
+- long experiments (> 60 min): check every 5 min
 
 ### 6. Report
 
-完成后输出状态摘要：
-- 运行时长
-- 最终指标（从结果文件提取）
-- 是否有错误或警告
+When finished, output a status summary:
+- runtime
+- final metrics (extracted from result files)
+- whether there were errors or warnings
