@@ -9,12 +9,55 @@ import * as fs from "fs/promises";
 import * as path from "path";
 
 export interface ResearchMemoryPolicy {
+  // Data integrity policies
   allowWorkspaceFallback?: boolean;
   requireProjectIsolation?: boolean;
   requireProjectIdInEntries?: boolean;
   requireTrackId?: boolean;
   requireEvidencePointers?: boolean;
   reviewStateMaxAgeHours?: number;
+  
+  // Project and server configuration
+  projectsRoot?: string;
+  servers?: {
+    default?: string;
+    list?: string[];
+  };
+  
+  // Idea generation configuration
+  ideaGeneration?: {
+    divergeSize?: number;
+    portfolioSize?: number;
+    tournamentRounds?: number;
+  };
+  
+  // Track portfolio configuration
+  trackPortfolio?: {
+    maxActiveTracks?: number;
+    maxParkedTracks?: number;
+    parkedBudgetPolicy?: "zero" | "reduced" | "full";
+  };
+  
+  // Compute budget configuration
+  computeBudget?: {
+    defaultGpuHoursPerTrack?: number;
+    maxConcurrentExperiments?: number;
+    gpuType?: "V100" | "A100" | "H100" | "RTX6000" | "mixed";
+  };
+  
+  // Review loop configuration
+  reviewLoop?: {
+    maxRounds?: number;
+    scoreThreshold?: number;
+    autoAdvanceScore?: number;
+  };
+  
+  // Graph configuration
+  graphConfig?: {
+    autoRefreshTrigger?: "never" | "weekly" | "monthly" | "per-track";
+    noveltyThreshold?: number;
+    maxPapersToIngest?: number;
+  };
 }
 
 interface CommonEntryFields {
@@ -77,18 +120,62 @@ interface ReviewState {
 }
 
 const DEFAULT_POLICY: Required<ResearchMemoryPolicy> = {
+  // Data integrity policies
   allowWorkspaceFallback: false,
   requireProjectIsolation: true,
   requireProjectIdInEntries: true,
   requireTrackId: true,
   requireEvidencePointers: true,
   reviewStateMaxAgeHours: 24,
+  
+  // Project and server configuration
+  projectsRoot: "~/.openclaw/projects",
+  servers: {
+    default: "gateway",
+    list: [],
+  },
+  
+  // Idea generation configuration
+  ideaGeneration: {
+    divergeSize: 8,
+    portfolioSize: 4,
+    tournamentRounds: 2,
+  },
+  
+  // Track portfolio configuration
+  trackPortfolio: {
+    maxActiveTracks: 2,
+    maxParkedTracks: 1,
+    parkedBudgetPolicy: "zero",
+  },
+  
+  // Compute budget configuration
+  computeBudget: {
+    defaultGpuHoursPerTrack: 100,
+    maxConcurrentExperiments: 4,
+    gpuType: "A100",
+  },
+  
+  // Review loop configuration
+  reviewLoop: {
+    maxRounds: 3,
+    scoreThreshold: 6.0,
+    autoAdvanceScore: 7.5,
+  },
+  
+  // Graph configuration
+  graphConfig: {
+    autoRefreshTrigger: "per-track",
+    noveltyThreshold: 0.7,
+    maxPapersToIngest: 5000,
+  },
 };
 
 function normalizePolicy(
   policy: ResearchMemoryPolicy = {}
 ): Required<ResearchMemoryPolicy> {
   return {
+    // Data integrity policies
     allowWorkspaceFallback:
       policy.allowWorkspaceFallback ?? DEFAULT_POLICY.allowWorkspaceFallback,
     requireProjectIsolation:
@@ -101,6 +188,76 @@ function normalizePolicy(
       policy.requireEvidencePointers ?? DEFAULT_POLICY.requireEvidencePointers,
     reviewStateMaxAgeHours:
       policy.reviewStateMaxAgeHours ?? DEFAULT_POLICY.reviewStateMaxAgeHours,
+    
+    // Project and server configuration
+    projectsRoot: policy.projectsRoot ?? DEFAULT_POLICY.projectsRoot,
+    servers: {
+      default: policy.servers?.default ?? DEFAULT_POLICY.servers.default,
+      list: policy.servers?.list ?? DEFAULT_POLICY.servers.list,
+    },
+    
+    // Idea generation configuration
+    ideaGeneration: {
+      divergeSize:
+        policy.ideaGeneration?.divergeSize ??
+        DEFAULT_POLICY.ideaGeneration.divergeSize,
+      portfolioSize:
+        policy.ideaGeneration?.portfolioSize ??
+        DEFAULT_POLICY.ideaGeneration.portfolioSize,
+      tournamentRounds:
+        policy.ideaGeneration?.tournamentRounds ??
+        DEFAULT_POLICY.ideaGeneration.tournamentRounds,
+    },
+    
+    // Track portfolio configuration
+    trackPortfolio: {
+      maxActiveTracks:
+        policy.trackPortfolio?.maxActiveTracks ??
+        DEFAULT_POLICY.trackPortfolio.maxActiveTracks,
+      maxParkedTracks:
+        policy.trackPortfolio?.maxParkedTracks ??
+        DEFAULT_POLICY.trackPortfolio.maxParkedTracks,
+      parkedBudgetPolicy:
+        policy.trackPortfolio?.parkedBudgetPolicy ??
+        DEFAULT_POLICY.trackPortfolio.parkedBudgetPolicy,
+    },
+    
+    // Compute budget configuration
+    computeBudget: {
+      defaultGpuHoursPerTrack:
+        policy.computeBudget?.defaultGpuHoursPerTrack ??
+        DEFAULT_POLICY.computeBudget.defaultGpuHoursPerTrack,
+      maxConcurrentExperiments:
+        policy.computeBudget?.maxConcurrentExperiments ??
+        DEFAULT_POLICY.computeBudget.maxConcurrentExperiments,
+      gpuType:
+        policy.computeBudget?.gpuType ?? DEFAULT_POLICY.computeBudget.gpuType,
+    },
+    
+    // Review loop configuration
+    reviewLoop: {
+      maxRounds:
+        policy.reviewLoop?.maxRounds ?? DEFAULT_POLICY.reviewLoop.maxRounds,
+      scoreThreshold:
+        policy.reviewLoop?.scoreThreshold ??
+        DEFAULT_POLICY.reviewLoop.scoreThreshold,
+      autoAdvanceScore:
+        policy.reviewLoop?.autoAdvanceScore ??
+        DEFAULT_POLICY.reviewLoop.autoAdvanceScore,
+    },
+    
+    // Graph configuration
+    graphConfig: {
+      autoRefreshTrigger:
+        policy.graphConfig?.autoRefreshTrigger ??
+        DEFAULT_POLICY.graphConfig.autoRefreshTrigger,
+      noveltyThreshold:
+        policy.graphConfig?.noveltyThreshold ??
+        DEFAULT_POLICY.graphConfig.noveltyThreshold,
+      maxPapersToIngest:
+        policy.graphConfig?.maxPapersToIngest ??
+        DEFAULT_POLICY.graphConfig.maxPapersToIngest,
+    },
   };
 }
 
@@ -601,4 +758,104 @@ ${formatList(params.nextSteps)}
   }
 
   return `Daily log appended: ${filepath}`;
+}
+
+// ============================================================================
+// Business Configuration Export Functions
+// ============================================================================
+
+/**
+ * Get the complete business configuration from the policy
+ * 
+ * @param policy - Research memory policy
+ * @returns Complete normalized business configuration
+ */
+export function getBusinessConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return {
+    projectsRoot: normalized.projectsRoot,
+    servers: normalized.servers,
+    ideaGeneration: normalized.ideaGeneration,
+    trackPortfolio: normalized.trackPortfolio,
+    computeBudget: normalized.computeBudget,
+    reviewLoop: normalized.reviewLoop,
+    graphConfig: normalized.graphConfig,
+  };
+}
+
+/**
+ * Get idea generation configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Idea generation parameters
+ */
+export function getIdeaGenerationConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.ideaGeneration;
+}
+
+/**
+ * Get track portfolio configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Track portfolio parameters
+ */
+export function getTrackPortfolioConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.trackPortfolio;
+}
+
+/**
+ * Get compute budget configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Compute budget parameters
+ */
+export function getComputeBudgetConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.computeBudget;
+}
+
+/**
+ * Get review loop configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Review loop parameters
+ */
+export function getReviewLoopConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.reviewLoop;
+}
+
+/**
+ * Get graph configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Graph configuration parameters
+ */
+export function getGraphConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.graphConfig;
+}
+
+/**
+ * Get server configuration
+ * 
+ * @param policy - Research memory policy
+ * @returns Server configuration
+ */
+export function getServersConfig(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.servers;
+}
+
+/**
+ * Get projects root directory
+ * 
+ * @param policy - Research memory policy
+ * @returns Projects root path
+ */
+export function getProjectsRoot(policy: ResearchMemoryPolicy = {}) {
+  const normalized = normalizePolicy(policy);
+  return normalized.projectsRoot;
 }

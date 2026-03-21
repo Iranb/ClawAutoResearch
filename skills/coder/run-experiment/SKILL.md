@@ -38,7 +38,31 @@ Write after launch:
 
 ## Steps
 
-### 1. Resource Check
+### 1. Determine Dataset Path
+
+**Priority order** (check in this order):
+
+1. **Project-specific**: `{PROJ}/PROJECT_MANIFEST.json` → `dataset_path` field
+2. **Track-specific**: `{PROJ}/TRACK_REGISTRY.json` → `tracks[<track-id>].dataset_path`
+3. **Plan-specific**: `{PROJ}/orchestrator/PLAN.md` → `Dataset location` section
+4. **Default**: `SERVER.md` → 主数据集 `/data/datasets/`
+
+**Common dataset paths**:
+```bash
+# COCO dataset
+DATASET_PATH="/data/datasets/coco"
+
+# ImageNet
+DATASET_PATH="/data/datasets/imagenet"
+
+# Project-specific
+DATASET_PATH="/data/projects/{PROJ}/datasets"
+
+# Custom path from PLAN.md
+DATASET_PATH="/data/shared/datasets/custom_dataset"
+```
+
+### 2. Resource Check
 
 ```bash
 ssh <server> "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader"

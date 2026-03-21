@@ -19,6 +19,48 @@ allowed-tools:
 
 End-to-end automated research pipeline with three levels of parallelism and state-machine control.
 
+## 🚀 EXECUTION ENTRY POINT (MANDATORY)
+
+**When this skill is invoked via `/research-pipeline "[topic]"`:**
+
+1. **Parse arguments:**
+   - Extract the research topic/direction from `$ARGUMENTS` (everything before `--`)
+   - Parse overrides: `AUTO_PROCEED: true/false`, `MULTI: true/false`, `TOP_K_IDEAS: N`
+   - If no topic provided → **STOP and ask user**: "Please provide a research direction, e.g., `/research-pipeline \"based vision transformer small object detection\"`"
+
+2. **Determine mode:**
+   - If `MULTI=true` → delegate to `/research-queue "[topic]"`
+   - If `MULTI=false` (default) → proceed with single-project pipeline below
+
+3. **Initialize project:**
+   - Read `{WS}/CONFIG.md` to get `{PROJECTS_ROOT}`
+   - Generate `project_id` from topic: lowercase, replace spaces with `-`, truncate to 40 chars
+   - Create `{PROJ} = {PROJECTS_ROOT}/{project_id}` directory
+   - Copy templates to `{PROJ}/`:
+     - `templates/PROJECT_MANIFEST.json` → update with `project_id`, `title`, `created_at`, `current_stage: "setup"`
+     - `templates/TRACK_REGISTRY.json`
+     - `templates/CLAIM_POLICY.md`
+   - Create `{PROJ}/graph/`, `{PROJ}/memory/`, `{PROJ}/researcher/`, `{PROJ}/orchestrator/`, `{PROJ}/coder/`, `{PROJ}/analyzer/`, `{PROJ}/academic_writer/`, `{PROJ}/reviewer/`
+   - Create `{PROJ}/memory/ideation-memory.md` and `{PROJ}/memory/experiment-memory.md` (copy from `templates/memory/` or create with section headers)
+   - Copy `{WS}/WORKFLOW.md` → `{PROJ}/WORKFLOW.md`
+   - Create `{PROJ}/researcher/workflow_snapshots/` and save timestamped copy
+
+4. **Update state:**
+   - Set `{PROJ}/PROJECT_MANIFEST.json`:
+     - `current_stage: "graph_build"`
+     - `current_micro_stage: "project_init"`
+     - `paper_source_dir: "{PROJ}/researcher/paper_source"`
+     - `memory_scope.project_isolated: true`
+
+5. **Announce and begin Stage 0.5:**
+   - Post: "🚀 Starting research pipeline for: [topic]"
+   - Post: "Project ID: {project_id}"
+   - Post: "Project path: {PROJ}"
+   - Post: "Mode: AUTO_PROCEED={true/false}, TOP_K_IDEAS={N}"
+   - **Immediately invoke:** `/research-lit "[topic]"` to begin literature collection
+
+---
+
 ## Constants
 
 - **AUTO_PROCEED = true** — Gates auto-select optimal option; set `false` for manual control
@@ -249,35 +291,30 @@ If multiple tracks were pursued, review each independently:
 spawn academic_writer → /paper-phase
 ```
 
-If multiple tracks survive review:
-- **Combined paper**: both tracks become contributions in a single paper
-  - strongest track = Main Method
-  - secondary track = Variant or Extension
-  - Strengthens the contribution narrative
-- **Separate papers**: if tracks are too different to combine (different tasks/domains)
-  - Each gets its own paper directory: `{PROJ}/academic_writer/paper_track1/` and `paper_track2/`
-  - Researcher decides at Gate 4
+Writer produces LaTeX paper with cross-review at each section.
 
-**Gate 4 — Paper Strategy:**
-- `AUTO_PROCEED=false`: present combination vs. separate option
-- `AUTO_PROCEED=true`: combine if same task/domain, else separate
-
-**Output**: `{PROJ}/academic_writer/paper/main.pdf` (or two papers)
+**Gate 4** — Paper draft complete, ready for external AI review.
 
 ### Stage 7: External AI Review (Mandatory)
 
-Once `main.pdf` exists, the pipeline must enter the reviewer-led external review stage:
-
 ```
-spawn reviewer → /paperreview-submit
-spawn reviewer → /review-response
+/paperreview-submit "{PROJ}/academic_writer/paper/main.pdf"
 ```
 
-Rules:
-- do **not** mark the project as done immediately after PDF compilation
-- external AI review is mandatory before completion
-- save the external review and rebuttal under `{PROJ}/reviewer/`
-- always stop at the final human decision gate after the external review arrives
+Submit to paperreview.ai (Stanford Agentic Reviewer). Wait for results, save to `{PROJ}/reviewer/external_review_{date}.md`.
+
+**Gate 5 [REQUIRED]** — Human decides: major-revision / minor-revision / accept-as-is.
+
+### Stage 8: Revise
+
+Based on Gate 5 decision:
+- `major-revision` → back to Stage 4 (EXPERIMENT)
+- `minor-revision` → back to Stage 6 (WRITE)
+- `accept-as-is` → Stage 9 (DONE)
+
+### Stage 9: DONE
+
+Archive project, update state, distill learnings to memory.
 
 ---
 
@@ -377,3 +414,4 @@ Typical overnight workflow:
 - Successful experiments always update `{PMEM}/experiment-memory.md` (ESE)
 - Each agent writes ONLY to its owned subfolder — see `WORKSPACE.md`
 - Failures are reported gracefully with suggested alternatives
+- **Always stop at the final human decision gate after the external review arrives**

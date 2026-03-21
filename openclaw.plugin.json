@@ -1,10 +1,27 @@
 {
   "id": "openclaw-research",
+  "kind": "provider",
   "name": "OpenClaw Research",
-  "description": "Multi-agent research workflow: ideation, experiment, analysis, paper, review.",
+  "version": "1.0.0",
+  "description": "Multi-agent automated research plugin: from idea discovery to paper submission. Supports graph-grounded ideation, remote experiment execution, and evidence-backed paper writing.",
+  "author": "OpenClaw Research Team",
+  "license": "MIT",
+  "homepage": "https://github.com/OpenClawThings/openclaw-research",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenClawThings/openclaw-research.git"
+  },
+  "keywords": [
+    "research",
+    "automation",
+    "multi-agent",
+    "paper-writing",
+    "experiment-management",
+    "literature-review"
+  ],
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
+    "additionalProperties": true,
     "properties": {
       "allowWorkspaceFallback": {
         "type": "boolean",
@@ -36,27 +53,291 @@
         "minimum": 1,
         "default": 24,
         "description": "Maximum age of REVIEW_STATE.json before review resumability suggests a restart."
+      },
+      "projectsRoot": {
+        "type": "string",
+        "default": "~/.openclaw/projects",
+        "description": "Root directory for all research projects. Supports ~ for home directory."
+      },
+      "servers": {
+        "type": "object",
+        "description": "GPU server configuration for remote experiment execution",
+        "properties": {
+          "default": {
+            "type": "string",
+            "default": "gateway",
+            "description": "Default server name for experiment submission"
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Available GPU server names. Must include the default server."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ideaGeneration": {
+        "type": "object",
+        "description": "Idea generation and tournament configuration",
+        "properties": {
+          "divergeSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 8,
+            "description": "Number of initial ideas to generate in diverge phase"
+          },
+          "portfolioSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 4,
+            "description": "Number of ideas to select for tournament portfolio"
+          },
+          "tournamentRounds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 2,
+            "description": "Number of elimination rounds in idea tournament"
+          }
+        },
+        "additionalProperties": false
+      },
+      "trackPortfolio": {
+        "type": "object",
+        "description": "Research track portfolio constraints and policies",
+        "properties": {
+          "maxActiveTracks": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 2,
+            "description": "Maximum number of simultaneously active research tracks"
+          },
+          "maxParkedTracks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 1,
+            "description": "Maximum number of parked (suspended) research tracks"
+          },
+          "parkedBudgetPolicy": {
+            "type": "string",
+            "enum": ["zero", "reduced", "full"],
+            "default": "zero",
+            "description": "GPU budget policy for parked tracks: zero=no budget, reduced=50%, full=100%"
+          }
+        },
+        "additionalProperties": false
+      },
+      "computeBudget": {
+        "type": "object",
+        "description": "GPU compute budget and experiment execution constraints",
+        "properties": {
+          "defaultGpuHoursPerTrack": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 100,
+            "description": "Default GPU hours allocated to each research track"
+          },
+          "maxConcurrentExperiments": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 4,
+            "description": "Maximum concurrent experiments per active track"
+          },
+          "gpuType": {
+            "type": "string",
+            "enum": ["V100", "A100", "H100", "RTX6000", "mixed"],
+            "default": "A100",
+            "description": "Default GPU type for experiments. 'mixed' allows automatic selection."
+          }
+        },
+        "additionalProperties": false
+      },
+      "reviewLoop": {
+        "type": "object",
+        "description": "Review loop configuration for paper drafts",
+        "properties": {
+          "maxRounds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 3,
+            "description": "Maximum review-revise rounds before requiring manual intervention"
+          },
+          "scoreThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10,
+            "default": 6.0,
+            "description": "Minimum quality score required to advance to next stage (0-10 scale)"
+          },
+          "autoAdvanceScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10,
+            "default": 7.5,
+            "description": "Score threshold for automatic advancement without review (0-10 scale)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "graphConfig": {
+        "type": "object",
+        "description": "Literature graph construction and maintenance configuration",
+        "properties": {
+          "autoRefreshTrigger": {
+            "type": "string",
+            "enum": ["never", "weekly", "monthly", "per-track"],
+            "default": "per-track",
+            "description": "When to automatically refresh literature graph"
+          },
+          "noveltyThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.7,
+            "description": "Minimum novelty score (0-1) for ideas in graph (lower=stricter)"
+          },
+          "maxPapersToIngest": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 5000,
+            "description": "Maximum papers to ingest during graph refresh"
+          }
+        },
+        "additionalProperties": false
       }
     }
   },
   "uiHints": {
     "allowWorkspaceFallback": {
-      "label": "Allow Workspace Fallback"
+      "label": "Allow Workspace Fallback",
+      "description": "When enabled, allows memory writes without OPENCLAW_PROJECT set"
     },
     "requireProjectIsolation": {
-      "label": "Require Project Isolation"
+      "label": "Require Project Isolation",
+      "description": "Enforce project-level memory isolation"
     },
     "requireProjectIdInEntries": {
-      "label": "Require Project ID"
+      "label": "Require Project ID",
+      "description": "Include project ID in all memory entries"
     },
     "requireTrackId": {
-      "label": "Require Track ID"
+      "label": "Require Track ID",
+      "description": "Require track ID for idea and experiment entries"
     },
     "requireEvidencePointers": {
-      "label": "Require Evidence Pointers"
+      "label": "Require Evidence Pointers",
+      "description": "Require evidence pointers for traceability"
     },
     "reviewStateMaxAgeHours": {
-      "label": "Review State Max Age (Hours)"
+      "label": "Review State Max Age (Hours)",
+      "description": "Hours before review state is considered stale"
+    },
+    "projectsRoot": {
+      "label": "Projects Root Directory",
+      "description": "Root directory where all research projects are stored"
+    },
+    "servers": {
+      "label": "GPU Server Configuration",
+      "description": "Configure default GPU server and list of available servers",
+      "default": {
+        "label": "Default Server",
+        "description": "Default GPU server for experiment submission"
+      },
+      "list": {
+        "label": "Available Servers",
+        "description": "List of available GPU server names"
+      }
+    },
+    "ideaGeneration": {
+      "label": "Idea Generation",
+      "description": "Configure idea generation and tournament parameters",
+      "divergeSize": {
+        "label": "Diverge Size",
+        "description": "Number of initial ideas to generate"
+      },
+      "portfolioSize": {
+        "label": "Portfolio Size",
+        "description": "Number of ideas for tournament"
+      },
+      "tournamentRounds": {
+        "label": "Tournament Rounds",
+        "description": "Number of elimination rounds"
+      }
+    },
+    "trackPortfolio": {
+      "label": "Track Portfolio",
+      "description": "Configure research track constraints",
+      "maxActiveTracks": {
+        "label": "Max Active Tracks",
+        "description": "Maximum simultaneous active research tracks"
+      },
+      "maxParkedTracks": {
+        "label": "Max Parked Tracks",
+        "description": "Maximum suspended research tracks"
+      },
+      "parkedBudgetPolicy": {
+        "label": "Parked Budget Policy",
+        "description": "GPU budget policy for parked tracks"
+      }
+    },
+    "computeBudget": {
+      "label": "Compute Budget",
+      "description": "Configure GPU budget and experiment constraints",
+      "defaultGpuHoursPerTrack": {
+        "label": "GPU Hours Per Track",
+        "description": "GPU hours allocated per research track"
+      },
+      "maxConcurrentExperiments": {
+        "label": "Max Concurrent Experiments",
+        "description": "Maximum simultaneous experiments"
+      },
+      "gpuType": {
+        "label": "GPU Type",
+        "description": "Default GPU type for experiments"
+      }
+    },
+    "reviewLoop": {
+      "label": "Review Loop",
+      "description": "Configure paper review parameters",
+      "maxRounds": {
+        "label": "Max Review Rounds",
+        "description": "Maximum review-revise iterations"
+      },
+      "scoreThreshold": {
+        "label": "Score Threshold",
+        "description": "Minimum quality score to advance"
+      },
+      "autoAdvanceScore": {
+        "label": "Auto Advance Score",
+        "description": "Score for automatic advancement"
+      }
+    },
+    "graphConfig": {
+      "label": "Graph Configuration",
+      "description": "Configure literature graph construction",
+      "autoRefreshTrigger": {
+        "label": "Auto Refresh Trigger",
+        "description": "When to refresh literature graph"
+      },
+      "noveltyThreshold": {
+        "label": "Novelty Threshold",
+        "description": "Minimum novelty score for ideas"
+      },
+      "maxPapersToIngest": {
+        "label": "Max Papers to Ingest",
+        "description": "Maximum papers in graph refresh"
+      }
     }
   },
   "skills": [
@@ -67,5 +348,32 @@
     "./skills/analyzer",
     "./skills/academic_writer",
     "./skills/cross-reviewer"
-  ]
+  ],
+  "tools": [
+    "research_memory"
+  ],
+  "capabilities": {
+    "multiAgent": true,
+    "projectIsolation": true,
+    "remoteExecution": true,
+    "graphGroundedIdeation": true,
+    "evidenceBackedWriting": true,
+    "stateMachineControl": true
+  },
+  "agents": {
+    "required": [
+      "researcher",
+      "orchestrator",
+      "coder",
+      "analyzer",
+      "academic_writer",
+      "reviewer",
+      "cross-reviewer"
+    ]
+  },
+  "dependencies": {
+    "paperNexus": "optional",
+    "sshAccess": "required",
+    "gpuServers": "required"
+  }
 }

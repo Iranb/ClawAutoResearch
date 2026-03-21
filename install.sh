@@ -116,6 +116,17 @@ if [[ ! -d "$OC_DIR_EXPANDED" ]]; then
   fi
 fi
 
+# Create plugins directory if it doesn't exist
+OC_PLUGINS_DIR="$OC_DIR_EXPANDED/plugins"
+if [[ ! -d "$OC_PLUGINS_DIR" ]]; then
+  if $DRY_RUN; then
+    echo "  [dry-run] 将创建插件目录：$OC_PLUGINS_DIR"
+  else
+    mkdir -p "$OC_PLUGINS_DIR"
+    echo "  → 已创建 $OC_PLUGINS_DIR"
+  fi
+fi
+
 if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
   echo "  ⚠ 未找到 $OPENCLAW_CONFIG_PATH"
   echo "    脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
@@ -142,11 +153,6 @@ for entry in "${AGENTS[@]}"; do
 
   if [[ ! -d "$PLUGIN_DIR/agents/$id" ]]; then
     echo "  → SKIP $id (插件内缺少 agents/$id)"
-    continue
-  fi
-
-  if agent_exists "$id"; then
-    echo "  → SKIP $id (已存在)"
     continue
   fi
 
@@ -214,8 +220,6 @@ echo ""
 
 echo "[3/4] 复制技能到 Agent 工作区 skills..."
 
-PLANNED_DESTS=""
-
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
   skill_src="$PLUGIN_DIR/skills/$agent"
   ws_rel="$(workspace_for_agent "$agent")"
@@ -232,48 +236,137 @@ for agent in researcher reviewer orchestrator coder analyzer academic_writer cro
     skill_name=$(basename "$skill_dir")
     dst="$ws_skills/$skill_name"
 
-    if [[ "$skill_name" != "self-improving-agent" ]] && path_seen "$dst" "$PLANNED_DESTS"; then
-      echo "  → SKIP $agent/$skill_name (本次安装中已有同名目标路径，避免重复覆盖)"
-      continue
-    fi
-
-    PLANNED_DESTS="${PLANNED_DESTS}"$'\n'"$dst"
-
-    if [[ -d "$dst" ]]; then
-      if [[ "$skill_name" == "self-improving-agent" ]]; then
-        echo "  → KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
-      elif $DELETE_DUPLICATES; then
-        run rm -rf "$dst"
-        run cp -r "$skill_dir" "$dst"
-        echo "  → REPLACE $agent/$skill_name (已确认删除重复 skill)"
+    # Check if this is a symlink in the plugin directory
+    if [[ -L "$skill_dir" ]]; then
+      # It's a symlink - preserve it
+      if [[ -L "$dst" || -d "$dst" ]]; then
+        if [[ "$skill_name" == "self-improving-agent" ]]; then
+          echo "  → KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
+        else
+          run rm -rf "$dst"
+          if $DRY_RUN; then
+            echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
+          else
+            ln -s "$(readlink "$skill_dir")" "$dst"
+            echo "  → RELINK $agent/$skill_name (符号链接已更新)"
+          fi
+        fi
       else
-        echo "  → SKIP $agent/$skill_name (已存在；未确认删除重复项)"
+        if $DRY_RUN; then
+          echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
+        else
+          ln -s "$(readlink "$skill_dir")" "$dst"
+          echo "  → LINK $agent/$skill_name (符号链接已创建)"
+        fi
       fi
     else
-      run cp -r "$skill_dir" "$dst"
-      echo "  → COPY $agent/$skill_name"
+      # It's a regular directory - copy as before
+      if [[ -d "$dst" ]]; then
+        if [[ "$skill_name" == "self-improving-agent" ]]; then
+          echo "  → KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
+        else
+          run rm -rf "$dst"
+          run cp -r "$skill_dir" "$dst"
+          echo "  → REPLACE $agent/$skill_name (直接覆盖)"
+        fi
+      else
+        run cp -r "$skill_dir" "$dst"
+        echo "  → COPY $agent/$skill_name"
+      fi
     fi
   done
 done
 
 echo ""
 
-echo "[4/4] 复制模板（templates/memory、templates/hooks）到工作区（已存在则跳过）..."
+echo "[4/4] 复制核心配置文件到工作区..."
 
+# Copy all config and template files to workspace-researcher
+WS_ROOT="$OC_DIR_EXPANDED/workspace-researcher"
+if ! $DRY_RUN; then mkdir -p "$WS_ROOT"; fi
+
+# 1. Copy core config files (CONFIG.md, WORKFLOW.md, WORKSPACE.md)
+echo "  → 复制核心配置文件..."
+CORE_FILES=("CONFIG.md" "WORKFLOW.md" "WORKSPACE.md")
+for file in "${CORE_FILES[@]}"; do
+  src="$PLUGIN_DIR/$file"
+  dst="$WS_ROOT/$file"
+  if [[ -f "$src" ]]; then
+    if [[ -f "$dst" ]]; then
+      echo "    → SKIP $file (已存在)"
+    else
+      if ! $DRY_RUN; then
+        run cp "$src" "$dst"
+      fi
+      echo "    → COPY $file"
+    fi
+  else
+    echo "    ⚠ SKIP $file (源文件不存在)"
+  fi
+done
+
+# 2. Copy template files to workspace root
+echo "  → 复制模板文件..."
+TEMPLATE_FILES=("PROJECT_MANIFEST.json" "TRACK_REGISTRY.json" "CLAIM_POLICY.md" "EXPERIMENT_REGISTRY.md" "IDEA_TOURNAMENT_STATE.json" "PROJECTS_STATE.json")
+for f in "${TEMPLATE_FILES[@]}"; do
+  src="$PLUGIN_DIR/templates/$f"
+  dst="$WS_ROOT/$f"
+  if [[ -f "$src" ]]; then
+    if [[ -f "$dst" ]]; then
+      echo "    → SKIP $f (已存在)"
+    else
+      if ! $DRY_RUN; then
+        run cp "$src" "$dst"
+      fi
+      echo "    → COPY $f"
+    fi
+  else
+    echo "    ⚠ SKIP $f (源文件不存在)"
+  fi
+done
+
+echo ""
+echo "[5/4] 复制 memory 和 hooks 模板..."
+
+# 3. Copy memory templates
 if [[ -d "$PLUGIN_DIR/templates/memory" ]]; then
-  ws_memory="$OC_DIR_EXPANDED/workspace-researcher/memory"
+  ws_memory="$WS_ROOT/memory"
   if ! $DRY_RUN; then mkdir -p "$ws_memory"; fi
   for f in ideation-memory.md experiment-memory.md; do
-    [[ -f "$PLUGIN_DIR/templates/memory/$f" ]] || continue
+    src="$PLUGIN_DIR/templates/memory/$f"
     dst="$ws_memory/$f"
-    if [[ -f "$dst" ]]; then
-      echo "  → SKIP memory/$f (已存在)"
-    else
-      run cp "$PLUGIN_DIR/templates/memory/$f" "$dst"
-      echo "  → COPY memory/$f"
+    if [[ -f "$src" ]]; then
+      if [[ -f "$dst" ]]; then
+        echo "    → SKIP memory/$f (已存在)"
+      else
+        if ! $DRY_RUN; then
+          run cp "$src" "$dst"
+        fi
+        echo "    → COPY memory/$f"
+      fi
     fi
   done
 fi
+
+# 4. Copy hooks templates
+HOOK_WORKSPACES=( "workspace-researcher" "workspace-reviewer" "workspace-cross-reviewer" )
+for ws_rel in "${HOOK_WORKSPACES[@]}"; do
+  ws_root="$OC_DIR_EXPANDED/$ws_rel"
+  [[ -d "$ws_root" ]] || continue
+  for hook in BOOTSTRAP.md HEARTBEAT.md; do
+    src="$PLUGIN_DIR/templates/hooks/$hook"
+    [[ -f "$src" ]] || continue
+    dst="$ws_root/$hook"
+    if [[ -f "$dst" ]]; then
+      echo "    → SKIP $ws_rel/$hook (已存在)"
+    else
+      if ! $DRY_RUN; then
+        run cp "$src" "$dst"
+      fi
+      echo "    → COPY $ws_rel/$hook"
+    fi
+  done
+done
 
 HOOK_WORKSPACES=( "workspace-researcher" "workspace-reviewer" "workspace-cross-reviewer" )
 for ws_rel in "${HOOK_WORKSPACES[@]}"; do
@@ -379,7 +472,21 @@ echo ""
 echo "  1. Agents: 已按插件内 agent 定义添加/跳过（researcher, reviewer, orchestrator, coder, analyzer, academic_writer, cross-reviewer）"
 echo "  2. Skills: 已复制到各 Agent 工作区 skills；重复项仅在你确认后删除并覆盖，self-improving-agent 保留"
 echo "  3. Template: templates/memory、templates/hooks 已复制到工作区，已存在项已跳过"
-echo "  4. Config: 未修改你的 openclaw.json，只生成了建议配置清单"
+echo "  4. Plugin: 已创建插件符号链接到 $OC_PLUGINS_DIR"
+echo "  5. Config: 未修改你的 openclaw.json，只生成了建议配置清单"
+echo ""
+
+# Create plugin symlink
+PLUGIN_LINK="$OC_PLUGINS_DIR/openclaw-research"
+if [[ -L "$PLUGIN_LINK" ]]; then
+  echo "  → 插件链接已存在：$PLUGIN_LINK"
+elif $DRY_RUN; then
+  echo "  [dry-run] 将创建插件链接：$PLUGIN_LINK -> $PLUGIN_DIR"
+else
+  ln -sf "$PLUGIN_DIR" "$PLUGIN_LINK"
+  echo "  → 已创建插件链接：$PLUGIN_LINK -> $PLUGIN_DIR"
+fi
+
 echo ""
 highlight "  请手动检查以下配置项：agents、workspaces、skills roots、researcher subagents.allowAgents、projectsRoot、reviewer bash"
 echo "  建议清单：$SUGGESTED_CHANGES_FILE"

@@ -1,0 +1,58 @@
+{
+  "researcher": [
+    "./researcher/research-pipeline",
+    "./researcher/graph-build",
+    "./researcher/frontier-mapping",
+    "./researcher/idea-phase",
+    "./researcher/idea-generator",
+    "./researcher/idea-tournament",
+    "./researcher/novelty-check",
+    "./researcher/experiment-phase",
+    "./researcher/monitor-experiment",
+    "./researcher/parallel-experiments",
+    "./researcher/resume-pipeline",
+    "./researcher/research-reflect",
+    "./researcher/research-lit",
+    "./researcher/papers-cool",
+    "./researcher/hugging-face-paper-pages",
+    "./researcher/papernexus",
+    "./researcher/papernexus-agentic-reasoning",
+    "./researcher/crawl4ai-search",
+    "./researcher/research-queue"
+  ],
+  "orchestrator": [
+    "./orchestrator/plan-research",
+    "./orchestrator/resume-pipeline"
+  ],
+  "coder": [
+    "./coder/implement-experiment",
+    "./coder/run-experiment",
+    "./coder/github-download",
+    "./coder/resume-pipeline"
+  ],
+  "analyzer": [
+    "./analyzer/analyze-results",
+    "./analyzer/scientific-figures",
+    "./analyzer/papernexus-reflection",
+    "./analyzer/resume-pipeline"
+  ],
+  "academic_writer": [
+    "./academic_writer/paper-plan",
+    "./academic_writer/paper-write",
+    "./academic_writer/paper-compile",
+    "./academic_writer/paper-phase",
+    "./academic_writer/ai-research-prompt",
+    "./academic_writer/research-paper-writing",
+    "./academic_writer/resume-pipeline"
+  ],
+  "reviewer": [
+    "./reviewer/review-phase",
+    "./reviewer/evidence-grading",
+    "./reviewer/paperreview-submit",
+    "./reviewer/review-response",
+    "./reviewer/resume-pipeline"
+  ],
+  "cross-reviewer": [
+    "./cross-reviewer/resume-pipeline"
+  ]
+}

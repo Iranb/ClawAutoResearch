@@ -34,7 +34,36 @@ Before writing any code:
 - List all required components: model, loss, optimizer, data pipeline
 - Identify any unclear requirements and resolve via `{PROJ}/researcher/IDEA_REPORT.md`
 
-### 2. Directory Setup
+### 2. Determine Dataset Configuration
+
+**Read dataset requirements from PLAN.md**:
+- Look for `Dataset` or `Data` section
+- Identify dataset name, path, and preprocessing requirements
+
+**Resolve dataset path** (priority order):
+1. **Explicit path in PLAN.md**: Use the specified path
+2. **Project config**: `{PROJ}/PROJECT_MANIFEST.json` → `dataset_path`
+3. **SERVER.md defaults**: Use the appropriate dataset directory
+
+**Example dataset configurations**:
+
+```yaml
+# In PLAN.md
+dataset:
+  name: COCO
+  path: /data/datasets/coco
+  format: coco_detection
+  splits: [train2017, val2017]
+
+# Or
+dataset:
+  name: Custom
+  path: /data/projects/{PROJ}/datasets/my_dataset
+  format: custom
+  loader: data/dataset.py
+```
+
+### 3. Directory Setup
 
 Create experiment directory:
 ```
