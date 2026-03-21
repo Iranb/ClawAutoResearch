@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/plugin-research",
+  "name": "openclaw-research",
   "version": "1.0.0",
   "description": "Multi-agent automated research plugin for OpenClaw",
   "type": "module",
