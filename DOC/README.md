@@ -1,14 +1,67 @@
 # OpenClaw Research DOC
 
-这套文档面向当前仓库里的 `openclaw-research` 代码，按接近 OpenClaw 官方文档的方式拆成 `concepts`、`reference`、`guides` 三层。
+这套文档服务于 [openclaw-research](./../README.md)，目标是把“先了解系统、再安装、再运行、最后查细节”这条路径整理清楚。
 
-## 文档导航
+## 从哪里开始
 
-### Concepts
+如果你第一次接触这个仓库，建议按下面顺序读：
+
+1. [仓库首页 README](./../README.md)
+2. [快速上手](./guides/getting-started.md)
+3. [系统架构](./concepts/architecture.md)
+4. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
+5. [安装与启用](./guides/install-and-enable.md)
+6. [配置项参考](./reference/configuration.md)
+
+## 按任务导航
+
+### 我想快速跑起来
+
+- [快速上手](./guides/getting-started.md)
+- [安装与启用](./guides/install-and-enable.md)
+- [配置项参考](./reference/configuration.md)
+
+### 我想理解整体设计
 
 - [系统架构](./concepts/architecture.md)
 - [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
 - [PaperNexus、实验记忆与反思机制](./concepts/papernexus-memory-and-reflection.md)
+
+### 我想知道某个文件或工具是干什么的
+
+- [Agent 角色与目录配置](./reference/agents.md)
+- [Skills 总表](./reference/skills.md)
+- [插件工具接口](./reference/plugin-tools.md)
+- [状态文件与项目产物](./reference/state-files.md)
+- [斜杠命令与技能入口](./reference/slash-commands.md)
+
+### 我想排查运行问题
+
+- [运行、调试与测试](./guides/operations-and-testing.md)
+- [Coder 数据集路径约束](./reference/coder-dataset-paths.md)
+- [配置项参考](./reference/configuration.md)
+
+## 根目录文档怎么分工
+
+- [README.md](./../README.md)
+  仓库首页，只负责说明系统定位、快速开始和阅读入口。
+- [WORKFLOW.md](./../WORKFLOW.md)
+  人类可读的 workflow 契约与阶段规则。
+- [WORKSPACE.md](./../WORKSPACE.md)
+  目录结构、路径约定和角色写入边界。
+- [CONFIG.md](./../CONFIG.md)
+  路径与配置速查，不再承担总介绍。
+
+## 文档分层
+
+### Concepts
+
+- [系统架构](./concepts/architecture.md)
+  讲清系统分层、核心控制回路和为什么需要插件约束。
+- [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
+  讲清阶段机、auto iterator、硬 gate 和自动推进逻辑。
+- [PaperNexus、实验记忆与反思机制](./concepts/papernexus-memory-and-reflection.md)
+  讲清文献摄取链路、图谱、实验账本和反思机制。
 
 ### Reference
 
@@ -22,41 +75,26 @@
 
 ### Guides
 
+- [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
 - [运行、调试与测试](./guides/operations-and-testing.md)
 
-## 这套代码当前解决什么问题
+## 这套文档当前覆盖什么
 
-`openclaw-research` 不是一个单纯的 prompt 集合，而是一套以插件为中心的自动化科研系统，目标是把多 Agent 科研流程从“靠聊天记忆和技能自觉执行”，变成“靠状态文件、工具动作、运行时约束和自动迭代器执行”。
+当前文档已经覆盖这些核心能力：
 
-当前代码已经覆盖这些能力：
-
-- 多 Agent 科研分工：`researcher`、`orchestrator`、`coder`、`analyzer`、`academic_writer`、`reviewer`、`cross-reviewer`
-- 显式科研阶段机：`setup -> graph_build -> frontier_mapping -> idea -> plan -> code -> experiment -> analyze -> review -> write -> submit`
-- 插件注入的 workflow guard：在每轮对话前注入状态，在工具调用前拦截越界行为
-- 确定性的 `auto_iterator_tick`：将 heartbeat / bootstrap / recovery turn 变成真正的阶段协调器
-- 基于 PaperNexus 的文献入库、图谱刷新、创新头脑风暴和实验后反思
-- 结构化实验记忆：`EXPERIMENT_LEDGER.json`
-- 空闲调研机制：`idle_research`
-- Writer 模版约束与段落逻辑约束：`writing_contract`
-- Agent 间 mailbox、Discord mention 清洗、通信 cooldown
-
-## 推荐阅读顺序
-
-如果你第一次接触这套代码，建议按下面顺序读：
-
-1. [系统架构](./concepts/architecture.md)
-2. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
-3. [PaperNexus、实验记忆与反思机制](./concepts/papernexus-memory-and-reflection.md)
-4. [Agent 角色与目录配置](./reference/agents.md)
-5. [插件工具接口](./reference/plugin-tools.md)
-6. [安装与启用](./guides/install-and-enable.md)
+- 确定性的 `auto_iterator_tick`
+- PaperNexus-first、Markdown-first 的文献与图谱链路
+- graph presence hard gate
+- `EXPERIMENT_LEDGER.json` 和创新反思 freshness
+- `idle_research`
+- `writing_contract`
+- mailbox、agent-to-agent 派发、mention 清洗和 cooldown
+- channel-to-project binding
 
 ## 代码入口
 
-- 插件入口：`index.ts`
-- workflow 约束核心：`tools/workflow-guard.ts`
-- research memory 后端：`tools/research-memory.ts`
-- 全局工作流规范：`WORKFLOW.md`
-- 安装脚本：`install.sh`
-- Skills 注册表：`skills/index.json`
+- [index.ts](./../index.ts)
+- [tools/workflow-guard.ts](./../tools/workflow-guard.ts)
+- [tools/graph-presence.ts](./../tools/graph-presence.ts)
+- [tools/research-memory.ts](./../tools/research-memory.ts)

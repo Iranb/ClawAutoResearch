@@ -4,17 +4,24 @@
 > Every agent MUST read this file and follow its ownership rules.
 > Rule summary: **write only to your own folder; read from any folder**.
 > Project directories are separate from agent workspaces and live under the configurable `projectsRoot`, accessible to all agents.
+> For the onboarding overview and reading map, start from [README.md](./README.md) and [DOC/README.md](./DOC/README.md).
 
 ---
 
 ## Path Resolution Conventions
 
 - **{PROJECTS_ROOT}**: configurable project root, separate from all agent workspaces.
-  - Resolution order: environment variable `OPENCLAW_PROJECTS_ROOT` → `projectsRoot` in `~/.openclaw/openclaw-research.json` → default `~/.openclaw/projects`.
-  - Configure it via the top-level `projectsRoot` key in `openclaw.json` (for example `"~/ResearchProjects"`). Runtime or install can mirror it into `~/.openclaw/openclaw-research.json` for agent-side resolution.
+  - Configure it via `plugins.entries.openclaw-research.config.projectsRoot` in your real `openclaw.json`.
+  - If omitted, the plugin falls back to `~/.openclaw/projects`.
 - **{PROJ}** = `{PROJECTS_ROOT}/{proj-id}` — one project directory.
 - **{WS}** = the current agent workspace (for example `~/.openclaw/workspace-researcher`), containing identity and process definitions only, not project data.
 - **{PMEM}** = `{PROJ}/memory` — project-level memory (ideation, experiment, daily logs), readable by all agents; write permissions are defined below.
+
+Project resolution in practice is:
+
+1. current channel/session binding when enabled
+2. explicit `OPENCLAW_PROJECT` fallback when present
+3. plugin-configured `{PROJECTS_ROOT}` + project id resolution
 
 ---
 
@@ -203,7 +210,7 @@ These states are advisory only and must not block first-draft generation.
 
 | Variable | Resolves to |
 |----------|-------------|
-| `{PROJECTS_ROOT}` | configured project root (env or `~/.openclaw/openclaw-research.json`) |
+| `{PROJECTS_ROOT}` | configured project root from `plugins.entries.openclaw-research.config.projectsRoot` |
 | `{PROJ}` | `{PROJECTS_ROOT}/{proj-id}` |
 | `{PMEM}` | `{PROJ}/memory` |
 | `{WS}` | current agent workspace (for example `~/.openclaw/workspace-researcher`) |
@@ -220,7 +227,7 @@ Long-term memory lives entirely under the project-level `{PROJ}/memory/`. Differ
 
 ## Multiple Servers
 
-The experiment stage deploys through SSH to remote GPUs. The global default `servers` configuration lives in `~/.openclaw/openclaw-research.json`; for a specific project or direction, place `{PROJ}/servers.json` under the project to override the server list. Different projects can use different servers. See `CONFIG.md` for details.
+The experiment stage can deploy through SSH to remote GPUs. Treat the global server configuration as part of your actual OpenClaw runtime setup; for a specific project or direction, place `{PROJ}/servers.json` under the project to override the server list. Different projects can use different servers. See `CONFIG.md` for details.
 
 ---
 

@@ -1,5 +1,8 @@
 # CONFIG.md — OpenClaw Research Configuration
 
+> This file is a path and configuration cheat sheet.
+> For the full narrative configuration guide, see [DOC/reference/configuration.md](./DOC/reference/configuration.md).
+
 ## Path Variables
 
 ### Core Paths
@@ -75,10 +78,14 @@ The `{PROJECTS_ROOT}` path is determined by:
 
 ## Environment Variables
 
-- **`OPENCLAW_PROJECT`**: Current project ID
-  - Must be set before starting any research workflow
-  - Used to resolve `{PROJ}` path
+- **`OPENCLAW_PROJECT`**: Optional current project ID fallback
+  - Useful in non-Discord or single-project local sessions
+  - In Discord multi-project setups, channel-to-project binding is usually preferred
   - Example: `export OPENCLAW_PROJECT=my-first-detection`
+
+- **`PAPERNEXUS_ROOT`**: Optional PaperNexus repository root
+  - Can be used when PaperNexus is not discoverable as a sibling repository
+  - Helps `graph-build` and related skills resolve the local PaperNexus installation
 
 ## Related Files
 
@@ -89,7 +96,7 @@ The `{PROJECTS_ROOT}` path is determined by:
 ## Quick Reference
 
 ```bash
-# Set project
+# Optional local fallback when channel binding is not used
 export OPENCLAW_PROJECT=my-project
 
 # Project path resolves to:
