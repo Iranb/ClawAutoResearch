@@ -4,68 +4,30 @@
   // Memory: QMD backend, per-agent isolation; project-level memory under projectsRoot
 
   // ── 项目根目录：独立于各 agent 的 workspace，所有 agent 均可访问（可指定为任意路径）
-  "projectsRoot": "~/.openclaw/projects",
+  projectsRoot: "/Users/iranb/Downloads/AutoResearchProjects",
 
-  "plugins": {
-    "enabled": true,
-    "load": {
-      "paths": ["~/.openclaw/plugins"]
+  plugins: {
+    enabled: true,
+    load: {
+      paths: ["."]
     },
-    "entries": {
+    entries: {
       "openclaw-research": {
-        "enabled": true,
-        "config": {
-          // ── Data Integrity Policies ──────────
-          "allowWorkspaceFallback": false,
-          "requireProjectIsolation": true,
-          "requireProjectIdInEntries": true,
-          "requireTrackId": true,
-          "requireEvidencePointers": true,
-          "reviewStateMaxAgeHours": 24,
-          
-          // ── Project & Server Configuration ──────────
-          "projectsRoot": "~/.openclaw/projects",
-          
-          // ── GPU Server Configuration ──────────
-          "servers": {
-            "default": "gateway",
-            "list": ["gateway"]
-          },
-          
-          // ── Idea Generation ──────────
-          "ideaGeneration": {
-            "divergeSize": 8,
-            "portfolioSize": 4,
-            "tournamentRounds": 2
-          },
-          
-          // ── Track Portfolio ──────────
-          "trackPortfolio": {
-            "maxActiveTracks": 2,
-            "maxParkedTracks": 1,
-            "parkedBudgetPolicy": "zero"
-          },
-          
-          // ── Compute Budget ──────────
-          "computeBudget": {
-            "defaultGpuHoursPerTrack": 100,
-            "maxConcurrentExperiments": 4,
-            "gpuType": "A100"
-          },
-          
-          // ── Review Loop ──────────
-          "reviewLoop": {
-            "maxRounds": 3,
-            "scoreThreshold": 6.0,
-            "autoAdvanceScore": 7.5
-          },
-          
-          // ── Graph Configuration ──────────
-          "graphConfig": {
-            "autoRefreshTrigger": "per-track",
-            "noveltyThreshold": 0.7,
-            "maxPapersToIngest": 5000
-          }
+        enabled: true,
+        config: {
+          allowWorkspaceFallback: false,
+          requireProjectIsolation: true,
+          requireProjectIdInEntries: true,
+          requireTrackId: true,
+          requireEvidencePointers: true,
+          reviewStateMaxAgeHours: 24,
+          injectWorkflowContext: true,
+          enforceWorkflowBoundaries: true,
+          blockDiscordAgentMentions: true,
+          enableWorkflowMailbox: true,
+          heartbeatBackgroundChecks: true,
+          maxWorkflowInboxMessages: 6,
+          agentContactCooldownSeconds: 300
         }
       }
     }
@@ -113,7 +75,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit", "research_memory"],
+          allow: ["read", "write", "edit", "research_memory", "research_workflow"],
           deny: ["bash", "exec", "process"]
         }
       },
@@ -133,7 +95,7 @@
           mode: "off"
         },
         tools: {
-          allow: ["read", "write", "edit", "bash", "research_memory"],
+          allow: ["read", "write", "edit", "bash", "research_memory", "research_workflow"],
           // bash allowed for local dry-run validation and remote SSH execution
           deny: []
         }
@@ -154,7 +116,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit", "bash", "research_memory"],
+          allow: ["read", "write", "edit", "bash", "research_memory", "research_workflow"],
           // bash allowed for running Python analysis/plotting scripts
           deny: []
         }
@@ -175,7 +137,7 @@
           mode: "non-main"
         },
         tools: {
-          allow: ["read", "write", "edit", "web_search", "web_fetch", "research_memory"],
+          allow: ["read", "write", "edit", "web_search", "web_fetch", "research_memory", "research_workflow"],
           deny: ["bash", "exec", "process"]
         }
       },
@@ -200,7 +162,7 @@
           scope: "agent"
         },
         tools: {
-          allow: ["read", "write", "edit", "bash", "memory_search", "memory_get", "web_search", "web_fetch", "research_memory"],
+          allow: ["read", "write", "edit", "bash", "memory_search", "memory_get", "web_search", "web_fetch", "research_memory", "research_workflow"],
           deny: ["exec", "process"]
         }
       },
@@ -230,6 +192,9 @@
     ],
 
     defaults: {
+      heartbeat: {
+        every: "30m"
+      },
       compaction: {
         memoryFlush: {
           enabled: true,

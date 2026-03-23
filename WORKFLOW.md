@@ -4,6 +4,11 @@
 > The Researcher agent reads this on every session start and uses it as the
 > authoritative definition of what to do next, in what order, and when to pause.
 
+## Agent naming (Coder, not “methodologist”)
+
+The **CODE** stage and all implementation work (baselines, training code, reproducibility) are owned by **Coder**.  
+If any older text still says **methodologist**, treat it as a deprecated alias — use **`coder` / Coder / `@coder`** in skills, handoffs, and external mentions.
+
 ---
 
 ## Configuration
@@ -25,18 +30,20 @@ The agent will then run like autoresearch — loop forever, never ask, human int
 
 This workflow is a **state machine**, not just an ordered checklist.
 
-Every project is controlled by three mandatory state files:
+Every project is controlled by four mandatory state files:
 
-- `{PROJ}/PROJECT_MANIFEST.json` — coarse stage, micro-stage, budget, gate state
+- `{PROJ}/PROJECT_MANIFEST.json` — coarse stage, micro-stage, budget, gate state, graph ingestion state, and idle-research background topic policy
 - `{PROJ}/TRACK_REGISTRY.json` — candidate / active / parked / killed hypothesis tracks
 - `{PROJ}/CLAIM_POLICY.md` — how support labels constrain writing and advancement
+- `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — restart-safe structured memory for queued, running, completed, failed, and PaperNexus-synced experiments
 
 The workflow advances only when:
 
 1. the current stage's mandatory artifacts exist
 2. `PROJECT_MANIFEST.json` reflects the correct `current_stage` and `current_micro_stage`
 3. track decisions are explicit (`advance` / `merge` / `park` / `kill`)
-4. claim support satisfies the current gate
+4. experiment history is durably reconciled before leaving the EXPERIMENT stage
+5. claim support satisfies the current gate
 
 Advisory writing signals are tracked separately and never block draft generation.
 
@@ -62,6 +69,70 @@ These signals use only two labels:
 - `red` — still write the draft, but use more conservative language and surface the issue for human review
 
 `red` on any advisory writing signal must **not** stop progression from ANALYZE → REVIEW → WRITE.
+
+### Template-Driven Writing Contract
+
+When the user provides a writing template, it must become durable workflow state instead of an ephemeral chat instruction.
+
+- record it in `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
+- store the readable template path in `writing_contract.template_path`
+- choose a durable `writing_contract.paper_mode`
+  - `conference` = `9` pages main body + `2` pages references
+  - `journal` = `12` pages main body + `2` pages references
+- if the template is mandatory, set `writing_contract.template_required = true`
+- require Academic Writer to read the template before `/paper-plan` or `/paper-write`
+- adapt the template explicitly into `{PROJ}/academic_writer/TEMPLATE_MAPPING.md`
+- if `writing_contract.kg_storyline_required = true`, require `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md` before final drafting
+
+The writing contract should also bound paper scope:
+
+- keep at most `1-2` core ideas
+- keep headline claims small and explicit
+- use the knowledge graph to constrain `problem -> gap -> method -> evidence -> limitation`
+
+Paragraph logic is part of this contract, not an optional polish pass:
+
+- one paragraph should carry one message
+- the opening sentence should state the paragraph role or claim
+- sentence order should show a clear relation: cause, contrast, consequence, refinement, or example
+- the closing sentence should bridge to the next paragraph or section when possible
+- Writer should reverse-outline each section before treating it as stable
+
+If `writing_contract.template_required = true` and the template file is missing, Writer must stop and restore the template before drafting new prose.
+
+### Citation Integrity Contract
+
+Citation reliability must become durable workflow state instead of a last-minute manual check.
+
+- record it in `{PROJ}/PROJECT_MANIFEST.json.citation_integrity`
+- keep `citation_integrity.bibliography_path = academic_writer/paper/refs.bib`
+- keep `citation_integrity.verification_report_path = reviewer/CITATION_VERIFICATION.md`
+- require reviewer-side citation verification before SUBMIT
+- block submission when citation verification is not `verified`
+- block submission when unresolved placeholders exceed budget
+- block submission when hallucinated citations remain
+
+### Structured Experiment Bundle Contract
+
+Coder must keep experiment folders self-describing enough that a later run can recover the relationship between:
+
+- project
+- track
+- experiment id
+- scientific question
+- entry point
+- config set
+- result directory
+- remote launch record
+
+Minimum structure:
+
+- `coder/EXPERIMENT_INDEX.md`
+- `coder/experiments/<track-id>/<experiment-id>__<slug>/EXPERIMENT_MANIFEST.json`
+- one local `README.md` per bundle
+- one `REMOTE_RUN.json` per launched bundle
+
+Flat, ambiguous experiment dumping under `coder/` is not allowed for new work.
 
 ### Track Lifecycle
 
@@ -103,7 +174,7 @@ The graph-backed brainstorming pack should preserve:
 Before graph build, Researcher must also maintain a project-local literature corpus:
 
 - use `/papers-cool` for rough keyword search and venue sweep
-- for key papers, prefer `/hugging-face-paper-pages` to save full-paper markdown into the PaperNexus source tree
+- once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into the PaperNexus source tree
 - if markdown is unavailable, fall back to `/papers-cool` PDF download
 - if the current graph does not already contain a newly found key paper, Researcher must ingest it first and refresh graph state before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
@@ -111,10 +182,34 @@ Before graph build, Researcher must also maintain a project-local literature cor
 Paper source layout and refresh rules:
 
 - keep a stable `paper_source_dir` with `md/` and `pdf/` subdirectories
+- default `paper_source_dir` and `graph_source_dir` should point to the local PaperNexus source tree `~/.papernexus/papers/{project_id}` unless a project explicitly overrides them
 - use canonical filenames prefixed by arXiv ID, e.g. `<arxiv-id>--<normalized-title>.md`
 - deduplicate by canonical paper identity, not by raw filename
 - refresh the graph immediately if a newly ingested paper changes the novelty baseline or closest prior work
 - otherwise refresh when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
+
+### Experiment-Informed Innovation Reflection Contract
+
+PaperNexus-backed brainstorming must not forget experiment history.
+Once `{PROJ}/researcher/EXPERIMENT_LEDGER.json` contains reflectable results, the next serious innovation proposal must first pass through a reflection step grounded in both the graph and the experiment ledger.
+
+The reflection flow must:
+
+- read the latest experiment memory via `research_workflow.get_experiment_memory`
+- inspect the latest `innovation_reflection` state from `{PROJ}/PROJECT_MANIFEST.json` or `research_workflow.get_innovation_reflection`
+- use PaperNexus `query`, `context`, `impact`, `ideas`, and at least one `brainstorm` pass to reinterpret the latest experiment evidence
+- produce `{PROJ}/researcher/INNOVATION_REFLECTION.md`
+- record the refresh through `research_workflow.record_innovation_reflection` instead of hand-editing `PROJECT_MANIFEST.json`
+
+The experiment-informed reflection should preserve:
+
+- which experiments materially changed the innovation picture
+- what worked, what failed, and what remains ambiguous
+- which assumptions were falsified or weakened
+- transferable graph-grounded lessons for the next idea round
+- brainstorm anchors and "do not repeat" constraints for the next innovation proposal
+
+If new experiment evidence exists after the last reflection, Researcher must refresh `INNOVATION_REFLECTION.md` before writing new idea outputs or changing the active innovation direction.
 
 ### Query-Grounded Graph Reasoning Contract
 
@@ -187,13 +282,13 @@ This applies regardless of `AUTO_PROCEED`. Skipping a stage (e.g. going IDEA →
 
 | From stage | To stage | Completion signals (all must exist) |
 |------------|----------|--------------------------------------|
-| SETUP      | GRAPH_BUILD | `{PROJ}/PROJECT_MANIFEST.json`, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/graph/` |
-| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, and `paper_ingestion.graph_presence_checked_at` recorded in `{PROJ}/PROJECT_MANIFEST.json` |
+| SETUP      | GRAPH_BUILD | `{PROJ}/PROJECT_MANIFEST.json` with `idle_research` block present, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, `{PROJ}/graph/` |
+| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`, and `paper_ingestion.graph_presence_status = ready` recorded in `{PROJ}/PROJECT_MANIFEST.json` |
 | FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, non-empty `{PROJ}/graph/subgraphs/`, and `current_micro_stage = frontiers_packaged` |
-| IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, and a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track |
+| IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track, and when experiment memory contains newer evidence than the last ideation reflection, `{PROJ}/researcher/INNOVATION_REFLECTION.md` refreshed after the latest experiment results |
 | **PLAN**   | **CODE** | **`{PROJ}/orchestrator/PLAN.md`** AND **`{PROJ}/orchestrator/TODOS.md`** AND **`{PROJ}/orchestrator/PLAN_AUDIT.md`** |
 | CODE       | EXPERIMENT | At least one `{PROJ}/coder/<experiment-name>/` with `train.py` (or equivalent) and `README.md` |
-| EXPERIMENT | ANALYZE | `{PROJ}/researcher/artifacts/results/` non-empty, `EXPERIMENT_REGISTRY.md` updated, `TRACK_REGISTRY.json` updated with experiment outcomes |
+| EXPERIMENT | ANALYZE | `{PROJ}/researcher/artifacts/results/` non-empty, `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` updated, `{PROJ}/researcher/EXPERIMENT_LEDGER.json` updated, `PROJECT_MANIFEST.json.experiment_memory.last_ledger_update_at` recorded, and `TRACK_REGISTRY.json` updated with experiment outcomes |
 | ANALYZE   | REVIEW  | `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/QUALITY_AUDIT.md` |
 | REVIEW    | WRITE   | `{PROJ}/reviewer/REVIEW_REPORT.md` or review loop marked complete in REVIEW_STATE.json, and no `UNSUPPORTED` primary claims remain in the selected writing scope |
 | WRITE     | SUBMIT  | `{PROJ}/academic_writer/paper/main.pdf` (or equivalent), `{PROJ}/academic_writer/WRITING_SIGNALS.md`, and outline/prose cross-review artifacts saved under `{PROJ}/cross-reviewer/` |
@@ -215,8 +310,10 @@ The workflow is not allowed to rely on prose alone.
 
 Before a stage can be considered complete, the durable state files must be structurally usable by another agent after restart:
 
-- `{PROJ}/PROJECT_MANIFEST.json` must carry the current `project_id`, `owner_agent`, `current_stage`, `current_micro_stage`, `next_action`, `resume_action`, `required_artifacts`, `blocking_reason`, `last_heartbeat_at`, `last_handoff_at`, `paper_source_dir`, `memory_scope`, `audit`, and latest graph-reasoning status.
+- `{PROJ}/PROJECT_MANIFEST.json` must carry the current `project_id`, `owner_agent`, `current_stage`, `current_micro_stage`, `next_action`, `resume_action`, `required_artifacts`, `blocking_reason`, `last_heartbeat_at`, `last_handoff_at`, `paper_source_dir`, `memory_scope`, `audit`, latest graph-reasoning status, an `idle_research` block with the configured topic, budget, cooldown, and latest runtime summary, an `innovation_reflection` block with freshness status and the latest reflected experiment boundary, and a `writing_contract` block with template path, section order, and paragraph-logic state.
 - `{PROJ}/TRACK_REGISTRY.json` must carry explicit per-track fields for status, hypothesis, graph grounding, reasoning packet location, working memory location, synthesis packet location, evidence pointers, failure signature, retry condition, and last decision.
+- `{PROJ}/researcher/EXPERIMENT_LEDGER.json` must carry a structured per-experiment record with experiment id, track id, kind, status, checkpoint stage, config reference, result pointers, decision, and PaperNexus sync status.
+- `PROJECT_MANIFEST.json.experiment_memory` must mirror the latest ledger summary (`ledger_path`, `last_ledger_update_at`, `last_completed_experiment_id`, `last_failed_experiment_id`, `best_known_config_ref`, `papernexus_sync_status`, `papernexus_sync_required`).
 - If a required field is missing, the stage is incomplete even if the narrative report exists.
 - Researcher is the top-level state steward: sub-agents emit structured handoff summaries in their own folders; Researcher mirrors the authoritative handoff state into `{PROJ}/PROJECT_MANIFEST.json`.
 
@@ -249,6 +346,13 @@ Every agent handoff must survive restarts and context loss.
 - Restart recovery always prefers durable state over remembered chat context.
 - If durable state and on-disk artifacts disagree, the pipeline must reconcile first and only then continue.
 
+Discord status reports are broadcast summaries, not routing commands.
+
+- Never post raw `@coder`, `@researcher`, `@writer`, `@reviewer`, or `@openclaw` inside routine status tables or heartbeat updates.
+- Use plain labels such as `[coder]`, `[researcher]`, `[writer]`, `[reviewer]`, `[openclaw]`.
+- If one agent truly needs another, use the approved workflow path (`sessions_send`, `sessions_spawn`, or `research_workflow.send_mailbox`) instead of a decorative `@` in Discord.
+- Short-term repeated routing is forbidden: after one agent routes work to another, do not route again to the same target until the workflow contact cooldown expires unless a new durable blocker or artifact changes the request.
+
 ## Strong Isolation Contract (mandatory)
 
 Shared workspaces do not justify shared project cognition.
@@ -256,6 +360,7 @@ Shared workspaces do not justify shared project cognition.
 - Every write must be scoped to exactly one `{PROJ}` and one `project_id`.
 - When an agent switches from one project to another in a shared workspace, it must re-read the new project's manifest and run `/resume-pipeline` before doing fresh work.
 - Project facts stay inside `{PROJ}/` and `{PROJ}/memory/`; only generalized heuristics may be promoted outside the project boundary.
+- Coder treats dataset roots as read-only inputs: no in-place preprocessing, annotation rewrites, permission changes, or cache dumps under shared `datasets/` directories.
 - Reviewer and Cross-Reviewer stay packet-isolated: they should judge the supplied materials, not browse another agent's hidden workspace context.
 - Background tasks may improve preparedness, but they must not silently change active tracks, claims, or stage ownership without an explicit state update.
 
@@ -284,7 +389,7 @@ For graph-grounded ideation and novelty analysis, prefer this micro-stage progre
 | IDEA | `graph_diverge_complete` → `graph_converge_complete` → `innovation_construction_complete` → `duplicate_risk_checked` → `attacker_pass_complete` → `novelty_checked` → `idea_audited` → `portfolio_selected` |
 | PLAN | `innovation_package_locked` → `track_plan_written` → `budgeted` → `stop_rules_defined` → `plan_audited` |
 | CODE | `pilot_bundle_ready` or `full_bundle_ready` |
-| EXPERIMENT | `pilot_runs_complete` → `track_decision_made` → `execution_reconciled` → `full_runs_complete` |
+| EXPERIMENT | `pilot_runs_complete` → `track_decision_made` → `execution_reconciled` → `experiment_memory_synced` → `full_runs_complete` |
 | ANALYZE | `claims_packed` → `track_verdicts_written` → `quality_audited` → `theory_note_written` |
 | REVIEW | `soundness_checked` → `scope_checked` → `publishability_checked` |
 | WRITE | `claim_safe_outline` → `storyline_sketch_ready` → `draft_complete` → `logic_signals_logged` → `writing_audited` → `venue_safe_pdf` |
@@ -305,18 +410,20 @@ Each stage specifies: owning agent, inputs, outputs, skills, and success conditi
 Actions:
   1. Read WORKFLOW.md (this file)
   2. Read SOUL.md, AGENTS.md
-  3. Ensure {PROJ}/PROJECT_MANIFEST.json, {PROJ}/TRACK_REGISTRY.json, {PROJ}/CLAIM_POLICY.md, and {PROJ}/graph/ exist
+  3. Ensure {PROJ}/PROJECT_MANIFEST.json, {PROJ}/TRACK_REGISTRY.json, {PROJ}/CLAIM_POLICY.md, {PROJ}/researcher/EXPERIMENT_LEDGER.json, and {PROJ}/graph/ exist
   4. If any state file is missing, initialize it from templates/
   5. Load {PROJ}/PROJECT_MANIFEST.json and confirm `project_id`, `owner_agent`, and `memory_scope.project_isolated`
   6. Load {PROJ}/TRACK_REGISTRY.json
   7. Load {PROJ}/CLAIM_POLICY.md
-  8. Load {PROJ}/memory/ideation-memory.md, {PROJ}/memory/experiment-memory.md (project-isolated)
+  8. Load {PROJ}/memory/ideation-memory.md, {PROJ}/memory/experiment-memory.md, and {PROJ}/researcher/EXPERIMENT_LEDGER.json (project-isolated + restart-safe)
   9. Check {PROJECTS_ROOT}/PROJECTS_STATE.json for active projects
   10. Set `current_micro_stage: "identity_locked"` once project identity and write target are confirmed
   11. If active project found → resume at last incomplete stage + micro-stage
   12. If no active project → proceed to GRAPH_BUILD stage
   13. Post Session Ready message (see BOOTSTRAP.md)
   14. All writes to ideation memory, experiment memory, daily logs, and REVIEW_STATE must go through the `research_memory` plugin tool rather than raw file appends
+  15. All writes to {PROJ}/researcher/EXPERIMENT_LEDGER.json must go through `research_workflow.upsert_experiment`; do not hand-edit the ledger during active runs
+  16. All runtime writes to `PROJECT_MANIFEST.json.idle_research` should go through `research_workflow.set_idle_research` or `research_workflow.record_idle_research_run` when the plugin tool is available
 ```
 
 ---
@@ -333,7 +440,7 @@ Actions:
 Procedure:
   1. Run /research-lit first if the project has not yet ingested key papers into a PaperNexus-readable source directory
   2. Use `/papers-cool` for broad discovery and venue sweep
-  3. For key papers, prefer `/hugging-face-paper-pages` to save full markdown into the PaperNexus source tree; if markdown is unavailable, save PDF via `/papers-cool`
+  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the PaperNexus source tree; only if markdown is unavailable, save PDF via `/papers-cool`
   4. Apply the graph refresh trigger rule:
      - refresh now if 1 new paper changes novelty / closest prior work
      - refresh now if 3+ genuinely new canonical papers accumulated
@@ -374,11 +481,12 @@ Procedure:
 
 ### Stage 1 · IDEA
 **Owner:** Researcher  
-**Skills:** `/idea-phase` → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
+**Skills:** `/idea-phase` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
 **Inputs:** Research domain or topic (from user, or from memory), `{PROJ}/researcher/FRONTIER_REPORT.md`
 **Outputs:**
 - `{PROJ}/researcher/IDEA_REPORT.md` — top-ranked idea with novelty assessment
 - `{PROJ}/researcher/IDEA_AUDIT.md` — duplicate-risk, evidence, retry, and isolation audit for active tracks
+- `{PROJ}/researcher/INNOVATION_REFLECTION.md` — refreshed experiment-informed ideation constraints when prior experiments exist
 - `{PROJ}/researcher/LITERATURE.md` — supporting literature
 - `{PROJ}/researcher/IDEA_TOURNAMENT_STATE.json` — pilot scores (if tournament ran)
 - `{PROJ}/TRACK_REGISTRY.json` — track portfolio with candidate / active / parked / killed decisions
@@ -386,26 +494,28 @@ Procedure:
 ```
 Procedure:
   1. Confirm {PROJ}/researcher/FRONTIER_REPORT.md and graph/subgraphs exist; if missing, go back to FRONTIER_MAPPING
-  2. Run /idea-phase as a graph-grounded dialectic loop, not a one-shot prompt brainstorm
-  3. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas` / `brainstorm --mode diverge` outputs
-  4. For each track, preserve a graph evidence packet:
+  2. If experiment memory contains reflectable evidence and `innovation_reflection` is stale or missing, run /innovation-reflection before proposing a new track set
+  3. Run /idea-phase as a graph-grounded dialectic loop, not a one-shot prompt brainstorm
+  4. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas` / `brainstorm --mode diverge` outputs
+  5. Reuse `{PROJ}/researcher/INNOVATION_REFLECTION.md` as a negative-constraint and transfer-lesson packet whenever prior experiment evidence exists
+  6. For each track, preserve a graph evidence packet:
      - anchor nodes / relations
      - why this matters
      - weakest assumption
      - one falsifier pilot
-  5. Run attacker / novelty pass on each track
-  6. Use a converge pass on the shortlist before locking the portfolio
-  7. If ≥2 tracks survive: run /idea-tournament or equivalent pilot pass
-  8. Select the portfolio:
+  7. Run attacker / novelty pass on each track
+  8. Use a converge pass on the shortlist before locking the portfolio
+  9. If ≥2 tracks survive: run /idea-tournament or equivalent pilot pass
+  10. Select the portfolio:
      - max 2 active tracks
      - max 1 parked track
      - all others merged or killed
-  9. Update {PROJ}/TRACK_REGISTRY.json with explicit decisions, rationale, and graph grounding
-  10. Write IDEA_AUDIT.md covering duplicate risk, closest prior work, evidence pointers, failure signatures, and retry conditions for each surviving track
-  11. Update {PROJ}/PROJECT_MANIFEST.json with `active_track_ids`, `parked_track_ids`, `audit.idea_audit_path`, and `current_micro_stage: "portfolio_selected"`
-  12. Select the current leading track → write IDEA_REPORT.md
-  13. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
-  14. → POST GATE-1
+  11. Update {PROJ}/TRACK_REGISTRY.json with explicit decisions, rationale, graph grounding, and which reflection lesson influenced each surviving track
+  12. Write IDEA_AUDIT.md covering duplicate risk, closest prior work, evidence pointers, failure signatures, retry conditions, and experiment-informed reflection takeaways for each surviving track
+  13. Update {PROJ}/PROJECT_MANIFEST.json with `active_track_ids`, `parked_track_ids`, `audit.idea_audit_path`, and `current_micro_stage: "portfolio_selected"`
+  14. Select the current leading track → write IDEA_REPORT.md
+  15. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
+  16. → POST GATE-1
 ```
 
 ---
@@ -416,14 +526,44 @@ Researcher should never become idle while the project is active.
 
 When Orchestrator, Coder, Analyzer, Reviewer, or Writer are executing their own stage work, Researcher should keep doing one or more of:
 
+- if `PROJECT_MANIFEST.json.idle_research.enabled = true` and the topic is due, run `/idle-research` for that exact topic before generic literature drift
 - run `/papers-cool` keyword and venue sweeps for newly relevant work
 - ingest newly found key papers via `/hugging-face-paper-pages` or `/papers-cool` PDF fallback into the PaperNexus source tree
 - prepare a graph refresh if the literature frontier changed materially
 - analyze innovation deltas with the current track portfolio and discuss novelty / composition opportunities with the relevant sub-agent
 - keep the `paper_source_dir` canonical and deduplicated; do not let duplicate downloads masquerade as new literature
+- reconcile newly completed experiments into `{PROJ}/researcher/EXPERIMENT_LEDGER.json` and, when possible, mirror high-value experiment details into PaperNexus
+- when new experiment evidence materially changes future ideation, queue or run `/innovation-reflection` before the next track rewrite
 - if paper inflow becomes steady, keep `papernexus watch` alive and let `/resume-pipeline` reconcile it after restarts
 
 This continuous loop must not silently change the active track set or overwrite the current experiment plan. Any material portfolio change still requires an explicit track decision and state update.
+
+---
+
+## Idle Research Contract (mandatory while waiting)
+
+`PROJECT_MANIFEST.json.idle_research` is the authoritative background-topic contract for Researcher.
+
+When `idle_research.enabled = true`, Researcher must treat it as a bounded queue, not as a vague reminder:
+
+1. Read the current state via `research_workflow.get_idle_research` before starting a round.
+2. If the round is not due yet, do not rerun it early unless the user explicitly overrides the cooldown.
+3. If the round is due, prefer `/idle-research` on `idle_research.topic` over ad hoc literature browsing.
+4. Respect `max_papers_per_cycle`, `cooldown_minutes`, `query_seeds`, and `preferred_venues`.
+5. Use the required acquisition order:
+   - `/papers-cool` for search and venue sweep
+   - `/hugging-face-paper-pages` for full-paper Markdown
+   - `/papers-cool` PDF fallback only when Markdown is unavailable
+6. Save the round digest under `{PROJ}/researcher/idle-research/ROUND-YYYY-MM-DD_HHMM.md`.
+7. Record the runtime outcome through `research_workflow.record_idle_research_run`, including `last_run_at`, `last_digest_path`, `status`, canonical-paper counts, and any graph-refresh follow-up.
+8. If the round discovers new core papers and `refresh_graph_on_new_core_papers = true`, mark graph refresh as required before the next novelty, ideation, or revision decision.
+
+Idle research must not silently:
+
+- change the active track set
+- rewrite `PLAN.md`
+- launch experiments
+- treat abstract-only evidence as enough for innovation claims
 
 ---
 
@@ -433,7 +573,7 @@ When an agent is blocked on another agent or a human gate, it should not invent 
 
 | Agent | Allowed background work while waiting | Forbidden during background mode |
 |-------|--------------------------------------|----------------------------------|
-| Researcher | literature watch, full-text ingestion, graph refresh prep, graph-grounded reflection, memory consolidation, queue triage | silently changing active tracks, rewriting plan, changing claims without state update |
+| Researcher | idle-research topic loop, literature watch, full-text ingestion, graph refresh prep, graph-grounded reflection, memory consolidation, experiment-ledger reconciliation, PaperNexus experiment sync, queue triage | silently changing active tracks, running generic literature drift when `idle_research` is enabled and due, rewriting plan, changing claims without state update |
 | Orchestrator | plan stress-test, compute what-if analysis, fallback trees, risk register, graph-backed innovation tightening | launching code, changing active track ownership, mutating another agent's files |
 | Coder | smoke tests, reproducibility hardening, launcher templates, environment snapshots, baseline harness cleanup | literature survey as the primary owner, changing research scope, launching unassigned experiments |
 | Analyzer | partial-result QC, figure/table scaffolds, claim extraction, graph reflection summaries, anomaly triage | running new experiments, rewriting the plan, promoting unsupported claims |
@@ -556,6 +696,7 @@ Procedure:
   1. Verify PLAN.md and TODOS.md exist under {PROJ}/orchestrator/. If not → run Stage 2 (PLAN) first.
   2. Researcher spawns Coder with path to PLAN.md and the active track set
   3. Coder runs /implement-experiment for the highest-priority active track first
+  3a. Coder treats dataset paths as read-only and writes any preprocessing outputs, caches, or converted artifacts under {PROJ}/coder/{experiment-name}/ or remote scratch/results, never back into dataset roots
   4. Coder marks TODOS.md item as complete
   5. Coder does local dry-run validation and reports the launch command
   6. If validation fails → Coder fixes
@@ -571,6 +712,7 @@ Procedure:
 **Inputs:** `{PROJ}/coder/{experiment-name}/`, `{PROJ}/orchestrator/PLAN.md`  
 **Outputs:**
 - `{PROJ}/researcher/artifacts/results/` — raw results
+- `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — restart-safe structured experiment memory
 - `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` — run status
 - updated `{PROJ}/TRACK_REGISTRY.json` — track evidence status and decision
 
@@ -585,13 +727,23 @@ Procedure:
   4. Monitor with /monitor-experiment
   5. On completion: collect results to artifacts/results/
   6. Update EXPERIMENT_REGISTRY.md
-  7. Run a track decision pass:
+  7. After every meaningful checkpoint (queued, launched, running, done, failed, decision made), upsert `{PROJ}/researcher/EXPERIMENT_LEDGER.json` with:
+     - experiment id / track id / kind
+     - config reference, screen name, server, GPU
+     - status, checkpoint stage, metrics, result pointers
+     - failure signature or decision (`advance` / `merge` / `park` / `kill`)
+     - `papernexus_sync.status`
+  8. Mirror the latest experiment-memory summary into `{PROJ}/PROJECT_MANIFEST.json.experiment_memory`
+  9. If the project has a PaperNexus corpus, use idle time or post-run reconciliation to sync important experiment details into PaperNexus and mark sync status in the ledger
+  10. Mark `{PROJ}/PROJECT_MANIFEST.json.innovation_reflection` as pending whenever the latest experiment evidence changes future ideation assumptions
+  11. Run a track decision pass:
      - `advance`
      - `merge`
      - `park`
      - `kill`
-  8. Update {PROJ}/TRACK_REGISTRY.json and {PROJ}/PROJECT_MANIFEST.json with the new decision
-  9. → POST GATE-3
+  12. Update {PROJ}/TRACK_REGISTRY.json and {PROJ}/PROJECT_MANIFEST.json with the new decision
+  13. Set `current_micro_stage: "experiment_memory_synced"` only after registry, ledger, manifest summary, and innovation-reflection freshness state agree
+  14. → POST GATE-3
 ```
 
 ---
@@ -611,6 +763,7 @@ Procedure:
 
 Key outputs:
   → {PROJ}/researcher/artifacts/results/
+  → {PROJ}/researcher/EXPERIMENT_LEDGER.json
   → {PROJ}/researcher/EXPERIMENT_REGISTRY.md
   → {PROJ}/TRACK_REGISTRY.json
 
@@ -680,10 +833,11 @@ Procedure:
 ### Stage 7 · WRITE
 **Owner:** Academic Writer (spawned by Researcher)  
 **Skills:** `/paper-plan`, `/paper-write`, `/paper-compile`, `/ai-research-prompt`, `/research-paper-writing`  
-**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`
+**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`, and `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
 **Outputs:**
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — paper outline
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough paper thesis and evidence spine
+- `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — how the user template maps onto this paper's outline and section order
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — `green` / `red` writing advisory for theory, storyline, paragraph logic
 - `{PROJ}/academic_writer/paper/sections/` — individual section drafts
 - `{PROJ}/academic_writer/paper/main.pdf` — compiled PDF
@@ -691,16 +845,19 @@ Procedure:
 ```
 Procedure:
   1. Researcher spawns Academic Writer with narrative report + claim matrix + track verdicts + theory support note + figures path
-  2. Writer runs /paper-plan → PAPER_PLAN.md + STORYLINE_SKETCH.md + initial WRITING_SIGNALS.md
-  3. Writer limits the paper to active / winning tracks only
-  4. Writer removes or downgrades unsupported primary claims before prose drafting
-  5. If theory or storyline signal is `red`, Writer still continues but marks the risky sections for human review
-  6. Cross-Reviewer checks outline (sessions_send, Outline Mode)
+  2. Writer reads `PROJECT_MANIFEST.json.writing_contract`; if a user template is configured, Writer must read it before any outline or prose drafting
+  3. Writer runs /paper-plan → PAPER_PLAN.md + STORYLINE_SKETCH.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
+  4. Writer limits the paper to active / winning tracks only
+  5. Writer removes or downgrades unsupported primary claims before prose drafting
+  6. If theory or storyline signal is `red`, Writer still continues but marks the risky sections for human review
+  7. Cross-Reviewer checks outline (sessions_send, Outline Mode)
      → saved to {PROJ}/cross-reviewer/outline/{date}.md
-  7. Writer runs /paper-write section by section and updates paragraph logic signal
-  8. Cross-Reviewer checks each section (Prose Mode)
-  9. Writer runs /paper-compile → main.pdf
-  10. → POST GATE-4
+  8. Writer runs /paper-write section by section and updates paragraph logic signal
+  9. For each section, Writer performs a reverse-outline pass and paragraph transition audit before treating the section as stable
+  10. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
+  11. Cross-Reviewer checks each section (Prose Mode)
+  12. Writer runs /paper-compile → main.pdf
+  13. → POST GATE-4
 ```
 
 ---
@@ -829,7 +986,7 @@ The researcher persists gate state to allow resuming after session restart:
 }
 ```
 
-On session restart: the owning agent should run `/resume-pipeline`, re-read durable state, and reconcile artifacts before doing new work. Researcher uses `GATE_STATE.json` + `PROJECT_MANIFEST.json` as the top-level source of truth.
+On session restart: the owning agent should run `/resume-pipeline`, re-read durable state, and reconcile artifacts before doing new work. Researcher uses `GATE_STATE.json` + `PROJECT_MANIFEST.json` as the top-level source of truth, but must cross-check them against `{PROJ}/researcher/EXPERIMENT_LEDGER.json` before trusting remembered experiment history.
 
 ---
 
@@ -853,6 +1010,7 @@ The workflow must prefer explicit decisions over drift.
 
 When `AUTO_PROCEED=true`, the pipeline behaves like `autoresearch/program.md` **except**:
 
+- Stage reconciliation is performed by the plugin-backed auto iterator: on heartbeat, bootstrap, and explicit recovery turns, Researcher should call `research_workflow.auto_iterator_tick` first so stage rollback / advance / owner routing / `PROJECTS_STATE.json` sync happen deterministically instead of relying only on prompt memory.
 - Graph grounding is mandatory for every new project: do not skip GRAPH_BUILD or FRONTIER_MAPPING before ideation.
 - The active track limit still applies: do not silently let 4–5 tracks continue consuming budget.
 - **Stage order and completion signals are still mandatory.** You must not skip the Orchestrator (PLAN) stage: always spawn Orchestrator, wait for `PLAN.md` and `TODOS.md` to exist, then advance to CODE. Same for all other stage transitions — see "Stage transition preconditions" above.
@@ -908,3 +1066,5 @@ LOOP FOREVER (when AUTO_PROCEED=true):
 | CROSS-REVIEW | Cross-Reviewer | resume-pipeline (stateless) + sessions_send |
 | SUBMIT | Reviewer | paperreview-submit, review-response |
 | REVISE | Researcher | (orchestrates loop-back) |
+
+Background-only Researcher skills during wait states: `idle-research`, `research-lit`, `papers-cool`, `hugging-face-paper-pages`, `papernexus`, `resume-pipeline`.

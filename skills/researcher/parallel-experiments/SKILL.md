@@ -9,6 +9,7 @@ allowed-tools:
   - Edit
   - Grep
   - Glob
+  - research_workflow
 ---
 
 # Parallel Experiments
@@ -90,6 +91,8 @@ Write initial `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`:
 | e005 | proposed_s456 | — | — | queued | — | — | — | after e002 |
 ```
 
+For each queued row, also upsert `{PROJ}/researcher/EXPERIMENT_LEDGER.json` with `status: "queued"` and `stage: "queue_built"`. Keep the markdown registry as the operator dashboard and the JSON ledger as the restart-safe memory.
+
 Write `{PROJ}/researcher/PARALLEL_STATE.json`:
 ```json
 {
@@ -111,10 +114,29 @@ ssh <server> "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utiliza
 
 Parse output, identify free GPUs (utilization < 10% AND memory.used/memory.total < 0.2).
 
+Before assigning GPUs, classify each bundle into a rough resource tier:
+
+- **light**: pilot / small split / cheap ablation
+- **medium**: standard single-dataset full run
+- **heavy**: large model, high resolution, or historically OOM-prone config
+
+Allocation rules:
+
+- if five datasets are independent and five GPUs are safely free, launch all five together
+- if only two GPUs are safely free, launch the top-priority two and queue the other three
+- baseline vs proposed on the same dataset should stay in the same wave when comparison latency matters
+- different datasets should not be serialized by default when there is safe free capacity
+- multi-seed replicas should normally wait until the first seed of that config starts cleanly, unless the plan explicitly requests immediate parallel seeds
+
 If insufficient free GPUs:
 - Report current occupancy: "GPU 0: exp_X (running), GPU 1: free, GPU 2: free"
 - Ask user to confirm proceeding with available GPUs or wait
 - `AUTO_PROCEED=true`: proceed with available GPUs, queue remainder
+
+Safe runtime tuning policy for Coder:
+- allow bounded fixes such as smaller batch size, higher gradient accumulation, fewer workers, and lower eval frequency
+- do not let Coder change dataset choice, experiment semantics, or hypothesis just to make the queue fit
+- record every launch-time adjustment in the registry and ledger
 
 ## Phase 3: Code Sync (once, shared)
 
@@ -144,6 +166,12 @@ for each pending experiment in Group A:
     /run-experiment "<experiment-name> --config <config> --seed <seed> --gpu <gpu_id>"
 ```
 
+Each Coder assignment should also include:
+- the current GPU allocation table
+- which bundles may run in parallel now
+- which bundles must stay queued
+- the allowed bounded runtime adjustments
+
 Coder returns launch metadata including:
 - `server`
 - `screen_name`
@@ -152,6 +180,7 @@ Coder returns launch metadata including:
 - initial log tail
 
 Update EXPERIMENT_REGISTRY.md: set Status=running, Started=now, ETA=now+estimated_h.
+Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json`: set `status: "running"`, `stage: "launched"`, and store the launch metadata.
 Update PARALLEL_STATE.json: set active_screens=[list].
 
 ## Phase 5: Joint Monitoring
@@ -180,6 +209,7 @@ Polling schedule: 2min → 5min → 10min → 15min (exponential backoff up to 1
 - If utilization = 0% for 30min → likely stalled → kill and requeue
 
 **On individual completion**: Update EXPERIMENT_REGISTRY.md row to status=done/failed.
+Also upsert the corresponding ledger entry with final metrics, result pointers, and `papernexusSync.status`.
 
 **Trigger Group B** when all Group A dependencies complete:
 - Check EXPERIMENT_REGISTRY.md: if all Group A rows = done → launch Group B
@@ -213,6 +243,7 @@ Build summary:
 
 Update PARALLEL_STATE.json to `"status": "completed"`.
 Update EXPERIMENT_REGISTRY.md: all rows finalized.
+Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` and `PROJECT_MANIFEST.json.experiment_memory` so resume logic can recover the completed run set without rereading old chat context.
 
 Then update `{PROJ}/TRACK_REGISTRY.json` with per-track experiment outcomes and recommended next action.
 

@@ -1,27 +1,10 @@
 {
   "id": "openclaw-research",
-  "kind": "provider",
   "name": "OpenClaw Research",
-  "version": "1.0.0",
-  "description": "Multi-agent automated research plugin: from idea discovery to paper submission. Supports graph-grounded ideation, remote experiment execution, and evidence-backed paper writing.",
-  "author": "OpenClaw Research Team",
-  "license": "MIT",
-  "homepage": "https://github.com/OpenClawThings/openclaw-research",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/OpenClawThings/openclaw-research.git"
-  },
-  "keywords": [
-    "research",
-    "automation",
-    "multi-agent",
-    "paper-writing",
-    "experiment-management",
-    "literature-review"
-  ],
+  "description": "Multi-agent research workflow: ideation, experiment, analysis, paper, review.",
   "configSchema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
       "allowWorkspaceFallback": {
         "type": "boolean",
@@ -57,287 +40,105 @@
       "projectsRoot": {
         "type": "string",
         "default": "~/.openclaw/projects",
-        "description": "Root directory for all research projects. Supports ~ for home directory."
+        "description": "Default root directory used by research_memory and workflow state when resolving project-level paths."
       },
-      "servers": {
-        "type": "object",
-        "description": "GPU server configuration for remote experiment execution",
-        "properties": {
-          "default": {
-            "type": "string",
-            "default": "gateway",
-            "description": "Default server name for experiment submission"
-          },
-          "list": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": [],
-            "description": "Available GPU server names. Must include the default server."
-          }
-        },
-        "additionalProperties": false
+      "injectWorkflowContext": {
+        "type": "boolean",
+        "default": true,
+        "description": "Inject a runtime workflow snapshot into each agent turn so roles, stages, blockers, and idle tasks stay visible."
       },
-      "ideaGeneration": {
-        "type": "object",
-        "description": "Idea generation and tournament configuration",
-        "properties": {
-          "divergeSize": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 8,
-            "description": "Number of initial ideas to generate in diverge phase"
-          },
-          "portfolioSize": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 20,
-            "default": 4,
-            "description": "Number of ideas to select for tournament portfolio"
-          },
-          "tournamentRounds": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5,
-            "default": 2,
-            "description": "Number of elimination rounds in idea tournament"
-          }
-        },
-        "additionalProperties": false
+      "enforceWorkflowBoundaries": {
+        "type": "boolean",
+        "default": true,
+        "description": "Block out-of-scope writes, unsafe spawns, and disallowed inter-agent messaging based on workflow role policy."
       },
-      "trackPortfolio": {
-        "type": "object",
-        "description": "Research track portfolio constraints and policies",
-        "properties": {
-          "maxActiveTracks": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 50,
-            "default": 2,
-            "description": "Maximum number of simultaneously active research tracks"
-          },
-          "maxParkedTracks": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 1,
-            "description": "Maximum number of parked (suspended) research tracks"
-          },
-          "parkedBudgetPolicy": {
-            "type": "string",
-            "enum": ["zero", "reduced", "full"],
-            "default": "zero",
-            "description": "GPU budget policy for parked tracks: zero=no budget, reduced=50%, full=100%"
-          }
-        },
-        "additionalProperties": false
+      "blockDiscordAgentMentions": {
+        "type": "boolean",
+        "default": true,
+        "description": "Sanitize raw @agent mentions in outbound Discord/chat messages and steer agents toward workflow-safe communication paths."
       },
-      "computeBudget": {
-        "type": "object",
-        "description": "GPU compute budget and experiment execution constraints",
-        "properties": {
-          "defaultGpuHoursPerTrack": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10000,
-            "default": 100,
-            "description": "Default GPU hours allocated to each research track"
-          },
-          "maxConcurrentExperiments": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 4,
-            "description": "Maximum concurrent experiments per active track"
-          },
-          "gpuType": {
-            "type": "string",
-            "enum": ["V100", "A100", "H100", "RTX6000", "mixed"],
-            "default": "A100",
-            "description": "Default GPU type for experiments. 'mixed' allows automatic selection."
-          }
-        },
-        "additionalProperties": false
+      "enableWorkflowMailbox": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable the research_workflow mailbox tool for bounded internal handoffs and blocker notes."
       },
-      "reviewLoop": {
-        "type": "object",
-        "description": "Review loop configuration for paper drafts",
-        "properties": {
-          "maxRounds": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 20,
-            "default": 3,
-            "description": "Maximum review-revise rounds before requiring manual intervention"
-          },
-          "scoreThreshold": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 10,
-            "default": 6.0,
-            "description": "Minimum quality score required to advance to next stage (0-10 scale)"
-          },
-          "autoAdvanceScore": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 10,
-            "default": 7.5,
-            "description": "Score threshold for automatic advancement without review (0-10 scale)"
-          }
-        },
-        "additionalProperties": false
+      "heartbeatBackgroundChecks": {
+        "type": "boolean",
+        "default": true,
+        "description": "On heartbeat/idling turns, inject bounded background-task guidance from the workflow state."
       },
-      "graphConfig": {
-        "type": "object",
-        "description": "Literature graph construction and maintenance configuration",
-        "properties": {
-          "autoRefreshTrigger": {
-            "type": "string",
-            "enum": ["never", "weekly", "monthly", "per-track"],
-            "default": "per-track",
-            "description": "When to automatically refresh literature graph"
-          },
-          "noveltyThreshold": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.7,
-            "description": "Minimum novelty score (0-1) for ideas in graph (lower=stricter)"
-          },
-          "maxPapersToIngest": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100000,
-            "default": 5000,
-            "description": "Maximum papers to ingest during graph refresh"
-          }
-        },
-        "additionalProperties": false
+      "maxWorkflowInboxMessages": {
+        "type": "number",
+        "minimum": 1,
+        "default": 6,
+        "description": "Maximum number of pending workflow mailbox items included in injected context or returned by default mailbox reads."
+      },
+      "agentContactCooldownSeconds": {
+        "type": "number",
+        "minimum": 0,
+        "default": 300,
+        "description": "Minimum cooldown between routing the same source agent to the same target agent through sessions_send, sessions_spawn, or workflow mailbox."
+      },
+      "enableChannelProjectBindings": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow Discord/session channels to bind to project roots so different channels can run different research projects in the same OpenClaw process."
+      },
+      "channelProjectBindingsPath": {
+        "type": "string",
+        "default": "",
+        "description": "Optional shared JSON path for channel-project bindings. When empty, bindings default to {projectRoot}/.openclaw-research/channel-project-bindings.json when a project is known, otherwise they fall back to the current workspace."
       }
     }
   },
   "uiHints": {
     "allowWorkspaceFallback": {
-      "label": "Allow Workspace Fallback",
-      "description": "When enabled, allows memory writes without OPENCLAW_PROJECT set"
+      "label": "Allow Workspace Fallback"
     },
     "requireProjectIsolation": {
-      "label": "Require Project Isolation",
-      "description": "Enforce project-level memory isolation"
+      "label": "Require Project Isolation"
     },
     "requireProjectIdInEntries": {
-      "label": "Require Project ID",
-      "description": "Include project ID in all memory entries"
+      "label": "Require Project ID"
     },
     "requireTrackId": {
-      "label": "Require Track ID",
-      "description": "Require track ID for idea and experiment entries"
+      "label": "Require Track ID"
     },
     "requireEvidencePointers": {
-      "label": "Require Evidence Pointers",
-      "description": "Require evidence pointers for traceability"
+      "label": "Require Evidence Pointers"
     },
     "reviewStateMaxAgeHours": {
-      "label": "Review State Max Age (Hours)",
-      "description": "Hours before review state is considered stale"
+      "label": "Review State Max Age (Hours)"
     },
     "projectsRoot": {
-      "label": "Projects Root Directory",
-      "description": "Root directory where all research projects are stored"
+      "label": "Projects Root"
     },
-    "servers": {
-      "label": "GPU Server Configuration",
-      "description": "Configure default GPU server and list of available servers",
-      "default": {
-        "label": "Default Server",
-        "description": "Default GPU server for experiment submission"
-      },
-      "list": {
-        "label": "Available Servers",
-        "description": "List of available GPU server names"
-      }
+    "injectWorkflowContext": {
+      "label": "Inject Workflow Context"
     },
-    "ideaGeneration": {
-      "label": "Idea Generation",
-      "description": "Configure idea generation and tournament parameters",
-      "divergeSize": {
-        "label": "Diverge Size",
-        "description": "Number of initial ideas to generate"
-      },
-      "portfolioSize": {
-        "label": "Portfolio Size",
-        "description": "Number of ideas for tournament"
-      },
-      "tournamentRounds": {
-        "label": "Tournament Rounds",
-        "description": "Number of elimination rounds"
-      }
+    "enforceWorkflowBoundaries": {
+      "label": "Enforce Workflow Boundaries"
     },
-    "trackPortfolio": {
-      "label": "Track Portfolio",
-      "description": "Configure research track constraints",
-      "maxActiveTracks": {
-        "label": "Max Active Tracks",
-        "description": "Maximum simultaneous active research tracks"
-      },
-      "maxParkedTracks": {
-        "label": "Max Parked Tracks",
-        "description": "Maximum suspended research tracks"
-      },
-      "parkedBudgetPolicy": {
-        "label": "Parked Budget Policy",
-        "description": "GPU budget policy for parked tracks"
-      }
+    "blockDiscordAgentMentions": {
+      "label": "Block Discord Agent Mentions"
     },
-    "computeBudget": {
-      "label": "Compute Budget",
-      "description": "Configure GPU budget and experiment constraints",
-      "defaultGpuHoursPerTrack": {
-        "label": "GPU Hours Per Track",
-        "description": "GPU hours allocated per research track"
-      },
-      "maxConcurrentExperiments": {
-        "label": "Max Concurrent Experiments",
-        "description": "Maximum simultaneous experiments"
-      },
-      "gpuType": {
-        "label": "GPU Type",
-        "description": "Default GPU type for experiments"
-      }
+    "enableWorkflowMailbox": {
+      "label": "Enable Workflow Mailbox"
     },
-    "reviewLoop": {
-      "label": "Review Loop",
-      "description": "Configure paper review parameters",
-      "maxRounds": {
-        "label": "Max Review Rounds",
-        "description": "Maximum review-revise iterations"
-      },
-      "scoreThreshold": {
-        "label": "Score Threshold",
-        "description": "Minimum quality score to advance"
-      },
-      "autoAdvanceScore": {
-        "label": "Auto Advance Score",
-        "description": "Score for automatic advancement"
-      }
+    "heartbeatBackgroundChecks": {
+      "label": "Heartbeat Background Checks"
     },
-    "graphConfig": {
-      "label": "Graph Configuration",
-      "description": "Configure literature graph construction",
-      "autoRefreshTrigger": {
-        "label": "Auto Refresh Trigger",
-        "description": "When to refresh literature graph"
-      },
-      "noveltyThreshold": {
-        "label": "Novelty Threshold",
-        "description": "Minimum novelty score for ideas"
-      },
-      "maxPapersToIngest": {
-        "label": "Max Papers to Ingest",
-        "description": "Maximum papers in graph refresh"
-      }
+    "maxWorkflowInboxMessages": {
+      "label": "Workflow Inbox Size"
+    },
+    "agentContactCooldownSeconds": {
+      "label": "Agent Contact Cooldown (Seconds)"
+    },
+    "enableChannelProjectBindings": {
+      "label": "Enable Channel Project Bindings"
+    },
+    "channelProjectBindingsPath": {
+      "label": "Channel Project Bindings Path"
     }
   },
   "skills": [
@@ -348,32 +149,5 @@
     "./skills/analyzer",
     "./skills/academic_writer",
     "./skills/cross-reviewer"
-  ],
-  "tools": [
-    "research_memory"
-  ],
-  "capabilities": {
-    "multiAgent": true,
-    "projectIsolation": true,
-    "remoteExecution": true,
-    "graphGroundedIdeation": true,
-    "evidenceBackedWriting": true,
-    "stateMachineControl": true
-  },
-  "agents": {
-    "required": [
-      "researcher",
-      "orchestrator",
-      "coder",
-      "analyzer",
-      "academic_writer",
-      "reviewer",
-      "cross-reviewer"
-    ]
-  },
-  "dependencies": {
-    "paperNexus": "optional",
-    "sshAccess": "required",
-    "gpuServers": "required"
-  }
+  ]
 }

@@ -32,7 +32,7 @@ Use this plugin when you need to:
 
 ## Agent Architecture
 
-The plugin coordinates multiple specialized agents:
+The plugin coordinates multiple specialized agents. **Implementation is always the Coder role** — do not use the deprecated name **methodologist** in routing, skills, or handoffs (use **coder** / `@coder`).
 
 | Agent | Role | Key Skills |
 |-------|------|------------|

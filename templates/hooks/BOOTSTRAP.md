@@ -62,6 +62,10 @@ If {PROJECTS_ROOT}/*/researcher/REVIEW_STATE.json exists:
   → If resuming: announce "Resuming review loop from round N (last score: X/10)"
 ```
 
+If an active project exists, call `research_workflow` with action `auto_iterator_tick` and `iterator.mode = "bootstrap"` before any fresh stage work.
+Use the returned `stageAfter`, `ownerAfter`, `blockingReason`, and `recommendedActions` as the deterministic startup decision.
+If the iterator routes ownership away from you, do not invent a parallel mainline task.
+
 ## Step 4: Check Running Experiments (Researcher Agent only)
 
 If you are the Researcher Agent, check remote server:

@@ -1,0 +1,22 @@
+{
+  "experiment_id": "exp_xxx",
+  "project_id": "proj_xxx",
+  "track_id": "track_xxx",
+  "name": "replace-me",
+  "question": "What does this experiment test?",
+  "hypothesis": null,
+  "owner": "coder",
+  "local_dir": "coder/experiments/track_xxx/exp_xxx__replace-me",
+  "entry_point": "train.py",
+  "config_paths": [
+    "configs/baseline.yaml",
+    "configs/proposed.yaml"
+  ],
+  "results_dir": "results/",
+  "log_dir": "logs/",
+  "dataset_path": null,
+  "depends_on": [],
+  "status": "draft",
+  "created_at": "1970-01-01T00:00:00Z",
+  "updated_at": "1970-01-01T00:00:00Z"
+}

@@ -19,6 +19,7 @@ Structured reflection checkpoint inspired by EvoScientist's `think_tool` design.
 - A new dataset / model / training method was introduced (risk: confounded variables)
 - The primary metric failed to improve for two consecutive iterations
 - Results are abnormal (metric mismatch, unstable training, unexpected regression)
+- You are about to propose a new innovation angle after updating the experiment ledger
 
 ## Reflection Dimensions
 
@@ -27,6 +28,7 @@ Select the 2-3 most relevant dimensions for each reflection; you do not need to 
 1. **Progress** — What has been completed? What concrete steps remain?
 2. **Evidence quality** — Would the evidence survive reviewer scrutiny? Do you have CIs / error bars?
 3. **Prior knowledge** — Check `{PMEM}/ideation-memory.md` and `{PMEM}/experiment-memory.md` for reusable validated strategies or failure paths to avoid. `{PMEM}` = `{PROJ}/memory`
+   - If `{PROJ}/researcher/INNOVATION_REFLECTION.md` exists, treat it as the authoritative experiment-informed ideation memory
 4. **Strategy** — Continue, adjust, or switch direction? What evidence supports that decision?
 5. **Resource & compute** — Estimate remaining GPU time and memory needs. Should you scale down or run at full scale?
 6. **Handoff** — Are the current outputs clear and complete enough for the next stage?
@@ -68,5 +70,7 @@ After reflection, update:
 - `{PROJ}/PROJECT_MANIFEST.json`
 - `{PROJ}/orchestrator/PLAN.md`
 - `{PROJ}/orchestrator/TODOS.md`
+
+If this reflection is supporting a new innovation proposal after recent experiments, refresh `{PROJ}/researcher/INNOVATION_REFLECTION.md` first or explicitly reuse its latest lessons instead of proposing a direction from scratch.
 
 `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`

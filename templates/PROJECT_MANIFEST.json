@@ -34,6 +34,118 @@
     "stop_status": "unknown",
     "stop_reason": null
   },
+  "idle_research": {
+    "enabled": false,
+    "topic": null,
+    "objective": null,
+    "query_seeds": [],
+    "preferred_venues": [],
+    "max_papers_per_cycle": 5,
+    "cooldown_minutes": 30,
+    "last_run_at": null,
+    "last_digest_path": null,
+    "last_source_update_at": null,
+    "status": "disabled",
+    "pending_reason": null,
+    "next_query_hint": null,
+    "refresh_graph_on_new_core_papers": true,
+    "last_round_new_canonical_papers": 0,
+    "last_round_new_core_papers": 0
+  },
+  "experiment_memory": {
+    "ledger_path": "researcher/EXPERIMENT_LEDGER.json",
+    "bundle_index_path": "coder/EXPERIMENT_INDEX.md",
+    "bundle_contract_version": 1,
+    "last_ledger_update_at": null,
+    "last_completed_experiment_id": null,
+    "last_failed_experiment_id": null,
+    "best_known_config_ref": null,
+    "last_decision_summary": null,
+    "papernexus_sync_status": "unknown",
+    "papernexus_sync_required": false,
+    "papernexus_last_sync_at": null
+  },
+  "innovation_reflection": {
+    "required_after_experiments": true,
+    "status": "missing",
+    "last_reflection_at": null,
+    "last_reflection_path": null,
+    "reflected_through_experiment_update_at": null,
+    "reflected_experiment_ids": [],
+    "pending_reason": null
+  },
+  "writing_contract": {
+    "paper_mode": null,
+    "template_required": false,
+    "template_path": null,
+    "template_name": null,
+    "template_status": "optional",
+    "body_page_budget": null,
+    "reference_page_budget": null,
+    "body_word_target_min": null,
+    "body_word_target_max": null,
+    "max_core_ideas": 2,
+    "max_headline_claims": 3,
+    "storyline_source": null,
+    "kg_storyline_required": false,
+    "kg_storyline_status": "missing",
+    "kg_storyline_packet_path": null,
+    "storyline_checklist": [
+      "one_clean_problem_gap_method_arc",
+      "thesis_is_grounded_in_papernexus_kg",
+      "every_headline_claim_maps_to_evidence_spine",
+      "related_work_supports_gap_not_catalog_only",
+      "limitations_boundary_is_explicit"
+    ],
+    "required_sections": [
+      "abstract",
+      "introduction",
+      "related_work",
+      "method",
+      "experiments",
+      "conclusion"
+    ],
+    "section_order": [
+      "abstract",
+      "introduction",
+      "related_work",
+      "method",
+      "experiments",
+      "conclusion"
+    ],
+    "paragraph_logic_checklist": [
+      "one_message_per_paragraph",
+      "first_sentence_states_paragraph_role",
+      "sentences_connect_by_cause_contrast_consequence_or_refinement",
+      "closing_sentence_bridges_to_next_paragraph_or_section",
+      "reverse_outline_each_section_before_finalize"
+    ],
+    "paragraph_logic_status": "pending",
+    "last_template_applied_at": null,
+    "last_paragraph_logic_audit_at": null,
+    "template_mapping_path": null,
+    "pending_reason": null
+  },
+  "citation_integrity": {
+    "enabled": true,
+    "verification_required": true,
+    "source_of_truth": [
+      "dblp",
+      "crossref",
+      "datacite",
+      "semantic_scholar"
+    ],
+    "bibliography_path": "academic_writer/paper/refs.bib",
+    "verification_report_path": "reviewer/CITATION_VERIFICATION.md",
+    "verification_status": "pending",
+    "allowed_placeholder_count": 0,
+    "unresolved_placeholder_count": 0,
+    "verified_citation_count": 0,
+    "suspicious_citation_count": 0,
+    "hallucinated_citation_count": 0,
+    "last_verified_at": null,
+    "pending_reason": null
+  },
   "paper_ingestion": {
     "last_ingested_at": null,
     "last_graph_sync_at": null,
@@ -41,7 +153,12 @@
     "changed_files_since_graph": 0,
     "refresh_required": false,
     "refresh_reason": null,
-    "graph_presence_checked_at": null
+    "graph_presence_checked_at": null,
+    "graph_presence_status": null,
+    "graph_presence_report_path": null,
+    "graph_presence_expected_papers": 0,
+    "graph_presence_present_papers": 0,
+    "graph_presence_missing_papers": []
   },
   "graph_watch": {
     "enabled": false,

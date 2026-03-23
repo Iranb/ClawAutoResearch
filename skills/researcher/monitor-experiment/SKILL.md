@@ -8,6 +8,7 @@ allowed-tools:
   - Read
   - Write
   - Edit
+  - research_workflow
 ---
 
 # Monitor Experiment
@@ -39,6 +40,8 @@ If result files exist:
 ssh <server> "cat <remote_dst>/results/<latest>.json"
 ```
 
+When a new checkpoint is observed, update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` through `research_workflow.upsert_experiment` with the current `status`, `stage`, `keyMetric`, `metrics`, `resultPaths`, and `failureSignature` if present.
+
 ### 4. Detect Completion
 
 Experiment completion signals:
@@ -59,3 +62,4 @@ When finished, output a status summary:
 - runtime
 - final metrics (extracted from result files)
 - whether there were errors or warnings
+- whether the experiment ledger and PaperNexus sync status were updated

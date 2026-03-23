@@ -11,6 +11,7 @@ allowed-tools:
   - Glob
   - Agent
   - Skill
+  - research_workflow
 ---
 
 # Experiment Phase
@@ -75,7 +76,20 @@ Read `{PROJ}/TRACK_REGISTRY.json` before dispatch:
 - do not spend GPU on `parked` / `killed` tracks
 - if a track is still in pilot stage, run pilot before any full experiment
 
-Write dispatch plan and initialize `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`:
+Write dispatch plan and initialize `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`.
+At the same time, create or update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` via `research_workflow.upsert_experiment` for every queued experiment with at least:
+
+- `experimentId`
+- `trackId`
+- `name`
+- `kind` (`pilot` / `full` / `repair` / `ablation` / `baseline`)
+- `status: "queued"`
+- `stage: "queue_built"`
+- `configRef`
+- `hypothesis`
+- `papernexusSync.status: "pending"` if this run may matter for later analysis
+
+Then initialize `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`:
 
 ```markdown
 # Experiment Registry — [Project Title]
@@ -113,6 +127,18 @@ Parse GPU availability. If insufficient free GPUs for Group A:
 - `AUTO_PROCEED=false`: present occupancy table, wait for user input
 - `AUTO_PROCEED=true`: proceed with available GPUs, queue remainder
 
+Do not default to a one-by-one serial plan when experiments are independent. In particular:
+
+- same method across multiple datasets should be parallelized across free GPUs
+- baseline vs proposed on the same dataset should be parallelized when memory permits
+- multi-seed replicas should usually start after the first validating launch is healthy, unless the plan explicitly wants immediate parallel seeds
+
+Before launch, build a simple resource-aware wave plan:
+
+- wave 1: highest-priority independent bundles that safely fit current GPUs
+- wave 2+: queued remainder
+- mark heavy bundles separately so they do not block all lighter validations behind them
+
 ## Phase 3: Code Sync
 
 Code sync may happen in either of two ways:
@@ -146,6 +172,15 @@ This handles:
 - Automatic Group B trigger when Group A completes
 - Error recovery (OOM, stall, crash)
 
+Coder may apply only bounded runtime fixes needed to keep the assigned runs alive, such as:
+
+- lower batch size
+- higher gradient accumulation
+- fewer workers
+- lower evaluation frequency
+
+Coder may not silently change the scientific question, dataset, metric, or core model semantics.
+
 ## Phase 5: Monitor Until Completion
 
 Poll loop via `/monitor-experiment`:
@@ -159,6 +194,14 @@ ssh <server> "tail -10 <remote_dir>/logs/<screen_name>.log"
 ```
 
 Update EXPERIMENT_REGISTRY.md on each poll.
+Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` on each poll checkpoint as well:
+
+- `status: running` when the remote screen is confirmed
+- `status: done | failed | stalled | timeout` when the run ends
+- `stage: launched | monitoring | results_synced | decision_made`
+- `server`, `gpuId`, `screenName`, `launchedAt`, `completedAt`
+- `keyMetric`, `metrics`, `resultPaths`, `evidencePointers`
+- `failureSignature` if the run crashed or is not worth retrying
 
 **Key events to watch for**:
 - Screen exits: check EXIT_CODE in log
@@ -187,7 +230,20 @@ Also update `{PROJ}/PROJECT_MANIFEST.json`:
 - `current_stage: "experiment"`
 - `current_micro_stage: "track_decision_made"`
 - `budget.gpu_hours_used`
+- `experiment_memory.last_ledger_update_at`
+- `experiment_memory.last_completed_experiment_id` / `last_failed_experiment_id`
+- `experiment_memory.best_known_config_ref`
+- `experiment_memory.papernexus_sync_status`
+- `innovation_reflection.status` when new experiment evidence changes future ideation
 - `updated_at`
+
+If a PaperNexus corpus exists for the project, mark the relevant completed experiments with `papernexusSync.status: "pending"` until they are mirrored into the graph or enhancement overlay.
+
+Once a completed or failed run materially changes the next-idea search space, treat the next ideation cycle as reflection-bound:
+
+- the ledger update should make `PROJECT_MANIFEST.json.innovation_reflection.status` become `pending`
+- the next serious idea proposal must refresh `/innovation-reflection`
+- do not let Researcher overwrite `IDEA_REPORT.md` with a fresh innovation angle until the reflection packet has been regenerated
 
 ## Phase 7: Analysis
 
@@ -212,6 +268,8 @@ After phase completes, update project-isolated memory files (`{PMEM}` = `{PROJ}/
 **If experiments failed** (all variants < baseline):
 - Append to `{PMEM}/ideation-memory.md` under "Failed Idea Catalog":
   - Method name, failure mode, do-not-retry condition
+
+The markdown memories are summaries. `{PROJ}/researcher/EXPERIMENT_LEDGER.json` remains the authoritative run-by-run memory that restart and resume flows must trust first.
 
 ## Error Recovery
 

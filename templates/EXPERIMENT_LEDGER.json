@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "project_id": "proj_xxx",
+  "updated_at": "1970-01-01T00:00:00Z",
+  "summary": {
+    "active_experiment_ids": [],
+    "last_completed_experiment_id": null,
+    "last_failed_experiment_id": null,
+    "best_known_config_ref": null,
+    "last_decision_summary": null,
+    "papernexus_sync_required": false,
+    "papernexus_last_sync_at": null
+  },
+  "experiments": []
+}

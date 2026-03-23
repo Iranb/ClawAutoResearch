@@ -8,6 +8,7 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - research_workflow
 ---
 
 # Paper Plan
@@ -28,8 +29,45 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback from experiment review cycle
 - `{PROJ}/analyzer/figures/` — available figures
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
+- `research_workflow.get_writing_contract` — user-provided template path, section order, and paragraph-logic contract
+- `research_workflow.get_citation_integrity` — source-of-truth citation policy and placeholder budget
+
+If `writing_contract.template_required = true` and the template path is missing or unreadable, stop and ask Researcher to restore it through `research_workflow.set_writing_contract` before drafting the outline.
 
 ## Process
+
+### 0. Load Writing Contract
+
+Before extracting claims, inspect:
+
+```json
+{"action":"get_writing_contract"}
+```
+
+If `paper_mode` is configured, treat it as a hard envelope:
+
+- `conference` = `9` main-body pages + `2` reference pages
+- `journal` = `12` main-body pages + `2` reference pages
+
+Also inspect:
+
+```json
+{"action":"get_citation_integrity"}
+```
+
+If a template path is configured:
+
+- read the template before drafting
+- preserve its required section order unless the project scope forces an explicit adaptation
+- write `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` to show how the template maps to this paper
+
+`TEMPLATE_MAPPING.md` should include:
+
+- template source path
+- required sections from the template
+- how each template section maps to current paper sections
+- which sections are reused, merged, dropped, or newly added
+- any paragraph-pattern rules the writer should preserve
 
 ### 1. Extract Claims
 
@@ -71,9 +109,29 @@ Rules:
 - `RED` means the storyline is still loose, not that writing must stop
 - If `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` is `RED`, reflect that in the limitation boundary instead of inventing stronger theory
 
+### 2.5 KG Storyline Packet
+
+Before locking the outline, build `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`.
+You may call `/kg-storyline-contract` first, or produce the packet directly here.
+
+The packet must map:
+
+- problem
+- gap in prior work
+- method response
+- evidence spine
+- limitation boundary
+- off-limit side tracks
+
+When the packet is writing-safe, update `writing_contract.kg_storyline_status = ready`.
+
 ### 3. Section Outline
 
 Write the section-level outline with concrete targets:
+
+- if a user template is configured, start from that template's section order and adapt it
+- if the project needs to deviate from the template, document the deviation in `TEMPLATE_MAPPING.md`
+- keep `PAPER_PLAN.md` and `TEMPLATE_MAPPING.md` consistent
 
 ```markdown
 ## 1. Introduction (~1 page)
@@ -99,7 +157,17 @@ Write the section-level outline with concrete targets:
 - §4.3 Ablation study (Table 2 — Claim 2)
 - §4.4 Further analysis / scalability (Fig 3 — Claim 3)
 
-## 5. Conclusion (~0.5 page)
+## 5. Results (~1-1.5 pages)
+- Main quantitative takeaway
+- Claim-to-evidence recap
+
+## 6. Discussion (~0.5-1 page)
+- Interpretation, boundary conditions, and implications
+
+## 7. Limitations (~0.2-0.4 page)
+- Honest scope boundary
+
+## 8. Conclusion (~0.5 page)
 - Summary, limitations, future work
 ```
 
@@ -185,6 +253,20 @@ Write `{PROJ}/academic_writer/WRITING_SIGNALS.md` with:
 
 At this stage, `paragraph_logic` defaults to `RED` until `/paper-write` performs section-level checks.
 
+If a writing template is configured, update the writing contract after the outline is aligned:
+
+```json
+{
+  "action": "set_writing_contract",
+  "writingContract": {
+    "template_status": "applied",
+    "template_mapping_path": "academic_writer/TEMPLATE_MAPPING.md",
+    "last_template_applied_at": "<now>",
+    "paragraph_logic_status": "pending"
+  }
+}
+```
+
 Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
 ## Output
@@ -199,4 +281,6 @@ Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date
 
 Also write:
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md`
+- `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`
+- `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when a template is configured
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md`

@@ -37,7 +37,7 @@ done
 # 复制模板文件
 echo ""
 echo "[2/3] 复制模板文件..."
-for file in PROJECT_MANIFEST.json TRACK_REGISTRY.json CLAIM_POLICY.md EXPERIMENT_REGISTRY.md IDEA_TOURNAMENT_STATE.json PROJECTS_STATE.json; do
+for file in PROJECT_MANIFEST.json TRACK_REGISTRY.json CLAIM_POLICY.md EXPERIMENT_LEDGER.json EXPERIMENT_REGISTRY.md IDEA_TOURNAMENT_STATE.json PROJECTS_STATE.json; do
   src="$SCRIPT_DIR/templates/$file"
   dst="$WORKSPACE/$file"
   if [[ -f "$src" ]]; then

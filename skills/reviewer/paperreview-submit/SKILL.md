@@ -1,6 +1,10 @@
 ---
 name: paperreview-submit
 description: 使用 reviewloop 工具将学术论文 PDF 提交到 paperreview.ai（Stanford Agentic Reviewer）获取 AI 审稿意见。适用于 openclaw 研究流程的投稿前审稿阶段。当用户需要提交论文、获取 AI 评审、查看审稿结果、运行 reviewloop、提交 PDF 到 paperreview.ai、获取 Stanford 审稿意见时使用。
+allowed-tools:
+  - Bash(*)
+  - Read
+  - research_workflow
 ---
 
 # 论文提交与 AI 审稿技能 (paperreview-submit)
@@ -141,12 +145,24 @@ ln -s "/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/
 ```
 researcher → academic_writer (撰写论文)
            ↓
+   citation-integrity-gate
+           ↓
      paperreview-submit skill
            ↓
      提交 PDF → 获取审稿意见
            ↓
      reviewer agent (分析审稿意见，迭代改进)
 ```
+
+## 提交前硬约束
+
+先读取：
+
+```json
+{"action":"get_citation_integrity"}
+```
+
+若 `verification_status != verified`，或仍存在未解决引用占位符、hallucinated citations，则不要提交到外部审稿系统，先运行 reviewer `/citation-integrity-gate`。
 
 ### 审稿结果反馈给 reviewer agent
 

@@ -31,3 +31,16 @@ This file defines how evidence labels constrain writing and stage advancement.
 - Every headline contribution must belong to an active or winning track in `TRACK_REGISTRY.json`.
 - If a primary claim becomes `UNSUPPORTED`, the workflow must roll back to analysis, review, or experiment before paper finalization.
 - When scope pressure is high, drop low-value `PARTIAL` claims before adding more experiments.
+
+## Storyline Rules
+
+- Keep the paper to `1-2` core ideas; weaker side tracks belong in limitations or future work.
+- Every headline claim in Abstract, Introduction, and Conclusion must appear in the KG-backed storyline packet and the claim-evidence matrix.
+- The storyline must follow `problem -> gap -> method -> evidence -> limitation` instead of listing disconnected features.
+
+## Citation Rules
+
+- Every non-trivial related-work claim needs a real citation from a source-of-truth record; do not invent BibTeX.
+- Every headline empirical claim needs either an inline citation to prior work or direct experiment evidence.
+- Placeholders like `[CITATION NEEDED]` must be driven to zero before submission unless the workflow explicitly allows otherwise.
+- Any citation marked suspicious or hallucinated by the citation integrity gate must be removed, replaced, or downgraded before submission.

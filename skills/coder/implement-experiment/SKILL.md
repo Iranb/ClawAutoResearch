@@ -45,6 +45,11 @@ Before writing any code:
 2. **Project config**: `{PROJ}/PROJECT_MANIFEST.json` → `dataset_path`
 3. **SERVER.md defaults**: Use the appropriate dataset directory
 
+**Immutability rule**:
+- Treat the resolved dataset path as read-only input
+- Never preprocess in place, rewrite annotations, or drop caches back into the source dataset root
+- Put converted shards, manifests, temporary files, and derived caches under `{PROJ}/coder/<experiment-name>/`, `logs/`, `results/`, or remote scratch
+
 **Example dataset configurations**:
 
 ```yaml
@@ -67,7 +72,8 @@ dataset:
 
 Create experiment directory:
 ```
-{PROJ}/coder/<experiment-name>/
+{PROJ}/coder/experiments/<track-id>/<experiment-id>__<experiment-name>/
+├── EXPERIMENT_MANIFEST.json
 ├── train.py
 ├── evaluate.py
 ├── models/
@@ -79,9 +85,23 @@ Create experiment directory:
 │   └── proposed.yaml
 ├── utils/
 │   └── logging.py
+├── logs/
+├── results/
 ├── requirements.txt
 └── README.md
 ```
+
+Also maintain a project-level index:
+
+```
+{PROJ}/coder/EXPERIMENT_INDEX.md
+```
+
+Rules:
+- every experiment bundle must have a stable `experiment-id`
+- folder names must make the project/track/experiment relationship obvious
+- never dump many unrelated runs into one flat folder
+- do not delete old bundle folders when iterating; create a new experiment id or record the revision in the manifest
 
 ### 3. Implement Core Components
 
@@ -195,11 +215,33 @@ uv run python train.py --config configs/proposed.yaml --seed 42
 ~N hours per seed on A100 80GB (batch_size=32)
 ```
 
+### 6.5 Write EXPERIMENT_MANIFEST.json
+
+Every bundle must include `EXPERIMENT_MANIFEST.json` with:
+
+- `experiment_id`
+- `project_id`
+- `track_id`
+- `question`
+- `entry_point`
+- `config_paths`
+- `results_dir`
+- `log_dir`
+- `dataset_path`
+- `status`
+
+Update `{PROJ}/coder/EXPERIMENT_INDEX.md` so Coder can later recover:
+
+- what the bundle tests
+- which track it belongs to
+- where results live
+- whether it was launched remotely
+
 ### 7. Completion Signal
 
 ```
 ## Code Ready
-- **Location**: {PROJ}/coder/<experiment-name>/
+- **Location**: {PROJ}/coder/experiments/<track-id>/<experiment-id>__<experiment-name>/
 - **Baseline config**: configs/baseline.yaml
 - **Proposed config**: configs/proposed.yaml
 - **Run command**: uv run python train.py --config configs/proposed.yaml --seed 42
@@ -218,6 +260,9 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 
 - Never skip dry-run validation
 - Never write to any folder outside `{PROJ}/coder/`
+- Never create flat, ambiguous experiment folders that hide the owning track or question
+- Always keep `EXPERIMENT_MANIFEST.json` and `EXPERIMENT_INDEX.md` updated
+- Never modify files under shared `datasets/` roots; keep dataset-derived outputs in `{PROJ}/coder/` or remote scratch/results
 - Remote deployment is handled separately by `/run-experiment` on the Coder agent when Researcher / `experiment-phase` explicitly assigns it
 - Never modify baseline code from other papers without flagging it
 - If a specification is ambiguous, use the most conservative interpretation and flag it

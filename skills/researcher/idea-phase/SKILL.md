@@ -13,6 +13,7 @@ allowed-tools:
   - WebFetch
   - Agent
   - Skill
+  - research_workflow
 ---
 
 # Idea Phase
@@ -22,10 +23,10 @@ allowed-tools:
 ## Pipeline
 
 ```
-/research-lit → /graph-build → /frontier-mapping → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
-     ↓               ↓                ↓                  ↓                  ↓                  ↓                    ↓
-  landscape      local corpus     graph frontier     4-8 tracks         验证新颖性         portfolio decision    深度审稿
-  + gaps         + PaperNexus     + subgraphs        + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
+/research-lit → /graph-build → /frontier-mapping → /innovation-reflection (if due) → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
+     ↓               ↓                ↓                           ↓                        ↓                  ↓                  ↓                    ↓
+  landscape      local corpus     graph frontier         实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
+  + gaps         + PaperNexus     + subgraphs            + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
 ```
 
 ## Execution
@@ -84,25 +85,45 @@ allowed-tools:
 /idea-generator "$ARGUMENTS"
 ```
 
+在生成新创新点之前，先检查：
+
+```json
+{"action":"get_innovation_reflection"}
+```
+
+如果返回 `due: true`，或者 recent experiments 明显比上一次 reflection 更新，就必须先执行：
+
+```
+/innovation-reflection "$ARGUMENTS"
+```
+
+并把 `{PROJ}/researcher/INNOVATION_REFLECTION.md` 作为后续 ideation 的必读输入，而不是继续沿用旧 brainstorm。
+
 执行 graph-grounded dialectic loop：
 1. 基于 `LITERATURE.md` + `FRONTIER_REPORT.md` + `graph/subgraphs/` 做一次 **diverge**，生成 4-8 个 typed tracks
-2. track 必须覆盖图谱透镜中的多种来源：limitation / contradiction / transfer / composition
-3. 每条 track 都要附带 graph evidence packet：
+2. 如果存在 `{PROJ}/researcher/INNOVATION_REFLECTION.md`，把其中的：
+   - do-not-repeat constraints
+   - transferable lessons
+   - brainstorm anchors
+   当成这轮创新点生成的硬约束
+3. track 必须覆盖图谱透镜中的多种来源：limitation / contradiction / transfer / composition
+4. 每条 track 都要附带 graph evidence packet：
    - anchor nodes / relations
    - why-now / why-this-gap-matters
    - weakest assumption
    - one falsifier pilot
-4. 对 surviving tracks，可把 graph evidence packet 交给 Orchestrator 做一次结构化 innovation construction，收敛成更可执行的 hypothesis package
-5. 对候选 track 做 attacker / novelty 初筛
-6. 对 surviving tracks 做一次 **converge**，收敛成 portfolio，而不是只取一个 top-1
-7. 可行性 + 新颖性初筛后保留 2-3 个候选 active tracks
-8. 保留至多 1 个 parked track
-9. 对 active tracks 做并行 pilot 实验（小规模快速验证）
-10. 按 pilot 实证信号排序并写入 `TRACK_REGISTRY.json`
+5. 对 surviving tracks，可把 graph evidence packet 交给 Orchestrator 做一次结构化 innovation construction，收敛成更可执行的 hypothesis package
+6. 对候选 track 做 attacker / novelty 初筛
+7. 对 surviving tracks 做一次 **converge**，收敛成 portfolio，而不是只取一个 top-1
+8. 可行性 + 新颖性初筛后保留 2-3 个候选 active tracks
+9. 保留至多 1 个 parked track
+10. 对 active tracks 做并行 pilot 实验（小规模快速验证）
+11. 按 pilot 实证信号排序并写入 `TRACK_REGISTRY.json`
 
 **Output**:
 - 初步 `{PROJ}/researcher/IDEA_REPORT.md`
 - `{PROJ}/TRACK_REGISTRY.json`
+- 若已有实验历史，则刷新 `{PROJ}/researcher/INNOVATION_REFLECTION.md`
 
 ### Phase 5: Novelty Check
 
@@ -133,6 +154,7 @@ allowed-tools:
 - 最多 2 条 `active` track
 - 最多 1 条 `parked` track
 - 明确写入 `{PROJ}/TRACK_REGISTRY.json`
+- 若本轮创新点受实验反思影响，明确记录是哪条 reflection lesson 改变了该 track 的保留/淘汰结论
 - 尽量形成一个有分工的 portfolio，例如 `safe-bet / high-upside / bridge-composition`
 
 ### Phase 7: Cross-model Review
@@ -144,6 +166,8 @@ allowed-tools:
 - 如 reviewer 认为 portfolio 过宽，优先缩 scope 而不是保留更多 tracks
 
 如果文献阶段中新增了大量本地 paper markdown / PDF，且与当前 frontier 显著不同，必须在最终决定前重新运行 `/graph-build --force` 和 `/frontier-mapping`。
+
+如果实验阶段新增了可反思的结果，且 `innovation_reflection` 重新变为 `pending`，不要继续写 `IDEA_REPORT.md` 或覆盖 `TRACK_REGISTRY.json`，先刷新 `/innovation-reflection`。
 
 ### 记忆更新
 

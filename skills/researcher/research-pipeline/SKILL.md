@@ -13,6 +13,7 @@ allowed-tools:
   - WebFetch
   - Agent
   - Skill
+  - research_workflow
 ---
 
 # Research Pipeline
@@ -49,7 +50,8 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - Set `{PROJ}/PROJECT_MANIFEST.json`:
      - `current_stage: "graph_build"`
      - `current_micro_stage: "project_init"`
-     - `paper_source_dir: "{PROJ}/researcher/paper_source"`
+     - `paper_source_dir: "~/.papernexus/papers/{project_id}"`
+     - `graph_source_dir: "~/.papernexus/papers/{project_id}"`
      - `memory_scope.project_isolated: true`
 
 5. **Announce and begin Stage 0.5:**
@@ -79,6 +81,8 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{WS}` = `~/.openclaw/workspace-researcher`
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
+- default PaperNexus source root = `~/.papernexus/papers/{proj-id}`
+- default PaperNexus index root = `~/.papernexus/index-store`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 
@@ -148,6 +152,7 @@ Default mode (`MULTI=false`). All state under `{PROJ}/`.
 ```
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md
 /papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
+/innovation-reflection "$ARGUMENTS" → {PROJ}/researcher/INNOVATION_REFLECTION.md (when experiment evidence exists and reflection is due)
 /idea-generator "$ARGUMENTS"        → {PROJ}/researcher/IDEA_REPORT.md (candidates) + {PROJ}/TRACK_REGISTRY.json
 /novelty-check "[top ideas]"        → novelty verdicts + {PROJ}/cross-reviewer/novelty/*.md
 /research-reflect "idea portfolio"  → track decisions
@@ -160,11 +165,14 @@ Default mode (`MULTI=false`). All state under `{PROJ}/`.
 - `{PROJ}/graph/subgraphs/`
 - `{PROJ}/researcher/reasoning/<track-id>/SYNTHESIS_PACKET.md` when it exists
 - `{PROJ}/researcher/reasoning/<track-id>/WORKING_MEMORY.json` for surviving or re-opened tracks
+- `{PROJ}/researcher/INNOVATION_REFLECTION.md` when experiment-informed reflection exists or `research_workflow.get_innovation_reflection` reports `due: true`
 
 Idea-stage control rules:
 - generate 4–8 candidate tracks
 - diverge from multiple graph lenses, then converge before locking the portfolio
 - use graph-backed innovation evidence, not abstract-only summaries, for each surviving track
+- if experiments have produced new evidence since the last reflection, refresh `/innovation-reflection` before writing or locking new idea outputs
+- treat `INNOVATION_REFLECTION.md` as both a transfer packet and a negative-constraint packet for the next brainstorm
 - for each serious candidate, first anchor the question, then explore the graph with an explicit working-memory loop before turning it into a track
 - each reasoning step must decide `expand`, `refine_query`, `answer_try`, or `stop`; do not traverse blindly
 - rejected branches, false-positive relations, and unresolved entities must be written into the reasoning packet
@@ -177,9 +185,10 @@ Idea-stage control rules:
 
 Researcher continuous-duty rule:
 - when Orchestrator / Coder / Analyzer / Writer are working, Researcher should continue literature watch, papers ingestion, graph refresh preparation, and innovation analysis instead of idling
+- if `PROJECT_MANIFEST.json.idle_research.enabled = true`, prioritize `/idle-research` for that topic during wait states, obey `max_papers_per_cycle` and `cooldown_minutes`, and record each round through `research_workflow.record_idle_research_run`
 - new papers discovered during execution should be added to `paper_source_dir`; if they materially change the frontier, refresh graph state before the next major idea or revision decision
 - prefer `papernexus watch` for active projects with steady paper inflow, and make `/resume-pipeline` reconcile watcher status after restarts
-- use waiting time to reopen unresolved graph questions, compact working memory, and refresh synthesis packets for active or parked tracks without silently changing track ownership
+- use waiting time to reopen unresolved graph questions, compact working memory, refresh synthesis packets for active or parked tracks, and refresh experiment-informed innovation reflection when it becomes due, without silently changing track ownership
 
 **Gate 1 — Idea Selection:**
 

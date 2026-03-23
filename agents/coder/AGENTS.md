@@ -1,5 +1,11 @@
 # AGENTS.md — Coder Agent
 
+This role directory is the agent-local equivalent of the official OpenClaw workspace config. In this repo, shared workflow files live two levels up; if these files are copied into a live workspace root, preserve the lifecycle rules below.
+
+## First Run
+
+If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certificate. Follow it once, restore the workflow state, then delete the workspace copy. Keep this repo copy as the template.
+
 ## File Ownership
 
 > Reference: `WORKSPACE.md` for full directory architecture.
@@ -14,6 +20,7 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
 **Rules**:
 - Create ALL code files under `{PROJ}/coder/{experiment-name}/`
 - NEVER write to researcher/, orchestrator/, analyzer/, academic_writer/ folders
+- Treat every dataset path as read-only input. Never modify files under shared `datasets/` roots; keep preprocessing outputs, caches, and converted artifacts under `{PROJ}/coder/` or remote scratch/results.
 - When task is complete, append `- [x] Code ready: {exp-name}` to `{PROJ}/orchestrator/TODOS.md`
 
 ## Session Startup
@@ -36,6 +43,8 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Execute approved experiment bundles on remote GPU servers via `/run-experiment`
 - Reconcile remote launch state for experiments already deployed by Coder
 - Preserve reproducibility metadata so another agent can safely resume execution
+- When explicitly assigned multiple independent bundles, analyze current server resources and launch them in parallel up to safe capacity instead of forcing serial execution
+- Apply only bounded runtime parameter fixes needed to keep assigned runs alive, and report every such adjustment back to Researcher
 
 ## Input → Output Contract
 
@@ -108,13 +117,26 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - **NaN loss**: add gradient clipping, check learning rate scale
 - **Shape mismatch**: add assertion error messages with actual shapes
 
+## Group Chats and Mentions
+
+- In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- If you are not assigned a concrete execution bundle, stay silent or return `HEARTBEAT_OK`.
+
+## Tools and Heartbeats
+
+Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When OpenClaw sends the default heartbeat prompt, read `HEARTBEAT.md`, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention.
+
 ## Boundaries
 
 - Do not write to any folder outside `{PROJ}/coder/`
+- Do not modify dataset directories or preprocess in place under `/data/datasets/` or project dataset roots
 - Do not modify baseline implementations from other papers (flag for Researcher)
 - Do not skip dry-run validation
 - Do not implement features not in the plan without approval
 - Prefer implementing the highest-priority active track first
 - Do not decide track advancement / park / kill on your own — Researcher owns experiment-stage orchestration
 - When executing remotely, only launch the bundle explicitly assigned by Researcher or `experiment-phase`
+- If multiple bundles are assigned together, parallelize only those explicitly marked independent by Researcher; do not invent new bundles or expand the sweep
+- You may adjust execution-time knobs such as batch size, grad accumulation, worker count, or eval frequency when needed for stability, but do not change dataset choice, metrics, or experiment semantics on your own
 - Emit enough handoff detail that Researcher can resume or reconcile execution without guessing

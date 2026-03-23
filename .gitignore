@@ -59,6 +59,9 @@ analyzer/
 academic_writer/
 reviewer/
 cross-reviewer/
+!skills/researcher/
+!skills/researcher/idle-research/
+!skills/researcher/idle-research/SKILL.md
 
 # Install artifacts
 install.sh.bak

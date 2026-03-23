@@ -11,6 +11,7 @@ allowed-tools:
   - WebSearch
   - WebFetch
   - Agent
+  - research_workflow
 ---
 
 # Resume Pipeline
@@ -22,29 +23,34 @@ Use when paper writing was interrupted and the writer needs to continue from exi
 - `{PROJ}/PROJECT_MANIFEST.json`
 - `{PROJ}/academic_writer/PAPER_PLAN.md` if exists
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` if exists
+- `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` if exists
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` if exists
 - `{PROJ}/academic_writer/paper/sections/*.tex`
 - `{PROJ}/reviewer/AUTO_REVIEW.md` if exists
 - relevant `{PROJ}/cross-reviewer/outline/` or `prose/` files if present
+- `research_workflow.get_writing_contract`
 
 ## Resume Logic
 
 1. If `PAPER_PLAN.md` is missing, resume with `/paper-plan`.
-2. If the plan exists, infer the next incomplete section in this order:
+2. If a writing template is required, confirm the template path still exists before drafting more prose.
+3. If `TEMPLATE_MAPPING.md` is missing while a template is configured, rebuild it with `/paper-plan`.
+4. If the plan exists, infer the next incomplete section in this order:
    - method
    - experiments
    - related work
    - introduction
    - conclusion
    - abstract
-3. If a section draft exists but lacks cross-review feedback, send that section to Cross-Reviewer before proceeding.
-4. If all sections exist, resume final polish or compile handoff.
-5. If compilation is needed but shell access is unavailable in the current writer configuration, stop with an explicit note for Researcher.
+5. If a section draft exists but lacks cross-review feedback, send that section to Cross-Reviewer before proceeding.
+6. If all sections exist, resume final polish or compile handoff.
+7. If compilation is needed but shell access is unavailable in the current writer configuration, stop with an explicit note for Researcher.
 
 ## Safety Rules
 
 - Never rewrite already-approved sections unless the latest review note requires it.
 - Preserve `WRITING_SIGNALS.md` and make red signals visible rather than silently discarding them.
+- If a writing template is configured, do not resume section drafting until the template and `TEMPLATE_MAPPING.md` are both readable.
 
 ## Output
 

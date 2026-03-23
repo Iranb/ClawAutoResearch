@@ -12,6 +12,7 @@ allowed-tools:
   - WebSearch
   - WebFetch
   - Agent
+  - research_workflow
 ---
 
 # Paper Write
@@ -31,26 +32,49 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory theory signal for conservative wording
 - `{PROJ}/CLAIM_POLICY.md` — support labels and wording rules
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough thesis and evidence spine
+- `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — template adaptation note if a user template is configured
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — advisory `green / red` state to update as sections are written
 - `{PROJ}/academic_writer/paper/figures/` — figures (copied from `{PROJ}/analyzer/figures/` at paper-phase start)
 - `{PROJ}/researcher/LITERATURE.md` — related work for citations
+- `research_workflow.get_writing_contract` — template path and paragraph-logic contract
+- `research_workflow.get_citation_integrity` — bibliography path, verification expectations, and placeholder budget
 
 ## Writing Order
 
-Write sections in this order (each gated by Cross-Reviewer):
+Default drafting order when no user template overrides the section flow:
 
 ```
 1. Method        (most factual, clearest to write)
 2. Experiments   (directly from NARRATIVE_REPORT)
-3. Related Work  (from LITERATURE.md)
-4. Introduction  (after contributions are clear)
-5. Conclusion    (after full paper is drafted)
-6. Abstract      (very last — 4-5 sentence summary)
+3. Results       (claim/evidence spine)
+4. Discussion    (interpretation + boundary)
+5. Related Work  (from LITERATURE.md)
+6. Introduction  (after contributions are clear)
+7. Limitations   (after results/discussion settle)
+8. Conclusion    (after full paper is drafted)
+9. Abstract      (very last — 4-5 sentence summary)
 ```
+
+If `writing_contract.section_order` or `TEMPLATE_MAPPING.md` specifies a different final section order, preserve that order in `main.tex`. You may still draft fact-heavy sections first for stability, but the final paper structure must follow the configured template.
 
 ## Per-Section Process
 
 ### Step A: Write Draft
+
+Before drafting the section, inspect:
+
+```json
+{"action":"get_writing_contract"}
+```
+
+Then inspect:
+
+```json
+{"action":"get_citation_integrity"}
+```
+
+If the writing template is required but missing, stop and restore it first.
+If a template path is configured, read that template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing.
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
 
@@ -71,6 +95,7 @@ web_fetch https://api.crossref.org/works?query=[title]&rows=3
 ```
 
 Add each entry to `{PROJ}/academic_writer/paper/refs.bib`. Use `[CITATION NEEDED: author year]` as placeholder if a paper cannot be found — never invent BibTeX.
+Respect `allowed_placeholder_count` from citation integrity state. If the budget is `0`, do not leave placeholders in the final draft.
 
 **Writing standards** (from Academic Writer Agent SOUL.md):
 - Abstract: 4-5 sentences (motivation / problem / method / result / implication)
@@ -78,6 +103,13 @@ Add each entry to `{PROJ}/academic_writer/paper/refs.bib`. Use `[CITATION NEEDED
 - All tables: `\booktabs` package (no vertical rules)
 - All figures: vector PDF format
 - Avoid: "In this paper, we…", "It is worth noting that…"
+
+**Paragraph logic rule**:
+- each paragraph has one explicit role: opening / challenge / method / evidence / limitation / transition
+- the first sentence should state that role or claim
+- sentence order should make the relation explicit: cause, contrast, consequence, refinement, or example
+- the final sentence should bridge to the next paragraph or section when possible
+- if a paragraph cannot be reverse-outlined cleanly, rewrite it before sending to Cross-Reviewer
 
 ### Step B: Cross-Reviewer Prose Check
 
@@ -127,6 +159,25 @@ For each line-level edit from Cross-Reviewer:
 After all edits: remove all `% RESOLVED` comments before next section.
 If `Storyline` or `Paragraph logic` is `RED`, keep the section, but add a short note under `## Human Review Focus` in `{PROJ}/academic_writer/WRITING_SIGNALS.md`.
 
+Before moving to the next section, do one local reverse-outline pass:
+
+- write the thesis of the section in one sentence
+- list each paragraph's opening sentence and role
+- verify that each paragraph supports the section thesis
+- verify that paragraph `n` hands off to paragraph `n+1`
+
+Then update the writing contract:
+
+```json
+{
+  "action": "set_writing_contract",
+  "writingContract": {
+    "paragraph_logic_status": "green or red",
+    "last_paragraph_logic_audit_at": "<now>"
+  }
+}
+```
+
 ## Main File
 
 After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`:
@@ -141,12 +192,10 @@ After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`
 
 \begin{document}
 \maketitle
-\input{sections/abstract}
-\input{sections/introduction}
-\input{sections/related_work}
-\input{sections/method}
-\input{sections/experiments}
-\input{sections/conclusion}
+% Input order must follow writing_contract.section_order or TEMPLATE_MAPPING.md
+\input{sections/<section-1>}
+\input{sections/<section-2>}
+\input{sections/<section-3>}
 \bibliography{refs}
 \bibliographystyle{plain}
 \end{document}
@@ -157,12 +206,15 @@ After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`
 ```
 ## Paper Draft Complete
 
-Sections written: abstract, introduction, related_work, method, experiments, conclusion
+Sections written: abstract, introduction, related_work, method, experiments, results, discussion, limitations, conclusion
 Cross-Reviewer status per section:
   - method:       PUBLICATION_READY
   - experiments:  NEEDS_REVISION → revised and finalized
+  - results:      PUBLICATION_READY
+  - discussion:   PUBLICATION_READY
   - related_work: PUBLICATION_READY
   - introduction: NEEDS_REVISION → revised and finalized
+  - limitations:  PUBLICATION_READY
   - conclusion:   PUBLICATION_READY
   - abstract:     PUBLICATION_READY
 
@@ -170,5 +222,5 @@ Pending [CITATION NEEDED] markers: N
 Estimated pages: ~X (based on word count)
 Writing signals: theory={GREEN/RED}, storyline={GREEN/RED}, paragraph_logic={GREEN/RED}
 
-Next: /paper-compile to verify LaTeX builds without errors
+Next: /paper-compile to verify LaTeX builds without errors, then run reviewer /citation-integrity-gate before submission
 ```

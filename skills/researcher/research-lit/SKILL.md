@@ -27,9 +27,10 @@ All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `
 
 1. **Search multiple keywords** (3-5 queries covering different angles)
 2. **For EACH paper found** (ALL, not just selected few):
-   - **Step 1:** Check HuggingFace for markdown (`/hugging-face-paper-pages`)
+   - **Step 1:** Once the paper identity is confirmed (arXiv ID / paper URL), check HuggingFace for markdown (`/hugging-face-paper-pages`) immediately
    - **Step 2:** If HF has markdown → save to `paper_source_dir/md/`
    - **Step 3:** If HF no markdown → download PDF to `paper_source_dir/pdf/`
+   - **Step 4:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
 3. **After EACH search query** (≥20 papers):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -57,6 +58,10 @@ All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `
   pdf/
     <arxiv-id>--<normalized-title>.pdf
 ```
+
+Default path policy:
+- for new projects, default `paper_source_dir` and `graph_source_dir` should both point to `~/.papernexus/papers/{proj-id}`
+- keep project reports and state under `{PROJ}/`, but keep canonical paper source files under the local PaperNexus source tree unless a project explicitly overrides it
 
 Preferred filenames:
 
@@ -87,6 +92,7 @@ Rules:
 - if both markdown and PDF exist for the same paper, markdown is the preferred PaperNexus ingestion source
 - if a new markdown arrives for a paper that already has a PDF, keep the PDF only as fallback; do not treat it as a new paper
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
+- `/graph-build` must stage a canonical source corpus so the same paper does not enter PaperNexus twice through both Markdown and PDF
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
 
@@ -110,7 +116,7 @@ Run 3–5 targeted searches covering different angles of the topic. Delegate eac
 
 **For EACH paper in search results:**
 
-1. **Check HuggingFace FIRST:**
+1. **As soon as the paper identity is confirmed, check HuggingFace FIRST:**
    ```
    /hugging-face-paper-pages --arxiv <arxiv_id> --output-dir {PROJ}/researcher/paper_source/md/
    ```
@@ -125,6 +131,8 @@ Run 3–5 targeted searches covering different angles of the topic. Delegate eac
      ```
      /papers-cool Download PDF for arxiv:<arxiv_id> to {PROJ}/researcher/paper_source/pdf/
      ```
+
+Do not postpone the HuggingFace attempt until after later filtering if the current search result already exposes a stable arXiv ID or paper URL.
 
 ### Step 3: Incremental Graph Build
 

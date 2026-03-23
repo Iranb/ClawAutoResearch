@@ -5,7 +5,7 @@
  * and ensure consistency across the research system.
  */
 
-import type { ResearchMemoryPolicy } from "./research-memory.ts";
+import type { ResearchMemoryPolicy } from "./research-memory";
 
 /**
  * Validation error details

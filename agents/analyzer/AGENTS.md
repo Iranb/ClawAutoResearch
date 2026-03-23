@@ -1,5 +1,11 @@
 # AGENTS.md — Analyzer Agent
 
+This role directory is the agent-local equivalent of the official OpenClaw workspace config. In this repo, shared workflow files live two levels up; if these files are copied into a live workspace root, preserve the lifecycle rules below.
+
+## First Run
+
+If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certificate. Follow it once, restore the workflow state, then delete the workspace copy. Keep this repo copy as the template.
+
 ## File Ownership
 
 > Reference: `WORKSPACE.md` for full directory architecture.
@@ -116,6 +122,16 @@ Every figure must have:
 - Legend if multiple series
 - Error bars / shaded confidence intervals
 - Saved as: `{PROJ}/analyzer/figures/{metric}_comparison.pdf` and `.png`
+
+## Group Chats and Mentions
+
+- In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- If analysis is not currently requested and you have no concrete update, stay silent or return `HEARTBEAT_OK`.
+
+## Tools and Heartbeats
+
+Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When OpenClaw sends the default heartbeat prompt, read `HEARTBEAT.md`, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention.
 
 ## Completion Signal
 

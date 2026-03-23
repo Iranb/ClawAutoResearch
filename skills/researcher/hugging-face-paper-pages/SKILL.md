@@ -33,8 +33,10 @@ Resolve the PaperNexus source directory in this order:
 
 Save:
 
-- full markdown to `<paper_source_dir>/<normalized-paper-id>.md`
+- full markdown to `<paper_source_dir>/md/<normalized-paper-id>.md`
 - metadata JSON to `{PROJ}/researcher/lit_papers/<paper-id>_hf.json`
+
+If a same-paper PDF already exists under `<paper_source_dir>/pdf/`, keep it only as fallback. The Markdown file becomes the canonical graph-ingestion artifact for the next `/graph-build`.
 
 ## Commands
 
@@ -52,3 +54,4 @@ If the markdown endpoint returns `404`, report that Hugging Face paper pages do 
 - Prefer the `.md` endpoint for PaperNexus ingestion.
 - Prefer the API endpoint when you need structured metadata such as GitHub repo, project page, linked models, or datasets.
 - If markdown is unavailable, let the caller fall back to `/papers-cool` PDF download.
+- Inside this repo, Markdown should land in the `md/` subdirectory so `graph-build` can stage a Markdown-first canonical corpus.

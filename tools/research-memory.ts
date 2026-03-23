@@ -7,8 +7,13 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import {
+  resolveProjectContext,
+  type ChannelProjectBindingContext,
+  type ChannelProjectBindingPolicy,
+} from "./channel-project-bindings";
 
-export interface ResearchMemoryPolicy {
+export interface ResearchMemoryPolicy extends ChannelProjectBindingPolicy {
   // Data integrity policies
   allowWorkspaceFallback?: boolean;
   requireProjectIsolation?: boolean;
@@ -169,6 +174,8 @@ const DEFAULT_POLICY: Required<ResearchMemoryPolicy> = {
     noveltyThreshold: 0.7,
     maxPapersToIngest: 5000,
   },
+  enableChannelProjectBindings: false,
+  channelProjectBindingsPath: "",
 };
 
 function normalizePolicy(
@@ -258,6 +265,12 @@ function normalizePolicy(
         policy.graphConfig?.maxPapersToIngest ??
         DEFAULT_POLICY.graphConfig.maxPapersToIngest,
     },
+    enableChannelProjectBindings:
+      policy.enableChannelProjectBindings ??
+      DEFAULT_POLICY.enableChannelProjectBindings,
+    channelProjectBindingsPath:
+      policy.channelProjectBindingsPath ??
+      DEFAULT_POLICY.channelProjectBindingsPath,
   };
 }
 
@@ -265,8 +278,14 @@ function getWorkspaceRoot(): string {
   return process.env.OPENCLAW_WORKSPACE ?? process.cwd();
 }
 
-function getProjectRoot(): string | null {
-  return process.env.OPENCLAW_PROJECT ?? null;
+function getProjectRoot(
+  context?: ChannelProjectBindingContext,
+  policy?: ResearchMemoryPolicy
+): string | null {
+  return resolveProjectContext({
+    policy,
+    context,
+  }).projectRoot;
 }
 
 function inferProjectId(projectRoot: string | null): string | undefined {
@@ -274,26 +293,30 @@ function inferProjectId(projectRoot: string | null): string | undefined {
   return path.basename(projectRoot);
 }
 
-function ensureProjectScope(policy: Required<ResearchMemoryPolicy>): void {
-  if (policy.requireProjectIsolation && !getProjectRoot()) {
+function ensureProjectScope(
+  policy: Required<ResearchMemoryPolicy>,
+  context?: ChannelProjectBindingContext
+): void {
+  if (policy.requireProjectIsolation && !getProjectRoot(context, policy)) {
     throw new Error(
-      "OPENCLAW_PROJECT is required for project-isolated research memory writes."
+      "A resolved project is required for project-isolated research memory writes. Bind the current channel to a project or set OPENCLAW_PROJECT."
     );
   }
 }
 
 function resolveBaseDir(
   policy: Required<ResearchMemoryPolicy>,
-  kind: "memory" | "researcher"
+  kind: "memory" | "researcher",
+  context?: ChannelProjectBindingContext
 ): string {
-  const projectRoot = getProjectRoot();
+  const projectRoot = getProjectRoot(context, policy);
   if (projectRoot) {
     return path.join(projectRoot, kind === "memory" ? "memory" : "researcher");
   }
 
   if (!policy.allowWorkspaceFallback) {
     throw new Error(
-      "Workspace fallback is disabled for research memory. Set OPENCLAW_PROJECT or relax plugin policy."
+      "Workspace fallback is disabled for research memory. Bind the current channel to a project, set OPENCLAW_PROJECT, or relax plugin policy."
     );
   }
 
@@ -303,23 +326,30 @@ function resolveBaseDir(
 
 function memoryPath(
   filename: string,
-  policy: Required<ResearchMemoryPolicy>
+  policy: Required<ResearchMemoryPolicy>,
+  context?: ChannelProjectBindingContext
 ): string {
-  return path.join(resolveBaseDir(policy, "memory"), filename);
+  return path.join(resolveBaseDir(policy, "memory", context), filename);
 }
 
 function researchPath(
   filename: string,
-  policy: Required<ResearchMemoryPolicy>
+  policy: Required<ResearchMemoryPolicy>,
+  context?: ChannelProjectBindingContext
 ): string {
-  return path.join(resolveBaseDir(policy, "researcher"), filename);
+  return path.join(resolveBaseDir(policy, "researcher", context), filename);
 }
 
 export function getResolvedResearchMemoryPaths(
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ) {
   const normalized = normalizePolicy(policy);
-  const projectRoot = getProjectRoot();
+  const resolvedProject = resolveProjectContext({
+    policy: normalized,
+    context,
+  });
+  const projectRoot = resolvedProject.projectRoot;
   const workspaceRoot = getWorkspaceRoot();
   const projectIsolationSatisfied = !normalized.requireProjectIsolation
     ? true
@@ -343,6 +373,10 @@ export function getResolvedResearchMemoryPaths(
     usingWorkspaceFallback,
     workspaceRoot,
     projectRoot,
+    projectResolutionSource: resolvedProject.source,
+    channelProjectBindingsEnabled: normalized.enableChannelProjectBindings,
+    channelProjectBindingKey: resolvedProject.channelKey,
+    channelProjectBindingsPath: resolvedProject.storePath,
     inferredProjectId: inferProjectId(projectRoot),
     ideationMemoryPath: memoryDir
       ? path.join(memoryDir, "ideation-memory.md")
@@ -433,9 +467,10 @@ function validateConfidence(value: number | undefined, label: string): void {
 function finalizeCommonFields<T extends CommonEntryFields>(
   entry: T,
   policy: Required<ResearchMemoryPolicy>,
-  signatureParts: string[]
+  signatureParts: string[],
+  context?: ChannelProjectBindingContext
 ): T {
-  const projectRoot = getProjectRoot();
+  const projectRoot = getProjectRoot(context, policy);
   const projectId = entry.projectId ?? inferProjectId(projectRoot);
   const evidencePointers = uniqueStrings(entry.evidencePointers);
   const tags = uniqueStrings(entry.tags);
@@ -502,17 +537,18 @@ function updateComputeBudgetLog(content: string, row: string): string {
 
 export async function recordIdeaEntry(
   entry: IdeaEntry,
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<string> {
   const normalized = normalizePolicy(policy);
-  ensureProjectScope(normalized);
+  ensureProjectScope(normalized, context);
 
   const finalized = finalizeCommonFields(entry, normalized, [
-    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.projectId ?? inferProjectId(getProjectRoot(context, normalized)) ?? "",
     entry.trackId ?? "",
     entry.title,
     entry.outcome,
-  ]);
+  ], context);
 
   const date = new Date().toISOString().split("T")[0];
   const statusLabel = finalized.outcome === "abandoned" ? " (ABANDONED)" : "";
@@ -541,7 +577,7 @@ ${common}- **Domain**: ${finalized.domain}
       ? "## Successful Idea Patterns"
       : "## Failed Idea Catalog";
 
-  const filepath = memoryPath("ideation-memory.md", normalized);
+  const filepath = memoryPath("ideation-memory.md", normalized, context);
   const existing = await readFileSafe(filepath);
   ensureNoDuplicateSignature(existing, finalized.signature ?? "");
   await writeFileEnsured(filepath, insertAfterSection(existing, section, block));
@@ -551,17 +587,18 @@ ${common}- **Domain**: ${finalized.domain}
 
 export async function recordExperimentEntry(
   entry: ExperimentEntry,
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<string> {
   const normalized = normalizePolicy(policy);
-  ensureProjectScope(normalized);
+  ensureProjectScope(normalized, context);
 
   const finalized = finalizeCommonFields(entry, normalized, [
-    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.projectId ?? inferProjectId(getProjectRoot(context, normalized)) ?? "",
     entry.trackId ?? "",
     entry.name,
     "success",
-  ]);
+  ], context);
 
   const date = new Date().toISOString().split("T")[0];
   const common = formatCommonFields(finalized);
@@ -576,7 +613,7 @@ ${formatKeyValueList(finalized.hyperparams)}
 - **Reuse condition**: ${finalized.reuseCondition}
 `;
 
-  const filepath = memoryPath("experiment-memory.md", normalized);
+  const filepath = memoryPath("experiment-memory.md", normalized, context);
   const existing = await readFileSafe(filepath);
   ensureNoDuplicateSignature(existing, finalized.signature ?? "");
 
@@ -594,17 +631,18 @@ ${formatKeyValueList(finalized.hyperparams)}
 
 export async function recordFailedExperimentEntry(
   entry: FailedExperimentEntry,
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<string> {
   const normalized = normalizePolicy(policy);
-  ensureProjectScope(normalized);
+  ensureProjectScope(normalized, context);
 
   const finalized = finalizeCommonFields(entry, normalized, [
-    entry.projectId ?? inferProjectId(getProjectRoot()) ?? "",
+    entry.projectId ?? inferProjectId(getProjectRoot(context, normalized)) ?? "",
     entry.trackId ?? "",
     entry.name,
     "failure",
-  ]);
+  ], context);
 
   const date = new Date().toISOString().split("T")[0];
   const common = formatCommonFields(finalized);
@@ -625,7 +663,7 @@ ${formatKeyValueList(finalized.hyperparams)}
   }
 `;
 
-  const filepath = memoryPath("experiment-memory.md", normalized);
+  const filepath = memoryPath("experiment-memory.md", normalized, context);
   const existing = await readFileSafe(filepath);
   ensureNoDuplicateSignature(existing, finalized.signature ?? "");
 
@@ -645,10 +683,11 @@ ${formatKeyValueList(finalized.hyperparams)}
 }
 
 export async function getReviewState(
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<ReviewState | null> {
   const normalized = normalizePolicy(policy);
-  const filepath = researchPath("REVIEW_STATE.json", normalized);
+  const filepath = researchPath("REVIEW_STATE.json", normalized, context);
   const content = await readFileSafe(filepath);
   if (!content) return null;
   try {
@@ -660,25 +699,27 @@ export async function getReviewState(
 
 export async function setReviewState(
   state: ReviewState,
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<string> {
   const normalized = normalizePolicy(policy);
-  ensureProjectScope(normalized);
+  ensureProjectScope(normalized, context);
 
-  const filepath = researchPath("REVIEW_STATE.json", normalized);
+  const filepath = researchPath("REVIEW_STATE.json", normalized, context);
   await writeFileEnsured(filepath, `${JSON.stringify(state, null, 2)}\n`);
   return `Review state saved: round=${state.round}, status=${state.status}, score=${state.lastScore}`;
 }
 
 export async function checkReviewResumability(
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<{
   action: "resume" | "restart" | "none";
   state: ReviewState | null;
   reason: string;
 }> {
   const normalized = normalizePolicy(policy);
-  const state = await getReviewState(normalized);
+  const state = await getReviewState(normalized, context);
 
   if (!state) {
     return { action: "none", state: null, reason: "No review state found." };
@@ -720,10 +761,11 @@ export async function appendDailyLog(
     results?: string[];
     nextSteps: string[];
   },
-  policy: ResearchMemoryPolicy = {}
+  policy: ResearchMemoryPolicy = {},
+  context?: ChannelProjectBindingContext
 ): Promise<string> {
   const normalized = normalizePolicy(policy);
-  ensureProjectScope(normalized);
+  ensureProjectScope(normalized, context);
 
   const now = new Date();
   const dateStr = now.toISOString().split("T")[0];
@@ -749,7 +791,7 @@ ${
 ${formatList(params.nextSteps)}
 `;
 
-  const filepath = memoryPath(`${dateStr}.md`, normalized);
+  const filepath = memoryPath(`${dateStr}.md`, normalized, context);
   const existing = await readFileSafe(filepath);
   if (!existing) {
     await writeFileEnsured(filepath, `# Research Log — ${dateStr}\n${block}`);

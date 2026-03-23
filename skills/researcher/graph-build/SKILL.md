@@ -33,24 +33,61 @@ If none exists, stop and report that PaperNexus is unavailable. Do not silently 
 Pick the richest available source directory in this order:
 
 1. explicit argument path if provided
-2. `paper_source_dir` recorded in `{PROJ}/PROJECT_MANIFEST.json`
-3. `/Users/iranb/.papernexus/papers/{proj-id}`
-4. `{PROJ}/papers/`
-5. `{PROJ}/literature/`
-6. `{PROJ}/researcher/lit_papers/`
-7. bootstrap fallback: create `{PROJ}/graph/bootstrap/` and place project markdown literature notes there (for example `LITERATURE.md`)
+2. `graph_source_dir` recorded in `{PROJ}/PROJECT_MANIFEST.json`
+3. `paper_source_dir` recorded in `{PROJ}/PROJECT_MANIFEST.json`
+4. `/Users/iranb/.papernexus/papers/{proj-id}` as the local default PaperNexus source tree
+5. `{PROJ}/papers/`
+6. `{PROJ}/literature/`
+7. `{PROJ}/researcher/lit_papers/`
+8. bootstrap fallback: create `{PROJ}/graph/bootstrap/` and place project markdown literature notes there (for example `LITERATURE.md`)
+
+Default policy:
+- if the manifest does not yet pin `graph_source_dir`, treat `/Users/iranb/.papernexus/papers/{proj-id}` as the default source corpus
+- `graph_source_dir` should record the actual source tree used to build the current corpus
+- the authoritative graph files still live in PaperNexus storage, typically under `~/.papernexus/index-store/.papernexus/`, not inside the paper source tree
 
 Preferred source types:
-- PDF papers
-- Markdown paper notes
+- full-paper Markdown
 - local converted paper markdown
+- PDF papers only when Markdown is unavailable for the same canonical paper
+
+## Canonical Corpus Assembly (mandatory)
+
+Do not point PaperNexus directly at a mixed raw directory when both Markdown and PDF copies exist for the same paper.
+
+Before each build, assemble a canonical source tree under:
+
+```text
+{PROJ}/graph/source-corpus/
+```
+
+Rules:
+- use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if it exists to resolve canonical identity
+- otherwise deduplicate by canonical paper identity in this order: arXiv ID, DOI, normalized title
+- if both `md/<paper>.md` and `pdf/<paper>.pdf` exist for the same canonical paper, include only the Markdown file in the canonical source tree
+- include a PDF only when no Markdown exists for that canonical paper
+- if a new Markdown arrives for a paper that previously only had a PDF, replace the PDF entry in the canonical source tree on the next build
+- treat `{paper_source_dir}/md/` as the highest-priority ingestion source
+- do not let duplicate PDF and Markdown files for the same paper both enter the analyzed corpus
+
+Suggested layout:
+
+```text
+{PROJ}/graph/source-corpus/
+  md/
+    <canonical-paper>.md
+  pdf/
+    <canonical-paper>.pdf
+```
+
+The analyzed source dir should be this canonical staged corpus, not the raw mixed download tree.
 
 ## Build / Refresh the Corpus
 
 Use a project-stable corpus name:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js analyze <source_dir> --name <proj-id>
+node <PAPERNEXUS_ROOT>/src/cli/index.js analyze {PROJ}/graph/source-corpus --name <proj-id>
 node <PAPERNEXUS_ROOT>/src/cli/index.js status --corpus <proj-id>
 ```
 
@@ -90,16 +127,17 @@ Write `{PROJ}/graph/GRAPH_BUILD_REPORT.md`:
 - Project: [proj-id]
 - PaperNexus root: [path]
 - Source dir: [path]
+- Raw paper source dir: [path]
 - Corpus name: [proj-id]
 - Build status: ready / failed
-- Notes: [coverage quality, missing PDFs, bootstrap fallback, etc.]
+- Notes: [coverage quality, Markdown-vs-PDF counts, missing Markdown fallbacks, bootstrap fallback, etc.]
 ```
 
 Update `{PROJ}/PROJECT_MANIFEST.json` with:
 - `papernexus_root`
 - `papernexus_corpus`
 - `paper_source_dir`
-- `graph_source_dir`
+- `graph_source_dir` pointing to `{PROJ}/graph/source-corpus/` when the canonical staged corpus is used
 - `graph_last_built_at`
 - `paper_ingestion.last_graph_sync_at`
 - `paper_ingestion.new_files_since_graph: 0`
@@ -118,3 +156,4 @@ Do not advance to frontier mapping if:
 - PaperNexus root cannot be resolved
 - the source directory is empty
 - the built corpus has effectively no useful content (for example 0 paper nodes or only a trivial bootstrap note)
+- the canonical source tree still contains duplicate Markdown and PDF entries for the same canonical paper

@@ -1,5 +1,11 @@
 # AGENTS.md — Cross-Reviewer Agent
 
+This role directory is the agent-local equivalent of the official OpenClaw workspace config. In this repo, shared workflow files live two levels up; if these files are copied into a live workspace root, preserve the lifecycle rules below.
+
+## First Run
+
+If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certificate. Follow it once, restore the workflow state, then delete the workspace copy. Keep this repo copy as the template.
+
 ## File Ownership
 
 > Reference: `WORKSPACE.md` for full directory architecture.
@@ -116,6 +122,12 @@ There are no proactive background duties for Cross-Reviewer.
 
 If no request is active, the correct behavior is no-op.
 
+## Group Chats and Mentions
+
+- In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- Do not join unrelated project chatter; respond only to explicit cross-review packets.
+- If there is no explicit request, stay silent or return `HEARTBEAT_OK`.
+
 ## Boundaries
 
 - Do not run code or access servers
@@ -130,3 +142,7 @@ If no request is active, the correct behavior is no-op.
 - `web_search` / `web_fetch` — for novelty mode, to verify prior work claims
 
 No write access. No bash/exec access.
+
+## Tools and Heartbeats
+
+Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When OpenClaw sends the default heartbeat prompt, read `HEARTBEAT.md`, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention.

@@ -1,14 +1,23 @@
-# HEARTBEAT.md — Periodic State Persistence
+# HEARTBEAT.md — Workflow Auto-Iterator
 
-> This file is read by OpenClaw's heartbeat mechanism (every 2h by default).
+> This file is read by OpenClaw's heartbeat mechanism.
+> In this repo, `openclaw.json` should configure heartbeat cadence explicitly; the recommended cadence is every 30 minutes for the default Researcher session.
 > On each heartbeat trigger, execute ALL applicable steps below.
 > This replaces the "before-compaction" hook with a time-based state flush.
 > Deployed from plugin `templates/hooks/` to workspace roots by install script.
 
 ## When to Execute
 
-OpenClaw calls this agent every 2 hours while sessions are active.
 On each heartbeat, run whichever steps are applicable to the current session state.
+
+## Step 0: Run The Deterministic Iterator First
+
+If an active project exists, before any ad hoc reasoning, background browsing, or spawning:
+
+1. Call `research_workflow` with action `auto_iterator_tick` and `iterator.mode = "heartbeat"`.
+2. Treat the returned `stageAfter`, `ownerAfter`, `blockingReason`, and `recommendedActions` as the source of truth for this heartbeat.
+3. If the iterator says to wait for a human gate, do not invent new mainline work.
+4. If the iterator advanced the stage or queued a mailbox handoff, update only bounded state around that decision.
 
 ## Step 1: Update TODOS.md
 
@@ -96,5 +105,5 @@ Output:
 - Review state: [saved / not applicable]
 - Ideation memory: [updated / not applicable]
 - Experiment memory: [updated / not applicable]
-Next heartbeat in ~2h.
+Next heartbeat: follow the configured cadence in `openclaw.json`.
 ```

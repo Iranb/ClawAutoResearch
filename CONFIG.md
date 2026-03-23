@@ -7,7 +7,15 @@
 - **`{PROJECTS_ROOT}`**: `/Users/iranb/Downloads/AutoResearchProjects`
   - Root directory for all research projects
   - Each project is isolated under `{PROJECTS_ROOT}/{proj-id}/`
-  - Configured in `openclaw.json` as `plugins.entries.openclaw-research.config.projectsRoot`
+  - Configure it in `openclaw.json` as `plugins.entries.openclaw-research.config.projectsRoot`
+
+- **`{PAPERNEXUS_PAPERS_ROOT}`**: `~/.papernexus/papers`
+  - Local default PaperNexus paper source root
+  - New projects should default `paper_source_dir` and `graph_source_dir` to `{PAPERNEXUS_PAPERS_ROOT}/{proj-id}`
+
+- **`{PAPERNEXUS_INDEX_ROOT}`**: `~/.papernexus/index-store`
+  - Local default PaperNexus index root
+  - Authoritative graph files are written under this index root when `storage.indexDir` is set in PaperNexus
 
 - **`{WS}`**: `~/.openclaw/workspace-researcher`
   - Researcher agent workspace
@@ -21,7 +29,27 @@
 
 For each project `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`:
 
+Default PaperNexus source and graph paths for a project:
+
+```text
+{PAPERNEXUS_PAPERS_ROOT}/{proj-id}/
+  md/
+  pdf/
+
+{PAPERNEXUS_INDEX_ROOT}/.papernexus/
+  graph.kuzu
+  graph.lite.json
+  meta.json
 ```
+
+Notes:
+- `paper_source_dir` should usually point at `{PAPERNEXUS_PAPERS_ROOT}/{proj-id}`
+- `graph_source_dir` should record the source corpus directory used for the current graph build, which by default is the same as `paper_source_dir`
+- the graph files themselves are not stored inside `graph_source_dir`; they are stored in the PaperNexus index area
+
+Project workspace structure:
+
+```text
 {PROJ}/
 ├── PROJECT_MANIFEST.json      # Project state and current stage
 ├── TRACK_REGISTRY.json        # Research track portfolio
@@ -43,8 +71,7 @@ For each project `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`:
 The `{PROJECTS_ROOT}` path is determined by:
 
 1. **Plugin config** (highest priority): `openclaw.json` → `plugins.entries.openclaw-research.config.projectsRoot`
-2. **Top-level config**: `openclaw.json` → `projectsRoot`
-3. **Default**: `~/.openclaw/projects`
+2. **Default**: `~/.openclaw/projects`
 
 ## Environment Variables
 
@@ -67,7 +94,7 @@ export OPENCLAW_PROJECT=my-project
 
 # Project path resolves to:
 # {PROJECTS_ROOT}/my-project
-# = ~/.openclaw/projects/my-project
+# = <plugins.entries.openclaw-research.config.projectsRoot>/my-project
 ```
 
 ---

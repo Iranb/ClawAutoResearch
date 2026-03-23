@@ -1,10 +1,7 @@
 {
   // OpenClaw Research — Multi-Agent Automated Research Configuration
   // Agent roster: researcher (orchestrator) + 4 sub-agents + reviewer (isolated)
-  // Memory: QMD backend, per-agent isolation; project-level memory under projectsRoot
-
-  // ── 项目根目录：独立于各 agent 的 workspace，所有 agent 均可访问（可指定为任意路径）
-  "projectsRoot": "~/.openclaw/projects",
+  // Memory: QMD backend, per-agent isolation; project-level memory under the plugin's projectsRoot
 
   "plugins": {
     "enabled": true,

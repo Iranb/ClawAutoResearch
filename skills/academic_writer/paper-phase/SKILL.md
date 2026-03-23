@@ -13,6 +13,7 @@ allowed-tools:
   - WebFetch
   - Agent
   - Skill
+  - research_workflow
 ---
 
 # Paper Phase
@@ -22,11 +23,13 @@ Full pipeline from analysis results to compiled PDF, with Cross-Reviewer quality
 ## Pipeline
 
 ```
-/paper-plan ──────► Cross-Reviewer (outline) ──► fix blockers
+/paper-plan ──────► KG storyline contract ──► Cross-Reviewer (outline) ──► fix blockers
      ↓
 /paper-write ─────► Cross-Reviewer (per section) ──► revise
      ↓
 /paper-compile ───► fix LaTeX errors ──► verify page count
+     ↓
+Citation Gate ────► Reviewer verifies refs.bib / no hallucinated citations
      ↓
 Final Polish Pass ► Cross-Reviewer (full draft) ──► final edits
      ↓
@@ -41,12 +44,14 @@ main_final.pdf
 
 Validates the Analyzer's `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, `CLAIM_POLICY.md`, and advisory `THEORY_SUPPORT_NOTE.md`, then builds section outline and figure plan.
 Cross-Reviewer validates outline **before** writing begins.
+If `writing_contract.template_required = true`, the template must be readable before this phase starts; otherwise stop and restore it through `research_workflow.set_writing_contract`.
+If `writing_contract.kg_storyline_required = true`, produce `KG_STORYLINE_PACKET.md` and mark it `ready` before expanding prose.
 
 Only hard blockers (missing experiments flagged by Cross-Reviewer, or unresolved unsupported primary claims) must be resolved before Phase 2.
 `theory`, `storyline`, or `paragraph_logic` marked `RED` are advisory only and must not block Phase 2.
 If multiple tracks survived review, narrow to the winning narrative before drafting prose.
 
-**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
+**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`, `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when applicable, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
 ## Phase 2: Paper Write
 
@@ -64,6 +69,7 @@ Primary claims marked `UNSUPPORTED` must not appear as headline contributions. T
 
 Only tracks recommended as `advance` or equivalent by `TRACK_VERDICTS.md` may be treated as core paper narrative.
 If theory / storyline / paragraph logic are `RED`, continue drafting but preserve the red signal in `{PROJ}/academic_writer/WRITING_SIGNALS.md` for human review.
+Template adherence is not optional when configured: section structure and paragraph patterns should be adapted from the template before style polishing.
 
 **Output**: `{PROJ}/academic_writer/paper/sections/*.tex` + `refs.bib` + `main.tex` + updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
 
@@ -84,13 +90,18 @@ Auto-fix common errors:
 - Undefined reference: check `\label` names
 
 Check constraints:
-- Page count within venue limit (NeurIPS=9+refs, ICML=8+refs, ICLR=8+refs)
+- Page count within the configured writing mode limit (`conference` = `9+2`, `journal` = `12+2`)
 - All figures referenced in text
 - No `[CITATION NEEDED]` markers remaining
 
 **Output**: `{PROJ}/academic_writer/paper/main.pdf`
 
-## Phase 4: Final Polish Pass
+## Phase 4: Citation Gate
+
+Before the final full-paper polish, run reviewer `/citation-integrity-gate`.
+Do not proceed to submission packaging while citation verification is not `verified`.
+
+## Phase 5: Final Polish Pass
 
 Send the full compiled draft (as text, not PDF) to **Cross-Reviewer Agent** for holistic review:
 
@@ -124,7 +135,7 @@ Parse the full-paper Cross-Reviewer response:
 - Fix any cross-section inconsistencies
 - Recompile after changes
 
-## Phase 5: Final Compile
+## Phase 6: Final Compile
 
 ```bash
 cd {PROJ}/academic_writer/paper && latexmk -pdf -interaction=nonstopmode main.tex
@@ -142,6 +153,7 @@ File: {PROJ}/academic_writer/paper/main_final.pdf
 Pages: X (limit: Y) ✓ / ✗
 Figures: N (all referenced) ✓
 Citations: N (no [CITATION NEEDED]) ✓
+Citation integrity: verified / needs_revision
 Cross-Reviewer final assessment: PUBLICATION_READY / NEEDS_REVISION
 Advisory writing signals: theory={GREEN/RED}, storyline={GREEN/RED}, paragraph_logic={GREEN/RED}
 

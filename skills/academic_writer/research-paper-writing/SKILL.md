@@ -12,11 +12,12 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 ## Core Workflow
 
 1. Clarify the paper story before sentence-level edits.
-2. Use section-specific guidance in `references/`.
-3. Rewrite paragraph-by-paragraph with one message per paragraph.
-4. Run reverse outlining after writing each section.
-5. Check every major claim in Abstract/Introduction against experimental evidence.
-6. Run final-paper adversarial review with `references/paper-review.md`.
+2. If the user has provided a paper template, read it first and preserve its section logic before adapting the wording.
+3. Use section-specific guidance in `references/`.
+4. Rewrite paragraph-by-paragraph with one message per paragraph.
+5. Run reverse outlining after writing each section.
+6. Check every major claim in Abstract/Introduction against experimental evidence.
+7. Run final-paper adversarial review with `references/paper-review.md`.
 
 ## Global Principles
 
@@ -24,11 +25,12 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 2. State the paragraph message in the first sentence.
 3. Make nouns self-contained; define new terms before reusing them.
 4. Maintain sentence-to-sentence flow (cause, contrast, consequence, or refinement).
-5. Iterate with adversarial self-review: read as a skeptical reviewer.
-6. Treat visual quality as core content, not decoration.
-7. Use a clean teaser and pipeline figure.
-8. Use readable, minimal-ink tables.
-9. Keep formatting consistent and tidy.
+5. Maintain paragraph-to-paragraph flow: the end of one paragraph should make the next paragraph feel necessary.
+6. Iterate with adversarial self-review: read as a skeptical reviewer.
+7. Treat visual quality as core content, not decoration.
+8. Use a clean teaser and pipeline figure.
+9. Use readable, minimal-ink tables.
+10. Keep formatting consistent and tidy.
 
 ## Paragraph Clarity Check (Important)
 

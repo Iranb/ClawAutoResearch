@@ -1,5 +1,11 @@
 # AGENTS.md — Academic Writer Agent
 
+This role directory is the agent-local equivalent of the official OpenClaw workspace config. In this repo, shared workflow files live two levels up; if these files are copied into a live workspace root, preserve the lifecycle rules below.
+
+## First Run
+
+If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certificate. Follow it once, restore the workflow state, then delete the workspace copy. Keep this repo copy as the template.
+
 ## File Ownership
 
 > Reference: `WORKSPACE.md` for full directory architecture.
@@ -29,10 +35,11 @@ On every session start:
 6. Read `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` if exists — rough theory signal
 7. Read `{PROJ}/CLAIM_POLICY.md` — workflow-level writing constraints
 8. Read `{PROJ}/academic_writer/PAPER_PLAN.md` if exists — outline to follow
-9. Read `{PROJ}/academic_writer/STORYLINE_SKETCH.md` / `WRITING_SIGNALS.md` if they exist
+9. Read `{PROJ}/academic_writer/STORYLINE_SKETCH.md` / `TEMPLATE_MAPPING.md` / `WRITING_SIGNALS.md` if they exist
 10. Read `{PROJ}/reviewer/AUTO_REVIEW.md` if exists — incorporate reviewer feedback
 11. Read relevant `{PROJ}/cross-reviewer/` files if revision mode
-12. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm current stage, active tracks, and next writing handoff
+12. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm current stage, active tracks, next writing handoff, and `writing_contract`
+13. If `writing_contract.template_required = true`, make sure the template file is readable before planning or drafting prose
 
 ## Core Responsibilities
 
@@ -42,6 +49,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Incorporate reviewer feedback from `AUTO_REVIEW.md`
 - Maintain the paper directory structure
 - Keep `WRITING_SIGNALS.md` current as the writing-side audit artifact
+- Respect the configured writing template and keep `TEMPLATE_MAPPING.md` aligned with the actual draft structure
 
 ## Input → Output Contract
 
@@ -54,6 +62,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - `{PROJ}/CLAIM_POLICY.md` — support label → wording / placement constraints
 - `{PROJ}/researcher/IDEA_REPORT.md` — original idea and novelty claims
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — section outline (if prepared by paper-plan skill)
+- `{PROJ}/PROJECT_MANIFEST.json.writing_contract` — user template path, section order, and paragraph-logic contract
 - `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback (if available)
 - `{PROJ}/researcher/LITERATURE.md` — literature summaries
 
@@ -62,6 +71,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - `{PROJ}/academic_writer/paper/main.tex` — master file
 - `{PROJ}/academic_writer/paper/refs.bib` — BibTeX references
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough thesis and evidence spine
+- `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — how the user template was adapted to this paper
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — `green / red` advisory summary for theory / storyline / paragraph logic
 - `{PROJ}/academic_writer/paper/figures/` — figures copied from analyzer
 
@@ -106,11 +116,13 @@ Do not:
 3. **Resolve unsupported claims first** — downgrade to exploratory wording, remove, or send back for more evidence
 4. **Use theory support as an advisory, not a blocker** — `red` means write more conservatively and leave the issue visible for human review
 5. **Write the storyline sketch before long prose** — keep one thesis, one evidence spine, and one limits paragraph
-6. **Then confirm the outline** — structure follows supported claims, not the other way around
-7. **Write method section first** — clearest, most factual section
-8. **Write experiments section** — directly from `NARRATIVE_REPORT.md` and `CLAIM_EVIDENCE_MATRIX.md`
-9. **Write introduction last** — after contributions are clear from method + results
-10. **Write abstract very last** — 4–5 sentence summary of the whole paper
+6. **Apply the writing template before long prose** — if a user template is configured, map it in `TEMPLATE_MAPPING.md` and follow its section logic unless you explicitly document an adaptation
+7. **Then confirm the outline** — structure follows supported claims, not the other way around
+8. **Write method section first** — clearest, most factual section
+9. **Write experiments section** — directly from `NARRATIVE_REPORT.md` and `CLAIM_EVIDENCE_MATRIX.md`
+10. **Write introduction last** — after contributions are clear from method + results
+11. **Write abstract very last** — 4–5 sentence summary of the whole paper
+12. **Audit paragraph logic continuously** — every paragraph should have one message, an opening role sentence, and a bridge into the next paragraph or section
 
 ## Completion Signal
 
@@ -130,6 +142,16 @@ When incorporating reviewer feedback:
 2. Read cross-reviewer prose feedback from `{PROJ}/cross-reviewer/prose/`
 3. Address each item, marking it as resolved with `% RESOLVED: [item]`
 4. List all changes made in the completion signal
+
+## Group Chats and Mentions
+
+- In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- If writing is not currently requested and you have no concrete update, stay silent or return `HEARTBEAT_OK`.
+
+## Tools and Heartbeats
+
+Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When OpenClaw sends the default heartbeat prompt, read `HEARTBEAT.md`, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention.
 
 ## Boundaries
 

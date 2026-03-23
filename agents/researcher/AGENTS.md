@@ -1,5 +1,11 @@
 # AGENTS.md — Researcher Agent
 
+This role directory is the agent-local equivalent of the official OpenClaw workspace config. In this repo, shared workflow files live two levels up; if these files are copied into a live workspace root, preserve the lifecycle rules below.
+
+## First Run
+
+If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certificate. Follow it once, restore the workflow state, then delete the workspace copy. Keep this repo copy as the template.
+
 ## File Ownership
 
 > Reference: `WORKSPACE.md` for full directory architecture.
@@ -23,14 +29,16 @@ On every session start:
 
 1. Read `SOUL.md` (identity and principles)
 2. Read `USER.md` (user preferences, if present)
-3. Read `{PROJ}/PROJECT_MANIFEST.json` if it exists — current project identity, PaperNexus corpus, and graph state
+3. Read `{PROJ}/PROJECT_MANIFEST.json` if it exists — current project identity, PaperNexus corpus, graph state, and `idle_research` policy
 4. Read `{PROJ}/TRACK_REGISTRY.json` if it exists — active / parked / killed tracks and recent decisions
 5. Read `{PROJ}/CLAIM_POLICY.md` if it exists — how claim support labels constrain writing and rollback
-6. Read `{PMEM}/YYYY-MM-DD.md` if it exists — today's and yesterday's logs
-7. Read `MEMORY.md` (long-term memory)
-8. Check for in-progress projects by reading `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md`
-9. Before any write, confirm that `{PROJ}/PROJECT_MANIFEST.json.project_id`, `owner_agent`, `next_action`, and `resume_action` match the current task
-10. If you just switched from another project, run `/resume-pipeline` before doing new writes
+6. Read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` if it exists — restart-safe experiment memory and PaperNexus sync state
+7. Read `PROJECT_MANIFEST.json.idle_research` via `research_workflow.get_idle_research` when available — confirm topic, cooldown, last digest, and whether the next background round is due
+8. Read `{PMEM}/YYYY-MM-DD.md` if it exists — today's and yesterday's logs
+9. Read `MEMORY.md` (long-term memory)
+10. Check for in-progress projects by reading `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md`
+11. Before any write, confirm that `{PROJ}/PROJECT_MANIFEST.json.project_id`, `owner_agent`, `next_action`, and `resume_action` match the current task
+12. If you just switched from another project, run `/resume-pipeline` before doing new writes
 
 ## Remote Server
 
@@ -57,6 +65,7 @@ ssh <server> "screen -dmS <exp_name> bash -c 'cd <remote_dst> && CUDA_VISIBLE_DE
 - `MEMORY.md` — long-term memory (research directions, server config, personal preferences)
 - `{PMEM}/ideation-memory.md` — idea memory (successful patterns + failure classes, project-isolated)
 - `{PMEM}/experiment-memory.md` — experiment strategy memory (effective hyperparameters, data-handling tactics, project-isolated)
+- `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — authoritative structured experiment ledger (queued / running / done / failed / PaperNexus sync state)
 
 Memory uses the QMD backend and `memory_search`, and is fully isolated from Reviewer memory.
 Project facts may only be written into the current `{PROJ}`; cross-project reuse is allowed only as generalized heuristics, never as copied project-specific facts.
@@ -64,10 +73,11 @@ Project facts may only be written into the current `{PROJ}`; cross-project reuse
 **When to update memory**:
 - after `idea-phase` succeeds or fails → update `ideation-memory.md` via the `research_memory` plugin tool
 - after `experiment-phase` completes → update `experiment-memory.md` via the `research_memory` plugin tool
+- after every meaningful experiment checkpoint → update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` via `research_workflow.upsert_experiment`
 - at the end of each day → write the daily log via the `research_memory` plugin tool
 - before context compaction → automatic memory flush
 
-Do not hand-edit `{PMEM}/ideation-memory.md`, `{PMEM}/experiment-memory.md`, or `{PROJ}/researcher/REVIEW_STATE.json` when the `research_memory` tool supports the write.
+Do not hand-edit `{PMEM}/ideation-memory.md`, `{PMEM}/experiment-memory.md`, `{PROJ}/researcher/REVIEW_STATE.json`, `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, or `PROJECT_MANIFEST.json.idle_research` runtime fields when the plugin tools support the write.
 
 ## Research Workflow
 
@@ -103,6 +113,7 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 
 **Skill entry points:**
 - `/research-lit` — continuous literature research and full-text corpus accumulation
+- `/idle-research` — bounded background-topic literature watch driven by `PROJECT_MANIFEST.json.idle_research`
 - `/papers-cool` — coarse search, venue sweep, abstract and PDF retrieval
 - `/hugging-face-paper-pages` — preferred full-paper Markdown retrieval for key papers
 - `/papernexus` — PaperNexus corpus / status / watch / refresh operations
@@ -137,7 +148,9 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Graph reasoning must have working memory:** for every serious candidate track, do not stop at `FRONTIER_REPORT.md` or `IDEA_REPORT.md`. Maintain `{PROJ}/researcher/reasoning/<track-id>/QUESTION_PACKET.md`, `WORKING_MEMORY.json`, `REASONING_TRACE.jsonl`, and `SYNTHESIS_PACKET.md`, and explicitly mark each step as `expand`, `refine_query`, `answer_try`, or `stop`.
 
-**Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, PaperNexus corpus refresh, and innovation analysis with the relevant agents. If new papers may change the frontier, refresh the graph before the next critical decision.
+**Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, PaperNexus corpus refresh, and innovation analysis with the relevant agents. If `idle_research.enabled = true` and the round is due, Researcher must prioritize `/idle-research` on that topic before generic literature drift. If new papers may change the frontier, refresh the graph before the next critical decision.
+
+**Experiment memory is mandatory:** do not trust chat history for what was already run. Before launching, resuming, or interpreting experiments, read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` or `research_workflow.get_experiment_memory`. After any queue / launch / result / decision milestone, upsert the ledger and mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`.
 
 **Tracks must be explicitly managed:** after idea discovery, candidate directions must be written into `{PROJ}/TRACK_REGISTRY.json`, with clear `active`, `parked`, and `killed` states. Do not rely on vague prose inside `IDEA_REPORT.md`.
 
@@ -145,9 +158,11 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 When waiting on a gate, another agent, a remote experiment, or the user, prioritize these bounded tasks:
 
+- Run `/idle-research` for the configured topic if `PROJECT_MANIFEST.json.idle_research` is enabled and due, then record the round through `research_workflow.record_idle_research_run`
 - Continue literature research, venue sweeps, key-paper full-text acquisition, and deduplication
 - Check whether key papers are already in the graph; prepare graph refresh if needed
 - Reflect on innovation opportunities, composition opportunities, and closest prior work using the current graph
+- Reconcile experiment results, failed runs, and PaperNexus sync status inside `{PROJ}/researcher/EXPERIMENT_LEDGER.json`
 - Reopen unresolved question packets and update working memory, rejected branches, and stop reasons
 - Refresh synthesis packets for active / parked tracks so Orchestrator / Analyzer / Reviewer can reuse them
 - Organize failure memory, decision memory, and evidence pointers to avoid repeated mistakes
@@ -155,9 +170,20 @@ When waiting on a gate, another agent, a remote experiment, or the user, priorit
 
 Do not do the following while waiting:
 
+- Ignore a due `idle_research` topic and drift into unrelated browsing
 - Silently change the active track set
 - Rewrite the experiment plan without an explicit state update
 - Mix project-specific facts from other projects into the current one
+
+## Group Chats and Mentions
+
+- In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- Prefer `sessions_spawn`, `sessions_send`, or the workflow mailbox for real handoffs.
+- If you are not directly assigned and cannot add concrete value, stay silent or return `HEARTBEAT_OK`.
+
+## Tools and Heartbeats
+
+Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When OpenClaw sends the default heartbeat prompt, read `HEARTBEAT.md`, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention.
 
 ## Red Lines
 

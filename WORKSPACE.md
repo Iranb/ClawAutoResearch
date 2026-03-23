@@ -81,6 +81,8 @@ memory/
 └── YYYY-MM-DD.md            ← per-project daily log (append-only)
 ```
 
+Bounded background-topic steering lives in `{PROJ}/PROJECT_MANIFEST.json.idle_research`; digests from those rounds should be written under `{PROJ}/researcher/idle-research/`.
+
 ### `{PROJ}/researcher/`
 
 ```text
@@ -88,9 +90,12 @@ researcher/
 ├── LITERATURE.md
 ├── FRONTIER_REPORT.md
 ├── IDEA_REPORT.md
+├── idle-research/
+│   └── ROUND-YYYY-MM-DD_HHMM.md
 ├── GATE_STATE.json
 ├── GATES_LOG.md
 ├── EXPERIMENT_LOG.md
+├── EXPERIMENT_LEDGER.json
 ├── EXPERIMENT_REGISTRY.md
 ├── IDEA_TOURNAMENT_STATE.json
 ├── REVIEW_STATE.json

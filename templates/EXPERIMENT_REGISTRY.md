@@ -10,8 +10,8 @@
 
 ## Active Experiments
 
-| ID | Name | Group | GPU | Screen | Status | Started | ETA | Exit | Key Metric |
-|----|------|-------|-----|--------|--------|---------|-----|------|------------|
+| ID | Track | Folder | Name | Group | GPU | Screen | Status | Started | ETA | Exit | Key Metric |
+|----|-------|--------|------|-------|-----|--------|--------|---------|-----|------|------------|
 
 <!-- Status values: running | done | failed | timeout | stalled -->
 <!-- Group A = first parallel wave; Group B = depends on A; etc. -->
@@ -20,15 +20,15 @@
 
 ## Queued Experiments
 
-| ID | Name | Group | Depends On | Reason Waiting |
-|----|------|-------|-----------|----------------|
+| ID | Track | Folder | Name | Group | Depends On | Reason Waiting |
+|----|-------|--------|------|-------|-----------|----------------|
 
 ---
 
 ## Completed Experiments
 
-| ID | Name | Status | Exit | Key Metric | vs Baseline | Duration | Seeds |
-|----|------|--------|------|------------|-------------|----------|-------|
+| ID | Track | Folder | Name | Status | Exit | Key Metric | vs Baseline | Duration | Seeds |
+|----|-------|--------|------|--------|------|------------|-------------|----------|-------|
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: run-experiment
-description: "Atomic remote execution owned by Coder: deploy one approved experiment bundle to a GPU server via SSH, record launch metadata, and return a restart-safe status summary."
+description: "Resource-aware remote execution owned by Coder: deploy one or more approved independent experiment bundles to GPU servers via SSH, record launch metadata, and return a restart-safe status summary."
 argument-hint: "[experiment name and config]"
 allowed-tools:
   - Bash(*)
@@ -9,15 +9,17 @@ allowed-tools:
   - Grep
   - Glob
   - Edit
+  - research_workflow
 ---
 
 # Run Experiment
 
-Deploy a single prepared experiment bundle to a remote GPU server over SSH.
+Deploy one approved experiment bundle, or a small explicitly assigned set of independent bundles, to a remote GPU server over SSH.
 
 > **Ownership split**:
 > - Coder owns the atomic launch and writes launch metadata under `{PROJ}/coder/`
 > - Researcher / `/experiment-phase` owns portfolio scheduling, registry updates, and track decisions
+> - If multiple bundles are assigned together, Coder may parallelize only the explicitly assigned independent bundles; Coder must not invent new experiments
 
 ## Prerequisites
 
@@ -32,6 +34,8 @@ Read before launch:
 - `{PROJ}/TRACK_REGISTRY.json`
 - `{PROJ}/coder/<experiment-name>/README.md`
 - `{PROJ}/coder/<experiment-name>/requirements.txt`
+- `{PROJ}/coder/EXPERIMENT_INDEX.md`
+- `{PROJ}/coder/.../EXPERIMENT_MANIFEST.json`
 
 Write after launch:
 - `{PROJ}/coder/<experiment-name>/REMOTE_RUN.json`
@@ -62,6 +66,11 @@ DATASET_PATH="/data/projects/{PROJ}/datasets"
 DATASET_PATH="/data/shared/datasets/custom_dataset"
 ```
 
+**Dataset immutability rule**:
+- Dataset paths are read-only inputs for Coder
+- Do not create, delete, patch, chmod, extract, or sync files into any dataset root during launch
+- Put checkpoints, logs, temporary conversions, caches, and scratch outputs under the remote experiment directory or another scratch/results directory, not under `datasets/`
+
 ### 2. Resource Check
 
 ```bash
@@ -70,6 +79,21 @@ ssh <server> "free -h | head -2"
 ```
 
 If the target GPU is already full, select a free GPU or notify the user.
+
+When multiple bundles are explicitly assigned in the same packet:
+
+- read the GPU table first
+- compute a safe slot count from free GPUs and memory headroom
+- launch one bundle per safe slot
+- queue the remainder instead of forcing full serialization
+
+Use these heuristics unless Researcher gave stricter numbers:
+
+- treat a GPU as safely available when utilization < 10% and memory.used / memory.total < 0.2
+- reserve at least 10-15% VRAM headroom for each launch
+- if a bundle already has an estimated VRAM requirement, do not co-locate it with another bundle on the same GPU unless the packet explicitly allows packing
+- prefer one GPU per dataset when the same method is being validated on multiple datasets
+- prefer one GPU per seed only after the first validating run has started successfully
 
 ### 2. Code Sync
 
@@ -88,6 +112,8 @@ ssh <server> "cd <remote_dst> && UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/
 ```bash
 ssh <server> "screen -dmS <exp_name> bash -c 'cd <remote_dst> && CUDA_VISIBLE_DEVICES=<gpu_id> uv run python <script> <args> > logs/<exp_name>.log 2>&1; echo EXIT_CODE=\$? >> logs/<exp_name>.log'"
 ```
+
+If a batch of independent bundles is assigned, repeat the same launch pattern for each `(bundle, gpu_id)` pair chosen from the resource check. Keep separate screen names and separate `REMOTE_RUN.json` files per bundle.
 
 ### 5. Verify Launch
 
@@ -114,10 +140,35 @@ Write `{PROJ}/coder/<experiment-name>/REMOTE_RUN.json`:
 }
 ```
 
+Also update:
+
+- the bundle's `EXPERIMENT_MANIFEST.json` status and remote pointers
+- `{PROJ}/coder/EXPERIMENT_INDEX.md` so the local folder tree and remote run stay linked
+
 Return a short structured summary so Researcher can update `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`.
+If you can identify `experimentId`, `trackId`, `server`, `gpu_id`, `screen_name`, and `REMOTE_RUN.json`, also call `research_workflow.upsert_experiment` so the shared ledger records the atomic launch immediately.
+
+## Allowed Runtime Adjustments
+
+Coder may make only bounded execution-time adjustments needed to keep the assigned experiment alive:
+
+- reduce `batch_size`
+- increase `gradient_accumulation_steps`
+- reduce `num_workers`
+- lower evaluation frequency
+- enable or disable mixed precision flags already supported by the codebase
+
+Coder may not, without Researcher approval:
+
+- switch datasets
+- change the main model architecture
+- change the primary metric
+- replace the loss/objective with a different research hypothesis
+- expand the sweep to new hyperparameters not in the assigned plan
 
 ## Error Recovery
 
 - `screen` launch failure → inspect the first 20 log lines to locate the error
 - ImportError → install the missing package and rerun
 - CUDA OOM (within the first 10 seconds) → halve the batch size and rerun
+- repeated CUDA OOM after one bounded retry → mark the bundle as blocked_by_resources and hand back to Researcher instead of endlessly shrinking the run
