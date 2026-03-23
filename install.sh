@@ -5,7 +5,7 @@
 #
 # 功能：
 #   1. 添加或检查研究工作流所需的 agents
-#   2. 同步各 agent skills，并处理重复 skill
+#   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
 #   3. 创建/更新插件链接到 ~/.openclaw/plugins/openclaw-research
 #   4. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
 #   5. 不修改用户 openclaw.json
@@ -312,7 +312,7 @@ else
 fi
 
 echo ""
-echo "[3/6] 复制技能到 Agent 工作区 skills..."
+echo "[3/6] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
 
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
   skill_src="$PLUGIN_DIR/skills/$agent"
@@ -434,7 +434,7 @@ echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete      
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 echo "  1. Agents: 已添加或检查研究工作流所需 agents"
-echo "  2. Skills: 已同步到各 agent workspace，重复项仅在你确认后删除并覆盖"
+echo "  2. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
 echo "  3. Plugin: 已创建或检查 $PLUGIN_LINK"
 echo "  4. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
 echo "  5. Config: 未修改你的 openclaw.json"

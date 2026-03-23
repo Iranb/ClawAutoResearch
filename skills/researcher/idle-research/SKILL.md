@@ -54,11 +54,14 @@ Runtime fields such as `last_run_at`, `last_digest_path`, `last_source_update_at
 3. If `enabled = false` or `topic` is empty, stop after reporting that idle research is disabled or unconfigured.
 4. If the round is not due yet, stop and report the next due time instead of rerunning it.
 5. Build 1-3 targeted search queries from `topic`, `query_seeds`, and `preferred_venues`.
-6. Use `/papers-cool` first for discovery and venue sweep. Hard-cap the round to `max_papers_per_cycle` candidate papers.
+6. Use `/papers-cool` as the guaranteed discovery baseline. If possible, also try `/pasa-paper-search` with equivalent English queries, then merge the two result sets by canonical identity. Hard-cap the merged round to `max_papers_per_cycle` candidate papers.
 7. For each candidate paper:
-   - try `/hugging-face-paper-pages` first and save Markdown into `paper_source_dir/md/`
-   - if Markdown is unavailable, use `/papers-cool` PDF fallback into `paper_source_dir/pdf/`
-   - update `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` by canonical identity
+   - try `/hugging-face-paper-pages` first and save validated Markdown into `paper_source_dir/md/`
+   - if the downloaded Markdown is HTML / error text / tiny stub, delete it and retry once
+   - if Hugging Face still has no valid markdown and the paper has an arXiv ID, try `/arxiv2md`
+   - if arxiv2md also fails, use `/papers-cool` PDF fallback into `paper_source_dir/pdf/`
+   - if the downloaded PDF is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
+   - update `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` by canonical identity, preserving `source_provider` and `retrieval_providers`
 8. Write the round digest to `{PROJ}/researcher/idle-research/ROUND-YYYY-MM-DD_HHMM.md`.
 9. If the round adds new core papers and `refresh_graph_on_new_core_papers = true`, mark graph refresh as required before the next novelty, ideation, or revision decision.
 10. Call `research_workflow.record_idle_research_run` with the round summary so the cooldown and digest pointer stay restart-safe.
@@ -72,6 +75,7 @@ Runtime fields such as `last_run_at`, `last_digest_path`, `last_source_update_at
 - Do not launch experiments.
 - Do not treat abstract-only evidence as enough for innovation claims.
 - Prefer Markdown over PDF when both are possible.
+- Do not leave invalid downloaded artifacts under `paper_source_dir`.
 
 ## Round Digest Template
 
@@ -91,7 +95,9 @@ The digest should contain:
 ```text
 research_workflow.get_idle_research
   -> /papers-cool
+  -> /pasa-paper-search (optional, non-fatal)
   -> /hugging-face-paper-pages
+  -> /arxiv2md
   -> /papers-cool (PDF fallback)
   -> update PAPER_SOURCE_INDEX.json
   -> write ROUND-*.md digest

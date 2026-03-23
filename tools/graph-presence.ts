@@ -19,6 +19,8 @@ type ExpectedPaper = {
   doi: string | null;
   sourceHints: string[];
   sourceKind: "markdown" | "pdf" | "unknown";
+  sourceProvider: string | null;
+  retrievalProviders: string[];
 };
 
 type CorpusPaper = {
@@ -36,6 +38,9 @@ type CorpusPaper = {
 export type GraphPresenceMatch = {
   canonicalId: string;
   title: string | null;
+  sourceKind: "markdown" | "pdf" | "unknown";
+  sourceProvider: string | null;
+  retrievalProviders: string[];
   matchedBy: "arxiv" | "doi" | "source_path" | "title";
   corpusPaperId: string | null;
   corpusPaperTitle: string | null;
@@ -48,6 +53,9 @@ export type GraphPresenceMissingPaper = {
   normalizedTitle: string | null;
   arxivId: string | null;
   doi: string | null;
+  sourceKind: "markdown" | "pdf" | "unknown";
+  sourceProvider: string | null;
+  retrievalProviders: string[];
 };
 
 export type GraphPresenceCheckResult = {
@@ -195,6 +203,96 @@ function normalizeTitle(value: string | null | undefined): string | null {
 
 function uniqueStrings(items: string[]): string[] {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
+}
+
+function normalizeProvider(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function collectRetrievalProviders(record: Record<string, unknown> | null): string[] {
+  if (!record) {
+    return [];
+  }
+  return uniqueStrings(
+    [
+      pickString(record, ["retrieval_provider", "retrievalProvider"]),
+      pickString(record, ["search_provider", "searchProvider"]),
+      pickString(record, ["discovered_by", "discoveredBy"]),
+      ...asStringArray(record.retrieval_providers),
+      ...asStringArray(record.retrievalProviders),
+      ...asStringArray(record.search_providers),
+      ...asStringArray(record.searchProviders),
+      ...asStringArray(record.discovered_by),
+      ...asStringArray(record.discoveredBy),
+    ]
+      .map((item) => normalizeProvider(item))
+      .filter((item): item is string => Boolean(item))
+  );
+}
+
+function inferSourceProvider(
+  record: Record<string, unknown> | null,
+  sourceKind: "markdown" | "pdf" | "unknown",
+  sourceHints: string[]
+): string | null {
+  const explicit = normalizeProvider(
+    pickString(record, [
+      "source_provider",
+      "sourceProvider",
+      "content_provider",
+      "contentProvider",
+      "provider",
+    ])
+  );
+  if (explicit) {
+    return explicit;
+  }
+  const joinedHints = sourceHints.join(" ").toLowerCase();
+  if (joinedHints.includes("huggingface") || joinedHints.includes("/hf/")) {
+    return "hf";
+  }
+  if (joinedHints.includes("arxiv2md")) {
+    return "arxiv2md";
+  }
+  if (sourceKind === "pdf") {
+    return "pdf";
+  }
+  return null;
+}
+
+function sourceKindRank(kind: "markdown" | "pdf" | "unknown"): number {
+  if (kind === "markdown") {
+    return 0;
+  }
+  if (kind === "pdf") {
+    return 1;
+  }
+  return 2;
+}
+
+function sourceProviderRank(provider: string | null): number {
+  const normalized = normalizeProvider(provider);
+  switch (normalized) {
+    case "hf":
+    case "huggingface":
+    case "hugging-face-paper-pages":
+      return 0;
+    case "arxiv2md":
+      return 1;
+    case "pdf":
+      return 2;
+    case "papers-cool":
+      return 3;
+    case "pasa":
+    case "pasa-paper-search":
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -350,10 +448,16 @@ function buildExpectedPaperFromRecord(
     doi: normalizeDoi(doi),
     sourceHints,
     sourceKind: inferSourceKind(sourceHints),
+    sourceProvider: inferSourceProvider(raw, inferSourceKind(sourceHints), sourceHints),
+    retrievalProviders: collectRetrievalProviders(raw),
   };
 }
 
 function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): ExpectedPaper {
+  const incomingPreferred =
+    sourceKindRank(incoming.sourceKind) < sourceKindRank(target.sourceKind) ||
+    (sourceKindRank(incoming.sourceKind) === sourceKindRank(target.sourceKind) &&
+      sourceProviderRank(incoming.sourceProvider) < sourceProviderRank(target.sourceProvider));
   return {
     canonicalId: target.canonicalId,
     title: target.title ?? incoming.title,
@@ -361,10 +465,14 @@ function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): Exp
     arxivId: target.arxivId ?? incoming.arxivId,
     doi: target.doi ?? incoming.doi,
     sourceHints: uniqueStrings([...target.sourceHints, ...incoming.sourceHints]),
-    sourceKind:
-      target.sourceKind === "markdown" || incoming.sourceKind !== "markdown"
-        ? target.sourceKind
-        : "markdown",
+    sourceKind: incomingPreferred ? incoming.sourceKind : target.sourceKind,
+    sourceProvider: incomingPreferred
+      ? incoming.sourceProvider ?? target.sourceProvider
+      : target.sourceProvider ?? incoming.sourceProvider,
+    retrievalProviders: uniqueStrings([
+      ...target.retrievalProviders,
+      ...incoming.retrievalProviders,
+    ]),
   };
 }
 
@@ -470,12 +578,15 @@ function parseExpectedPapersFromFiles(files: string[]): ExpectedPaper[] {
       byCanonicalId.set(paper.canonicalId, {
         ...paper,
         sourceKind: ext === ".md" ? "markdown" : ext === ".pdf" ? "pdf" : "unknown",
+        sourceProvider: ext === ".pdf" ? "pdf" : paper.sourceProvider,
       });
       continue;
     }
     const merged = mergeExpectedPaper(existing, {
       ...paper,
       sourceKind: ext === ".md" ? "markdown" : ext === ".pdf" ? "pdf" : "unknown",
+      sourceProvider:
+        ext === ".md" ? paper.sourceProvider : ext === ".pdf" ? "pdf" : paper.sourceProvider,
     });
     if (existing.sourceKind !== "markdown" && ext === ".md") {
       merged.sourceKind = "markdown";
@@ -621,6 +732,9 @@ function matchExpectedPaper(
       return {
         canonicalId: expected.canonicalId,
         title: expected.title,
+        sourceKind: expected.sourceKind,
+        sourceProvider: expected.sourceProvider,
+        retrievalProviders: expected.retrievalProviders,
         matchedBy: "arxiv",
         corpusPaperId: match.paperId,
         corpusPaperTitle: match.paperTitle,
@@ -635,6 +749,9 @@ function matchExpectedPaper(
       return {
         canonicalId: expected.canonicalId,
         title: expected.title,
+        sourceKind: expected.sourceKind,
+        sourceProvider: expected.sourceProvider,
+        retrievalProviders: expected.retrievalProviders,
         matchedBy: "doi",
         corpusPaperId: match.paperId,
         corpusPaperTitle: match.paperTitle,
@@ -655,6 +772,9 @@ function matchExpectedPaper(
     return {
       canonicalId: expected.canonicalId,
       title: expected.title,
+      sourceKind: expected.sourceKind,
+      sourceProvider: expected.sourceProvider,
+      retrievalProviders: expected.retrievalProviders,
       matchedBy: "source_path",
       corpusPaperId: sourcePathMatch.paperId,
       corpusPaperTitle: sourcePathMatch.paperTitle,
@@ -670,6 +790,9 @@ function matchExpectedPaper(
       return {
         canonicalId: expected.canonicalId,
         title: expected.title,
+        sourceKind: expected.sourceKind,
+        sourceProvider: expected.sourceProvider,
+        retrievalProviders: expected.retrievalProviders,
         matchedBy: "title",
         corpusPaperId: match.paperId,
         corpusPaperTitle: match.paperTitle,
@@ -713,6 +836,9 @@ function serializeMissingPapers(missingPapers: GraphPresenceMissingPaper[]) {
     normalized_title: paper.normalizedTitle,
     arxiv_id: paper.arxivId,
     doi: paper.doi,
+    source_kind: paper.sourceKind,
+    source_provider: paper.sourceProvider,
+    retrieval_providers: paper.retrievalProviders,
   }));
 }
 
@@ -769,6 +895,9 @@ export async function checkGraphPresenceForWorkflow(params: {
         normalizedTitle: paper.normalizedTitle,
         arxivId: paper.arxivId,
         doi: paper.doi,
+        sourceKind: paper.sourceKind,
+        sourceProvider: paper.sourceProvider,
+        retrievalProviders: paper.retrievalProviders,
       });
     }
   }
@@ -838,6 +967,9 @@ export async function checkGraphPresenceForWorkflow(params: {
     present_papers: result.presentPapers.map((paper) => ({
       canonical_id: paper.canonicalId,
       title: paper.title,
+      source_kind: paper.sourceKind,
+      source_provider: paper.sourceProvider,
+      retrieval_providers: paper.retrievalProviders,
       matched_by: paper.matchedBy,
       corpus_paper_id: paper.corpusPaperId,
       corpus_paper_title: paper.corpusPaperTitle,

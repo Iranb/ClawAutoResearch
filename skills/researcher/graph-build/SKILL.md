@@ -69,6 +69,7 @@ Rules:
 - if a new Markdown arrives for a paper that previously only had a PDF, replace the PDF entry in the canonical source tree on the next build
 - treat `{paper_source_dir}/md/` as the highest-priority ingestion source
 - do not let duplicate PDF and Markdown files for the same paper both enter the analyzed corpus
+- do not ingest invalid artifacts such as HTML pages saved as `.md` / `.pdf`, or text-like non-PDF error files
 
 Suggested layout:
 
@@ -157,3 +158,4 @@ Do not advance to frontier mapping if:
 - the source directory is empty
 - the built corpus has effectively no useful content (for example 0 paper nodes or only a trivial bootstrap note)
 - the canonical source tree still contains duplicate Markdown and PDF entries for the same canonical paper
+- the source tree still contains obviously invalid HTML / error-page artifacts that were not cleaned up

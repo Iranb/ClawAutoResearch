@@ -1,6 +1,6 @@
 ---
 name: novelty-check
-description: "Verify research idea novelty through papers.cool multi-source search and Cross-Reviewer agent validation. Use after idea-generator produces candidate ideas."
+description: "Verify research idea novelty through papers.cool plus optional PASA search and Cross-Reviewer agent validation. Use after idea-generator produces candidate ideas."
 argument-hint: "[idea title + hypothesis description]"
 allowed-tools:
   - Read
@@ -13,11 +13,11 @@ allowed-tools:
 
 # Novelty Check
 
-papers.cool keyword search + venue sweep + Cross-Reviewer agent validation.
+papers.cool keyword search + optional PASA retrieval + venue sweep + Cross-Reviewer agent validation.
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
-All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `web_fetch` to find papers.
+Use `/papers-cool` as the guaranteed paper-discovery baseline. If available, use `/pasa-paper-search` as a second source and merge by canonical identity. Do not use `web_search` or `web_fetch` to find papers.
 
 ## Process
 
@@ -54,6 +54,14 @@ Check the three most relevant venues for any similar work published in the last 
 ```
 
 Filter venue results: keep only papers whose title/abstract meaningfully overlaps with the idea.
+
+**1e. Optional PASA search — English novelty expansion**
+
+```bash
+/pasa-paper-search --format json --limit 15 --save-json {PROJ}/researcher/novelty_search_pasa.json "[ENGLISH NOVELTY QUERY]"
+```
+
+If PASA fails, continue with the `papers-cool` evidence only.
 
 **1d. Fetch full abstracts for top 5 most similar papers**
 

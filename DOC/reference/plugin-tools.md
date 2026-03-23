@@ -124,6 +124,7 @@
 它会：
 
 - 读取 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`，如果没有则回退到 `paper_source_dir / graph_source_dir`
+- 识别每篇 canonical paper 的 `source_kind`、`source_provider`、`retrieval_providers`，便于图谱追踪和来源审计
 - 检查当前 corpus 的 `.papernexus/sources.json`
 - 回写 `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_*`
 - 生成 `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`

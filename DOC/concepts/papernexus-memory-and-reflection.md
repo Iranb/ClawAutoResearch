@@ -15,16 +15,17 @@
 
 当前推荐链路已经固定成：
 
-1. 先用 `papers-cool` 检索论文
+1. 先用 `papers-cool` 检索论文，必要时可合并 `pasa-paper-search` 结果
 2. 优先去 `hugging-face-paper-pages` 查找论文 Markdown
-3. 如果没有 Markdown，再回退到 PDF 下载
-4. 将新论文纳入图谱构建或刷新
-5. 更新 `paper_ingestion` 和图谱相关状态
+3. 如果 Hugging Face 没有有效 Markdown，再尝试 `arxiv2md`
+4. 如果两路 Markdown 都失败，再回退到 PDF 下载
+5. 将新论文纳入图谱构建或刷新
+6. 更新 `paper_ingestion` 和图谱相关状态
 
 这样做的好处是：
 
 - 尽量优先拿结构化 Markdown
-- PDF 只作为 fallback
+- PDF 只作为最后 fallback
 - 图谱刷新有明确触发条件
 
 ## 3. PaperNexus 在 workflow 中承担什么角色
@@ -131,4 +132,3 @@ Writer 实际依赖这些上游知识：
 - 空闲时能围绕指定主题持续积累
 - PaperNexus 图谱成为跨阶段共享知识底座
 - 写作、分析和 ideation 用的是同一份研究事实集
-

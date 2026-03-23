@@ -25,24 +25,29 @@ metadata:
 
 ## Workflow inside OpenClaw Research
 
-When `papers-cool` is used inside the automated research pipeline, it is only the **discovery and fallback-download** layer. The required project flow is:
+When `papers-cool` is used inside the automated research pipeline, it is the **guaranteed discovery baseline and fallback-download** layer. The required project flow is:
 
 1. Use `papers-cool` for rough search, venue sweep, abstract fetch, and candidate filtering.
-2. As soon as a search result confirms a concrete paper identity (for example arXiv ID, papers.cool paper page, arXiv URL, or Hugging Face paper URL), immediately try `/hugging-face-paper-pages` first for that paper.
-3. For each confirmed key paper, save the full-paper Markdown into the project's `paper_source_dir/md/` when Hugging Face provides it.
-4. Only if Markdown is unavailable, use `papers-cool` to download the PDF into `paper_source_dir/pdf/`.
-5. Update the project's `PAPER_SOURCE_INDEX.json` using canonical paper identity (arXiv ID first).
-6. When `/graph-build` runs, it must build from a canonical Markdown-first staged corpus: same-paper Markdown wins over PDF, and PDF is included only when Markdown is unavailable.
-7. If the paper is new, upgraded from PDF to Markdown, or likely changes the novelty/baseline picture, refresh PaperNexus with `/graph-build` or `/papernexus` before downstream novelty, idea, or planning decisions.
+2. If `/pasa-paper-search` is available and stable, merge its candidate set with the `papers-cool` set by canonical identity; do not replace `papers-cool` with PASA-only results.
+3. As soon as a search result confirms a concrete paper identity (for example arXiv ID, papers.cool paper page, arXiv URL, or Hugging Face paper URL), immediately try `/hugging-face-paper-pages` first for that paper.
+4. If Hugging Face does not provide valid Markdown, try `/arxiv2md` for the same arXiv paper.
+5. For each confirmed key paper, save the first valid full-paper Markdown into the project's `paper_source_dir/md/`.
+6. Only if neither Markdown source is available, use `papers-cool` to download the PDF into `paper_source_dir/pdf/`.
+7. Update the project's `PAPER_SOURCE_INDEX.json` using canonical paper identity (arXiv ID first), `source_provider` (`hf` / `arxiv2md` / `pdf`), and `retrieval_providers` (for example `["papers-cool", "pasa-paper-search"]`).
+8. When `/graph-build` runs, it must build from a canonical Markdown-first staged corpus: same-paper Markdown wins over PDF, and PDF is included only when Markdown is unavailable.
+9. If the paper is new, upgraded from PDF to Markdown, or likely changes the novelty/baseline picture, refresh PaperNexus with `/graph-build` or `/papernexus` before downstream novelty, idea, or planning decisions.
 
 Hard rules in this workflow:
 
-- Do not treat a `papers-cool` search result or abstract as sufficient evidence for innovation analysis.
+- Do not treat a `papers-cool` or PASA search result or abstract as sufficient evidence for innovation analysis.
 - Do not wait for a later “paper ingestion phase” once the paper identity is already known; try Hugging Face Markdown immediately.
 - Do not skip the Hugging Face Markdown attempt for key papers.
+- Do not skip the arxiv2md fallback for arXiv papers when Hugging Face Markdown is unavailable.
 - Do not let duplicate filenames masquerade as new literature; deduplicate by canonical paper identity.
+- Do not overwrite `retrieval_providers`; merge them when the same paper is found by both `papers-cool` and PASA.
 - Do not let `/graph-build` read a mixed raw corpus where same-paper PDF and Markdown coexist without canonical deduplication.
 - Do not proceed to graph-grounded reasoning until the key paper is ingested into the project corpus or explicitly recorded as missing/deferred.
+- Do not keep invalid downloads such as HTML pages, access-denied stubs, or plain-text error responses masquerading as PDF / markdown.
 
 ### Confirmed paper rule
 
@@ -57,8 +62,19 @@ Identity is considered confirmed when at least one of these is available:
 Then the required order is:
 
 1. `/hugging-face-paper-pages`
-2. save Markdown if available
-3. only then `/papers-cool` PDF fallback if Markdown is missing
+2. if no valid Markdown, `/arxiv2md`
+3. save the first valid Markdown if available
+4. validate the downloaded file; if it is HTML / error text / non-paper content, delete it and retry once
+5. only then `/papers-cool` PDF fallback if Markdown is still missing
+
+### File validation rule
+
+After every full-text fetch, validate the saved artifact before treating it as ingested.
+
+- Markdown is invalid if it is really HTML, a rate-limit page, an access-denied page, or an obviously tiny stub instead of paper text.
+- PDF is invalid if it does not have a PDF header and instead looks like HTML or plain-text error output.
+- If validation fails, delete the bad file and retry using the next available source.
+- Preferred Markdown source order is Hugging Face first, arxiv2md second.
 
 ### 1. Find papers by keyword
 
@@ -75,7 +91,7 @@ Then the required order is:
 
 ### 3. Get PDF
 
-- **papers.cool direct link**: The site offers direct download URLs like `https://papers.cool/<uuid>`. Use **`scripts/download_paper.py`**: pass the direct link to download immediately. For **arXiv ID or paper page URL**, the script first tries **HTTP + BeautifulSoup** to get the PDF link from `a.title-pdf`; if that fails it uses Playwright to open the page and parse [PDF], then downloads; fallback is `https://arxiv.org/pdf/<arxiv_id>.pdf`. Dependencies: `requests`, `beautifulsoup4`; `playwright` only for fallback when HTTP parse fails.
+- **papers.cool direct link**: The site offers direct download URLs like `https://papers.cool/<uuid>`. Use **`scripts/download_paper.py`**: pass the direct link to download immediately. For **arXiv ID or paper page URL**, the script first tries **HTTP + BeautifulSoup** to get the PDF link from `a.title-pdf`; if that fails it uses Playwright to open the page and parse [PDF], then downloads; fallback is `https://arxiv.org/pdf/<arxiv_id>.pdf`. The script now validates that the saved file is a real PDF and automatically retries the next candidate source when it instead downloads HTML / plain-text error content. Dependencies: `requests`, `beautifulsoup4`; `playwright` only for fallback when HTTP parse fails.
 - **arXiv**: PDF is also at `https://arxiv.org/pdf/<arxiv_id>.pdf`. Use `web_fetch` to check; download with `curl`/`wget` or this skill’s `download_paper.py`.
 - **Venue papers**: Some link to arXiv; if there’s no arXiv ID, get the PDF URL from the page [PDF] link or the venue site, then use `web_fetch` or a download tool.
 
@@ -244,7 +260,7 @@ Output formats:
 
 ### 5. PDF download: `download_paper.py`
 
-**Direct papers.cool URL** → download with `requests`. **arXiv ID or paper URL** → script first gets PDF URL via **HTTP + BeautifulSoup** (`a.title-pdf`); if that fails, uses **Playwright** to open the page and parse [PDF], then download; fallback `https://arxiv.org/pdf/<arxiv_id>.pdf`. Depends: `requests`, `beautifulsoup4`; `playwright` only for fallback.
+**Direct papers.cool URL** → download with `requests`. **arXiv ID or paper URL** → script first gets PDF URL via **HTTP + BeautifulSoup** (`a.title-pdf`); if that fails, uses **Playwright** to open the page and parse [PDF], then download; fallback `https://arxiv.org/pdf/<arxiv_id>.pdf`. After each attempt, the script validates the saved file and rejects HTML / text-like non-PDF downloads before retrying the next source. Depends: `requests`, `beautifulsoup4`; `playwright` only for fallback.
 
 ```bash
 # Direct papers.cool link
@@ -265,6 +281,7 @@ python scripts/download_paper.py https://papers.cool/arxiv/2602.20400 -o ./downl
 - **List pages**: use `list_papers_dynamic.py` (HTTP + BeautifulSoup; same as search). For static copy, `web_fetch` may suffice.
 - **按会议查询**: use `venue_papers.py <Venue.Year> --show N`，可选 `--group <子分类>`（如 Poster、Oral）；会议列表 use `list_venues.py`.
 - **Inside the research pipeline**: `papers-cool` does discovery first, then `/hugging-face-paper-pages`, then PDF fallback, then Markdown-first PaperNexus graph refresh if the paper is new or important.
+- **Inside the research pipeline**: every downloaded full-text artifact must pass format validation before it is counted as ingested.
 
 ### Testing
 

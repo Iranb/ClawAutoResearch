@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -94,6 +95,49 @@ class TestDownloadPaperUrlDetection(unittest.TestCase):
         self.assertTrue(self.arxiv_pattern.match("2602.20400"))
         self.assertTrue(self.arxiv_pattern.match("2502.00032"))
         self.assertIsNotNone(self.arxiv_pattern.match("2602.20400v1"))
+
+
+class TestPaperSourceValidation(unittest.TestCase):
+    """validate_paper_source helpers"""
+
+    def setUp(self):
+        from validate_paper_source import validate_markdown_file, validate_pdf_file
+        self.validate_markdown_file = validate_markdown_file
+        self.validate_pdf_file = validate_pdf_file
+
+    def test_valid_pdf_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paper.pdf"
+            path.write_bytes(b"%PDF-1.7\n" + b"0" * 1024)
+            valid, reason = self.validate_pdf_file(path)
+            self.assertTrue(valid, reason)
+
+    def test_html_disguised_as_pdf_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paper.pdf"
+            path.write_text("<!DOCTYPE html><html><body>Access denied</body></html>", encoding="utf-8")
+            valid, reason = self.validate_pdf_file(path)
+            self.assertFalse(valid)
+            self.assertIn(reason, {"html_or_error_page", "too_small"})
+
+    def test_valid_markdown_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paper.md"
+            path.write_text(
+                "# Paper Title\n\n## Abstract\n\nThis paper studies a method for robust training.\n\n## Introduction\n\n"
+                + ("content " * 120),
+                encoding="utf-8",
+            )
+            valid, reason = self.validate_markdown_file(path)
+            self.assertTrue(valid, reason)
+
+    def test_html_disguised_as_markdown_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paper.md"
+            path.write_text("<!DOCTYPE html><html><body>Just a moment...</body></html>", encoding="utf-8")
+            valid, reason = self.validate_markdown_file(path)
+            self.assertFalse(valid)
+            self.assertIn(reason, {"html_or_error_page", "too_small"})
 
 
 # ---------- 集成测试（需 Playwright + 网络，默认跳过） ----------
@@ -271,6 +315,7 @@ def suite_unit_only():
     return unittest.TestSuite([
         loader.loadTestsFromTestCase(TestBuildPaperUrl),
         loader.loadTestsFromTestCase(TestDownloadPaperUrlDetection),
+        loader.loadTestsFromTestCase(TestPaperSourceValidation),
     ])
 
 

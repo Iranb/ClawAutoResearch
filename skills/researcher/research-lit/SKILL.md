@@ -1,6 +1,6 @@
 ---
 name: research-lit
-description: "Literature survey using papers.cool: keyword search, venue browsing, abstract fetch, and Kimi analysis. Builds a structured landscape report. Use when starting a new research direction."
+description: "Literature survey using papers.cool plus optional PASA retrieval, then markdown-first full-text ingestion and graph grounding. Use when starting a new research direction."
 argument-hint: "[research topic or question]"
 allowed-tools:
   - Read
@@ -13,11 +13,11 @@ allowed-tools:
 
 # Research Lit
 
-Multi-source literature survey via `/papers-cool`, building a structured research landscape with gaps and baselines.
+Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-search`, building a structured research landscape with gaps and baselines.
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
-All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `web_fetch` to find papers.
+Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/pasa-paper-search` as a second discovery source and merge the two result sets by canonical paper identity. Do not use `web_search` or `web_fetch` to find papers.
 
 ---
 
@@ -26,12 +26,18 @@ All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `
 **When invoked by `/research-pipeline` or `/research-queue`:**
 
 1. **Search multiple keywords** (3-5 queries covering different angles)
+   - always run `papers-cool`
+   - if possible, also run `pasa-paper-search` with equivalent English queries
+   - if PASA fails, continue with `papers-cool` only
 2. **For EACH paper found** (ALL, not just selected few):
    - **Step 1:** Once the paper identity is confirmed (arXiv ID / paper URL), check HuggingFace for markdown (`/hugging-face-paper-pages`) immediately
-   - **Step 2:** If HF has markdown → save to `paper_source_dir/md/`
-   - **Step 3:** If HF no markdown → download PDF to `paper_source_dir/pdf/`
-   - **Step 4:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
-3. **After EACH search query** (≥20 papers):
+   - **Step 2:** Validate the downloaded Markdown; if it is really HTML / error text / tiny stub, delete it and retry the HF fetch
+   - **Step 3:** If HF still has no valid markdown and the paper is on arXiv, try `/arxiv2md`
+   - **Step 4:** Validate the arxiv2md markdown; if it is HTML / error text / tiny stub, delete it and retry once
+   - **Step 5:** If both Markdown sources fail → download PDF to `paper_source_dir/pdf/`
+   - **Step 6:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
+   - **Step 7:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
+3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
 4. **After ALL searches complete**:
@@ -44,6 +50,7 @@ All paper discovery is delegated to `/papers-cool`. Do not use `web_search` or `
 - Only process 1-2 papers from search results
 - Delay graph build until all searches complete (build incrementally)
 - Write LITERATURE.md before graph build
+- Keep invalid HTML / error-page downloads under `paper_source_dir`
 
 ---
 
@@ -96,6 +103,31 @@ Rules:
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
 
+Recommended per-paper fields:
+
+```json
+{
+  "canonical_id": "arxiv:2502.00032",
+  "arxiv_id": "2502.00032",
+  "title": "Retrieval-Augmented Experiment Planning",
+  "source_kind": "markdown",
+  "source_provider": "arxiv2md",
+  "source_path": "{paper_source_dir}/md/2502.00032--retrieval-augmented-experiment-planning.md",
+  "retrieval_providers": ["papers-cool", "pasa-paper-search"]
+}
+```
+
+`source_provider` should describe the full-text origin:
+
+- `hf`
+- `arxiv2md`
+- `pdf`
+
+`retrieval_providers` should list discovery channels such as:
+
+- `papers-cool`
+- `pasa-paper-search`
+
 ## Process
 
 ### Step 1: Check Existing Memory
@@ -104,7 +136,7 @@ Read `{PMEM}/ideation-memory.md` if it exists — note already-explored directio
 
 ### Step 2: Keyword Search (core topic)
 
-Run 3–5 targeted searches covering different angles of the topic. Delegate each to `/papers-cool`:
+Run 3–5 targeted searches covering different angles of the topic. Always use `/papers-cool`, and optionally mirror the strongest queries through `/pasa-paper-search`:
 
 ```
 /papers-cool Search for papers on "[CORE METHOD KEYWORDS]", return top 20 results sorted by time, save to {PROJ}/researcher/lit_search_1.json
@@ -113,6 +145,29 @@ Run 3–5 targeted searches covering different angles of the topic. Delegate eac
 ```
 /papers-cool Search for papers on "[TASK + DATASET KEYWORDS]", return top 15 results sorted by reading stars (most cited/discussed first), save to {PROJ}/researcher/lit_search_2.json
 ```
+
+For the same theme, try PASA as an optional second source:
+
+```bash
+/pasa-paper-search --format json --limit 15 --save-json {PROJ}/researcher/lit_search_pasa_1.json "[ENGLISH CORE QUERY]"
+```
+
+If PASA returns an error, times out, or yields unusable output, record the failure in the round notes and continue with the `papers-cool` results only.
+
+### Merge Rule (mandatory)
+
+Before deciding which papers are genuinely new, merge `papers-cool` and PASA candidates by canonical identity:
+
+1. arXiv ID
+2. DOI
+3. normalized title
+
+Rules:
+
+- keep the union of both sources, not the intersection
+- record all successful discovery channels in `retrieval_providers`
+- PASA scores are ranking hints only; do not let PASA-only ranking erase strong `papers-cool` recency or venue signals
+- if both sources point to the same paper, keep one canonical entry and merge metadata
 
 **For EACH paper in search results:**
 
@@ -123,14 +178,23 @@ Run 3–5 targeted searches covering different angles of the topic. Delegate eac
 
 2. **If HuggingFace has markdown:**
    - Saved to `paper_source_dir/md/`
+   - Must pass format validation before being counted as ingested
    - Add to graph build queue
    - Continue to next paper
 
-3. **If HuggingFace NO markdown:**
+3. **If HuggingFace NO valid markdown and the paper has an arXiv ID:**
+   - Try `/arxiv2md`:
+     ```
+     /arxiv2md <arxiv_id>
+     ```
+   - The saved markdown must also pass format validation before being counted as ingested
+
+4. **If both Markdown sources fail:**
    - Download PDF via `/papers-cool`:
      ```
      /papers-cool Download PDF for arxiv:<arxiv_id> to {PROJ}/researcher/paper_source/pdf/
      ```
+   - The saved PDF must pass format validation; bad HTML / text responses must be deleted and retried
 
 Do not postpone the HuggingFace attempt until after later filtering if the current search result already exposes a stable arXiv ID or paper URL.
 
@@ -169,7 +233,7 @@ Write `{PROJ}/researcher/LITERATURE.md` with:
 
 ## HuggingFace Integration (PRIORITY 1)
 
-**Always check HuggingFace before downloading PDFs.**
+**Always check HuggingFace first, then arxiv2md, before downloading PDFs.**
 
 ### Why HuggingFace?
 
@@ -186,7 +250,7 @@ For each arXiv ID from search results:
 ```
 
 **Success:** Markdown saved, ready for graph build  
-**Failure:** Fall back to PDF download
+**Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md`, and only then fall back to PDF download
 
 ### Batch Processing
 
@@ -228,8 +292,10 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 
 ## Related Skills
 
-- `/papers-cool` — Paper search and download
+- `/papers-cool` — Guaranteed paper search baseline and PDF fallback
+- `/pasa-paper-search` — Optional PASA-ranked discovery source to merge with papers.cool
 - `/hugging-face-paper-pages` — Fetch markdown from HuggingFace
+- `/arxiv2md` — Fallback markdown source for arXiv papers
 - `/graph-build` — Build PaperNexus corpus
 - `/frontier-mapping` — Extract research frontiers from graph
 
@@ -240,6 +306,7 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 | File | Description |
 |------|-------------|
 | `lit_search_*.json` | Raw search results |
+| `lit_search_pasa_*.json` | Optional PASA search results |
 | `paper_source/md/*.md` | HuggingFace markdown papers |
 | `paper_source/pdf/*.pdf` | Downloaded PDFs |
 | `PAPER_SOURCE_INDEX.json` | Canonical paper index |

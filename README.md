@@ -51,7 +51,7 @@ Current flagship capabilities:
 | Skills | Step-by-step operating contracts | 各角色技能，负责把任务拆成可执行流程 |
 | Plugin | Runtime hooks and structured tools | `index.ts`、`research_workflow`、`research_memory` |
 | State | Durable project truth | `PROJECT_MANIFEST.json`、`TRACK_REGISTRY.json`、`EXPERIMENT_LEDGER.json` 等 |
-| External knowledge | Literature retrieval and graph grounding | `papers-cool`、`hugging-face-paper-pages`、PaperNexus |
+| External knowledge | Literature retrieval and graph grounding | `papers-cool`、`pasa-paper-search`、`hugging-face-paper-pages`、`arxiv2md`、PaperNexus |
 
 ## Quick Start | 快速开始
 
@@ -122,8 +122,10 @@ Important operational notes:
 
 - `graph_build` / `frontier_mapping` / `idea` now include a real graph-presence check
 - `graph_build` / `frontier_mapping` / `idea` 现在都带真实的图谱论文存在性检查
-- once a paper identity is confirmed, the preferred path is Hugging Face Markdown first and PDF only as fallback
-- 一旦确认到具体论文身份，默认先拉 Hugging Face Markdown，PDF 只做 fallback
+- `papers-cool` is the guaranteed search baseline, and `pasa-paper-search` can be merged in as an optional second retrieval source
+- `papers-cool` 是稳定保底的检索入口，`pasa-paper-search` 则作为可选的第二检索源并入结果
+- once a paper identity is confirmed, the preferred path is Hugging Face Markdown first, then arxiv2md, and PDF only as the last fallback
+- 一旦确认到具体论文身份，默认先拉 Hugging Face Markdown，再尝试 arxiv2md，PDF 只作为最后 fallback
 - new experiment evidence can make innovation reflection stale and block serious ideation until refreshed
 - 新实验结果会让创新反思过期，并在刷新前阻止严肃 ideation
 - writer can be constrained by `writing_contract`
@@ -144,9 +146,9 @@ Important operational notes:
   每轮前注入上下文，并拦截越界写文件、非法 spawn、非法消息和破坏阶段顺序的动作。
 
 - **PaperNexus-backed literature loop**
-  `papers-cool search -> confirmed identity -> hugging-face-paper-pages Markdown -> PDF fallback -> graph refresh -> PaperNexus reasoning`
+  `papers-cool search (+ optional pasa-paper-search merge) -> confirmed identity -> hugging-face-paper-pages Markdown -> arxiv2md Markdown fallback -> PDF fallback -> graph refresh -> PaperNexus reasoning`
 - **PaperNexus 驱动的文献回路**
-  `papers-cool 检索 -> 确认论文身份 -> hugging-face-paper-pages Markdown -> PDF fallback -> 刷图 -> PaperNexus 推理`
+  `papers-cool 检索（可选合并 pasa-paper-search） -> 确认论文身份 -> hugging-face-paper-pages Markdown -> arxiv2md Markdown fallback -> PDF fallback -> 刷图 -> PaperNexus 推理`
 
 - **Structured experiment memory**
   `researcher/EXPERIMENT_LEDGER.json` is the durable experiment source of truth.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PASA Paper Search"
+  short_description: "Search arXiv papers with PASA backend"
+  default_prompt: "Use $pasa-paper-search to find PASA-ranked papers relevant to my research topic."

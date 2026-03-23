@@ -441,6 +441,53 @@ test("graph presence check reports missing canonical papers before novelty-sensi
   assert.equal(manifest.paper_ingestion.graph_presence_missing_papers.length, 1);
 });
 
+test("graph presence check preserves source provider and retrieval providers from PAPER_SOURCE_INDEX", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00003",
+      arxiv_id: "2501.00003",
+      title: "Gamma Paper",
+      source_kind: "markdown",
+      source_provider: "arxiv2md",
+      retrieval_providers: ["papers-cool", "pasa-paper-search"],
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00003--gamma-paper.md"
+      ),
+    },
+  ]);
+  await seedGraphCorpus(projectRoot, []);
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "missing_papers");
+  assert.equal(result.missingPapers.length, 1);
+  assert.equal(result.missingPapers[0].sourceKind, "markdown");
+  assert.equal(result.missingPapers[0].sourceProvider, "arxiv2md");
+  assert.deepEqual(result.missingPapers[0].retrievalProviders, [
+    "papers-cool",
+    "pasa-paper-search",
+  ]);
+
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(report.missing_papers[0].source_provider, "arxiv2md");
+  assert.deepEqual(report.missing_papers[0].retrieval_providers, [
+    "papers-cool",
+    "pasa-paper-search",
+  ]);
+});
+
 test("auto iterator advances graph_build once graph presence is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

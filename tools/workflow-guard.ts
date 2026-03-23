@@ -561,8 +561,8 @@ const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
       "{PROJECTS_ROOT}/PROJECTS_STATE.json",
     ],
     backgroundTasks: [
-      "Continue literature survey and venue sweeps with /research-lit or /papers-cool.",
-      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then use papers-cool PDF fallback only if Markdown is unavailable.",
+      "Continue literature survey and venue sweeps with /research-lit or /papers-cool; if PASA is responsive, use /pasa-paper-search as a second retrieval source and merge by canonical identity.",
+      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md for arXiv papers, and use papers-cool PDF fallback only if both Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
       "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
       "Keep reasoning packets and manifest next_action/resume_action current.",
     ],
@@ -3511,7 +3511,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search -> once paper identity is confirmed, call /hugging-face-paper-pages -> only if Markdown is unavailable, call /papers-cool PDF fallback -> /graph-build or /papernexus refresh."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md -> only if both Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> /graph-build or /papernexus refresh."
   );
   lines.push(
     "Idle research rule: if idle_research is enabled and due, prefer /idle-research on that topic over ad hoc literature drift. Record each round through research_workflow.record_idle_research_run."

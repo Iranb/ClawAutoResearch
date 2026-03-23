@@ -41,8 +41,10 @@ allowed-tools:
 
 这一阶段必须同时完成全文语料积累：
 - 先用 `/papers-cool` 做粗检索和 venue sweep
+- 如果稳定可用，可额外用 `/pasa-paper-search` 做第二检索源，并按 canonical identity 合并结果
 - 对关键论文优先用 `/hugging-face-paper-pages` 拉取全文 markdown
-- 若拿不到 markdown，则回退到 `/papers-cool` 下载 PDF
+- 若 Hugging Face 拿不到有效 markdown，则回退到 `/arxiv2md`
+- 若两路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
 - 把 markdown / PDF 保存到 PaperNexus 源目录，再进入 `/graph-build`
 - 如果当前 graph 里还没有这些关键论文，必须先刷新 graph，再进入创新点分析
 

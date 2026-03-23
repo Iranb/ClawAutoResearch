@@ -24,8 +24,14 @@
 - `/papers-cool`  
   粗粒度检索论文入口。
 
+- `/pasa-paper-search`  
+  可选的第二检索源；如果成功，和 `papers-cool` 结果按 canonical identity 合并。
+
 - `/hugging-face-paper-pages`  
   优先抓取论文 Markdown。
+
+- `/arxiv2md`  
+  当 Hugging Face 没有有效 Markdown 时，抓取 arxiv2md 的 Markdown。
 
 - `/graph-build`  
   构建或刷新项目图谱。

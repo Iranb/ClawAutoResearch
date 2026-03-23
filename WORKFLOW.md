@@ -174,8 +174,10 @@ The graph-backed brainstorming pack should preserve:
 Before graph build, Researcher must also maintain a project-local literature corpus:
 
 - use `/papers-cool` for rough keyword search and venue sweep
+- when stable and available, also use `/pasa-paper-search` as a second retrieval source and merge by canonical identity; if PASA fails, continue with `papers-cool`
 - once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into the PaperNexus source tree
-- if markdown is unavailable, fall back to `/papers-cool` PDF download
+- if Hugging Face does not provide valid markdown for an arXiv paper, try `/arxiv2md`
+- if both markdown sources are unavailable, fall back to `/papers-cool` PDF download
 - if the current graph does not already contain a newly found key paper, Researcher must ingest it first and refresh graph state before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
 
@@ -439,8 +441,8 @@ Actions:
 ```
 Procedure:
   1. Run /research-lit first if the project has not yet ingested key papers into a PaperNexus-readable source directory
-  2. Use `/papers-cool` for broad discovery and venue sweep
-  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the PaperNexus source tree; only if markdown is unavailable, save PDF via `/papers-cool`
+  2. Use `/papers-cool` for broad discovery and venue sweep; if stable, also query `/pasa-paper-search` and merge by canonical identity
+  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the PaperNexus source tree; if that fails and the paper is on arXiv, try `/arxiv2md`; only if both markdown sources are unavailable, save PDF via `/papers-cool`
   4. Apply the graph refresh trigger rule:
      - refresh now if 1 new paper changes novelty / closest prior work
      - refresh now if 3+ genuinely new canonical papers accumulated
@@ -527,8 +529,8 @@ Researcher should never become idle while the project is active.
 When Orchestrator, Coder, Analyzer, Reviewer, or Writer are executing their own stage work, Researcher should keep doing one or more of:
 
 - if `PROJECT_MANIFEST.json.idle_research.enabled = true` and the topic is due, run `/idle-research` for that exact topic before generic literature drift
-- run `/papers-cool` keyword and venue sweeps for newly relevant work
-- ingest newly found key papers via `/hugging-face-paper-pages` or `/papers-cool` PDF fallback into the PaperNexus source tree
+- run `/papers-cool` keyword and venue sweeps for newly relevant work, and optionally `/pasa-paper-search` as a second retrieval source when it is responsive
+- ingest newly found key papers via `/hugging-face-paper-pages`, then `/arxiv2md`, and only then `/papers-cool` PDF fallback into the PaperNexus source tree
 - prepare a graph refresh if the literature frontier changed materially
 - analyze innovation deltas with the current track portfolio and discuss novelty / composition opportunities with the relevant sub-agent
 - keep the `paper_source_dir` canonical and deduplicated; do not let duplicate downloads masquerade as new literature
@@ -551,9 +553,11 @@ When `idle_research.enabled = true`, Researcher must treat it as a bounded queue
 3. If the round is due, prefer `/idle-research` on `idle_research.topic` over ad hoc literature browsing.
 4. Respect `max_papers_per_cycle`, `cooldown_minutes`, `query_seeds`, and `preferred_venues`.
 5. Use the required acquisition order:
-   - `/papers-cool` for search and venue sweep
+   - `/papers-cool` for guaranteed search and venue sweep
+   - `/pasa-paper-search` as optional supplementary search; merge results when it succeeds
    - `/hugging-face-paper-pages` for full-paper Markdown
-   - `/papers-cool` PDF fallback only when Markdown is unavailable
+   - `/arxiv2md` as the second markdown source for arXiv papers
+   - `/papers-cool` PDF fallback only when both markdown sources are unavailable
 6. Save the round digest under `{PROJ}/researcher/idle-research/ROUND-YYYY-MM-DD_HHMM.md`.
 7. Record the runtime outcome through `research_workflow.record_idle_research_run`, including `last_run_at`, `last_digest_path`, `status`, canonical-paper counts, and any graph-refresh follow-up.
 8. If the round discovers new core papers and `refresh_graph_on_new_core_papers = true`, mark graph refresh as required before the next novelty, ideation, or revision decision.

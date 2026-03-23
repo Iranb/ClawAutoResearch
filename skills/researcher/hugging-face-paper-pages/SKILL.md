@@ -2,6 +2,8 @@
 name: hugging-face-paper-pages
 description: "Fetch Hugging Face paper pages as markdown plus structured paper metadata. Use to ingest full-paper markdown into the PaperNexus source tree before graph build."
 argument-hint: "[arXiv ID / Hugging Face paper URL / arXiv URL]"
+metadata:
+  {"openclaw": {"emoji": "🤗", "requires": {"bins": ["python3"]}}}
 allowed-tools:
   - Bash(*)
   - Read
@@ -40,12 +42,45 @@ If a same-paper PDF already exists under `<paper_source_dir>/pdf/`, keep it only
 
 ## Commands
 
-Parse the paper ID, then fetch:
+Preferred command in this repo:
+
+```bash
+python scripts/fetch_hf_paper.py <paper-id-or-url> \
+  --output-dir "<paper_source_dir>/md" \
+  --metadata-dir "{PROJ}/researcher/lit_papers"
+```
+
+This script will:
+
+- fetch `https://huggingface.co/papers/{PAPER_ID}.md`
+- validate that the saved file is real paper markdown rather than HTML / error-page text
+- delete invalid files automatically
+- retry the markdown fetch before giving up
+- save metadata JSON when requested
+
+If you need to inspect manually, the underlying endpoints are:
 
 ```bash
 curl -s "https://huggingface.co/papers/{PAPER_ID}.md"
 curl -s "https://huggingface.co/api/papers/{PAPER_ID}"
 ```
+
+## Validation Rule (mandatory)
+
+Do not keep a downloaded `.md` file just because the HTTP request succeeded.
+
+Treat the fetch as failed if the saved file looks like:
+
+- HTML
+- access-denied / rate-limit / Cloudflare text
+- an error page masquerading as markdown
+- an obviously too-short stub instead of full-paper markdown
+
+If validation fails:
+
+1. delete the bad file
+2. retry the Hugging Face markdown fetch
+3. if it still fails, report Markdown unavailable and let the caller try `/arxiv2md` before `/papers-cool` PDF download
 
 If the markdown endpoint returns `404`, report that Hugging Face paper pages do not currently provide markdown for this paper. Do not fabricate content.
 
@@ -53,5 +88,5 @@ If the markdown endpoint returns `404`, report that Hugging Face paper pages do 
 
 - Prefer the `.md` endpoint for PaperNexus ingestion.
 - Prefer the API endpoint when you need structured metadata such as GitHub repo, project page, linked models, or datasets.
-- If markdown is unavailable, let the caller fall back to `/papers-cool` PDF download.
+- If markdown is unavailable, let the caller try `/arxiv2md` first, then `/papers-cool` PDF download.
 - Inside this repo, Markdown should land in the `md/` subdirectory so `graph-build` can stage a Markdown-first canonical corpus.

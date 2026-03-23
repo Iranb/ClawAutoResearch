@@ -14,6 +14,8 @@ import warnings
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from validate_paper_source import validate_pdf_file
+
 warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*", category=UserWarning)
 
 try:
@@ -144,13 +146,13 @@ def get_pdf_url_from_paper_page(arxiv_id: str, headless: bool = True) -> str | N
             browser.close()
 
 
-def download_file(url: str, output_path: Path, session: "requests.Session | None" = None) -> bool:
+def download_file(url: str, output_path: Path, session: "requests.Session | None" = None) -> Path | None:
     """
     请求 url，按 Content-Disposition 或 URL 决定文件名，将内容写入 output_path。
     """
     if not requests:
         print("请安装 requests: pip install requests", file=sys.stderr)
-        return False
+        return None
     sess = session or requests.Session()
     sess.headers.setdefault("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
     try:
@@ -172,10 +174,63 @@ def download_file(url: str, output_path: Path, session: "requests.Session | None
             for chunk in r.iter_content(chunk_size=65536):
                 if chunk:
                     f.write(chunk)
-        return True
+        return output_path
     except Exception as e:
         print(f"下载失败: {e}", file=sys.stderr)
-        return False
+        return None
+
+
+def dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+def remove_if_exists(path: Path) -> None:
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def build_pdf_candidates(raw: str, target_url: str, headless: bool) -> tuple[list[str], str]:
+    candidates: list[str] = []
+    default_name = "paper.pdf"
+
+    if is_direct_download_url(target_url):
+        candidates.append(target_url)
+        default_name = Path(urlparse(target_url).path).name or "paper.pdf"
+        if not Path(default_name).suffix:
+            default_name += ".pdf"
+        return dedupe_preserve_order(candidates), default_name
+
+    arxiv_id = None
+    if "/arxiv/" in target_url:
+        arxiv_id = target_url.split("/arxiv/")[-1].split("?")[0].strip("/")
+    elif ARXIV_ID_PATTERN.match(raw):
+        arxiv_id = raw
+
+    if not arxiv_id:
+        return [], default_name
+
+    default_name = f"{arxiv_id.replace('.', '_')}.pdf"
+    http_candidate = get_pdf_url_from_paper_page_http(arxiv_id)
+    if http_candidate:
+        candidates.append(http_candidate)
+
+    browser_candidate = get_pdf_url_from_paper_page(arxiv_id, headless=headless)
+    if browser_candidate:
+        candidates.append(browser_candidate)
+
+    candidates.append(f"https://arxiv.org/pdf/{arxiv_id}.pdf")
+    return dedupe_preserve_order(candidates), default_name
 
 
 def run(
@@ -194,45 +249,38 @@ def run(
     else:
         target_url = f"{BASE}/arxiv/{raw}"
 
-    pdf_url: str | None = None
-    default_name = "paper.pdf"
-
-    if is_direct_download_url(target_url):
-        pdf_url = target_url
-        default_name = Path(urlparse(target_url).path).name or "paper.pdf"
-        if not Path(default_name).suffix:
-            default_name += ".pdf"
-    else:
-        # 从论文页解析 arxiv_id 并取 PDF 链接（papers.cool 直链或 arxiv.org）
-        arxiv_id = None
-        if "/arxiv/" in target_url:
-            arxiv_id = target_url.split("/arxiv/")[-1].split("?")[0].strip("/")
-        elif ARXIV_ID_PATTERN.match(raw):
-            arxiv_id = raw
-        if arxiv_id:
-            pdf_url = get_pdf_url_from_paper_page_http(arxiv_id)
-            if not pdf_url:
-                pdf_url = get_pdf_url_from_paper_page(arxiv_id, headless=headless)
-            if pdf_url:
-                default_name = f"{arxiv_id.replace('.', '_')}.pdf"
-            # 未解析到直链时回退到 arXiv 官方 PDF
-            if not pdf_url and arxiv_id:
-                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-                default_name = f"{arxiv_id.replace('.', '_')}.pdf"
-        if not pdf_url:
-            print("未解析到 PDF 链接且无 arXiv ID。", file=sys.stderr)
-            return 1
+    candidates, default_name = build_pdf_candidates(raw, target_url, headless=headless)
+    if not candidates:
+        print("未解析到 PDF 链接且无 arXiv ID。", file=sys.stderr)
+        return 1
 
     out = Path(output_path) if output_path else Path(default_name)
     if out.is_dir():
         out = out / default_name
     if not out.suffix:
         out = out.with_suffix(".pdf")
+    errors: list[str] = []
 
-    print(f"下载: {pdf_url}")
-    print(f"保存: {out}")
-    ok = download_file(pdf_url, out)
-    return 0 if ok else 1
+    for index, pdf_url in enumerate(candidates, start=1):
+        print(f"尝试 {index}/{len(candidates)}: {pdf_url}")
+        print(f"保存: {out}")
+        downloaded_path = download_file(pdf_url, out)
+        if not downloaded_path:
+            errors.append(f"{pdf_url} -> download_failed")
+            continue
+
+        valid, reason = validate_pdf_file(downloaded_path)
+        if valid:
+            return 0
+
+        remove_if_exists(downloaded_path)
+        print(f"文件校验失败，准备重试其他来源: {reason}", file=sys.stderr)
+        errors.append(f"{pdf_url} -> invalid_pdf:{reason}")
+
+    print("所有候选 PDF 来源都失败。", file=sys.stderr)
+    for error in errors:
+        print(f"- {error}", file=sys.stderr)
+    return 1
 
 
 def main():

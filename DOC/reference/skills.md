@@ -55,8 +55,14 @@
 - `papers-cool`  
   论文检索、下载、候选集收集。
 
+- `pasa-paper-search`  
+  可选的第二论文检索源；如果可用，就和 `papers-cool` 按 canonical identity 合并结果。
+
 - `hugging-face-paper-pages`  
   优先获取论文 Markdown 页面。
+
+- `arxiv2md`  
+  当 Hugging Face 没有有效 Markdown 时，用 arxiv2md 作为第二 Markdown 来源。
 
 - `papernexus`  
   调用或接入 PaperNexus 功能做图谱构建与操作。
@@ -158,4 +164,3 @@ Skill 负责告诉 Agent “应该怎么做”，插件负责确保它“不能�
 
 - Skill 层的操作步骤
 - Plugin 层的硬约束和状态回写
-
