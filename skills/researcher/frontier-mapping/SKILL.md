@@ -9,6 +9,7 @@ allowed-tools:
   - Edit
   - Grep
   - Glob
+  - lobster
 ---
 
 # Frontier Mapping
@@ -24,6 +25,7 @@ Use PaperNexus graph traversal to produce a compact, reusable frontier report fo
 - `{PROJ}/PROJECT_MANIFEST.json` if present
 - project topic / user direction
 - optional `{PROJ}/researcher/LITERATURE.md` if it already exists
+- optional `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` if it already exists
 
 ## Query Passes
 
@@ -116,9 +118,23 @@ Prefer using current graph semantics when available, for example:
 - `SUPPORTED_BY`
 - `FAILS_UNDER`
 
+If `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` exists, treat it as mandatory upstream context:
+
+- refine it
+- prune weak or duplicate hooks
+- convert the best hooks into graph-backed frontier items
+
+Do not ignore earlier research-stage brainstorming and restart from a blank slate.
+
 After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
 
 - `frontier_report`
 - `current_stage: "frontier_mapping"`
 - `current_micro_stage: "frontiers_packaged"`
 - `updated_at`
+
+## Stage Closeout
+
+When `FRONTIER_REPORT.md` and the required `graph/subgraphs/` snapshots are complete and the project is ready to move into IDEA, Researcher should trigger the Lobster handoff workflow.
+
+Do not hand off if the report still requests graph refresh, key frontier anchors are unresolved, or the current plan is to keep iterating inside frontier mapping.

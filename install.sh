@@ -1,10 +1,10 @@
 #!/bin/bash
 # OpenClaw Research Plugin Installer
 # Usage:
-#   bash install.sh [--dry-run] [--force-role-files]
+#   bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create]
 #
 # 功能：
-#   1. 添加或检查研究工作流所需的 agents
+#   1. 可选地添加或检查研究工作流所需的 agents
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
 #   3. 创建/更新插件链接到 ~/.openclaw/plugins/openclaw-research
 #   4. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
@@ -17,14 +17,16 @@ PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 OC_DIR="${OPENCLAW_HOME:-$HOME/.openclaw}"
 DRY_RUN=false
 FORCE_ROLE_FILES=false
+SKIP_AGENT_CREATE=false
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--dry-run] [--force-role-files]
+Usage: bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create]
 
 Options:
   --dry-run           只预览，不实际写入
   --force-role-files  覆盖 workspace root 中已存在的 researcher/reviewer/cross-reviewer 角色配置文件
+  --skip-agent-create 跳过 `openclaw agents add` / `set-identity`，只同步插件、skills、模板和角色配置
   -h, --help          显示帮助
 EOF
 }
@@ -36,6 +38,9 @@ for arg in "$@"; do
       ;;
     --force-role-files)
       FORCE_ROLE_FILES=true
+      ;;
+    --skip-agent-create)
+      SKIP_AGENT_CREATE=true
       ;;
     -h|--help)
       usage
@@ -208,12 +213,17 @@ echo "  Plugin:  $PLUGIN_DIR"
 echo "  Target:  $OC_DIR_EXPANDED"
 echo "  Mode:    $([ "$DRY_RUN" = true ] && echo 'DRY RUN (no changes)' || echo 'LIVE')"
 echo "  Force:   $([ "$FORCE_ROLE_FILES" = true ] && echo 'overwrite role root files' || echo 'preserve existing role root files')"
+echo "  Agents:  $([ "$SKIP_AGENT_CREATE" = true ] && echo 'skip openclaw agents add' || echo 'create/check via openclaw')"
 echo ""
 
 echo "[ Pre-flight ]"
 
 if ! command -v openclaw >/dev/null 2>&1; then
-  die "未找到 openclaw 命令，请先安装 OpenClaw CLI 并确保在 PATH 中。"
+  if $SKIP_AGENT_CREATE; then
+    echo "  WARN: 未找到 openclaw 命令，但已启用 --skip-agent-create；将跳过 Agent 创建，仅继续同步插件与工作区文件。"
+  else
+    die "未找到 openclaw 命令，请先安装 OpenClaw CLI 并确保在 PATH 中，或使用 --skip-agent-create 跳过 Agent 创建。"
+  fi
 fi
 
 if [[ ! -d "$PLUGIN_DIR" ]]; then
@@ -228,7 +238,7 @@ if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
   echo "        脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
 fi
 
-echo "  -> openclaw 可用，配置目录就绪"
+echo "  -> 配置目录就绪"
 echo ""
 
 echo "[1/6] 添加 Agents（openclaw agents add）..."
@@ -243,30 +253,35 @@ AGENTS=(
   "cross-reviewer|Cross-Reviewer|workspace-cross-reviewer"
 )
 
-for entry in "${AGENTS[@]}"; do
-  IFS='|' read -r id name workspace_rel <<< "$entry"
-  workspace_abs="$OC_DIR_EXPANDED/$workspace_rel"
+if $SKIP_AGENT_CREATE; then
+  echo "  -> SKIP 全部 Agent 创建（已启用 --skip-agent-create）"
+else
+  for entry in "${AGENTS[@]}"; do
+    IFS='|' read -r id name workspace_rel <<< "$entry"
+    workspace_abs="$OC_DIR_EXPANDED/$workspace_rel"
 
-  if [[ ! -d "$PLUGIN_DIR/agents/$id" ]]; then
-    echo "  -> SKIP $id (插件内缺少 agents/$id)"
-    continue
-  fi
-
-  ensure_dir "$workspace_abs"
-
-  if run openclaw agents add "$id" --workspace "$workspace_abs" --model "modelstudio/glm-5" --non-interactive 2>/dev/null; then
-    echo "  -> ADD $id"
-    if ! $DRY_RUN; then
-      run openclaw agents set-identity --agent "$id" --name "$name" --workspace "$workspace_abs" 2>/dev/null || true
+    if [[ ! -d "$PLUGIN_DIR/agents/$id" ]]; then
+      echo "  -> SKIP $id (插件内缺少 agents/$id)"
+      continue
     fi
-  else
-    if ! $DRY_RUN && agent_exists "$id"; then
+
+    ensure_dir "$workspace_abs"
+
+    if agent_exists "$id"; then
       echo "  -> KEEP $id (已存在)"
+      continue
+    fi
+
+    if run openclaw agents add "$id" --workspace "$workspace_abs" --model "modelstudio/glm-5" --non-interactive 2>/dev/null; then
+      echo "  -> ADD $id"
+      if ! $DRY_RUN; then
+        run openclaw agents set-identity --agent "$id" --name "$name" --workspace "$workspace_abs" 2>/dev/null || true
+      fi
     else
       echo "  WARN: $id 添加失败，请检查 openclaw 与当前配置后重试"
     fi
-  fi
-done
+  done
+fi
 
 echo ""
 echo "[2/6] 检查重复技能..."
@@ -433,7 +448,11 @@ echo "╔═══════════════════════�
 echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete            ' || echo 'Complete                    ')║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "  1. Agents: 已添加或检查研究工作流所需 agents"
+if $SKIP_AGENT_CREATE; then
+  echo "  1. Agents: 已跳过 openclaw Agent 创建；如需创建可移除 --skip-agent-create 后重跑"
+else
+  echo "  1. Agents: 已添加或检查研究工作流所需 agents"
+fi
 echo "  2. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
 echo "  3. Plugin: 已创建或检查 $PLUGIN_LINK"
 echo "  4. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
@@ -447,6 +466,9 @@ echo "  推荐配置：$PLUGIN_DIR/openclaw.RECOMMENDED.json"
 echo ""
 if $DRY_RUN; then
   echo "  使用不带 --dry-run 的方式运行以应用更改。"
+fi
+if [[ "$SKIP_AGENT_CREATE" == "true" ]]; then
+  echo "  如需让脚本通过 OpenClaw 自动创建 agents，请去掉 --skip-agent-create 后重跑。"
 fi
 if [[ "$FORCE_ROLE_FILES" != "true" ]]; then
   echo "  若要用插件中的 researcher/reviewer/cross-reviewer 根配置覆盖现有 workspace root 文件，请追加 --force-role-files。"

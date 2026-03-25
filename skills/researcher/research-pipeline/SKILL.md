@@ -27,16 +27,39 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 1. **Parse arguments:**
    - Extract the research topic/direction from `$ARGUMENTS` (everything before `--`)
    - Parse overrides: `AUTO_PROCEED: true/false`, `MULTI: true/false`, `TOP_K_IDEAS: N`
+   - Parse internal marker: `__BACKGROUND_CONTINUATION__: true/false`
    - If no topic provided → **STOP and ask user**: "Please provide a research direction, e.g., `/research-pipeline \"based vision transformer small object detection\"`"
 
 2. **Determine mode:**
    - If `MULTI=true` → delegate to `/research-queue "[topic]"`
    - If `MULTI=false` (default) → proceed with single-project pipeline below
 
-3. **Initialize project:**
-   - Read `{WS}/CONFIG.md` to get `{PROJECTS_ROOT}`
+3. **Slash fast path (mandatory unless already in background continuation):**
+   - If `__BACKGROUND_CONTINUATION__ != true`, do **not** run the full workflow inline
+   - First call `research_workflow`:
+     - `action = "start_background_run"`
+     - `backgroundRun.kind = "research_pipeline"`
+     - `backgroundRun.topic = [topic]`
+     - `backgroundRun.title = [topic]`
+     - `backgroundRun.summary = "Starting research pipeline for [topic]"`
+     - `backgroundRun.commandText = /research-pipeline "[topic]" ... -- __BACKGROUND_CONTINUATION__: true`
+   - After the tool returns:
+     - Reply briefly that the pipeline has started in the background
+     - Include `project_id` / `project_root` if the tool returned them
+     - **STOP**
+   - The background continuation will do the real work and post progress updates to the channel or mailbox
+
+4. **Resolve project context in background continuation:**
+   - Call `research_workflow` with `action = "bind_channel_project"`
+   - Pass `channelBinding.projectId = [derived project_id]`
+   - Pass `channelBinding.topic = [topic]`
+   - If the current channel is not yet bound, the plugin should read configured `projectsRoot`, create `{PROJ}` automatically when missing, and then bind the current channel to it
+   - Treat the returned `projectRoot` as authoritative `{PROJ}`
+
+5. **Initialize project:**
+   - Read `{WS}/CONFIG.md` only as a reference; prefer the `projectRoot` returned by `research_workflow.bind_channel_project`
    - Generate `project_id` from topic: lowercase, replace spaces with `-`, truncate to 40 chars
-   - Create `{PROJ} = {PROJECTS_ROOT}/{project_id}` directory
+   - Ensure `{PROJ}` exists
    - Copy templates to `{PROJ}/`:
      - `templates/PROJECT_MANIFEST.json` → update with `project_id`, `title`, `created_at`, `current_stage: "setup"`
      - `templates/TRACK_REGISTRY.json`
@@ -46,7 +69,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - Copy `{WS}/WORKFLOW.md` → `{PROJ}/WORKFLOW.md`
    - Create `{PROJ}/researcher/workflow_snapshots/` and save timestamped copy
 
-4. **Update state:**
+6. **Update state:**
    - Set `{PROJ}/PROJECT_MANIFEST.json`:
      - `current_stage: "graph_build"`
      - `current_micro_stage: "project_init"`
@@ -54,7 +77,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
      - `graph_source_dir: "~/.papernexus/papers/{project_id}"`
      - `memory_scope.project_isolated: true`
 
-5. **Announce and begin Stage 0.5:**
+7. **Announce and begin Stage 0.5:**
    - Post: "🚀 Starting research pipeline for: [topic]"
    - Post: "Project ID: {project_id}"
    - Post: "Project path: {PROJ}"
@@ -119,6 +142,7 @@ Before graph build, the Researcher must first gather papers and full text into a
 
 ```
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + paper_source_dir
+/research-lit "$ARGUMENTS"          → {PROJ}/researcher/RESEARCH_BRAINSTORM.md
 /graph-build "$ARGUMENTS"           → {PROJ}/graph/PAPERNEXUS_STATUS.json
 /frontier-mapping "$ARGUMENTS"      → {PROJ}/researcher/FRONTIER_REPORT.md
 /papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
@@ -126,8 +150,10 @@ Before graph build, the Researcher must first gather papers and full text into a
 
 Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
+- `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
 - after `/papers-cool` finds key papers, Researcher must verify graph presence; if the graph lacks a key paper, refresh graph state before innovation analysis
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
+- Do **not** enter idea selection without `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 - Do **not** enter idea selection if `{PROJ}/graph/subgraphs/` is empty
 - Do **not** lock or advance a serious track without a reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/`
 - If local literature changes materially during Stage 1, refresh graph state:

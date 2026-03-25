@@ -44,6 +44,7 @@
     "tools/",
     "skills/",
     "agents/",
+    "lobster/",
     "templates/",
     "install.sh",
     "openclaw.plugin.json",
@@ -53,18 +54,15 @@
     "WORKSPACE.md",
     "CONFIG.md"
   ],
-  "peerDependencies": {
-    "@openclaw/core": ">=0.1.0"
-  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
-    "@openclaw/core": ">=0.1.0"
+    "openclaw": ">=2026.3.24"
   },
   "peerDependenciesMeta": {
-    "@openclaw/core": {
+    "openclaw": {
       "optional": true
     }
   },

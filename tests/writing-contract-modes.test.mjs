@@ -41,6 +41,11 @@ test("conference mode preset populates bundled template, budgets, and KG storyli
   assert.equal(result.state.templateName, "conference-9p-body-2p-refs");
   assert.equal(result.state.kgStorylinePacketPath, "academic_writer/KG_STORYLINE_PACKET.md");
   assert.equal(result.templateExists, true);
+  assert.equal(result.state.projectTemplatePath?.startsWith("academic_writer/template_bundle/"), true);
+  assert.equal(result.templateCopyStatus, "ready");
+  assert.equal(result.state.mainTextProofStyle, "lemma_result_only");
+  assert.equal(result.state.proofAppendixRequired, true);
+  assert.equal(result.state.proofAppendixPath, "academic_writer/paper/sections/appendix_theory.tex");
   assert.ok(result.state.sectionOrder.includes("results"));
   assert.ok(result.state.sectionOrder.includes("discussion"));
   assert.ok(result.state.sectionOrder.includes("limitations"));
@@ -66,4 +71,42 @@ test("journal mode preset exposes 12-plus-2 writing envelope through summary", a
   assert.equal(summary.state.bodyWordTargetMin, 7000);
   assert.equal(summary.state.bodyWordTargetMax, 9500);
   assert.equal(summary.templateReady, true);
+  assert.equal(summary.templateCopyStatus, "ready");
+  assert.ok(summary.projectTemplateResolvedPath);
+  assert.ok(summary.templateResolvedPath);
+});
+
+test("configured default conference template is copied into the project before writing", async (t) => {
+  const projectRoot = await makeTempProject();
+  const externalTemplateRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-template-src-")
+  );
+  const externalTemplatePath = path.join(externalTemplateRoot, "main.tex");
+  const stylePath = path.join(externalTemplateRoot, "custom.cls");
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(externalTemplateRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(externalTemplatePath, "\\documentclass{custom}\n", "utf8");
+  await fs.writeFile(stylePath, "% custom class\n", "utf8");
+
+  const result = await setWritingContractState({
+    projectRoot,
+    policy: {
+      defaultConferenceTemplatePath: externalTemplatePath,
+    },
+    writingContract: {
+      paper_mode: "conference",
+    },
+  });
+
+  assert.equal(result.templateCopyStatus, "ready");
+  assert.ok(result.projectTemplateResolvedPath);
+  assert.equal(result.projectTemplateResolvedPath.startsWith(projectRoot), true);
+  assert.equal(result.projectTemplateResolvedPath.includes("academic_writer/template_bundle"), true);
+  const copiedStyle = path.join(path.dirname(result.projectTemplateResolvedPath), "custom.cls");
+  await fs.access(result.projectTemplateResolvedPath);
+  await fs.access(copiedStyle);
 });

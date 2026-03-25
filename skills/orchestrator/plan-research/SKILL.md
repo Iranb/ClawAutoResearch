@@ -8,6 +8,7 @@ allowed-tools:
   - Edit
   - Grep
   - Glob
+  - lobster
 ---
 
 # Plan Research
@@ -30,6 +31,10 @@ Read `{PROJ}/TRACK_REGISTRY.json` to understand:
 - which track is the current leading narrative
 - which tracks are parked / merged / killed and therefore out of scope
 
+When available, also read:
+- `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
+- `research_workflow.get_writing_contract` to inspect proof-writing / appendix expectations
+
 Also read graph-grounding artifacts when present:
 - `{PROJ}/researcher/FRONTIER_REPORT.md`
 - `{PROJ}/graph/subgraphs/`
@@ -45,6 +50,7 @@ From the idea report and active tracks, identify:
 - **Metrics**: How will we measure success?
 - **Ablations**: What components need isolated evaluation?
 - **Track decision rules**: what would advance / park / kill each active track
+- **Theory opportunities**: what repeatable mechanisms, invariances, monotonicities, or convergence patterns might support a lightweight theorem / lemma narrative
 
 Before writing the plan, perform one explicit innovation-construction pass:
 - convert each active track's graph evidence into a bounded hypothesis package
@@ -76,6 +82,13 @@ Additional required sections:
 - Per-track stop / rollback / kill rules
 - Scope narrowing rule if multiple tracks survive but budget is tight
 
+Add one explicit **Theory / Proof Appendix Plan** section:
+- candidate lemma / proposition list grounded in actually feasible results
+- which statements are safe for main text as concise theorem / lemma claims
+- which derivations must be deferred to appendix
+- what assumptions are empirical, heuristic, or only partially justified
+- what extra experiments or diagnostics would raise confidence in the derivation
+
 ### 4. Write TODOS.md
 
 Write `{PROJ}/orchestrator/TODOS.md` with:
@@ -84,7 +97,8 @@ Write `{PROJ}/orchestrator/TODOS.md` with:
 - Stage 3: Deploy and run experiments — assign: researcher
 - Stage 4: Analyze results + track verdicts — assign: analyzer
 - Stage 5: Internal review / scope decision — assign: reviewer
-- Stage 6: Write paper — assign: academic_writer
+- Stage 6: Draft proof appendix packet from feasible results / theory note — assign: academic_writer
+- Stage 7: Write paper — assign: academic_writer
 
 Each task must have:
 - Clear description (what done = task complete)
@@ -114,3 +128,9 @@ Return to Researcher Agent:
 - Every stage must have a measurable success criterion
 - Prefer 1–2 strong active tracks over an over-expanded portfolio
 - Preserve graph-backed novelty rationale; do not silently drop it during planning
+
+## Stage Closeout
+
+When `PLAN.md`, `TODOS.md`, and `PLAN_AUDIT.md` are complete and the project is ready to move into CODE, invoke the Lobster handoff workflow described in `{PLUGIN_ROOT}/lobster/QUICKSTART.md`.
+
+Do not hand off if the plan is still being revised, narrowed, or re-audited.

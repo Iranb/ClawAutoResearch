@@ -32,6 +32,8 @@ Use when analysis stopped mid-run or when Researcher wants Analyzer to continue 
    - `TRACK_VERDICTS.md`
    - `UNSUPPORTED_CLAIMS.md`
    - `THEORY_SUPPORT_NOTE.md`
+   - `THEORY_STATE.json`
+   - `proof-packets/`
    - `figures/`, `tables/`
 3. Regenerate only missing or obviously stale outputs.
 4. If all outputs already exist, return `no-op` with a summary of what is ready.

@@ -76,13 +76,16 @@ When the user provides a writing template, it must become durable workflow state
 
 - record it in `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
 - store the readable template path in `writing_contract.template_path`
+- store the project-local copied template path in `writing_contract.project_template_path`
 - choose a durable `writing_contract.paper_mode`
   - `conference` = `9` pages main body + `2` pages references
   - `journal` = `12` pages main body + `2` pages references
 - if the template is mandatory, set `writing_contract.template_required = true`
-- require Academic Writer to read the template before `/paper-plan` or `/paper-write`
+- require Academic Writer to read the project-local template copy before `/paper-plan` or `/paper-write`
 - adapt the template explicitly into `{PROJ}/academic_writer/TEMPLATE_MAPPING.md`
+- never let Writer edit the external source template in place; the plugin should copy the template into `{PROJ}/academic_writer/template_bundle/` first
 - if `writing_contract.kg_storyline_required = true`, require `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md` before final drafting
+- if proof-aware writing is enabled, keep `writing_contract.main_text_proof_style = lemma_result_only` and require `writing_contract.proof_appendix_path` for detailed derivations
 
 The writing contract should also bound paper scope:
 
@@ -107,6 +110,7 @@ Citation reliability must become durable workflow state instead of a last-minute
 - record it in `{PROJ}/PROJECT_MANIFEST.json.citation_integrity`
 - keep `citation_integrity.bibliography_path = academic_writer/paper/refs.bib`
 - keep `citation_integrity.verification_report_path = reviewer/CITATION_VERIFICATION.md`
+- require writer-side `/citation-preflight` before final citation review
 - require reviewer-side citation verification before SUBMIT
 - block submission when citation verification is not `verified`
 - block submission when unresolved placeholders exceed budget
@@ -329,6 +333,30 @@ High-quality automation requires explicit self-audit at each stage:
 - Academic Writer must keep `{PROJ}/academic_writer/WRITING_SIGNALS.md` current before WRITE can hand off to SUBMIT.
 - Reviewer remains the final internal audit gate through `{PROJ}/reviewer/REVIEW_REPORT.md`.
 
+## Deterministic Lobster Handoff
+
+After a stage owner finishes that stage's mandatory durable artifacts and the stage is genuinely ready to advance, the owner should run the Lobster handoff workflow:
+
+- `lobster/workflows/research-stage-handoff.lobster`
+
+The handoff should:
+
+- run `research_workflow.auto_iterator_tick`
+- confirm the effective next stage and next owner
+- dispatch work to the next owner when ownership changed
+- keep the stage-broadcast message consistent on the project channel
+
+Use Lobster handoff only for true forward progression.
+
+Do **not** hand off forward when:
+
+- the stage is still missing a required artifact
+- the current result triggered a revise / retry / more-experiments loop
+- a human or internal review decided to stay in the current stage
+- the current owner still owes a bounded repair inside the same stage
+
+In those cases, remain in the current stage or roll back explicitly according to the gate outcome. Lobster handoff is for deterministic owner-to-owner continuation, not for bypassing revision loops.
+
 Each audit must include:
 
 - what was checked
@@ -437,6 +465,7 @@ Actions:
 **Outputs:**
 - `{PROJ}/graph/PAPERNEXUS_STATUS.json` — PaperNexus corpus status
 - `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — graph build summary
+- `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` — preliminary brainstorm scaffold built during literature work
 
 ```
 Procedure:
@@ -452,9 +481,10 @@ Procedure:
   6. Check corpus status (`status` / registry) before trusting an existing corpus
   7. Run /graph-build to index the ingested literature into a project-scoped corpus
   8. If this project's paper folder changes often, prefer enabling `watch` or re-checking `status` before ideation
-  9. Save status + build report under {PROJ}/graph/
-  10. Update {PROJ}/PROJECT_MANIFEST.json with graph readiness metadata and `current_micro_stage: "graph_validated"`
-  11. → proceed to FRONTIER_MAPPING
+  9. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
+  10. Save status + build report under {PROJ}/graph/
+  11. Update {PROJ}/PROJECT_MANIFEST.json with graph readiness metadata and `current_micro_stage: "graph_validated"`
+  12. → proceed to FRONTIER_MAPPING
 ```
 
 ---
@@ -462,7 +492,7 @@ Procedure:
 ### Stage 0B · FRONTIER_MAPPING
 **Owner:** Researcher
 **Skills:** `/frontier-mapping`
-**Inputs:** `{PROJ}/graph/PAPERNEXUS_STATUS.json`, project literature corpus
+**Inputs:** `{PROJ}/graph/PAPERNEXUS_STATUS.json`, project literature corpus, `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 **Outputs:**
 - `{PROJ}/researcher/FRONTIER_REPORT.md` — candidate frontiers from the graph
 - `{PROJ}/graph/subgraphs/` — graph query snapshots
@@ -478,6 +508,8 @@ Procedure:
   7. Update {PROJ}/PROJECT_MANIFEST.json with `current_micro_stage: "frontiers_packaged"`
   8. → proceed to IDEA
 ```
+
+Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only if `FRONTIER_REPORT.md` exists, `graph/subgraphs/` is non-empty, the brainstorm pack is packaged, and no explicit refresh / rebuild / re-query loop remains open.
 
 ---
 
@@ -519,6 +551,8 @@ Procedure:
   15. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
   16. → POST GATE-1
 ```
+
+Before leaving IDEA, Researcher should trigger Lobster handoff only if `IDEA_REPORT.md`, `IDEA_AUDIT.md`, the required reasoning packets, and the narrowed active portfolio already exist, and there is no pending novelty / attacker / reflection retry.
 
 ---
 
@@ -653,6 +687,8 @@ Procedure:
   7. → POST GATE-2 (or if AUTO_PROCEED=true, log to GATES_LOG.md and set current_stage=CODE only after step 5).
 ```
 
+When PLAN is complete and the project is truly ready to move into CODE, Orchestrator should trigger Lobster handoff. If PLAN is sent back for narrowing, budgeting, or audit fixes, remain in PLAN and do not hand off.
+
 ---
 
 ### ◆ GATE-2 · Plan Approval
@@ -683,6 +719,8 @@ Options:
 Waiting for response...
 ```
 
+Researcher should trigger Lobster handoff only when EXPERIMENT has produced the required durable outputs and the track decision is to proceed into ANALYZE. If the result requires more experiments, bounded relaunch, or `restart-idea`, stay in EXPERIMENT or roll back explicitly instead of handing off forward.
+
 ---
 
 ### Stage 3 · CODE
@@ -707,6 +745,8 @@ Procedure:
   7. When multiple active tracks exist, only implement the next track if budget remains justified by the plan
   8. → proceed to EXPERIMENT (no gate — coding is internal)
 ```
+
+When CODE is complete and the required experiment bundle exists, Coder should trigger Lobster handoff. If dry-run, reproducibility, or implementation review still requires fixes, remain in CODE and do not hand off.
 
 ---
 
@@ -784,7 +824,7 @@ Waiting for response...
 
 ### Stage 5 · ANALYZE
 **Owner:** Analyzer (spawned by Researcher)  
-**Skills:** `/analyze-results`, `/scientific-figures`  
+**Skills:** `/analyze-results`, `/theory-phase`, `/scientific-figures`  
 **Inputs:** `{PROJ}/researcher/artifacts/results/`  
 **Outputs:**
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md` — findings narrative
@@ -793,6 +833,10 @@ Waiting for response...
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that must be downgraded or removed
 - `{PROJ}/analyzer/QUALITY_AUDIT.md` — audit of seeds, controls, anomaly handling, artifact completeness, and unsupported claims
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — rough theory / mechanism support memo with `green` / `red` signal
+- `{PROJ}/analyzer/THEORY_STATE.json` — structured theorem / lemma candidate state
+- `{PROJ}/analyzer/proof-packets/` — theorem / lemma / proposition proof packets for Writer and appendix planning
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — generated appendix planning scaffold derived from packets
+- `{PROJ}/academic_writer/paper/sections/appendix_theory.tex` — generated appendix derivation draft derived from packets
 - `{PROJ}/analyzer/figures/` — publication-ready figures
 - `{PROJ}/analyzer/tables/` — result tables
 
@@ -805,14 +849,17 @@ Procedure:
   5. Analyzer writes TRACK_VERDICTS.md
   6. Analyzer writes QUALITY_AUDIT.md covering seed count, CI/error bars, baseline coverage, anomalies, artifact completeness, and residual risks
   7. Analyzer writes THEORY_SUPPORT_NOTE.md with a rough `green` / `red` theory signal
-  8. → proceed to REVIEW (no gate — analysis is internal)
+  8. Analyzer runs /theory-phase so theory candidates become THEORY_STATE.json + proof-packets/ + THEORY_APPENDIX_PLAN.md + appendix_theory.tex
+  9. → proceed to REVIEW (no gate — analysis is internal)
 ```
+
+When ANALYZE artifacts are complete and the current decision is to move into REVIEW, Analyzer should trigger Lobster handoff. If analysis uncovered unsupported central claims that require more experiments or a return to EXPERIMENT, do not hand off forward.
 
 ---
 
 ### Stage 6 · REVIEW (Internal)
 **Owner:** Reviewer (invoked by Researcher via `sessions_send`)  
-**Skills:** `/review-phase`, `/evidence-grading`  
+**Skills:** `/review-phase`, `/evidence-grading`, `/citation-integrity-gate`  
 **Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/artifacts/`
 **Outputs:**
 - `{PROJ}/reviewer/REVIEW_REPORT.md` — structured review
@@ -832,15 +879,19 @@ Procedure:
   10. → proceed to WRITE
 ```
 
+Reviewer should trigger Lobster handoff only when the internal review loop is actually complete and the project is ready to enter WRITE. If review requests more experiments, narrower scope, or additional fixes, remain in REVIEW or send the project backward according to the gate result.
+
 ---
 
 ### Stage 7 · WRITE
 **Owner:** Academic Writer (spawned by Researcher)  
-**Skills:** `/paper-plan`, `/paper-write`, `/paper-compile`, `/ai-research-prompt`, `/research-paper-writing`  
-**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`, and `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
+**Skills:** `/paper-plan`, `/paper-write`, `/citation-preflight`, `/paper-compile`, `/ai-research-prompt`, `/research-paper-writing`  
+**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/analyzer/THEORY_STATE.json`, `{PROJ}/analyzer/proof-packets/`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`, and `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
 **Outputs:**
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — paper outline
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough paper thesis and evidence spine
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — proof / derivation plan for appendix-only detail
+- `{PROJ}/academic_writer/paper/sections/appendix_theory.tex` — appendix derivation draft generated from proof packets
 - `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — how the user template maps onto this paper's outline and section order
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — `green` / `red` writing advisory for theory, storyline, paragraph logic
 - `{PROJ}/academic_writer/paper/sections/` — individual section drafts
@@ -849,20 +900,23 @@ Procedure:
 ```
 Procedure:
   1. Researcher spawns Academic Writer with narrative report + claim matrix + track verdicts + theory support note + figures path
-  2. Writer reads `PROJECT_MANIFEST.json.writing_contract`; if a user template is configured, Writer must read it before any outline or prose drafting
-  3. Writer runs /paper-plan → PAPER_PLAN.md + STORYLINE_SKETCH.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
+  2. Writer reads `PROJECT_MANIFEST.json.writing_contract`; if a user template is configured, Writer must read the project-local copied template before any outline or prose drafting
+  3. Writer runs /paper-plan → PAPER_PLAN.md + STORYLINE_SKETCH.md + THEORY_APPENDIX_PLAN.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
   4. Writer limits the paper to active / winning tracks only
   5. Writer removes or downgrades unsupported primary claims before prose drafting
   6. If theory or storyline signal is `red`, Writer still continues but marks the risky sections for human review
   7. Cross-Reviewer checks outline (sessions_send, Outline Mode)
      → saved to {PROJ}/cross-reviewer/outline/{date}.md
-  8. Writer runs /paper-write section by section and updates paragraph logic signal
+  8. Writer runs /paper-write section by section, starts from the generated THEORY_APPENDIX_PLAN.md + appendix_theory.tex, keeps theorem / lemma statements concise in the body, and pushes detailed derivations to the appendix path from `writing_contract`
   9. For each section, Writer performs a reverse-outline pass and paragraph transition audit before treating the section as stable
-  10. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
-  11. Cross-Reviewer checks each section (Prose Mode)
-  12. Writer runs /paper-compile → main.pdf
-  13. → POST GATE-4
+  10. Writer runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
+  11. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
+  12. Cross-Reviewer checks each section (Prose Mode)
+  13. Writer runs /paper-compile → main.pdf
+  14. → POST GATE-4
 ```
+
+Academic Writer should trigger Lobster handoff only when WRITE is complete and the recommendation is to move into SUBMIT. If Cross-Reviewer, Reviewer, or the user requests another writing revision pass, remain in WRITE and do not hand off forward.
 
 ---
 
@@ -898,7 +952,7 @@ Waiting for response...
 
 ### Stage 8 · SUBMIT & EXTERNAL REVIEW
 **Owner:** Reviewer  
-**Skills:** `/paperreview-submit`, `/review-response`  
+**Skills:** `/citation-integrity-gate`, `/paperreview-submit`, `/review-response`  
 **Inputs:** `{PROJ}/academic_writer/paper/main.pdf`  
 **Outputs:**
 - `{PROJ}/reviewer/external_review_{date}.md` — AI reviewer feedback
@@ -907,12 +961,14 @@ Waiting for response...
 ```
 Procedure:
   1. This stage is mandatory for every paper-ready draft. Do not skip it when `main.pdf` exists.
-  2. Reviewer submits PDF to paperreview.ai via /paperreview-submit
-  3. Polls for results (auto-retry every 5 min, max 2h)
-  4. Saves structured review to external_review_{date}.md
-  5. Runs /review-response to draft rebuttal
-  6. Record submission metadata and latest external review status in {PROJ}/researcher/GATE_STATE.json or project state
-  7. → POST GATE-5
+  2. Reviewer first runs /citation-integrity-gate and writes reviewer/CITATION_VERIFICATION.md
+  3. If citation verification is not `verified`, return to WRITE and do not submit
+  4. Reviewer submits PDF to paperreview.ai via /paperreview-submit
+  5. Polls for results (auto-retry every 5 min, max 2h)
+  6. Saves structured review to external_review_{date}.md
+  7. Runs /review-response to draft rebuttal
+  8. Record submission metadata and latest external review status in {PROJ}/researcher/GATE_STATE.json or project state
+  9. → POST GATE-5
 ```
 
 ---

@@ -25,6 +25,9 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks are writing-safe to foreground
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that cannot yet be elevated
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory theory / mechanism signal
+- `{PROJ}/analyzer/THEORY_STATE.json` — structured theorem / lemma candidate state
+- `{PROJ}/analyzer/proof-packets/` — packetized theorem / lemma / proposition objects
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — generated appendix plan derived from proof packets
 - `{PROJ}/CLAIM_POLICY.md` — label-to-wording constraints
 - `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback from experiment review cycle
 - `{PROJ}/analyzer/figures/` — available figures
@@ -57,9 +60,17 @@ Also inspect:
 
 If a template path is configured:
 
-- read the template before drafting
+- read the project-local copied template before drafting
 - preserve its required section order unless the project scope forces an explicit adaptation
 - write `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` to show how the template maps to this paper
+
+Also inspect these proof-writing fields from the contract:
+
+- `main_text_proof_style`
+- `proof_appendix_required`
+- `proof_appendix_path`
+- `theory_note_path`
+- `proof_checklist`
 
 `TEMPLATE_MAPPING.md` should include:
 
@@ -109,6 +120,36 @@ Rules:
 - `RED` means the storyline is still loose, not that writing must stop
 - If `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` is `RED`, reflect that in the limitation boundary instead of inventing stronger theory
 
+### 2.2 Theory / Proof Appendix Plan
+
+Before locking the outline, read `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` if it already exists. Treat it as the generated starting point from `/theory-phase`, then refine only if the outline changed materially.
+
+If the file does not exist, stop and ask Analyzer / Researcher to run `/theory-phase` or `research_workflow.materialize_theory_appendix` before planning proof-heavy writing.
+
+The plan should follow this structure:
+
+```markdown
+# Theory Appendix Plan
+
+- Main-text theorem / lemma candidates:
+  - [statement]
+- Main-text intuition only:
+  - [what can be safely claimed in body text]
+- Appendix derivations:
+  - [derivation / proof sketch / algebra / case split]
+- Evidence basis:
+  - [results, trend, ablation, mechanism note, literature cue]
+- Assumptions / caveats:
+  - [explicit boundary]
+```
+
+Rules:
+- only elevate theory that is consistent with `THEORY_SUPPORT_NOTE.md` and supported empirical signals
+- use `THEORY_STATE.json` and `proof-packets/` as the source of truth for what is body-safe vs appendix-only
+- main text should keep theorem / lemma statements concise
+- detailed derivations belong in the appendix, not in the main narrative
+- if the theory signal is weak, plan a conservative appendix note rather than a strong theorem claim
+
 ### 2.5 KG Storyline Packet
 
 Before locking the outline, build `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`.
@@ -130,6 +171,7 @@ When the packet is writing-safe, update `writing_contract.kg_storyline_status = 
 Write the section-level outline with concrete targets:
 
 - if a user template is configured, start from that template's section order and adapt it
+- if a project-local template copy exists, use that copy as the active writing template and never edit the external source template
 - if the project needs to deviate from the template, document the deviation in `TEMPLATE_MAPPING.md`
 - keep `PAPER_PLAN.md` and `TEMPLATE_MAPPING.md` consistent
 
@@ -267,6 +309,11 @@ If a writing template is configured, update the writing contract after the outli
 }
 ```
 
+If proof-aware writing is enabled, keep or set:
+- `main_text_proof_style = lemma_result_only`
+- `proof_appendix_required = true`
+- `proof_appendix_path = academic_writer/paper/sections/appendix_theory.tex` unless you intentionally configured a different appendix path
+
 Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
 ## Output
@@ -281,6 +328,7 @@ Save the Cross-Reviewer outline response to `{PROJ}/cross-reviewer/outline/{date
 
 Also write:
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md`
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`
 - `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`
 - `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when a template is configured
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md`

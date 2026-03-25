@@ -1,69 +1,35 @@
 {
-  // OpenClaw Research — Multi-Agent Automated Research Configuration
-  // Agent roster: researcher (orchestrator) + 4 sub-agents + reviewer (isolated)
-  // Memory: QMD backend, per-agent isolation; project-level memory under the plugin's projectsRoot
+  // Minimal additive config for enabling openclaw-research.
+  // This file lists the extra fields you usually need to merge into
+  // your real ~/.openclaw/openclaw.json, with common defaults expanded.
 
   "plugins": {
     "enabled": true,
     "load": {
-      "paths": ["~/.openclaw/plugins"]  // ✅ 修改：指向插件目录
+      "paths": ["~/.openclaw/plugins"]
     },
     "entries": {
       "openclaw-research": {
         "enabled": true,
         "config": {
-          // ── Data Integrity Policies ──────────
           "allowWorkspaceFallback": false,
           "requireProjectIsolation": true,
           "requireProjectIdInEntries": true,
           "requireTrackId": true,
           "requireEvidencePointers": true,
           "reviewStateMaxAgeHours": 24,
-          
-          // ── Project & Server Configuration ──────────
           "projectsRoot": "~/.openclaw/projects",
-          
-          // ── GPU Server Configuration ──────────
-          // ⚠️ TODO: 替换为你的实际 GPU 服务器
-          "servers": {
-            "default": "gateway",
-            "list": ["gateway"]
-          },
-          
-          // ── Idea Generation (IDEA stage) ──────────
-          "ideaGeneration": {
-            "divergeSize": 8,
-            "portfolioSize": 4,
-            "tournamentRounds": 2
-          },
-          
-          // ── Track Portfolio Management ──────────
-          "trackPortfolio": {
-            "maxActiveTracks": 2,
-            "maxParkedTracks": 1,
-            "parkedBudgetPolicy": "zero"
-          },
-          
-          // ── Compute Budget ──────────
-          "computeBudget": {
-            "defaultGpuHoursPerTrack": 100,
-            "maxConcurrentExperiments": 4,
-            "gpuType": "A100"
-          },
-          
-          // ── Review Loop (REVIEW stage) ──────────
-          "reviewLoop": {
-            "maxRounds": 3,
-            "scoreThreshold": 6.0,
-            "autoAdvanceScore": 7.5
-          },
-          
-          // ── Graph Configuration ──────────
-          "graphConfig": {
-            "autoRefreshTrigger": "per-track",
-            "noveltyThreshold": 0.7,
-            "maxPapersToIngest": 5000
-          }
+          "injectWorkflowContext": true,
+          "enforceWorkflowBoundaries": true,
+          "blockDiscordAgentMentions": true,
+          "enableWorkflowMailbox": true,
+          "heartbeatBackgroundChecks": true,
+          "maxWorkflowInboxMessages": 6,
+          "agentContactCooldownSeconds": 300,
+          "enableChannelProjectBindings": true,
+          "channelProjectBindingsPath": "",
+          "defaultConferenceTemplatePath": "",
+          "defaultJournalTemplatePath": ""
         }
       }
     }
@@ -71,201 +37,47 @@
 
   "agents": {
     "list": [
-      // ── Main Orchestrator ──────────────────────────────────────────
-      {
-        "id": "researcher",
-        "name": "Researcher",
-        "default": true,
-        "workspace": "~/.openclaw/workspace-researcher",
-        "agentDir": "./agents/researcher",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        // Researcher has access to its own skill set only
-        "skills": ["~/.openclaw/skills", "./skills/researcher"],
-        "subagents": {
-          "maxSpawnDepth": 2,
-          "allowAgents": ["orchestrator", "coder", "analyzer", "academic_writer", "reviewer", "cross-reviewer"]
-        },
-        "sandbox": {
-          "mode": "off"  // needs SSH access to remote GPU servers
-        },
-        "tools": {
-          "allow": ["*"],
-          "deny": []
-        }
-      },
-
-      // ── Orchestrator Sub-agent ──────────────────────────────────────────
       {
         "id": "orchestrator",
-        "name": "Orchestrator",
-        "workspace": "~/.openclaw/workspace-researcher",  // shares researcher workspace (read access)
-        "agentDir": "./agents/orchestrator",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        // Planner has only its own planning skill
-        "skills": ["~/.openclaw/skills", "./skills/orchestrator"],
-        "sandbox": {
-          "mode": "non-main"
-        },
         "tools": {
-          "allow": ["read", "write", "edit", "research_memory"],
-          "deny": ["bash", "exec", "process"]
+          "allow": ["research_workflow"]
         }
       },
-
-      // ── Coder Sub-agent ───────────────────────────────────────────
       {
         "id": "coder",
-        "name": "Coder",
-        "workspace": "~/.openclaw/workspace-researcher",
-        "agentDir": "./agents/coder",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        // Coder owns implementation plus atomic remote execution / resume skills
-        "skills": ["~/.openclaw/skills", "./skills/coder"],
-        "sandbox": {
-          "mode": "off"
-        },
         "tools": {
-          "allow": ["read", "write", "edit", "bash", "research_memory"],
-          // bash allowed for local dry-run validation and remote SSH execution
-          "deny": []
+          "allow": ["research_workflow"]
         }
       },
-
-      // ── Analyzer Sub-agent ────────────────────────────────────────
       {
         "id": "analyzer",
-        "name": "Analyzer",
-        "workspace": "~/.openclaw/workspace-researcher",
-        "agentDir": "./agents/analyzer",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        // Analyzer has only its own analysis skill
-        "skills": ["~/.openclaw/skills", "./skills/analyzer"],
-        "sandbox": {
-          "mode": "non-main"
-        },
         "tools": {
-          "allow": ["read", "write", "edit", "bash", "research_memory"],
-          // bash allowed for running Python analysis/plotting scripts
-          "deny": []
+          "allow": ["research_workflow"]
         }
       },
-
-      // ── Writer Sub-agent ──────────────────────────────────────────
       {
         "id": "academic_writer",
-        "name": "Writer",
-        "workspace": "~/.openclaw/workspace-researcher",
-        "agentDir": "./agents/academic_writer",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        // Writer has paper-writing skills (plan, write, compile, phase)
-        "skills": ["~/.openclaw/skills", "./skills/academic_writer"],
-        "sandbox": {
-          "mode": "non-main"
-        },
         "tools": {
-          "allow": ["read", "write", "edit", "web_search", "web_fetch", "research_memory"],
-          "deny": ["bash", "exec", "process"]
+          "allow": ["research_workflow"]
         }
       },
-
-      // ── Reviewer Agent (experiment review, fully isolated) ────────
       {
         "id": "reviewer",
-        "name": "Reviewer",
-        "workspace": "~/.openclaw/workspace-reviewer",  // isolated workspace — cannot see researcher memory
-        "agentDir": "./agents/reviewer",
-        "model": {
-          // ── USER-CONFIGURABLE ─────────────────────────────────────
-          // Change this to any model available in your OpenClaw setup.
-          // Recommended: a strong reasoning model different from researcher's.
-          // Examples: "modelstudio/glm-5", "modelstudio/kimi-k2.5"
-          "default": "modelstudio/glm-5"
-        },
-        // Reviewer handles both internal review and external AI review submission.
-        "skills": ["~/.openclaw/skills", "./skills/reviewer"],
-        "sandbox": {
-          "mode": "all",
-          "scope": "agent"
-        },
         "tools": {
-          "allow": ["read", "write", "edit", "bash", "memory_search", "memory_get", "web_search", "web_fetch", "research_memory"],
-          "deny": ["exec", "process"]
-        }
-      },
-
-      // ── Cross-Reviewer Agent (novelty + outline + prose critique) ──
-      // Replaces all mcp__codex__ calls for review/validation purposes.
-      // Invoked via sessions_send from: novelty-check, paper-plan, paper-write, paper-phase.
-      {
-        "id": "cross-reviewer",
-        "name": "Cross-Reviewer",
-        "workspace": "~/.openclaw/workspace-cross-reviewer",
-        "agentDir": "./agents/cross-reviewer",
-        "model": {
-          "default": "modelstudio/glm-5"
-        },
-        "skills": ["~/.openclaw/skills", "./skills/cross-reviewer"],
-        "sandbox": {
-          "mode": "all",
-          "scope": "agent"
-        },
-        "tools": {
-          "allow": ["read", "web_search", "web_fetch"],
-          // Read-only: cross-reviewer never modifies files
-          "deny": ["write", "edit", "bash", "exec", "process"]
+          "allow": ["research_workflow"]
         }
       }
     ],
-
     "defaults": {
+      "heartbeat": {
+        "every": "30m"
+      },
       "compaction": {
         "memoryFlush": {
           "enabled": true,
           "softThresholdTokens": 4000
         }
       }
-    }
-  },
-
-  // QMD Memory — per-agent isolation via separate workspaces
-  "memory": {
-    "backend": "qmd",
-    "citations": "auto",
-    "qmd": {
-      "includeDefaultMemory": true,
-      "update": { "interval": "5m", "debounceMs": 15000 },
-      "limits": { "maxResults": 8, "timeoutMs": 5000 },
-      "scope": {
-        "default": "deny",
-        "rules": [
-          { "action": "allow", "match": { "chatType": "direct" } }
-        ]
-      }
-    }
-  },
-
-  // Discord notifications
-  "channels": {
-    "discord": {
-      // Discord webhook configured via user settings
-    }
-  },
-
-  // Tool configuration（远程执行；多机时由 skills 从 servers.list 选 host，此处保持与 servers.default 一致）
-  "tools": {
-    "exec": {
-      "host": "gateway",
-      "security": "allowlist"
     }
   }
 }

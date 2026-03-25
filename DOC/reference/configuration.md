@@ -4,7 +4,7 @@
 
 当前项目最重要的配置文件有：
 
-- `openclaw.json`
+- `~/.openclaw/openclaw.json`
 - `openclaw.plugin.json`
 - `skills/index.json`
 - `templates/PROJECT_MANIFEST.json`
@@ -63,9 +63,15 @@
 - `channelProjectBindingsPath`  
   可选的绑定存储文件路径。留空时，默认写入 `{PROJ}/.openclaw-research/channel-project-bindings.json`；只有当前 turn 还没解析出项目时，才回退到 workspace 下。多 workspace 场景下如果你需要统一共享一份绑定文件，再显式指定它。
 
-## 3. `openclaw.json`
+- `defaultConferenceTemplatePath`  
+  可选的 conference 默认模板路径。启用 `paper_mode = conference` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
 
-这是本项目针对 OpenClaw 运行环境的主要配置文件。
+- `defaultJournalTemplatePath`  
+  可选的 journal 默认模板路径。启用 `paper_mode = journal` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
+
+## 3. `~/.openclaw/openclaw.json`
+
+这是你真实运行时使用的 OpenClaw 主配置文件，不是仓库内文件。
 
 ### 当前值得关注的点
 
@@ -93,7 +99,19 @@
 - `idle_research`
 - `experiment_memory`
 - `innovation_reflection`
+- `theory_state`
 - `writing_contract`
+
+其中 `writing_contract` 现在额外承载：
+
+- `project_template_path`
+- `template_copy_status`
+- `main_text_proof_style`
+- `proof_appendix_required`
+- `proof_appendix_path`
+- `proof_appendix_status`
+- `theory_note_path`
+- `proof_checklist`
 
 ## 6. 配置时的推荐顺序
 

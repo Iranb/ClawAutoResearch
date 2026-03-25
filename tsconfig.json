@@ -21,6 +21,8 @@
   },
   "include": [
     "index.ts",
+    "runtime-api.ts",
+    "types/**/*.d.ts",
     "tools/**/*.ts"
   ],
   "exclude": [

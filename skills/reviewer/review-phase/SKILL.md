@@ -11,6 +11,7 @@ allowed-tools:
   - Glob
   - Agent
   - Skill
+  - lobster
 ---
 
 # Review Phase
@@ -137,3 +138,7 @@ Researcher Agent 自我反思当前工作：
 2. 写入最终审稿总结到 `{PROJ}/reviewer/AUTO_REVIEW.md`
 3. 更新 `{PMEM}/experiment-memory.md`（ESE），`{PMEM}` = `{PROJ}/memory`
 4. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
+
+如果当前结论是进入 WRITE，则在 durable review state 更新完成后再调用 Lobster handoff。
+
+如果结论是补实验、缩 scope、继续 review 轮次，或回退到 IDEA / EXPERIMENT / ANALYZE，则不要向前 handoff。

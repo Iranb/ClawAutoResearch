@@ -22,6 +22,7 @@
     "./researcher/papernexus",
     "./researcher/papernexus-agentic-reasoning",
     "./researcher/crawl4ai-search",
+    "./researcher/theory-phase",
     "./researcher/research-queue"
   ],
   "orchestrator": [
@@ -35,12 +36,14 @@
     "./coder/resume-pipeline"
   ],
   "analyzer": [
+    "./analyzer/theory-phase",
     "./analyzer/analyze-results",
     "./analyzer/scientific-figures",
     "./analyzer/papernexus-reflection",
     "./analyzer/resume-pipeline"
   ],
   "academic_writer": [
+    "./academic_writer/citation-preflight",
     "./academic_writer/paper-plan",
     "./academic_writer/paper-write",
     "./academic_writer/paper-compile",
@@ -50,6 +53,7 @@
     "./academic_writer/resume-pipeline"
   ],
   "reviewer": [
+    "./reviewer/citation-integrity-gate",
     "./reviewer/review-phase",
     "./reviewer/evidence-grading",
     "./reviewer/paperreview-submit",

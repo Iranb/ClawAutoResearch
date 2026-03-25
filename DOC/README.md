@@ -77,6 +77,7 @@
 
 - [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
+- [Lobster Handoff Quickstart](./../lobster/QUICKSTART.md)
 - [运行、调试与测试](./guides/operations-and-testing.md)
 
 ## 这套文档当前覆盖什么

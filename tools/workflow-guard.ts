@@ -21,6 +21,7 @@ import {
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
 export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
+  allowWorkspaceFallback?: boolean;
   injectWorkflowContext?: boolean;
   enforceWorkflowBoundaries?: boolean;
   blockDiscordAgentMentions?: boolean;
@@ -28,6 +29,8 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   heartbeatBackgroundChecks?: boolean;
   maxWorkflowInboxMessages?: number;
   agentContactCooldownSeconds?: number;
+  defaultConferenceTemplatePath?: string;
+  defaultJournalTemplatePath?: string;
 }
 
 export interface WorkflowToolContext {
@@ -209,18 +212,83 @@ type InnovationReflectionState = {
 
 type WritingMode = "conference" | "journal";
 
+type TheorySupportState = {
+  status: string;
+  overallSignal: string | null;
+  theoryStatePath: string | null;
+  sourceTheoryNotePath: string | null;
+  proofPacketDir: string | null;
+  appendixPacketPath: string | null;
+  mainTextProofStyle: string | null;
+  bodyReady: boolean;
+  theoremCount: number;
+  lemmaCount: number;
+  proofPacketCount: number;
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type TheoryStateFile = {
+  schema_version: number;
+  status: string;
+  overall_signal: string | null;
+  source_theory_note_path: string | null;
+  thesis: string | null;
+  body_guidance: string | null;
+  main_text_proof_style: string | null;
+  theorem_candidates: TheoryObjectPacket[];
+  lemma_packets: TheoryObjectPacket[];
+  appendix_sections: TheoryAppendixSection[];
+  pending_reason: string | null;
+  updated_at: string | null;
+};
+
+type TheoryAppendixSection = {
+  section_id: string;
+  title: string;
+  purpose: string | null;
+  packet_ids: string[];
+};
+
+type TheoryObjectPacket = {
+  packet_id: string;
+  role: string;
+  title: string | null;
+  statement: string;
+  short_result: string | null;
+  body_safe: boolean;
+  confidence: string | null;
+  appendix_required: boolean;
+  appendix_path: string | null;
+  evidence_pointers: string[];
+  assumptions: string[];
+  derivation_outline: string[];
+  caveats: string[];
+  notes: string | null;
+  source_claim_ids: string[];
+  updated_at: string | null;
+};
+
 type WritingContractState = {
   paperMode: WritingMode | null;
   templateRequired: boolean;
   templatePath: string | null;
+  projectTemplatePath: string | null;
   templateName: string | null;
   templateStatus: string;
+  templateCopyStatus: string;
   bodyPageBudget: number | null;
   referencePageBudget: number | null;
   bodyWordTargetMin: number | null;
   bodyWordTargetMax: number | null;
   maxCoreIdeas: number;
   maxHeadlineClaims: number;
+  mainTextProofStyle: string | null;
+  proofAppendixRequired: boolean;
+  proofAppendixPath: string | null;
+  proofAppendixStatus: string;
+  theoryNotePath: string | null;
+  proofChecklist: string[];
   storylineSource: string | null;
   kgStorylineRequired: boolean;
   kgStorylineStatus: string;
@@ -301,17 +369,33 @@ export type WorkflowSnapshot = {
   innovationReflectionLastAt: string | null;
   innovationReflectionPath: string | null;
   innovationReflectionPendingReason: string | null;
+  theorySupportStatus: string | null;
+  theorySupportSignal: string | null;
+  theoryStatePath: string | null;
+  theoryProofPacketDir: string | null;
+  theoryAppendixPacketPath: string | null;
+  theoryPacketCount: number | null;
+  theoryBodyReady: boolean;
+  theoryPendingReason: string | null;
   writingTemplateRequired: boolean;
   writingPaperMode: string | null;
   writingBodyPageBudget: number | null;
   writingReferencePageBudget: number | null;
   writingBodyWordTargetMin: number | null;
   writingBodyWordTargetMax: number | null;
-  writingMaxCoreIdeas: number | null;
-  writingMaxHeadlineClaims: number | null;
-  writingTemplatePath: string | null;
-  writingTemplateStatus: string | null;
+    writingMaxCoreIdeas: number | null;
+    writingMaxHeadlineClaims: number | null;
+    writingTemplatePath: string | null;
+    writingProjectTemplatePath: string | null;
+    writingTemplateStatus: string | null;
+    writingTemplateCopyStatus: string | null;
   writingTemplateMappingPath: string | null;
+  mainTextProofStyle: string | null;
+  proofAppendixRequired: boolean;
+  proofAppendixPath: string | null;
+  proofAppendixStatus: string | null;
+  theoryNotePath: string | null;
+  proofChecklist: string[];
   kgStorylineRequired: boolean;
   kgStorylineStatus: string | null;
   kgStorylinePacketPath: string | null;
@@ -383,7 +467,20 @@ export type AutoIteratorResult = {
   recommendedActions: AutoIteratorAction[];
 };
 
+export type EnsuredWorkflowProject = {
+  projectRoot: string;
+  projectId: string;
+  projectsRoot: string;
+  title: string;
+  created: boolean;
+  manifestCreated: boolean;
+  trackRegistryCreated: boolean;
+  claimPolicyCreated: boolean;
+  experimentLedgerCreated: boolean;
+};
+
 const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
+  allowWorkspaceFallback: false,
   injectWorkflowContext: true,
   enforceWorkflowBoundaries: true,
   blockDiscordAgentMentions: true,
@@ -394,6 +491,8 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   projectsRoot: "",
   enableChannelProjectBindings: false,
   channelProjectBindingsPath: "",
+  defaultConferenceTemplatePath: "",
+  defaultJournalTemplatePath: "",
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -433,6 +532,14 @@ const DEFAULT_STORYLINE_CHECKLIST = [
   "limitations_boundary_is_explicit",
 ];
 
+const DEFAULT_PROOF_CHECKLIST = [
+  "derive_a_small_set_of_named_lemmas_from_supported_results",
+  "keep_main_text_to_lemma_statements_and_consequences_only",
+  "move_full_derivations_and_case_splits_to_appendix",
+  "tie_every_formulaic_step_to_evidence_or_explicit_assumption",
+  "mark_speculative_theory_as_conservative_mechanistic_interpretation",
+];
+
 const DEFAULT_CITATION_SOURCE_OF_TRUTH = [
   "dblp",
   "crossref",
@@ -443,6 +550,12 @@ const DEFAULT_CITATION_SOURCE_OF_TRUTH = [
 const DEFAULT_CITATION_BIB_PATH = "academic_writer/paper/refs.bib";
 const DEFAULT_CITATION_REPORT_PATH = "reviewer/CITATION_VERIFICATION.md";
 const DEFAULT_KG_STORYLINE_PACKET_PATH = "academic_writer/KG_STORYLINE_PACKET.md";
+const DEFAULT_THEORY_STATE_PATH = "analyzer/THEORY_STATE.json";
+const DEFAULT_THEORY_NOTE_PATH = "analyzer/THEORY_SUPPORT_NOTE.md";
+const DEFAULT_PROOF_PACKET_DIR = "analyzer/proof-packets";
+const DEFAULT_THEORY_APPENDIX_PLAN_PATH = "academic_writer/THEORY_APPENDIX_PLAN.md";
+const DEFAULT_THEORY_APPENDIX_SECTION_PATH =
+  "academic_writer/paper/sections/appendix_theory.tex";
 
 type WritingModePreset = {
   mode: WritingMode;
@@ -799,6 +912,10 @@ function normalizePolicy(
   config: Record<string, unknown> | undefined
 ): Required<WorkflowGuardPolicy> {
   return {
+    allowWorkspaceFallback:
+      config?.allowWorkspaceFallback === true
+        ? true
+        : DEFAULT_POLICY.allowWorkspaceFallback,
     injectWorkflowContext:
       config?.injectWorkflowContext === false
         ? false
@@ -839,6 +956,12 @@ function normalizePolicy(
     channelProjectBindingsPath:
       asString(config?.channelProjectBindingsPath) ??
       DEFAULT_POLICY.channelProjectBindingsPath,
+    defaultConferenceTemplatePath:
+      asString(config?.defaultConferenceTemplatePath) ??
+      DEFAULT_POLICY.defaultConferenceTemplatePath,
+    defaultJournalTemplatePath:
+      asString(config?.defaultJournalTemplatePath) ??
+      DEFAULT_POLICY.defaultJournalTemplatePath,
   };
 }
 
@@ -904,6 +1027,16 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function expandHome(value: string): string {
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -931,6 +1064,314 @@ function getDefaultPapernexusSourceDir(projectId: string | null): string | null 
 
 function getDefaultPapernexusIndexRoot(): string {
   return path.join(os.homedir(), ".papernexus", "index-store");
+}
+
+function getTemplatesRoot(): string {
+  return path.resolve(MODULE_DIR, "..", "templates");
+}
+
+function sanitizeProjectIdFragment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function deriveProjectIdForBootstrap(params: {
+  projectId?: string | null;
+  title?: string | null;
+  topic?: string | null;
+  channelKey?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+}): string {
+  const candidates = [
+    params.projectId,
+    params.title,
+    params.topic,
+    params.channelKey,
+    params.sessionKey,
+    params.sessionId,
+  ];
+  for (const candidate of candidates) {
+    const raw = asString(candidate);
+    if (!raw) {
+      continue;
+    }
+    const derived = sanitizeProjectIdFragment(raw);
+    if (derived) {
+      return derived;
+    }
+  }
+  return `research-${new Date().toISOString().slice(0, 10)}`;
+}
+
+function deriveProjectTitleForBootstrap(params: {
+  title?: string | null;
+  topic?: string | null;
+  projectId: string;
+}): string {
+  return (
+    asString(params.title) ??
+    asString(params.topic) ??
+    params.projectId.replace(/-/g, " ")
+  );
+}
+
+function buildIdleResearchTemplateForBootstrap(params: {
+  title: string;
+  topic?: string | null;
+}): Record<string, unknown> {
+  const seedTopic = asString(params.topic) ?? params.title;
+  return {
+    enabled: false,
+    topic: seedTopic,
+    objective: `Track new literature, adjacent mechanisms, and transferable ideas for ${seedTopic}.`,
+    query_seeds: [
+      seedTopic,
+      `${seedTopic} literature review`,
+      `${seedTopic} strong baseline`,
+      `${seedTopic} failure analysis`,
+      `${seedTopic} transfer learning`,
+    ],
+    preferred_venues: ["arXiv", "ICLR", "NeurIPS", "ICML", "ACL"],
+    max_papers_per_cycle: 5,
+    cooldown_minutes: 30,
+    last_run_at: null,
+    last_digest_path: null,
+    last_source_update_at: null,
+    status: "disabled",
+    pending_reason:
+      "Review this template, then sync the approved config into PROJECT_MANIFEST.json.idle_research.",
+    next_query_hint: `Start from core papers on ${seedTopic}, then widen to neighboring mechanisms and recent counterexamples.`,
+    refresh_graph_on_new_core_papers: true,
+    last_round_new_canonical_papers: 0,
+    last_round_new_core_papers: 0,
+  };
+}
+
+function getConfiguredProjectsRoot(params: {
+  policy?: WorkflowGuardPolicy;
+  workspaceDir?: string;
+}): string | null {
+  const explicit = asString(params.policy?.projectsRoot);
+  if (explicit) {
+    return path.resolve(expandHome(explicit));
+  }
+  const envProjectsRoot = asString(process.env.OPENCLAW_PROJECTS_ROOT);
+  if (envProjectsRoot) {
+    return path.resolve(expandHome(envProjectsRoot));
+  }
+  if (params.policy?.allowWorkspaceFallback !== true) {
+    return null;
+  }
+  const workspaceDir =
+    asString(params.workspaceDir) ??
+    asString(process.env.OPENCLAW_WORKSPACE) ??
+    path.join(os.homedir(), ".openclaw", "workspace-researcher");
+  return path.join(path.resolve(expandHome(workspaceDir)), "projects");
+}
+
+async function ensureTextFile(targetPath: string, content: string): Promise<boolean> {
+  if (await pathExists(targetPath)) {
+    return false;
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, content, "utf8");
+  return true;
+}
+
+async function ensureJsonTemplateFile(params: {
+  targetPath: string;
+  templateRelativePath: string;
+  transform: (template: Record<string, unknown>) => Record<string, unknown>;
+}): Promise<boolean> {
+  const templatePath = path.join(getTemplatesRoot(), params.templateRelativePath);
+  const template =
+    (await readJsonIfExists<Record<string, unknown>>(templatePath)) ?? {};
+  const desired = params.transform(template);
+  const existing = await readJsonIfExists<Record<string, unknown>>(params.targetPath);
+  if (!existing) {
+    await writeJsonEnsured(params.targetPath, desired);
+    return true;
+  }
+  const merged = mergeMissingTemplateDefaults(existing, desired);
+  if (JSON.stringify(merged) !== JSON.stringify(existing)) {
+    await writeJsonEnsured(params.targetPath, merged);
+  }
+  return false;
+}
+
+function mergeMissingTemplateDefaults(
+  existing: Record<string, unknown>,
+  desired: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...existing };
+  for (const [key, desiredValue] of Object.entries(desired)) {
+    const existingValue = merged[key];
+    if (existingValue === undefined) {
+      merged[key] = cloneTemplateValue(desiredValue);
+      continue;
+    }
+    if (isPlainObject(existingValue) && isPlainObject(desiredValue)) {
+      merged[key] = mergeMissingTemplateDefaults(existingValue, desiredValue);
+    }
+  }
+  return merged;
+}
+
+function cloneTemplateValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneTemplateValue(entry));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, cloneTemplateValue(entry)])
+    );
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export async function ensureWorkflowProjectRoot(params: {
+  policy?: WorkflowGuardPolicy;
+  workspaceDir?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  messageChannel?: string;
+  channelKey?: string;
+  projectRoot?: string | null;
+  projectId?: string | null;
+  title?: string | null;
+  topic?: string | null;
+}): Promise<EnsuredWorkflowProject> {
+  const projectId = deriveProjectIdForBootstrap({
+    projectId: params.projectId,
+    title: params.title,
+    topic: params.topic,
+    channelKey: params.channelKey,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  const title = deriveProjectTitleForBootstrap({
+    title: params.title,
+    topic: params.topic,
+    projectId,
+  });
+  const projectsRoot = getConfiguredProjectsRoot({
+    policy: params.policy,
+    workspaceDir: params.workspaceDir,
+  });
+  if (!projectsRoot) {
+    throw new Error(
+      "projectsRoot is not configured for openclaw-research. Set plugins.entries.openclaw-research.config.projectsRoot (or OPENCLAW_PROJECTS_ROOT), or explicitly enable allowWorkspaceFallback if you want project scaffolds under the agent workspace."
+    );
+  }
+  const projectRoot = path.resolve(
+    expandHome(params.projectRoot ?? path.join(projectsRoot, projectId))
+  );
+  const created = !(await pathExists(projectRoot));
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(projectsRoot, { recursive: true });
+
+  const projectDirs = [
+    "graph",
+    "memory",
+    "researcher",
+    "researcher/idle-research",
+    "researcher/workflow_snapshots",
+    "researcher/paper_source",
+    "orchestrator",
+    "coder",
+    "analyzer",
+    "academic_writer",
+    "reviewer",
+    "cross-reviewer",
+  ];
+  for (const relativeDir of projectDirs) {
+    await fs.mkdir(path.join(projectRoot, relativeDir), { recursive: true });
+  }
+
+  const now = new Date().toISOString();
+  const defaultPaperSourceDir = getDefaultPapernexusSourceDir(projectId);
+  const manifestCreated = await ensureJsonTemplateFile({
+    targetPath: path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    templateRelativePath: "PROJECT_MANIFEST.json",
+    transform: (template) => ({
+      ...template,
+      project_id: projectId,
+      title,
+      status: "active",
+      owner_agent: "researcher",
+      current_stage: "setup",
+      current_micro_stage: "project_init",
+      next_action: '/research-pipeline "topic"',
+      resume_action: '/resume-pipeline "<project_id>"',
+      blocking_reason: "Project scaffold created; continue with literature collection and graph build.",
+      paper_source_dir: defaultPaperSourceDir,
+      graph_source_dir: defaultPaperSourceDir,
+      memory_scope: {
+        ...(asRecord(template.memory_scope) ?? {}),
+        project_isolated: true,
+      },
+      created_at: now,
+      updated_at: now,
+    }),
+  });
+  const trackRegistryCreated = await ensureJsonTemplateFile({
+    targetPath: path.join(projectRoot, "TRACK_REGISTRY.json"),
+    templateRelativePath: "TRACK_REGISTRY.json",
+    transform: (template) => ({
+      ...template,
+      project_id: projectId,
+      updated_at: now,
+    }),
+  });
+  const experimentLedgerCreated = await ensureJsonTemplateFile({
+    targetPath: getExperimentLedgerPath(projectRoot),
+    templateRelativePath: "EXPERIMENT_LEDGER.json",
+    transform: (template) => ({
+      ...template,
+      project_id: projectId,
+      updated_at: now,
+    }),
+  });
+  await ensureJsonTemplateFile({
+    targetPath: path.join(projectRoot, "researcher", "idle-research", "IDLE_RESEARCH.json"),
+    templateRelativePath: "IDLE_RESEARCH.example.json",
+    transform: () => buildIdleResearchTemplateForBootstrap({ title, topic: params.topic }),
+  });
+
+  const claimPolicyCreated = await ensureTextFile(
+    path.join(projectRoot, "CLAIM_POLICY.md"),
+    (await fs.readFile(path.join(getTemplatesRoot(), "CLAIM_POLICY.md"), "utf8")).toString()
+  );
+
+  const memoryTemplatesRoot = path.join(getTemplatesRoot(), "memory");
+  await ensureTextFile(
+    path.join(projectRoot, "memory", "ideation-memory.md"),
+    (await fs.readFile(path.join(memoryTemplatesRoot, "ideation-memory.md"), "utf8")).toString()
+  );
+  await ensureTextFile(
+    path.join(projectRoot, "memory", "experiment-memory.md"),
+    (await fs.readFile(path.join(memoryTemplatesRoot, "experiment-memory.md"), "utf8")).toString()
+  );
+
+  return {
+    projectRoot,
+    projectId,
+    projectsRoot,
+    title,
+    created,
+    manifestCreated,
+    trackRegistryCreated,
+    claimPolicyCreated,
+    experimentLedgerCreated,
+  };
 }
 
 function isBundledWritingModeTemplatePath(templatePath: string | null): boolean {
@@ -2001,6 +2442,467 @@ function serializeInnovationReflectionState(
   };
 }
 
+function normalizeTheoryObjectPacket(value: unknown): TheoryObjectPacket | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const statement = pickString(record, ["statement"]);
+  const packetId =
+    pickString(record, ["packetId", "packet_id"]) ??
+    pickString(record, ["lemmaId", "lemma_id"]) ??
+    pickString(record, ["theoremId", "theorem_id"]);
+  if (!packetId || !statement) {
+    return null;
+  }
+  return {
+    packet_id: packetId,
+    role:
+      pickString(record, ["role", "kind", "type"]) ??
+      (packetId.startsWith("thm_") ? "theorem" : "lemma"),
+    title: pickString(record, ["title", "name"]),
+    statement,
+    short_result: pickString(record, ["shortResult", "short_result", "result"]),
+    body_safe: pickBoolean(record, ["bodySafe", "body_safe"]) ?? false,
+    confidence: pickString(record, ["confidence", "signal"]),
+    appendix_required:
+      pickBoolean(record, ["appendixRequired", "appendix_required"]) ?? true,
+    appendix_path: pickString(record, ["appendixPath", "appendix_path"]),
+    evidence_pointers: asStringArray(
+      record.evidencePointers ?? record.evidence_pointers
+    ),
+    assumptions: asStringArray(record.assumptions),
+    derivation_outline: asStringArray(
+      record.derivationOutline ?? record.derivation_outline
+    ),
+    caveats: asStringArray(record.caveats),
+    notes: pickString(record, ["notes", "note"]),
+    source_claim_ids: asStringArray(
+      record.sourceClaimIds ?? record.source_claim_ids
+    ),
+    updated_at: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function serializeTheoryObjectPacket(packet: TheoryObjectPacket): Record<string, unknown> {
+  return {
+    packet_id: packet.packet_id,
+    role: packet.role,
+    title: packet.title,
+    statement: packet.statement,
+    short_result: packet.short_result,
+    body_safe: packet.body_safe,
+    confidence: packet.confidence,
+    appendix_required: packet.appendix_required,
+    appendix_path: packet.appendix_path,
+    evidence_pointers: packet.evidence_pointers,
+    assumptions: packet.assumptions,
+    derivation_outline: packet.derivation_outline,
+    caveats: packet.caveats,
+    notes: packet.notes,
+    source_claim_ids: packet.source_claim_ids,
+    updated_at: packet.updated_at,
+  };
+}
+
+function normalizeTheoryStateFile(value: unknown): TheoryStateFile {
+  const record = asRecord(value) ?? {};
+  const theoremCandidates = Array.isArray(record.theorem_candidates)
+    ? record.theorem_candidates.map(normalizeTheoryObjectPacket).filter(Boolean)
+    : [];
+  const lemmaPackets = Array.isArray(record.lemma_packets)
+    ? record.lemma_packets.map(normalizeTheoryObjectPacket).filter(Boolean)
+    : [];
+  const appendixSections = Array.isArray(record.appendix_sections)
+    ? record.appendix_sections
+        .map((item) => {
+          const section = asRecord(item);
+          if (!section) {
+            return null;
+          }
+          const sectionId = pickString(section, ["sectionId", "section_id"]);
+          const title = pickString(section, ["title"]);
+          if (!sectionId || !title) {
+            return null;
+          }
+          return {
+            section_id: sectionId,
+            title,
+            purpose: pickString(section, ["purpose"]),
+            packet_ids: asStringArray(section.packetIds ?? section.packet_ids),
+          } satisfies TheoryAppendixSection;
+        })
+        .filter(Boolean)
+    : [];
+  return {
+    schema_version:
+      Math.max(1, Math.floor(pickNumber(record, ["schemaVersion", "schema_version"]) ?? 1)),
+    status: normalizeStage(record.status) ?? "missing",
+    overall_signal: pickString(record, ["overallSignal", "overall_signal"]),
+    source_theory_note_path:
+      pickString(record, ["sourceTheoryNotePath", "source_theory_note_path"]) ??
+      DEFAULT_THEORY_NOTE_PATH,
+    thesis: pickString(record, ["thesis"]),
+    body_guidance: pickString(record, ["bodyGuidance", "body_guidance"]),
+    main_text_proof_style:
+      pickString(record, ["mainTextProofStyle", "main_text_proof_style"]) ??
+      "lemma_result_only",
+    theorem_candidates: theoremCandidates as TheoryObjectPacket[],
+    lemma_packets: lemmaPackets as TheoryObjectPacket[],
+    appendix_sections: appendixSections as TheoryAppendixSection[],
+    pending_reason: pickString(record, ["pendingReason", "pending_reason"]),
+    updated_at: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function serializeTheoryStateFile(state: TheoryStateFile): Record<string, unknown> {
+  return {
+    schema_version: state.schema_version,
+    status: state.status,
+    overall_signal: state.overall_signal,
+    source_theory_note_path: state.source_theory_note_path,
+    thesis: state.thesis,
+    body_guidance: state.body_guidance,
+    main_text_proof_style: state.main_text_proof_style,
+    theorem_candidates: state.theorem_candidates.map(serializeTheoryObjectPacket),
+    lemma_packets: state.lemma_packets.map(serializeTheoryObjectPacket),
+    appendix_sections: state.appendix_sections.map((section) => ({
+      section_id: section.section_id,
+      title: section.title,
+      purpose: section.purpose,
+      packet_ids: section.packet_ids,
+    })),
+    pending_reason: state.pending_reason,
+    updated_at: state.updated_at,
+  };
+}
+
+function normalizeTheorySupportState(value: unknown): TheorySupportState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    overallSignal: pickString(record, ["overallSignal", "overall_signal"]),
+    theoryStatePath:
+      pickString(record, ["theoryStatePath", "theory_state_path"]) ??
+      DEFAULT_THEORY_STATE_PATH,
+    sourceTheoryNotePath:
+      pickString(record, ["sourceTheoryNotePath", "source_theory_note_path"]) ??
+      DEFAULT_THEORY_NOTE_PATH,
+    proofPacketDir:
+      pickString(record, ["proofPacketDir", "proof_packet_dir"]) ??
+      DEFAULT_PROOF_PACKET_DIR,
+    appendixPacketPath:
+      pickString(record, ["appendixPacketPath", "appendix_packet_path"]) ??
+      DEFAULT_THEORY_APPENDIX_PLAN_PATH,
+    mainTextProofStyle:
+      pickString(record, ["mainTextProofStyle", "main_text_proof_style"]) ??
+      "lemma_result_only",
+    bodyReady: pickBoolean(record, ["bodyReady", "body_ready"]) ?? false,
+    theoremCount: Math.max(0, Math.floor(pickNumber(record, ["theoremCount", "theorem_count"]) ?? 0)),
+    lemmaCount: Math.max(0, Math.floor(pickNumber(record, ["lemmaCount", "lemma_count"]) ?? 0)),
+    proofPacketCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["proofPacketCount", "proof_packet_count"]) ?? 0)
+    ),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeTheorySupportState(state: TheorySupportState): Record<string, unknown> {
+  return {
+    status: state.status,
+    overall_signal: state.overallSignal,
+    theory_state_path: state.theoryStatePath,
+    source_theory_note_path: state.sourceTheoryNotePath,
+    proof_packet_dir: state.proofPacketDir,
+    appendix_packet_path: state.appendixPacketPath,
+    main_text_proof_style: state.mainTextProofStyle,
+    body_ready: state.bodyReady,
+    theorem_count: state.theoremCount,
+    lemma_count: state.lemmaCount,
+    proof_packet_count: state.proofPacketCount,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function humanizeTheoryPacketLabel(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw) {
+    return "Untitled theory packet";
+  }
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function dedupeTheoryPackets(packets: TheoryObjectPacket[]): TheoryObjectPacket[] {
+  const unique = new Map<string, TheoryObjectPacket>();
+  for (const packet of packets) {
+    if (!packet?.packet_id) {
+      continue;
+    }
+    if (!unique.has(packet.packet_id)) {
+      unique.set(packet.packet_id, packet);
+    }
+  }
+  return Array.from(unique.values()).sort((left, right) => {
+    const rank = (role: string) =>
+      role === "theorem" || role === "proposition" || role === "corollary" ? 0 : 1;
+    const roleDelta = rank(left.role) - rank(right.role);
+    if (roleDelta !== 0) {
+      return roleDelta;
+    }
+    return (left.title ?? left.packet_id).localeCompare(right.title ?? right.packet_id);
+  });
+}
+
+function inferTheoryAppendixSections(params: {
+  packets: TheoryObjectPacket[];
+  existingSections: TheoryAppendixSection[];
+}): TheoryAppendixSection[] {
+  const appendixPackets = params.packets.filter(
+    (packet) =>
+      packet.appendix_required ||
+      packet.derivation_outline.length > 0 ||
+      packet.assumptions.length > 0 ||
+      packet.caveats.length > 0
+  );
+  const appendixPacketIds = new Set(appendixPackets.map((packet) => packet.packet_id));
+  const sections: TheoryAppendixSection[] = [];
+  const seenSectionIds = new Set<string>();
+  const coveredPacketIds = new Set<string>();
+
+  for (const section of params.existingSections) {
+    const packetIds = section.packet_ids.filter((packetId) => appendixPacketIds.has(packetId));
+    if (packetIds.length === 0 || seenSectionIds.has(section.section_id)) {
+      continue;
+    }
+    sections.push({
+      section_id: section.section_id,
+      title: section.title,
+      purpose: section.purpose,
+      packet_ids: packetIds,
+    });
+    seenSectionIds.add(section.section_id);
+    for (const packetId of packetIds) {
+      coveredPacketIds.add(packetId);
+    }
+  }
+
+  for (const packet of appendixPackets) {
+    if (coveredPacketIds.has(packet.packet_id)) {
+      continue;
+    }
+    const title = packet.title ?? humanizeTheoryPacketLabel(packet.packet_id);
+    const sectionId = `appendix_${packet.packet_id}`;
+    if (seenSectionIds.has(sectionId)) {
+      continue;
+    }
+    sections.push({
+      section_id: sectionId,
+      title,
+      purpose: `Detailed ${packet.role} derivation and boundary conditions for ${title}.`,
+      packet_ids: [packet.packet_id],
+    });
+    seenSectionIds.add(sectionId);
+  }
+
+  return sections;
+}
+
+function escapeLatexText(value: string): string {
+  return value
+    .replace(/\\/g, "\\textbackslash{}")
+    .replace(/([#$%&_{}])/g, "\\$1")
+    .replace(/~/g, "\\textasciitilde{}")
+    .replace(/\^/g, "\\textasciicircum{}");
+}
+
+function sanitizeLatexLabel(value: string): string {
+  return value.replace(/[^A-Za-z0-9:-]+/g, "-");
+}
+
+function renderMarkdownList(items: string[], emptyText: string): string {
+  if (items.length === 0) {
+    return `- ${emptyText}`;
+  }
+  return items.map((item) => `- ${item}`).join("\n");
+}
+
+function renderLatexItemList(items: string[]): string {
+  if (items.length === 0) {
+    return "\\begin{itemize}\n\\item None.\n\\end{itemize}";
+  }
+  return [
+    "\\begin{itemize}",
+    ...items.map((item) => `\\item ${escapeLatexText(item)}`),
+    "\\end{itemize}",
+  ].join("\n");
+}
+
+function buildTheoryAppendixPlanMarkdown(params: {
+  theoryFile: TheoryStateFile;
+  packets: TheoryObjectPacket[];
+  appendixSections: TheoryAppendixSection[];
+  appendixSectionPath: string;
+}): string {
+  const bodySafePackets = params.packets.filter((packet) => packet.body_safe);
+  const appendixOnlyPackets = params.packets.filter((packet) => !packet.body_safe);
+  const lines: string[] = [
+    "# Theory Appendix Plan",
+    "",
+    "## Synthesis Summary",
+    `- Overall signal: ${(params.theoryFile.overall_signal ?? "unknown").toUpperCase()}`,
+    `- Thesis: ${params.theoryFile.thesis ?? "Not yet stated"}`,
+    `- Main-text proof style: ${params.theoryFile.main_text_proof_style ?? "lemma_result_only"}`,
+    `- Body-safe packets: ${bodySafePackets.length}`,
+    `- Appendix sections: ${params.appendixSections.length}`,
+    `- Appendix draft path: ${params.appendixSectionPath}`,
+    "",
+    "## Main-Text Safe Statements",
+  ];
+
+  if (bodySafePackets.length === 0) {
+    lines.push(
+      "- No packet is currently body-safe. Keep theory discussion in mechanism / appendix language until stronger support exists."
+    );
+  } else {
+    for (const packet of bodySafePackets) {
+      lines.push(`### ${packet.title ?? humanizeTheoryPacketLabel(packet.packet_id)}`);
+      lines.push(`- Packet ID: ${packet.packet_id}`);
+      lines.push(`- Role: ${packet.role}`);
+      lines.push(`- Statement: ${packet.statement}`);
+      if (packet.short_result) {
+        lines.push(`- Main-text result: ${packet.short_result}`);
+      }
+      lines.push(
+        `- Evidence basis:\n${renderMarkdownList(packet.evidence_pointers, "Use the paired empirical evidence from the analyzer report.")}`
+      );
+      lines.push(
+        `- Assumptions:\n${renderMarkdownList(packet.assumptions, "State assumptions conservatively in prose.")}`
+      );
+      lines.push(
+        `- Caveats:\n${renderMarkdownList(packet.caveats, "No extra caveat recorded yet.")}`
+      );
+      lines.push("");
+    }
+  }
+
+  lines.push("## Appendix Sections");
+  if (params.appendixSections.length === 0) {
+    lines.push("- No appendix section is required yet.");
+  } else {
+    for (const section of params.appendixSections) {
+      const packets = section.packet_ids
+        .map((packetId) => params.packets.find((packet) => packet.packet_id === packetId))
+        .filter(Boolean) as TheoryObjectPacket[];
+      lines.push(`### ${section.title}`);
+      if (section.purpose) {
+        lines.push(`- Purpose: ${section.purpose}`);
+      }
+      lines.push(`- Packet IDs: ${section.packet_ids.join(", ")}`);
+      for (const packet of packets) {
+        lines.push(`- ${packet.role}: ${packet.statement}`);
+        if (packet.derivation_outline.length > 0) {
+          lines.push(
+            `  - Derivation outline:\n${packet.derivation_outline
+              .map((item) => `    - ${item}`)
+              .join("\n")}`
+          );
+        }
+      }
+      lines.push("");
+    }
+  }
+
+  lines.push("## Non-Body-Safe / Exploratory Packets");
+  if (appendixOnlyPackets.length === 0) {
+    lines.push("- None.");
+  } else {
+    for (const packet of appendixOnlyPackets) {
+      lines.push(`- ${packet.packet_id}: ${packet.statement}`);
+    }
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function buildTheoryAppendixSectionDraft(params: {
+  theoryFile: TheoryStateFile;
+  packets: TheoryObjectPacket[];
+  appendixSections: TheoryAppendixSection[];
+}): string {
+  const sections: string[] = [
+    "% Auto-generated theory appendix draft from THEORY_STATE.json and proof packets.",
+    "\\section{Additional Theory and Derivation Details}",
+    "\\label{app:theory}",
+    "",
+    "This appendix expands the theorem and lemma sketches referenced in the main text.",
+    "",
+  ];
+
+  for (const section of params.appendixSections) {
+    sections.push(`\\subsection{${escapeLatexText(section.title)}}`);
+    sections.push(`\\label{sec:${sanitizeLatexLabel(section.section_id)}}`);
+    if (section.purpose) {
+      sections.push(escapeLatexText(section.purpose));
+      sections.push("");
+    }
+    const packets = section.packet_ids
+      .map((packetId) => params.packets.find((packet) => packet.packet_id === packetId))
+      .filter(Boolean) as TheoryObjectPacket[];
+    for (const packet of packets) {
+      sections.push(
+        `\\paragraph{${escapeLatexText(humanizeTheoryPacketLabel(packet.role))}: ${escapeLatexText(packet.title ?? humanizeTheoryPacketLabel(packet.packet_id))}}`
+      );
+      sections.push(escapeLatexText(packet.statement));
+      sections.push("");
+      if (packet.short_result) {
+        sections.push(`\\textbf{Result connection.} ${escapeLatexText(packet.short_result)}`);
+        sections.push("");
+      }
+      sections.push("\\textbf{Assumptions.}");
+      sections.push(renderLatexItemList(packet.assumptions));
+      sections.push("");
+      sections.push("\\textbf{Derivation sketch.}");
+      if (packet.derivation_outline.length === 0) {
+        sections.push(
+          "\\begin{enumerate}\n\\item Expand this derivation from the structured packet before submission.\n\\end{enumerate}"
+        );
+      } else {
+        sections.push(
+          [
+            "\\begin{enumerate}",
+            ...packet.derivation_outline.map(
+              (item) => `\\item ${escapeLatexText(item)}`
+            ),
+            "\\end{enumerate}",
+          ].join("\n")
+        );
+      }
+      sections.push("");
+      sections.push("\\textbf{Evidence links.}");
+      sections.push(renderLatexItemList(packet.evidence_pointers));
+      sections.push("");
+      sections.push("\\textbf{Caveats.}");
+      sections.push(renderLatexItemList(packet.caveats));
+      sections.push("");
+    }
+  }
+
+  if (params.appendixSections.length === 0) {
+    sections.push(
+      "No appendix-only theorem or lemma packet is currently available. Keep theoretical discussion conservative."
+    );
+    sections.push("");
+  }
+
+  return `${sections.join("\n").trim()}\n`;
+}
+
 function resolveWritingTemplatePath(
   projectRoot: string | null,
   templatePath: string | null
@@ -2015,6 +2917,77 @@ function resolveWritingTemplatePath(
     return templatePath;
   }
   return path.normalize(path.join(projectRoot, templatePath));
+}
+
+function sanitizeTemplateCopyName(value: string): string {
+  const cleaned = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return cleaned || "template";
+}
+
+function getConfiguredWritingModeTemplatePath(
+  policy: WorkflowGuardPolicy | undefined,
+  mode: WritingMode
+): string | null {
+  const normalized = normalizePolicy(policy as Record<string, unknown> | undefined);
+  const configured =
+    mode === "conference"
+      ? normalized.defaultConferenceTemplatePath
+      : normalized.defaultJournalTemplatePath;
+  return configured || null;
+}
+
+async function copyWritingTemplateIntoProject(params: {
+  projectRoot: string;
+  sourcePath: string;
+  paperMode: WritingMode | null;
+}): Promise<{
+  projectTemplatePath: string;
+  projectTemplateResolvedPath: string;
+}> {
+  const resolvedSourcePath = path.normalize(params.sourcePath);
+  const projectRoot = path.normalize(params.projectRoot);
+
+  if (isInside(projectRoot, resolvedSourcePath)) {
+    return {
+      projectTemplatePath: path.relative(projectRoot, resolvedSourcePath),
+      projectTemplateResolvedPath: resolvedSourcePath,
+    };
+  }
+
+  const sourceStat = await fs.stat(resolvedSourcePath);
+  const templateBundleRoot = path.join(projectRoot, "academic_writer", "template_bundle");
+  await fs.mkdir(templateBundleRoot, { recursive: true });
+
+  const modePrefix = params.paperMode ? `${params.paperMode}-` : "";
+  if (sourceStat.isDirectory()) {
+    const destinationDir = path.join(
+      templateBundleRoot,
+      `${modePrefix}${sanitizeTemplateCopyName(path.basename(resolvedSourcePath))}`
+    );
+    await fs.rm(destinationDir, { recursive: true, force: true });
+    await fs.cp(resolvedSourcePath, destinationDir, { recursive: true, force: true });
+    return {
+      projectTemplatePath: path.relative(projectRoot, destinationDir),
+      projectTemplateResolvedPath: destinationDir,
+    };
+  }
+
+  const sourceDir = path.dirname(resolvedSourcePath);
+  const destinationDir = path.join(
+    templateBundleRoot,
+    `${modePrefix}${sanitizeTemplateCopyName(path.basename(sourceDir))}`
+  );
+  await fs.rm(destinationDir, { recursive: true, force: true });
+  await fs.cp(sourceDir, destinationDir, { recursive: true, force: true });
+  const destinationFile = path.join(destinationDir, path.basename(resolvedSourcePath));
+  return {
+    projectTemplatePath: path.relative(projectRoot, destinationFile),
+    projectTemplateResolvedPath: destinationFile,
+  };
 }
 
 async function resolveBundledWritingModeTemplatePath(
@@ -2042,8 +3015,14 @@ function normalizeWritingContractState(value: unknown): WritingContractState {
     templateRequired:
       pickBoolean(record, ["templateRequired", "template_required"]) ?? false,
     templatePath: pickString(record, ["templatePath", "template_path"]),
+    projectTemplatePath: pickString(record, [
+      "projectTemplatePath",
+      "project_template_path",
+    ]),
     templateName: pickString(record, ["templateName", "template_name"]),
     templateStatus: normalizeStage(record.templateStatus ?? record.template_status) ?? "optional",
+    templateCopyStatus:
+      normalizeStage(record.templateCopyStatus ?? record.template_copy_status) ?? "pending",
     bodyPageBudget: pickNumber(record, ["bodyPageBudget", "body_page_budget"]),
     referencePageBudget: pickNumber(record, [
       "referencePageBudget",
@@ -2064,6 +3043,23 @@ function normalizeWritingContractState(value: unknown): WritingContractState {
         1,
         Math.floor(pickNumber(record, ["maxHeadlineClaims", "max_headline_claims"]) ?? 3)
       ),
+    mainTextProofStyle:
+      pickString(record, ["mainTextProofStyle", "main_text_proof_style"]) ??
+      "lemma_result_only",
+    proofAppendixRequired:
+      pickBoolean(record, ["proofAppendixRequired", "proof_appendix_required"]) ?? true,
+    proofAppendixPath:
+      pickString(record, ["proofAppendixPath", "proof_appendix_path"]) ??
+      "academic_writer/paper/sections/appendix_theory.tex",
+    proofAppendixStatus:
+      normalizeStage(record.proofAppendixStatus ?? record.proof_appendix_status) ?? "pending",
+    theoryNotePath:
+      pickString(record, ["theoryNotePath", "theory_note_path"]) ??
+      "analyzer/THEORY_SUPPORT_NOTE.md",
+    proofChecklist:
+      asStringArray(record.proofChecklist ?? record.proof_checklist).length > 0
+        ? asStringArray(record.proofChecklist ?? record.proof_checklist)
+        : [...DEFAULT_PROOF_CHECKLIST],
     storylineSource: pickString(record, ["storylineSource", "storyline_source"]),
     kgStorylineRequired:
       pickBoolean(record, ["kgStorylineRequired", "kg_storyline_required"]) ?? false,
@@ -2120,14 +3116,22 @@ function serializeWritingContractState(
     paper_mode: state.paperMode,
     template_required: state.templateRequired,
     template_path: state.templatePath,
+    project_template_path: state.projectTemplatePath,
     template_name: state.templateName,
     template_status: state.templateStatus,
+    template_copy_status: state.templateCopyStatus,
     body_page_budget: state.bodyPageBudget,
     reference_page_budget: state.referencePageBudget,
     body_word_target_min: state.bodyWordTargetMin,
     body_word_target_max: state.bodyWordTargetMax,
     max_core_ideas: state.maxCoreIdeas,
     max_headline_claims: state.maxHeadlineClaims,
+    main_text_proof_style: state.mainTextProofStyle,
+    proof_appendix_required: state.proofAppendixRequired,
+    proof_appendix_path: state.proofAppendixPath,
+    proof_appendix_status: state.proofAppendixStatus,
+    theory_note_path: state.theoryNotePath,
+    proof_checklist: state.proofChecklist,
     storyline_source: state.storylineSource,
     kg_storyline_required: state.kgStorylineRequired,
     kg_storyline_status: state.kgStorylineStatus,
@@ -2149,48 +3153,71 @@ async function evaluateWritingContractState(params: {
   state: WritingContractState;
 }): Promise<{
   templateResolvedPath: string | null;
+  projectTemplateResolvedPath: string | null;
+  sourceTemplateResolvedPath: string | null;
   templateExists: boolean;
   templateStatus: string;
+  templateCopyStatus: string;
   pendingReason: string | null;
 }> {
-  const templateResolvedPath = resolveWritingTemplatePath(
+  const sourceTemplateResolvedPath = resolveWritingTemplatePath(
     params.projectRoot,
     params.state.templatePath
   );
-  const templateExists = templateResolvedPath
-    ? await pathExists(templateResolvedPath)
+  const projectTemplateResolvedPath = resolveWritingTemplatePath(
+    params.projectRoot,
+    params.state.projectTemplatePath
+  );
+  const projectTemplateExists = projectTemplateResolvedPath
+    ? await pathExists(projectTemplateResolvedPath)
     : false;
+  const sourceTemplateExists = sourceTemplateResolvedPath
+    ? await pathExists(sourceTemplateResolvedPath)
+    : false;
+  const templateResolvedPath = projectTemplateExists
+    ? projectTemplateResolvedPath
+    : sourceTemplateResolvedPath;
+  const templateExists = projectTemplateExists || sourceTemplateExists;
 
   let templateStatus = params.state.templateStatus;
+  let templateCopyStatus = params.state.templateCopyStatus;
   let pendingReason = params.state.pendingReason;
 
   if (!params.state.templateRequired && !params.state.templatePath) {
     templateStatus = "optional";
+    templateCopyStatus = params.state.projectTemplatePath ? "ready" : "pending";
     pendingReason = null;
   } else if (params.state.templateRequired && !params.state.templatePath) {
     templateStatus = "missing";
+    templateCopyStatus = "missing";
     pendingReason =
       pendingReason ??
       "Writer is required to follow a user-provided template, but writing_contract.template_path is not configured.";
   } else if (params.state.templatePath && !templateExists) {
     templateStatus = "missing";
+    templateCopyStatus = "missing";
     pendingReason =
       pendingReason ??
       "The configured writing template path cannot be read. Restore the template file or update writing_contract.template_path.";
   } else if (params.state.lastTemplateAppliedAt) {
     templateStatus =
       params.state.templateStatus === "configured" ? "applied" : params.state.templateStatus;
+    templateCopyStatus = projectTemplateExists ? "ready" : "source_only";
     pendingReason = null;
   } else if (params.state.templatePath) {
     templateStatus =
       params.state.templateStatus === "optional" ? "configured" : params.state.templateStatus;
+    templateCopyStatus = projectTemplateExists ? "ready" : "source_only";
     pendingReason = null;
   }
 
   return {
     templateResolvedPath,
+    projectTemplateResolvedPath,
+    sourceTemplateResolvedPath,
     templateExists,
     templateStatus,
+    templateCopyStatus,
     pendingReason,
   };
 }
@@ -2675,10 +3702,15 @@ async function getMissingStageSignals(params: {
         "TRACK_VERDICTS.md",
         "UNSUPPORTED_CLAIMS.md",
         "QUALITY_AUDIT.md",
+        "THEORY_SUPPORT_NOTE.md",
+        "THEORY_STATE.json",
       ]) {
         if (!(await pathExists(path.join(projectRoot, "analyzer", file)))) {
           missing.push(`{PROJ}/analyzer/${file}`);
         }
+      }
+      if (!(await isNonEmptyDirectory(path.join(projectRoot, "analyzer", "proof-packets")))) {
+        missing.push("{PROJ}/analyzer/proof-packets/");
       }
       break;
     case "review": {
@@ -2728,14 +3760,51 @@ async function getMissingStageSignals(params: {
             );
           }
         }
-      }
-      if (!(await pathExists(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md")))) {
-        missing.push("{PROJ}/academic_writer/PAPER_PLAN.md");
-      }
-      if (
-        !(await pathExists(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md")))
-      ) {
-        missing.push("{PROJ}/academic_writer/STORYLINE_SKETCH.md");
+        if (!(await pathExists(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md")))) {
+          missing.push("{PROJ}/academic_writer/PAPER_PLAN.md");
+        }
+        if (
+          !(await pathExists(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md")))
+        ) {
+          missing.push("{PROJ}/academic_writer/STORYLINE_SKETCH.md");
+        }
+        {
+          const theorySupport = normalizeTheorySupportState(manifest?.theory_state);
+          if (writingContract.proofAppendixRequired) {
+            const theoryStatePath = resolveProjectArtifactPath(
+              projectRoot,
+              theorySupport.theoryStatePath
+            );
+            if (!theoryStatePath || !(await pathExists(theoryStatePath))) {
+              missing.push("{PROJ}/analyzer/THEORY_STATE.json");
+            }
+            const proofPacketDir = resolveProjectArtifactPath(
+              projectRoot,
+              theorySupport.proofPacketDir
+            );
+            if (!proofPacketDir || !(await isNonEmptyDirectory(proofPacketDir))) {
+              missing.push("{PROJ}/analyzer/proof-packets/");
+            }
+            const appendixPlanPath = resolveProjectArtifactPath(
+              projectRoot,
+              theorySupport.appendixPacketPath ?? DEFAULT_THEORY_APPENDIX_PLAN_PATH
+            );
+            if (!appendixPlanPath || !(await pathExists(appendixPlanPath))) {
+              missing.push(
+                "{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md (or theory_state.appendix_packet_path)"
+              );
+            }
+            const appendixDraftPath = resolveProjectArtifactPath(
+              projectRoot,
+              writingContract.proofAppendixPath ?? DEFAULT_THEORY_APPENDIX_SECTION_PATH
+            );
+            if (!appendixDraftPath || !(await pathExists(appendixDraftPath))) {
+              missing.push(
+                "{PROJ}/academic_writer/paper/sections/appendix_theory.tex (or writing_contract.proof_appendix_path)"
+              );
+            }
+          }
+        }
       }
       {
         const citationIntegrity = normalizeCitationIntegrityState(
@@ -3128,6 +4197,9 @@ export async function buildWorkflowSnapshot(params: {
   const innovationReflection = normalizeInnovationReflectionState(
     asRecord(projectState.manifest?.innovation_reflection)
   );
+  const theorySupport = normalizeTheorySupportState(
+    asRecord(projectState.manifest?.theory_state)
+  );
   const writingContract = normalizeWritingContractState(
     asRecord(projectState.manifest?.writing_contract)
   );
@@ -3238,6 +4310,14 @@ export async function buildWorkflowSnapshot(params: {
     innovationReflectionLastAt: innovationReflection.lastReflectionAt,
     innovationReflectionPath: innovationReflection.lastReflectionPath,
     innovationReflectionPendingReason: innovationReflection.pendingReason,
+    theorySupportStatus: theorySupport.status,
+    theorySupportSignal: theorySupport.overallSignal,
+    theoryStatePath: theorySupport.theoryStatePath,
+    theoryProofPacketDir: theorySupport.proofPacketDir,
+    theoryAppendixPacketPath: theorySupport.appendixPacketPath,
+    theoryPacketCount: theorySupport.proofPacketCount,
+    theoryBodyReady: theorySupport.bodyReady,
+    theoryPendingReason: theorySupport.pendingReason,
     writingTemplateRequired: writingContract.templateRequired,
     writingPaperMode: writingContract.paperMode,
     writingBodyPageBudget: writingContract.bodyPageBudget,
@@ -3247,8 +4327,16 @@ export async function buildWorkflowSnapshot(params: {
     writingMaxCoreIdeas: writingContract.maxCoreIdeas,
     writingMaxHeadlineClaims: writingContract.maxHeadlineClaims,
     writingTemplatePath: writingContractEval.templateResolvedPath,
+    writingProjectTemplatePath: writingContractEval.projectTemplateResolvedPath,
     writingTemplateStatus: writingContractEval.templateStatus,
+    writingTemplateCopyStatus: writingContractEval.templateCopyStatus,
     writingTemplateMappingPath: writingContract.templateMappingPath,
+    mainTextProofStyle: writingContract.mainTextProofStyle,
+    proofAppendixRequired: writingContract.proofAppendixRequired,
+    proofAppendixPath: writingContract.proofAppendixPath,
+    proofAppendixStatus: writingContract.proofAppendixStatus,
+    theoryNotePath: writingContract.theoryNotePath,
+    proofChecklist: writingContract.proofChecklist,
     kgStorylineRequired: writingContract.kgStorylineRequired,
     kgStorylineStatus: writingContract.kgStorylineStatus,
     kgStorylinePacketPath: writingContract.kgStorylinePacketPath,
@@ -3313,6 +4401,21 @@ export function formatWorkflowSnapshotForPrompt(params: {
   if (snapshot.recommendedOwner) {
     lines.push(`Expected owner for this stage: ${snapshot.recommendedOwner}`);
   }
+  if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
+    lines.push(
+      `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
+    );
+    lines.push(
+      `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route or hand off the task to ${snapshot.recommendedOwner} via research_workflow.dispatch_task, sessions_send, or workflow mailbox.`
+    );
+    lines.push(
+      "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase."
+    );
+  } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
+    lines.push(
+      `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
+    );
+  }
   if (snapshot.nextAction) {
     lines.push(`next_action: ${snapshot.nextAction}`);
   }
@@ -3358,6 +4461,9 @@ export function formatWorkflowSnapshotForPrompt(params: {
   );
   lines.push(
     "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
+  );
+  lines.push(
+    "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
   );
   if (snapshot.role === "researcher") {
     lines.push(
@@ -3522,12 +4628,32 @@ export function formatWorkflowSnapshotForPrompt(params: {
   lines.push(
     "Innovation reflection rule: if experiments have produced new evidence since the last reflection, run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before proposing or locking a new innovation direction."
   );
+  if (snapshot.role === "analyzer" || snapshot.currentStage === "analyze") {
+    lines.push(
+      "Theory packet rule: Analyzer should not stop at THEORY_SUPPORT_NOTE.md. Write analyzer/THEORY_STATE.json plus analyzer/proof-packets/*.json so theorem / lemma candidates, assumptions, derivation outlines, and caveats become structured objects for Writer."
+    );
+    lines.push(
+      "Theory-phase rule: after the packet set is current, run /theory-phase or research_workflow.materialize_theory_appendix so Writer receives a generated THEORY_APPENDIX_PLAN.md and appendix_theory.tex draft."
+    );
+  }
   if (snapshot.role === "academic_writer" || snapshot.currentStage === "write") {
     lines.push(
-      "Writing template rule: if writing_contract.template_required is true or a writing template path is configured, read that template before /paper-plan or /paper-write. Keep PAPER_PLAN.md, TEMPLATE_MAPPING.md, and section drafts aligned with it."
+      "Writing template rule: if writing_contract.template_required is true or a writing template path is configured, read the project-local template copy before /paper-plan or /paper-write. Never edit the external source template in place; keep PAPER_PLAN.md, TEMPLATE_MAPPING.md, and section drafts aligned with the copied template."
     );
     lines.push(
       "Writing mode rule: conference mode targets 9 body pages + 2 reference pages; journal mode targets 12 body pages + 2 reference pages. Keep the paper to 1-2 core ideas and do not let side tracks re-enter the headline narrative."
+    );
+    lines.push(
+      "Proof-writing rule: when the writing contract enables proof-aware writing, keep the main text to theorem/lemma statements, intuition, and final consequences; move full derivations, algebra, and case-by-case proofs into the appendix."
+    );
+    lines.push(
+      "Theory support rule: use analyzer/THEORY_SUPPORT_NOTE.md or the configured theory note path as the ceiling for formal claims. Where proof confidence is weak, write conservative mechanism language in the body and spell out caveats in the appendix or limitations."
+    );
+    lines.push(
+      "Structured proof-object rule: read analyzer/THEORY_STATE.json and analyzer/proof-packets/*.json before drafting. Use those packets to decide which statements are body-safe and which derivations belong in the appendix."
+    );
+    lines.push(
+      "Appendix draft rule: start from academic_writer/THEORY_APPENDIX_PLAN.md and the configured proof_appendix_path instead of reconstructing derivations from scratch."
     );
     lines.push(
       "KG storyline rule: when writing_contract.kg_storyline_required is true, build and use a KG storyline packet that maps problem -> gap -> method -> evidence -> limitations before broadening prose."
@@ -4075,14 +5201,74 @@ export async function getInnovationReflectionStateSummary(params: {
   };
 }
 
+export async function getTheoryStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: TheorySupportState;
+  theoryStateResolvedPath: string | null;
+  theoryStateExists: boolean;
+  sourceTheoryNoteResolvedPath: string | null;
+  sourceTheoryNoteExists: boolean;
+  proofPacketDirResolvedPath: string | null;
+  proofPacketCount: number;
+  theoryFile: TheoryStateFile | null;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeTheorySupportState(manifest.theory_state);
+  const theoryStateResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.theoryStatePath
+  );
+  const sourceTheoryNoteResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.sourceTheoryNotePath
+  );
+  const proofPacketDirResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.proofPacketDir
+  );
+  const theoryStateExists = theoryStateResolvedPath
+    ? await pathExists(theoryStateResolvedPath)
+    : false;
+  const sourceTheoryNoteExists = sourceTheoryNoteResolvedPath
+    ? await pathExists(sourceTheoryNoteResolvedPath)
+    : false;
+  const theoryFile = theoryStateExists
+    ? normalizeTheoryStateFile(await readJsonIfExists(theoryStateResolvedPath!))
+    : null;
+  let proofPacketCount = 0;
+  if (proofPacketDirResolvedPath && (await pathExists(proofPacketDirResolvedPath))) {
+    try {
+      const entries = await fs.readdir(proofPacketDirResolvedPath);
+      proofPacketCount = entries.filter((entry) => entry.endsWith(".json")).length;
+    } catch {
+      proofPacketCount = 0;
+    }
+  }
+  return {
+    state,
+    theoryStateResolvedPath,
+    theoryStateExists,
+    sourceTheoryNoteResolvedPath,
+    sourceTheoryNoteExists,
+    proofPacketDirResolvedPath,
+    proofPacketCount,
+    theoryFile,
+  };
+}
+
 export async function getWritingContractStateSummary(params: {
   projectRoot: string;
+  policy?: WorkflowGuardPolicy;
 }): Promise<{
   state: WritingContractState;
   templateResolvedPath: string | null;
+  projectTemplateResolvedPath: string | null;
+  sourceTemplateResolvedPath: string | null;
   templateExists: boolean;
   templateReady: boolean;
   templateStatus: string;
+  templateCopyStatus: string;
   paragraphLogicStatus: string;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
@@ -4094,12 +5280,366 @@ export async function getWritingContractStateSummary(params: {
   return {
     state,
     templateResolvedPath: evaluation.templateResolvedPath,
+    projectTemplateResolvedPath: evaluation.projectTemplateResolvedPath,
+    sourceTemplateResolvedPath: evaluation.sourceTemplateResolvedPath,
     templateExists: evaluation.templateExists,
     templateReady:
       !state.templateRequired ||
       Boolean(evaluation.templateResolvedPath && evaluation.templateExists),
     templateStatus: evaluation.templateStatus,
+    templateCopyStatus: evaluation.templateCopyStatus,
     paragraphLogicStatus: state.paragraphLogicStatus,
+  };
+}
+
+export async function recordTheoryState(params: {
+  projectRoot: string;
+  theoryState: Record<string, unknown>;
+}): Promise<{
+  state: TheorySupportState;
+  theoryStateResolvedPath: string | null;
+  proofPacketDirResolvedPath: string | null;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeTheorySupportState(manifest.theory_state);
+  const patch = asRecord(params.theoryState) ?? {};
+  const next: TheorySupportState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    overallSignal:
+      pickString(patch, ["overallSignal", "overall_signal"]) ?? current.overallSignal,
+    theoryStatePath:
+      pickString(patch, ["theoryStatePath", "theory_state_path"]) ?? current.theoryStatePath,
+    sourceTheoryNotePath:
+      pickString(patch, ["sourceTheoryNotePath", "source_theory_note_path"]) ??
+      current.sourceTheoryNotePath,
+    proofPacketDir:
+      pickString(patch, ["proofPacketDir", "proof_packet_dir"]) ?? current.proofPacketDir,
+    appendixPacketPath:
+      pickString(patch, ["appendixPacketPath", "appendix_packet_path"]) ??
+      current.appendixPacketPath,
+    mainTextProofStyle:
+      pickString(patch, ["mainTextProofStyle", "main_text_proof_style"]) ??
+      current.mainTextProofStyle,
+    bodyReady: pickBoolean(patch, ["bodyReady", "body_ready"]) ?? current.bodyReady,
+    theoremCount: Math.max(
+      0,
+      Math.floor(pickNumber(patch, ["theoremCount", "theorem_count"]) ?? current.theoremCount)
+    ),
+    lemmaCount: Math.max(
+      0,
+      Math.floor(pickNumber(patch, ["lemmaCount", "lemma_count"]) ?? current.lemmaCount)
+    ),
+    proofPacketCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["proofPacketCount", "proof_packet_count"]) ?? current.proofPacketCount
+      )
+    ),
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ?? new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  const theoryStatePayload = asRecord(patch.theoryStateFile ?? patch.theory_state_file);
+  const theoryStateResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.theoryStatePath
+  );
+  if (theoryStatePayload && theoryStateResolvedPath) {
+    const normalized = normalizeTheoryStateFile({
+      ...theoryStatePayload,
+      updated_at: next.lastUpdatedAt,
+      overall_signal:
+        pickString(theoryStatePayload, ["overallSignal", "overall_signal"]) ?? next.overallSignal,
+      main_text_proof_style:
+        pickString(theoryStatePayload, ["mainTextProofStyle", "main_text_proof_style"]) ??
+        next.mainTextProofStyle,
+      source_theory_note_path:
+        pickString(theoryStatePayload, ["sourceTheoryNotePath", "source_theory_note_path"]) ??
+        next.sourceTheoryNotePath,
+    });
+    next.theoremCount = normalized.theorem_candidates.length;
+    next.lemmaCount = normalized.lemma_packets.length;
+    next.proofPacketCount = next.theoremCount + next.lemmaCount;
+    await writeJsonEnsured(theoryStateResolvedPath, serializeTheoryStateFile(normalized));
+  }
+
+  manifest.theory_state = serializeTheorySupportState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    theoryStateResolvedPath,
+    proofPacketDirResolvedPath: resolveProjectArtifactPath(params.projectRoot, next.proofPacketDir),
+  };
+}
+
+export async function upsertTheoryProofPacket(params: {
+  projectRoot: string;
+  proofPacket: Record<string, unknown>;
+}): Promise<{
+  packet: TheoryObjectPacket;
+  packetResolvedPath: string;
+  state: TheorySupportState;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeTheorySupportState(manifest.theory_state);
+  const packet = normalizeTheoryObjectPacket(params.proofPacket);
+  if (!packet) {
+    throw new Error("proofPacket.packet_id and proofPacket.statement are required.");
+  }
+
+  const proofPacketDir = resolveProjectArtifactPath(
+    params.projectRoot,
+    current.proofPacketDir
+  );
+  if (!proofPacketDir) {
+    throw new Error("No proof packet directory is configured for this project.");
+  }
+  const packetResolvedPath = path.join(proofPacketDir, `${packet.packet_id}.json`);
+  const now = new Date().toISOString();
+  const normalizedPacket: TheoryObjectPacket = {
+    ...packet,
+    updated_at: packet.updated_at ?? now,
+  };
+  await writeJsonEnsured(packetResolvedPath, serializeTheoryObjectPacket(normalizedPacket));
+
+  const theoryStateResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    current.theoryStatePath
+  );
+  let theoryFile = normalizeTheoryStateFile({
+    status: "draft",
+    overall_signal: current.overallSignal,
+    source_theory_note_path: current.sourceTheoryNotePath,
+    main_text_proof_style: current.mainTextProofStyle,
+  });
+  if (theoryStateResolvedPath && (await pathExists(theoryStateResolvedPath))) {
+    theoryFile = normalizeTheoryStateFile(await readJsonIfExists(theoryStateResolvedPath));
+  }
+
+  const collection =
+    normalizedPacket.role === "theorem" ||
+    normalizedPacket.role === "proposition" ||
+    normalizedPacket.role === "corollary"
+      ? theoryFile.theorem_candidates
+      : theoryFile.lemma_packets;
+  const existingIndex = collection.findIndex((item) => item.packet_id === normalizedPacket.packet_id);
+  if (existingIndex >= 0) {
+    collection[existingIndex] = normalizedPacket;
+  } else {
+    collection.push(normalizedPacket);
+  }
+  theoryFile.updated_at = now;
+  theoryFile.status = theoryFile.status === "missing" ? "draft" : theoryFile.status;
+  if (theoryStateResolvedPath) {
+    await writeJsonEnsured(theoryStateResolvedPath, serializeTheoryStateFile(theoryFile));
+  }
+
+  const next: TheorySupportState = {
+    ...current,
+    status: current.status === "missing" ? "draft" : current.status,
+    theoremCount: theoryFile.theorem_candidates.length,
+    lemmaCount: theoryFile.lemma_packets.length,
+    proofPacketCount: theoryFile.theorem_candidates.length + theoryFile.lemma_packets.length,
+    lastUpdatedAt: now,
+    pendingReason: null,
+  };
+  manifest.theory_state = serializeTheorySupportState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    packet: normalizedPacket,
+    packetResolvedPath,
+    state: next,
+  };
+}
+
+export async function materializeTheoryAppendix(params: {
+  projectRoot: string;
+  theoryMaterialization?: Record<string, unknown> | null;
+}): Promise<{
+  state: TheorySupportState;
+  writingContract: WritingContractState;
+  theoryStateResolvedPath: string | null;
+  proofPacketDirResolvedPath: string | null;
+  appendixPlanResolvedPath: string;
+  appendixSectionResolvedPath: string;
+  theoremCount: number;
+  lemmaCount: number;
+  bodySafeCount: number;
+  appendixSectionCount: number;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeTheorySupportState(manifest.theory_state);
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  const materializationPatch = asRecord(params.theoryMaterialization) ?? {};
+  const now = new Date().toISOString();
+
+  const theoryStateArtifactPath =
+    pickString(materializationPatch, ["theoryStatePath", "theory_state_path"]) ??
+    current.theoryStatePath ??
+    DEFAULT_THEORY_STATE_PATH;
+  const proofPacketDirArtifactPath =
+    pickString(materializationPatch, ["proofPacketDir", "proof_packet_dir"]) ??
+    current.proofPacketDir ??
+    DEFAULT_PROOF_PACKET_DIR;
+  const appendixPlanArtifactPath =
+    pickString(materializationPatch, ["planPath", "plan_path"]) ??
+    pickString(materializationPatch, ["appendixPacketPath", "appendix_packet_path"]) ??
+    current.appendixPacketPath ??
+    DEFAULT_THEORY_APPENDIX_PLAN_PATH;
+  const appendixSectionArtifactPath =
+    pickString(materializationPatch, ["appendixSectionPath", "appendix_section_path"]) ??
+    pickString(materializationPatch, ["proofAppendixPath", "proof_appendix_path"]) ??
+    writingContract.proofAppendixPath ??
+    DEFAULT_THEORY_APPENDIX_SECTION_PATH;
+
+  const theoryStateResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    theoryStateArtifactPath
+  );
+  const proofPacketDirResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    proofPacketDirArtifactPath
+  );
+  const appendixPlanResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    appendixPlanArtifactPath
+  );
+  const appendixSectionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    appendixSectionArtifactPath
+  );
+
+  if (!theoryStateResolvedPath || !proofPacketDirResolvedPath) {
+    throw new Error("Theory state paths are not configured for this project.");
+  }
+  if (!appendixPlanResolvedPath || !appendixSectionResolvedPath) {
+    throw new Error("Theory appendix output paths are not configured for this project.");
+  }
+
+  let theoryFile = normalizeTheoryStateFile(await readJsonIfExists(theoryStateResolvedPath));
+  const diskPackets: TheoryObjectPacket[] = [];
+  if (await pathExists(proofPacketDirResolvedPath)) {
+    const entries = await fs.readdir(proofPacketDirResolvedPath);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) {
+        continue;
+      }
+      const packet = normalizeTheoryObjectPacket(
+        await readJsonIfExists(path.join(proofPacketDirResolvedPath, entry))
+      );
+      if (packet) {
+        diskPackets.push(packet);
+      }
+    }
+  }
+
+  const packets = dedupeTheoryPackets([
+    ...diskPackets,
+    ...theoryFile.theorem_candidates,
+    ...theoryFile.lemma_packets,
+  ]);
+  if (packets.length === 0) {
+    throw new Error(
+      "No theorem or lemma proof packets are available. Run theorem/lemma synthesis before materializing appendix artifacts."
+    );
+  }
+
+  const theoremCandidates = packets.filter((packet) =>
+    ["theorem", "proposition", "corollary"].includes(packet.role)
+  );
+  const lemmaPackets = packets.filter(
+    (packet) => !["theorem", "proposition", "corollary"].includes(packet.role)
+  );
+  const appendixSections = inferTheoryAppendixSections({
+    packets,
+    existingSections: theoryFile.appendix_sections,
+  });
+  const bodySafeCount = packets.filter((packet) => packet.body_safe).length;
+
+  theoryFile = normalizeTheoryStateFile({
+    ...serializeTheoryStateFile(theoryFile),
+    status: bodySafeCount > 0 ? "ready" : "draft",
+    theorem_candidates: theoremCandidates.map(serializeTheoryObjectPacket),
+    lemma_packets: lemmaPackets.map(serializeTheoryObjectPacket),
+    appendix_sections: appendixSections.map((section) => ({
+      section_id: section.section_id,
+      title: section.title,
+      purpose: section.purpose,
+      packet_ids: section.packet_ids,
+    })),
+    updated_at: now,
+    pending_reason: null,
+    main_text_proof_style:
+      writingContract.mainTextProofStyle ??
+      current.mainTextProofStyle ??
+      theoryFile.main_text_proof_style,
+  });
+  await writeJsonEnsured(theoryStateResolvedPath, serializeTheoryStateFile(theoryFile));
+
+  const appendixPlanMarkdown = buildTheoryAppendixPlanMarkdown({
+    theoryFile,
+    packets,
+    appendixSections,
+    appendixSectionPath: appendixSectionArtifactPath,
+  });
+  await fs.mkdir(path.dirname(appendixPlanResolvedPath), { recursive: true });
+  await fs.writeFile(appendixPlanResolvedPath, appendixPlanMarkdown, "utf8");
+
+  const appendixSectionDraft = buildTheoryAppendixSectionDraft({
+    theoryFile,
+    packets,
+    appendixSections,
+  });
+  await fs.mkdir(path.dirname(appendixSectionResolvedPath), { recursive: true });
+  await fs.writeFile(appendixSectionResolvedPath, appendixSectionDraft, "utf8");
+
+  const nextTheoryState: TheorySupportState = {
+    ...current,
+    status: bodySafeCount > 0 ? "ready" : "draft",
+    overallSignal: theoryFile.overall_signal ?? current.overallSignal,
+    theoryStatePath: theoryStateArtifactPath,
+    proofPacketDir: proofPacketDirArtifactPath,
+    appendixPacketPath: appendixPlanArtifactPath,
+    mainTextProofStyle:
+      theoryFile.main_text_proof_style ?? current.mainTextProofStyle,
+    bodyReady: bodySafeCount > 0,
+    theoremCount: theoremCandidates.length,
+    lemmaCount: lemmaPackets.length,
+    proofPacketCount: packets.length,
+    lastUpdatedAt: now,
+    pendingReason: null,
+  };
+  const nextWritingContract: WritingContractState = {
+    ...writingContract,
+    proofAppendixRequired: true,
+    proofAppendixPath: appendixSectionArtifactPath,
+    proofAppendixStatus: "ready",
+    theoryNotePath:
+      writingContract.theoryNotePath ??
+      current.sourceTheoryNotePath ??
+      DEFAULT_THEORY_NOTE_PATH,
+  };
+
+  manifest.theory_state = serializeTheorySupportState(nextTheoryState);
+  manifest.writing_contract = serializeWritingContractState(nextWritingContract);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: nextTheoryState,
+    writingContract: nextWritingContract,
+    theoryStateResolvedPath,
+    proofPacketDirResolvedPath,
+    appendixPlanResolvedPath,
+    appendixSectionResolvedPath,
+    theoremCount: theoremCandidates.length,
+    lemmaCount: lemmaPackets.length,
+    bodySafeCount,
+    appendixSectionCount: appendixSections.length,
   };
 }
 
@@ -4235,12 +5775,16 @@ export async function setIdleResearchState(params: {
 export async function setWritingContractState(params: {
   projectRoot: string;
   writingContract: Record<string, unknown>;
+  policy?: WorkflowGuardPolicy;
 }): Promise<{
   state: WritingContractState;
   templateResolvedPath: string | null;
+  projectTemplateResolvedPath: string | null;
+  sourceTemplateResolvedPath: string | null;
   templateExists: boolean;
   templateReady: boolean;
   templateStatus: string;
+  templateCopyStatus: string;
   paragraphLogicStatus: string;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
@@ -4285,6 +5829,25 @@ export async function setWritingContractState(params: {
   let storylineSource =
     pickString(patch, ["storylineSource", "storyline_source"]) ??
     current.storylineSource;
+  let mainTextProofStyle =
+    pickString(patch, ["mainTextProofStyle", "main_text_proof_style"]) ??
+    current.mainTextProofStyle;
+  let proofAppendixRequired =
+    pickBoolean(patch, ["proofAppendixRequired", "proof_appendix_required"]) ??
+    current.proofAppendixRequired;
+  let proofAppendixPath =
+    pickString(patch, ["proofAppendixPath", "proof_appendix_path"]) ??
+    current.proofAppendixPath;
+  let proofAppendixStatus =
+    normalizeStage(patch.proofAppendixStatus ?? patch.proof_appendix_status) ??
+    current.proofAppendixStatus;
+  let theoryNotePath =
+    pickString(patch, ["theoryNotePath", "theory_note_path"]) ??
+    current.theoryNotePath;
+  let proofChecklist =
+    patch.proofChecklist || patch.proof_checklist
+      ? asStringArray(patch.proofChecklist ?? patch.proof_checklist)
+      : current.proofChecklist;
   let kgStorylineRequired =
     pickBoolean(patch, ["kgStorylineRequired", "kg_storyline_required"]) ??
     current.kgStorylineRequired;
@@ -4299,7 +5862,9 @@ export async function setWritingContractState(params: {
   if (requestedMode) {
     const preset = WRITING_MODE_PRESETS[requestedMode];
     if (!requestedTemplatePath && (!templatePath || isBundledWritingModeTemplatePath(templatePath))) {
-      templatePath = await resolveBundledWritingModeTemplatePath(requestedMode);
+      templatePath =
+        getConfiguredWritingModeTemplatePath(params.policy, requestedMode) ??
+        (await resolveBundledWritingModeTemplatePath(requestedMode));
     }
     if (!templateName || templateName === current.templateName) {
       templateName = preset.templateName;
@@ -4325,6 +5890,38 @@ export async function setWritingContractState(params: {
     if (storylineChecklist.length === 0) {
       storylineChecklist = [...DEFAULT_STORYLINE_CHECKLIST];
     }
+    if (proofChecklist.length === 0) {
+      proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
+    }
+    mainTextProofStyle = mainTextProofStyle ?? "lemma_result_only";
+    proofAppendixRequired = proofAppendixRequired ?? true;
+    proofAppendixPath =
+      proofAppendixPath ?? "academic_writer/paper/sections/appendix_theory.tex";
+    theoryNotePath = theoryNotePath ?? "analyzer/THEORY_SUPPORT_NOTE.md";
+  }
+
+  let projectTemplatePath =
+    pickString(patch, ["projectTemplatePath", "project_template_path"]) ??
+    current.projectTemplatePath;
+  let templateCopyStatus =
+    normalizeStage(patch.templateCopyStatus ?? patch.template_copy_status) ??
+    current.templateCopyStatus;
+
+  const sourceTemplateResolvedPath = resolveWritingTemplatePath(
+    params.projectRoot,
+    templatePath
+  );
+  if (sourceTemplateResolvedPath && (await pathExists(sourceTemplateResolvedPath))) {
+    const copiedTemplate = await copyWritingTemplateIntoProject({
+      projectRoot: params.projectRoot,
+      sourcePath: sourceTemplateResolvedPath,
+      paperMode: requestedMode,
+    });
+    projectTemplatePath = copiedTemplate.projectTemplatePath;
+    templateCopyStatus = "ready";
+  } else if (templatePath) {
+    projectTemplatePath = current.projectTemplatePath;
+    templateCopyStatus = "missing";
   }
 
   const next: WritingContractState = {
@@ -4334,10 +5931,12 @@ export async function setWritingContractState(params: {
       pickBoolean(patch, ["templateRequired", "template_required"]) ??
       current.templateRequired,
     templatePath,
+    projectTemplatePath,
     templateName,
     templateStatus:
       normalizeStage(patch.templateStatus ?? patch.template_status) ??
       current.templateStatus,
+    templateCopyStatus,
     bodyPageBudget:
       bodyPageBudget == null ? null : Math.max(1, Math.floor(bodyPageBudget)),
     referencePageBudget:
@@ -4351,6 +5950,12 @@ export async function setWritingContractState(params: {
       1,
       Math.floor(maxHeadlineClaims ?? current.maxHeadlineClaims)
     ),
+    mainTextProofStyle,
+    proofAppendixRequired,
+    proofAppendixPath,
+    proofAppendixStatus,
+    theoryNotePath,
+    proofChecklist,
     storylineSource,
     kgStorylineRequired,
     kgStorylineStatus:
@@ -4394,6 +5999,9 @@ export async function setWritingContractState(params: {
   if (next.storylineChecklist.length === 0) {
     next.storylineChecklist = [...DEFAULT_STORYLINE_CHECKLIST];
   }
+  if (next.proofChecklist.length === 0) {
+    next.proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
+  }
   if (next.paragraphLogicChecklist.length === 0) {
     next.paragraphLogicChecklist = [...DEFAULT_PARAGRAPH_LOGIC_CHECKLIST];
   }
@@ -4403,6 +6011,7 @@ export async function setWritingContractState(params: {
     state: next,
   });
   next.templateStatus = evaluation.templateStatus;
+  next.templateCopyStatus = evaluation.templateCopyStatus;
   next.pendingReason = evaluation.pendingReason;
 
   manifest.writing_contract = serializeWritingContractState(next);
@@ -4411,11 +6020,14 @@ export async function setWritingContractState(params: {
   return {
     state: next,
     templateResolvedPath: evaluation.templateResolvedPath,
+    projectTemplateResolvedPath: evaluation.projectTemplateResolvedPath,
+    sourceTemplateResolvedPath: evaluation.sourceTemplateResolvedPath,
     templateExists: evaluation.templateExists,
     templateReady:
       !next.templateRequired ||
       Boolean(evaluation.templateResolvedPath && evaluation.templateExists),
     templateStatus: evaluation.templateStatus,
+    templateCopyStatus: evaluation.templateCopyStatus,
     paragraphLogicStatus: next.paragraphLogicStatus,
   };
 }
@@ -5162,11 +6774,26 @@ export async function bindChannelProjectForWorkflow(params: {
   sessionId?: string;
   messageChannel?: string;
   channelKey?: string;
-  projectRoot: string;
+  projectRoot?: string | null;
   projectId?: string | null;
+  title?: string | null;
+  topic?: string | null;
   boundByAgent?: string | null;
   notes?: string | null;
+  createIfMissing?: boolean;
 }) {
+  const ensuredProject = await ensureWorkflowProjectRoot({
+    policy: params.policy,
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    messageChannel: params.messageChannel,
+    channelKey: params.channelKey,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    title: params.title,
+    topic: params.topic,
+  });
   return setChannelProjectBinding({
     policy: params.policy,
     context: {
@@ -5176,8 +6803,8 @@ export async function bindChannelProjectForWorkflow(params: {
       messageChannel: params.messageChannel,
       channelKey: params.channelKey,
     },
-    projectRoot: params.projectRoot,
-    projectId: params.projectId,
+    projectRoot: ensuredProject.projectRoot,
+    projectId: params.projectId ?? ensuredProject.projectId,
     messageChannel: params.messageChannel,
     boundByAgent: params.boundByAgent,
     notes: params.notes,

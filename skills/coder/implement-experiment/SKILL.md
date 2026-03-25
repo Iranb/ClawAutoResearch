@@ -9,6 +9,7 @@ allowed-tools:
   - Grep
   - Glob
   - Bash
+  - lobster
 ---
 
 # Implement Experiment
@@ -266,3 +267,9 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - Remote deployment is handled separately by `/run-experiment` on the Coder agent when Researcher / `experiment-phase` explicitly assigns it
 - Never modify baseline code from other papers without flagging it
 - If a specification is ambiguous, use the most conservative interpretation and flag it
+
+## Stage Closeout
+
+When the required experiment bundle is complete, the dry-run has passed, and the stage is genuinely ready to move into EXPERIMENT, invoke the Lobster handoff workflow from the quickstart.
+
+Do not hand off if dry-run, reproducibility, or implementation review still requires fixes.

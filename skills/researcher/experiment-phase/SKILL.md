@@ -12,6 +12,7 @@ allowed-tools:
   - Agent
   - Skill
   - research_workflow
+  - lobster
 ---
 
 # Experiment Phase
@@ -283,3 +284,9 @@ The markdown memories are summaries. `{PROJ}/researcher/EXPERIMENT_LEDGER.json` 
 | NaN loss | `nan` or `inf` in loss log | Add gradient clipping, reduce LR |
 | Stalled | 0% GPU utilization 20min | Kill screen, relaunch with debug config |
 | Dependency timeout | Group A not done after MAX_WAIT_H | Report to user, mark as partial |
+
+## Stage Closeout
+
+When experiment execution is durably reconciled and the track decision is to proceed into ANALYZE, Researcher should trigger the Lobster handoff workflow.
+
+Do not hand off if more experiments or a bounded relaunch are still required, the right action is `restart-idea`, or artifacts / ledger state are still out of sync.

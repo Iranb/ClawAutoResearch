@@ -9,6 +9,8 @@ allowed-tools:
   - Edit
   - Grep
   - Glob
+  - research_workflow
+  - lobster
 ---
 
 # Analyze Results
@@ -109,6 +111,99 @@ Rules:
 - `RED` means the writer should prefer empirical / mechanism language over strong theoretical claims
 - Do not fabricate theorems, proofs, or assumptions just to turn a claim green
 
+### 5.6 Build Minimal Theory State And Proof Packets
+
+Do not stop at the prose note. Also create:
+
+- `{PROJ}/analyzer/THEORY_STATE.json`
+- `{PROJ}/analyzer/proof-packets/*.json`
+
+`THEORY_STATE.json` should summarize:
+
+```json
+{
+  "status": "draft or ready",
+  "overall_signal": "green or red",
+  "thesis": "one-sentence theory thesis",
+  "body_guidance": "empirical_mechanistic or proof_sketch",
+  "main_text_proof_style": "lemma_result_only",
+  "theorem_candidates": [],
+  "lemma_packets": [],
+  "appendix_sections": []
+}
+```
+
+Each proof packet should be a small structured object:
+
+```json
+{
+  "packet_id": "lemma_monotonic_margin",
+  "role": "lemma",
+  "title": "Margin monotonicity under confidence sharpening",
+  "statement": "If confidence sharpening increases inter-class margin, the cluster assignment error upper bound decreases monotonically.",
+  "short_result": "Explains why the method should help under semantic shift.",
+  "body_safe": true,
+  "confidence": "green or red",
+  "appendix_required": true,
+  "appendix_path": "academic_writer/paper/sections/appendix_theory.tex",
+  "evidence_pointers": ["Table 1", "Fig 3", "CLAIM C2"],
+  "assumptions": ["feature margin estimate is stable"],
+  "derivation_outline": ["define margin quantity", "bound assignment error", "show monotonic decrease"],
+  "caveats": ["not a formal proof"],
+  "source_claim_ids": ["C2"]
+}
+```
+
+Rules:
+- only create theorem / lemma candidates that are supported by observed trends, ablations, or literature-backed mechanisms
+- if support is weak, keep `body_safe = false` and `confidence = red`
+- main text should consume only body-safe objects
+- detailed derivation steps belong to appendix-oriented packets, not headline contribution bullets
+
+After writing the files, call:
+
+```json
+{
+  "action": "record_theory_state",
+  "theoryState": {
+    "status": "draft or ready",
+    "overall_signal": "green or red",
+    "theory_state_path": "analyzer/THEORY_STATE.json",
+    "proof_packet_dir": "analyzer/proof-packets",
+    "appendix_packet_path": "academic_writer/THEORY_APPENDIX_PLAN.md",
+    "main_text_proof_style": "lemma_result_only",
+    "body_ready": true or false,
+    "theoryStateFile": {}
+  }
+}
+```
+
+For each packet, also call:
+
+```json
+{
+  "action": "upsert_proof_packet",
+  "proofPacket": {}
+}
+```
+
+### 5.7 Materialize Writer-Ready Theory Outputs
+
+After the packet set is stable, either invoke `/theory-phase` or directly call:
+
+```json
+{
+  "action": "materialize_theory_appendix"
+}
+```
+
+This must create:
+
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`
+- `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`
+
+The appendix draft is generated from the packets and can be refined later by Writer, but it must exist before proof-aware writing is considered ready.
+
 ### 6. Write Report
 
 Output `{PROJ}/analyzer/NARRATIVE_REPORT.md`:
@@ -147,6 +242,10 @@ Output `{PROJ}/analyzer/NARRATIVE_REPORT.md`:
 - **Track verdicts**: {PROJ}/analyzer/TRACK_VERDICTS.md
 - **Unsupported claims**: {PROJ}/analyzer/UNSUPPORTED_CLAIMS.md
 - **Theory support note**: {PROJ}/analyzer/THEORY_SUPPORT_NOTE.md
+- **Theory state**: {PROJ}/analyzer/THEORY_STATE.json
+- **Proof packets**: {PROJ}/analyzer/proof-packets/
+- **Theory appendix plan**: {PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md
+- **Theory appendix draft**: {PROJ}/academic_writer/paper/sections/appendix_theory.tex
 - **Report**: {PROJ}/analyzer/NARRATIVE_REPORT.md
 - **Main result**: [Proposed achieves X.X ± Y.Y vs baseline X.X ± Y.Y]
 ```
@@ -164,3 +263,9 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - Include all completed runs — do not cherry-pick seeds
 - Prefer explicit `advance / merge / park / kill` recommendations over vague suggestions
 - Theory support is advisory, not a hard gate: use only `GREEN / RED`
+
+## Stage Closeout
+
+When the required ANALYZE artifacts are complete and the project is ready to move into REVIEW, invoke the Lobster handoff workflow from the quickstart.
+
+Do not hand off if a central unsupported claim still requires returning to EXPERIMENT or if analysis explicitly requests more data collection.

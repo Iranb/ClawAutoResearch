@@ -1,0 +1,33 @@
+{
+  "enabled": true,
+  "topic": "generalized category discovery with part-level features and manifold capacity",
+  "objective": "Track new literature, broaden brainstorming space, and keep the project aware of promising mechanisms, contradictions, and transfer opportunities.",
+  "query_seeds": [
+    "generalized category discovery part-level features",
+    "fine-grained clustering semantic overlap",
+    "dimensional collapse vision transformer CLS token",
+    "manifold capacity representation learning clustering",
+    "local semantic parts fine-grained recognition",
+    "token disentanglement visual primitives"
+  ],
+  "preferred_venues": [
+    "CVPR",
+    "ICCV",
+    "ECCV",
+    "NeurIPS",
+    "ICLR",
+    "TPAMI",
+    "arXiv"
+  ],
+  "max_papers_per_cycle": 8,
+  "cooldown_minutes": 20,
+  "last_run_at": null,
+  "last_digest_path": null,
+  "last_source_update_at": null,
+  "status": "pending",
+  "pending_reason": "initial configuration",
+  "next_query_hint": "Broaden beyond core GCD papers toward part-aware representation learning, geometry, and fine-grained clustering.",
+  "refresh_graph_on_new_core_papers": true,
+  "last_round_new_canonical_papers": 0,
+  "last_round_new_core_papers": 0
+}

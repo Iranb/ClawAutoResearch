@@ -225,9 +225,33 @@ async function seedProjectReadyForSubmit(projectRoot) {
     "TRACK_VERDICTS.md",
     "UNSUPPORTED_CLAIMS.md",
     "QUALITY_AUDIT.md",
+    "THEORY_SUPPORT_NOTE.md",
   ]) {
     await writeText(path.join(projectRoot, "analyzer", fileName));
   }
+  await writeJson(path.join(projectRoot, "analyzer", "THEORY_STATE.json"), {
+    schema_version: 1,
+    status: "draft",
+    overall_signal: "green",
+    theorem_candidates: [
+      {
+        packet_id: "theorem_demo",
+        role: "theorem",
+        statement: "Demo theorem statement.",
+      },
+    ],
+    lemma_packets: [],
+    appendix_sections: [],
+  });
+  await writeJson(
+    path.join(projectRoot, "analyzer", "proof-packets", "lemma_demo.json"),
+    {
+      packet_id: "lemma_demo",
+      role: "lemma",
+      statement: "Demo lemma statement.",
+      body_safe: true,
+    }
+  );
 
   await writeText(path.join(projectRoot, "reviewer", "REVIEW_REPORT.md"));
   await writeText(path.join(projectRoot, "reviewer", "external_review_2026-03-22.md"));
@@ -236,6 +260,10 @@ async function seedProjectReadyForSubmit(projectRoot) {
 
   await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
   await writeText(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"));
+  await writeText(path.join(projectRoot, "academic_writer", "THEORY_APPENDIX_PLAN.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex")
+  );
   await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
@@ -324,9 +352,25 @@ async function seedProjectReadyForSubmit(projectRoot) {
       reflected_through_experiment_update_at: now,
       reflected_experiment_ids: [experimentId],
     },
+    theory_state: {
+      status: "draft",
+      overall_signal: "green",
+      theory_state_path: "analyzer/THEORY_STATE.json",
+      source_theory_note_path: "analyzer/THEORY_SUPPORT_NOTE.md",
+      proof_packet_dir: "analyzer/proof-packets",
+      appendix_packet_path: "academic_writer/THEORY_APPENDIX_PLAN.md",
+      main_text_proof_style: "lemma_result_only",
+      body_ready: true,
+      theorem_count: 1,
+      lemma_count: 1,
+      proof_packet_count: 1,
+      last_updated_at: now,
+    },
     writing_contract: {
       template_required: false,
       template_status: "optional",
+      proof_appendix_required: true,
+      proof_appendix_path: "academic_writer/paper/sections/appendix_theory.tex",
       paragraph_logic_status: "pending",
     },
     citation_integrity: {
@@ -687,4 +731,35 @@ test("auto iterator accepts structured coder experiment bundles with index file"
 
   assert.equal(result.stageBefore, "code");
   assert.equal(result.stageAfter, "experiment");
+});
+
+test("auto iterator keeps write stage blocked when theory appendix draft is missing", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  await fs.rm(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex"),
+    { force: true }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "drafting";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) => /appendix_theory\.tex/i.test(signal))
+  );
 });

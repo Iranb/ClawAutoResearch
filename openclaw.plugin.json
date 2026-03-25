@@ -88,6 +88,16 @@
         "type": "string",
         "default": "",
         "description": "Optional shared JSON path for channel-project bindings. When empty, bindings default to {projectRoot}/.openclaw-research/channel-project-bindings.json when a project is known, otherwise they fall back to the current workspace."
+      },
+      "defaultConferenceTemplatePath": {
+        "type": "string",
+        "default": "",
+        "description": "Optional default conference paper template path. When configured, conference writing mode copies this template into each project before Writer edits it."
+      },
+      "defaultJournalTemplatePath": {
+        "type": "string",
+        "default": "",
+        "description": "Optional default journal paper template path. When configured, journal writing mode copies this template into each project before Writer edits it."
       }
     }
   },
@@ -139,6 +149,12 @@
     },
     "channelProjectBindingsPath": {
       "label": "Channel Project Bindings Path"
+    },
+    "defaultConferenceTemplatePath": {
+      "label": "Default Conference Template Path"
+    },
+    "defaultJournalTemplatePath": {
+      "label": "Default Journal Template Path"
     }
   },
   "skills": [

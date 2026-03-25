@@ -14,6 +14,7 @@ allowed-tools:
   - Agent
   - Skill
   - research_workflow
+  - lobster
 ---
 
 # Paper Phase
@@ -27,9 +28,11 @@ Full pipeline from analysis results to compiled PDF, with Cross-Reviewer quality
      ↓
 /paper-write ─────► Cross-Reviewer (per section) ──► revise
      ↓
+/citation-preflight ─► clean refs.bib / remove suspicious refs
+     ↓
 /paper-compile ───► fix LaTeX errors ──► verify page count
      ↓
-Citation Gate ────► Reviewer verifies refs.bib / no hallucinated citations
+Citation Gate ────► Reviewer /citation-integrity-gate
      ↓
 Final Polish Pass ► Cross-Reviewer (full draft) ──► final edits
      ↓
@@ -42,16 +45,18 @@ main_final.pdf
 /paper-plan
 ```
 
-Validates the Analyzer's `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, `CLAIM_POLICY.md`, and advisory `THEORY_SUPPORT_NOTE.md`, then builds section outline and figure plan.
+Validates the Analyzer's `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, `CLAIM_POLICY.md`, and advisory `THEORY_SUPPORT_NOTE.md`, then builds section outline, theory appendix plan, and figure plan.
+If `THEORY_APPENDIX_PLAN.md` or `appendix_theory.tex` are missing, first run `/theory-phase` or `research_workflow.materialize_theory_appendix`.
 Cross-Reviewer validates outline **before** writing begins.
 If `writing_contract.template_required = true`, the template must be readable before this phase starts; otherwise stop and restore it through `research_workflow.set_writing_contract`.
+If a template is configured, the active path should be the project-local copied template, not the external source template.
 If `writing_contract.kg_storyline_required = true`, produce `KG_STORYLINE_PACKET.md` and mark it `ready` before expanding prose.
 
 Only hard blockers (missing experiments flagged by Cross-Reviewer, or unresolved unsupported primary claims) must be resolved before Phase 2.
 `theory`, `storyline`, or `paragraph_logic` marked `RED` are advisory only and must not block Phase 2.
 If multiple tracks survived review, narrow to the winning narrative before drafting prose.
 
-**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`, `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when applicable, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
+**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`, `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when applicable, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
 
 ## Phase 2: Paper Write
 
@@ -69,11 +74,27 @@ Primary claims marked `UNSUPPORTED` must not appear as headline contributions. T
 
 Only tracks recommended as `advance` or equivalent by `TRACK_VERDICTS.md` may be treated as core paper narrative.
 If theory / storyline / paragraph logic are `RED`, continue drafting but preserve the red signal in `{PROJ}/academic_writer/WRITING_SIGNALS.md` for human review.
-Template adherence is not optional when configured: section structure and paragraph patterns should be adapted from the template before style polishing.
+Template adherence is not optional when configured: section structure and paragraph patterns should be adapted from the project-local template copy before style polishing.
+When proof-aware writing is enabled, the main text should keep concise theorem / lemma statements and final implications, while full derivations are maintained in the appendix path.
 
 **Output**: `{PROJ}/academic_writer/paper/sections/*.tex` + `refs.bib` + `main.tex` + updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
 
-## Phase 3: Paper Compile
+## Phase 3: Citation Preflight
+
+Before compiling the final paper, Writer should run:
+
+```
+/citation-preflight
+```
+
+This step must:
+
+- verify that `refs.bib` entries come from real sources of truth
+- remove or downgrade suspicious citations before Reviewer sees the draft
+- keep placeholders within the configured budget
+- update citation integrity state, but leave final verification to Reviewer
+
+## Phase 4: Paper Compile
 
 ```
 /paper-compile
@@ -96,12 +117,12 @@ Check constraints:
 
 **Output**: `{PROJ}/academic_writer/paper/main.pdf`
 
-## Phase 4: Citation Gate
+## Phase 5: Citation Gate
 
 Before the final full-paper polish, run reviewer `/citation-integrity-gate`.
 Do not proceed to submission packaging while citation verification is not `verified`.
 
-## Phase 5: Final Polish Pass
+## Phase 6: Final Polish Pass
 
 Send the full compiled draft (as text, not PDF) to **Cross-Reviewer Agent** for holistic review:
 
@@ -135,7 +156,7 @@ Parse the full-paper Cross-Reviewer response:
 - Fix any cross-section inconsistencies
 - Recompile after changes
 
-## Phase 6: Final Compile
+## Phase 7: Final Compile
 
 ```bash
 cd {PROJ}/academic_writer/paper && latexmk -pdf -interaction=nonstopmode main.tex
@@ -166,6 +187,10 @@ Recommended: [submit / one more revision pass]
 
 `AUTO_PROCEED=false`: wait for user to review PDF before marking complete.
 `AUTO_PROCEED=true`: if Cross-Reviewer says PUBLICATION_READY and all checks pass → auto-complete.
+
+When WRITE is complete and the project is truly ready to move into SUBMIT, invoke the Lobster handoff workflow from the quickstart.
+
+Do not hand off if Cross-Reviewer says `NEEDS_REVISION`, Reviewer asks for another writing pass, the user asks for changes, or citation integrity is not yet `verified`.
 
 ## Error Recovery
 

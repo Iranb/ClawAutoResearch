@@ -9,6 +9,7 @@ allowed-tools:
   - Grep
   - Glob
   - Skill
+  - lobster
 ---
 
 # Research Lit
@@ -40,7 +41,9 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
+   - Run one bounded brainstorm synthesis pass over the currently ingested papers; this is mandatory during research, not postponed to IDEA
 4. **After ALL searches complete**:
+   - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
    - Run `/graph-build --force` for final corpus build
    - Run `/frontier-mapping` to extract research frontiers
    - Write `{PROJ}/researcher/LITERATURE.md` with full survey
@@ -218,6 +221,26 @@ Update `{PROJ}/PROJECT_MANIFEST.json`:
 }
 ```
 
+### Step 3.5: Brainstorm During Research (mandatory)
+
+Do not wait for `IDEA` to begin the first serious brainstorm.
+During literature work itself, after each materially new batch of papers:
+
+- cluster the new papers into mechanisms, assumptions, and failure modes
+- note at least 3 candidate problem framings or innovation hooks
+- note at least 2 explicit falsifiers or "why this may fail" constraints
+- prefer graph-grounded or citation-grounded prompts whenever the graph is already usable
+
+Maintain `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with sections such as:
+
+- `Mechanism hypotheses`
+- `Part-level decomposition opportunities`
+- `Manifold / capacity hypotheses`
+- `Contradictions and unresolved tensions`
+- `Do-not-repeat constraints`
+
+Frontier mapping should refine and package this brainstorm scaffold, not start it from zero.
+
 ### Step 4: Write Literature Report
 
 After all searches and graph builds complete:
@@ -228,6 +251,8 @@ Write `{PROJ}/researcher/LITERATURE.md` with:
 - Key papers (with arXiv IDs)
 - Initial observations
 - Gaps identified
+
+Also refresh `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` so the literature stage ends with a usable brainstorm scaffold.
 
 ---
 
@@ -310,4 +335,11 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 | `paper_source/md/*.md` | HuggingFace markdown papers |
 | `paper_source/pdf/*.pdf` | Downloaded PDFs |
 | `PAPER_SOURCE_INDEX.json` | Canonical paper index |
+| `RESEARCH_BRAINSTORM.md` | Brainstorm scaffold generated during research |
 | `LITERATURE.md` | Literature survey report |
+
+## Stage Closeout
+
+When literature ingestion, preliminary brainstorming, and the durable outputs are complete, Researcher may trigger the Lobster handoff workflow only if the current stage is actually ready to advance.
+
+Do not hand off if the graph still needs refresh, key papers are still missing from the corpus, or brainstorming is still stale relative to the new papers.

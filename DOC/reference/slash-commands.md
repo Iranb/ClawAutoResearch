@@ -84,11 +84,17 @@
 - `/paper-write`  
   Writer 按 writing contract 写作。
 
+- `/citation-preflight`  
+  Writer 在提交前预检 bibliography，清理可疑引用并准备 `refs.bib`。
+
 - `/paper-phase`  
   论文写作主流程。
 
 - `/review-phase`  
   Reviewer 做内部评审与证据分级。
+
+- `/citation-integrity-gate`  
+  Reviewer 独立核验引用，写 `CITATION_VERIFICATION.md`，并更新 citation gate 状态。
 
 ## 7. 推荐使用方式
 

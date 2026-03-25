@@ -30,9 +30,13 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks belong in the paper's main arc
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that must stay exploratory or be removed
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory theory signal for conservative wording
+- `{PROJ}/analyzer/THEORY_STATE.json` — structured theorem / lemma candidate state
+- `{PROJ}/analyzer/proof-packets/` — packetized theorem / lemma objects and appendix derivation outlines
 - `{PROJ}/CLAIM_POLICY.md` — support labels and wording rules
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough thesis and evidence spine
 - `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — template adaptation note if a user template is configured
+- `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — what proof / derivation detail stays in appendix
+- `{PROJ}/academic_writer/paper/sections/appendix_theory.tex` — generated appendix derivation draft
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — advisory `green / red` state to update as sections are written
 - `{PROJ}/academic_writer/paper/figures/` — figures (copied from `{PROJ}/analyzer/figures/` at paper-phase start)
 - `{PROJ}/researcher/LITERATURE.md` — related work for citations
@@ -74,7 +78,7 @@ Then inspect:
 ```
 
 If the writing template is required but missing, stop and restore it first.
-If a template path is configured, read that template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing.
+If a template path is configured, read the project-local copied template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing. Never edit the external source template in place.
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
 
@@ -110,6 +114,15 @@ Respect `allowed_placeholder_count` from citation integrity state. If the budget
 - sentence order should make the relation explicit: cause, contrast, consequence, refinement, or example
 - the final sentence should bridge to the next paragraph or section when possible
 - if a paragraph cannot be reverse-outlined cleanly, rewrite it before sending to Cross-Reviewer
+
+**Proof-writing rule**:
+- keep the main body concise: theorem / lemma statements, intuition, and takeaways
+- use `THEORY_STATE.json` and `proof-packets/*.json` to decide what is body-safe
+- start from the generated `THEORY_APPENDIX_PLAN.md` and `appendix_theory.tex` rather than rebuilding appendix structure from scratch
+- do not expand full derivations, algebra-heavy manipulations, or long case splits in the main body
+- place those details into `{PROJ}/academic_writer/paper/sections/appendix_theory.tex` or the configured `proof_appendix_path`
+- if `THEORY_SUPPORT_NOTE.md` is weak, describe the result as a mechanism interpretation or proof sketch rather than a fully established theorem
+- every formal statement in the body must point either to evidence, a citation, or the appendix derivation path
 
 ### Step B: Cross-Reviewer Prose Check
 
@@ -178,6 +191,17 @@ Then update the writing contract:
 }
 ```
 
+If proof-aware writing is enabled, also update the appendix status when needed:
+
+```json
+{
+  "action": "set_writing_contract",
+  "writingContract": {
+    "proof_appendix_status": "green or red"
+  }
+}
+```
+
 ## Main File
 
 After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`:
@@ -196,6 +220,7 @@ After all sections are written, generate `{PROJ}/academic_writer/paper/main.tex`
 \input{sections/<section-1>}
 \input{sections/<section-2>}
 \input{sections/<section-3>}
+% Appendix derivation path should be included after the main text when proof-aware writing is enabled
 \bibliography{refs}
 \bibliographystyle{plain}
 \end{document}
@@ -222,5 +247,5 @@ Pending [CITATION NEEDED] markers: N
 Estimated pages: ~X (based on word count)
 Writing signals: theory={GREEN/RED}, storyline={GREEN/RED}, paragraph_logic={GREEN/RED}
 
-Next: /paper-compile to verify LaTeX builds without errors, then run reviewer /citation-integrity-gate before submission
+Next: /citation-preflight to clean refs.bib, then /paper-compile, then reviewer /citation-integrity-gate before submission
 ```

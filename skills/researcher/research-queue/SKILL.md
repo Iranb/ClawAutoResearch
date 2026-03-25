@@ -11,11 +11,30 @@ allowed-tools:
   - Glob
   - Agent
   - Skill
+  - research_workflow
 ---
 
 # Research Queue
 
 L3 parallelism: multiple complete research projects, each at a different pipeline stage, managed as a priority queue.
+
+## Slash Fast Path
+
+When this skill is invoked directly via `/research-queue ...` from Discord or another native slash surface:
+
+1. Parse the full queue command from `$ARGUMENTS`.
+2. Parse internal marker: `__BACKGROUND_CONTINUATION__: true/false`.
+3. If `__BACKGROUND_CONTINUATION__ != true`, do **not** run the full queue inline.
+4. First call `research_workflow`:
+   - `action = "start_background_run"`
+   - `backgroundRun.kind = "research_queue"`
+   - `backgroundRun.summary = "Starting research queue task"`
+   - `backgroundRun.commandText = /research-queue ... -- __BACKGROUND_CONTINUATION__: true`
+5. After the tool returns:
+   - Reply briefly that the queue task has started in the background
+   - Include `project_id` / `project_root` if the tool returned them
+   - **STOP**
+6. The background continuation will execute the actual queue logic and post later progress through normal agent/channel delivery.
 
 ## Constants
 

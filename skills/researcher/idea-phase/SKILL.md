@@ -177,3 +177,9 @@ Phase 完成后更新 `{PMEM}/ideation-memory.md`：
 - 有效选题模式（IDE: Idea Discovery Evolution）
 - 如果所有 idea 被否决：记录失败分类（IVE: Idea Validation Evolution）
 - 如果某条 track 被 kill：记录其 falsification signal 和不要重试的条件
+
+## Stage Closeout
+
+When the surviving portfolio is locked and the project is genuinely ready to move into PLAN, Researcher should trigger the Lobster handoff workflow.
+
+Do not hand off if novelty / attacker review still requires another ideation pass, innovation reflection is still due, or the portfolio still needs another pilot or narrowing round.

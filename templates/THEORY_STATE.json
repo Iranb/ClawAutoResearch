@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "status": "missing",
+  "overall_signal": null,
+  "source_theory_note_path": "analyzer/THEORY_SUPPORT_NOTE.md",
+  "thesis": null,
+  "body_guidance": "empirical_mechanistic",
+  "main_text_proof_style": "lemma_result_only",
+  "theorem_candidates": [],
+  "lemma_packets": [],
+  "appendix_sections": [],
+  "pending_reason": null,
+  "updated_at": null
+}
