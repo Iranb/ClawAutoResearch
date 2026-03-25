@@ -8,6 +8,16 @@ import {
   checkGraphPresenceForWorkflow,
   runWorkflowAutoIterator,
 } from "../tools/workflow-guard.ts";
+import {
+  aggregateGateReviewRound,
+  createGateReviewRound,
+  saveGateReviewStore,
+} from "../tools/workflow-auto-gate.ts";
+import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
+import {
+  createAutoModeDiscussionRound,
+  saveAutoModeDiscussionStore,
+} from "../tools/workflow-auto-discussion.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -622,6 +632,30 @@ test("auto iterator regresses frontier_mapping back to graph_build when graph mi
   assert.equal(result.stageAfter, "graph_build");
   assert.equal(result.graphPresenceCheck?.status, "missing_papers");
   assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+
+  const aggressiveResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(aggressiveResult.configuredAutoMode, "aggressive");
+  assert.equal(aggressiveResult.effectiveAutoMode, "aggressive");
+  assert.equal(aggressiveResult.autoModeRiskLevel, "severe");
+  assert.equal(aggressiveResult.autoModeMitigationRoundsStarted, 0);
+  assert.equal(aggressiveResult.autoModeMitigationRoundsRemaining, 2);
+  assert.ok(
+    aggressiveResult.autoModeReasons.some((reason) =>
+      /Auto discussion rounds remaining before downgrade/i.test(reason)
+    )
+  );
 });
 
 test("auto iterator blocks on the mandatory submit human gate once submit artifacts are ready", async (t) => {
@@ -644,6 +678,154 @@ test("auto iterator blocks on the mandatory submit human gate once submit artifa
   assert.match(result.gateReason ?? "", /GATE-5/);
   assert.equal(result.ownerAfter, "reviewer");
   assert.equal(result.recommendedActions[0]?.kind, "wait_human");
+});
+
+test("auto iterator keeps submit blocked in aggressive mode while auto gate review is pending", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "submit");
+  assert.equal(result.gateBlocking, true);
+  assert.match(result.gateReason ?? "", /auto review is pending/i);
+});
+
+test("auto iterator advances submit to done when aggressive auto gate review is approved", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const autoGate = {
+    ...defaultAutoGateConfig(),
+    enabled: true,
+  };
+  const round = createGateReviewRound({
+    gateId: "GATE-5",
+    stage: "submit",
+    packetPath: path.join(projectRoot, "reviewer", "gates", "GATE-5", "AUTO_GATE_PACKET.md"),
+    packetJsonPath: path.join(
+      projectRoot,
+      "reviewer",
+      "gates",
+      "GATE-5",
+      "AUTO_GATE_PACKET.json"
+    ),
+    packetFingerprint: "approved-packet",
+    attempts: [
+      {
+        reviewerRole: "reviewer",
+        sessionKey: "agent:reviewer:main",
+        runId: "gate-run-reviewer",
+        status: "completed",
+        launchedAt: "2026-03-25T12:00:00.000Z",
+        completedAt: "2026-03-25T12:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "reviewer",
+          verdict: "pass",
+          overallScore: 9.2,
+          dimensionScores: { quality: 9, evidence: 9, citation: 10 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["academic_writer/paper/main.pdf"],
+          summary: "Looks submission-ready.",
+          createdAt: "2026-03-25T12:01:00.000Z",
+          runId: "gate-run-reviewer",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "cross-reviewer",
+        sessionKey: "agent:cross-reviewer:main",
+        runId: "gate-run-cross-reviewer",
+        status: "completed",
+        launchedAt: "2026-03-25T12:00:00.000Z",
+        completedAt: "2026-03-25T12:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "cross-reviewer",
+          verdict: "pass",
+          overallScore: 8.9,
+          dimensionScores: { quality: 9, clarity: 9, publishability: 9 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["reviewer/rebuttal_2026-03-22.md"],
+          summary: "Readable and persuasive.",
+          createdAt: "2026-03-25T12:01:00.000Z",
+          runId: "gate-run-cross-reviewer",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "analyzer",
+        sessionKey: "agent:analyzer:main",
+        runId: "gate-run-analyzer",
+        status: "completed",
+        launchedAt: "2026-03-25T12:00:00.000Z",
+        completedAt: "2026-03-25T12:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "analyzer",
+          verdict: "pass",
+          overallScore: 9.0,
+          dimensionScores: { quality: 9, evidence: 9, publishability: 9 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["analyzer/CLAIM_EVIDENCE_MATRIX.md"],
+          summary: "Evidence packet is coherent.",
+          createdAt: "2026-03-25T12:01:00.000Z",
+          runId: "gate-run-analyzer",
+          rawText: "{}",
+        },
+      },
+    ],
+  });
+  round.aggregate = aggregateGateReviewRound(round, autoGate);
+  round.status = round.aggregate.status;
+  await saveGateReviewStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-03-25T12:01:00.000Z",
+    roundsStarted: 1,
+    currentRound: round,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate,
+    },
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "done");
+  assert.equal(result.gateBlocking, false);
+  assert.equal(result.ownerAfter, "researcher");
 });
 
 test("auto iterator keeps submit blocked when citation verification is not complete", async (t) => {
@@ -672,6 +854,107 @@ test("auto iterator keeps submit blocked when citation verification is not compl
   assert.match(result.blockingReason ?? "", /citation/i);
   assert.ok(
     result.missingStageSignals.some((signal) => /verification_status/i.test(signal))
+  );
+
+  const aggressiveResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+  assert.equal(aggressiveResult.effectiveAutoMode, "aggressive");
+  assert.ok(
+    aggressiveResult.autoModeReasons.some((reason) => /citation/i.test(reason))
+  );
+});
+
+test("auto iterator downgrades only after mitigation rounds are exhausted for the same risk", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.citation_integrity.verification_status = "needs_revision";
+  manifest.citation_integrity.hallucinated_citation_count = 1;
+  await writeJson(manifestPath, manifest);
+
+  const firstResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(firstResult.effectiveAutoMode, "aggressive");
+  assert.ok(firstResult.autoModeRiskFingerprint);
+
+  const round = createAutoModeDiscussionRound({
+    stage: "submit",
+    riskLevel: "severe",
+    packetPath: path.join(
+      projectRoot,
+      "reviewer",
+      "auto-mode-discussion",
+      "AUTO_MODE_DISCUSSION_PACKET.md"
+    ),
+    packetJsonPath: path.join(
+      projectRoot,
+      "reviewer",
+      "auto-mode-discussion",
+      "AUTO_MODE_DISCUSSION_PACKET.json"
+    ),
+    packetFingerprint: firstResult.autoModeRiskFingerprint,
+    attempts: [],
+  });
+  round.status = "blocked";
+  await saveAutoModeDiscussionStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-03-25T12:20:00.000Z",
+    roundsStartedByFingerprint: {
+      [firstResult.autoModeRiskFingerprint]: 2,
+    },
+    currentRound: round,
+  });
+
+  const downgradedResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(downgradedResult.effectiveAutoMode, "off");
+  assert.equal(downgradedResult.autoModeMitigationStatus, "blocked");
+  assert.equal(downgradedResult.autoModeMitigationRoundsStarted, 2);
+  assert.equal(downgradedResult.autoModeMitigationRoundsRemaining, 0);
+  assert.ok(
+    downgradedResult.autoModeReasons.some((reason) =>
+      /Auto discussion rounds were exhausted without resolving the current risk/i.test(
+        reason
+      )
+    )
   );
 });
 

@@ -9,6 +9,10 @@ import {
   resolveBindingConversationFromCommandContext,
   resolveWorkflowCommandSessionTarget,
 } from "../tools/workflow-commands.ts";
+import {
+  createAutoModeDiscussionRound,
+  saveAutoModeDiscussionStore,
+} from "../tools/workflow-auto-discussion.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-command-"));
@@ -315,6 +319,18 @@ test("workflow-status command returns a readable workflow summary", async () => 
         experimentPapernexusSyncStatus: null,
       };
     },
+    async runWorkflowAutoIterator() {
+      return {
+        configuredAutoMode: "aggressive",
+        effectiveAutoMode: "conservative",
+        autoModeRiskLevel: "caution",
+        autoModeReasons: ["Citation verification is needs_revision."],
+        autoModeRiskFingerprint: "risk-1",
+        autoModeMitigationStatus: "needs_changes",
+        autoModeMitigationRoundsStarted: 1,
+        autoModeMitigationRoundsRemaining: 1,
+      };
+    },
   }), "workflow-status");
 
   const result = await statusCommand.handler({
@@ -337,4 +353,193 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Mailbox: 2 unread/);
   assert.match(result.text ?? "", /Idle research: enabled=true, due=true, topic=spectral clustering under drift/);
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
+  assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
+  assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);
+});
+
+test("workflow-status command shows persisted auto discussion content per agent", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+  const packetPath = path.join(
+    projectRoot,
+    "reviewer",
+    "auto-mode-discussion",
+    "AUTO_MODE_DISCUSSION_PACKET.md"
+  );
+  const packetJsonPath = path.join(
+    projectRoot,
+    "reviewer",
+    "auto-mode-discussion",
+    "AUTO_MODE_DISCUSSION_PACKET.json"
+  );
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.dirname(packetPath), { recursive: true });
+  await fs.writeFile(packetPath, "# packet\n", "utf8");
+  await fs.writeFile(packetJsonPath, "{}\n", "utf8");
+
+  const round = createAutoModeDiscussionRound({
+    stage: "write",
+    riskLevel: "severe",
+    packetPath,
+    packetJsonPath,
+    packetFingerprint: "risk-fingerprint-1",
+    attempts: [
+      {
+        reviewerRole: "researcher",
+        sessionKey: "agent:researcher:main",
+        runId: "discussion-1",
+        status: "completed",
+        launchedAt: "2026-03-25T12:00:00.000Z",
+        completedAt: "2026-03-25T12:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "researcher",
+          riskAssessment: "needs_changes",
+          confidence: 8.4,
+          recommendedOwner: "academic_writer",
+          actionItems: ["Refresh the citation verification appendix."],
+          blockers: ["Citation verification is not complete."],
+          summary: "One more bounded writing pass should reconcile the citation packet.",
+          createdAt: "2026-03-25T12:01:00.000Z",
+          runId: "discussion-1",
+          rawText: JSON.stringify({
+            riskAssessment: "needs_changes",
+            confidence: 8.4,
+            recommendedOwner: "academic_writer",
+            actionItems: ["Refresh the citation verification appendix."],
+            blockers: ["Citation verification is not complete."],
+            summary: "One more bounded writing pass should reconcile the citation packet.",
+          }),
+        },
+      },
+      {
+        reviewerRole: "analyzer",
+        sessionKey: "agent:analyzer:main",
+        runId: "discussion-2",
+        status: "completed",
+        launchedAt: "2026-03-25T12:00:00.000Z",
+        completedAt: "2026-03-25T12:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "analyzer",
+          riskAssessment: "needs_changes",
+          confidence: 8.1,
+          recommendedOwner: "academic_writer",
+          actionItems: ["Tighten the claim-evidence bridge in the writing packet."],
+          blockers: [],
+          summary: "Evidence is almost aligned, but the paper packet still needs one tighter revision.",
+          createdAt: "2026-03-25T12:01:00.000Z",
+          runId: "discussion-2",
+          rawText: JSON.stringify({
+            riskAssessment: "needs_changes",
+            confidence: 8.1,
+            recommendedOwner: "academic_writer",
+            actionItems: ["Tighten the claim-evidence bridge in the writing packet."],
+            blockers: [],
+            summary: "Evidence is almost aligned, but the paper packet still needs one tighter revision.",
+          }),
+        },
+      },
+    ],
+  });
+  round.aggregate = {
+    status: "needs_changes",
+    quorum: 2,
+    reviewCount: 2,
+    averageConfidence: 8.25,
+    assessmentCounts: {
+      needs_changes: 2,
+    },
+    recommendedOwner: "academic_writer",
+    actionItems: [
+      "Refresh the citation verification appendix.",
+      "Tighten the claim-evidence bridge in the writing packet.",
+    ],
+    blockers: ["Citation verification is not complete."],
+    summary: "Panel recommends one more bounded remediation round before keeping aggressive auto mode.",
+  };
+  round.status = "needs_changes";
+
+  await saveAutoModeDiscussionStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-03-25T12:02:00.000Z",
+    roundsStartedByFingerprint: {
+      "risk-fingerprint-1": 1,
+    },
+    currentRound: round,
+  });
+
+  const api = makeApi();
+  const statusCommand = getCommand(createResearchWorkflowCommands(api, {
+    resolveConversationBindingRecord() {
+      return {
+        targetSessionKey: "agent:researcher:discord:group:paper-lab",
+      };
+    },
+    async buildWorkflowSnapshot() {
+      return {
+        role: "researcher",
+        projectRoot,
+        projectId: "paper-lab",
+        projectResolutionSource: "channel_binding",
+        currentStage: "write",
+        currentMicroStage: "citation-fix",
+        ownerAgent: "academic_writer",
+        recommendedOwner: "academic_writer",
+        nextAction: "/write-paper",
+        resumeAction: "/resume-pipeline paper-lab",
+        blockingReason: "Citation verification is not complete.",
+        unreadMailbox: [],
+        idleResearchEnabled: false,
+        idleResearchDue: false,
+        idleResearchTopic: null,
+        graphRefreshRequired: false,
+        graphRefreshReason: null,
+        innovationReflectionStatus: "fresh",
+        innovationReflectionDue: false,
+        experimentSyncRequired: false,
+        experimentPapernexusSyncStatus: null,
+      };
+    },
+    async runWorkflowAutoIterator() {
+      return {
+        configuredAutoMode: "aggressive",
+        effectiveAutoMode: "aggressive",
+        autoModeRiskLevel: "severe",
+        autoModeReasons: [
+          "Citation integrity reports hallucinated citations.",
+          "Auto discussion rounds remaining before downgrade: 1/2.",
+        ],
+        autoModeRiskFingerprint: "risk-fingerprint-1",
+        autoModeMitigationStatus: "needs_changes",
+        autoModeMitigationRoundsStarted: 1,
+        autoModeMitigationRoundsRemaining: 1,
+      };
+    },
+  }), "workflow-status");
+
+  const result = await statusCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/workflow-status",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text ?? "", /Auto discussion: status=needs_changes, stage=write, risk=severe, reviews=2/);
+  assert.match(result.text ?? "", /Auto discussion summary: Panel recommends one more bounded remediation round/);
+  assert.match(result.text ?? "", /researcher: status=completed, assessment=needs_changes, confidence=8.4/);
+  assert.match(result.text ?? "", /action items: Refresh the citation verification appendix\./);
+  assert.match(result.text ?? "", /blockers: Citation verification is not complete\./);
+  assert.match(result.text ?? "", /response: \{.*\"riskAssessment\":\"needs_changes\"/);
 });

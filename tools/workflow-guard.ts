@@ -17,6 +17,17 @@ import {
   type GraphPresenceCheckResult,
   type GraphPresenceStatus,
 } from "./graph-presence";
+import {
+  evaluateWorkflowAutoModeRisk,
+  normalizeWorkflowAutoGateConfig,
+  normalizeWorkflowAutoMode,
+  resolveEffectiveWorkflowAutoMode,
+  type WorkflowAutoGateConfig,
+  type WorkflowEffectiveAutoMode,
+  type WorkflowAutoMode,
+} from "./workflow-auto-mode";
+import { evaluateSubmitAutoGate } from "./workflow-auto-gate";
+import { readAutoModeDiscussionStore } from "./workflow-auto-discussion";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -31,6 +42,8 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   agentContactCooldownSeconds?: number;
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
+  autoMode?: WorkflowAutoMode;
+  autoGate?: WorkflowAutoGateConfig;
 }
 
 export interface WorkflowToolContext {
@@ -448,6 +461,14 @@ export type AutoIteratorResult = {
   projectRoot: string | null;
   projectId: string | null;
   mode: string;
+  configuredAutoMode: WorkflowAutoMode;
+  effectiveAutoMode: WorkflowAutoMode;
+  autoModeRiskLevel: WorkflowEffectiveAutoMode["riskLevel"];
+  autoModeReasons: string[];
+  autoModeRiskFingerprint: string | null;
+  autoModeMitigationStatus: WorkflowEffectiveAutoMode["mitigationStatus"];
+  autoModeMitigationRoundsStarted: number;
+  autoModeMitigationRoundsRemaining: number;
   stageBefore: string | null;
   stageEffective: string | null;
   stageAfter: string | null;
@@ -493,6 +514,8 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   channelProjectBindingsPath: "",
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
+  autoMode: normalizeWorkflowAutoMode(undefined),
+  autoGate: normalizeWorkflowAutoGateConfig(undefined),
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -962,6 +985,14 @@ function normalizePolicy(
     defaultJournalTemplatePath:
       asString(config?.defaultJournalTemplatePath) ??
       DEFAULT_POLICY.defaultJournalTemplatePath,
+    autoMode:
+      config && typeof config === "object"
+        ? normalizeWorkflowAutoMode((config as Record<string, unknown>).autoMode)
+        : DEFAULT_POLICY.autoMode,
+    autoGate:
+      config && typeof config === "object"
+        ? normalizeWorkflowAutoGateConfig((config as Record<string, unknown>).autoGate)
+        : DEFAULT_POLICY.autoGate,
   };
 }
 
@@ -2194,19 +2225,24 @@ function getAutoIteratorAuditPath(projectRoot: string): string {
   return path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json");
 }
 
-function isHumanGateBlocking(params: {
+async function evaluateGateBlocking(params: {
+  projectRoot: string;
   gateState: GateState;
   stage: string | null;
   hasStageWorkRemaining?: boolean;
-}): { blocking: boolean; reason: string | null } {
+  effectiveAutoMode: WorkflowAutoMode;
+  autoGate: WorkflowAutoGateConfig;
+}): Promise<{ blocking: boolean; reason: string | null }> {
   const stage = params.stage;
   const gateStatus = params.gateState.gateStatus;
   const lastGate = params.gateState.lastGate?.trim().toUpperCase() ?? null;
   if (stage === "submit" && params.hasStageWorkRemaining !== true) {
-    return {
-      blocking: true,
-      reason: "GATE-5 revision decision is mandatory at SUBMIT; wait for human response before DONE.",
-    };
+    return evaluateSubmitAutoGate({
+      projectRoot: params.projectRoot,
+      autoMode: params.effectiveAutoMode,
+      autoGate: params.autoGate,
+      hasStageWorkRemaining: false,
+    });
   }
   if (gateStatus !== "waiting") {
     return { blocking: false, reason: null };
@@ -6405,8 +6441,10 @@ export async function runWorkflowAutoIterator(params: {
   mode?: string;
   queueMailbox?: boolean;
   cooldownSeconds?: number;
+  policy?: WorkflowGuardPolicy;
 }): Promise<AutoIteratorResult> {
   const projectRoot = path.resolve(params.projectRoot);
+  const workflowPolicy = normalizePolicy(params.policy as Record<string, unknown> | undefined);
   const [manifestRaw, trackRegistry, experimentLedger] = await Promise.all([
     readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json")),
     readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json")),
@@ -6461,10 +6499,42 @@ export async function runWorkflowAutoIterator(params: {
     experimentLedger,
     currentStage: stageEffective,
   });
-  const gateEvaluation = isHumanGateBlocking({
+  const autoModeRiskEvaluation = evaluateWorkflowAutoModeRisk({
+    configuredMode: workflowPolicy.autoMode,
+    stage: stageEffective,
+    regressed,
+    revisionCount: gateState.revisionCount,
+    missingStageSignals: effectiveMissingSignals,
+    manifest,
+  });
+  const autoModeDiscussionStore =
+    autoModeRiskEvaluation.riskFingerprint && autoModeRiskEvaluation.riskLevel !== "stable"
+      ? await readAutoModeDiscussionStore(projectRoot)
+      : null;
+  const autoModeDiscussionRound =
+    autoModeDiscussionStore?.currentRound?.packetFingerprint ===
+    autoModeRiskEvaluation.riskFingerprint
+      ? autoModeDiscussionStore.currentRound
+      : null;
+  const autoModeMitigationRoundsStarted = autoModeRiskEvaluation.riskFingerprint
+    ? autoModeDiscussionStore?.roundsStartedByFingerprint[
+        autoModeRiskEvaluation.riskFingerprint
+      ] ?? 0
+    : 0;
+  const autoModeEvaluation = resolveEffectiveWorkflowAutoMode({
+    configuredMode: workflowPolicy.autoMode,
+    riskEvaluation: autoModeRiskEvaluation,
+    mitigationStatus: autoModeDiscussionRound?.status ?? null,
+    mitigationRoundsStarted: autoModeMitigationRoundsStarted,
+    mitigationMaxRounds: workflowPolicy.autoGate.maxMitigationRounds,
+  });
+  const gateEvaluation = await evaluateGateBlocking({
+    projectRoot,
     gateState,
     stage: stageEffective,
     hasStageWorkRemaining: effectiveMissingSignals.length > 0,
+    effectiveAutoMode: autoModeEvaluation.effectiveMode,
+    autoGate: workflowPolicy.autoGate,
   });
 
   let stageAfter = stageEffective;
@@ -6573,7 +6643,7 @@ export async function runWorkflowAutoIterator(params: {
               typeof params.cooldownSeconds === "number" &&
               Number.isFinite(params.cooldownSeconds)
                 ? Math.max(0, Math.floor(params.cooldownSeconds))
-                : DEFAULT_POLICY.agentContactCooldownSeconds,
+                : workflowPolicy.agentContactCooldownSeconds,
           });
     recommendedActions.push({
       kind: "drive_stage",
@@ -6701,6 +6771,14 @@ export async function runWorkflowAutoIterator(params: {
     projectRoot,
     projectId,
     mode,
+    configuredAutoMode: autoModeEvaluation.configuredMode,
+    effectiveAutoMode: autoModeEvaluation.effectiveMode,
+    autoModeRiskLevel: autoModeEvaluation.riskLevel,
+    autoModeReasons: autoModeEvaluation.reasons,
+    autoModeRiskFingerprint: autoModeEvaluation.riskFingerprint,
+    autoModeMitigationStatus: autoModeEvaluation.mitigationStatus,
+    autoModeMitigationRoundsStarted: autoModeEvaluation.mitigationRoundsStarted,
+    autoModeMitigationRoundsRemaining: autoModeEvaluation.mitigationRoundsRemaining,
     stageBefore,
     stageEffective,
     stageAfter,

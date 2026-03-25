@@ -14,6 +14,7 @@ import {
   buildWorkflowSnapshot,
   getWorkflowGuardPolicy,
   inferTargetRoleFromToolParams,
+  runWorkflowAutoIterator,
 } from "./workflow-guard";
 import {
   buildResearchPipelineBackgroundCommand,
@@ -22,6 +23,14 @@ import {
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
 } from "./workflow-fast-paths";
+import {
+  getGateReviewStorePath,
+  readGateReviewStore,
+} from "./workflow-auto-gate";
+import {
+  getAutoModeDiscussionStorePath,
+  readAutoModeDiscussionStore,
+} from "./workflow-auto-discussion";
 import { enqueueWorkflowTask, resolveWorkflowQueueKey } from "./workflow-coordination";
 
 type WorkflowBackgroundCommandKind =
@@ -36,6 +45,7 @@ type WorkflowCommandDependencies = {
     conversation: ConversationRef
   ) => SessionBindingRecord | null;
   buildWorkflowSnapshot: typeof buildWorkflowSnapshot;
+  runWorkflowAutoIterator: typeof runWorkflowAutoIterator;
   startBackgroundWorkflowRun: typeof startBackgroundWorkflowRun;
 };
 
@@ -57,6 +67,9 @@ type ResolvedWorkflowCommandTarget = {
 };
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
+type WorkflowAutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
+type WorkflowGateReviewStore = Awaited<ReturnType<typeof readGateReviewStore>>;
+type WorkflowAutoDiscussionStore = Awaited<ReturnType<typeof readAutoModeDiscussionStore>>;
 
 type ExistingWorkflowProjectSelection = {
   projectId: string;
@@ -66,6 +79,7 @@ type ExistingWorkflowProjectSelection = {
 const DEFAULT_DEPS: WorkflowCommandDependencies = {
   resolveConversationBindingRecord: defaultResolveConversationBindingRecord,
   buildWorkflowSnapshot,
+  runWorkflowAutoIterator,
   startBackgroundWorkflowRun,
 };
 
@@ -373,12 +387,139 @@ async function resolveExistingWorkflowProjectSelection(params: {
   };
 }
 
+function compactStatusText(value: string | null | undefined, maxLength = 240): string {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "none";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function joinStatusList(values: string[]): string {
+  return values.length > 0 ? values.join("; ") : "none";
+}
+
+function formatAutoModeSection(params: {
+  autoIteratorResult: WorkflowAutoIteratorResult | null;
+}) {
+  const result = params.autoIteratorResult;
+  if (!result) {
+    return ["Auto mode: unavailable (no active project root resolved)."];
+  }
+  const totalMitigationRounds =
+    result.autoModeMitigationRoundsStarted + result.autoModeMitigationRoundsRemaining;
+  const lines = [
+    `Auto mode: configured=${result.configuredAutoMode}, effective=${result.effectiveAutoMode}, risk=${result.autoModeRiskLevel}`,
+    `Auto mitigation: status=${result.autoModeMitigationStatus ?? "none"}, rounds=${result.autoModeMitigationRoundsStarted}/${totalMitigationRounds}, remaining=${result.autoModeMitigationRoundsRemaining}, fingerprint=${result.autoModeRiskFingerprint ?? "none"}`,
+  ];
+  if (result.autoModeReasons.length > 0) {
+    lines.push("Auto mode reasons:");
+    for (const reason of result.autoModeReasons) {
+      lines.push(`  - ${reason}`);
+    }
+  }
+  return lines;
+}
+
+function formatAutoDiscussionSection(params: {
+  projectRoot: string | null;
+  discussionStore: WorkflowAutoDiscussionStore | null;
+}) {
+  if (!params.projectRoot || !params.discussionStore?.currentRound) {
+    return ["Auto discussion: no persisted discussion round for the current project."];
+  }
+  const round = params.discussionStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto discussion: status=${round.status}, stage=${round.stage ?? "unknown"}, risk=${round.riskLevel}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto discussion store: ${getAutoModeDiscussionStorePath(params.projectRoot)}`,
+    `Auto discussion packet: ${round.packetPath}`,
+    `Auto discussion summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+    `Auto discussion recommended owner: ${aggregate?.recommendedOwner ?? "none"}`,
+  ];
+  if ((aggregate?.actionItems?.length ?? 0) > 0) {
+    lines.push(`Auto discussion action items: ${joinStatusList(aggregate?.actionItems ?? [])}`);
+  }
+  if ((aggregate?.blockers?.length ?? 0) > 0) {
+    lines.push(`Auto discussion blockers: ${joinStatusList(aggregate?.blockers ?? [])}`);
+  }
+  lines.push("Auto discussion content:");
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - ${attempt.reviewerRole}: status=${attempt.status}${
+        result
+          ? `, assessment=${result.riskAssessment}, confidence=${result.confidence.toFixed(1)}`
+          : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.actionItems?.length ?? 0) > 0) {
+      lines.push(`    action items: ${joinStatusList(result?.actionItems ?? [])}`);
+    }
+    if ((result?.blockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.blockers ?? [])}`);
+    }
+    if (result?.rawText) {
+      lines.push(`    response: ${compactStatusText(result.rawText, 320)}`);
+    }
+  }
+  return lines;
+}
+
+function formatGateReviewSection(params: {
+  projectRoot: string | null;
+  gateReviewStore: WorkflowGateReviewStore | null;
+}) {
+  if (!params.projectRoot || !params.gateReviewStore?.currentRound) {
+    return ["Auto gate review: no persisted gate review round for the current project."];
+  }
+  const round = params.gateReviewStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto gate review: status=${round.status}, gate=${round.gateId}, stage=${round.stage ?? "unknown"}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto gate review store: ${getGateReviewStorePath(params.projectRoot)}`,
+    `Auto gate review packet: ${round.packetPath}`,
+    `Auto gate review summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+  ];
+  if (aggregate) {
+    lines.push(
+      `Auto gate review scores: avg=${aggregate.averageScore?.toFixed(2) ?? "n/a"}, min=${aggregate.minScore?.toFixed(2) ?? "n/a"}, blockers=${aggregate.blockerCount}`
+    );
+  }
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - gate reviewer ${attempt.reviewerRole}: status=${attempt.status}${
+        result ? `, verdict=${result.verdict}, score=${result.overallScore.toFixed(1)}` : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.majorIssues?.length ?? 0) > 0) {
+      lines.push(`    major issues: ${joinStatusList(result?.majorIssues ?? [])}`);
+    }
+    if ((result?.criticalBlockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.criticalBlockers ?? [])}`);
+    }
+  }
+  return lines;
+}
+
 function formatWorkflowStatusText(params: {
   snapshot: WorkflowSnapshot;
   commandLabel: string;
   targetSessionKey: string;
+  autoIteratorResult: WorkflowAutoIteratorResult | null;
+  discussionStore: WorkflowAutoDiscussionStore | null;
+  gateReviewStore: WorkflowGateReviewStore | null;
 }) {
   const { snapshot } = params;
+  const unreadMailboxCount = Array.isArray(snapshot.unreadMailbox)
+    ? snapshot.unreadMailbox.length
+    : 0;
   const lines = [
     "Workflow Status",
     `Session: ${params.targetSessionKey}`,
@@ -389,7 +530,7 @@ function formatWorkflowStatusText(params: {
     `Next action: ${snapshot.nextAction ?? "none"}`,
     `Resume action: ${snapshot.resumeAction ?? params.commandLabel}`,
     `Blocking reason: ${snapshot.blockingReason ?? "none"}`,
-    `Mailbox: ${snapshot.unreadMailbox.length} unread`,
+    `Mailbox: ${unreadMailboxCount} unread`,
     `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
@@ -400,6 +541,18 @@ function formatWorkflowStatusText(params: {
       "Project binding: no active project is currently bound to this conversation or workflow session."
     );
   }
+  lines.push("");
+  lines.push(...formatAutoModeSection({ autoIteratorResult: params.autoIteratorResult }));
+  lines.push("");
+  lines.push(...formatAutoDiscussionSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    discussionStore: params.discussionStore,
+  }));
+  lines.push("");
+  lines.push(...formatGateReviewSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    gateReviewStore: params.gateReviewStore,
+  }));
   return lines.join("\n");
 }
 
@@ -600,7 +753,7 @@ function createWorkflowStatusCommandHandler(
         messageChannel: ctx.channel,
       });
 
-      const currentSnapshot = await enqueueWorkflowTask({
+      const statusState = await enqueueWorkflowTask({
         key: resolveWorkflowQueueKey({
           projectRoot: previewSnapshot.projectRoot,
           workspaceDir: target.workspaceDir,
@@ -610,21 +763,47 @@ function createWorkflowStatusCommandHandler(
         }),
         label: "workflow_command:workflow_status",
         logger: api.logger,
-        task: () =>
-          deps.buildWorkflowSnapshot({
+        task: async () => {
+          const snapshot = await deps.buildWorkflowSnapshot({
             policy: workflowPolicy,
             agentId: target.agentId ?? undefined,
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: targetSessionKey,
             messageChannel: ctx.channel,
-          }),
+          });
+          const resolvedProjectRoot = snapshot.projectRoot ?? null;
+          const autoIteratorResult = resolvedProjectRoot
+            ? await deps.runWorkflowAutoIterator({
+                projectRoot: resolvedProjectRoot,
+                policy: workflowPolicy,
+                agentId: target.agentId ?? snapshot.role ?? undefined,
+                mode: "command-status",
+                queueMailbox: false,
+              })
+            : null;
+          const [discussionStore, gateReviewStore] = resolvedProjectRoot
+            ? await Promise.all([
+                readAutoModeDiscussionStore(resolvedProjectRoot),
+                readGateReviewStore(resolvedProjectRoot),
+              ])
+            : [null, null];
+          return {
+            snapshot,
+            autoIteratorResult,
+            discussionStore,
+            gateReviewStore,
+          };
+        },
       });
 
       return {
         text: formatWorkflowStatusText({
-          snapshot: currentSnapshot,
+          snapshot: statusState.snapshot,
           commandLabel,
           targetSessionKey,
+          autoIteratorResult: statusState.autoIteratorResult,
+          discussionStore: statusState.discussionStore,
+          gateReviewStore: statusState.gateReviewStore,
         }),
       };
     } catch (error) {

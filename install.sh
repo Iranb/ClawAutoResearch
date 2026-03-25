@@ -6,15 +6,18 @@
 # 功能：
 #   1. 可选地添加或检查研究工作流所需的 agents
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
-#   3. 创建/更新插件链接到 ~/.openclaw/plugins/openclaw-research
-#   4. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
-#   5. 不修改用户 openclaw.json
-#   6. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
+#   3. 若本机存在 PaperNexus 仓库，则自动把相关 Skills 同步到本仓库后再安装
+#   4. 创建/更新插件链接到 ~/.openclaw/plugins/openclaw-research
+#   5. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
+#   6. 不修改用户 openclaw.json
+#   7. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
+#   8. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
 
 set -euo pipefail
 
 PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 OC_DIR="${OPENCLAW_HOME:-$HOME/.openclaw}"
+PAPERNEXUS_DIR="${PAPERNEXUS_DIR:-/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus}"
 DRY_RUN=false
 FORCE_ROLE_FILES=false
 SKIP_AGENT_CREATE=false
@@ -28,6 +31,11 @@ Options:
   --force-role-files  覆盖 workspace root 中已存在的 researcher/reviewer/cross-reviewer 角色配置文件
   --skip-agent-create 跳过 `openclaw agents add` / `set-identity`，只同步插件、skills、模板和角色配置
   -h, --help          显示帮助
+
+Environment:
+  OPENCLAW_HOME       默认是 ~/.openclaw
+  OPENCLAW_CONFIG_PATH 默认是 $OPENCLAW_HOME/openclaw.json
+  PAPERNEXUS_DIR      默认是 /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus
 EOF
 }
 
@@ -93,6 +101,10 @@ ensure_dir() {
   fi
 }
 
+path_exists() {
+  [[ -e "$1" || -L "$1" ]]
+}
+
 copy_file() {
   local src="$1"
   local dst="$2"
@@ -121,6 +133,81 @@ copy_file() {
     run cp "$src" "$dst"
     echo "  -> COPY $label"
   fi
+}
+
+remove_path() {
+  local target="$1"
+  if ! path_exists "$target"; then
+    return 0
+  fi
+  if $DRY_RUN; then
+    echo "  [dry-run] 将删除: $target"
+  else
+    rm -rf "$target"
+  fi
+}
+
+sync_skill_dir() {
+  local src="$1"
+  local dst="$2"
+  local label="$3"
+
+  if [[ ! -d "$src" && ! -L "$src" ]]; then
+    echo "  -> SKIP $label (源目录不存在)"
+    return 0
+  fi
+
+  if [[ -L "$src" ]]; then
+    local link_target
+    link_target=$(readlink "$src")
+    if [[ -L "$dst" ]]; then
+      local existing_target
+      existing_target=$(readlink "$dst")
+      if [[ "$existing_target" == "$link_target" ]]; then
+        echo "  -> KEEP $label"
+        return 0
+      fi
+    fi
+    remove_path "$dst"
+    if $DRY_RUN; then
+      echo "  [dry-run] 将创建符号链接: $dst -> $link_target"
+    else
+      ln -s "$link_target" "$dst"
+    fi
+    echo "  -> LINK $label"
+    return 0
+  fi
+
+  if [[ -d "$dst" ]]; then
+    remove_path "$dst"
+  fi
+  run cp -R "$src" "$dst"
+  echo "  -> COPY $label"
+}
+
+sync_papernexus_skills() {
+  local papernexus_skill_root="$PAPERNEXUS_DIR/SKILL"
+  if [[ ! -d "$PAPERNEXUS_DIR" || ! -d "$papernexus_skill_root" ]]; then
+    echo "  -> SKIP PaperNexus skills (未检测到 $papernexus_skill_root)"
+    return 0
+  fi
+
+  echo "  -> 检测到 PaperNexus: $PAPERNEXUS_DIR"
+  ensure_dir "$PLUGIN_DIR/skills/researcher"
+  ensure_dir "$PLUGIN_DIR/skills/analyzer"
+
+  sync_skill_dir \
+    "$papernexus_skill_root/PaperNexus" \
+    "$PLUGIN_DIR/skills/researcher/papernexus" \
+    "researcher/papernexus"
+  sync_skill_dir \
+    "$papernexus_skill_root/PaperNexusAgenticReasoning" \
+    "$PLUGIN_DIR/skills/researcher/papernexus-agentic-reasoning" \
+    "researcher/papernexus-agentic-reasoning"
+  sync_skill_dir \
+    "$papernexus_skill_root/PaperNexusReflection" \
+    "$PLUGIN_DIR/skills/analyzer/papernexus-reflection" \
+    "analyzer/papernexus-reflection"
 }
 
 get_existing_agent_ids() {
@@ -211,6 +298,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "  Plugin:  $PLUGIN_DIR"
 echo "  Target:  $OC_DIR_EXPANDED"
+echo "  PaperNexus: $PAPERNEXUS_DIR"
 echo "  Mode:    $([ "$DRY_RUN" = true ] && echo 'DRY RUN (no changes)' || echo 'LIVE')"
 echo "  Force:   $([ "$FORCE_ROLE_FILES" = true ] && echo 'overwrite role root files' || echo 'preserve existing role root files')"
 echo "  Agents:  $([ "$SKIP_AGENT_CREATE" = true ] && echo 'skip openclaw agents add' || echo 'create/check via openclaw')"
@@ -238,10 +326,17 @@ if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
   echo "        脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
 fi
 
+if [[ ! -f "$PLUGIN_DIR/dist/index.js" ]]; then
+  echo "  WARN: 未检测到 $PLUGIN_DIR/dist/index.js"
+  echo "        建议先执行 npm run build，再运行安装脚本。"
+else
+  echo "  -> 已检测到构建产物 dist/index.js"
+fi
+
 echo "  -> 配置目录就绪"
 echo ""
 
-echo "[1/6] 添加 Agents（openclaw agents add）..."
+echo "[1/7] 添加 Agents（openclaw agents add）..."
 
 AGENTS=(
   "researcher|Researcher|workspace-researcher"
@@ -284,7 +379,12 @@ else
 fi
 
 echo ""
-echo "[2/6] 检查重复技能..."
+echo "[2/7] 同步本机 PaperNexus Skills（如果存在）..."
+
+sync_papernexus_skills
+
+echo ""
+echo "[3/7] 检查重复技能..."
 
 DUPLICATES=()
 
@@ -327,7 +427,7 @@ else
 fi
 
 echo ""
-echo "[3/6] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
+echo "[4/7] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
 
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
   skill_src="$PLUGIN_DIR/skills/$agent"
@@ -348,7 +448,7 @@ for agent in researcher reviewer orchestrator coder analyzer academic_writer cro
           echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
         else
           if $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
-            run rm -rf "$dst"
+            remove_path "$dst"
             if $DRY_RUN; then
               echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
             else
@@ -372,7 +472,7 @@ for agent in researcher reviewer orchestrator coder analyzer academic_writer cro
         if [[ "$skill_name" == "self-improving-agent" ]]; then
           echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
         elif $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
-          run rm -rf "$dst"
+          remove_path "$dst"
           run cp -R "$skill_dir" "$dst"
           echo "  -> REPLACE $agent/$skill_name"
         else
@@ -387,7 +487,7 @@ for agent in researcher reviewer orchestrator coder analyzer academic_writer cro
 done
 
 echo ""
-echo "[4/6] 创建插件链接..."
+echo "[5/7] 创建插件链接..."
 
 sync_plugin_link "$PLUGIN_LINK"
 if [[ -e "$PLUGIN_LINK" && ! -L "$PLUGIN_LINK" ]]; then
@@ -395,7 +495,7 @@ if [[ -e "$PLUGIN_LINK" && ! -L "$PLUGIN_LINK" ]]; then
 fi
 
 echo ""
-echo "[5/6] 同步工作区配置、模板和角色根配置..."
+echo "[6/7] 同步工作区配置、模板和角色根配置..."
 
 RESEARCHER_WS="$OC_DIR_EXPANDED/workspace-researcher"
 REVIEWER_WS="$OC_DIR_EXPANDED/workspace-reviewer"
@@ -441,7 +541,7 @@ copy_role_bundle "reviewer" "$REVIEWER_WS" "$FORCE_ROLE_FILES"
 copy_role_bundle "cross-reviewer" "$CROSS_REVIEWER_WS" "$FORCE_ROLE_FILES"
 
 echo ""
-echo "[6/6] 完成安装收尾..."
+echo "[7/7] 完成安装收尾..."
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
@@ -453,16 +553,29 @@ if $SKIP_AGENT_CREATE; then
 else
   echo "  1. Agents: 已添加或检查研究工作流所需 agents"
 fi
-echo "  2. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
-echo "  3. Plugin: 已创建或检查 $PLUGIN_LINK"
-echo "  4. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
-echo "  5. Config: 未修改你的 openclaw.json"
-echo "  6. Docs: 请直接查看仓库内 README、DOC 和 openclaw.RECOMMENDED.json"
+echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR，则相关 skills 已先同步到插件仓库"
+echo "  3. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
+echo "  4. Plugin: 已创建或检查 $PLUGIN_LINK"
+echo "  5. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
+echo "  6. Config: 未修改你的 openclaw.json"
+echo "  7. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
 echo ""
-highlight "  请重点检查：plugin load path、agentDir 绝对路径、skills roots、research_workflow 工具权限、projectsRoot"
-echo "  参考文档：$PLUGIN_DIR/README.md"
-echo "  文档入口：$PLUGIN_DIR/DOC/README.md"
+highlight "  请重点检查：plugin load path、agentDir 绝对路径、skills roots、research_workflow 工具权限、projectsRoot、autoMode、autoGate"
+echo "  新手入口：$PLUGIN_DIR/DOC/beginner_zh.md"
+echo "  中文概览：$PLUGIN_DIR/DOC/overview_zh.md"
+echo "  文档总入口：$PLUGIN_DIR/DOC/README.md"
 echo "  推荐配置：$PLUGIN_DIR/openclaw.RECOMMENDED.json"
+echo ""
+echo "  推荐安装后验证："
+echo "    1. /research-pipeline \"你的研究主题\""
+echo "    2. /workflow-status"
+echo "    3. 检查输出里是否能看到 Auto mode、Auto discussion、Auto gate review"
+echo "    4. 如果项目有风险，检查 /workflow-status 是否显示每个 Agent 的讨论摘要和 action items"
+echo ""
+echo "  如果你想先稳一点："
+echo "    - openclaw.RECOMMENDED.json 里默认是 autoMode = conservative"
+echo "    - 想更自动，可以改成 autoMode = aggressive"
+echo "    - 高风险时系统会先自动讨论和补救，多轮仍不行才降档"
 echo ""
 if $DRY_RUN; then
   echo "  使用不带 --dry-run 的方式运行以应用更改。"

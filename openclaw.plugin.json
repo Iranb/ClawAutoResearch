@@ -98,6 +98,76 @@
         "type": "string",
         "default": "",
         "description": "Optional default journal paper template path. When configured, journal writing mode copies this template into each project before Writer edits it."
+      },
+      "autoMode": {
+        "type": "string",
+        "enum": ["off", "conservative", "aggressive"],
+        "default": "off",
+        "description": "Workflow auto-dispatch mode. conservative auto-launches stage owners but still stops at GATE-5; aggressive also uses auto gate review to progress submit to done."
+      },
+      "autoGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allowAutonomousDone": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxReviewRounds": {
+            "type": "number",
+            "minimum": 1,
+            "default": 2
+          },
+          "maxMitigationRounds": {
+            "type": "number",
+            "minimum": 1,
+            "default": 2
+          },
+          "reviewTimeoutMinutes": {
+            "type": "number",
+            "minimum": 1,
+            "default": 20
+          },
+          "quorum": {
+            "type": "number",
+            "minimum": 1,
+            "default": 2
+          },
+          "thresholds": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "review_to_write": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "avg": { "type": "number", "minimum": 0, "maximum": 10, "default": 7.8 },
+                  "minSingle": { "type": "number", "minimum": 0, "maximum": 10, "default": 7.0 }
+                }
+              },
+              "write_to_submit": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "avg": { "type": "number", "minimum": 0, "maximum": 10, "default": 8.2 },
+                  "minSingle": { "type": "number", "minimum": 0, "maximum": 10, "default": 7.5 }
+                }
+              },
+              "submit_to_done": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "avg": { "type": "number", "minimum": 0, "maximum": 10, "default": 8.8 },
+                  "minSingle": { "type": "number", "minimum": 0, "maximum": 10, "default": 8.0 }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -155,6 +225,12 @@
     },
     "defaultJournalTemplatePath": {
       "label": "Default Journal Template Path"
+    },
+    "autoMode": {
+      "label": "Auto Mode"
+    },
+    "autoGate": {
+      "label": "Auto Gate"
     }
   },
   "skills": [

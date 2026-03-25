@@ -13,9 +13,38 @@ import {
 import {
   getIdleResearchStateSummary,
   listChannelProjectBindingsForWorkflow,
+  recordWorkflowContactEvent,
   runWorkflowAutoIterator,
 } from "./workflow-guard";
-import { deriveAgentSessionKeyForRole } from "./agent-task-dispatch";
+import {
+  deriveAgentSessionKeyForRole,
+  dispatchWorkflowTaskToAgent,
+  type DispatchableWorkflowRole,
+} from "./agent-task-dispatch";
+import {
+  aggregateGateReviewRound,
+  buildAutoGateReviewPrompt,
+  createGateReviewRound,
+  defaultGateReviewPanel,
+  extractLatestAssistantText,
+  materializeGateReviewPacket,
+  parseGateReviewResult,
+  readGateReviewStore,
+  saveGateReviewStore,
+  type GateReviewAttempt,
+  type GateReviewReviewerRole,
+} from "./workflow-auto-gate";
+import {
+  aggregateAutoModeDiscussionRound,
+  buildAutoModeDiscussionPrompt,
+  createAutoModeDiscussionRound,
+  defaultAutoModeDiscussionPanel,
+  materializeAutoModeDiscussionPacket,
+  parseAutoModeDiscussionResult,
+  readAutoModeDiscussionStore,
+  saveAutoModeDiscussionStore,
+  type AutoModeDiscussionAttempt as AutoModeDiscussionReviewAttempt,
+} from "./workflow-auto-discussion";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -47,6 +76,14 @@ type RuntimeSubagentApi = {
     idempotencyKey?: string;
     extraSystemPrompt?: string;
   }) => Promise<{ runId: string }>;
+  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+    status: "ok" | "error" | "timeout";
+    error?: string;
+  }>;
+  getSessionMessages?: (params: {
+    sessionKey: string;
+    limit?: number;
+  }) => Promise<{ messages: unknown[] }>;
 };
 
 type IdleResearchLaunchAttempt = {
@@ -67,6 +104,97 @@ type IdleResearchLaunchAttempt = {
   dueKey: string | null;
 };
 
+type AutoStageLaunchAttempt = {
+  launched: boolean;
+  reason:
+    | "started"
+    | "auto_mode_disabled"
+    | "risk_discussion_pending"
+    | "no_runtime_subagent"
+    | "gate_blocked"
+    | "no_drive_stage_action"
+    | "cooldown_active"
+    | "already_launched"
+    | "dispatch_failed";
+  projectId: string | null;
+  projectRoot: string;
+  stage: string | null;
+  owner: string | null;
+  sessionKey: string | null;
+  runId: string | null;
+  dispatchStrategy: string | null;
+  launchKey: string | null;
+  error: string | null;
+};
+
+type AutoGateReviewAttempt = {
+  launched: boolean;
+  reason:
+    | "disabled"
+    | "not_submit_gate"
+    | "no_runtime_subagent"
+    | "already_approved"
+    | "already_rejected"
+    | "reviewing"
+    | "started"
+    | "updated"
+    | "launch_failed";
+  projectId: string | null;
+  projectRoot: string;
+  gateId: string | null;
+  stage: string | null;
+  status: string | null;
+  reviewCount: number;
+  approved: boolean;
+};
+
+type AutoModeDiscussionAttempt = {
+  launched: boolean;
+  reason:
+    | "disabled"
+    | "stable"
+    | "no_runtime_subagent"
+    | "reviewing"
+    | "started"
+    | "updated"
+    | "resolved"
+    | "round_limit_reached";
+  projectId: string | null;
+  projectRoot: string;
+  fingerprint: string | null;
+  stage: string | null;
+  riskLevel: string | null;
+  status: string | null;
+  reviewCount: number;
+  roundsStarted: number;
+  recommendedOwner: DispatchableWorkflowRole | null;
+  actionItems: string[];
+  blockers: string[];
+  summary: string | null;
+  roundId: string | null;
+  packetPath: string | null;
+  resolved: boolean;
+};
+
+type AutoModeMitigationDispatchAttempt = {
+  launched: boolean;
+  reason:
+    | "not_needed"
+    | "no_runtime_subagent"
+    | "already_dispatched"
+    | "dispatch_failed"
+    | "started";
+  projectId: string | null;
+  projectRoot: string;
+  fingerprint: string | null;
+  stage: string | null;
+  owner: DispatchableWorkflowRole | null;
+  sessionKey: string | null;
+  runId: string | null;
+  dispatchStrategy: string | null;
+  error: string | null;
+};
+
 const DEFAULT_WORKFLOW_COORDINATOR_INTERVAL_MS = 120_000;
 const DEFAULT_WORKFLOW_COORDINATOR_MAX_PROJECTS = 3;
 
@@ -76,6 +204,29 @@ function readString(value: unknown): string | null {
 
 function slugifyForIdempotency(value: string): string {
   return value.replace(/[^a-z0-9_.:-]+/gi, "-");
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function resolveWorkflowRequesterSessionKey(params: {
+  projectRoot: string;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps: WorkflowCoordinatorDependencies;
+}): string | null {
+  const bindings = params.deps.listChannelProjectBindingsForWorkflow({
+    policy: params.workflowPolicy,
+  });
+  const binding = bindings.bindings
+    .filter(
+      (entry) => path.resolve(entry.projectRoot) === path.resolve(params.projectRoot)
+    )
+    .sort(
+      (left, right) =>
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )[0];
+  return binding?.sessionKeySample ?? null;
 }
 
 async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
@@ -226,6 +377,7 @@ export async function listWorkflowCoordinatorProjects(params: {
 
 export async function runWorkflowCoordinatorPass(params: {
   projectsRoot: string;
+  policy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   cooldownSeconds: number;
   queueMailbox: boolean;
   maxProjects?: number;
@@ -253,6 +405,7 @@ export async function runWorkflowCoordinatorPass(params: {
       task: () =>
         deps.runWorkflowAutoIterator({
           projectRoot: project.projectRoot,
+          policy: params.policy,
           agentId: "researcher",
           mode: "service",
           queueMailbox: params.queueMailbox,
@@ -496,6 +649,1206 @@ export async function maybeLaunchIdleResearchForProject(params: {
   });
 }
 
+function buildAutoStageLaunchKey(params: {
+  projectRoot: string;
+  stage: string | null;
+  owner: string | null;
+  command: string | null;
+}) {
+  return [
+    path.resolve(params.projectRoot),
+    params.stage ?? "unknown-stage",
+    params.owner ?? "unknown-owner",
+    params.command ?? "no-command",
+  ].join("::");
+}
+
+export async function maybeLaunchAutoStageForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    configuredAutoMode?: string | null;
+    effectiveAutoMode?: string | null;
+    autoModeRiskLevel?: string | null;
+    autoModeMitigationStatus?: string | null;
+    gateBlocking?: boolean;
+    stageAfter?: string | null;
+    recommendedActions: Array<{
+      kind: string;
+      owner: string | null;
+      stage: string | null;
+      summary: string;
+      command: string | null;
+      mailboxMessageId?: string | null;
+      cooldownRemainingSeconds?: number | null;
+      blocking?: boolean;
+    }>;
+  };
+  launchedStageKeys: Map<string, { key: string; launchedAt: number }>;
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_stage_launch",
+    logger: params.logger,
+    task: async (): Promise<AutoStageLaunchAttempt> => {
+      if ((params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) === "off") {
+        params.launchedStageKeys.delete(params.projectRoot);
+        return {
+          launched: false,
+          reason: "auto_mode_disabled",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+      if (
+        readString(params.autoIteratorResult.autoModeRiskLevel) &&
+        readString(params.autoIteratorResult.autoModeRiskLevel) !== "stable" &&
+        params.autoIteratorResult.autoModeMitigationStatus !== "resolved" &&
+        (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) ===
+          (params.autoIteratorResult.configuredAutoMode ?? params.workflowPolicy.autoMode)
+      ) {
+        return {
+          launched: false,
+          reason: "risk_discussion_pending",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+      if (params.autoIteratorResult.gateBlocking) {
+        return {
+          launched: false,
+          reason: "gate_blocked",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+
+      const action = params.autoIteratorResult.recommendedActions.find(
+        (entry) =>
+          entry.kind === "drive_stage" &&
+          entry.owner &&
+          entry.command &&
+          entry.blocking !== true
+      );
+      if (!action) {
+        params.launchedStageKeys.delete(params.projectRoot);
+        return {
+          launched: false,
+          reason: "no_drive_stage_action",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+      if ((action.cooldownRemainingSeconds ?? 0) > 0) {
+        return {
+          launched: false,
+          reason: "cooldown_active",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error: null,
+        };
+      }
+
+      const launchKey = buildAutoStageLaunchKey({
+        projectRoot: params.projectRoot,
+        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        owner: action.owner,
+        command: action.command,
+      });
+      const lastLaunch = params.launchedStageKeys.get(params.projectRoot);
+      const cooldownMs = Math.max(
+        1,
+        params.workflowPolicy.agentContactCooldownSeconds
+      ) * 1000;
+      if (
+        lastLaunch?.key === launchKey &&
+        Date.now() - lastLaunch.launchedAt < cooldownMs
+      ) {
+        return {
+          launched: false,
+          reason: "already_launched",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey,
+          error: null,
+        };
+      }
+
+      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const dispatch = await dispatchWorkflowTaskToAgent({
+        runtimeSubagent: params.runtimeSubagent,
+        requesterSessionKey: requesterSessionKey ?? undefined,
+        fromRole: "researcher",
+        toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        summary: action.summary,
+        command: action.command,
+        mailboxMessageId: action.mailboxMessageId ?? null,
+        extraBody:
+          "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+        waitTimeoutMs: 5000,
+        retryOnTimeout: true,
+        enableSpawnFallback: true,
+      });
+      if (!dispatch.dispatched) {
+        return {
+          launched: false,
+          reason: "dispatch_failed",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: dispatch.sessionKey,
+          runId: dispatch.runId,
+          dispatchStrategy: dispatch.strategy,
+          launchKey,
+          error: dispatch.error,
+        };
+      }
+
+      params.launchedStageKeys.set(params.projectRoot, {
+        key: launchKey,
+        launchedAt: Date.now(),
+      });
+      await recordWorkflowContactEvent({
+        projectRoot: params.projectRoot,
+        fromAgent: "researcher",
+        toAgent: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+        channel: dispatch.channel ?? "sessions_send",
+      });
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        owner: action.owner,
+        sessionKey: dispatch.sessionKey,
+        runId: dispatch.runId,
+        dispatchStrategy: dispatch.strategy,
+        launchKey,
+        error: null,
+      };
+    },
+  });
+}
+
+async function pollGateReviewAttempts(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  attempts: GateReviewAttempt[];
+}) {
+  return Promise.all(
+    params.attempts.map(async (attempt) => {
+      if (attempt.status !== "pending" || !attempt.runId || !params.runtimeSubagent.waitForRun) {
+        return attempt;
+      }
+      const waited = await params.runtimeSubagent.waitForRun({
+        runId: attempt.runId,
+        timeoutMs: 1,
+      });
+      if (waited.status === "timeout") {
+        return attempt;
+      }
+      if (waited.status === "error") {
+        return {
+          ...attempt,
+          status: "error" as const,
+          completedAt: nowIso(),
+          error: waited.error ?? "gate review run failed",
+          result: parseGateReviewResult(
+            JSON.stringify({
+              verdict: "block",
+              overallScore: 0,
+              criticalBlockers: [waited.error ?? "gate review run failed"],
+              summary: "Gate review run failed before returning a valid response.",
+            }),
+            attempt.reviewerRole
+          ),
+        };
+      }
+      const messages = params.runtimeSubagent.getSessionMessages
+        ? await params.runtimeSubagent.getSessionMessages({
+            sessionKey: attempt.sessionKey,
+            limit: 20,
+          })
+        : { messages: [] };
+      const latestText = extractLatestAssistantText(messages.messages);
+      return {
+        ...attempt,
+        status: "completed" as const,
+        completedAt: nowIso(),
+        error: null,
+        result: {
+          ...parseGateReviewResult(
+            latestText ??
+              JSON.stringify({
+                verdict: "block",
+                overallScore: 0,
+                criticalBlockers: ["Reviewer returned no readable response."],
+                summary: "No readable gate review response was found in the session transcript.",
+              }),
+            attempt.reviewerRole
+          ),
+          runId: attempt.runId,
+        },
+      };
+    })
+  );
+}
+
+async function pollAutoModeDiscussionAttempts(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  attempts: AutoModeDiscussionReviewAttempt[];
+}) {
+  return Promise.all(
+    params.attempts.map(async (attempt) => {
+      if (attempt.status !== "pending" || !attempt.runId || !params.runtimeSubagent.waitForRun) {
+        return attempt;
+      }
+      const waited = await params.runtimeSubagent.waitForRun({
+        runId: attempt.runId,
+        timeoutMs: 1,
+      });
+      if (waited.status === "timeout") {
+        return attempt;
+      }
+      if (waited.status === "error") {
+        return {
+          ...attempt,
+          status: "error" as const,
+          completedAt: nowIso(),
+          error: waited.error ?? "auto discussion run failed",
+          result: parseAutoModeDiscussionResult(
+            JSON.stringify({
+              riskAssessment: "blocked",
+              confidence: 0,
+              recommendedOwner: "researcher",
+              blockers: [waited.error ?? "auto discussion run failed"],
+              summary: "Auto discussion run failed before returning a valid response.",
+            }),
+            attempt.reviewerRole
+          ),
+        };
+      }
+      const messages = params.runtimeSubagent.getSessionMessages
+        ? await params.runtimeSubagent.getSessionMessages({
+            sessionKey: attempt.sessionKey,
+            limit: 20,
+          })
+        : { messages: [] };
+      const latestText = extractLatestAssistantText(messages.messages);
+      return {
+        ...attempt,
+        status: "completed" as const,
+        completedAt: nowIso(),
+        error: null,
+        result: {
+          ...parseAutoModeDiscussionResult(
+            latestText ??
+              JSON.stringify({
+                riskAssessment: "blocked",
+                confidence: 0,
+                recommendedOwner: "researcher",
+                blockers: ["Reviewer returned no readable response."],
+                summary:
+                  "No readable auto discussion response was found in the session transcript.",
+              }),
+            attempt.reviewerRole
+          ),
+          runId: attempt.runId,
+        },
+      };
+    })
+  );
+}
+
+function buildAutoMitigationLaunchKey(params: {
+  projectRoot: string;
+  fingerprint: string | null;
+  owner: DispatchableWorkflowRole | null;
+  roundId: string | null;
+}) {
+  return [
+    path.resolve(params.projectRoot),
+    params.fingerprint ?? "no-fingerprint",
+    params.owner ?? "researcher",
+    params.roundId ?? "no-round",
+  ].join("::");
+}
+
+function buildAutoMitigationExtraBody(params: {
+  packetPath: string | null;
+  summary: string | null;
+  actionItems: string[];
+  blockers: string[];
+}) {
+  return [
+    "Workflow auto-mode risk mitigation dispatch.",
+    params.packetPath ? `Discussion packet: ${params.packetPath}` : null,
+    params.summary ? `Panel summary: ${params.summary}` : null,
+    params.actionItems.length > 0
+      ? `Action items:\n- ${params.actionItems.join("\n- ")}`
+      : "Action items: none were returned.",
+    params.blockers.length > 0
+      ? `Open blockers:\n- ${params.blockers.join("\n- ")}`
+      : null,
+    "Make one bounded remediation pass for the listed risk signals, update durable workflow artifacts, then rerun research_workflow.auto_iterator_tick.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function maybeAdvanceAutoGateReviewForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    effectiveAutoMode?: string | null;
+    gateBlocking?: boolean;
+    stageAfter?: string | null;
+    recommendedActions?: Array<{ kind: string; summary: string; command: string | null }>;
+  };
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_gate_review",
+    logger: params.logger,
+    task: async (): Promise<AutoGateReviewAttempt> => {
+      if (
+        !params.workflowPolicy.autoGate.enabled ||
+        (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !==
+          "aggressive"
+      ) {
+        return {
+          launched: false,
+          reason: "disabled",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: null,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: null,
+          reviewCount: 0,
+          approved: false,
+        };
+      }
+      if (
+        params.autoIteratorResult.stageAfter !== "submit" ||
+        params.autoIteratorResult.gateBlocking !== true
+      ) {
+        return {
+          launched: false,
+          reason: "not_submit_gate",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: null,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: null,
+          reviewCount: 0,
+          approved: false,
+        };
+      }
+
+      const packet = await materializeGateReviewPacket({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: "submit",
+        gateId: "GATE-5",
+      });
+      const store = await readGateReviewStore(params.projectRoot);
+      const currentRound = store.currentRound;
+      if (
+        currentRound?.gateId === "GATE-5" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "approved"
+      ) {
+        return {
+          launched: false,
+          reason: "already_approved",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          approved: true,
+        };
+      }
+      if (
+        currentRound?.gateId === "GATE-5" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "rejected"
+      ) {
+        return {
+          launched: false,
+          reason: "already_rejected",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: currentRound?.status ?? null,
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+
+      if (
+        currentRound?.gateId === "GATE-5" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "reviewing"
+      ) {
+        const attempts = await pollGateReviewAttempts({
+          runtimeSubagent: params.runtimeSubagent,
+          attempts: currentRound.attempts,
+        });
+        const nextRound = {
+          ...currentRound,
+          attempts,
+          updatedAt: nowIso(),
+        };
+        nextRound.aggregate = aggregateGateReviewRound(
+          nextRound,
+          params.workflowPolicy.autoGate
+        );
+        nextRound.status = nextRound.aggregate.status;
+        const nextStore = {
+          ...store,
+          updatedAt: nowIso(),
+          currentRound: nextRound,
+        };
+        await saveGateReviewStore(params.projectRoot, nextStore);
+        return {
+          launched: false,
+          reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: nextRound.status,
+          reviewCount: nextRound.aggregate?.reviewCount ?? 0,
+          approved: nextRound.aggregate?.approved === true,
+        };
+      }
+
+      if (store.roundsStarted >= params.workflowPolicy.autoGate.maxReviewRounds) {
+        return {
+          launched: false,
+          reason: "already_rejected",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: "rejected",
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+
+      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const attempts: GateReviewAttempt[] = [];
+      for (const reviewerRole of defaultGateReviewPanel()) {
+        const sessionKey = deriveAgentSessionKeyForRole({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          targetRole: reviewerRole,
+        });
+        try {
+          const started = await params.runtimeSubagent.run({
+            sessionKey,
+            message: buildAutoGateReviewPrompt({
+              projectRoot: params.projectRoot,
+              projectId: params.projectId,
+              stage: "submit",
+              gateId: "GATE-5",
+              reviewerRole,
+              packetPath: packet.packetPath,
+              packetJsonPath: packet.packetJsonPath,
+            }),
+            lane: "nested",
+            deliver: false,
+            idempotencyKey: slugifyForIdempotency(
+              `openclaw-research:auto-gate:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
+            ),
+            extraSystemPrompt:
+              "Workflow auto gate reviewer.\n" +
+              "Review only the supplied gate packet and return the required JSON schema.",
+          });
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: started.runId,
+            status: "pending",
+            launchedAt: nowIso(),
+            completedAt: null,
+            error: null,
+            result: null,
+          });
+        } catch (error) {
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: null,
+            status: "error",
+            launchedAt: nowIso(),
+            completedAt: nowIso(),
+            error: error instanceof Error ? error.message : String(error),
+            result: parseGateReviewResult(
+              JSON.stringify({
+                verdict: "block",
+                overallScore: 0,
+                criticalBlockers: [
+                  error instanceof Error ? error.message : String(error),
+                ],
+                summary: "Reviewer run failed to start.",
+              }),
+              reviewerRole
+            ),
+          });
+        }
+      }
+      const round = createGateReviewRound({
+        gateId: "GATE-5",
+        stage: "submit",
+        packetPath: packet.packetPath,
+        packetJsonPath: packet.packetJsonPath,
+        packetFingerprint: packet.packetFingerprint,
+        attempts,
+      });
+      const nextStore = {
+        schemaVersion: 1 as const,
+        updatedAt: nowIso(),
+        roundsStarted: store.roundsStarted + 1,
+        currentRound: round,
+      };
+      await saveGateReviewStore(params.projectRoot, nextStore);
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        gateId: "GATE-5",
+        stage: "submit",
+        status: round.status,
+        reviewCount: 0,
+        approved: false,
+      };
+    },
+  });
+}
+
+export async function maybeAdvanceAutoModeDiscussionForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    configuredAutoMode?: string | null;
+    autoModeRiskLevel?: string | null;
+    autoModeReasons?: string[];
+    autoModeRiskFingerprint?: string | null;
+    stageAfter?: string | null;
+    ownerAfter?: string | null;
+    nextAction?: string | null;
+    blockingReason?: string | null;
+    missingStageSignals?: string[];
+  };
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_mode_discussion",
+    logger: params.logger,
+    task: async (): Promise<AutoModeDiscussionAttempt> => {
+      const configuredMode =
+        readString(params.autoIteratorResult.configuredAutoMode) ??
+        params.workflowPolicy.autoMode;
+      const riskLevel = readString(params.autoIteratorResult.autoModeRiskLevel);
+      const fingerprint = readString(params.autoIteratorResult.autoModeRiskFingerprint);
+      const riskReasons = Array.isArray(params.autoIteratorResult.autoModeReasons)
+        ? params.autoIteratorResult.autoModeReasons.filter(
+            (item): item is string => typeof item === "string" && item.trim().length > 0
+          )
+        : [];
+      const coreRiskReasons = riskReasons.filter(
+        (item) => !/^Auto discussion /i.test(item)
+      );
+      const missingStageSignals = Array.isArray(params.autoIteratorResult.missingStageSignals)
+        ? params.autoIteratorResult.missingStageSignals.filter(
+            (item): item is string => typeof item === "string" && item.trim().length > 0
+          )
+        : [];
+      if (configuredMode === "off") {
+        return {
+          launched: false,
+          reason: "disabled",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel,
+          status: null,
+          reviewCount: 0,
+          roundsStarted: 0,
+          recommendedOwner: null,
+          actionItems: [],
+          blockers: [],
+          summary: null,
+          roundId: null,
+          packetPath: null,
+          resolved: false,
+        };
+      }
+      if (riskLevel == null || riskLevel === "stable" || !fingerprint) {
+        return {
+          launched: false,
+          reason: "stable",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel,
+          status: null,
+          reviewCount: 0,
+          roundsStarted: 0,
+          recommendedOwner: null,
+          actionItems: [],
+          blockers: [],
+          summary: null,
+          roundId: null,
+          packetPath: null,
+          resolved: false,
+        };
+      }
+
+      const packet = await materializeAutoModeDiscussionPacket({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: params.autoIteratorResult.stageAfter ?? null,
+        riskLevel: riskLevel as "caution" | "severe",
+        riskReasons: coreRiskReasons.length > 0 ? coreRiskReasons : riskReasons,
+        missingStageSignals,
+        ownerAfter: params.autoIteratorResult.ownerAfter ?? null,
+        nextAction: params.autoIteratorResult.nextAction ?? null,
+        blockingReason: params.autoIteratorResult.blockingReason ?? null,
+      });
+      const store = await readAutoModeDiscussionStore(params.projectRoot);
+      const currentRound = store.currentRound;
+      const roundsStarted = store.roundsStartedByFingerprint[packet.packetFingerprint] ?? 0;
+
+      if (
+        currentRound?.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "resolved"
+      ) {
+        return {
+          launched: false,
+          reason: "resolved",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: currentRound.stage,
+          riskLevel: currentRound.riskLevel,
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: currentRound.aggregate?.recommendedOwner ?? null,
+          actionItems: currentRound.aggregate?.actionItems ?? [],
+          blockers: currentRound.aggregate?.blockers ?? [],
+          summary: currentRound.aggregate?.summary ?? null,
+          roundId: currentRound.roundId,
+          packetPath: currentRound.packetPath,
+          resolved: true,
+        };
+      }
+
+      if (
+        currentRound?.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "reviewing"
+      ) {
+        if (!params.runtimeSubagent) {
+          return {
+            launched: false,
+            reason: "no_runtime_subagent",
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            fingerprint: packet.packetFingerprint,
+            stage: currentRound.stage,
+            riskLevel: currentRound.riskLevel,
+            status: currentRound.status,
+            reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+            roundsStarted,
+            recommendedOwner: currentRound.aggregate?.recommendedOwner ?? null,
+            actionItems: currentRound.aggregate?.actionItems ?? [],
+            blockers: currentRound.aggregate?.blockers ?? [],
+            summary: currentRound.aggregate?.summary ?? null,
+            roundId: currentRound.roundId,
+            packetPath: currentRound.packetPath,
+            resolved: false,
+          };
+        }
+        const attempts = await pollAutoModeDiscussionAttempts({
+          runtimeSubagent: params.runtimeSubagent,
+          attempts: currentRound.attempts,
+        });
+        const nextRound = {
+          ...currentRound,
+          attempts,
+          updatedAt: nowIso(),
+        };
+        nextRound.aggregate = aggregateAutoModeDiscussionRound(
+          nextRound,
+          params.workflowPolicy.autoGate.quorum
+        );
+        nextRound.status = nextRound.aggregate.status;
+        const nextStore = {
+          ...store,
+          updatedAt: nowIso(),
+          currentRound: nextRound,
+        };
+        await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
+        return {
+          launched: false,
+          reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: nextRound.stage,
+          riskLevel: nextRound.riskLevel,
+          status: nextRound.status,
+          reviewCount: nextRound.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: nextRound.aggregate?.recommendedOwner ?? null,
+          actionItems: nextRound.aggregate?.actionItems ?? [],
+          blockers: nextRound.aggregate?.blockers ?? [],
+          summary: nextRound.aggregate?.summary ?? null,
+          roundId: nextRound.roundId,
+          packetPath: nextRound.packetPath,
+          resolved: nextRound.status === "resolved",
+        };
+      }
+
+      if (roundsStarted >= params.workflowPolicy.autoGate.maxMitigationRounds) {
+        return {
+          launched: false,
+          reason: "round_limit_reached",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: currentRound?.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          riskLevel: currentRound?.riskLevel ?? riskLevel,
+          status: currentRound?.status ?? "blocked",
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: currentRound?.aggregate?.recommendedOwner ?? null,
+          actionItems: currentRound?.aggregate?.actionItems ?? [],
+          blockers: currentRound?.aggregate?.blockers ?? [],
+          summary: currentRound?.aggregate?.summary ?? null,
+          roundId: currentRound?.roundId ?? null,
+          packetPath: currentRound?.packetPath ?? packet.packetPath,
+          resolved: false,
+        };
+      }
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel,
+          status: null,
+          reviewCount: 0,
+          roundsStarted,
+          recommendedOwner: null,
+          actionItems: [],
+          blockers: [],
+          summary: null,
+          roundId: null,
+          packetPath: packet.packetPath,
+          resolved: false,
+        };
+      }
+
+      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const attempts: AutoModeDiscussionReviewAttempt[] = [];
+      for (const reviewerRole of defaultAutoModeDiscussionPanel()) {
+        const sessionKey = deriveAgentSessionKeyForRole({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          targetRole: reviewerRole,
+        });
+        try {
+          const started = await params.runtimeSubagent.run({
+            sessionKey,
+            message: buildAutoModeDiscussionPrompt({
+              projectRoot: params.projectRoot,
+              projectId: params.projectId,
+              stage: params.autoIteratorResult.stageAfter ?? null,
+              riskLevel: riskLevel as "caution" | "severe",
+              reviewerRole,
+              packetPath: packet.packetPath,
+              packetJsonPath: packet.packetJsonPath,
+            }),
+            lane: "nested",
+            deliver: false,
+            idempotencyKey: slugifyForIdempotency(
+              `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
+            ),
+            extraSystemPrompt:
+              "Workflow auto risk discussion reviewer.\n" +
+              "Review only the supplied risk packet and return the required JSON schema.",
+          });
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: started.runId,
+            status: "pending",
+            launchedAt: nowIso(),
+            completedAt: null,
+            error: null,
+            result: null,
+          });
+        } catch (error) {
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: null,
+            status: "error",
+            launchedAt: nowIso(),
+            completedAt: nowIso(),
+            error: error instanceof Error ? error.message : String(error),
+            result: parseAutoModeDiscussionResult(
+              JSON.stringify({
+                riskAssessment: "blocked",
+                confidence: 0,
+                recommendedOwner: "researcher",
+                blockers: [error instanceof Error ? error.message : String(error)],
+                summary: "Risk discussion run failed to start.",
+              }),
+              reviewerRole
+            ),
+          });
+        }
+      }
+      const round = createAutoModeDiscussionRound({
+        stage: params.autoIteratorResult.stageAfter ?? null,
+        riskLevel: riskLevel as "caution" | "severe",
+        packetPath: packet.packetPath,
+        packetJsonPath: packet.packetJsonPath,
+        packetFingerprint: packet.packetFingerprint,
+        attempts,
+      });
+      const nextStore = {
+        schemaVersion: 1 as const,
+        updatedAt: nowIso(),
+        roundsStartedByFingerprint: {
+          ...store.roundsStartedByFingerprint,
+          [packet.packetFingerprint]: roundsStarted + 1,
+        },
+        currentRound: round,
+      };
+      await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        fingerprint: packet.packetFingerprint,
+        stage: round.stage,
+        riskLevel: round.riskLevel,
+        status: round.status,
+        reviewCount: 0,
+        roundsStarted: roundsStarted + 1,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary: null,
+        roundId: round.roundId,
+        packetPath: round.packetPath,
+        resolved: false,
+      };
+    },
+  });
+}
+
+export async function maybeDispatchAutoModeMitigationForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    stageAfter?: string | null;
+    nextAction?: string | null;
+    ownerAfter?: DispatchableWorkflowRole | null;
+  };
+  discussionAttempt: AutoModeDiscussionAttempt;
+  launchedMitigationKeys: Map<string, { key: string; launchedAt: number }>;
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_mode_mitigation",
+    logger: params.logger,
+    task: async (): Promise<AutoModeMitigationDispatchAttempt> => {
+      if (
+        params.discussionAttempt.status !== "needs_changes" &&
+        params.discussionAttempt.status !== "blocked"
+      ) {
+        return {
+          launched: false,
+          reason: "not_needed",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: params.discussionAttempt.fingerprint,
+          stage: params.discussionAttempt.stage,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          error: null,
+        };
+      }
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: params.discussionAttempt.fingerprint,
+          stage: params.discussionAttempt.stage,
+          owner: params.discussionAttempt.recommendedOwner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          error: null,
+        };
+      }
+
+      const owner =
+        params.discussionAttempt.recommendedOwner ??
+        params.autoIteratorResult.ownerAfter ??
+        "researcher";
+      const launchKey = buildAutoMitigationLaunchKey({
+        projectRoot: params.projectRoot,
+        fingerprint: params.discussionAttempt.fingerprint,
+        owner,
+        roundId: params.discussionAttempt.roundId,
+      });
+      const lastLaunch = params.launchedMitigationKeys.get(params.projectRoot);
+      const cooldownMs = Math.max(
+        1,
+        params.workflowPolicy.agentContactCooldownSeconds
+      ) * 1000;
+      if (
+        lastLaunch?.key === launchKey &&
+        Date.now() - lastLaunch.launchedAt < cooldownMs
+      ) {
+        return {
+          launched: false,
+          reason: "already_dispatched",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: params.discussionAttempt.fingerprint,
+          stage: params.discussionAttempt.stage,
+          owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          error: null,
+        };
+      }
+
+      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const dispatch = await dispatchWorkflowTaskToAgent({
+        runtimeSubagent: params.runtimeSubagent,
+        requesterSessionKey: requesterSessionKey ?? undefined,
+        fromRole: "researcher",
+        toRole: owner,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: params.autoIteratorResult.stageAfter ?? null,
+        summary:
+          params.discussionAttempt.summary ??
+          "Resolve the current auto-mode risk before the next workflow advance.",
+        command:
+          params.autoIteratorResult.nextAction ??
+          "Run research_workflow.auto_iterator_tick after the mitigation pass.",
+        extraBody: buildAutoMitigationExtraBody({
+          packetPath: params.discussionAttempt.packetPath,
+          summary: params.discussionAttempt.summary,
+          actionItems: params.discussionAttempt.actionItems,
+          blockers: params.discussionAttempt.blockers,
+        }),
+        waitTimeoutMs: 5000,
+        retryOnTimeout: true,
+        enableSpawnFallback: true,
+      });
+      if (!dispatch.dispatched) {
+        return {
+          launched: false,
+          reason: "dispatch_failed",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: params.discussionAttempt.fingerprint,
+          stage: params.discussionAttempt.stage,
+          owner,
+          sessionKey: dispatch.sessionKey,
+          runId: dispatch.runId,
+          dispatchStrategy: dispatch.strategy,
+          error: dispatch.error,
+        };
+      }
+
+      params.launchedMitigationKeys.set(params.projectRoot, {
+        key: launchKey,
+        launchedAt: Date.now(),
+      });
+      await recordWorkflowContactEvent({
+        projectRoot: params.projectRoot,
+        fromAgent: "researcher",
+        toAgent: owner,
+        channel: dispatch.channel ?? "sessions_send",
+      });
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        fingerprint: params.discussionAttempt.fingerprint,
+        stage: params.discussionAttempt.stage,
+        owner,
+        sessionKey: dispatch.sessionKey,
+        runId: dispatch.runId,
+        dispatchStrategy: dispatch.strategy,
+        error: null,
+      };
+    },
+  });
+}
+
 function summarizeCoordinatorPass(
   results: Awaited<ReturnType<typeof runWorkflowCoordinatorPass>>
 ) {
@@ -516,6 +1869,8 @@ export function createWorkflowCoordinatorService(
   let intervalHandle: ReturnType<typeof setInterval> | null = null;
   let inFlightTick: Promise<void> | null = null;
   const launchedIdleResearchDueKeys = new Map<string, string>();
+  const launchedStageKeys = new Map<string, { key: string; launchedAt: number }>();
+  const launchedMitigationKeys = new Map<string, { key: string; launchedAt: number }>();
 
   const runTick = (logger: WorkflowCoordinatorLogger, trigger: string) => {
     if (inFlightTick) {
@@ -532,15 +1887,125 @@ export function createWorkflowCoordinatorService(
         const workflowPolicy = plugin.getWorkflowPolicy();
         const results = await runWorkflowCoordinatorPass({
           projectsRoot: workflowPolicy.projectsRoot,
+          policy: workflowPolicy,
           cooldownSeconds: workflowPolicy.agentContactCooldownSeconds,
           queueMailbox: workflowPolicy.enableWorkflowMailbox,
           maxProjects: DEFAULT_WORKFLOW_COORDINATOR_MAX_PROJECTS,
           logger,
           deps,
         });
+        const autoGateReviews = await Promise.all(
+          results.map((entry) =>
+            maybeAdvanceAutoGateReviewForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              logger,
+              deps,
+            })
+          )
+        );
+        const refreshedResults = await Promise.all(
+          results.map(async (entry, index) => {
+            if (autoGateReviews[index]?.approved !== true) {
+              return entry;
+            }
+            const refreshed = await enqueueWorkflowTask({
+              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              label: "workflow_post_gate_reconcile",
+              logger,
+              task: () =>
+                (deps.runWorkflowAutoIterator ?? runWorkflowAutoIterator)({
+                  projectRoot: entry.projectRoot,
+                  policy: workflowPolicy,
+                  agentId: "researcher",
+                  mode: "service-post-gate",
+                  queueMailbox: workflowPolicy.enableWorkflowMailbox,
+                  cooldownSeconds: workflowPolicy.agentContactCooldownSeconds,
+                }),
+            });
+            return {
+              ...entry,
+              result: refreshed,
+            };
+          })
+        );
+        const autoModeDiscussions = await Promise.all(
+          refreshedResults.map((entry) =>
+            maybeAdvanceAutoModeDiscussionForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              logger,
+              deps,
+            })
+          )
+        );
+        const discussionRefreshedResults = await Promise.all(
+          refreshedResults.map(async (entry, index) => {
+            if (autoModeDiscussions[index]?.resolved !== true) {
+              return entry;
+            }
+            const refreshed = await enqueueWorkflowTask({
+              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              label: "workflow_post_discussion_reconcile",
+              logger,
+              task: () =>
+                (deps.runWorkflowAutoIterator ?? runWorkflowAutoIterator)({
+                  projectRoot: entry.projectRoot,
+                  policy: workflowPolicy,
+                  agentId: "researcher",
+                  mode: "service-post-discussion",
+                  queueMailbox: workflowPolicy.enableWorkflowMailbox,
+                  cooldownSeconds: workflowPolicy.agentContactCooldownSeconds,
+                }),
+            });
+            return {
+              ...entry,
+              result: refreshed,
+            };
+          })
+        );
+        const autoMitigationDispatches = (
+          await Promise.all(
+            discussionRefreshedResults.map((entry, index) =>
+              maybeDispatchAutoModeMitigationForProject({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                workflowPolicy,
+                projectRoot: entry.projectRoot,
+                projectId: entry.projectId,
+                autoIteratorResult: entry.result,
+                discussionAttempt: autoModeDiscussions[index],
+                launchedMitigationKeys,
+                logger,
+                deps,
+              })
+            )
+          )
+        ).filter((entry) => entry.launched);
+        const autoStageLaunches = (
+          await Promise.all(
+            discussionRefreshedResults.map((entry) =>
+              maybeLaunchAutoStageForProject({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                workflowPolicy,
+                projectRoot: entry.projectRoot,
+                projectId: entry.projectId,
+                autoIteratorResult: entry.result,
+                launchedStageKeys,
+                logger,
+                deps,
+              })
+            )
+          )
+        ).filter((entry) => entry.launched);
         const idleResearchLaunches = (
           await Promise.all(
-            results.map((entry) =>
+            discussionRefreshedResults.map((entry) =>
               maybeLaunchIdleResearchForProject({
                 runtimeSubagent: plugin.api.runtime?.subagent,
                 workflowPolicy,
@@ -556,10 +2021,40 @@ export function createWorkflowCoordinatorService(
         ).filter((entry) => entry.launched);
         logger.debug?.("Workflow coordinator pass completed.", {
           trigger,
-          projectCount: results.length,
-          results: summarizeCoordinatorPass(results),
+          projectCount: discussionRefreshedResults.length,
+          results: summarizeCoordinatorPass(discussionRefreshedResults),
+          autoGateReviews,
+          autoModeDiscussions,
+          autoMitigationDispatches,
+          autoStageLaunches,
           idleResearchLaunches,
         });
+        if (autoMitigationDispatches.length > 0) {
+          logger.info?.("Workflow coordinator launched mitigation passes.", {
+            trigger,
+            launches: autoMitigationDispatches.map((entry) => ({
+              projectId: entry.projectId,
+              stage: entry.stage,
+              owner: entry.owner,
+              sessionKey: entry.sessionKey,
+              runId: entry.runId,
+              strategy: entry.dispatchStrategy,
+            })),
+          });
+        }
+        if (autoStageLaunches.length > 0) {
+          logger.info?.("Workflow coordinator launched stage owners.", {
+            trigger,
+            launches: autoStageLaunches.map((entry) => ({
+              projectId: entry.projectId,
+              stage: entry.stage,
+              owner: entry.owner,
+              sessionKey: entry.sessionKey,
+              runId: entry.runId,
+              strategy: entry.dispatchStrategy,
+            })),
+          });
+        }
         if (idleResearchLaunches.length > 0) {
           logger.info?.("Workflow coordinator launched idle research.", {
             trigger,

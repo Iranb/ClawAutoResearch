@@ -13,10 +13,13 @@
 `install.sh` 当前主要负责：
 
 - 检查基础环境
+- 检查是否已有构建产物
+- 可选地创建或检查 workflow agents
+- 如果本机存在 `PaperNexus`，先同步相关 skills
 - 创建或更新 `~/.openclaw/plugins/openclaw-research` 符号链接
 - 同步共享 workspace 配置与模板
 - 同步角色配置文件
-- 保留仓库内 `README.md`、`DOC/`、`openclaw.RECOMMENDED.json` 作为参考文档
+- 保留仓库内 `DOC/`、`openclaw.RECOMMENDED.json` 作为参考文档
 
 ## 3. 推荐安装步骤
 
@@ -33,6 +36,9 @@ bash install.sh
 
 - `--force-role-files`  
   强制覆盖或重建角色配置文件同步。
+
+- `--skip-agent-create`  
+  跳过 `openclaw agents add`，只同步插件、skills、模板和角色配置。
 
 ## 5. 安装后应确认什么
 
@@ -65,6 +71,16 @@ heartbeat: {
   every: "30m"
 }
 ```
+
+### 5.5 Auto mode 配置已经对齐
+
+建议先确认：
+
+- `autoMode = conservative`
+- `autoGate.enabled = true`
+- `autoGate.maxMitigationRounds` 已设置
+
+这样系统才能在高风险时先自动讨论、先补救，再决定是否降档。
 
 ## 6. 新项目创建后的第一步
 
@@ -106,5 +122,6 @@ heartbeat: {
 ## 8. 推荐同时阅读
 
 - `DOC/README.md`
-- `README.md`
+- `DOC/overview_zh.md`
+- `DOC/beginner_zh.md`
 - `WORKFLOW.md`

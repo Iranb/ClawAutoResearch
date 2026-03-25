@@ -29,7 +29,30 @@
           "enableChannelProjectBindings": true,
           "channelProjectBindingsPath": "",
           "defaultConferenceTemplatePath": "",
-          "defaultJournalTemplatePath": ""
+          "defaultJournalTemplatePath": "",
+          "autoMode": "conservative",
+          "autoGate": {
+            "enabled": true,
+            "allowAutonomousDone": true,
+            "maxReviewRounds": 2,
+            "maxMitigationRounds": 2,
+            "reviewTimeoutMinutes": 20,
+            "quorum": 2,
+            "thresholds": {
+              "review_to_write": {
+                "avg": 7.8,
+                "minSingle": 7.0
+              },
+              "write_to_submit": {
+                "avg": 8.2,
+                "minSingle": 7.5
+              },
+              "submit_to_done": {
+                "avg": 8.8,
+                "minSingle": 8.0
+              }
+            }
+          }
         }
       }
     }

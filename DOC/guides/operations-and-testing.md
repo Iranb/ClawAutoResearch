@@ -122,7 +122,9 @@ npm test
 
 每次新增重大能力时，建议同步更新：
 
-- `README.md`
+- `DOC/overview.md`
+- `DOC/overview_zh.md`
+- `DOC/beginner_zh.md`
 - `WORKFLOW.md`
 - `DOC/README.md`
 - `DOC/` 下对应 concept/reference/guide

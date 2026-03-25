@@ -1,28 +1,34 @@
 # OpenClaw Research DOC
 
-这套文档服务于 [openclaw-research](./../README.md)，目标是把“先了解系统、再安装、再运行、最后查细节”这条路径整理清楚。
+这套文档服务于 `openclaw-research`，目标是把“先了解系统、再安装、再运行、最后查细节”这条路径整理清楚。
 
 ## 从哪里开始
 
 如果你第一次接触这个仓库，建议按下面顺序读：
 
-1. [仓库首页 README](./../README.md)
-2. [快速上手](./guides/getting-started.md)
-3. [系统架构](./concepts/architecture.md)
-4. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
-5. [安装与启用](./guides/install-and-enable.md)
-6. [配置项参考](./reference/configuration.md)
+1. [新手快速开始（中文）](./beginner_zh.md)
+2. [系统概览（中文）](./overview_zh.md)
+3. [Overview (English)](./overview.md)
+4. [快速上手](./guides/getting-started.md)
+5. [系统架构](./concepts/architecture.md)
+6. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
+7. [安装与启用](./guides/install-and-enable.md)
+8. [配置项参考](./reference/configuration.md)
 
 ## 按任务导航
 
 ### 我想快速跑起来
 
+- [新手快速开始（中文）](./beginner_zh.md)
+- [系统概览（中文）](./overview_zh.md)
 - [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
 - [配置项参考](./reference/configuration.md)
 
 ### 我想理解整体设计
 
+- [Overview (English)](./overview.md)
+- [系统概览（中文）](./overview_zh.md)
 - [系统架构](./concepts/architecture.md)
 - [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
 - [PaperNexus、实验记忆与反思机制](./concepts/papernexus-memory-and-reflection.md)
@@ -41,10 +47,14 @@
 - [Coder 数据集路径约束](./reference/coder-dataset-paths.md)
 - [配置项参考](./reference/configuration.md)
 
-## 根目录文档怎么分工
+## 文档入口怎么分工
 
-- [README.md](./../README.md)
-  仓库首页，只负责说明系统定位、快速开始和阅读入口。
+- [beginner_zh.md](./beginner_zh.md)
+  第一次使用时最适合先看的短文档。
+- [overview_zh.md](./overview_zh.md)
+  中文系统总览，包含 Auto mode 和自动讨论能力概览。
+- [overview.md](./overview.md)
+  英文系统总览。
 - [WORKFLOW.md](./../WORKFLOW.md)
   人类可读的 workflow 契约与阶段规则。
 - [WORKSPACE.md](./../WORKSPACE.md)
@@ -75,6 +85,9 @@
 
 ### Guides
 
+- [新手快速开始（中文）](./beginner_zh.md)
+- [系统概览（中文）](./overview_zh.md)
+- [Overview (English)](./overview.md)
 - [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
 - [Lobster Handoff Quickstart](./../lobster/QUICKSTART.md)
@@ -89,6 +102,8 @@
 - graph presence hard gate
 - `EXPERIMENT_LEDGER.json` 和创新反思 freshness
 - `idle_research`
+- `autoMode`、自动讨论、自动补救和动态降档
+- `/workflow-status` 中的讨论可见性
 - `writing_contract`
 - mailbox、agent-to-agent 派发、mention 清洗和 cooldown
 - channel-to-project binding

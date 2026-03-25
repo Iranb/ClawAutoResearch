@@ -53,6 +53,7 @@ import {
   buildWorkflowQueueContext,
   enqueueWorkflowTask,
 } from "./workflow-coordination";
+import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -165,6 +166,14 @@ function buildUnboundProjectAutoIteratorPayload(params: {
     projectRoot: null,
     projectId: null,
     mode: readString(params.iterator?.mode) ?? "default",
+    configuredAutoMode: "off",
+    effectiveAutoMode: "off",
+    autoModeRiskLevel: "stable",
+    autoModeReasons: [],
+    autoModeRiskFingerprint: null,
+    autoModeMitigationStatus: null,
+    autoModeMitigationRoundsStarted: 0,
+    autoModeMitigationRoundsRemaining: 0,
     stageBefore: null,
     stageEffective: null,
     stageAfter: null,
@@ -295,6 +304,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_theory_state",
               "get_writing_contract",
               "get_citation_integrity",
+              "get_gate_review_state",
               "upsert_experiment",
               "record_theory_state",
               "upsert_proof_packet",
@@ -518,6 +528,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               }
               const result = await runWorkflowAutoIterator({
                 projectRoot,
+                policy: workflowPolicy,
                 agentId: ctx.agentId,
                 mode: readString(iterator?.mode),
                 queueMailbox:
@@ -731,6 +742,20 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_gate_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await readGateReviewStore(resolvedProjectRoot);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    storePath: getGateReviewStorePath(resolvedProjectRoot),
+                    ...summary,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "upsert_experiment": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
