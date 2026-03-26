@@ -29,7 +29,7 @@ Brainstorm → filter → create typed tracks → generate parallel pilot code �
 Load research context:
 - `{PROJ}/researcher/LITERATURE.md` (from `/research-lit`)
 - `{PROJ}/researcher/FRONTIER_REPORT.md` (from `/frontier-mapping`)
-- `{PROJ}/graph/subgraphs/` (anchor snapshots from `/frontier-mapping`)
+- `{PROJ}/graph/LIMITATION_FRONTIER.md`, `CONTRADICTION_FRONTIER.md`, `TRANSFER_FRONTIER.md`, `COMPOSITION_FRONTIER.md`, `ANCHOR_INDEX.md`
 - `{PMEM}/ideation-memory.md` (known failures + successful patterns)
 
 `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`, `{PMEM}` = `{PROJ}/memory`
@@ -48,8 +48,8 @@ mcp__codex__codex:
     Graph frontier signals:
     [FRONTIER_REPORT.md content]
 
-    Graph subgraph snapshots / anchors:
-    [{PROJ}/graph/subgraphs/*.md content or compact summary]
+    Graph frontier files / anchors:
+    [{PROJ}/graph/*.md content or compact summary]
 
     Known failed directions (DO NOT suggest similar ideas):
     [{PMEM}/ideation-memory.md — Failed Idea Catalog section]

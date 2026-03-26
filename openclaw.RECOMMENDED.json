@@ -1,103 +1,272 @@
 {
-  // Minimal additive config for enabling openclaw-research.
-  // This file lists the extra fields you usually need to merge into
-  // your real ~/.openclaw/openclaw.json, with common defaults expanded.
+  // openclaw-research 推荐配置总览（JSONC）
+  // 用法：
+  // 1. 这不是完整的 ~/.openclaw/openclaw.json，而是一份“与 openclaw-research 相关”的推荐片段。
+  // 2. 把你需要的部分合并到真实的 ~/.openclaw/openclaw.json 里。
+  // 3. 注释说明的是“这个字段在 openclaw-research 里负责什么”。
 
   "plugins": {
+    // 启用 OpenClaw 的插件系统。
     "enabled": true,
     "load": {
+      // 让 OpenClaw 去 ~/.openclaw/plugins 下发现通过 install.sh 安装的插件。
       "paths": ["~/.openclaw/plugins"]
     },
     "entries": {
       "openclaw-research": {
+        // 真正启用 openclaw-research 插件。
         "enabled": true,
         "config": {
+          // 是否允许在没有 OPENCLAW_PROJECT 时把 research memory 写回 workspace 级别。
+          // 推荐 false，避免不同科研项目互相污染。
           "allowWorkspaceFallback": false,
+
+          // 是否强制要求项目隔离。
+          // true 表示研究状态、memory、workflow 都要尽量挂在具体项目下面。
           "requireProjectIsolation": true,
+
+          // 是否要求每条结构化 memory entry 都能解析出 project id。
+          // true 更利于长期归档与恢复。
           "requireProjectIdInEntries": true,
+
+          // 是否要求 idea / experiment memory 带 track id。
+          // true 有助于多 track 项目避免串线。
           "requireTrackId": true,
+
+          // 是否要求研究 memory 带 evidence pointers。
+          // true 可以降低“只记结论、不记证据”的漂移。
           "requireEvidencePointers": true,
+
+          // REVIEW_STATE.json 过期阈值，单位小时。
+          // 超过这个时间后，review resumability 会更倾向于建议重启一轮 review。
           "reviewStateMaxAgeHours": 24,
+
+          // 项目根目录。所有项目目录、manifest、state、workflow artifacts 默认都放这里。
           "projectsRoot": "~/.openclaw/projects",
+
+          // 是否把 workflow snapshot 注入到每个 agent 的上下文里。
+          // 开启后，agent 更容易知道自己是谁、当前阶段是什么、下一步该做什么。
           "injectWorkflowContext": true,
+
+          // 是否启用 workflow boundary enforcement。
+          // 开启后会限制越权写目录、乱发消息、错误角色推进阶段等行为。
           "enforceWorkflowBoundaries": true,
+
+          // 是否拦截聊天里的原始 @agent 提及，并改成 workflow-safe 的路由方式。
           "blockDiscordAgentMentions": true,
+
+          // 是否启用 workflow mailbox。
+          // mailbox 用于受控 handoff / blocker / request，而不是随意对话。
           "enableWorkflowMailbox": true,
+
+          // 是否启用 heartbeat / idle turn 的后台检查。
+          // 开启后 service 和 auto iterator 会在空闲或心跳时继续做 bounded reconcile。
           "heartbeatBackgroundChecks": true,
+
+          // workflow mailbox 默认最多注入多少条待处理消息。
+          // 太小容易漏信息，太大容易污染 prompt。
           "maxWorkflowInboxMessages": 6,
+
+          // 同一 source agent 到同一 target agent 的最小联系冷却时间，单位秒。
+          // 用来抑制重复 handoff、重复催促。
           "agentContactCooldownSeconds": 300,
+
+          // 是否启用“频道/会话 -> 项目”的绑定。
+          // 开启后，不同 Discord/Telegram 会话可以绑定到不同项目，不必依赖 OPENCLAW_PROJECT。
           "enableChannelProjectBindings": true,
+
+          // 频道绑定存储路径。
+          // 留空时优先落到 {projectRoot}/.openclaw-research/channel-project-bindings.json；
+          // 如果当前还没解析出项目，则会暂时回退到 workspace 侧。
           "channelProjectBindingsPath": "",
+
+          // 默认 conference 模板路径。
+          // 配置后，conference 模式写作时会先把模板复制进项目，再由 writer 在项目内编辑。
           "defaultConferenceTemplatePath": "",
+
+          // 默认 journal 模板路径。
+          // 配置后，journal 模式写作时会先把模板复制进项目，再由 writer 在项目内编辑。
           "defaultJournalTemplatePath": "",
+
+          // 自动推进模式：
+          // off           = 不自动推进，只做 guard / snapshot / 状态辅助
+          // conservative  = 自动唤起阶段 owner，但 submit 仍偏保守
+          // aggressive    = 在 gate review 通过时，允许更强自动推进
           "autoMode": "conservative",
+
           "autoGate": {
+            // 是否启用自动 gate review。
+            // 开启后，系统会在关键 gate 处组织多 agent 审核和评分。
             "enabled": true,
+
+            // 是否允许在自动 gate 达标后自动进入 done。
+            // 如果你希望 submit 之后仍然必须手动收尾，可以改为 false。
             "allowAutonomousDone": true,
+
+            // 自动 gate review 的最大轮次数。
+            // 超过后就不再无限自我审稿，避免空转。
             "maxReviewRounds": 2,
+
+            // 高风险自动讨论/补救的最大轮次数。
+            // 超过后系统才会真正考虑降档。
             "maxMitigationRounds": 2,
+
+            // 一轮 gate review 等待多 agent 返回的超时时间，单位分钟。
             "reviewTimeoutMinutes": 20,
+
+            // 自动 gate 的最小法定人数。
+            // 例如 quorum=2 表示至少要有 2 个 reviewer 返回，聚合结果才算有效。
             "quorum": 2,
+
             "thresholds": {
+              // REVIEW -> WRITE 的放行阈值。
               "review_to_write": {
+                // 平均分阈值。
                 "avg": 7.8,
+                // 单 reviewer 最低分阈值，防止“一高一低平均后误放行”。
                 "minSingle": 7.0
               },
+
+              // WRITE -> SUBMIT 的放行阈值。
               "write_to_submit": {
                 "avg": 8.2,
                 "minSingle": 7.5
               },
+
+              // SUBMIT -> DONE 的放行阈值。
               "submit_to_done": {
                 "avg": 8.8,
                 "minSingle": 8.0
               }
             }
+          },
+
+          "lobsterHandoff": {
+            // 是否启用 Lobster 作为“Agent 间任务交接后端”。
+            // false = 完全使用插件内建 native dispatch
+            // true  = Auto mode 下优先用 Lobster 做 handoff
+            "enabled": false,
+
+            // 是否只在 Auto mode 激活时才使用 Lobster。
+            // 推荐 true，这样手动模式不会额外引入 Lobster 依赖。
+            "autoModeOnly": true,
+
+            // 插件调用 Lobster tool 时使用的 Gateway URL。
+            "gatewayUrl": "http://127.0.0.1:18789",
+
+            // 自定义 Lobster workflow 路径。
+            // 留空时使用插件内置的 workflow-agent-dispatch.lobster。
+            "pipelinePath": "",
+
+            // 调用 Lobster tool 的超时时间，单位毫秒。
+            "timeoutMs": 30000,
+
+            // Lobster tool 允许输出的最大 stdout 字节数。
+            "maxStdoutBytes": 512000,
+
+            // 如果 Lobster 没装、没授权、被拒绝、或执行失败，是否自动回退 native dispatch。
+            // 推荐 true，这样 Lobster 只是增强项，不是单点故障源。
+            "fallbackToNative": true
           }
         }
       }
     }
   },
 
+  "tools": {
+    // 给 OpenClaw 全局额外放行 Lobster tool。
+    // 只有在你想手动运行 Lobster，或者启用了 lobsterHandoff.enabled=true 时才真正需要。
+    "alsoAllow": ["lobster"]
+  },
+
   "agents": {
     "list": [
       {
-        "id": "orchestrator",
+        "id": "researcher",
+        "heartbeat": {
+          // Researcher 是工作流主控和空闲调研执行者，建议最频繁。
+          "every": "30m"
+        },
         "tools": {
+          // Researcher 是整个科研工作流的主控角色，需要 research_workflow。
+          "allow": ["research_workflow"]
+        }
+      },
+      {
+        "id": "orchestrator",
+        "heartbeat": {
+          // Orchestrator 主要负责规划和阶段收口，不需要像 Researcher 一样频繁唤醒。
+          "every": "2h"
+        },
+        "tools": {
+          // Orchestrator 需要读写 PLAN / TODOS / PLAN_AUDIT，并参与 workflow 路由。
           "allow": ["research_workflow"]
         }
       },
       {
         "id": "coder",
+        "heartbeat": {
+          // Coder 通常由 workflow dispatch 唤起，保守一些可以减少空转。
+          "every": "2h"
+        },
         "tools": {
+          // Coder 需要 workflow 上下文来知道当前 track、stage、handoff 和 artifact 约束。
           "allow": ["research_workflow"]
         }
       },
       {
         "id": "analyzer",
+        "heartbeat": {
+          // Analyzer 需要定期参与质量审计和高风险讨论，建议与 Coder 同一档。
+          "every": "2h"
+        },
         "tools": {
+          // Analyzer 需要 workflow 上下文，以及 QUALITY_AUDIT / theory state 等工具能力。
           "allow": ["research_workflow"]
         }
       },
       {
         "id": "academic_writer",
+        "heartbeat": {
+          // Writer 主要在写作和修订阶段活跃，2 小时通常足够。
+          "every": "2h"
+        },
         "tools": {
+          // Writer 需要 workflow 上下文、writing contract、citation integrity、gate 状态等能力。
           "allow": ["research_workflow"]
         }
       },
       {
         "id": "reviewer",
+        "heartbeat": {
+          // Reviewer 用于阶段评审和 gate 审核，比主流程 agent 再保守一些。
+          "every": "3h"
+        },
         "tools": {
+          // Reviewer 需要 workflow snapshot、gate state、mailbox 和 review-related state。
+          "allow": ["research_workflow"]
+        }
+      },
+      {
+        "id": "cross-reviewer",
+        "heartbeat": {
+          // Cross-reviewer 主要用于额外视角审稿和 auto discussion，频率可以最低。
+          "every": "4h"
+        },
+        "tools": {
+          // Cross-reviewer 如果要更完整地参与 auto gate / workflow 恢复，也建议放开 research_workflow。
           "allow": ["research_workflow"]
         }
       }
     ],
+
     "defaults": {
-      "heartbeat": {
-        "every": "30m"
-      },
       "compaction": {
         "memoryFlush": {
+          // 让 agent 在上下文过长前更早把 memory 刷回 durable state。
           "enabled": true,
+
+          // 软阈值，达到后更倾向于进行 memory flush / compact。
           "softThresholdTokens": 4000
         }
       }

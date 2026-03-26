@@ -26,7 +26,7 @@ allowed-tools:
 /research-lit → /graph-build → /frontier-mapping → /innovation-reflection (if due) → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
      ↓               ↓                ↓                           ↓                        ↓                  ↓                  ↓                    ↓
   landscape      local corpus     graph frontier         实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
-  + gaps         + PaperNexus     + subgraphs            + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
+  + gaps         + PaperNexus     + frontier files       + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
 ```
 
 ## Execution
@@ -79,7 +79,7 @@ allowed-tools:
 
 **Output**: `{PROJ}/researcher/FRONTIER_REPORT.md`
 
-同时要求 `{PROJ}/graph/subgraphs/` 非空，并保留 graph anchor 快照。
+同时要求 `{PROJ}/graph/` 下的 frontier files 已生成，并保留 graph anchor 快照。
 
 ### Phase 4: Idea Generation
 
@@ -102,7 +102,7 @@ allowed-tools:
 并把 `{PROJ}/researcher/INNOVATION_REFLECTION.md` 作为后续 ideation 的必读输入，而不是继续沿用旧 brainstorm。
 
 执行 graph-grounded dialectic loop：
-1. 基于 `LITERATURE.md` + `FRONTIER_REPORT.md` + `graph/subgraphs/` 做一次 **diverge**，生成 4-8 个 typed tracks
+1. 基于 `LITERATURE.md` + `FRONTIER_REPORT.md` + `{PROJ}/graph/*.md` frontier files 做一次 **diverge**，生成 4-8 个 typed tracks
 2. 如果存在 `{PROJ}/researcher/INNOVATION_REFLECTION.md`，把其中的：
    - do-not-repeat constraints
    - transferable lessons

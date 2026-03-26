@@ -55,7 +55,7 @@ Before using research memory, ensure:
     "tags": ["rag", "graphs", "retrieval"],
     "evidencePointers": [
       "{PROJ}/researcher/IDEA_REPORT.md#L45-L67",
-      "{PROJ}/graph/subgraphs/rag-neighborhood.json"
+      "{PROJ}/graph/ANCHOR_INDEX.md"
     ]
   }
 }
@@ -258,7 +258,7 @@ Returns:
 Always provide `evidencePointers` that point to:
 - Phase reports (IDEA_REPORT.md, PLAN.md, etc.)
 - Experiment results (results.json, metrics.csv)
-- Graph artifacts (subgraphs/*.json)
+- Graph artifacts (`graph/*.md` frontier files, anchor indexes, build reports)
 - Analysis documents (failure-analysis.md)
 
 ### 4. Record Failures Promptly

@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from paper_filename import canonical_paper_filename, normalize_arxiv_id
 from validate_paper_source import validate_pdf_file
 
 warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*", category=UserWarning)
@@ -200,15 +201,23 @@ def remove_if_exists(path: Path) -> None:
         pass
 
 
-def build_pdf_candidates(raw: str, target_url: str, headless: bool) -> tuple[list[str], str]:
+def build_pdf_candidates(
+    raw: str,
+    target_url: str,
+    headless: bool,
+    title: str | None = None,
+) -> tuple[list[str], str]:
     candidates: list[str] = []
     default_name = "paper.pdf"
 
     if is_direct_download_url(target_url):
         candidates.append(target_url)
-        default_name = Path(urlparse(target_url).path).name or "paper.pdf"
-        if not Path(default_name).suffix:
-            default_name += ".pdf"
+        if title:
+            default_name = canonical_paper_filename(".pdf", title=title)
+        else:
+            default_name = Path(urlparse(target_url).path).name or "paper.pdf"
+            if not Path(default_name).suffix:
+                default_name += ".pdf"
         return dedupe_preserve_order(candidates), default_name
 
     arxiv_id = None
@@ -217,25 +226,28 @@ def build_pdf_candidates(raw: str, target_url: str, headless: bool) -> tuple[lis
     elif ARXIV_ID_PATTERN.match(raw):
         arxiv_id = raw
 
-    if not arxiv_id:
+    normalized_arxiv_id = normalize_arxiv_id(arxiv_id)
+    if not normalized_arxiv_id and not title:
         return [], default_name
 
-    default_name = f"{arxiv_id.replace('.', '_')}.pdf"
-    http_candidate = get_pdf_url_from_paper_page_http(arxiv_id)
-    if http_candidate:
-        candidates.append(http_candidate)
+    default_name = canonical_paper_filename(".pdf", arxiv_id=normalized_arxiv_id, title=title)
+    if normalized_arxiv_id:
+        http_candidate = get_pdf_url_from_paper_page_http(normalized_arxiv_id)
+        if http_candidate:
+            candidates.append(http_candidate)
 
-    browser_candidate = get_pdf_url_from_paper_page(arxiv_id, headless=headless)
-    if browser_candidate:
-        candidates.append(browser_candidate)
+        browser_candidate = get_pdf_url_from_paper_page(normalized_arxiv_id, headless=headless)
+        if browser_candidate:
+            candidates.append(browser_candidate)
 
-    candidates.append(f"https://arxiv.org/pdf/{arxiv_id}.pdf")
+        candidates.append(f"https://arxiv.org/pdf/{normalized_arxiv_id}.pdf")
     return dedupe_preserve_order(candidates), default_name
 
 
 def run(
     url_or_arxiv_id: str,
     output_path: str | None = None,
+    title: str | None = None,
     headless: bool = True,
 ) -> int:
     """
@@ -249,9 +261,9 @@ def run(
     else:
         target_url = f"{BASE}/arxiv/{raw}"
 
-    candidates, default_name = build_pdf_candidates(raw, target_url, headless=headless)
+    candidates, default_name = build_pdf_candidates(raw, target_url, headless=headless, title=title)
     if not candidates:
-        print("未解析到 PDF 链接且无 arXiv ID。", file=sys.stderr)
+        print("未解析到 PDF 链接，且缺少可用于命名的 arXiv ID / title。", file=sys.stderr)
         return 1
 
     out = Path(output_path) if output_path else Path(default_name)
@@ -295,8 +307,9 @@ def main():
     parser.add_argument(
         "-o", "--output",
         default=None,
-        help="输出路径：文件路径（如 /path/to/paper.pdf）或目录（则在该目录下保存为 <arxiv_id>.pdf）",
+        help="输出路径：文件路径（如 /path/to/paper.pdf）或目录（则在该目录下保存为规范文件名）",
     )
+    parser.add_argument("--title", default=None, help="论文标题；当没有 arXiv ID 时用它生成规范文件名")
     parser.add_argument("--no-headless", action="store_true", help="解析论文页时显示浏览器")
     args = parser.parse_args()
 
@@ -307,6 +320,7 @@ def main():
     sys.exit(run(
         args.url_or_arxiv_id,
         output_path=args.output,
+        title=args.title,
         headless=not args.no_headless,
     ))
 

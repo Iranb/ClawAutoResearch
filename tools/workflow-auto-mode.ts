@@ -336,7 +336,7 @@ export function evaluateWorkflowAutoModeRisk(params: {
   if (
     includesPattern(
       missingStageSignals,
-      /graph_presence_status|GRAPH_PRESENCE|missing canonical papers|source-corpus/i
+      /graph_presence_status|GRAPH_PRESENCE|missing canonical papers|graph_source_dir|paper_source_dir/i
     )
   ) {
     riskLevel = "severe";

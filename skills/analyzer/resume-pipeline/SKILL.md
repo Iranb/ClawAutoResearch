@@ -15,6 +15,15 @@ allowed-tools:
 
 Use when analysis stopped mid-run or when Researcher wants Analyzer to continue from existing results.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** when reconstructing comparisons; keep attribution tied to the original hypothesis and bundle.
+- **Record everything** you reuse versus regenerate so later review can audit the resume pass.
+- Keep the **experiment and code change linked** by regenerating outputs from the recorded artifacts, not memory.
+- **Verify before claiming** an analysis output is complete; stale inputs or missing scripts mean the output is not trustworthy yet.
+- **Never manipulate evaluation** while resuming: do not silently change the metric view, baseline set, or aggregation rule.
+- **Never fabricate citations** in regenerated narratives or notes.
+
 ## Read First
 
 - `{PROJ}/PROJECT_MANIFEST.json`

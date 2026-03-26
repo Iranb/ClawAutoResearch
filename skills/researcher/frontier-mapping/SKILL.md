@@ -16,7 +16,7 @@ allowed-tools:
 
 Use PaperNexus graph traversal to produce a compact, reusable frontier report for brainstorming.
 
-> **File ownership**: Write ONLY to `{PROJ}/researcher/` and `{PROJ}/graph/subgraphs/`.
+> **File ownership**: Write ONLY to `{PROJ}/researcher/` and `{PROJ}/graph/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 ## Inputs
@@ -67,13 +67,13 @@ Build four sections:
 
 ## Output Files
 
-Write compact markdown snapshots under `{PROJ}/graph/subgraphs/`:
+Write compact frontier files directly under `{PROJ}/graph/`:
 
-- `limitation_frontier.md`
-- `contradiction_frontier.md`
-- `transfer_frontier.md`
-- `composition_frontier.md`
-- `anchor_index.md`
+- `LIMITATION_FRONTIER.md`
+- `CONTRADICTION_FRONTIER.md`
+- `TRANSFER_FRONTIER.md`
+- `COMPOSITION_FRONTIER.md`
+- `ANCHOR_INDEX.md`
 
 Write `{PROJ}/researcher/FRONTIER_REPORT.md`:
 
@@ -135,6 +135,6 @@ After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
 
 ## Stage Closeout
 
-When `FRONTIER_REPORT.md` and the required `graph/subgraphs/` snapshots are complete and the project is ready to move into IDEA, Researcher should trigger the Lobster handoff workflow.
+When `FRONTIER_REPORT.md` and the required frontier files under `{PROJ}/graph/` are complete and the project is ready to move into IDEA, Researcher should trigger the Lobster handoff workflow.
 
 Do not hand off if the report still requests graph refresh, key frontier anchors are unresolved, or the current plan is to keep iterating inside frontier mapping.

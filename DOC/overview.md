@@ -123,7 +123,7 @@ The default source roots are global PaperNexus paths such as:
 - `~/.papernexus/papers/{project_id}`
 - `~/.papernexus/index-store`
 
-Project-local `graph/` keeps workflow-facing reports, checks, and subgraph snapshots.
+Project-local `graph/` keeps workflow-facing reports, checks, and frontier files written directly into the default graph directory.
 
 ### 3. Brainstorming Starts During Research
 
@@ -319,7 +319,7 @@ At minimum, make sure your real OpenClaw config:
 - sets `plugins.entries.openclaw-research.config.projectsRoot`
 - allows `research_workflow` for active roles
 - keeps `researcher` as the default owner for this workflow
-- keeps `heartbeat.every = "30m"` unless you intentionally change it
+- configures heartbeat per agent instead of relying on one global default
 
 A minimal plugin config looks like:
 

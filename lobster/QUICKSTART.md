@@ -27,7 +27,9 @@ It only makes the **handoff** deterministic.
 ## Files
 
 - Workflow: `lobster/workflows/research-stage-handoff.lobster`
+- Auto-dispatch workflow: `lobster/workflows/workflow-agent-dispatch.lobster`
 - Handoff runner: `lobster/scripts/research-stage-handoff.mjs`
+- Auto-dispatch runner: `lobster/scripts/workflow-task-dispatch.mjs`
 - Tool bridge: `lobster/scripts/openclaw-tool.mjs`
 
 ## Prerequisites
@@ -115,6 +117,52 @@ in `argsJson`.
   "timeoutMs": 30000
 }
 ```
+
+## Recommended Operational Pattern
+
+## Optional Auto Mode Backend
+
+`openclaw-research` can now use Lobster as an optional handoff backend during
+Auto mode. In this setup, the plugin still computes workflow state locally, but
+it routes inter-agent dispatch through the Lobster tool so automatic owner
+handoffs can be made deterministic without replacing the existing workflow
+kernel.
+
+Recommended plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclaw-research": {
+        "config": {
+          "autoMode": "conservative",
+          "lobsterHandoff": {
+            "enabled": true,
+            "autoModeOnly": true,
+            "gatewayUrl": "http://127.0.0.1:18789",
+            "timeoutMs": 30000,
+            "maxStdoutBytes": 512000,
+            "fallbackToNative": true
+          }
+        }
+      }
+    }
+  },
+  "tools": {
+    "alsoAllow": ["lobster"]
+  }
+}
+```
+
+Behavior:
+
+- when Auto mode is active, the plugin tries the Lobster workflow first for
+  agent-to-agent handoff
+- if Lobster is unavailable, denied, or misconfigured, the plugin falls back to
+  the built-in native dispatch path
+- stage state, gates, mailbox logic, and broadcasts still come from
+  `openclaw-research`; Lobster only owns the dispatch hop
 
 ## Recommended Operational Pattern
 

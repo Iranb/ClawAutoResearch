@@ -16,6 +16,15 @@ allowed-tools:
 
 Bounded background-topic research for Researcher. This is not a free-form brainstorm loop.
 
+## Research Rigor Constraints
+
+- If idle research produces experiment ideas, preserve **one variable per experiment** by keeping each candidate mechanism separate in the digest.
+- **Record everything** in the round digest: queries, papers touched, new core papers, and resulting follow-up suggestions.
+- Keep the **experiment and code change linked** by noting which paper or mechanism could motivate which future implementation delta.
+- **Verify before claiming** that a paper changes project direction; abstract-only or weak evidence should stay tentative.
+- **Never manipulate evaluation** by cherry-picking only supportive papers for the background topic.
+- **Never fabricate citations** or metadata in the digest or follow-up notes.
+
 The authoritative state lives in `{PROJ}/PROJECT_MANIFEST.json.idle_research`, and the preferred runtime API is:
 
 - `research_workflow.get_idle_research`
@@ -57,9 +66,12 @@ Runtime fields such as `last_run_at`, `last_digest_path`, `last_source_update_at
 6. Use `/papers-cool` as the guaranteed discovery baseline. If possible, also try `/pasa-paper-search` with equivalent English queries, then merge the two result sets by canonical identity. Hard-cap the merged round to `max_papers_per_cycle` candidate papers.
 7. For each candidate paper:
    - try `/hugging-face-paper-pages` first and save validated Markdown into `paper_source_dir/md/`
+   - rename or save the validated file as `<arxiv-id>.md` when arXiv ID exists; otherwise use a transliterated, special-character-safe title slug
    - if the downloaded Markdown is HTML / error text / tiny stub, delete it and retry once
    - if Hugging Face still has no valid markdown and the paper has an arXiv ID, try `/arxiv2md`
+   - save arxiv2md output as `<arxiv-id>.md`
    - if arxiv2md also fails, use `/papers-cool` PDF fallback into `paper_source_dir/pdf/`
+   - save PDF fallback as `<arxiv-id>.pdf` when possible; otherwise use the normalized title slug
    - if the downloaded PDF is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - update `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` by canonical identity, preserving `source_provider` and `retrieval_providers`
 8. Write the round digest to `{PROJ}/researcher/idle-research/ROUND-YYYY-MM-DD_HHMM.md`.

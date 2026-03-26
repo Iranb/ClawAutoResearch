@@ -1,102 +1,278 @@
 # 快速上手
 
-这份指南只回答一个问题：已经拿到仓库后，怎样用最少步骤把 `openclaw-research` 真正跑起来。
+这份指南只讲 4 件最常用的事：
 
-## 1. 先确认前提
+1. 如何开启一个科研项目
+2. 如何打开自动化
+3. 如何设置自动调研论文的主题方向
+4. 如何设置远程服务器和 GPU
 
-在开始之前，至少确认这些前提已经满足：
+如果你已经完成安装，并且 `openclaw-research` 已经启用，看这一份就够了。
 
-- 本机有可用的 `openclaw` CLI
-- 你已经在当前仓库根目录
-- 如果要跑远程实验，SSH 已经配好
-- 如果要使用 PaperNexus，相关仓库或环境路径可访问
+## 1. 如何开启科研
 
-## 2. 先构建，再安装
-
-```bash
-cd "/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research"
-npm run build
-bash install.sh --dry-run
-bash install.sh
-```
-
-如果你需要强制同步 workspace 根目录里的角色文件，可以改成：
-
-```bash
-bash install.sh --force-role-files
-```
-
-## 3. 合并 OpenClaw 主配置
-
-安装脚本不会直接覆盖你的 `~/.openclaw/openclaw.json`，所以你还需要把最新插件配置合并到自己的主配置里。
-
-最关键的项只有这些：
-
-- `plugins.load.paths` 包含 `~/.openclaw/plugins`
-- 启用 `openclaw-research`
-- 在 `plugins.entries.openclaw-research.config.projectsRoot` 里设置项目根目录
-- 给需要工作的角色放行 `research_workflow`
-- 默认 `researcher` heartbeat 保持 `30m`
-
-参考：
-
-- [openclaw.RECOMMENDED.json](./../../openclaw.RECOMMENDED.json)
-- [配置项参考](./../reference/configuration.md)
-
-## 4. 启动第一个科研项目
-
-推荐在 Discord 的一个独立频道里启动一个项目，对应一个研究主题。
-
-先让 `researcher` 开题：
+最简单的启动方式，就是让 `researcher` 执行：
 
 ```text
-/research-pipeline "your research topic" -- AUTO_PROCEED: true
+/research-pipeline "你的研究主题"
 ```
 
-如果你启用了 channel binding，拿到项目目录后，把当前频道绑定到该项目：
+例如：
+
+```text
+/research-pipeline "multimodal reasoning for document understanding"
+```
+
+执行后，系统会自动做这些事：
+
+- 创建项目目录
+- 初始化 `PROJECT_MANIFEST.json`
+- 初始化 workflow 状态
+- 创建各个 Agent 的项目子目录
+- 开始第一轮文献收集和图谱构建
+
+如果你想恢复一个已经做过的项目，用：
+
+```text
+/resume-pipeline "project-id"
+```
+
+想查看当前状态，用：
+
+```text
+/workflow-status
+```
+
+## 2. 如何设置自动化
+
+自动化最关键的是 3 件事：
+
+- 打开 `autoMode`
+- 打开 `autoGate`
+- 给各个 Agent 配置 heartbeat
+
+最稳的推荐值是：
 
 ```json
 {
-  "action": "bind_channel_project",
-  "channelBinding": {
-    "projectRoot": "/absolute/path/to/the-created-project"
+  "plugins": {
+    "entries": {
+      "openclaw-research": {
+        "enabled": true,
+        "config": {
+          "projectsRoot": "~/.openclaw/projects",
+          "injectWorkflowContext": true,
+          "enforceWorkflowBoundaries": true,
+          "enableWorkflowMailbox": true,
+          "heartbeatBackgroundChecks": true,
+          "enableChannelProjectBindings": true,
+          "autoMode": "conservative",
+          "autoGate": {
+            "enabled": true,
+            "maxMitigationRounds": 2
+          }
+        }
+      }
+    }
+  },
+  "agents": {
+    "list": [
+      { "id": "researcher", "heartbeat": { "every": "30m" } },
+      { "id": "orchestrator", "heartbeat": { "every": "2h" } },
+      { "id": "coder", "heartbeat": { "every": "2h" } },
+      { "id": "analyzer", "heartbeat": { "every": "2h" } },
+      { "id": "academic_writer", "heartbeat": { "every": "2h" } },
+      { "id": "reviewer", "heartbeat": { "every": "3h" } },
+      { "id": "cross-reviewer", "heartbeat": { "every": "4h" } }
+    ]
   }
 }
 ```
 
-这样之后这个频道里的 workflow、mailbox、graph presence check 和恢复逻辑，都会优先绑定到同一个项目上。
+这套默认值的含义很简单：
 
-## 5. 理解项目启动后的默认行为
+- `conservative`：尽量自动推进，但关键位置更保守
+- `autoGate.enabled = true`：高风险时会先多 Agent 讨论和审核
+- `researcher` heartbeat 更频繁：负责主流程推进和空闲自动调研
 
-项目启动后，系统会围绕这些机制工作：
+如果你确认系统已经比较稳定，想更自动，可以再把：
 
-- `research_workflow.auto_iterator_tick` 在 heartbeat / bootstrap / resume 时推进或回退阶段
-- `graph_build` / `frontier_mapping` / `idea` 前会做 graph presence check
-- Researcher 空闲时会根据 `idle_research` 做受控背景调研
-- 新实验进入账本后，会让创新反思变为待刷新
-- Writer 在 `writing_contract` 存在时会按模板和段落逻辑约束工作
+```json
+"autoMode": "aggressive"
+```
 
-## 6. 新项目里最值得尽早补的状态
+加进去。
 
-为了让后续流程更稳，建议尽早确认：
+更完整的推荐配置见：
 
-- `papernexus_root`
-- `paper_source_dir`
-- `graph_source_dir`
-- `idle_research`
-- `writing_contract`
+- [openclaw.RECOMMENDED.json](../../openclaw.RECOMMENDED.json)
 
-其中：
+## 3. 如何设置自动调研论文的主题方向
 
-- `paper_source_dir` 默认建议指向 `~/.papernexus/papers/{project_id}`
-- `graph_source_dir` 默认建议也指向 `~/.papernexus/papers/{project_id}`
-- `channel-project-bindings.json` 默认会写在 `{PROJ}/.openclaw-research/`
+最简单的理解方式是：
 
-## 7. 建议的下一步阅读
+“自动调研”就是 Researcher 在空闲时，围绕你指定的主题继续追论文、补充文献、更新图谱。
 
-当你已经能跑起项目后，建议继续看：
+### 3.1 先确认自动调研能运行
 
-1. [系统架构](./../concepts/architecture.md)
-2. [科研工作流与自动迭代器](./../concepts/workflow-and-auto-iterator.md)
-3. [PaperNexus、实验记忆与反思机制](./../concepts/papernexus-memory-and-reflection.md)
-4. [运行、调试与测试](./operations-and-testing.md)
+需要这两个条件：
+
+- 插件配置里 `heartbeatBackgroundChecks = true`
+- `researcher` 有 heartbeat
+
+也就是上面自动化配置那一段已经开了。
+
+### 3.2 新项目里会自动生成调研模板
+
+项目创建后，你会看到：
+
+- `{PROJ}/researcher/idle-research/IDLE_RESEARCH.json`
+
+这个文件可以理解成“自动调研设置草稿”。
+
+你最常需要改的是这些字段：
+
+```json
+{
+  "enabled": true,
+  "topic": "multimodal reasoning for document understanding",
+  "objective": "track new papers, useful baselines, and strong implementation ideas",
+  "query_seeds": [
+    "document understanding multimodal reasoning",
+    "multimodal OCR reasoning",
+    "vision-language document QA"
+  ],
+  "preferred_venues": ["arXiv", "CVPR", "ICCV", "ECCV", "ACL", "EMNLP"],
+  "max_papers_per_cycle": 8,
+  "cooldown_minutes": 360,
+  "refresh_graph_on_new_core_papers": true
+}
+```
+
+最重要的字段只有 3 个：
+
+- `enabled`
+- `topic`
+- `query_seeds`
+
+### 3.3 什么时候它会自己调研
+
+当这些条件满足时，系统会自动跑一轮：
+
+- 当前项目不是 Researcher 的关键路径
+- `idle_research.enabled = true`
+- 到了下一次调研时间
+
+你不需要手动盯着它，它会把结果写回项目状态和 round digest。
+
+## 4. 如何设置远程服务器和 GPU
+
+远程实验最简单的入口是：
+
+- 全局默认服务器配置：`agents/researcher/SERVER.md`
+- 某个项目单独指定服务器：`{PROJ}/servers.json`
+
+### 4.1 先改全局默认服务器
+
+编辑：
+
+- [agents/researcher/SERVER.md](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/agents/researcher/SERVER.md)
+
+至少写清楚这些信息：
+
+- SSH 地址或 alias
+- 远程代码目录
+- 远程日志目录
+- 远程结果目录
+- `uv` 路径
+- 数据集目录
+- GPU 情况
+
+最小示例：
+
+```md
+# SERVER.md — Remote Server Configuration
+
+## GPU Server
+
+- **SSH alias**: `gpu-server`
+- **GPU**: `4x RTX 4090 24GB`
+- **uv path**: `~/.local/bin/uv`
+
+## Directory Configuration
+
+- **Remote code directory**: `/home/you/experiments/`
+- **Log directory**: `/home/you/experiments/logs/`
+- **Result directory**: `/home/you/experiments/results/`
+- **主数据集**: `/data/datasets/`
+- **项目数据集**: `/data/projects/{PROJ}/datasets/`
+```
+
+### 4.2 检查服务器和 GPU 是否正常
+
+先确认你本机能连上去：
+
+```bash
+ssh gpu-server "hostname"
+```
+
+再确认 GPU：
+
+```bash
+ssh gpu-server "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader"
+```
+
+再确认 `uv`：
+
+```bash
+ssh gpu-server "~/.local/bin/uv --version"
+```
+
+### 4.3 如果某个项目想用另一台机器
+
+可以在项目目录下写：
+
+- `{PROJ}/servers.json`
+
+最小示例：
+
+```json
+{
+  "default": "gpu-server-a",
+  "list": ["gpu-server-a", "gpu-server-b"]
+}
+```
+
+它的意思是：
+
+- 默认优先用 `gpu-server-a`
+- 这个项目也允许分发到 `gpu-server-b`
+
+### 4.4 GPU 是怎么被使用的
+
+你不用手动指定每一张卡。通常流程是：
+
+1. Researcher / `experiment-phase` 先检查远程 `nvidia-smi`
+2. 再判断哪些 GPU 空闲
+3. 然后把原子实验交给 Coder 去启动
+4. 一般是一块 GPU 跑一个独立实验
+
+所以你真正要保证的只有两件事：
+
+- `SERVER.md` 写对
+- SSH 和 `nvidia-smi` 能正常工作
+
+## 5. 最简单的一套实际使用顺序
+
+如果你是第一次用，按这个顺序做就行：
+
+1. 在 `~/.openclaw/openclaw.json` 里合并推荐配置，先用 `autoMode = conservative`
+2. 给各个 Agent 配好 heartbeat
+3. 改好 [agents/researcher/SERVER.md](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/agents/researcher/SERVER.md)
+4. 执行 `/research-pipeline "你的研究主题"`
+5. 进入项目后，把 `researcher/idle-research/IDLE_RESEARCH.json` 里的主题方向改成你真正想长期追踪的方向
+6. 用 `/workflow-status` 看它当前推进到了哪一步
+
+如果你只想记一句话：
+
+先开项目，再开自动化，再设自动调研主题，最后把远程服务器配好。

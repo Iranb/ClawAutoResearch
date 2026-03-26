@@ -56,7 +56,7 @@ def main():
     # 2. 下载 PDF（先解析直链再下载，或直链）
     print("2. 下载 PDF…")
     from download_paper import run as download_run
-    out_pdf = Path(SKILL_ROOT) / f"{ARXIV_ID.replace('.', '_')}.pdf"
+    out_pdf = Path(SKILL_ROOT) / f"{ARXIV_ID.split('v')[0]}.pdf"
     code = download_run(ARXIV_ID, output_path=str(out_pdf))
     if code == 0:
         print(f"   已保存: {out_pdf}\n")

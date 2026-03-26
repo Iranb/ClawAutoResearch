@@ -18,6 +18,15 @@ allowed-tools:
 
 Researcher-owned restart entrypoint. Use after session loss, gateway restart, or any time the pipeline state may have drifted from reality.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** while reconciling state; do not merge distinct runs or hypotheses into one repaired history.
+- **Record everything** you fix during resume: drift, missing artifacts, relaunched work, and updated next actions.
+- Keep the **experiment and code change linked** by trusting durable manifests, ledgers, and run metadata over chat memory.
+- **Verify before claiming** the project is back on track; check artifacts, remote reality, and stage signals first.
+- **Never manipulate evaluation** during recovery by advancing stages or rewriting baselines without evidence.
+- **Never fabricate citations** when rebuilding literature or writing-side context.
+
 ## Read First
 
 - `{PROJECTS_ROOT}/PROJECTS_STATE.json`
@@ -37,10 +46,10 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 1. Resolve the project to resume from `PROJECTS_STATE.json`, explicit argument, or the newest active project.
 2. Read `PROJECT_MANIFEST.json` and `GATE_STATE.json`; treat them as the top-level stage source of truth.
 3. Validate required artifacts for the recorded stage:
-   - `plan/code` → `orchestrator/PLAN.md`, `orchestrator/TODOS.md`
+   - `plan/code` → `orchestrator/PLAN.md`, `orchestrator/TODOS.md`, `orchestrator/PLAN_AUDIT.md`
    - `experiment` → `researcher/EXPERIMENT_REGISTRY.md`, `coder/*/REMOTE_RUN.json`, remote `screen -ls`
-   - `analyze` → `researcher/artifacts/results/`
-   - `review` → `researcher/REVIEW_STATE.json`, `reviewer/AUTO_REVIEW.md`
+   - `analyze` → `researcher/artifacts/results/`, `analyzer/QUALITY_AUDIT.md`
+   - `review` → `researcher/REVIEW_STATE.json`, `reviewer/REVIEW_REPORT.md`
    - `write` → `academic_writer/PAPER_PLAN.md`, `paper/sections/`
 4. Reconcile literature source state:
    - read `paper_source_dir`, `graph_last_built_at`, and `paper_ingestion.*` from `PROJECT_MANIFEST.json`

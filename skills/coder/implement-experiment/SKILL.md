@@ -19,6 +19,15 @@ Write reproducible, self-contained experiment code from a research plan specific
 > **File ownership**: Write ONLY to `{PROJ}/coder/`. Read from `{PROJ}/orchestrator/` and `{PROJ}/researcher/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment**: each bundle should implement one hypothesis or one clearly named repair, not a grab bag of changes.
+- **Record everything**: experiment id, changed files, configs, run command, and assumptions must stay visible in manifests and README notes.
+- Keep the **experiment and code change linked** so later analysis can trace a result back to an exact diff and config.
+- **Verify before claiming** readiness: dry-run, shape checks, and minimal validation come before "implementation complete".
+- **Never manipulate evaluation** by quietly changing metrics, splits, baselines, or fixed settings in code.
+- **Never fabricate citations** in experiment docs or comments; if prior work is mentioned, verify it first or leave a TODO.
+
 ## Input
 
 Read in order:

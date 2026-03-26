@@ -19,6 +19,15 @@ allowed-tools:
 
 Orchestrate full experiment execution: classify dependencies → track-aware dispatch → assign atomic launches to Coder → monitor → decide → analyze.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** when building launch groups; if a run combines multiple hypothesis changes, split it or label it as non-attributable.
+- **Record everything** in the registry and ledger: hypothesis, bundle id, GPU assignment, status, failures, and follow-up decisions.
+- Keep the **experiment and code change linked** by dispatching only named bundles with durable manifests and config references.
+- **Verify before claiming** success: a launched run is not evidence until logs, outputs, and required checks are present.
+- **Never manipulate evaluation** through opportunistic reruns, metric swaps, or selective stage advancement.
+- **Never fabricate citations** in experiment notes, comparison summaries, or follow-up guidance.
+
 ## Prerequisites
 
 1. `agents/researcher/SERVER.md` configured (SSH alias, uv project path, remote dirs)

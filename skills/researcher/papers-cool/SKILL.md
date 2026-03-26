@@ -44,6 +44,7 @@ Hard rules in this workflow:
 - Do not skip the Hugging Face Markdown attempt for key papers.
 - Do not skip the arxiv2md fallback for arXiv papers when Hugging Face Markdown is unavailable.
 - Do not let duplicate filenames masquerade as new literature; deduplicate by canonical paper identity.
+- Do not keep title-plus-ID mixed variants for the same paper; if arXiv ID exists, the final saved filename should be exactly that arXiv ID.
 - Do not overwrite `retrieval_providers`; merge them when the same paper is found by both `papers-cool` and PASA.
 - Do not let `/graph-build` read a mixed raw corpus where same-paper PDF and Markdown coexist without canonical deduplication.
 - Do not proceed to graph-grounded reasoning until the key paper is ingested into the project corpus or explicitly recorded as missing/deferred.
@@ -76,6 +77,21 @@ After every full-text fetch, validate the saved artifact before treating it as i
 - If validation fails, delete the bad file and retry using the next available source.
 - Preferred Markdown source order is Hugging Face first, arxiv2md second.
 
+### Canonical filename rule
+
+After validation succeeds, the saved artifact must use a canonical filename:
+
+- if arXiv ID exists: `<arxiv-id>.md` or `<arxiv-id>.pdf`
+- if arXiv ID does not exist: `<normalized-title>.md` or `<normalized-title>.pdf`
+
+Title normalization rules:
+
+- transliterate special characters to ASCII when possible
+- lowercase the result
+- replace spaces, `_`, `/`, and similar separators with `-`
+- strip remaining punctuation
+- collapse repeated `-`
+
 ### 1. Find papers by keyword
 
 - **Use the Python script**: run `python scripts/search_papers.py "<keyword>"` (or `--query "<keyword>"`). The script **requests the search URL** (`https://papers.cool/arxiv/search?highlight=1&query=...&sort=0|1`) with HTTP and parses the HTML (BeautifulSoup); the site is server-rendered, **no browser**. Use **`--sort 0`** for time order (default), **`--sort 1`** for reading star order. Output: title, abstract snippet, arxiv_id, links. Use `-o result.json` to save.
@@ -92,6 +108,7 @@ After every full-text fetch, validate the saved artifact before treating it as i
 ### 3. Get PDF
 
 - **papers.cool direct link**: The site offers direct download URLs like `https://papers.cool/<uuid>`. Use **`scripts/download_paper.py`**: pass the direct link to download immediately. For **arXiv ID or paper page URL**, the script first tries **HTTP + BeautifulSoup** to get the PDF link from `a.title-pdf`; if that fails it uses Playwright to open the page and parse [PDF], then downloads; fallback is `https://arxiv.org/pdf/<arxiv_id>.pdf`. The script now validates that the saved file is a real PDF and automatically retries the next candidate source when it instead downloads HTML / plain-text error content. Dependencies: `requests`, `beautifulsoup4`; `playwright` only for fallback when HTTP parse fails.
+- When the paper has no arXiv ID but you know the title, pass `--title "<paper title>"` so the final saved PDF uses a normalized title filename instead of a temporary name.
 - **arXiv**: PDF is also at `https://arxiv.org/pdf/<arxiv_id>.pdf`. Use `web_fetch` to check; download with `curl`/`wget` or this skill’s `download_paper.py`.
 - **Venue papers**: Some link to arXiv; if there’s no arXiv ID, get the PDF URL from the page [PDF] link or the venue site, then use `web_fetch` or a download tool.
 
@@ -151,7 +168,7 @@ Search and list pages on papers.cool are **server-rendered**; the scripts use **
   - `list_papers_dynamic.py` → `list_results.json`
   - `venue_papers.py` → `venue_results.json`
   - `list_venues.py` → `venues_list.json`
-  - `download_paper.py` → `<arxiv_id>.pdf` 或根据直链生成文件名
+  - `download_paper.py` → `<arxiv_id>.pdf`；若无 arXiv ID 且提供 `--title`，则用规范化题目名
 
 示例（指定目录）：
 
@@ -163,7 +180,7 @@ python scripts/search_and_save_papers.py "LLM" -o ~/Documents/papers
 # 写入 ~/Documents/papers/papers_saved.json
 
 python scripts/download_paper.py 2602.20400 -o ./downloads
-# 写入 ./downloads/2602_20400.pdf
+# 写入 ./downloads/2602.20400.pdf
 ```
 
 ### 1. Single paper page (incl. Kimi): `fetch_paper_dynamic.py`

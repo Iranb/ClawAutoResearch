@@ -18,6 +18,15 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 > **File ownership**: Write ONLY to `{PROJ}/academic_writer/`. Read from `{PROJ}/analyzer/`, `{PROJ}/reviewer/`, `{PROJ}/researcher/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in the storyline: ablations and gains should stay attributable to the specific change that produced them.
+- **Record everything** needed for writing: each claim should point to its experiment evidence, figure/table, and relevant review caveat.
+- Keep the **experiment and code change linked** by carrying forward bundle ids, config families, or artifact names when planning sections.
+- **Verify before claiming**: unsupported or partial claims must be downgraded or removed before they enter the outline.
+- **Never manipulate evaluation narrative** by hiding baselines, renaming metrics, or over-compressing negative results.
+- **Never fabricate citations** while mapping related work or contribution claims.
+
 ## Input
 
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md` — key results and analysis
@@ -29,7 +38,7 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/analyzer/proof-packets/` — packetized theorem / lemma / proposition objects
 - `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — generated appendix plan derived from proof packets
 - `{PROJ}/CLAIM_POLICY.md` — label-to-wording constraints
-- `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback from experiment review cycle
+- `{PROJ}/reviewer/REVIEW_REPORT.md` — canonical reviewer feedback from experiment review cycle
 - `{PROJ}/analyzer/figures/` — available figures
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
 - `research_workflow.get_writing_contract` — user-provided template path, section order, and paragraph-logic contract

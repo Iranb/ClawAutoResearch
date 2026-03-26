@@ -12,6 +12,15 @@ allowed-tools:
 
 Cross-Reviewer is intentionally stateless. Resume means reconstructing a single review request from saved artifacts, not recovering hidden memory.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in your critique: if the packet conflates multiple changes, call that out explicitly.
+- **Record everything** in the returned assessment by pointing to concrete lines, claims, figures, or missing evidence.
+- Keep the **experiment and code change linked** when judging novelty, outline quality, or prose support.
+- **Verify before claiming** that something is strong or weak; base it only on the supplied packet.
+- Treat **evaluation manipulation** or unclear attribution as review defects.
+- **Never fabricate citations** or prior-art references in the review.
+
 ## Read First
 
 - explicit request content passed in the invocation

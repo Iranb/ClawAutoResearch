@@ -16,6 +16,15 @@ allowed-tools:
 
 L1 parallelism: schedule multiple independent experiments (seeds, ablations, baselines vs proposed) across available GPUs, then assign each atomic launch to Coder.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** even in parallel mode: independence and attribution matter more than GPU saturation.
+- **Record everything** in the registry, ledger, and parallel-state files, including queue decisions and failure handling.
+- Keep the **experiment and code change linked** by dispatching only named bundles with clear config and hypothesis references.
+- **Verify before claiming** that a parallel batch is informative; pilots, validation runs, and full evaluations must stay distinct.
+- **Never manipulate evaluation** by promoting the best-looking run while hiding the rest of the batch.
+- **Never fabricate citations** in dispatch notes or experiment summaries.
+
 ## Constants
 
 - **MAX_PARALLEL = 4** — max simultaneous experiments (GPU count is the real limit)

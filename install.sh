@@ -223,6 +223,30 @@ get_existing_agent_ids() {
   fi
 }
 
+get_existing_agent_workspace() {
+  local id="$1"
+  local json
+  json=$(openclaw agents list --json 2>/dev/null) || true
+  if [[ -z "$json" ]]; then
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg id "$id" '.[] | select(.id == $id) | .workspace // empty'
+  else
+    echo "$json" | awk -v id="$id" '
+      BEGIN { RS="\\{" }
+      $0 ~ "\"id\"[[:space:]]*:[[:space:]]*\"" id "\"" {
+        if (match($0, /"workspace"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+          value = substr($0, RSTART, RLENGTH)
+          sub(/^.*"workspace"[[:space:]]*:[[:space:]]*"/, "", value)
+          sub(/"$/, "", value)
+          print value
+        }
+      }
+    '
+  fi
+}
+
 agent_exists() {
   local id="$1"
   local existing
@@ -230,17 +254,28 @@ agent_exists() {
   echo "$existing" | grep -Fxq "$id" 2>/dev/null || false
 }
 
-workspace_for_agent() {
+default_workspace_rel_for_agent() {
   case "$1" in
     researcher) echo "workspace-researcher" ;;
     reviewer) echo "workspace-reviewer" ;;
-    orchestrator) echo "workspace-researcher" ;;
-    coder) echo "workspace-researcher" ;;
-    analyzer) echo "workspace-researcher" ;;
-    academic_writer) echo "workspace-researcher" ;;
+    orchestrator) echo "workspace-orchestrator" ;;
+    coder) echo "workspace-coder" ;;
+    analyzer) echo "workspace-analyzer" ;;
+    academic_writer) echo "workspace-academic_writer" ;;
     cross-reviewer) echo "workspace-cross-reviewer" ;;
     *) echo "workspace-$1" ;;
   esac
+}
+
+workspace_for_agent() {
+  local id="$1"
+  local existing_workspace
+  existing_workspace=$(get_existing_agent_workspace "$id" || true)
+  if [[ -n "$existing_workspace" ]]; then
+    echo "$existing_workspace"
+  else
+    echo "$OC_DIR_EXPANDED/$(default_workspace_rel_for_agent "$id")"
+  fi
 }
 
 copy_role_bundle() {
@@ -341,10 +376,10 @@ echo "[1/7] 添加 Agents（openclaw agents add）..."
 AGENTS=(
   "researcher|Researcher|workspace-researcher"
   "reviewer|Reviewer|workspace-reviewer"
-  "orchestrator|Orchestrator|workspace-researcher"
-  "coder|Coder|workspace-researcher"
-  "analyzer|Analyzer|workspace-researcher"
-  "academic_writer|Writer|workspace-researcher"
+  "orchestrator|Orchestrator|workspace-orchestrator"
+  "coder|Coder|workspace-coder"
+  "analyzer|Analyzer|workspace-analyzer"
+  "academic_writer|Writer|workspace-academic_writer"
   "cross-reviewer|Cross-Reviewer|workspace-cross-reviewer"
 )
 
@@ -390,8 +425,8 @@ DUPLICATES=()
 
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
   skill_src="$PLUGIN_DIR/skills/$agent"
-  ws_rel="$(workspace_for_agent "$agent")"
-  ws_skills="$OC_DIR_EXPANDED/$ws_rel/skills"
+  ws_root="$(workspace_for_agent "$agent")"
+  ws_skills="$ws_root/skills"
 
   [[ -d "$skill_src" ]] || continue
   [[ -d "$ws_skills" ]] || continue
@@ -431,8 +466,8 @@ echo "[4/7] 复制技能到 Agent 工作区 skills（包括 vendored retrieval s
 
 for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
   skill_src="$PLUGIN_DIR/skills/$agent"
-  ws_rel="$(workspace_for_agent "$agent")"
-  ws_skills="$OC_DIR_EXPANDED/$ws_rel/skills"
+  ws_root="$(workspace_for_agent "$agent")"
+  ws_skills="$ws_root/skills"
 
   [[ -d "$skill_src" ]] || continue
   ensure_dir "$ws_skills"
@@ -553,7 +588,7 @@ if $SKIP_AGENT_CREATE; then
 else
   echo "  1. Agents: 已添加或检查研究工作流所需 agents"
 fi
-echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR，则相关 skills 已先同步到插件仓库"
+echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则相关 skills 已先同步到插件仓库"
 echo "  3. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
 echo "  4. Plugin: 已创建或检查 $PLUGIN_LINK"
 echo "  5. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"

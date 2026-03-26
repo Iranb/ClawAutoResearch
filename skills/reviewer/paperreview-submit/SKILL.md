@@ -4,12 +4,25 @@ description: 使用 reviewloop 工具将学术论文 PDF 提交到 paperreview.a
 allowed-tools:
   - Bash(*)
   - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
   - research_workflow
 ---
 
 # 论文提交与 AI 审稿技能 (paperreview-submit)
 
 基于 [reviewloop](https://lib.rs/crates/reviewloop) 工具，将论文 PDF 提交至 [paperreview.ai](https://paperreview.ai)，自动轮询并获取审稿意见。
+
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** when summarizing the paper for external review; do not blur separate ablations into one claimed improvement.
+- **Record everything**: submission command, job id, source PDF, returned review path, and project-local writeback are all mandatory.
+- Keep the **experiment and code change linked** by tying reviewer concerns back to concrete manuscript claims and supporting artifacts.
+- **Verify before claiming** a review round is complete: confirm the returned artifact exists and is written back to `{PROJ}/reviewer/external_review_{date}.md`.
+- **Never manipulate evaluation narrative** before submission by hiding caveats or swapping baselines in the packaged draft.
+- **Never fabricate citations** in any submission notes, summaries, or follow-up comments.
 
 ## 快速工作流
 
@@ -164,9 +177,30 @@ researcher → academic_writer (撰写论文)
 
 若 `verification_status != verified`，或仍存在未解决引用占位符、hallucinated citations，则不要提交到外部审稿系统，先运行 reviewer `/citation-integrity-gate`。
 
+## 项目内正式写回 Contract
+
+外部 AI 审稿完成后，不要只停留在 `~/.review_loop/artifacts/<job-id>/`。
+
+必须把最新完成的一轮审稿结果规范化写回项目目录：
+
+- `{PROJ}/reviewer/external_review_{YYYY-MM-DD}.md`
+
+使用本技能目录中的 `EXTERNAL_REVIEW_TEMPLATE.md` 作为起点，并至少写入：
+- 提交元信息：`paper_id`、`backend`、`job_id`、时间戳
+- `review.md` 的可读摘要
+- `review.json` 中的结构化字段：recommendation / score / confidence
+- Strengths / Weaknesses / Questions / Detailed Comments
+- 后续修订与 rebuttal 优先级
+
+如果同一天内重复跑外部审稿，可以：
+- 覆盖最新同日文件，或
+- 在文件中明确记录新的 `job_id`
+
+但项目目录下必须始终保留一个当前有效的 `external_review_{date}.md`。
+
 ### 审稿结果反馈给 reviewer agent
 
-审稿完成后，将 `review.md` 内容传递给 openclaw reviewer agent：
+审稿完成后，先把结果写回 `{PROJ}/reviewer/external_review_{date}.md`，再把该项目内文件传递给 reviewer agent：
 
 ```bash
 # 获取审稿结果路径
@@ -174,8 +208,16 @@ REVIEW_MD=$(ls ~/.review_loop/artifacts/*/review.md | tail -1)
 
 # 在 openclaw 中，让 reviewer agent 读取并分析
 # agent: reviewer
-# 任务: 读取 $REVIEW_MD，分析审稿意见，提出修改建议
+# 任务: 读取 {PROJ}/reviewer/external_review_{date}.md，起草 rebuttal_{date}.md
 ```
+
+## 完成标准
+
+本技能只有在以下条件都满足后才算完成：
+- 外部审稿 job 已处于 `COMPLETED`
+- 最新 `review.md` / `review.json` / `meta.json` 已读入
+- `{PROJ}/reviewer/external_review_{date}.md` 已写入
+- 下一步已经明确交给 `/review-response`
 
 ---
 

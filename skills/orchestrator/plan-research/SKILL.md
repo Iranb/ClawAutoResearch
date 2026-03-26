@@ -1,6 +1,6 @@
 ---
 name: plan-research
-description: "Translate a confirmed research idea into a structured experiment plan (PLAN.md) and task list (TODOS.md). Use after idea-phase produces a confirmed IDEA_REPORT.md."
+description: "Translate a confirmed research idea into a structured experiment plan (PLAN.md), task list (TODOS.md), and plan audit (PLAN_AUDIT.md). Use after idea-phase produces a confirmed IDEA_REPORT.md."
 argument-hint: "[confirmed track title or path to IDEA_REPORT.md]"
 allowed-tools:
   - Read
@@ -17,6 +17,15 @@ Produce a concrete, sequenced, track-aware experiment plan from a confirmed idea
 
 > **File ownership**: Write ONLY to `{PROJ}/orchestrator/`. Read from `{PROJ}/researcher/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+
+## Research Rigor Constraints
+
+- Enforce **one variable per experiment** in the plan. If two ideas both matter, split them into separate stages, ablations, or tracks.
+- **Record everything** in `PLAN.md`, `TODOS.md`, and `PLAN_AUDIT.md`, including expected code touchpoints, baselines, rollback rules, and decision gates.
+- Keep the **experiment change and code change linked**: each planned experiment should map to a concrete bundle, config family, or implementation delta.
+- **Verify before claiming**: do not mark a plan ready unless the required evidence, audit, and completion signals are named explicitly.
+- **Never manipulate evaluation**: metrics, datasets, baselines, and minimum decision scale are protected constraints unless a documented override is approved.
+- **Never fabricate citations** or prior-work positioning in the plan; verify source details before building strategy around them.
 
 ## Input
 
@@ -105,7 +114,27 @@ Each task must have:
 - Assigned agent
 - Dependencies (what must complete first)
 
-### 5. Output Summary
+### 5. Write PLAN_AUDIT.md
+
+Write `{PROJ}/orchestrator/PLAN_AUDIT.md` using `PLAN_AUDIT_TEMPLATE.md` in this skill directory.
+
+The audit must explicitly answer:
+- whether every active track has required baselines, datasets, metrics, and ablations
+- whether seed policy, compute budget, and rollback / kill rules are actually documented
+- whether leakage / contamination risks were checked
+- whether theory / appendix expectations are reflected conservatively
+- whether the plan is truly ready to hand off to CODE or still needs revision
+
+If any critical blocker remains, mark:
+- `Verdict: NEEDS_REVISION`
+- `Ready to hand off to CODE: no`
+
+Only mark the audit ready when:
+- `PLAN.md` and `TODOS.md` are complete
+- no required baseline / artifact / dependency is still missing
+- the active track scope is bounded enough for implementation
+
+### 6. Output Summary
 
 Return to Researcher Agent:
 
@@ -113,6 +142,7 @@ Return to Researcher Agent:
 ## Plan Ready
 - **PLAN.md**: {PROJ}/orchestrator/PLAN.md
 - **TODOS.md**: {PROJ}/orchestrator/TODOS.md
+- **PLAN_AUDIT.md**: {PROJ}/orchestrator/PLAN_AUDIT.md
 - **Stages**: N stages
 - **Estimated compute**: ~X GPU-hours total
 - **First task**: [description] — assigned: coder
@@ -131,6 +161,13 @@ Return to Researcher Agent:
 
 ## Stage Closeout
 
-When `PLAN.md`, `TODOS.md`, and `PLAN_AUDIT.md` are complete and the project is ready to move into CODE, invoke the Lobster handoff workflow described in `{PLUGIN_ROOT}/lobster/QUICKSTART.md`.
+Do not consider PLAN complete until all of the following are true:
+- `{PROJ}/orchestrator/PLAN.md` exists and is non-empty
+- `{PROJ}/orchestrator/TODOS.md` exists and is non-empty
+- `{PROJ}/orchestrator/PLAN_AUDIT.md` exists and is non-empty
+- `PLAN_AUDIT.md` says `Verdict: READY_FOR_CODE`
+- `PLAN_AUDIT.md` says `Ready to hand off to CODE: yes`
+
+When those conditions are satisfied, invoke the Lobster handoff workflow described in `{PLUGIN_ROOT}/lobster/QUICKSTART.md`.
 
 Do not hand off if the plan is still being revised, narrowed, or re-audited.

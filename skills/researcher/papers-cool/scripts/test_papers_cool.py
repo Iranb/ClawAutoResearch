@@ -97,6 +97,43 @@ class TestDownloadPaperUrlDetection(unittest.TestCase):
         self.assertIsNotNone(self.arxiv_pattern.match("2602.20400v1"))
 
 
+class TestCanonicalPaperFilenames(unittest.TestCase):
+    def setUp(self):
+        from paper_filename import canonical_paper_filename, normalize_arxiv_id, slugify_paper_title
+        from download_paper import build_pdf_candidates
+        self.canonical_paper_filename = canonical_paper_filename
+        self.normalize_arxiv_id = normalize_arxiv_id
+        self.slugify_paper_title = slugify_paper_title
+        self.build_pdf_candidates = build_pdf_candidates
+
+    def test_arxiv_filename_keeps_dot_and_drops_version(self):
+        self.assertEqual(self.normalize_arxiv_id("2602.20400v1"), "2602.20400")
+        self.assertEqual(
+            self.canonical_paper_filename(".pdf", arxiv_id="2602.20400v1"),
+            "2602.20400.pdf",
+        )
+
+    def test_title_filename_slugifies_special_characters(self):
+        self.assertEqual(
+            self.slugify_paper_title("Graph & Reasoning: A Survey / 2026?"),
+            "graph-and-reasoning-a-survey-2026",
+        )
+        self.assertEqual(
+            self.canonical_paper_filename(".md", title="Graph & Reasoning: A Survey / 2026?"),
+            "graph-and-reasoning-a-survey-2026.md",
+        )
+
+    def test_direct_pdf_download_uses_title_slug_when_provided(self):
+        candidates, default_name = self.build_pdf_candidates(
+            "https://papers.cool/2ae6f548-411c-48da-b9a5-f40ab4437632",
+            "https://papers.cool/2ae6f548-411c-48da-b9a5-f40ab4437632",
+            headless=True,
+            title="Graph & Reasoning: A Survey / 2026?",
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(default_name, "graph-and-reasoning-a-survey-2026.pdf")
+
+
 class TestPaperSourceValidation(unittest.TestCase):
     """validate_paper_source helpers"""
 
@@ -315,6 +352,7 @@ def suite_unit_only():
     return unittest.TestSuite([
         loader.loadTestsFromTestCase(TestBuildPaperUrl),
         loader.loadTestsFromTestCase(TestDownloadPaperUrlDetection),
+        loader.loadTestsFromTestCase(TestCanonicalPaperFilenames),
         loader.loadTestsFromTestCase(TestPaperSourceValidation),
     ])
 

@@ -21,6 +21,15 @@ Deploy one approved experiment bundle, or a small explicitly assigned set of ind
 > - Researcher / `/experiment-phase` owns portfolio scheduling, registry updates, and track decisions
 > - If multiple bundles are assigned together, Coder may parallelize only the explicitly assigned independent bundles; Coder must not invent new experiments
 
+## Research Rigor Constraints
+
+- Keep **one variable per experiment** at launch time: do not bundle unrelated hypothesis changes into one remote run.
+- **Record everything** about each launch: exact bundle, config, GPU, command, remote path, and restart status.
+- Keep the **experiment and code change linked** by launching only named bundles with durable manifests and run metadata.
+- **Verify before claiming** a run started correctly: confirm screen/process state, log creation, and first-step sanity.
+- **Never manipulate evaluation** through launch-time flag changes that alter the agreed metric, dataset, or baseline protocol.
+- **Never fabricate citations** in launch notes or experiment READMEs; unresolved references stay unresolved.
+
 ## Prerequisites
 
 Read `SERVER.md` to obtain:

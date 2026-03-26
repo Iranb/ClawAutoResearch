@@ -126,15 +126,17 @@ Each project lives under `{PROJECTS_ROOT}/{proj-id}/` with per-agent subfolders 
 │   │   ├── EXPERIMENT_REGISTRY.md, REVIEW_STATE.json
 │   │   └── artifacts/{pilots/, results/, logs/}
 │   ├── orchestrator/        ← orchestrator owns
-│   │   ├── PLAN.md, TODOS.md
+│   │   ├── PLAN.md, PLAN_AUDIT.md, TODOS.md
 │   ├── coder/               ← coder owns
 │   │   └── {exp-name}/
 │   ├── analyzer/            ← analyzer owns
-│   │   ├── NARRATIVE_REPORT.md, CLAIM_EVIDENCE_MATRIX.md, figures/, tables/
+│   │   ├── NARRATIVE_REPORT.md, CLAIM_EVIDENCE_MATRIX.md, QUALITY_AUDIT.md, figures/, tables/
 │   ├── academic_writer/     ← academic_writer owns
 │   │   ├── PAPER_PLAN.md, paper/
 │   ├── reviewer/            ← reviewer owns (saved by researcher)
-│   │   └── AUTO_REVIEW.md
+│   │   ├── REVIEW_REPORT.md
+│   │   ├── external_review_{date}.md
+│   │   └── rebuttal_{date}.md
 │   └── cross-reviewer/      ← cross-reviewer owns (saved by calling agent)
 │       ├── novelty/, outline/, prose/
 ├── proj_def/

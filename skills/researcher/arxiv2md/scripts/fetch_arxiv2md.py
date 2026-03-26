@@ -9,7 +9,6 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PAPERS_COOL_SCRIPTS = SCRIPT_DIR.parent.parent / "papers-cool" / "scripts"
@@ -17,20 +16,9 @@ if str(PAPERS_COOL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(PAPERS_COOL_SCRIPTS))
 
 from validate_paper_source import validate_markdown_file  # noqa: E402
+from paper_filename import canonical_paper_stem, normalize_arxiv_id  # noqa: E402
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-
-
-def normalize_arxiv_id(raw: str) -> str:
-    value = raw.strip()
-    if not value:
-        raise ValueError("arXiv id is required")
-    if value.startswith("http"):
-        parsed = urlparse(value)
-        parts = parsed.path.strip("/").split("/")
-        if parts and parts[-1]:
-            return parts[-1].replace(".pdf", "")
-    return value.strip("/")
 
 
 def fetch_bytes(url: str) -> tuple[int, bytes]:
@@ -52,10 +40,12 @@ def remove_if_exists(path: Path) -> None:
 
 def run(paper: str, output_dir: str, retries: int = 2) -> int:
     arxiv_id = normalize_arxiv_id(paper)
+    if not arxiv_id:
+        raise ValueError("arXiv id is required")
     url = f"https://arxiv2md.org/abs/{arxiv_id}"
     output_root = Path(output_dir).expanduser()
     output_root.mkdir(parents=True, exist_ok=True)
-    output_path = output_root / f"{arxiv_id.replace('/', '_')}.md"
+    output_path = output_root / f"{canonical_paper_stem(arxiv_id=arxiv_id)}.md"
 
     last_reason = "unfetched"
     for attempt in range(1, retries + 2):

@@ -18,6 +18,15 @@ allowed-tools:
 
 Use when paper writing was interrupted and the writer needs to continue from existing outline, section drafts, and review comments.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in resumed prose; do not collapse distinct ablations or hypotheses during cleanup.
+- **Record everything** you reuse, revise, or newly draft so review can see what changed.
+- Keep the **experiment and code change linked** by resuming from named evidence artifacts, not vague memory.
+- **Verify before claiming**: if support status changed while you were away, downgrade the claim before drafting more prose.
+- **Never manipulate evaluation narrative** during resume or polish passes.
+- **Never fabricate citations** when filling gaps after interruption.
+
 ## Read First
 
 - `{PROJ}/PROJECT_MANIFEST.json`

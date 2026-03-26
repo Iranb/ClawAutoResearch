@@ -1,6 +1,6 @@
 ---
 name: review-phase
-description: "Hybrid review loop: same-model reflection + cross-agent review with isolated Reviewer. Use after experiments complete."
+description: "Hybrid review loop: same-model reflection + cross-agent review with isolated Reviewer. Use after experiments complete. Canonical output: REVIEW_REPORT.md."
 argument-hint: "[topic or scope — chosen idea title]"
 allowed-tools:
   - Bash(*)
@@ -19,11 +19,20 @@ allowed-tools:
 混合审稿循环：同模型快速反思 + 独立 Reviewer Agent 跨 Agent 审稿。
 这是实验和 claim 层面的内部审稿，不替代成稿后的 `/paperreview-submit` 外部 AI 审稿。
 
+## Research Rigor Constraints
+
+- Enforce **one variable per experiment** in the review logic: if attribution is muddy, call it out explicitly as a scientific weakness.
+- **Record everything** in `REVIEW_REPORT.md`, especially major concerns, evidence gaps, and acceptance rationale.
+- Keep the **experiment and code change linked** by asking which exact bundle, config, or implementation delta supports each headline claim.
+- **Verify before claiming** readiness: if the packet does not support novelty, soundness, or significance, say so directly.
+- Treat **evaluation manipulation** as a review defect: hidden baselines, changed metrics, or selective slices should lower the verdict.
+- **Never fabricate citations** or prior-art comparisons in the review.
+
 ## Constants
 
 - **MAX_ROUNDS = 4**
 - **POSITIVE_THRESHOLD**: score ≥ 6/10, verdict 包含 "ready" 或 "almost"
-- **REVIEW_DOC**: `{PROJ}/reviewer/AUTO_REVIEW.md`（累积审稿记录）
+- **REVIEW_DOC**: `{PROJ}/reviewer/REVIEW_REPORT.md`（正式内部审稿记录）
 - **HUMAN_CHECKPOINT = false** — 当 `true` 时，每轮审稿后暂停等待用户指令
 
 `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -56,10 +65,11 @@ allowed-tools:
 2. 读取实验报告（`{PROJ}/researcher/EXPERIMENT_LOG.md`、`{PROJ}/analyzer/NARRATIVE_REPORT.md`）
 3. 读取 `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md` 与 `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`
 4. 读取 `{PROJ}/analyzer/TRACK_VERDICTS.md`
-5. 若存在，读取 `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
-6. 读取 `{PROJ}/CLAIM_POLICY.md`
-7. 读取 `{PROJ}/reviewer/AUTO_REVIEW.md`（如有历史审稿）
-8. 初始化轮次计数
+5. 读取 `{PROJ}/analyzer/QUALITY_AUDIT.md`
+6. 若存在，读取 `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
+7. 读取 `{PROJ}/CLAIM_POLICY.md`
+8. 读取 `{PROJ}/reviewer/REVIEW_REPORT.md`（如有历史审稿）
+9. 初始化轮次计数
 
 ### Loop (≤ MAX_ROUNDS)
 
@@ -83,6 +93,7 @@ Researcher Agent 自我反思当前工作：
 - 从 `{PROJ}/analyzer/NARRATIVE_REPORT.md` 提取核心内容
 - 附上 `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`
 - 附上 `{PROJ}/analyzer/TRACK_VERDICTS.md`
+- 附上 `{PROJ}/analyzer/QUALITY_AUDIT.md`
 - 若存在，附上 `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
 - 不包含实现细节、调试日志等内部信息
 - 附上图表和关键指标表
@@ -118,7 +129,7 @@ Researcher Agent 自我反思当前工作：
 
 #### Phase E: Document Round
 
-追加到 `{PROJ}/reviewer/AUTO_REVIEW.md`（Researcher 负责写入）：
+追加或重写 `{PROJ}/reviewer/REVIEW_REPORT.md`（Researcher 负责写入）。必须使用本技能目录中的 `REVIEW_REPORT_TEMPLATE.md` 作为结构起点：
 
 ```markdown
 ## Round N (timestamp)
@@ -132,12 +143,27 @@ Researcher Agent 自我反思当前工作：
 
 更新 `{PROJ}/researcher/REVIEW_STATE.json`。
 
+每轮至少保留这些字段：
+- `Overall score`
+- `Verdict`
+- `Theory advisory signal`
+- `Action Items`
+- `Claims requiring downgrade or removal`
+- `Ready to hand off to WRITE: yes/no`
+
 ### Completion
 
 1. 更新 `{PROJ}/researcher/REVIEW_STATE.json` 为 `status: "completed"`
-2. 写入最终审稿总结到 `{PROJ}/reviewer/AUTO_REVIEW.md`
+2. 写入最终审稿总结到 `{PROJ}/reviewer/REVIEW_REPORT.md`
 3. 更新 `{PMEM}/experiment-memory.md`（ESE），`{PMEM}` = `{PROJ}/memory`
 4. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
+
+只有当 `REVIEW_REPORT.md` 明确写出：
+- `Verdict: READY` 或等价 ready 结论
+- `Ready to hand off to WRITE: yes`
+- 无需要保留为 headline 的 primary claim 仍然是 unsupported
+
+才允许 handoff 到 WRITE。
 
 如果当前结论是进入 WRITE，则在 durable review state 更新完成后再调用 Lobster handoff。
 

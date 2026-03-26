@@ -18,9 +18,9 @@ import {
 } from "./workflow-guard";
 import {
   deriveAgentSessionKeyForRole,
-  dispatchWorkflowTaskToAgent,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
+import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
   aggregateGateReviewRound,
   buildAutoGateReviewPrompt,
@@ -845,8 +845,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         workflowPolicy: params.workflowPolicy,
         deps,
       });
-      const dispatch = await dispatchWorkflowTaskToAgent({
+      const dispatch = await handoffWorkflowTaskToAgent({
         runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
         fromRole: "researcher",
         toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
@@ -861,6 +862,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
         enableSpawnFallback: true,
+        autoModeActive:
+          (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !== "off",
+        logger: params.logger,
       });
       if (!dispatch.dispatched) {
         return {
@@ -1690,6 +1694,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
     stageAfter?: string | null;
     nextAction?: string | null;
     ownerAfter?: DispatchableWorkflowRole | null;
+    effectiveAutoMode?: string | null;
   };
   discussionAttempt: AutoModeDiscussionAttempt;
   launchedMitigationKeys: Map<string, { key: string; launchedAt: number }>;
@@ -1782,8 +1787,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         workflowPolicy: params.workflowPolicy,
         deps,
       });
-      const dispatch = await dispatchWorkflowTaskToAgent({
+      const dispatch = await handoffWorkflowTaskToAgent({
         runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
         fromRole: "researcher",
         toRole: owner,
@@ -1805,6 +1811,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
         enableSpawnFallback: true,
+        autoModeActive:
+          (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !== "off",
+        logger: params.logger,
       });
       if (!dispatch.dispatched) {
         return {

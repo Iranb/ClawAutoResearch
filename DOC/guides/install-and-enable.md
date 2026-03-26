@@ -64,12 +64,16 @@ bash install.sh
 
 ### 5.4 heartbeat 已开启
 
-当前推荐默认是：
+当前推荐是按 Agent 单独配置 heartbeat，例如：
 
 ```js
-heartbeat: {
-  every: "30m"
-}
+researcher: { heartbeat: { every: "30m" } }
+orchestrator: { heartbeat: { every: "2h" } }
+coder: { heartbeat: { every: "2h" } }
+analyzer: { heartbeat: { every: "2h" } }
+academic_writer: { heartbeat: { every: "2h" } }
+reviewer: { heartbeat: { every: "3h" } }
+cross-reviewer: { heartbeat: { every: "4h" } }
 ```
 
 ### 5.5 Auto mode 配置已经对齐

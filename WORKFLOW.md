@@ -290,7 +290,7 @@ This applies regardless of `AUTO_PROCEED`. Skipping a stage (e.g. going IDEA →
 |------------|----------|--------------------------------------|
 | SETUP      | GRAPH_BUILD | `{PROJ}/PROJECT_MANIFEST.json` with `idle_research` block present, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, `{PROJ}/graph/` |
 | GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`, and `paper_ingestion.graph_presence_status = ready` recorded in `{PROJ}/PROJECT_MANIFEST.json` |
-| FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, non-empty `{PROJ}/graph/subgraphs/`, and `current_micro_stage = frontiers_packaged` |
+| FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, frontier files under `{PROJ}/graph/` (or legacy non-empty `{PROJ}/graph/subgraphs/`), and `current_micro_stage = frontiers_packaged` |
 | IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track, and when experiment memory contains newer evidence than the last ideation reflection, `{PROJ}/researcher/INNOVATION_REFLECTION.md` refreshed after the latest experiment results |
 | **PLAN**   | **CODE** | **`{PROJ}/orchestrator/PLAN.md`** AND **`{PROJ}/orchestrator/TODOS.md`** AND **`{PROJ}/orchestrator/PLAN_AUDIT.md`** |
 | CODE       | EXPERIMENT | At least one `{PROJ}/coder/<experiment-name>/` with `train.py` (or equivalent) and `README.md` |
@@ -495,7 +495,7 @@ Procedure:
 **Inputs:** `{PROJ}/graph/PAPERNEXUS_STATUS.json`, project literature corpus, `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 **Outputs:**
 - `{PROJ}/researcher/FRONTIER_REPORT.md` — candidate frontiers from the graph
-- `{PROJ}/graph/subgraphs/` — graph query snapshots
+- `{PROJ}/graph/LIMITATION_FRONTIER.md`, `{PROJ}/graph/CONTRADICTION_FRONTIER.md`, `{PROJ}/graph/TRANSFER_FRONTIER.md`, `{PROJ}/graph/COMPOSITION_FRONTIER.md`, `{PROJ}/graph/ANCHOR_INDEX.md` — graph query snapshots
 
 ```
 Procedure:
@@ -503,13 +503,13 @@ Procedure:
   2. For each promising anchor, run `context` and `impact`
   3. Extract at least four frontier lenses: limitation, contradiction, transfer, composition
   4. Save concrete graph anchors, relation patterns, plausible pilots, and falsifiers
-  5. Package compact frontier prompts and subgraph snapshots for later idea divergence / convergence
+  5. Package compact frontier prompts and graph frontier files for later idea divergence / convergence
   6. If literature changed materially since last graph build, or corpus status looks stale: return to GRAPH_BUILD first
   7. Update {PROJ}/PROJECT_MANIFEST.json with `current_micro_stage: "frontiers_packaged"`
   8. → proceed to IDEA
 ```
 
-Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only if `FRONTIER_REPORT.md` exists, `graph/subgraphs/` is non-empty, the brainstorm pack is packaged, and no explicit refresh / rebuild / re-query loop remains open.
+Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only if `FRONTIER_REPORT.md` exists, the required frontier files under `graph/` exist (legacy `graph/subgraphs/` is still acceptable for older projects), the brainstorm pack is packaged, and no explicit refresh / rebuild / re-query loop remains open.
 
 ---
 
@@ -527,7 +527,7 @@ Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only 
 
 ```
 Procedure:
-  1. Confirm {PROJ}/researcher/FRONTIER_REPORT.md and graph/subgraphs exist; if missing, go back to FRONTIER_MAPPING
+  1. Confirm {PROJ}/researcher/FRONTIER_REPORT.md and the required frontier files under graph/ exist; if missing, go back to FRONTIER_MAPPING
   2. If experiment memory contains reflectable evidence and `innovation_reflection` is stale or missing, run /innovation-reflection before proposing a new track set
   3. Run /idea-phase as a graph-grounded dialectic loop, not a one-shot prompt brainstorm
   4. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas` / `brainstorm --mode diverge` outputs

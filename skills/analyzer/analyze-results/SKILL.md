@@ -20,6 +20,15 @@ Extract metrics from experiment outputs, generate figures, and summarize finding
 > **File ownership**: Write ONLY to `{PROJ}/analyzer/`. Read logs from `{PROJ}/researcher/artifacts/` (read-only).
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in analysis: when comparing runs, keep attribution clear about which single change each result represents.
+- **Record everything**: failed runs, excluded runs, dropped seeds, figure scripts, and aggregation choices belong in durable analysis artifacts.
+- Keep the **experiment and code change linked** by naming the exact bundle, manifest, or config behind each table and figure.
+- **Verify before claiming**: check parsing, aggregation math, and figure inputs before upgrading an observation into a conclusion.
+- **Never manipulate evaluation** by swapping metrics, cherry-picking slices, or hiding baselines to make the story cleaner.
+- **Never fabricate citations** in analysis notes; if prior work is mentioned, verify it or mark it unresolved.
+
 ## Process
 
 ### 1. Collect Results
@@ -232,6 +241,23 @@ Output `{PROJ}/analyzer/NARRATIVE_REPORT.md`:
 - Logs:    {PROJ}/researcher/artifacts/logs/
 ```
 
+### 6.5 Write QUALITY_AUDIT.md
+
+Write `{PROJ}/analyzer/QUALITY_AUDIT.md` using `QUALITY_AUDIT_TEMPLATE.md` in this skill directory.
+
+The audit must explicitly cover:
+- whether headline results have enough seeds and uncertainty reporting
+- whether baseline and ablation coverage is complete
+- whether unsupported claims are already downgraded or isolated
+- whether the result artifacts are complete enough for Reviewer to work from
+- what anomalies or caveats still remain
+
+If the analysis is still incomplete, mark:
+- `Verdict: NEEDS_MORE_ANALYSIS`
+- `Ready to hand off to REVIEW: no`
+
+Only mark the audit ready when the reviewer can evaluate the work without first reconstructing missing evidence.
+
 ### 7. Completion Signal
 
 ```
@@ -247,6 +273,7 @@ Output `{PROJ}/analyzer/NARRATIVE_REPORT.md`:
 - **Theory appendix plan**: {PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md
 - **Theory appendix draft**: {PROJ}/academic_writer/paper/sections/appendix_theory.tex
 - **Report**: {PROJ}/analyzer/NARRATIVE_REPORT.md
+- **Quality audit**: {PROJ}/analyzer/QUALITY_AUDIT.md
 - **Main result**: [Proposed achieves X.X ± Y.Y vs baseline X.X ± Y.Y]
 ```
 
@@ -258,6 +285,7 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 ## Rules
 
 - Do NOT modify files in `{PROJ}/researcher/artifacts/logs/` (read-only)
+- Do not hand off to REVIEW until `{PROJ}/analyzer/QUALITY_AUDIT.md` exists and says the project is ready for review
 - Do NOT run new experiments — only analyze existing results
 - Do NOT write to any folder outside `{PROJ}/analyzer/`
 - Include all completed runs — do not cherry-pick seeds

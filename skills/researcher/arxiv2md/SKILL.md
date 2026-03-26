@@ -67,6 +67,12 @@ If validation fails:
 
 Save validated markdown to:
 
-- `<paper_source_dir>/md/<normalized-paper-id>.md`
+- `<paper_source_dir>/md/<arxiv-id>.md`
+
+Filename rule:
+
+- keep the modern arXiv dot form, for example `2502.00032.md`
+- strip version suffixes such as `v1`
+- if an old-style arXiv ID contains `/`, replace it with `-` in the filename stem
 
 The caller should then update `PAPER_SOURCE_INDEX.json` with `source_kind = "markdown"`, `source_provider = "arxiv2md"`, and merged `retrieval_providers`, then continue to `/graph-build` if the paper is new or important.

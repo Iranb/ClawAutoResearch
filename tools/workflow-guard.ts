@@ -28,6 +28,10 @@ import {
 } from "./workflow-auto-mode";
 import { evaluateSubmitAutoGate } from "./workflow-auto-gate";
 import { readAutoModeDiscussionStore } from "./workflow-auto-discussion";
+import {
+  normalizeWorkflowLobsterHandoffConfig,
+  type WorkflowLobsterHandoffConfig,
+} from "./lobster-handoff";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -44,6 +48,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   defaultJournalTemplatePath?: string;
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
+  lobsterHandoff?: WorkflowLobsterHandoffConfig;
 }
 
 export interface WorkflowToolContext {
@@ -516,6 +521,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   defaultJournalTemplatePath: "",
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
+  lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -834,7 +840,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Package graph-grounded frontiers for ideation.",
     command:
-      "Run /frontier-mapping and refresh FRONTIER_REPORT.md plus graph/subgraphs before moving into idea selection.",
+      "Run /frontier-mapping and refresh FRONTIER_REPORT.md plus the frontier files under {PROJ}/graph before moving into idea selection.",
   },
   idea: {
     owner: "researcher",
@@ -993,6 +999,12 @@ function normalizePolicy(
       config && typeof config === "object"
         ? normalizeWorkflowAutoGateConfig((config as Record<string, unknown>).autoGate)
         : DEFAULT_POLICY.autoGate,
+    lobsterHandoff:
+      config && typeof config === "object"
+        ? normalizeWorkflowLobsterHandoffConfig(
+            (config as Record<string, unknown>).lobsterHandoff
+          )
+        : DEFAULT_POLICY.lobsterHandoff,
   };
 }
 
@@ -3648,8 +3660,29 @@ async function getMissingStageSignals(params: {
       if (!(await pathExists(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md")))) {
         missing.push("{PROJ}/researcher/FRONTIER_REPORT.md");
       }
-      if (!(await isNonEmptyDirectory(path.join(projectRoot, "graph", "subgraphs")))) {
-        missing.push("{PROJ}/graph/subgraphs/");
+      {
+        const directFrontierFiles = [
+          "LIMITATION_FRONTIER.md",
+          "CONTRADICTION_FRONTIER.md",
+          "TRANSFER_FRONTIER.md",
+          "COMPOSITION_FRONTIER.md",
+          "ANCHOR_INDEX.md",
+        ];
+        const directFrontiersReady = (
+          await Promise.all(
+            directFrontierFiles.map((fileName) =>
+              pathExists(path.join(projectRoot, "graph", fileName))
+            )
+          )
+        ).every(Boolean);
+        const legacySubgraphsReady = await isNonEmptyDirectory(
+          path.join(projectRoot, "graph", "subgraphs")
+        );
+        if (!directFrontiersReady && !legacySubgraphsReady) {
+          missing.push(
+            "{PROJ}/graph/LIMITATION_FRONTIER.md, CONTRADICTION_FRONTIER.md, TRANSFER_FRONTIER.md, COMPOSITION_FRONTIER.md, ANCHOR_INDEX.md (or legacy {PROJ}/graph/subgraphs/)"
+          );
+        }
       }
       if (normalizeStage(manifest?.current_micro_stage) !== "frontiers_packaged") {
         missing.push("PROJECT_MANIFEST.json.current_micro_stage = frontiers_packaged");

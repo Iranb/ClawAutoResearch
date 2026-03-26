@@ -39,11 +39,12 @@ Pick the richest available source directory in this order:
 5. `{PROJ}/papers/`
 6. `{PROJ}/literature/`
 7. `{PROJ}/researcher/lit_papers/`
-8. bootstrap fallback: create `{PROJ}/graph/bootstrap/` and place project markdown literature notes there (for example `LITERATURE.md`)
+8. bootstrap fallback: use project literature notes directly (for example `LITERATURE.md`) until the default paper source fills up
 
 Default policy:
 - if the manifest does not yet pin `graph_source_dir`, treat `/Users/iranb/.papernexus/papers/{proj-id}` as the default source corpus
-- `graph_source_dir` should record the actual source tree used to build the current corpus
+- `graph_source_dir` should normally stay equal to `paper_source_dir`
+- all agents should read and write against this default source tree instead of staging a second graph-only corpus
 - the authoritative graph files still live in PaperNexus storage, typically under `~/.papernexus/index-store/.papernexus/`, not inside the paper source tree
 
 Preferred source types:
@@ -51,44 +52,43 @@ Preferred source types:
 - local converted paper markdown
 - PDF papers only when Markdown is unavailable for the same canonical paper
 
-## Canonical Corpus Assembly (mandatory)
+## Default Graph Source Rule (mandatory)
 
-Do not point PaperNexus directly at a mixed raw directory when both Markdown and PDF copies exist for the same paper.
+Do not create a second project-local graph corpus such as `{PROJ}/graph/source-corpus/`.
 
-Before each build, assemble a canonical source tree under:
-
-```text
-{PROJ}/graph/source-corpus/
-```
-
-Rules:
-- use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if it exists to resolve canonical identity
-- otherwise deduplicate by canonical paper identity in this order: arXiv ID, DOI, normalized title
-- if both `md/<paper>.md` and `pdf/<paper>.pdf` exist for the same canonical paper, include only the Markdown file in the canonical source tree
-- include a PDF only when no Markdown exists for that canonical paper
-- if a new Markdown arrives for a paper that previously only had a PDF, replace the PDF entry in the canonical source tree on the next build
-- treat `{paper_source_dir}/md/` as the highest-priority ingestion source
-- do not let duplicate PDF and Markdown files for the same paper both enter the analyzed corpus
-- do not ingest invalid artifacts such as HTML pages saved as `.md` / `.pdf`, or text-like non-PDF error files
-
-Suggested layout:
+Build from the default canonical paper source tree directly:
 
 ```text
-{PROJ}/graph/source-corpus/
+{paper_source_dir}/
   md/
     <canonical-paper>.md
   pdf/
     <canonical-paper>.pdf
 ```
 
-The analyzed source dir should be this canonical staged corpus, not the raw mixed download tree.
+Rules:
+- use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if it exists to resolve canonical identity
+- otherwise deduplicate by canonical paper identity in this order: arXiv ID, DOI, normalized title
+- if both `md/<paper>.md` and `pdf/<paper>.pdf` exist for the same canonical paper, treat the Markdown file as authoritative
+- include a PDF only when no Markdown exists for that canonical paper
+- if a new Markdown arrives for a paper that previously only had a PDF, build from the Markdown and keep the PDF only as fallback
+- treat `{paper_source_dir}/md/` as the highest-priority ingestion source
+- do not create a second analyzed source tree just to deduplicate files
+- do not ingest invalid artifacts such as HTML pages saved as `.md` / `.pdf`, or text-like non-PDF error files
+
+Here `<canonical-paper>` should match the normalized download stem:
+
+- arXiv ID if present, for example `2502.00032`
+- otherwise a transliterated title slug such as `graph-retrieval-benchmarks`
+
+The analyzed source dir should be the default canonical paper source tree itself, not a separately staged graph-only tree.
 
 ## Build / Refresh the Corpus
 
 Use a project-stable corpus name:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js analyze {PROJ}/graph/source-corpus --name <proj-id>
+node <PAPERNEXUS_ROOT>/src/cli/index.js analyze <source_dir> --name <proj-id>
 node <PAPERNEXUS_ROOT>/src/cli/index.js status --corpus <proj-id>
 ```
 
@@ -138,7 +138,7 @@ Update `{PROJ}/PROJECT_MANIFEST.json` with:
 - `papernexus_root`
 - `papernexus_corpus`
 - `paper_source_dir`
-- `graph_source_dir` pointing to `{PROJ}/graph/source-corpus/` when the canonical staged corpus is used
+- `graph_source_dir` pointing to the same default source tree used for reading papers, normally equal to `paper_source_dir`
 - `graph_last_built_at`
 - `paper_ingestion.last_graph_sync_at`
 - `paper_ingestion.new_files_since_graph: 0`
@@ -157,5 +157,5 @@ Do not advance to frontier mapping if:
 - PaperNexus root cannot be resolved
 - the source directory is empty
 - the built corpus has effectively no useful content (for example 0 paper nodes or only a trivial bootstrap note)
-- the canonical source tree still contains duplicate Markdown and PDF entries for the same canonical paper
+- the default source tree still contains duplicate Markdown and PDF entries for the same canonical paper and the Markdown/PDF precedence is not clear
 - the source tree still contains obviously invalid HTML / error-page artifacts that were not cleaned up

@@ -96,15 +96,23 @@ bash install.sh --skip-agent-create
 "projectsRoot": "~/.openclaw/projects"
 ```
 
-如果你不知道 heartbeat 怎么配，先用：
+如果你不知道 heartbeat 怎么配，先按每个 Agent 单独设置：
 
 ```json
-"heartbeat": {
-  "every": "30m"
+"agents": {
+  "list": [
+    { "id": "researcher", "heartbeat": { "every": "30m" } },
+    { "id": "orchestrator", "heartbeat": { "every": "2h" } },
+    { "id": "coder", "heartbeat": { "every": "2h" } },
+    { "id": "analyzer", "heartbeat": { "every": "2h" } },
+    { "id": "academic_writer", "heartbeat": { "every": "2h" } },
+    { "id": "reviewer", "heartbeat": { "every": "3h" } },
+    { "id": "cross-reviewer", "heartbeat": { "every": "4h" } }
+  ]
 }
 ```
 
-通常只需要保证 `researcher` 会有 heartbeat 机会就够了。
+如果你想先从最小配置开始，至少保证 `researcher` 有 heartbeat；现在仓库里的推荐示例已经把每个 Agent 的建议节奏都展开了，方便你直接微调。
 
 如果你想直接打开自动推进，可以先从这个最稳的默认值开始：
 

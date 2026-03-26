@@ -39,7 +39,7 @@ Project resolution in practice is:
     ├── TRACK_REGISTRY.json          ← OWNED BY: researcher (multiple hypothesis tracks)
     ├── CLAIM_POLICY.md              ← OWNED BY: researcher (claim support and writing constraints)
     ├── servers.json                 ← optional; project-specific server config overriding global servers
-    ├── graph/                       ← OWNED BY: researcher (PaperNexus graph state and subgraphs)
+    ├── graph/                       ← OWNED BY: researcher (PaperNexus graph state and frontier files)
     │
     ├── memory/                      ← project-level memory (readable by all agents; written by researcher)
     │   ├── ideation-memory.md
@@ -148,8 +148,11 @@ Controls how claims can flow from analysis into writing:
 graph/
 ├── PAPERNEXUS_STATUS.json
 ├── GRAPH_BUILD_REPORT.md
-└── subgraphs/
-    └── *.md
+├── LIMITATION_FRONTIER.md
+├── CONTRADICTION_FRONTIER.md
+├── TRANSFER_FRONTIER.md
+├── COMPOSITION_FRONTIER.md
+└── ANCHOR_INDEX.md
 ```
 
 ### `{PROJ}/orchestrator/`

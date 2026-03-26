@@ -19,6 +19,15 @@ allowed-tools:
 
 Section-by-section LaTeX generation with Cross-Reviewer quality gate after each section.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in prose: when describing ablations or improvements, keep attribution tied to the actual isolated change.
+- **Record everything** important to the reader: headline results, negative findings, caveats, and writing-relevant code/experiment changes must surface in the draft or TODO comments.
+- Keep the **experiment and code change linked** by grounding claims in named tables, figures, manifests, or reported experiment bundles.
+- **Verify before claiming**: if a result, theorem-style statement, or literature position is not supported, write it cautiously or omit it.
+- **Never manipulate evaluation narrative** by hiding weak baselines, changing metric language, or overstating exploratory trends.
+- **Never fabricate citations**; placeholders are acceptable within policy, invented BibTeX is not.
+
 ## Input
 
 > **File ownership**: Write ONLY to `{PROJ}/academic_writer/`. Read from `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/analyzer/`, `{PROJ}/researcher/`.

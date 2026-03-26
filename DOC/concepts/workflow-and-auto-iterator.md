@@ -115,17 +115,21 @@ Researcher 的 heartbeat 和 bootstrap 文档都已经要求优先调用 auto it
 
 ## 9. 与 heartbeat 的关系
 
-`openclaw.json` 当前把默认 heartbeat 设置为：
+`openclaw.json` 推荐把 heartbeat 显式配置到各个 workflow agent 上，例如：
 
 ```js
-defaults: {
-  heartbeat: {
-    every: "30m"
-  }
-}
+list: [
+  { id: "researcher", heartbeat: { every: "30m" } },
+  { id: "orchestrator", heartbeat: { every: "2h" } },
+  { id: "coder", heartbeat: { every: "2h" } },
+  { id: "analyzer", heartbeat: { every: "2h" } },
+  { id: "academic_writer", heartbeat: { every: "2h" } },
+  { id: "reviewer", heartbeat: { every: "3h" } },
+  { id: "cross-reviewer", heartbeat: { every: "4h" } }
+]
 ```
 
-这意味着只要 Agent 心跳正常，系统就有周期性机会去：
+这意味着只要对应 Agent 心跳正常，系统就有周期性机会去：
 
 - 检查阶段是否可推进
 - 检查 mailbox

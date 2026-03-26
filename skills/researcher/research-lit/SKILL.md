@@ -18,6 +18,15 @@ Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-sea
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
+## Research Rigor Constraints
+
+- When literature turns into candidate experiments, preserve **one variable per experiment** by keeping mechanism ideas isolated instead of merging several deltas at once.
+- **Record everything**: queries, canonical paper ids, ingestion decisions, rejected papers, and emerging baseline hypotheses belong in durable project files.
+- Keep the **experiment and code change linked** by noting which papers justify which future experiment deltas or baseline requirements.
+- **Verify before claiming** novelty, contradiction, or support; abstracts and memory alone are not enough.
+- **Never manipulate evaluation** by selecting only flattering baselines or citations from the literature sweep.
+- **Never fabricate citations** or paper metadata; verify title, authors, year, venue, and identifier from the source.
+
 Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/pasa-paper-search` as a second discovery source and merge the two result sets by canonical paper identity. Do not use `web_search` or `web_fetch` to find papers.
 
 ---
@@ -64,9 +73,9 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 ```text
 <paper_source_dir>/
   md/
-    <arxiv-id>--<normalized-title>.md
+    <canonical-paper>.md
   pdf/
-    <arxiv-id>--<normalized-title>.pdf
+    <canonical-paper>.pdf
 ```
 
 Default path policy:
@@ -75,19 +84,23 @@ Default path policy:
 
 Preferred filenames:
 
-- markdown: `<arxiv-id>--<normalized-title>.md`
-- pdf: `<arxiv-id>--<normalized-title>.pdf`
+- if arXiv ID exists: `<arxiv-id>.md` or `<arxiv-id>.pdf`
+- if arXiv ID does not exist: `<normalized-title>.md` or `<normalized-title>.pdf`
 
 Normalization rules:
 - lowercase ASCII only
-- replace spaces / underscores with `-`
-- strip punctuation except `-`
+- if the paper has an arXiv ID, use that ID as the whole filename stem
+- keep the `.` in modern arXiv IDs such as `2502.00032`
+- strip version suffixes such as `v1`, `v2`
+- if the ID uses the old slash form, replace `/` with `-`
+- otherwise transliterate the paper title to ASCII, lowercase it, replace spaces / separators with `-`, and strip special characters
+- collapse repeated `-`
 - keep titles short and readable
-- prefer arXiv ID as the canonical prefix
 
 Examples:
-- `2502.00032--retrieval-augmented-experiment-planning.md`
-- `2406.12345--graph-contrastive-learning.pdf`
+- `2502.00032.md`
+- `2406.12345.pdf`
+- `graph-contrastive-learning-for-retrieval.md`
 
 ## Dedup Rules (mandatory)
 
@@ -102,7 +115,8 @@ Rules:
 - if both markdown and PDF exist for the same paper, markdown is the preferred PaperNexus ingestion source
 - if a new markdown arrives for a paper that already has a PDF, keep the PDF only as fallback; do not treat it as a new paper
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
-- `/graph-build` must stage a canonical source corpus so the same paper does not enter PaperNexus twice through both Markdown and PDF
+- `/graph-build` must build from the default canonical paper source tree directly; do not create a second graph-only source tree for the same project
+- after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
 
@@ -115,7 +129,7 @@ Recommended per-paper fields:
   "title": "Retrieval-Augmented Experiment Planning",
   "source_kind": "markdown",
   "source_provider": "arxiv2md",
-  "source_path": "{paper_source_dir}/md/2502.00032--retrieval-augmented-experiment-planning.md",
+  "source_path": "{paper_source_dir}/md/2502.00032.md",
   "retrieval_providers": ["papers-cool", "pasa-paper-search"]
 }
 ```
@@ -181,6 +195,7 @@ Rules:
 
 2. **If HuggingFace has markdown:**
    - Saved to `paper_source_dir/md/`
+   - Save or rename it to the canonical filename immediately: arXiv ID first, otherwise normalized title
    - Must pass format validation before being counted as ingested
    - Add to graph build queue
    - Continue to next paper
@@ -190,6 +205,7 @@ Rules:
      ```
      /arxiv2md <arxiv_id>
      ```
+   - Save or rename the validated file to `<arxiv-id>.md`
    - The saved markdown must also pass format validation before being counted as ingested
 
 4. **If both Markdown sources fail:**
@@ -197,6 +213,7 @@ Rules:
      ```
      /papers-cool Download PDF for arxiv:<arxiv_id> to {PROJ}/researcher/paper_source/pdf/
      ```
+   - Save or rename the validated PDF to the canonical filename immediately after download
    - The saved PDF must pass format validation; bad HTML / text responses must be deleted and retried
 
 Do not postpone the HuggingFace attempt until after later filtering if the current search result already exposes a stable arXiv ID or paper URL.

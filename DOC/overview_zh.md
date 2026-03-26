@@ -364,7 +364,7 @@ bash install.sh --skip-agent-create
 - `plugins.entries.openclaw-research.config.projectsRoot` 已配置
 - 工作角色允许 `research_workflow`
 - `researcher` 是默认 owner
-- `heartbeat.every = "30m"` 保持合理默认
+- 按每个 Agent 显式配置 heartbeat，而不是只配一个全局 `30m`
 
 一个最小插件配置示例：
 

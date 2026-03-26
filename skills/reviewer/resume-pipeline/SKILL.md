@@ -16,6 +16,15 @@ allowed-tools:
 
 Use when the internal review loop was interrupted and Reviewer needs to continue from durable review state.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** in resumed review reasoning; if attribution was already muddy, keep that concern visible.
+- **Record everything** you resume, restart, or conclude so the next round stays auditable.
+- Keep the **experiment and code change linked** by resuming from the saved evidence packet, not hidden memory.
+- **Verify before claiming** a review can be closed; incomplete or stale state should be surfaced, not papered over.
+- Treat **evaluation manipulation** as a standing blocker if discovered during resume.
+- **Never fabricate citations** in review notes.
+
 ## Read First
 
 - `{PROJ}/researcher/REVIEW_STATE.json`

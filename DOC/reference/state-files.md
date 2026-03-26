@@ -85,7 +85,7 @@ idea 阶段的审计材料。
 
 ### `graph/`
 
-图谱、子图、graph artifact 所在目录。
+图谱相关的 workflow-facing 产物所在目录，例如 build report、presence check 和 frontier files。默认不再要求单独维护 `subgraphs/` 目录。
 
 ### `memory/`
 

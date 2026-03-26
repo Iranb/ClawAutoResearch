@@ -14,6 +14,15 @@ allowed-tools:
 
 Use when planning work was interrupted or when Researcher wakes Orchestrator after discovering missing planning artifacts.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** when rebuilding the plan; do not merge distinct hypotheses just because state is incomplete.
+- **Record everything** you repair, regenerate, or keep, especially plan revisions and missing code-impacting tasks.
+- Keep **experiment intent and implementation intent linked** so Researcher and Coder can see which code path belongs to which planned hypothesis.
+- **Verify before claiming** a plan artifact is restored; if an audit or completion signal is missing, report it as incomplete.
+- **Never manipulate evaluation** while repairing the plan; protected metrics and baselines stay protected.
+- **Never fabricate citations** when restoring related-work context; if a source is uncertain, leave it unresolved instead of guessing.
+
 ## Read First
 
 - `{PROJ}/PROJECT_MANIFEST.json`

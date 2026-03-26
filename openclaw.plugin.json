@@ -168,6 +168,49 @@
             }
           }
         }
+      },
+      "lobsterHandoff": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Use the optional Lobster tool as the agent handoff backend for automatic workflow dispatches."
+          },
+          "autoModeOnly": {
+            "type": "boolean",
+            "default": true,
+            "description": "Only use Lobster handoff when workflow auto mode is active."
+          },
+          "gatewayUrl": {
+            "type": "string",
+            "default": "http://127.0.0.1:18789",
+            "description": "Gateway base URL used when invoking the optional Lobster tool from the research plugin."
+          },
+          "pipelinePath": {
+            "type": "string",
+            "default": "",
+            "description": "Optional absolute path to a custom Lobster workflow file. When empty, the bundled workflow-agent-dispatch.lobster is used."
+          },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 1000,
+            "default": 30000,
+            "description": "Timeout passed to the Lobster tool when running the workflow handoff pipeline."
+          },
+          "maxStdoutBytes": {
+            "type": "number",
+            "minimum": 1024,
+            "default": 512000,
+            "description": "Maximum stdout bytes allowed for the Lobster tool run."
+          },
+          "fallbackToNative": {
+            "type": "boolean",
+            "default": true,
+            "description": "If Lobster is unavailable or denied, fall back to the built-in native dispatch path instead of failing the workflow handoff."
+          }
+        }
       }
     }
   },
@@ -231,6 +274,9 @@
     },
     "autoGate": {
       "label": "Auto Gate"
+    },
+    "lobsterHandoff": {
+      "label": "Lobster Handoff"
     }
   },
   "skills": [

@@ -20,6 +20,15 @@ allowed-tools:
 
 End-to-end automated research pipeline with three levels of parallelism and state-machine control.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** across the whole pipeline: each promoted track, ablation, or repair should stay attributable to one intended change.
+- **Record everything** in durable project artifacts, including literature decisions, experiment hypotheses, code-impacting changes, failures, and gate outcomes.
+- Keep the **experiment and code change linked** so every result can be traced to a concrete bundle, manifest, config, or commit-worthy delta.
+- **Verify before claiming** at every stage: pilot runs do not justify full claims, and unsupported observations must stay downgraded.
+- **Never manipulate evaluation** by drifting metrics, baselines, datasets, or decision thresholds mid-pipeline.
+- **Never fabricate citations** anywhere in the pipeline; verify metadata against primary sources first.
+
 ## 🚀 EXECUTION ENTRY POINT (MANDATORY)
 
 **When this skill is invoked via `/research-pipeline "[topic]"`:**
@@ -154,7 +163,7 @@ Rules:
 - after `/papers-cool` finds key papers, Researcher must verify graph presence; if the graph lacks a key paper, refresh graph state before innovation analysis
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
 - Do **not** enter idea selection without `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
-- Do **not** enter idea selection if `{PROJ}/graph/subgraphs/` is empty
+- Do **not** enter idea selection until `{PROJ}/graph/LIMITATION_FRONTIER.md`, `CONTRADICTION_FRONTIER.md`, `TRANSFER_FRONTIER.md`, `COMPOSITION_FRONTIER.md`, and `ANCHOR_INDEX.md` exist
 - Do **not** lock or advance a serious track without a reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/`
 - If local literature changes materially during Stage 1, refresh graph state:
   - `/research-lit "$ARGUMENTS"` if the corpus itself needs more papers or refreshed full text
@@ -188,7 +197,11 @@ Default mode (`MULTI=false`). All state under `{PROJ}/`.
 `/idea-generator` must read both:
 - `{PROJ}/researcher/LITERATURE.md`
 - `{PROJ}/researcher/FRONTIER_REPORT.md`
-- `{PROJ}/graph/subgraphs/`
+- `{PROJ}/graph/LIMITATION_FRONTIER.md`
+- `{PROJ}/graph/CONTRADICTION_FRONTIER.md`
+- `{PROJ}/graph/TRANSFER_FRONTIER.md`
+- `{PROJ}/graph/COMPOSITION_FRONTIER.md`
+- `{PROJ}/graph/ANCHOR_INDEX.md`
 - `{PROJ}/researcher/reasoning/<track-id>/SYNTHESIS_PACKET.md` when it exists
 - `{PROJ}/researcher/reasoning/<track-id>/WORKING_MEMORY.json` for surviving or re-opened tracks
 - `{PROJ}/researcher/INNOVATION_REFLECTION.md` when experiment-informed reflection exists or `research_workflow.get_innovation_reflection` reports `due: true`
@@ -249,23 +262,23 @@ For EACH active track (parallel if TOP_K_IDEAS > 1):
 spawn orchestrator → /plan-research "[track title]" (input: {PROJ}/researcher/IDEA_REPORT.md + {PROJ}/TRACK_REGISTRY.json)
 ```
 
-**Output:** `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`
+**Output:** `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`, `{PROJ}/orchestrator/PLAN_AUDIT.md`
 
 Planning rules:
 - one plan section per active track
 - one compute budget per active track
 - one explicit `stop / rollback / kill` rule set per active track
 
-**Mandatory before Stage 3:** Do **not** advance to Implementation or spawn Coder until **both** `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` exist. **Proactively wake Orchestrator** when either file is missing: spawn Orchestrator with `/plan-research`, wait for session completion or poll until both files appear; if still missing after timeout, re-spawn. Do not assume someone else will run Orchestrator.
+**Mandatory before Stage 3:** Do **not** advance to Implementation or spawn Coder until `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`, and `{PROJ}/orchestrator/PLAN_AUDIT.md` all exist. `PLAN_AUDIT.md` must say the project is ready for CODE. **Proactively wake Orchestrator** when any of the required files are missing: spawn Orchestrator with `/plan-research`, wait for session completion or poll until all required files appear; if still missing after timeout, re-spawn. Do not assume someone else will run Orchestrator.
 
 **Gate 2 — Plan Confirmation:**
 - Present experiment count and estimated GPU hours
 - `AUTO_PROCEED=false`: wait for approval
-- `AUTO_PROCEED=true`: auto-confirm if total GPU estimate ≤ 20h (only after PLAN.md and TODOS.md exist)
+- `AUTO_PROCEED=true`: auto-confirm if total GPU estimate ≤ 20h (only after PLAN.md, TODOS.md, and a ready PLAN_AUDIT.md exist)
 
 ### Stage 3: Implementation
 
-**Precondition:** `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` must exist. If either is missing, go back to Stage 2 and wait for Orchestrator output.
+**Precondition:** `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`, and a ready `{PROJ}/orchestrator/PLAN_AUDIT.md` must exist. If any is missing, go back to Stage 2 and wait for Orchestrator output.
 
 ```
 spawn coder → /implement-experiment "[confirmed plan]"
@@ -305,10 +318,15 @@ Experiment control rules:
 /review-phase                        → cross-agent review loop
 ```
 
+Precondition before Stage 5:
+- `{PROJ}/analyzer/NARRATIVE_REPORT.md` exists
+- `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md` exists
+- `{PROJ}/analyzer/QUALITY_AUDIT.md` exists and says the project is ready for REVIEW
+
 If multiple tracks were pursued, review each independently:
 - strongest track gets first review slot
 - secondary track reviewed when the first completes or in parallel if reviewer agent allows
-- Review output saved to `{PROJ}/reviewer/AUTO_REVIEW.md`
+- Review output saved to `{PROJ}/reviewer/REVIEW_REPORT.md`
 
 **Gate 3** (per-idea, controlled by HUMAN_CHECKPOINT):
 - Show score + action items
@@ -337,6 +355,14 @@ Writer produces LaTeX paper with cross-review at each section.
 ```
 
 Submit to paperreview.ai (Stanford Agentic Reviewer). Wait for results, save to `{PROJ}/reviewer/external_review_{date}.md`.
+
+After the external review lands, invoke:
+
+```
+/review-response
+```
+
+to write `{PROJ}/reviewer/rebuttal_{date}.md`.
 
 **Gate 5 [REQUIRED]** — Human decides: major-revision / minor-revision / accept-as-is.
 
@@ -385,7 +411,11 @@ Typical overnight workflow:
 ├── graph/                           ← OWNED BY: researcher
 │   ├── PAPERNEXUS_STATUS.json       Stage 0.5 output (corpus metadata)
 │   ├── GRAPH_BUILD_REPORT.md        Stage 0.5 output (build log)
-│   └── subgraphs/                   Stage 0.5 output (frontier snapshots)
+│   ├── LIMITATION_FRONTIER.md       Stage 0.5 output
+│   ├── CONTRADICTION_FRONTIER.md    Stage 0.5 output
+│   ├── TRANSFER_FRONTIER.md         Stage 0.5 output
+│   ├── COMPOSITION_FRONTIER.md      Stage 0.5 output
+│   └── ANCHOR_INDEX.md              Stage 0.5 output
 │
 ├── researcher/                      ← OWNED BY: researcher
 │   ├── IDEA_REPORT.md               Stage 1 output (tournament results)
@@ -403,6 +433,7 @@ Typical overnight workflow:
 │
 ├── orchestrator/                    ← OWNED BY: orchestrator
 │   ├── PLAN.md                      Stage 2 output (track-aware experiment plan)
+│   ├── PLAN_AUDIT.md                Stage 2 audit gate for CODE handoff
 │   └── TODOS.md                     Stage 2–6 shared task list
 │
 ├── coder/                           ← OWNED BY: coder
@@ -413,6 +444,7 @@ Typical overnight workflow:
 │   ├── CLAIM_EVIDENCE_MATRIX.md     Stage 4 output (writing-safe claim ledger)
 │   ├── TRACK_VERDICTS.md            Stage 4 output (advance / merge / park / kill memo)
 │   ├── UNSUPPORTED_CLAIMS.md        Stage 4 output (claims needing downgrade or more evidence)
+│   ├── QUALITY_AUDIT.md             Stage 4 audit gate for REVIEW handoff
 │   ├── figures/                     Stage 4 output (plots)
 │   └── tables/                      Stage 4 output (LaTeX tables)
 │
@@ -425,7 +457,9 @@ Typical overnight workflow:
 │       └── refs.bib
 │
 ├── reviewer/                        ← OWNED BY: reviewer (saved by researcher)
-│   └── AUTO_REVIEW.md               Stage 5 output (review history)
+│   ├── REVIEW_REPORT.md             Stage 5 output (internal review history)
+│   ├── external_review_{date}.md    Stage 7 output (external AI review)
+│   └── rebuttal_{date}.md           Stage 8 output (response draft)
 │
 └── cross-reviewer/                  ← OWNED BY: cross-reviewer (saved by calling agent)
     ├── novelty/                     Stage 1 novelty assessments
@@ -441,7 +475,7 @@ Typical overnight workflow:
 - **Never skip Stage 0.5 (Graph Foundation)** on a new project: build PaperNexus corpus and frontier report before idea selection
 - **Always maintain the state machine**: update `{PROJ}/PROJECT_MANIFEST.json` and `{PROJ}/TRACK_REGISTRY.json` at each stage transition
 - **Never let the track portfolio drift**: keep at most 2 active tracks unless budget explicitly allows more
-- **Never skip Stage 2 (Planning):** even when AUTO_PROCEED=true, wait for `PLAN.md` and `TODOS.md` before spawning Coder. When either is missing, **proactively wake Orchestrator** (spawn with /plan-research) to produce them. See WORKFLOW.md "Stage transition preconditions" and "Wake Orchestrator on demand".
+- **Never skip Stage 2 (Planning):** even when AUTO_PROCEED=true, wait for `PLAN.md`, `TODOS.md`, and a ready `PLAN_AUDIT.md` before spawning Coder. When any is missing, **proactively wake Orchestrator** (spawn with /plan-research) to produce them. See WORKFLOW.md "Stage transition preconditions" and "Wake Orchestrator on demand".
 - Stages 3–6 can run autonomously after Gate 1 (overnight mode)
 - Review max 4 rounds; if exceeded → stop and report
 - Multi-track mode: all tracks share the same project memory files but must remain explicitly separated in `TRACK_REGISTRY.json`

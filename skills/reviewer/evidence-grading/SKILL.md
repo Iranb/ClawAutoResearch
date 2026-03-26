@@ -3,6 +3,15 @@
 ## Overview
 Evaluates the strength of evidence behind scientific claims based on study design, sample size, replication status, venue quality, and recency. Produces structured evidence grades that help teams know how much weight to put on any given finding.
 
+## Research Rigor Constraints
+
+- Preserve **one variable per experiment** when grading evidence; mixed interventions should be graded more conservatively.
+- **Record everything** about the grading rationale so downstream agents can see why a claim was marked strong, partial, or unsupported.
+- Keep the **experiment and code change linked** when a claim depends on a specific implementation or ablation.
+- **Verify before claiming** strong evidence; low replication, thin baselines, or weak verification should reduce the grade.
+- **Never manipulate evaluation** by grading a claim on a friendlier metric than the one the project actually uses.
+- **Never fabricate citations** or supporting papers in the rationale.
+
 ## When to Use
 - User asks "how strong is the evidence for [claim]?"
 - Lab needs to decide how confidently to build on a published result

@@ -15,6 +15,15 @@ allowed-tools:
 
 Use after session loss, gateway restart, or when Researcher asks Coder to continue interrupted implementation or execution work.
 
+## Research Rigor Constraints
+
+- Resume with **one variable per experiment** intact; do not fold multiple pending fixes into one unexplained relaunch.
+- **Record everything** you reuse, resume, or relaunch so Researcher can persist the true execution state.
+- Keep the **experiment and code change linked** by resuming only named bundles with durable manifests and remote metadata.
+- **Verify before claiming** a bundle is safe to continue: inspect local completeness, remote process state, and logs first.
+- **Never manipulate evaluation** while resuming by swapping configs or evaluation flags behind the plan's back.
+- **Never fabricate citations** in bundle notes; leave uncertain references unresolved.
+
 ## Read First
 
 - `{PROJ}/PROJECT_MANIFEST.json`

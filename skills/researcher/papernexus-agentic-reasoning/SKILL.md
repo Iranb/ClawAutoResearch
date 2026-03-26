@@ -21,6 +21,7 @@ In PaperNexus, the "Mind Map" equivalent is:
 - the main research graph
 - the lite graph read model
 - enhancement overlays for theory, storyline, and reflection
+- the brainstorm-quality node view, which filters the graph down to nodes marked `brainstormEligible`
 
 ## Available Graph Memory
 
@@ -75,6 +76,8 @@ In PaperNexus, the default reasoning tools are:
 - `papernexus ideas`
 - `papernexus brainstorm`
 - paper enhancement overlays from the API or local files
+
+For ideation, prefer the brainstorm-quality node view over the raw full graph. The full graph can still contain supporting nodes that are useful for provenance but too noisy to use as primary anchors.
 
 ## Core Reasoning Loop
 
@@ -143,6 +146,11 @@ Use this to produce:
 - likely constraints
 - converged directions worth testing
 
+Important:
+
+- `ideas` and `brainstorm` already prioritize the brainstorm-quality node view
+- when manually inspecting nodes, trust `brainstormEligible`, `brainstormScore`, and `brainstormTier` over raw visual prominence on the canvas
+
 ### C. Evaluate whether an idea is well supported
 
 Use:
@@ -159,6 +167,8 @@ Use:
 Use this chain:
 
 `Problem -> Method -> Claim -> Evidence -> Limitation`
+
+Prefer `Problem` and `Method` nodes whose names are multi-word research objects rather than single generic nouns.
 
 ### For theory support
 

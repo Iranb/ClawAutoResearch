@@ -83,7 +83,14 @@
   - `agentContactCooldownSeconds: 300`
 - 如果你希望不同 Discord channel 跑不同项目，可以额外开启：
   - `enableChannelProjectBindings: true`
-- 默认 heartbeat 已显式设置为 `30m`
+- 推荐把 heartbeat 显式写到每个 agent 上，而不是只写全局默认：
+  - `researcher: 30m`
+  - `orchestrator: 2h`
+  - `coder: 2h`
+  - `analyzer: 2h`
+  - `academic_writer: 2h`
+  - `reviewer: 3h`
+  - `cross-reviewer: 4h`
 - QMD memory 已开启，且采用项目隔离导向的限制策略
 
 ## 4. `skills/index.json`
@@ -117,7 +124,7 @@
 
 1. 先确认 OpenClaw 主配置能加载插件
 2. 再确认各角色允许的工具中包含 `research_workflow`
-3. 再确认 heartbeat 已开启
+3. 再确认每个关键 agent 的 heartbeat 已开启
 4. 再根据项目需要设置：
    - `idle_research`
    - `writing_contract`
@@ -143,7 +150,7 @@
 
 ### 想让心跳更积极
 
-调小 heartbeat 间隔，但要注意成本和噪音。
+优先单独调小对应 agent 的 heartbeat 间隔，但要注意成本和噪音。
 
 ### 想更严格地防越界
 

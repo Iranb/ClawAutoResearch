@@ -48,6 +48,7 @@ Default PaperNexus source and graph paths for a project:
 Notes:
 - `paper_source_dir` should usually point at `{PAPERNEXUS_PAPERS_ROOT}/{proj-id}`
 - `graph_source_dir` should record the source corpus directory used for the current graph build, which by default is the same as `paper_source_dir`
+- all agents should read and write against that default source tree instead of creating a second project-local graph corpus
 - the graph files themselves are not stored inside `graph_source_dir`; they are stored in the PaperNexus index area
 
 Project workspace structure:

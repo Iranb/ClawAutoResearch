@@ -35,8 +35,15 @@ Resolve the PaperNexus source directory in this order:
 
 Save:
 
-- full markdown to `<paper_source_dir>/md/<normalized-paper-id>.md`
-- metadata JSON to `{PROJ}/researcher/lit_papers/<paper-id>_hf.json`
+- full markdown to `<paper_source_dir>/md/<canonical-paper>.md`
+- metadata JSON to `{PROJ}/researcher/lit_papers/<canonical-paper>_hf.json`
+
+Canonical filename rule:
+
+- if arXiv ID exists, use the arXiv ID as the whole filename stem, for example `2502.00032.md`
+- if arXiv ID does not exist, use a transliterated title slug, for example `graph-retrieval-benchmarks.md`
+- transliterate special characters to ASCII when possible, lowercase the result, replace separators with `-`, and strip the remaining punctuation
+- strip arXiv version suffixes such as `v1`
 
 If a same-paper PDF already exists under `<paper_source_dir>/pdf/`, keep it only as fallback. The Markdown file becomes the canonical graph-ingestion artifact for the next `/graph-build`.
 
@@ -48,6 +55,15 @@ Preferred command in this repo:
 python scripts/fetch_hf_paper.py <paper-id-or-url> \
   --output-dir "<paper_source_dir>/md" \
   --metadata-dir "{PROJ}/researcher/lit_papers"
+```
+
+If the paper does not have an arXiv ID but you already know the title, pass:
+
+```bash
+python scripts/fetch_hf_paper.py <paper-id-or-url> \
+  --output-dir "<paper_source_dir>/md" \
+  --metadata-dir "{PROJ}/researcher/lit_papers" \
+  --title "<paper title>"
 ```
 
 This script will:

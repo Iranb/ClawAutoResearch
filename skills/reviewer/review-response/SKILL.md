@@ -1,66 +1,66 @@
+---
+name: review-response
+description: "Draft a project-local rebuttal from external reviewer feedback. Canonical output: {PROJ}/reviewer/rebuttal_{date}.md."
+argument-hint: "[external review path or empty to infer latest reviewer/external_review_{date}.md]"
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - research_workflow
+---
+
 # Review Response
 
-## Overview
-Drafts structured, evidence-backed responses to peer reviewer comments. Grounds rebuttals in the team's literature base, surfaces relevant papers to cite in response, and calibrates tone appropriately — firm where warranted, concise throughout.
+Draft a structured, evidence-backed rebuttal from the latest project-local external review artifact.
 
-## When to Use
-- User pastes reviewer comments and asks for a response draft
-- User asks "how should we respond to reviewer 2?"
-- Lab has a revise-and-resubmit and needs to draft the response letter
-- User wants to find papers that address a reviewer's concern
-- User needs help deciding which reviewer concerns to push back on vs. accept
+> **File ownership**: Write ONLY to `{PROJ}/reviewer/`.
+> `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
-## Key Capabilities
-- Parse reviewer comment threads and categorize by type: factual concern, missing citation, methodology critique, scope request, clarity issue
-- Draft point-by-point response for each comment
-- Search team corpus and external literature for papers addressing reviewer concerns
-- Recommend response strategy: concede / address / push back / defer
-- Generate revision summary letter (cover letter for resubmission)
-- Calibrate tone: firm scientific disagreement vs. gracious acknowledgment
+## Research Rigor Constraints
 
-## Usage Examples
+- Preserve **one variable per experiment** in the rebuttal: tie each response to the exact experiment, analysis artifact, or manuscript change that addresses it.
+- **Record everything** in the rebuttal and supporting notes, including what is fixed, what remains open, and what evidence backs each response.
+- Keep the **experiment and code change linked** by referencing concrete artifacts rather than vague promises.
+- **Verify before claiming** a reviewer concern is resolved; if it is only partially addressed, say so.
+- **Never manipulate evaluation narrative** in rebuttals by overstating preliminary evidence or hiding failed checks.
+- **Never fabricate citations** or unsupported prior-work comparisons in the response.
 
-### Draft response to reviewer comments
-```python
-review_response.draft(
-    reviewer_comments="[paste full review here]",
-    manuscript_abstract="[paste abstract]",
-    corpus=review.get_papers(),
-    tone="firm_but_respectful",
-    include_literature_search=True
-)
-```
+## Inputs
 
-### Categorize and triage reviewer concerns
-```python
-review_response.triage(
-    reviewer_comments="[paste full review]",
-    output=["category", "effort_estimate", "recommended_strategy"]
-)
-```
+Read:
+- the latest `{PROJ}/reviewer/external_review_{date}.md` unless the user provided a specific path
+- `{PROJ}/academic_writer/paper/` for the current paper draft when needed
+- `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`
+- `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`
+- `{PROJ}/analyzer/NARRATIVE_REPORT.md`
+- `{PROJ}/CLAIM_POLICY.md`
 
-### Find papers that address a specific reviewer concern
-```python
-review_response.find_supporting_literature(
-    concern="The authors do not address out-of-distribution generalization",
-    corpus=review.get_papers(),
-    search_external=True
-)
-```
+## Output Contract
 
-### Generate cover letter for resubmission
-```python
-review_response.cover_letter(
-    original_reviews=["R1 text", "R2 text", "R3 text"],
-    changes_made=["Added ablation study in Section 4.2", "Clarified limitation in Discussion"],
-    target_journal="Nature Methods"
-)
-```
+Write:
+- `{PROJ}/reviewer/rebuttal_{YYYY-MM-DD}.md`
 
-## Output Format
-Response draft is structured as: summary paragraph + numbered point-by-point responses. Each response includes: reviewer quote, response text, and any new citations to add. Triage output is a prioritized table. Cover letter is formatted prose ready to submit.
+Use `REBUTTAL_TEMPLATE.md` in this skill directory as the starting structure.
 
-## Notes
-- PaperClaw does not decide what experiments to run — it drafts the prose around decisions made by the authors
-- Tone calibration: "firm" = disagree with evidence; "gracious" = accept and thank; default is balanced
-- Combine with `evidence-grading` to assess whether a reviewer's concern has strong literature support
+The rebuttal must include:
+- a short response summary
+- point-by-point responses for the material reviewer concerns
+- explicit evidence or planned revisions for each concern
+- a closing paragraph suitable for a response letter or revision memo
+
+## Rules
+
+- Base every response on project evidence; do not invent new experiments or citations
+- If a reviewer request cannot be satisfied, explain the limitation directly and politely
+- If a concern maps to an unsupported claim, recommend downgrading or removing that claim
+- Keep the tone respectful, concise, and specific
+- Do not leave the output only in chat; the project-local rebuttal file is mandatory
+
+## Completion
+
+Return a short summary that includes:
+- the source external review path
+- the written rebuttal path
+- the top 1-3 revision commitments

@@ -9,7 +9,8 @@
 4. check          → 强制立即查询
 5. status         → 查看 job 状态
 6. 读取结果       → review.md / review.json
-7. openclaw 集成  → 传给 reviewer agent 分析改进建议
+7. 项目内写回     → external_review_{date}.md
+8. openclaw 集成  → 传给 reviewer agent 起草 rebuttal
 ```
 
 ---
@@ -222,9 +223,10 @@ reviewloop import-token --paper-id main --token <token-from-email> --source emai
 1. 调用 academic_writer 完成论文撰写
 2. 使用 paperreview-submit skill 提交 PDF
 3. 轮询等待 reviewloop status = COMPLETED
-4. 将 review.md 内容发送给 reviewer agent
-5. reviewer agent 输出修改意见，返回给 academic_writer
-6. academic_writer 根据意见修改论文，重复循环
+4. 将 review.md/review.json/meta.json 规范化写回 `{PROJ}/reviewer/external_review_{date}.md`
+5. 调用 `/review-response` 生成 `{PROJ}/reviewer/rebuttal_{date}.md`
+6. reviewer agent 输出修改意见，返回给 academic_writer
+7. academic_writer 根据意见修改论文，重复循环
 ```
 
 ### 方案三：在 openclaw 研究实验注册中记录审稿状态

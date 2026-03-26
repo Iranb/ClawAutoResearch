@@ -35,6 +35,7 @@ import {
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import { maybeBroadcastAutoIteratorStageChange } from "./stage-broadcast";
+import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
@@ -247,8 +248,9 @@ async function maybeDispatchAutoIteratorTask(params: {
   if (!params.snapshot.projectRoot) {
     return null;
   }
-  const dispatch = await dispatchWorkflowTaskToAgent({
+  const dispatch = await handoffWorkflowTaskToAgent({
     runtimeSubagent: params.plugin.api.runtime?.subagent,
+    workflowPolicy: params.workflowPolicy,
     requesterSessionKey: params.agentCtx.sessionKey,
     requesterChannel: params.agentCtx.messageChannel,
     fromRole: requesterRole,
@@ -262,6 +264,9 @@ async function maybeDispatchAutoIteratorTask(params: {
     waitTimeoutMs: params.waitTimeoutMs,
     retryOnTimeout: params.retryOnTimeout,
     enableSpawnFallback: params.enableSpawnFallback,
+    autoModeActive:
+      (params.result.effectiveAutoMode ?? params.workflowPolicy.autoMode ?? "off") !== "off",
+    logger: params.plugin.api.logger,
   });
   if (dispatch.dispatched) {
     await recordWorkflowContactEvent({
@@ -380,7 +385,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           subject: {
             type: "string",
           },
+          command: {
+            type: "string",
+          },
           body: {
+            type: "string",
+          },
+          extraBody: {
             type: "string",
           },
           kind: {
@@ -648,6 +659,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               }
               const subject = readString(params.subject) ?? "Workflow task dispatch";
               const body = readString(params.body);
+              const explicitCommand = readString(params.command);
+              const explicitExtraBody = readString(params.extraBody);
+              const command =
+                explicitCommand ??
+                (body && !body.includes("\n") ? body : snapshot.nextAction);
+              const extraBody =
+                explicitExtraBody ??
+                (body && body.includes("\n") ? body : null);
               const dispatch = await dispatchWorkflowTaskToAgent({
                 runtimeSubagent: plugin.api.runtime?.subagent,
                 requesterSessionKey: ctx.sessionKey,
@@ -658,8 +677,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectId: snapshot.projectId,
                 stage: snapshot.currentStage,
                 summary: subject,
-                command: body ?? snapshot.nextAction,
-                extraBody: body,
+                command,
+                extraBody,
                 waitTimeoutMs: Math.max(
                   0,
                   Math.floor(((readNumber(params.waitSeconds) ?? 0) as number) * 1000)
