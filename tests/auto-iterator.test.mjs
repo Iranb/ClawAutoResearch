@@ -142,12 +142,27 @@ async function seedProjectReadyForCode(projectRoot) {
       {
         track_id: trackId,
         status: "active",
+        linked_graph_nodes: ["paper:demo", "concept:contrastive-pruning"],
+        relation_patterns: ["extends->paper:demo"],
+        evidence_pointers: ["graph/LIMITATION_FRONTIER.md#candidate-1"],
         reasoning_packet_dir: `researcher/reasoning/${trackId}`,
         working_memory_path: `researcher/reasoning/${trackId}/working-memory.md`,
         synthesis_packet_path: `researcher/reasoning/${trackId}/synthesis.md`,
       },
     ],
   });
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", trackId, "packet.md"),
+    "# reasoning packet\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", trackId, "working-memory.md"),
+    "# working memory\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", trackId, "synthesis.md"),
+    "# synthesis\n"
+  );
 
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "demo-project",
@@ -396,8 +411,198 @@ async function seedProjectReadyForSubmit(projectRoot) {
       hallucinated_citation_count: 0,
       last_verified_at: now,
     },
+    writing_session: {
+      status: "ready_for_submit",
+      current_section: "discussion",
+      draft_order: ["abstract", "results", "discussion"],
+      finalized_sections: ["abstract", "results", "discussion"],
+      compile_safe_sections: ["abstract", "results", "discussion"],
+      section_packets: {
+        abstract: {
+          section: "abstract",
+          packet_path: "academic_writer/section_packets/abstract.md",
+          status: "finalized",
+          review_verdict: "publication_ready",
+        },
+        results: {
+          section: "results",
+          packet_path: "academic_writer/section_packets/results.md",
+          status: "finalized",
+          review_verdict: "publication_ready",
+        },
+        discussion: {
+          section: "discussion",
+          packet_path: "academic_writer/section_packets/discussion.md",
+          status: "finalized",
+          review_verdict: "publication_ready",
+        },
+      },
+      headline_claim_evidence_status: "covered",
+      graph_evidence_coverage_status: "covered",
+      citation_plan_mode: "graph_only",
+      external_scholar_query_mode: "reserved",
+    },
+    review_session: {
+      status: "completed",
+      stage_scope: "review",
+      round: 1,
+      review_packet_path: "reviewer/REVIEW_REPORT.md",
+      graph_evidence_summary_path: "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+      latest_review_path: "reviewer/REVIEW_REPORT.md",
+      verdict: "ready",
+      reviewer_summary: "Review loop complete.",
+    },
+    graph_guided_writing: {
+      enabled: true,
+      status: "ready",
+      anchor_index_path: "graph/ANCHOR_INDEX.md",
+      frontier_files: [
+        "graph/LIMITATION_FRONTIER.md",
+        "graph/CONTRADICTION_FRONTIER.md",
+      ],
+      literature_path: "researcher/LITERATURE.md",
+      claim_evidence_packet_paths: ["analyzer/proof-packets/lemma_demo.json"],
+      required_evidence_pointer_count: 3,
+      covered_headline_claim_count: 3,
+      total_headline_claim_count: 3,
+      evidence_coverage_status: "covered",
+      missing_evidence_claims: [],
+      citation_source_mode: "graph_only",
+      scholar_query_reserved: true,
+    },
+    external_review_state: {
+      status: "received",
+      provider: "paperreview.ai",
+      review_skill: "paperreview-submit",
+      source_label: "Stanford Agentic Reviewer",
+      submitted_pdf_path: "academic_writer/paper/main.pdf",
+      external_review_path: "reviewer/external_review_2026-03-22.md",
+      review_response_path: "reviewer/rebuttal_2026-03-22.md",
+      overall_recommendation: "minor_revision",
+      required_action: "human_decision",
+      last_updated_at: now,
+    },
   });
 }
+
+test("auto iterator keeps idea stage blocked when active tracks lack materialized reasoning evidence", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00011",
+      arxiv_id: "2501.00011",
+      title: "Demo Idea Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00011--demo-idea-paper.md"
+      ),
+    },
+  ]);
+  const graphSourceRoot = path.join(projectRoot, "graph", "source-corpus");
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(graphSourceRoot, "md", "2501.00011--demo-idea-paper.md"),
+      inputPath: path.join(graphSourceRoot, "md", "2501.00011--demo-idea-paper.md"),
+      kind: "markdown",
+      paperId: "paper:demo-idea",
+      paperTitle: "Demo Idea Paper",
+      sourcePath: path.join(graphSourceRoot, "md", "2501.00011--demo-idea-paper.md"),
+      sourceMarkdownPath: path.join(
+        graphSourceRoot,
+        "md",
+        "2501.00011--demo-idea-paper.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(
+        graphSourceRoot,
+        "md",
+        "2501.00011--demo-idea-paper.md"
+      ),
+    },
+  ]);
+  await fs.rm(path.join(projectRoot, "researcher", "reasoning", trackId), {
+    recursive: true,
+    force: true,
+  });
+
+  const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+  const trackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
+  trackRegistry.tracks[0].linked_graph_nodes = [];
+  trackRegistry.tracks[0].relation_patterns = [];
+  trackRegistry.tracks[0].evidence_pointers = [];
+  await writeJson(trackRegistryPath, trackRegistry);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "idea");
+  assert.ok(
+    result.missingStageSignals.some((signal) => /graph-backed innovation evidence/i.test(signal))
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) => /reasoning packet/i.test(signal))
+  );
+});
+
+test("auto iterator keeps review stage blocked when unsupported primary claims remain in scope", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  await writeText(
+    path.join(projectRoot, "analyzer", "UNSUPPORTED_CLAIMS.md"),
+    [
+      "# Unsupported Claims",
+      "## abstract",
+      "- PRIMARY claim claim-unsupported-1 remains UNSUPPORTED in the abstract.",
+    ].join("\n")
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "review";
+  manifest.current_micro_stage = "review_requested";
+  manifest.writing_contract.required_sections = ["abstract", "results"];
+  manifest.writing_session.current_section = "abstract";
+  manifest.writing_session.section_packets.abstract.forbidden_unsupported_claims = [
+    "claim-unsupported-1",
+  ];
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "review");
+  assert.equal(result.stageAfter, "review");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /unsupported primary claims remain in the selected writing scope/i.test(signal)
+    )
+  );
+});
 
 test("auto iterator stays in setup when required setup signals are missing", async (t) => {
   const projectRoot = await makeTempProject();
@@ -874,6 +1079,36 @@ test("auto iterator keeps submit blocked when citation verification is not compl
   );
 });
 
+test("auto iterator keeps submit blocked when external Stanford review has not reached a conclusion", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.external_review_state.status = "submitted";
+  manifest.external_review_state.overall_recommendation = null;
+  manifest.external_review_state.required_action = null;
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      signal.includes("external_review_state")
+    )
+  );
+});
+
 test("auto iterator downgrades only after mitigation rounds are exhausted for the same risk", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -1044,5 +1279,100 @@ test("auto iterator keeps write stage blocked when theory appendix draft is miss
   assert.equal(result.stageAfter, "write");
   assert.ok(
     result.missingStageSignals.some((signal) => /appendix_theory\.tex/i.test(signal))
+  );
+});
+
+test("auto iterator keeps write stage blocked when paper QC reports a hard compile failure", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "compile_and_surface_fix";
+  manifest.paper_qc = {
+    status: "blocked",
+    compile_status: "fail",
+    compile_round_count: 3,
+    chktex_status: "pass",
+    page_budget_status: "pass",
+    unused_figure_status: "pass",
+    invalid_figure_ref_status: "pass",
+    reflection_round_count: 1,
+    latest_report_path: "academic_writer/PAPER_QC.md",
+  };
+  manifest.review_issue_tracker = {
+    status: "ready",
+    open_counts: {
+      critical: 0,
+      high: 0,
+      medium: 1,
+      low: 0,
+    },
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /paper_qc.*compile_status = pass/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps write stage blocked when figure QC reports caption alignment failure", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "citation_and_figure_qc";
+  manifest.figure_qc = {
+    status: "blocked",
+    duplicate_figure_status: "pass",
+    caption_alignment_status: "fail",
+    text_alignment_status: "pass",
+    selection_status: "pass",
+    figure_review_path: "reviewer/SURFACE_REVIEW.json",
+  };
+  manifest.review_issue_tracker = {
+    status: "ready",
+    open_counts: {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    },
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /figure_qc.*caption_alignment_status = pass/i.test(signal)
+    )
   );
 });

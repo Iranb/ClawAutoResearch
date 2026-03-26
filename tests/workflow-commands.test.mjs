@@ -317,6 +317,72 @@ test("workflow-status command returns a readable workflow summary", async () => 
         innovationReflectionDue: true,
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
+        experimentSearchStatus: "running",
+        experimentSearchCurrentMainStage: "creative_research",
+        experimentSearchCurrentSubstage: "branch_expansion",
+        experimentSearchBestNodeId: "node-7",
+        experimentSearchMultiSeedStatus: "running",
+        experimentSearchPlotPackStatus: "pending",
+        writingSessionStatus: "writing",
+        writingCurrentSection: "results",
+        writingDraftOrder: [
+          "method",
+          "experimental_setup",
+          "results",
+          "related_work",
+          "introduction",
+          "abstract",
+          "conclusion",
+        ],
+        writingFinalizedSections: ["method"],
+        writingCompileSafeSections: ["method"],
+        writingSectionPacketsReady: false,
+        writingCurrentSectionReviewVerdict: "needs_revision",
+        writingGraphEvidenceCoverageStatus: "partial",
+        writingGraphEvidenceCoverageSummary:
+          "1/2 headline claims already have graph-backed evidence pointers.",
+        reviewSessionStatus: "needs_revision",
+        reviewSessionStageScope: "review",
+        reviewSessionRound: 2,
+        reviewSessionVerdict: "not_ready",
+        reviewSessionSummary:
+          "Soundness and graph-grounded evidence are still below the handoff bar.",
+        reviewRubricSummary: {
+          originality: 7,
+          quality: 6,
+          clarity: 7,
+          significance: 6,
+          soundness: 5,
+          citationIntegrity: 8,
+          graphGroundedEvidenceSufficiency: 5,
+        },
+        graphGuidedWritingStatus: "partial",
+        graphGuidedWritingEvidenceCoverageStatus: "partial",
+        graphGuidedWritingMissingEvidenceClaims: ["claim-results-1"],
+        graphGuidedWritingScholarReserved: true,
+        graphGuidedWritingScholarSkillSlot: "future/literature-dehallucination",
+        citationCollectionStatus: "running",
+        citationCollectionCandidateCount: 24,
+        citationCollectionVerifiedCount: 8,
+        citationCollectionSuspiciousCount: 1,
+        citationCollectionHallucinatedCount: 0,
+        paperQcStatus: "running",
+        paperQcCompileStatus: "pass",
+        paperQcChktexStatus: "pending",
+        paperQcPageBudgetStatus: "pending",
+        figureQcStatus: "ready",
+        figureQcDuplicateFigureStatus: "pass",
+        figureQcCaptionAlignmentStatus: "pass",
+        figureQcTextAlignmentStatus: "pass",
+        figureQcSelectionStatus: "pass",
+        reviewIssueTrackerStatus: "open",
+        reviewIssueCriticalCount: 0,
+        reviewIssueHighCount: 1,
+        reviewIssueMediumCount: 2,
+        reviewIssueLowCount: 1,
+        externalReviewStatus: "received",
+        externalReviewRecommendation: "minor_revision",
+        externalReviewRequiredAction: "rollback_write",
       };
     },
     async runWorkflowAutoIterator() {
@@ -353,8 +419,20 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Mailbox: 2 unread/);
   assert.match(result.text ?? "", /Idle research: enabled=true, due=true, topic=spectral clustering under drift/);
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
+  assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);
+  assert.match(result.text ?? "", /Writing session: status=writing, current_section=results, section_review=needs_revision/);
+  assert.match(result.text ?? "", /Writing evidence coverage: status=partial, packets_ready=false/);
+  assert.match(result.text ?? "", /Review session: status=needs_revision, scope=review, round=2, verdict=not_ready/);
+  assert.match(result.text ?? "", /Reviewer rubric: originality=7, quality=6, clarity=7, significance=6, soundness=5, citation_integrity=8, graph_evidence=5/);
+  assert.match(result.text ?? "", /Review issues: status=open, critical=0, high=1, medium=2, low=1/);
+  assert.match(result.text ?? "", /Graph-guided writing: status=partial, evidence_coverage=partial, missing_claims=claim-results-1/);
+  assert.match(result.text ?? "", /Citation collection: status=running, verified=8\/24, suspicious=1, hallucinated=0/);
+  assert.match(result.text ?? "", /Paper QC: status=running, compile=pass, chktex=pending, page_budget=pending/);
+  assert.match(result.text ?? "", /Figure QC: status=ready, duplicate_figures=pass, caption_alignment=pass, text_alignment=pass, selection=pass/);
+  assert.match(result.text ?? "", /Scholar fallback slot: reserved=future\/literature-dehallucination/);
+  assert.match(result.text ?? "", /External review: status=received, recommendation=minor_revision, required_action=rollback_write/);
 });
 
 test("workflow-status command shows persisted auto discussion content per agent", async (t) => {

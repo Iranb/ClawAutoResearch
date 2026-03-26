@@ -65,6 +65,25 @@
     "papernexus_sync_required": false,
     "papernexus_last_sync_at": null
   },
+  "experiment_search": {
+    "status": "not_started",
+    "current_main_stage": null,
+    "current_substage": null,
+    "frontier_node_ids": [],
+    "best_node_id": null,
+    "completed_node_ids": [],
+    "failed_node_ids": [],
+    "tried_hyperparams": [],
+    "completed_ablations": [],
+    "multi_seed_status": "pending",
+    "evaluation_summary_path": null,
+    "plot_pack_status": "pending",
+    "plot_pack_path": null,
+    "stage_progress_path": null,
+    "checkpoint_path": null,
+    "pending_reason": null,
+    "last_updated_at": null
+  },
   "innovation_reflection": {
     "required_after_experiments": true,
     "status": "missing",
@@ -173,6 +192,56 @@
     "suspicious_citation_count": 0,
     "hallucinated_citation_count": 0,
     "last_verified_at": null,
+    "pending_reason": null
+  },
+  "citation_collection": {
+    "status": "not_started",
+    "progress_path": "academic_writer/citations_progress.json",
+    "cache_bib_path": "academic_writer/cached_citations.bib",
+    "candidate_count": 0,
+    "verified_count": 0,
+    "suspicious_count": 0,
+    "hallucinated_count": 0,
+    "pending_reason": null,
+    "last_updated_at": null
+  },
+  "paper_qc": {
+    "status": "pending",
+    "compile_status": "pending",
+    "compile_round_count": 0,
+    "chktex_status": "pending",
+    "page_budget_status": "pending",
+    "reference_start_page": null,
+    "body_page_count": null,
+    "unused_figure_status": "pending",
+    "invalid_figure_ref_status": "pending",
+    "reflection_round_count": 0,
+    "latest_report_path": "academic_writer/PAPER_QC.md",
+    "pending_reason": null,
+    "last_updated_at": null
+  },
+  "figure_qc": {
+    "status": "pending",
+    "figure_review_path": "reviewer/SURFACE_REVIEW.json",
+    "figure_selection_path": "academic_writer/FIGURE_SELECTION.json",
+    "duplicate_figure_status": "pending",
+    "caption_alignment_status": "pending",
+    "text_alignment_status": "pending",
+    "selection_status": "pending",
+    "pending_reason": null,
+    "last_updated_at": null
+  },
+  "review_issue_tracker": {
+    "status": "empty",
+    "open_counts": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "issue_manifest_path": "reviewer/REVIEW_ISSUES.json",
+    "last_review_round": 0,
+    "last_updated_at": null,
     "pending_reason": null
   },
   "paper_ingestion": {

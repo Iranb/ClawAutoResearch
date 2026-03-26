@@ -101,6 +101,37 @@ function makeBaseSnapshot() {
     citationSuspiciousCount: 0,
     citationHallucinatedCount: 0,
     citationPendingReason: null,
+    writingSessionStatus: null,
+    writingCurrentSection: null,
+    writingDraftOrder: [],
+    writingFinalizedSections: [],
+    writingCompileSafeSections: [],
+    writingSectionPacketsReady: false,
+    writingCurrentSectionReviewVerdict: null,
+    writingGraphEvidenceCoverageStatus: null,
+    writingGraphEvidenceCoverageSummary: null,
+    reviewSessionStatus: null,
+    reviewSessionStageScope: null,
+    reviewSessionRound: 0,
+    reviewSessionVerdict: null,
+    reviewSessionSummary: null,
+    reviewRubricSummary: {
+      originality: null,
+      quality: null,
+      clarity: null,
+      significance: null,
+      soundness: null,
+      citationIntegrity: null,
+      graphGroundedEvidenceSufficiency: null,
+    },
+    graphGuidedWritingStatus: null,
+    graphGuidedWritingEvidenceCoverageStatus: null,
+    graphGuidedWritingMissingEvidenceClaims: [],
+    graphGuidedWritingScholarReserved: false,
+    graphGuidedWritingScholarSkillSlot: null,
+    externalReviewStatus: null,
+    externalReviewRecommendation: null,
+    externalReviewRequiredAction: null,
     recentExperiments: [],
     unreadMailbox: [],
     backgroundTasks: [],
@@ -129,4 +160,37 @@ test("formatWorkflowSnapshotForPrompt tells the expected owner to complete the s
 
   assert.match(prompt, /Owner gate: you are the responsible owner for plan\./i);
   assert.match(prompt, /Produce the stage artifacts/i);
+});
+
+test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without flooding in distant workflow state", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "academic_writer",
+      currentStage: "write",
+      currentMicroStage: "drafting",
+      ownerAgent: "academic_writer",
+      recommendedOwner: "academic_writer",
+      nextAction: "Revise the results section packet and resolve citation placeholders.",
+      writingSessionStatus: "revise_required",
+      writingCurrentSection: "results",
+      writingDraftOrder: ["method", "results", "conclusion"],
+      writingFinalizedSections: ["method"],
+      writingCompileSafeSections: ["method"],
+      writingCurrentSectionReviewVerdict: "needs_revision",
+      writingGraphEvidenceCoverageStatus: "partial",
+      writingGraphEvidenceCoverageSummary:
+        "The results section still lacks one evidence pointer and one citation fix.",
+      missingStageSignals: [
+        "results packet still has missing citation placeholders",
+      ],
+    },
+    detailLevel: "focused",
+  });
+
+  assert.match(prompt, /Prompt assembly:/i);
+  assert.match(prompt, /Use the active section packet as the main task payload/i);
+  assert.match(prompt, /Focus current section: results/i);
+  assert.doesNotMatch(prompt, /Idle research:/);
+  assert.doesNotMatch(prompt, /PaperNexus:/);
 });

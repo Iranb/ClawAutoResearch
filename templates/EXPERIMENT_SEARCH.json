@@ -1,0 +1,19 @@
+{
+  "status": "not_started",
+  "current_main_stage": null,
+  "current_substage": null,
+  "frontier_node_ids": [],
+  "best_node_id": null,
+  "completed_node_ids": [],
+  "failed_node_ids": [],
+  "tried_hyperparams": [],
+  "completed_ablations": [],
+  "multi_seed_status": "pending",
+  "evaluation_summary_path": null,
+  "plot_pack_status": "pending",
+  "plot_pack_path": null,
+  "stage_progress_path": null,
+  "checkpoint_path": null,
+  "pending_reason": null,
+  "last_updated_at": null
+}

@@ -3,6 +3,7 @@ import os from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendWorkflowTraceEvent } from "./workflow-trace";
 import {
   clearChannelProjectBinding,
   getChannelProjectBinding,
@@ -338,6 +339,180 @@ type CitationIntegrityState = {
   pendingReason: string | null;
 };
 
+type WritingSectionPacketState = {
+  section: string;
+  sectionClass: string | null;
+  goal: string | null;
+  allowedClaims: string[];
+  requiredGraphEvidencePointers: string[];
+  forbiddenUnsupportedClaims: string[];
+  missingCitationPlaceholders: string[];
+  requiredCitationCount: number;
+  requiredFigureIds: string[];
+  dependentSections: string[];
+  stale: boolean;
+  packetPath: string | null;
+  draftPath: string | null;
+  reviewPath: string | null;
+  reviewVerdict: string | null;
+  status: string;
+  updatedAt: string | null;
+};
+
+type WritingSessionState = {
+  status: string;
+  currentSection: string | null;
+  draftOrder: string[];
+  finalizedSections: string[];
+  compileSafeSections: string[];
+  sectionPackets: Record<string, WritingSectionPacketState>;
+  headlineClaimEvidenceStatus: string;
+  graphEvidenceCoverageStatus: string;
+  graphEvidenceCoverageSummary: string | null;
+  citationPlanMode: string;
+  externalScholarQueryMode: string;
+  futureScholarVerificationSkill: string | null;
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type ReviewSessionRubric = {
+  originality: number | null;
+  quality: number | null;
+  clarity: number | null;
+  significance: number | null;
+  soundness: number | null;
+  citationIntegrity: number | null;
+  graphGroundedEvidenceSufficiency: number | null;
+};
+
+type ReviewSessionState = {
+  status: string;
+  stageScope: string | null;
+  round: number;
+  reviewPacketPath: string | null;
+  graphEvidenceSummaryPath: string | null;
+  latestReviewPath: string | null;
+  verdict: string | null;
+  rubric: ReviewSessionRubric;
+  reviewerSummary: string | null;
+  actionItems: string[];
+  blockingArtifacts: string[];
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type GraphGuidedWritingState = {
+  enabled: boolean;
+  status: string;
+  anchorIndexPath: string | null;
+  frontierFiles: string[];
+  literaturePath: string | null;
+  claimEvidencePacketPaths: string[];
+  requiredEvidencePointerCount: number;
+  coveredHeadlineClaimCount: number;
+  totalHeadlineClaimCount: number;
+  evidenceCoverageStatus: string;
+  missingEvidenceClaims: string[];
+  citationSourceMode: string;
+  scholarQueryReserved: boolean;
+  scholarQuerySkillSlot: string | null;
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type ExternalReviewState = {
+  status: string;
+  provider: string | null;
+  reviewSkill: string | null;
+  sourceLabel: string | null;
+  submissionId: string | null;
+  submittedPdfPath: string | null;
+  externalReviewPath: string | null;
+  reviewResponsePath: string | null;
+  overallRecommendation: string | null;
+  requiredAction: string | null;
+  lastPolledAt: string | null;
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type ExperimentSearchState = {
+  status: string;
+  currentMainStage: string | null;
+  currentSubstage: string | null;
+  frontierNodeIds: string[];
+  bestNodeId: string | null;
+  completedNodeIds: string[];
+  failedNodeIds: string[];
+  triedHyperparams: string[];
+  completedAblations: string[];
+  multiSeedStatus: string;
+  evaluationSummaryPath: string | null;
+  plotPackStatus: string;
+  plotPackPath: string | null;
+  stageProgressPath: string | null;
+  checkpointPath: string | null;
+  pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type PaperQcState = {
+  status: string;
+  compileStatus: string;
+  compileRoundCount: number;
+  chktexStatus: string;
+  pageBudgetStatus: string;
+  referenceStartPage: number | null;
+  bodyPageCount: number | null;
+  unusedFigureStatus: string;
+  invalidFigureRefStatus: string;
+  reflectionRoundCount: number;
+  latestReportPath: string | null;
+  pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type CitationCollectionState = {
+  status: string;
+  progressPath: string | null;
+  cacheBibPath: string | null;
+  candidateCount: number;
+  verifiedCount: number;
+  suspiciousCount: number;
+  hallucinatedCount: number;
+  pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type FigureQcState = {
+  status: string;
+  figureReviewPath: string | null;
+  figureSelectionPath: string | null;
+  duplicateFigureStatus: string;
+  captionAlignmentStatus: string;
+  textAlignmentStatus: string;
+  selectionStatus: string;
+  pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type ReviewIssueCounts = {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+};
+
+type ReviewIssueTrackerState = {
+  status: string;
+  openCounts: ReviewIssueCounts;
+  issueManifestPath: string | null;
+  lastReviewRound: number;
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
 export type WorkflowSnapshot = {
   projectRoot: string | null;
   projectId: string | null;
@@ -387,6 +562,12 @@ export type WorkflowSnapshot = {
   innovationReflectionLastAt: string | null;
   innovationReflectionPath: string | null;
   innovationReflectionPendingReason: string | null;
+  experimentSearchStatus: string | null;
+  experimentSearchCurrentMainStage: string | null;
+  experimentSearchCurrentSubstage: string | null;
+  experimentSearchBestNodeId: string | null;
+  experimentSearchMultiSeedStatus: string | null;
+  experimentSearchPlotPackStatus: string | null;
   theorySupportStatus: string | null;
   theorySupportSignal: string | null;
   theoryStatePath: string | null;
@@ -435,6 +616,48 @@ export type WorkflowSnapshot = {
   citationSuspiciousCount: number | null;
   citationHallucinatedCount: number | null;
   citationPendingReason: string | null;
+  citationCollectionStatus: string | null;
+  citationCollectionCandidateCount: number | null;
+  citationCollectionVerifiedCount: number | null;
+  citationCollectionSuspiciousCount: number | null;
+  citationCollectionHallucinatedCount: number | null;
+  writingSessionStatus: string | null;
+  writingCurrentSection: string | null;
+  writingDraftOrder: string[];
+  writingFinalizedSections: string[];
+  writingCompileSafeSections: string[];
+  writingSectionPacketsReady: boolean;
+  writingCurrentSectionReviewVerdict: string | null;
+  writingGraphEvidenceCoverageStatus: string | null;
+  writingGraphEvidenceCoverageSummary: string | null;
+  reviewSessionStatus: string | null;
+  reviewSessionStageScope: string | null;
+  reviewSessionRound: number | null;
+  reviewSessionVerdict: string | null;
+  reviewSessionSummary: string | null;
+  reviewRubricSummary: Record<string, number | null>;
+  graphGuidedWritingStatus: string | null;
+  graphGuidedWritingEvidenceCoverageStatus: string | null;
+  graphGuidedWritingMissingEvidenceClaims: string[];
+  graphGuidedWritingScholarReserved: boolean;
+  graphGuidedWritingScholarSkillSlot: string | null;
+  paperQcStatus: string | null;
+  paperQcCompileStatus: string | null;
+  paperQcChktexStatus: string | null;
+  paperQcPageBudgetStatus: string | null;
+  figureQcStatus: string | null;
+  figureQcDuplicateFigureStatus: string | null;
+  figureQcCaptionAlignmentStatus: string | null;
+  figureQcTextAlignmentStatus: string | null;
+  figureQcSelectionStatus: string | null;
+  reviewIssueTrackerStatus: string | null;
+  reviewIssueCriticalCount: number | null;
+  reviewIssueHighCount: number | null;
+  reviewIssueMediumCount: number | null;
+  reviewIssueLowCount: number | null;
+  externalReviewStatus: string | null;
+  externalReviewRecommendation: string | null;
+  externalReviewRequiredAction: string | null;
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
   backgroundTasks: string[];
@@ -576,15 +799,27 @@ const DEFAULT_CITATION_SOURCE_OF_TRUTH = [
   "semantic_scholar",
 ];
 
+const DEFAULT_EXPERIMENT_SEARCH_PATH = "researcher/EXPERIMENT_SEARCH.json";
 const DEFAULT_CITATION_BIB_PATH = "academic_writer/paper/refs.bib";
 const DEFAULT_CITATION_REPORT_PATH = "reviewer/CITATION_VERIFICATION.md";
+const DEFAULT_CITATION_COLLECTION_PROGRESS_PATH =
+  "academic_writer/citations_progress.json";
+const DEFAULT_CACHED_CITATIONS_BIB_PATH = "academic_writer/cached_citations.bib";
 const DEFAULT_KG_STORYLINE_PACKET_PATH = "academic_writer/KG_STORYLINE_PACKET.md";
+const DEFAULT_WRITING_SECTION_PACKET_DIR = "academic_writer/section-packets";
+const DEFAULT_REVIEW_PACKET_PATH = "reviewer/REVIEW_PACKET.json";
+const DEFAULT_REVIEW_ISSUES_PATH = "reviewer/REVIEW_ISSUES.json";
+const DEFAULT_GRAPH_EVIDENCE_SUMMARY_PATH = "reviewer/GRAPH_EVIDENCE_SUMMARY.md";
 const DEFAULT_THEORY_STATE_PATH = "analyzer/THEORY_STATE.json";
 const DEFAULT_THEORY_NOTE_PATH = "analyzer/THEORY_SUPPORT_NOTE.md";
 const DEFAULT_PROOF_PACKET_DIR = "analyzer/proof-packets";
 const DEFAULT_THEORY_APPENDIX_PLAN_PATH = "academic_writer/THEORY_APPENDIX_PLAN.md";
 const DEFAULT_THEORY_APPENDIX_SECTION_PATH =
   "academic_writer/paper/sections/appendix_theory.tex";
+const DEFAULT_FUTURE_SCHOLAR_VERIFICATION_SKILL = "future/literature-dehallucination";
+const DEFAULT_PAPER_QC_REPORT_PATH = "academic_writer/PAPER_QC.md";
+const DEFAULT_FIGURE_REVIEW_PATH = "reviewer/SURFACE_REVIEW.json";
+const DEFAULT_FIGURE_SELECTION_PATH = "academic_writer/FIGURE_SELECTION.json";
 
 type WritingModePreset = {
   mode: WritingMode;
@@ -1524,6 +1759,14 @@ async function readJsonIfExists<T>(targetPath: string): Promise<T | null> {
   }
 }
 
+async function readTextIfExists(targetPath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(targetPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function writeJsonEnsured(targetPath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -1601,6 +1844,10 @@ async function saveContactStore(
 
 function getExperimentLedgerPath(projectRoot: string): string {
   return path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json");
+}
+
+function getExperimentSearchPath(projectRoot: string): string {
+  return path.join(projectRoot, DEFAULT_EXPERIMENT_SEARCH_PATH);
 }
 
 function createEmptyExperimentLedger(projectId: string | null): ExperimentLedger {
@@ -1979,6 +2226,29 @@ async function saveExperimentLedger(
       },
     })),
   });
+}
+
+async function loadExperimentSearchState(params: {
+  projectRoot: string;
+  manifest?: Record<string, unknown> | null;
+}): Promise<ExperimentSearchState> {
+  const raw = await readJsonIfExists<Record<string, unknown>>(
+    getExperimentSearchPath(params.projectRoot)
+  );
+  if (raw) {
+    return normalizeExperimentSearchState(raw);
+  }
+  return normalizeExperimentSearchState(params.manifest?.experiment_search);
+}
+
+async function saveExperimentSearchStateFile(
+  projectRoot: string,
+  state: ExperimentSearchState
+): Promise<void> {
+  await writeJsonEnsured(
+    getExperimentSearchPath(projectRoot),
+    serializeExperimentSearchState(state)
+  );
 }
 
 async function syncManifestExperimentMemory(params: {
@@ -3371,6 +3641,869 @@ function serializeCitationIntegrityState(
   };
 }
 
+function normalizeWritingSectionPacketState(
+  key: string,
+  value: unknown
+): WritingSectionPacketState {
+  const record = asRecord(value) ?? {};
+  return {
+    section: normalizeStage(record.section) ?? normalizeStage(key) ?? key,
+    sectionClass:
+      normalizeStage(record.sectionClass ?? record.section_class) ?? null,
+    goal: pickString(record, ["goal"]),
+    allowedClaims: asStringArray(record.allowedClaims ?? record.allowed_claims),
+    requiredGraphEvidencePointers: asStringArray(
+      record.requiredGraphEvidencePointers ?? record.required_graph_evidence_pointers
+    ),
+    forbiddenUnsupportedClaims: asStringArray(
+      record.forbiddenUnsupportedClaims ?? record.forbidden_unsupported_claims
+    ),
+    missingCitationPlaceholders: asStringArray(
+      record.missingCitationPlaceholders ?? record.missing_citation_placeholders
+    ),
+    requiredCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "requiredCitationCount",
+          "required_citation_count",
+        ]) ?? 0
+      )
+    ),
+    requiredFigureIds: asStringArray(
+      record.requiredFigureIds ?? record.required_figure_ids
+    ),
+    dependentSections: asStringArray(
+      record.dependentSections ?? record.dependent_sections
+    ).map((entry) => normalizeStage(entry) ?? entry),
+    stale:
+      pickBoolean(record, ["stale"]) ??
+      normalizeStage(record.status) === "stale",
+    packetPath: pickString(record, ["packetPath", "packet_path"]),
+    draftPath: pickString(record, ["draftPath", "draft_path"]),
+    reviewPath: pickString(record, ["reviewPath", "review_path"]),
+    reviewVerdict:
+      pickString(record, ["reviewVerdict", "review_verdict"]) ?? null,
+    status: normalizeStage(record.status) ?? "pending",
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function serializeWritingSectionPacketState(
+  state: WritingSectionPacketState
+): Record<string, unknown> {
+  return {
+    section: state.section,
+    section_class: state.sectionClass,
+    goal: state.goal,
+    allowed_claims: state.allowedClaims,
+    required_graph_evidence_pointers: state.requiredGraphEvidencePointers,
+    forbidden_unsupported_claims: state.forbiddenUnsupportedClaims,
+    missing_citation_placeholders: state.missingCitationPlaceholders,
+    required_citation_count: state.requiredCitationCount,
+    required_figure_ids: state.requiredFigureIds,
+    dependent_sections: state.dependentSections,
+    stale: state.stale,
+    packet_path: state.packetPath,
+    draft_path: state.draftPath,
+    review_path: state.reviewPath,
+    review_verdict: state.reviewVerdict,
+    status: state.status,
+    updated_at: state.updatedAt,
+  };
+}
+
+function normalizeExternalReviewState(value: unknown): ExternalReviewState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    provider: pickString(record, ["provider"]),
+    reviewSkill:
+      pickString(record, ["reviewSkill", "review_skill"]) ??
+      "paperreview-submit",
+    sourceLabel:
+      pickString(record, ["sourceLabel", "source_label"]) ??
+      "Stanford Agentic Reviewer",
+    submissionId: pickString(record, ["submissionId", "submission_id"]),
+    submittedPdfPath: pickString(record, [
+      "submittedPdfPath",
+      "submitted_pdf_path",
+    ]),
+    externalReviewPath: pickString(record, [
+      "externalReviewPath",
+      "external_review_path",
+    ]),
+    reviewResponsePath: pickString(record, [
+      "reviewResponsePath",
+      "review_response_path",
+    ]),
+    overallRecommendation: pickString(record, [
+      "overallRecommendation",
+      "overall_recommendation",
+    ]),
+    requiredAction: pickString(record, ["requiredAction", "required_action"]),
+    lastPolledAt: pickString(record, ["lastPolledAt", "last_polled_at"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeExternalReviewState(
+  state: ExternalReviewState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    provider: state.provider,
+    review_skill: state.reviewSkill,
+    source_label: state.sourceLabel,
+    submission_id: state.submissionId,
+    submitted_pdf_path: state.submittedPdfPath,
+    external_review_path: state.externalReviewPath,
+    review_response_path: state.reviewResponsePath,
+    overall_recommendation: state.overallRecommendation,
+    required_action: state.requiredAction,
+    last_polled_at: state.lastPolledAt,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function normalizeExperimentSearchState(value: unknown): ExperimentSearchState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "not_started",
+    currentMainStage:
+      normalizeStage(record.currentMainStage ?? record.current_main_stage) ?? null,
+    currentSubstage:
+      normalizeStage(record.currentSubstage ?? record.current_substage) ?? null,
+    frontierNodeIds: asStringArray(
+      record.frontierNodeIds ?? record.frontier_node_ids
+    ),
+    bestNodeId: pickString(record, ["bestNodeId", "best_node_id"]),
+    completedNodeIds: asStringArray(
+      record.completedNodeIds ?? record.completed_node_ids
+    ),
+    failedNodeIds: asStringArray(record.failedNodeIds ?? record.failed_node_ids),
+    triedHyperparams: asStringArray(
+      record.triedHyperparams ?? record.tried_hyperparams
+    ),
+    completedAblations: asStringArray(
+      record.completedAblations ?? record.completed_ablations
+    ),
+    multiSeedStatus:
+      normalizeStage(record.multiSeedStatus ?? record.multi_seed_status) ??
+      "pending",
+    evaluationSummaryPath: pickString(record, [
+      "evaluationSummaryPath",
+      "evaluation_summary_path",
+    ]),
+    plotPackStatus:
+      normalizeStage(record.plotPackStatus ?? record.plot_pack_status) ??
+      "pending",
+    plotPackPath: pickString(record, ["plotPackPath", "plot_pack_path"]),
+    stageProgressPath: pickString(record, [
+      "stageProgressPath",
+      "stage_progress_path",
+    ]),
+    checkpointPath: pickString(record, ["checkpointPath", "checkpoint_path"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializeExperimentSearchState(
+  state: ExperimentSearchState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    current_main_stage: state.currentMainStage,
+    current_substage: state.currentSubstage,
+    frontier_node_ids: state.frontierNodeIds,
+    best_node_id: state.bestNodeId,
+    completed_node_ids: state.completedNodeIds,
+    failed_node_ids: state.failedNodeIds,
+    tried_hyperparams: state.triedHyperparams,
+    completed_ablations: state.completedAblations,
+    multi_seed_status: state.multiSeedStatus,
+    evaluation_summary_path: state.evaluationSummaryPath,
+    plot_pack_status: state.plotPackStatus,
+    plot_pack_path: state.plotPackPath,
+    stage_progress_path: state.stageProgressPath,
+    checkpoint_path: state.checkpointPath,
+    pending_reason: state.pendingReason,
+    last_updated_at: state.lastUpdatedAt,
+  };
+}
+
+function normalizePaperQcState(value: unknown): PaperQcState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    compileStatus:
+      normalizeStage(record.compileStatus ?? record.compile_status) ?? "pending",
+    compileRoundCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["compileRoundCount", "compile_round_count"]) ?? 0
+      )
+    ),
+    chktexStatus:
+      normalizeStage(record.chktexStatus ?? record.chktex_status) ?? "pending",
+    pageBudgetStatus:
+      normalizeStage(record.pageBudgetStatus ?? record.page_budget_status) ??
+      "pending",
+    referenceStartPage:
+      pickNumber(record, ["referenceStartPage", "reference_start_page"]) ?? null,
+    bodyPageCount:
+      pickNumber(record, ["bodyPageCount", "body_page_count"]) ?? null,
+    unusedFigureStatus:
+      normalizeStage(record.unusedFigureStatus ?? record.unused_figure_status) ??
+      "pending",
+    invalidFigureRefStatus:
+      normalizeStage(
+        record.invalidFigureRefStatus ?? record.invalid_figure_ref_status
+      ) ?? "pending",
+    reflectionRoundCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "reflectionRoundCount",
+          "reflection_round_count",
+        ]) ?? 0
+      )
+    ),
+    latestReportPath: pickString(record, [
+      "latestReportPath",
+      "latest_report_path",
+    ]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializePaperQcState(state: PaperQcState): Record<string, unknown> {
+  return {
+    status: state.status,
+    compile_status: state.compileStatus,
+    compile_round_count: state.compileRoundCount,
+    chktex_status: state.chktexStatus,
+    page_budget_status: state.pageBudgetStatus,
+    reference_start_page: state.referenceStartPage,
+    body_page_count: state.bodyPageCount,
+    unused_figure_status: state.unusedFigureStatus,
+    invalid_figure_ref_status: state.invalidFigureRefStatus,
+    reflection_round_count: state.reflectionRoundCount,
+    latest_report_path: state.latestReportPath,
+    pending_reason: state.pendingReason,
+    last_updated_at: state.lastUpdatedAt,
+  };
+}
+
+function normalizeCitationCollectionState(value: unknown): CitationCollectionState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    progressPath: pickString(record, ["progressPath", "progress_path"]),
+    cacheBibPath: pickString(record, ["cacheBibPath", "cache_bib_path"]),
+    candidateCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["candidateCount", "candidate_count"]) ?? 0)
+    ),
+    verifiedCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["verifiedCount", "verified_count"]) ?? 0)
+    ),
+    suspiciousCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["suspiciousCount", "suspicious_count"]) ?? 0
+      )
+    ),
+    hallucinatedCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["hallucinatedCount", "hallucinated_count"]) ?? 0
+      )
+    ),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializeCitationCollectionState(
+  state: CitationCollectionState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    progress_path: state.progressPath,
+    cache_bib_path: state.cacheBibPath,
+    candidate_count: state.candidateCount,
+    verified_count: state.verifiedCount,
+    suspicious_count: state.suspiciousCount,
+    hallucinated_count: state.hallucinatedCount,
+    pending_reason: state.pendingReason,
+    last_updated_at: state.lastUpdatedAt,
+  };
+}
+
+function normalizeFigureQcState(value: unknown): FigureQcState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    figureReviewPath: pickString(record, [
+      "figureReviewPath",
+      "figure_review_path",
+    ]),
+    figureSelectionPath: pickString(record, [
+      "figureSelectionPath",
+      "figure_selection_path",
+    ]),
+    duplicateFigureStatus:
+      normalizeStage(
+        record.duplicateFigureStatus ?? record.duplicate_figure_status
+      ) ?? "pending",
+    captionAlignmentStatus:
+      normalizeStage(
+        record.captionAlignmentStatus ?? record.caption_alignment_status
+      ) ?? "pending",
+    textAlignmentStatus:
+      normalizeStage(
+        record.textAlignmentStatus ?? record.text_alignment_status
+      ) ?? "pending",
+    selectionStatus:
+      normalizeStage(record.selectionStatus ?? record.selection_status) ??
+      "pending",
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializeFigureQcState(state: FigureQcState): Record<string, unknown> {
+  return {
+    status: state.status,
+    figure_review_path: state.figureReviewPath,
+    figure_selection_path: state.figureSelectionPath,
+    duplicate_figure_status: state.duplicateFigureStatus,
+    caption_alignment_status: state.captionAlignmentStatus,
+    text_alignment_status: state.textAlignmentStatus,
+    selection_status: state.selectionStatus,
+    pending_reason: state.pendingReason,
+    last_updated_at: state.lastUpdatedAt,
+  };
+}
+
+function normalizeReviewIssueCounts(value: unknown): ReviewIssueCounts {
+  const record = asRecord(value) ?? {};
+  return {
+    critical: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["critical"]) ?? 0)
+    ),
+    high: Math.max(0, Math.floor(pickNumber(record, ["high"]) ?? 0)),
+    medium: Math.max(0, Math.floor(pickNumber(record, ["medium"]) ?? 0)),
+    low: Math.max(0, Math.floor(pickNumber(record, ["low"]) ?? 0)),
+  };
+}
+
+function serializeReviewIssueCounts(
+  counts: ReviewIssueCounts
+): Record<string, unknown> {
+  return {
+    critical: counts.critical,
+    high: counts.high,
+    medium: counts.medium,
+    low: counts.low,
+  };
+}
+
+function normalizeReviewIssueTrackerState(
+  value: unknown
+): ReviewIssueTrackerState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    openCounts: normalizeReviewIssueCounts(
+      record.openCounts ?? record.open_counts
+    ),
+    issueManifestPath:
+      pickString(record, ["issueManifestPath", "issue_manifest_path"]) ??
+      DEFAULT_REVIEW_ISSUES_PATH,
+    lastReviewRound: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["lastReviewRound", "last_review_round"]) ?? 0
+      )
+    ),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeReviewIssueTrackerState(
+  state: ReviewIssueTrackerState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    open_counts: serializeReviewIssueCounts(state.openCounts),
+    issue_manifest_path: state.issueManifestPath,
+    last_review_round: state.lastReviewRound,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function normalizeWritingSessionState(value: unknown): WritingSessionState {
+  const record = asRecord(value) ?? {};
+  const sectionPacketsRecord =
+    asRecord(record.sectionPackets ?? record.section_packets) ?? {};
+  const sectionPackets = Object.fromEntries(
+    Object.entries(sectionPacketsRecord).map(([key, packet]) => [
+      normalizeStage(key) ?? key,
+      normalizeWritingSectionPacketState(key, packet),
+    ])
+  );
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    currentSection: normalizeStage(record.currentSection ?? record.current_section),
+    draftOrder:
+      asStringArray(record.draftOrder ?? record.draft_order)
+        .map((entry) => normalizeStage(entry) ?? entry)
+        .filter(Boolean),
+    finalizedSections:
+      asStringArray(record.finalizedSections ?? record.finalized_sections)
+        .map((entry) => normalizeStage(entry) ?? entry)
+        .filter(Boolean),
+    compileSafeSections:
+      asStringArray(record.compileSafeSections ?? record.compile_safe_sections)
+        .map((entry) => normalizeStage(entry) ?? entry)
+        .filter(Boolean),
+    sectionPackets,
+    headlineClaimEvidenceStatus:
+      normalizeStage(
+        record.headlineClaimEvidenceStatus ?? record.headline_claim_evidence_status
+      ) ?? "pending",
+    graphEvidenceCoverageStatus:
+      normalizeStage(
+        record.graphEvidenceCoverageStatus ?? record.graph_evidence_coverage_status
+      ) ?? "pending",
+    graphEvidenceCoverageSummary:
+      pickString(record, [
+        "graphEvidenceCoverageSummary",
+        "graph_evidence_coverage_summary",
+      ]) ?? null,
+    citationPlanMode:
+      normalizeStage(record.citationPlanMode ?? record.citation_plan_mode) ??
+      "graph_only",
+    externalScholarQueryMode:
+      normalizeStage(
+        record.externalScholarQueryMode ?? record.external_scholar_query_mode
+      ) ?? "reserved",
+    futureScholarVerificationSkill:
+      pickString(record, [
+        "futureScholarVerificationSkill",
+        "future_scholar_verification_skill",
+      ]) ?? DEFAULT_FUTURE_SCHOLAR_VERIFICATION_SKILL,
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeWritingSessionState(
+  state: WritingSessionState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    current_section: state.currentSection,
+    draft_order: state.draftOrder,
+    finalized_sections: state.finalizedSections,
+    compile_safe_sections: state.compileSafeSections,
+    section_packets: Object.fromEntries(
+      Object.entries(state.sectionPackets).map(([key, packet]) => [
+        key,
+        serializeWritingSectionPacketState(packet),
+      ])
+    ),
+    headline_claim_evidence_status: state.headlineClaimEvidenceStatus,
+    graph_evidence_coverage_status: state.graphEvidenceCoverageStatus,
+    graph_evidence_coverage_summary: state.graphEvidenceCoverageSummary,
+    citation_plan_mode: state.citationPlanMode,
+    external_scholar_query_mode: state.externalScholarQueryMode,
+    future_scholar_verification_skill: state.futureScholarVerificationSkill,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function normalizeReviewSessionRubric(value: unknown): ReviewSessionRubric {
+  const record = asRecord(value) ?? {};
+  return {
+    originality: pickNumber(record, ["originality"]),
+    quality: pickNumber(record, ["quality"]),
+    clarity: pickNumber(record, ["clarity"]),
+    significance: pickNumber(record, ["significance"]),
+    soundness: pickNumber(record, ["soundness"]),
+    citationIntegrity: pickNumber(record, [
+      "citationIntegrity",
+      "citation_integrity",
+    ]),
+    graphGroundedEvidenceSufficiency: pickNumber(record, [
+      "graphGroundedEvidenceSufficiency",
+      "graph_grounded_evidence_sufficiency",
+    ]),
+  };
+}
+
+function serializeReviewSessionRubric(
+  rubric: ReviewSessionRubric
+): Record<string, unknown> {
+  return {
+    originality: rubric.originality,
+    quality: rubric.quality,
+    clarity: rubric.clarity,
+    significance: rubric.significance,
+    soundness: rubric.soundness,
+    citation_integrity: rubric.citationIntegrity,
+    graph_grounded_evidence_sufficiency:
+      rubric.graphGroundedEvidenceSufficiency,
+  };
+}
+
+function normalizeReviewSessionState(value: unknown): ReviewSessionState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    stageScope: normalizeStage(record.stageScope ?? record.stage_scope),
+    round: Math.max(0, Math.floor(pickNumber(record, ["round"]) ?? 0)),
+    reviewPacketPath:
+      pickString(record, ["reviewPacketPath", "review_packet_path"]) ??
+      DEFAULT_REVIEW_PACKET_PATH,
+    graphEvidenceSummaryPath:
+      pickString(record, [
+        "graphEvidenceSummaryPath",
+        "graph_evidence_summary_path",
+      ]) ?? DEFAULT_GRAPH_EVIDENCE_SUMMARY_PATH,
+    latestReviewPath:
+      pickString(record, ["latestReviewPath", "latest_review_path"]) ??
+      "reviewer/REVIEW_REPORT.md",
+    verdict: pickString(record, ["verdict"]) ?? null,
+    rubric: normalizeReviewSessionRubric(record.rubric),
+    reviewerSummary:
+      pickString(record, ["reviewerSummary", "reviewer_summary"]) ?? null,
+    actionItems: asStringArray(record.actionItems ?? record.action_items),
+    blockingArtifacts: asStringArray(
+      record.blockingArtifacts ?? record.blocking_artifacts
+    ),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeReviewSessionState(
+  state: ReviewSessionState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    stage_scope: state.stageScope,
+    round: state.round,
+    review_packet_path: state.reviewPacketPath,
+    graph_evidence_summary_path: state.graphEvidenceSummaryPath,
+    latest_review_path: state.latestReviewPath,
+    verdict: state.verdict,
+    rubric: serializeReviewSessionRubric(state.rubric),
+    reviewer_summary: state.reviewerSummary,
+    action_items: state.actionItems,
+    blocking_artifacts: state.blockingArtifacts,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function normalizeGraphGuidedWritingState(value: unknown): GraphGuidedWritingState {
+  const record = asRecord(value) ?? {};
+  return {
+    enabled: pickBoolean(record, ["enabled"]) ?? true,
+    status: normalizeStage(record.status) ?? "missing",
+    anchorIndexPath:
+      pickString(record, ["anchorIndexPath", "anchor_index_path"]) ??
+      "graph/ANCHOR_INDEX.md",
+    frontierFiles: asStringArray(record.frontierFiles ?? record.frontier_files),
+    literaturePath:
+      pickString(record, ["literaturePath", "literature_path"]) ??
+      "researcher/LITERATURE.md",
+    claimEvidencePacketPaths: asStringArray(
+      record.claimEvidencePacketPaths ?? record.claim_evidence_packet_paths
+    ),
+    requiredEvidencePointerCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "requiredEvidencePointerCount",
+          "required_evidence_pointer_count",
+        ]) ?? 0
+      )
+    ),
+    coveredHeadlineClaimCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "coveredHeadlineClaimCount",
+          "covered_headline_claim_count",
+        ]) ?? 0
+      )
+    ),
+    totalHeadlineClaimCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "totalHeadlineClaimCount",
+          "total_headline_claim_count",
+        ]) ?? 0
+      )
+    ),
+    evidenceCoverageStatus:
+      normalizeStage(
+        record.evidenceCoverageStatus ?? record.evidence_coverage_status
+      ) ?? "pending",
+    missingEvidenceClaims: asStringArray(
+      record.missingEvidenceClaims ?? record.missing_evidence_claims
+    ),
+    citationSourceMode:
+      normalizeStage(record.citationSourceMode ?? record.citation_source_mode) ??
+      "graph_only",
+    scholarQueryReserved:
+      pickBoolean(record, ["scholarQueryReserved", "scholar_query_reserved"]) ??
+      true,
+    scholarQuerySkillSlot:
+      pickString(record, ["scholarQuerySkillSlot", "scholar_query_skill_slot"]) ??
+      DEFAULT_FUTURE_SCHOLAR_VERIFICATION_SKILL,
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeGraphGuidedWritingState(
+  state: GraphGuidedWritingState
+): Record<string, unknown> {
+  return {
+    enabled: state.enabled,
+    status: state.status,
+    anchor_index_path: state.anchorIndexPath,
+    frontier_files: state.frontierFiles,
+    literature_path: state.literaturePath,
+    claim_evidence_packet_paths: state.claimEvidencePacketPaths,
+    required_evidence_pointer_count: state.requiredEvidencePointerCount,
+    covered_headline_claim_count: state.coveredHeadlineClaimCount,
+    total_headline_claim_count: state.totalHeadlineClaimCount,
+    evidence_coverage_status: state.evidenceCoverageStatus,
+    missing_evidence_claims: state.missingEvidenceClaims,
+    citation_source_mode: state.citationSourceMode,
+    scholar_query_reserved: state.scholarQueryReserved,
+    scholar_query_skill_slot: state.scholarQuerySkillSlot,
+    last_updated_at: state.lastUpdatedAt,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function isRuntimeReadyStatus(
+  value: unknown,
+  readyStates: readonly string[]
+): boolean {
+  const normalized = normalizeStage(value);
+  return normalized ? readyStates.includes(normalized) : false;
+}
+
+function areWritingSectionPacketsReady(state: WritingSessionState): boolean {
+  const packets = Object.values(state.sectionPackets);
+  return (
+    packets.length > 0 &&
+    packets.every((packet) => {
+      const packetStatus = normalizeStage(packet.status);
+      const reviewVerdict = normalizeStage(packet.reviewVerdict);
+      return (
+        !packet.stale &&
+        packet.forbiddenUnsupportedClaims.length === 0 &&
+        packet.missingCitationPlaceholders.length === 0 &&
+        (packetStatus === "finalized" ||
+          packetStatus === "locked" ||
+          packetStatus === "compile_safe" ||
+          reviewVerdict === "publication_ready")
+      );
+    })
+  );
+}
+
+function isWritingSessionReadyForSubmit(state: WritingSessionState): boolean {
+  return (
+    isRuntimeReadyStatus(state.status, [
+      "ready_for_submit",
+      "ready",
+      "finalized",
+      "complete",
+      "completed",
+    ]) &&
+    areWritingSectionPacketsReady(state) &&
+    isRuntimeReadyStatus(state.graphEvidenceCoverageStatus, [
+      "covered",
+      "ready",
+      "complete",
+      "completed",
+    ])
+  );
+}
+
+function isGraphGuidedWritingReadyForSubmit(
+  state: GraphGuidedWritingState
+): boolean {
+  if (!state.enabled) {
+    return true;
+  }
+  return (
+    isRuntimeReadyStatus(state.status, [
+      "ready",
+      "covered",
+      "complete",
+      "completed",
+    ]) &&
+    isRuntimeReadyStatus(state.evidenceCoverageStatus, [
+      "covered",
+      "ready",
+      "complete",
+      "completed",
+    ]) &&
+    state.missingEvidenceClaims.length === 0
+  );
+}
+
+function isExternalReviewConclusionReady(state: ExternalReviewState): boolean {
+  return (
+    isRuntimeReadyStatus(state.status, [
+      "received",
+      "ready",
+      "complete",
+      "completed",
+      "accepted_for_handoff",
+    ]) &&
+    Boolean(state.overallRecommendation)
+  );
+}
+
+function isExperimentSearchReadyForAnalysis(
+  state: ExperimentSearchState
+): boolean {
+  return (
+    isRuntimeReadyStatus(state.status, [
+      "ready_for_analysis",
+      "ready",
+      "complete",
+      "completed",
+    ]) &&
+    isRuntimeReadyStatus(state.multiSeedStatus, [
+      "ready",
+      "complete",
+      "completed",
+    ]) &&
+    isRuntimeReadyStatus(state.plotPackStatus, [
+      "ready",
+      "complete",
+      "completed",
+    ]) &&
+    Boolean(state.evaluationSummaryPath) &&
+    Boolean(state.plotPackPath)
+  );
+}
+
+function isPaperQcHardFailure(state: PaperQcState): boolean {
+  if (normalizeStage(state.status) === "missing") {
+    return false;
+  }
+  return [state.compileStatus, state.pageBudgetStatus, state.invalidFigureRefStatus].some(
+    (value) => normalizeStage(value) === "fail"
+  );
+}
+
+function isFigureQcHardFailure(state: FigureQcState): boolean {
+  if (normalizeStage(state.status) === "missing") {
+    return false;
+  }
+  return [
+    state.duplicateFigureStatus,
+    state.captionAlignmentStatus,
+    state.textAlignmentStatus,
+    state.selectionStatus,
+  ].some((value) => normalizeStage(value) === "fail");
+}
+
+function isCitationCollectionHardFailure(
+  state: CitationCollectionState
+): boolean {
+  if (normalizeStage(state.status) === "missing") {
+    return false;
+  }
+  return normalizeStage(state.status) === "blocked" || state.hallucinatedCount > 0;
+}
+
+function hasBlockingReviewIssues(state: ReviewIssueTrackerState): boolean {
+  return state.status !== "waived" &&
+    (state.openCounts.critical > 0 || state.openCounts.high > 0);
+}
+
+function summarizeReviewIssuesFromManifest(value: unknown): ReviewIssueCounts {
+  const record = asRecord(value);
+  const issues = Array.isArray(record?.issues)
+    ? record.issues
+    : Array.isArray(value)
+      ? value
+      : [];
+  const counts: ReviewIssueCounts = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+  };
+  for (const issue of issues) {
+    const issueRecord = asRecord(issue) ?? {};
+    const status = normalizeStage(issueRecord.status);
+    if (["fixed", "verified", "waived", "closed", "resolved"].includes(status ?? "")) {
+      continue;
+    }
+    const severity = normalizeStage(issueRecord.severity);
+    if (severity === "critical") {
+      counts.critical += 1;
+    } else if (severity === "high") {
+      counts.high += 1;
+    } else if (severity === "medium") {
+      counts.medium += 1;
+    } else {
+      counts.low += 1;
+    }
+  }
+  return counts;
+}
+
+async function hydrateReviewIssueTrackerState(params: {
+  projectRoot: string;
+  value: unknown;
+}): Promise<ReviewIssueTrackerState> {
+  const state = normalizeReviewIssueTrackerState(params.value);
+  const issueManifestResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.issueManifestPath
+  );
+  if (!issueManifestResolvedPath || !(await pathExists(issueManifestResolvedPath))) {
+    return state;
+  }
+  const issueManifest = await readJsonIfExists<Record<string, unknown> | unknown[]>(
+    issueManifestResolvedPath
+  );
+  if (!issueManifest) {
+    return state;
+  }
+  return {
+    ...state,
+    openCounts: summarizeReviewIssuesFromManifest(issueManifest),
+  };
+}
+
 function isReflectableExperiment(entry: ExperimentLedgerEntry): boolean {
   return Boolean(
     isTerminalExperimentStatus(entry.status) ||
@@ -3592,6 +4725,167 @@ function manifestFieldExists(manifest: ManifestLike | null, pathSpec: string[]):
   return current !== null && current !== undefined;
 }
 
+function resolveTrackArtifactPath(projectRoot: string, artifactPath: string | null): string | null {
+  if (!artifactPath) {
+    return null;
+  }
+  return (
+    resolveProjectArtifactPath(projectRoot, artifactPath) ??
+    path.join(projectRoot, artifactPath)
+  );
+}
+
+async function fileHasNonWhitespaceContent(targetPath: string | null): Promise<boolean> {
+  if (!targetPath) {
+    return false;
+  }
+  const raw = await readTextIfExists(targetPath);
+  return Boolean(raw && raw.trim().length > 0);
+}
+
+function trackHasGraphBackedInnovationEvidence(track: Record<string, unknown>): boolean {
+  return (
+    asStringArray(track.evidencePointers ?? track.evidence_pointers).length > 0 ||
+    asStringArray(track.linkedGraphNodes ?? track.linked_graph_nodes).length > 0 ||
+    asStringArray(track.relationPatterns ?? track.relation_patterns).length > 0
+  );
+}
+
+function normalizeWritingScopeLabel(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return normalized || null;
+}
+
+function collectSelectedWritingScope(manifest: ManifestLike | null): string[] {
+  const writingContract = normalizeWritingContractState(manifest?.writing_contract);
+  const writingSession = normalizeWritingSessionState(manifest?.writing_session);
+  return uniqueStrings(
+    [
+      ...writingContract.requiredSections,
+      ...writingContract.sectionOrder,
+      ...writingSession.draftOrder,
+      ...writingSession.finalizedSections,
+      ...writingSession.compileSafeSections,
+      ...(writingSession.currentSection ? [writingSession.currentSection] : []),
+    ]
+      .map((entry) => normalizeWritingScopeLabel(entry))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+}
+
+function getStructuredUnsupportedScopeHits(
+  manifest: ManifestLike | null,
+  selectedScope: string[]
+): string[] {
+  const writingSession = normalizeWritingSessionState(manifest?.writing_session);
+  return Object.values(writingSession.sectionPackets)
+    .filter((packet) => {
+      if (packet.forbiddenUnsupportedClaims.length === 0) {
+        return false;
+      }
+      if (selectedScope.length === 0) {
+        return true;
+      }
+      const sectionLabel = normalizeWritingScopeLabel(packet.section);
+      return Boolean(sectionLabel && selectedScope.includes(sectionLabel));
+    })
+    .map(
+      (packet) =>
+        `${packet.section}: ${packet.forbiddenUnsupportedClaims.join(", ")}`
+    );
+}
+
+function findUnsupportedPrimaryClaimLines(
+  rawText: string,
+  selectedScope: string[]
+): string[] {
+  const matches: string[] = [];
+  let currentHeading: string | null = null;
+  for (const rawLine of rawText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const headingMatch = line.match(/^#+\s*(.+)$/);
+    if (headingMatch) {
+      currentHeading = headingMatch[1];
+      continue;
+    }
+    if (!/\bunsupported\b/i.test(line)) {
+      continue;
+    }
+    if (!/\bprimary\b/i.test(line) && !/\bheadline\b/i.test(line) && !/\bmain claim\b/i.test(line)) {
+      continue;
+    }
+    if (selectedScope.length > 0) {
+      const normalizedLine = normalizeWritingScopeLabel(line);
+      const normalizedHeading = normalizeWritingScopeLabel(currentHeading);
+      const inScope = selectedScope.some(
+        (scope) =>
+          (normalizedLine && normalizedLine.includes(scope)) ||
+          (normalizedHeading && normalizedHeading.includes(scope))
+      );
+      if (!inScope) {
+        continue;
+      }
+    }
+    matches.push(line);
+  }
+  return matches;
+}
+
+async function findUnsupportedPrimaryClaimsInSelectedWritingScope(params: {
+  projectRoot: string;
+  manifest: ManifestLike | null;
+}): Promise<{ blocked: boolean; reason: string | null }> {
+  const selectedScope = collectSelectedWritingScope(params.manifest);
+  const scopeLabel =
+    selectedScope.length > 0 ? selectedScope.join(", ") : "all planned sections";
+  const structuredHits = getStructuredUnsupportedScopeHits(
+    params.manifest,
+    selectedScope
+  );
+  if (structuredHits.length > 0) {
+    return {
+      blocked: true,
+      reason: `unsupported primary claims remain in the selected writing scope (${scopeLabel}): ${structuredHits
+        .slice(0, 3)
+        .join("; ")}${structuredHits.length > 3 ? "; ..." : ""}`,
+    };
+  }
+
+  const unsupportedClaimsPath = path.join(
+    params.projectRoot,
+    "analyzer",
+    "UNSUPPORTED_CLAIMS.md"
+  );
+  const unsupportedClaimsRaw = await readTextIfExists(unsupportedClaimsPath);
+  if (!unsupportedClaimsRaw) {
+    return { blocked: false, reason: null };
+  }
+  const textHits = findUnsupportedPrimaryClaimLines(
+    unsupportedClaimsRaw,
+    selectedScope
+  );
+  if (textHits.length === 0) {
+    return { blocked: false, reason: null };
+  }
+  return {
+    blocked: true,
+    reason: `unsupported primary claims remain in the selected writing scope (${scopeLabel}): ${textHits
+      .slice(0, 3)
+      .join("; ")}${textHits.length > 3 ? "; ..." : ""}`,
+  };
+}
+
 async function getMissingStageSignals(params: {
   projectRoot: string;
   manifest: ManifestLike | null;
@@ -3714,14 +5008,49 @@ async function getMissingStageSignals(params: {
       }
       for (const track of activeTracks) {
         const trackId = asString(track.track_id) ?? "unknown-track";
-        if (!asString(track.reasoning_packet_dir)) {
+        const reasoningPacketDir = asString(track.reasoning_packet_dir);
+        const workingMemoryPath = asString(track.working_memory_path);
+        const synthesisPacketPath = asString(track.synthesis_packet_path);
+        if (!trackHasGraphBackedInnovationEvidence(track)) {
+          missing.push(`active track ${trackId} missing graph-backed innovation evidence`);
+        }
+        if (!reasoningPacketDir) {
           missing.push(`active track ${trackId} missing reasoning_packet_dir`);
+        } else {
+          const resolvedReasoningPacketDir = resolveTrackArtifactPath(
+            projectRoot,
+            reasoningPacketDir
+          );
+          if (
+            !resolvedReasoningPacketDir ||
+            !(await isNonEmptyDirectory(resolvedReasoningPacketDir))
+          ) {
+            missing.push(
+              `active track ${trackId} requires a non-empty reasoning packet under ${reasoningPacketDir}`
+            );
+          }
         }
-        if (!asString(track.working_memory_path)) {
+        if (!workingMemoryPath) {
           missing.push(`active track ${trackId} missing working_memory_path`);
+        } else if (
+          !(await fileHasNonWhitespaceContent(
+            resolveTrackArtifactPath(projectRoot, workingMemoryPath)
+          ))
+        ) {
+          missing.push(
+            `active track ${trackId} working_memory_path must point to a non-empty artifact (${workingMemoryPath})`
+          );
         }
-        if (!asString(track.synthesis_packet_path)) {
+        if (!synthesisPacketPath) {
           missing.push(`active track ${trackId} missing synthesis_packet_path`);
+        } else if (
+          !(await fileHasNonWhitespaceContent(
+            resolveTrackArtifactPath(projectRoot, synthesisPacketPath)
+          ))
+        ) {
+          missing.push(
+            `active track ${trackId} synthesis_packet_path must point to a non-empty artifact (${synthesisPacketPath})`
+          );
         }
       }
       break;
@@ -3791,6 +5120,14 @@ async function getMissingStageSignals(params: {
       if (!reviewReport && !reviewCompleted) {
         missing.push("{PROJ}/reviewer/REVIEW_REPORT.md or completed REVIEW_STATE.json");
       }
+      const unsupportedPrimaryClaims =
+        await findUnsupportedPrimaryClaimsInSelectedWritingScope({
+          projectRoot,
+          manifest,
+        });
+      if (unsupportedPrimaryClaims.blocked && unsupportedPrimaryClaims.reason) {
+        missing.push(unsupportedPrimaryClaims.reason);
+      }
       break;
     }
     case "write":
@@ -3836,6 +5173,93 @@ async function getMissingStageSignals(params: {
           !(await pathExists(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md")))
         ) {
           missing.push("{PROJ}/academic_writer/STORYLINE_SKETCH.md");
+        }
+        {
+          const writingSession = normalizeWritingSessionState(
+            manifest?.writing_session
+          );
+          if (!isWritingSessionReadyForSubmit(writingSession)) {
+            missing.push(
+              `PROJECT_MANIFEST.json.writing_session must be ready_for_submit with publication-ready section packets and covered graph evidence (current: status=${writingSession.status}, coverage=${writingSession.graphEvidenceCoverageStatus})`
+            );
+          }
+        }
+        {
+          const graphGuidedWriting = normalizeGraphGuidedWritingState(
+            manifest?.graph_guided_writing
+          );
+          if (!isGraphGuidedWritingReadyForSubmit(graphGuidedWriting)) {
+            missing.push(
+              `PROJECT_MANIFEST.json.graph_guided_writing must report ready/covered evidence with no missing claims (current: status=${graphGuidedWriting.status}, evidence_coverage=${graphGuidedWriting.evidenceCoverageStatus}, missing_claims=${graphGuidedWriting.missingEvidenceClaims.join(",") || "none"})`
+            );
+          }
+        }
+        {
+          const reviewIssueTracker = await hydrateReviewIssueTrackerState({
+            projectRoot,
+            value: manifest?.review_issue_tracker,
+          });
+          if (hasBlockingReviewIssues(reviewIssueTracker)) {
+            missing.push(
+              `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before submit handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
+            );
+          }
+        }
+        {
+          const paperQc = normalizePaperQcState(manifest?.paper_qc);
+          if (normalizeStage(paperQc.compileStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.paper_qc.compile_status = pass (current: ${paperQc.compileStatus})`
+            );
+          }
+          if (normalizeStage(paperQc.pageBudgetStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.paper_qc.page_budget_status = pass (current: ${paperQc.pageBudgetStatus})`
+            );
+          }
+          if (normalizeStage(paperQc.invalidFigureRefStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.paper_qc.invalid_figure_ref_status = pass (current: ${paperQc.invalidFigureRefStatus})`
+            );
+          }
+        }
+        {
+          const figureQc = normalizeFigureQcState(manifest?.figure_qc);
+          if (normalizeStage(figureQc.duplicateFigureStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.figure_qc.duplicate_figure_status = pass (current: ${figureQc.duplicateFigureStatus})`
+            );
+          }
+          if (normalizeStage(figureQc.captionAlignmentStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.figure_qc.caption_alignment_status = pass (current: ${figureQc.captionAlignmentStatus})`
+            );
+          }
+          if (normalizeStage(figureQc.textAlignmentStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.figure_qc.text_alignment_status = pass (current: ${figureQc.textAlignmentStatus})`
+            );
+          }
+          if (normalizeStage(figureQc.selectionStatus) === "fail") {
+            missing.push(
+              `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
+            );
+          }
+        }
+        {
+          const citationCollection = normalizeCitationCollectionState(
+            manifest?.citation_collection
+          );
+          if (normalizeStage(citationCollection.status) === "blocked") {
+            missing.push(
+              `PROJECT_MANIFEST.json.citation_collection.status must not be blocked (current: ${citationCollection.status})`
+            );
+          }
+          if (citationCollection.hallucinatedCount > 0) {
+            missing.push(
+              `PROJECT_MANIFEST.json.citation_collection.hallucinated_count = 0 (current: ${citationCollection.hallucinatedCount})`
+            );
+          }
         }
         {
           const theorySupport = normalizeTheorySupportState(manifest?.theory_state);
@@ -3904,6 +5328,9 @@ async function getMissingStageSignals(params: {
         const citationIntegrity = normalizeCitationIntegrityState(
           manifest?.citation_integrity
         );
+        const externalReview = normalizeExternalReviewState(
+          manifest?.external_review_state
+        );
         const verificationReportPath = resolveProjectArtifactPath(
           projectRoot,
           citationIntegrity.verificationReportPath
@@ -3911,6 +5338,14 @@ async function getMissingStageSignals(params: {
         const bibliographyPath = resolveProjectArtifactPath(
           projectRoot,
           citationIntegrity.bibliographyPath
+        );
+        const externalReviewPath = resolveProjectArtifactPath(
+          projectRoot,
+          externalReview.externalReviewPath
+        );
+        const reviewResponsePath = resolveProjectArtifactPath(
+          projectRoot,
+          externalReview.reviewResponsePath
         );
         if (citationIntegrity.enabled && citationIntegrity.verificationRequired) {
           if (citationIntegrity.verificationStatus !== "verified") {
@@ -3941,6 +5376,21 @@ async function getMissingStageSignals(params: {
               `{PROJ}/${citationIntegrity.bibliographyPath ?? DEFAULT_CITATION_BIB_PATH}`
             );
           }
+        }
+        if (!isExternalReviewConclusionReady(externalReview)) {
+          missing.push(
+            `PROJECT_MANIFEST.json.external_review_state must record a received Stanford review conclusion (current: status=${externalReview.status}, recommendation=${externalReview.overallRecommendation ?? "unset"})`
+          );
+        }
+        if (!externalReviewPath || !(await pathExists(externalReviewPath))) {
+          missing.push(
+            `{PROJ}/${externalReview.externalReviewPath ?? "reviewer/external_review_{date}.md"}`
+          );
+        }
+        if (!reviewResponsePath || !(await pathExists(reviewResponsePath))) {
+          missing.push(
+            `{PROJ}/${externalReview.reviewResponsePath ?? "reviewer/rebuttal_{date}.md"}`
+          );
         }
       }
       if (!(await hasPrefixedFile(path.join(projectRoot, "reviewer"), "external_review_"))) {
@@ -4266,6 +5716,12 @@ export async function buildWorkflowSnapshot(params: {
   const innovationReflection = normalizeInnovationReflectionState(
     asRecord(projectState.manifest?.innovation_reflection)
   );
+  const experimentSearch = projectState.projectRoot
+    ? await loadExperimentSearchState({
+        projectRoot: projectState.projectRoot,
+        manifest: projectState.manifest,
+      })
+    : normalizeExperimentSearchState(asRecord(projectState.manifest?.experiment_search));
   const theorySupport = normalizeTheorySupportState(
     asRecord(projectState.manifest?.theory_state)
   );
@@ -4274,6 +5730,31 @@ export async function buildWorkflowSnapshot(params: {
   );
   const citationIntegrity = normalizeCitationIntegrityState(
     asRecord(projectState.manifest?.citation_integrity)
+  );
+  const writingSession = normalizeWritingSessionState(
+    asRecord(projectState.manifest?.writing_session)
+  );
+  const reviewSession = normalizeReviewSessionState(
+    asRecord(projectState.manifest?.review_session)
+  );
+  const graphGuidedWriting = normalizeGraphGuidedWritingState(
+    asRecord(projectState.manifest?.graph_guided_writing)
+  );
+  const paperQc = normalizePaperQcState(asRecord(projectState.manifest?.paper_qc));
+  const figureQc = normalizeFigureQcState(asRecord(projectState.manifest?.figure_qc));
+  const citationCollection = normalizeCitationCollectionState(
+    asRecord(projectState.manifest?.citation_collection)
+  );
+  const reviewIssueTracker = projectState.projectRoot
+    ? await hydrateReviewIssueTrackerState({
+        projectRoot: projectState.projectRoot,
+        value: asRecord(projectState.manifest?.review_issue_tracker),
+      })
+    : normalizeReviewIssueTrackerState(
+        asRecord(projectState.manifest?.review_issue_tracker)
+      );
+  const externalReview = normalizeExternalReviewState(
+    asRecord(projectState.manifest?.external_review_state)
   );
   const recommendedOwner = currentStage ? STAGE_REQUIREMENTS[currentStage]?.owner ?? null : null;
   const recentExperiments = buildExperimentMemoryDigest(projectState.experimentLedger, 5);
@@ -4379,6 +5860,12 @@ export async function buildWorkflowSnapshot(params: {
     innovationReflectionLastAt: innovationReflection.lastReflectionAt,
     innovationReflectionPath: innovationReflection.lastReflectionPath,
     innovationReflectionPendingReason: innovationReflection.pendingReason,
+    experimentSearchStatus: experimentSearch.status,
+    experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
+    experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
+    experimentSearchBestNodeId: experimentSearch.bestNodeId,
+    experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
+    experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
     theorySupportStatus: theorySupport.status,
     theorySupportSignal: theorySupport.overallSignal,
     theoryStatePath: theorySupport.theoryStatePath,
@@ -4429,6 +5916,63 @@ export async function buildWorkflowSnapshot(params: {
     citationSuspiciousCount: citationIntegrity.suspiciousCitationCount,
     citationHallucinatedCount: citationIntegrity.hallucinatedCitationCount,
     citationPendingReason: citationIntegrity.pendingReason,
+    citationCollectionStatus: citationCollection.status,
+    citationCollectionCandidateCount: citationCollection.candidateCount,
+    citationCollectionVerifiedCount: citationCollection.verifiedCount,
+    citationCollectionSuspiciousCount: citationCollection.suspiciousCount,
+    citationCollectionHallucinatedCount: citationCollection.hallucinatedCount,
+    writingSessionStatus: writingSession.status,
+    writingCurrentSection: writingSession.currentSection,
+    writingDraftOrder: writingSession.draftOrder,
+    writingFinalizedSections: writingSession.finalizedSections,
+    writingCompileSafeSections: writingSession.compileSafeSections,
+    writingSectionPacketsReady: areWritingSectionPacketsReady(writingSession),
+    writingCurrentSectionReviewVerdict: writingSession.currentSection
+      ? writingSession.sectionPackets[writingSession.currentSection]?.reviewVerdict ?? null
+      : null,
+    writingGraphEvidenceCoverageStatus: writingSession.graphEvidenceCoverageStatus,
+    writingGraphEvidenceCoverageSummary: writingSession.graphEvidenceCoverageSummary,
+    reviewSessionStatus: reviewSession.status,
+    reviewSessionStageScope: reviewSession.stageScope,
+    reviewSessionRound: reviewSession.round,
+    reviewSessionVerdict: reviewSession.verdict,
+    reviewSessionSummary: reviewSession.reviewerSummary,
+    reviewRubricSummary: {
+      originality: reviewSession.rubric.originality,
+      quality: reviewSession.rubric.quality,
+      clarity: reviewSession.rubric.clarity,
+      significance: reviewSession.rubric.significance,
+      soundness: reviewSession.rubric.soundness,
+      citationIntegrity: reviewSession.rubric.citationIntegrity,
+      graphGroundedEvidenceSufficiency:
+        reviewSession.rubric.graphGroundedEvidenceSufficiency,
+    },
+    graphGuidedWritingStatus: graphGuidedWriting.status,
+    graphGuidedWritingEvidenceCoverageStatus:
+      graphGuidedWriting.evidenceCoverageStatus,
+    graphGuidedWritingMissingEvidenceClaims:
+      graphGuidedWriting.missingEvidenceClaims,
+    graphGuidedWritingScholarReserved:
+      graphGuidedWriting.scholarQueryReserved,
+    graphGuidedWritingScholarSkillSlot:
+      graphGuidedWriting.scholarQuerySkillSlot,
+    paperQcStatus: paperQc.status,
+    paperQcCompileStatus: paperQc.compileStatus,
+    paperQcChktexStatus: paperQc.chktexStatus,
+    paperQcPageBudgetStatus: paperQc.pageBudgetStatus,
+    figureQcStatus: figureQc.status,
+    figureQcDuplicateFigureStatus: figureQc.duplicateFigureStatus,
+    figureQcCaptionAlignmentStatus: figureQc.captionAlignmentStatus,
+    figureQcTextAlignmentStatus: figureQc.textAlignmentStatus,
+    figureQcSelectionStatus: figureQc.selectionStatus,
+    reviewIssueTrackerStatus: reviewIssueTracker.status,
+    reviewIssueCriticalCount: reviewIssueTracker.openCounts.critical,
+    reviewIssueHighCount: reviewIssueTracker.openCounts.high,
+    reviewIssueMediumCount: reviewIssueTracker.openCounts.medium,
+    reviewIssueLowCount: reviewIssueTracker.openCounts.low,
+    externalReviewStatus: externalReview.status,
+    externalReviewRecommendation: externalReview.overallRecommendation,
+    externalReviewRequiredAction: externalReview.requiredAction,
     recentExperiments,
     unreadMailbox,
     backgroundTasks: buildDynamicTasks({
@@ -4456,8 +6000,112 @@ export async function buildWorkflowSnapshot(params: {
 export function formatWorkflowSnapshotForPrompt(params: {
   snapshot: WorkflowSnapshot;
   trigger?: string;
+  detailLevel?: "full" | "focused";
 }): string {
   const { snapshot, trigger } = params;
+  if ((params.detailLevel ?? "full") === "focused") {
+    const lines: string[] = [];
+    lines.push("[Workflow Guard]");
+    lines.push(`Agent role: ${snapshot.role ?? "unknown"}`);
+    lines.push(`Project: ${snapshot.projectId ?? "unset"}`);
+    lines.push(`Stage: ${snapshot.currentStage ?? "unknown"} / ${snapshot.currentMicroStage ?? "unknown"}`);
+    lines.push(`Manifest owner: ${snapshot.ownerAgent ?? "unset"}`);
+    if (snapshot.recommendedOwner) {
+      lines.push(`Expected owner for this stage: ${snapshot.recommendedOwner}`);
+    }
+    if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
+      lines.push(
+        `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
+      );
+      lines.push(
+        `Non-owner rule: do not perform the stage work yourself. Route or hand off the task to ${snapshot.recommendedOwner}.`
+      );
+    } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
+      lines.push(
+        `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
+      );
+    }
+    if (snapshot.nextAction) {
+      lines.push(`next_action: ${snapshot.nextAction}`);
+    }
+    if (snapshot.resumeAction) {
+      lines.push(`resume_action: ${snapshot.resumeAction}`);
+    }
+    if (snapshot.blockingReason) {
+      lines.push(`blocking_reason: ${snapshot.blockingReason}`);
+    }
+    if (snapshot.allowedWriteScopes.length > 0) {
+      lines.push("Allowed writes:");
+      for (const scope of snapshot.allowedWriteScopes) {
+        lines.push(`- ${scope}`);
+      }
+    }
+    lines.push(
+      "Communication rule: do not use raw @agent mentions in chat. Use sessions_send or workflow mailbox for real routing."
+    );
+    lines.push(
+      "Stage completion rule: call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself."
+    );
+    if (snapshot.missingStageSignals.length > 0) {
+      lines.push("Missing stage signals:");
+      for (const signal of snapshot.missingStageSignals.slice(0, 5)) {
+        lines.push(`- ${signal}`);
+      }
+    }
+    lines.push("Prompt assembly:");
+    if (snapshot.role === "academic_writer") {
+      lines.push(
+        "Use the active section packet as the main task payload."
+      );
+      lines.push(
+        `Focus current section: ${snapshot.writingCurrentSection ?? "unset"}`
+      );
+      lines.push(
+        `Current writing state: status=${snapshot.writingSessionStatus ?? "unknown"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}, evidence_coverage=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}`
+      );
+      if (
+        (snapshot.reviewIssueHighCount ?? 0) > 0 ||
+        (snapshot.reviewIssueCriticalCount ?? 0) > 0 ||
+        (snapshot.reviewIssueMediumCount ?? 0) > 0
+      ) {
+        lines.push(
+          `Immediate issue delta: critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}`
+        );
+      }
+      if (
+        snapshot.paperQcStatus &&
+        snapshot.paperQcStatus !== "missing"
+      ) {
+        lines.push(
+          `Late-stage QC delta: paper_qc compile=${snapshot.paperQcCompileStatus ?? "unset"}, page_budget=${snapshot.paperQcPageBudgetStatus ?? "unset"}; figure_qc caption=${snapshot.figureQcCaptionAlignmentStatus ?? "unset"}, text=${snapshot.figureQcTextAlignmentStatus ?? "unset"}`
+        );
+      }
+      lines.push(
+        "Keep full workflow state out of the active drafting task. Use only the current round, immediate blockers, and the narrow evidence needed for this section."
+      );
+    } else if (snapshot.role === "reviewer" || snapshot.role === "cross-reviewer") {
+      lines.push(
+        "Use the active review packet or issue set as the main task payload."
+      );
+      lines.push(
+        `Current review state: status=${snapshot.reviewSessionStatus ?? "unknown"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
+      );
+      if (snapshot.reviewIssueTrackerStatus && snapshot.reviewIssueTrackerStatus !== "missing") {
+        lines.push(
+          `Issue tracker summary: status=${snapshot.reviewIssueTrackerStatus}, critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}, low=${snapshot.reviewIssueLowCount ?? 0}`
+        );
+      }
+      lines.push(
+        "Prefer unresolved issue deltas over replaying the entire workflow history."
+      );
+    } else {
+      lines.push(
+        "Prioritize the immediate stage-local task payload over distant workflow state."
+      );
+    }
+    lines.push("[/Workflow Guard]");
+    return lines.join("\n");
+  }
   const lines: string[] = [];
   lines.push("[Workflow Guard]");
   lines.push(`Agent role: ${snapshot.role ?? "unknown"}`);
@@ -4635,6 +6283,59 @@ export function formatWorkflowSnapshotForPrompt(params: {
     }
     if (snapshot.citationPendingReason) {
       lines.push(`Citation pending_reason: ${snapshot.citationPendingReason}`);
+    }
+  }
+  if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {
+    lines.push(
+      `Writing session: status=${snapshot.writingSessionStatus}, current_section=${snapshot.writingCurrentSection ?? "unset"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`
+    );
+    lines.push(
+      `Writing evidence coverage: status=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}, packets_ready=${snapshot.writingSectionPacketsReady ? "true" : "false"}`
+    );
+    if (snapshot.writingGraphEvidenceCoverageSummary) {
+      lines.push(
+        `Writing evidence summary: ${snapshot.writingGraphEvidenceCoverageSummary}`
+      );
+    }
+  }
+  if (snapshot.reviewSessionStatus && snapshot.reviewSessionStatus !== "missing") {
+    lines.push(
+      `Review session: status=${snapshot.reviewSessionStatus}, scope=${snapshot.reviewSessionStageScope ?? "unset"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
+    );
+    const reviewRubric = snapshot.reviewRubricSummary ?? {};
+    const rubricPairs = [
+      ["originality", reviewRubric.originality],
+      ["quality", reviewRubric.quality],
+      ["clarity", reviewRubric.clarity],
+      ["significance", reviewRubric.significance],
+      ["soundness", reviewRubric.soundness],
+      ["citation_integrity", reviewRubric.citationIntegrity],
+      ["graph_evidence", reviewRubric.graphGroundedEvidenceSufficiency],
+    ].filter(([, value]) => typeof value === "number");
+    if (rubricPairs.length > 0) {
+      lines.push(
+        `Reviewer rubric: ${rubricPairs
+          .map(([key, value]) => `${key}=${value}`)
+          .join(", ")}`
+      );
+    }
+    if (snapshot.reviewSessionSummary) {
+      lines.push(`Review summary: ${snapshot.reviewSessionSummary}`);
+    }
+  }
+  if (
+    snapshot.graphGuidedWritingStatus &&
+    snapshot.graphGuidedWritingStatus !== "missing"
+  ) {
+    lines.push(
+      `Graph-guided writing: status=${snapshot.graphGuidedWritingStatus}, evidence_coverage=${snapshot.graphGuidedWritingEvidenceCoverageStatus ?? "unknown"}, missing_claims=${snapshot.graphGuidedWritingMissingEvidenceClaims.join(",") || "none"}`
+    );
+    if (snapshot.graphGuidedWritingScholarReserved) {
+      lines.push(
+        `Scholar fallback slot: reserved=${snapshot.graphGuidedWritingScholarSkillSlot ?? "true"}`
+      );
+    } else {
+      lines.push("Scholar fallback slot: reserved=false");
     }
   }
   if (snapshot.recentExperiments.length > 0) {
@@ -5744,6 +7445,316 @@ export async function getCitationIntegrityStateSummary(params: {
   };
 }
 
+export async function getWritingSessionStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: WritingSessionState;
+  sectionPacketDirResolvedPath: string | null;
+  currentSectionPacketResolvedPath: string | null;
+  currentSectionPacketExists: boolean;
+  readyForSubmit: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeWritingSessionState(manifest.writing_session);
+  const sectionPacketDirResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_WRITING_SECTION_PACKET_DIR
+  );
+  const currentSectionPacket = state.currentSection
+    ? state.sectionPackets[state.currentSection] ?? null
+    : null;
+  const currentSectionPacketResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    currentSectionPacket?.packetPath ?? null
+  );
+  return {
+    state,
+    sectionPacketDirResolvedPath,
+    currentSectionPacketResolvedPath,
+    currentSectionPacketExists: currentSectionPacketResolvedPath
+      ? await pathExists(currentSectionPacketResolvedPath)
+      : false,
+    readyForSubmit: isWritingSessionReadyForSubmit(state),
+  };
+}
+
+export async function getReviewSessionStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ReviewSessionState;
+  reviewPacketResolvedPath: string | null;
+  reviewPacketExists: boolean;
+  graphEvidenceSummaryResolvedPath: string | null;
+  graphEvidenceSummaryExists: boolean;
+  latestReviewResolvedPath: string | null;
+  latestReviewExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeReviewSessionState(manifest.review_session);
+  const reviewPacketResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.reviewPacketPath
+  );
+  const graphEvidenceSummaryResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.graphEvidenceSummaryPath
+  );
+  const latestReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.latestReviewPath
+  );
+  return {
+    state,
+    reviewPacketResolvedPath,
+    reviewPacketExists: reviewPacketResolvedPath
+      ? await pathExists(reviewPacketResolvedPath)
+      : false,
+    graphEvidenceSummaryResolvedPath,
+    graphEvidenceSummaryExists: graphEvidenceSummaryResolvedPath
+      ? await pathExists(graphEvidenceSummaryResolvedPath)
+      : false,
+    latestReviewResolvedPath,
+    latestReviewExists: latestReviewResolvedPath
+      ? await pathExists(latestReviewResolvedPath)
+      : false,
+  };
+}
+
+export async function getGraphGuidedWritingStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: GraphGuidedWritingState;
+  anchorIndexResolvedPath: string | null;
+  anchorIndexExists: boolean;
+  literatureResolvedPath: string | null;
+  literatureExists: boolean;
+  readyForSubmit: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeGraphGuidedWritingState(manifest.graph_guided_writing);
+  const anchorIndexResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.anchorIndexPath
+  );
+  const literatureResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.literaturePath
+  );
+  return {
+    state,
+    anchorIndexResolvedPath,
+    anchorIndexExists: anchorIndexResolvedPath
+      ? await pathExists(anchorIndexResolvedPath)
+      : false,
+    literatureResolvedPath,
+    literatureExists: literatureResolvedPath
+      ? await pathExists(literatureResolvedPath)
+      : false,
+    readyForSubmit: isGraphGuidedWritingReadyForSubmit(state),
+  };
+}
+
+export async function getExternalReviewStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ExternalReviewState;
+  submittedPdfResolvedPath: string | null;
+  submittedPdfExists: boolean;
+  externalReviewResolvedPath: string | null;
+  externalReviewExists: boolean;
+  reviewResponseResolvedPath: string | null;
+  reviewResponseExists: boolean;
+  conclusionReady: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeExternalReviewState(manifest.external_review_state);
+  const submittedPdfResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.submittedPdfPath
+  );
+  const externalReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.externalReviewPath
+  );
+  const reviewResponseResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.reviewResponsePath
+  );
+  return {
+    state,
+    submittedPdfResolvedPath,
+    submittedPdfExists: submittedPdfResolvedPath
+      ? await pathExists(submittedPdfResolvedPath)
+      : false,
+    externalReviewResolvedPath,
+    externalReviewExists: externalReviewResolvedPath
+      ? await pathExists(externalReviewResolvedPath)
+      : false,
+    reviewResponseResolvedPath,
+    reviewResponseExists: reviewResponseResolvedPath
+      ? await pathExists(reviewResponseResolvedPath)
+      : false,
+    conclusionReady: isExternalReviewConclusionReady(state),
+  };
+}
+
+export async function getExperimentSearchStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ExperimentSearchState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+  evaluationSummaryResolvedPath: string | null;
+  evaluationSummaryExists: boolean;
+  plotPackResolvedPath: string | null;
+  plotPackExists: boolean;
+  readyForAnalysis: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = await loadExperimentSearchState({
+    projectRoot: params.projectRoot,
+    manifest,
+  });
+  const stateFilePath = getExperimentSearchPath(params.projectRoot);
+  const evaluationSummaryResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.evaluationSummaryPath
+  );
+  const plotPackResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.plotPackPath
+  );
+  return {
+    state,
+    stateFilePath,
+    stateFileExists: await pathExists(stateFilePath),
+    evaluationSummaryResolvedPath,
+    evaluationSummaryExists: evaluationSummaryResolvedPath
+      ? await pathExists(evaluationSummaryResolvedPath)
+      : false,
+    plotPackResolvedPath,
+    plotPackExists: plotPackResolvedPath
+      ? await pathExists(plotPackResolvedPath)
+      : false,
+    readyForAnalysis: isExperimentSearchReadyForAnalysis(state),
+  };
+}
+
+export async function getPaperQcStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: PaperQcState;
+  latestReportResolvedPath: string | null;
+  latestReportExists: boolean;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizePaperQcState(manifest.paper_qc);
+  const latestReportResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.latestReportPath
+  );
+  return {
+    state,
+    latestReportResolvedPath,
+    latestReportExists: latestReportResolvedPath
+      ? await pathExists(latestReportResolvedPath)
+      : false,
+    hardFailure: isPaperQcHardFailure(state),
+  };
+}
+
+export async function getCitationCollectionStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: CitationCollectionState;
+  progressResolvedPath: string | null;
+  progressExists: boolean;
+  cacheBibResolvedPath: string | null;
+  cacheBibExists: boolean;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeCitationCollectionState(manifest.citation_collection);
+  const progressResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.progressPath
+  );
+  const cacheBibResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.cacheBibPath
+  );
+  return {
+    state,
+    progressResolvedPath,
+    progressExists: progressResolvedPath ? await pathExists(progressResolvedPath) : false,
+    cacheBibResolvedPath,
+    cacheBibExists: cacheBibResolvedPath ? await pathExists(cacheBibResolvedPath) : false,
+    hardFailure: isCitationCollectionHardFailure(state),
+  };
+}
+
+export async function getFigureQcStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: FigureQcState;
+  figureReviewResolvedPath: string | null;
+  figureReviewExists: boolean;
+  figureSelectionResolvedPath: string | null;
+  figureSelectionExists: boolean;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeFigureQcState(manifest.figure_qc);
+  const figureReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.figureReviewPath
+  );
+  const figureSelectionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.figureSelectionPath
+  );
+  return {
+    state,
+    figureReviewResolvedPath,
+    figureReviewExists: figureReviewResolvedPath
+      ? await pathExists(figureReviewResolvedPath)
+      : false,
+    figureSelectionResolvedPath,
+    figureSelectionExists: figureSelectionResolvedPath
+      ? await pathExists(figureSelectionResolvedPath)
+      : false,
+    hardFailure: isFigureQcHardFailure(state),
+  };
+}
+
+export async function getReviewIssueTrackerStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ReviewIssueTrackerState;
+  issueManifestResolvedPath: string | null;
+  issueManifestExists: boolean;
+  hardBlockersOpen: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = await hydrateReviewIssueTrackerState({
+    projectRoot: params.projectRoot,
+    value: manifest.review_issue_tracker,
+  });
+  const issueManifestResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.issueManifestPath
+  );
+  return {
+    state,
+    issueManifestResolvedPath,
+    issueManifestExists: issueManifestResolvedPath
+      ? await pathExists(issueManifestResolvedPath)
+      : false,
+    hardBlockersOpen: hasBlockingReviewIssues(state),
+  };
+}
+
 export async function setIdleResearchState(params: {
   projectRoot: string;
   idleResearch: Record<string, unknown>;
@@ -6098,6 +8109,694 @@ export async function setWritingContractState(params: {
     templateStatus: evaluation.templateStatus,
     templateCopyStatus: evaluation.templateCopyStatus,
     paragraphLogicStatus: next.paragraphLogicStatus,
+  };
+}
+
+export async function setWritingSessionState(params: {
+  projectRoot: string;
+  writingSession: Record<string, unknown>;
+}): Promise<{
+  state: WritingSessionState;
+  currentSectionPacketResolvedPath: string | null;
+  readyForSubmit: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeWritingSessionState(manifest.writing_session);
+  const patch = asRecord(params.writingSession) ?? {};
+  const sectionPacketsPatch = asRecord(
+    patch.sectionPackets ?? patch.section_packets
+  );
+  const next: WritingSessionState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    currentSection:
+      normalizeStage(patch.currentSection ?? patch.current_section) ??
+      current.currentSection,
+    draftOrder:
+      patch.draftOrder || patch.draft_order
+        ? asStringArray(patch.draftOrder ?? patch.draft_order)
+            .map((entry) => normalizeStage(entry) ?? entry)
+            .filter(Boolean)
+        : current.draftOrder,
+    finalizedSections:
+      patch.finalizedSections || patch.finalized_sections
+        ? asStringArray(patch.finalizedSections ?? patch.finalized_sections)
+            .map((entry) => normalizeStage(entry) ?? entry)
+            .filter(Boolean)
+        : current.finalizedSections,
+    compileSafeSections:
+      patch.compileSafeSections || patch.compile_safe_sections
+        ? asStringArray(patch.compileSafeSections ?? patch.compile_safe_sections)
+            .map((entry) => normalizeStage(entry) ?? entry)
+            .filter(Boolean)
+        : current.compileSafeSections,
+    sectionPackets: sectionPacketsPatch
+      ? Object.fromEntries(
+          Object.entries(sectionPacketsPatch).map(([key, value]) => [
+            normalizeStage(key) ?? key,
+            normalizeWritingSectionPacketState(key, value),
+          ])
+        )
+      : current.sectionPackets,
+    headlineClaimEvidenceStatus:
+      normalizeStage(
+        patch.headlineClaimEvidenceStatus ?? patch.headline_claim_evidence_status
+      ) ?? current.headlineClaimEvidenceStatus,
+    graphEvidenceCoverageStatus:
+      normalizeStage(
+        patch.graphEvidenceCoverageStatus ?? patch.graph_evidence_coverage_status
+      ) ?? current.graphEvidenceCoverageStatus,
+    graphEvidenceCoverageSummary:
+      pickString(patch, [
+        "graphEvidenceCoverageSummary",
+        "graph_evidence_coverage_summary",
+      ]) ?? current.graphEvidenceCoverageSummary,
+    citationPlanMode:
+      normalizeStage(patch.citationPlanMode ?? patch.citation_plan_mode) ??
+      current.citationPlanMode,
+    externalScholarQueryMode:
+      normalizeStage(
+        patch.externalScholarQueryMode ?? patch.external_scholar_query_mode
+      ) ?? current.externalScholarQueryMode,
+    futureScholarVerificationSkill:
+      pickString(patch, [
+        "futureScholarVerificationSkill",
+        "future_scholar_verification_skill",
+      ]) ?? current.futureScholarVerificationSkill,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  manifest.writing_session = serializeWritingSessionState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  const currentSectionPacket = next.currentSection
+    ? next.sectionPackets[next.currentSection] ?? null
+    : null;
+  return {
+    state: next,
+    currentSectionPacketResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      currentSectionPacket?.packetPath ?? null
+    ),
+    readyForSubmit: isWritingSessionReadyForSubmit(next),
+  };
+}
+
+export async function setReviewSessionState(params: {
+  projectRoot: string;
+  reviewSession: Record<string, unknown>;
+}): Promise<{
+  state: ReviewSessionState;
+  reviewPacketResolvedPath: string | null;
+  latestReviewResolvedPath: string | null;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeReviewSessionState(manifest.review_session);
+  const patch = asRecord(params.reviewSession) ?? {};
+  const next: ReviewSessionState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    stageScope:
+      normalizeStage(patch.stageScope ?? patch.stage_scope) ?? current.stageScope,
+    round: Math.max(
+      0,
+      Math.floor(pickNumber(patch, ["round"]) ?? current.round)
+    ),
+    reviewPacketPath:
+      pickString(patch, ["reviewPacketPath", "review_packet_path"]) ??
+      current.reviewPacketPath,
+    graphEvidenceSummaryPath:
+      pickString(patch, [
+        "graphEvidenceSummaryPath",
+        "graph_evidence_summary_path",
+      ]) ?? current.graphEvidenceSummaryPath,
+    latestReviewPath:
+      pickString(patch, ["latestReviewPath", "latest_review_path"]) ??
+      current.latestReviewPath,
+    verdict: pickString(patch, ["verdict"]) ?? current.verdict,
+    rubric:
+      patch.rubric != null
+        ? normalizeReviewSessionRubric(patch.rubric)
+        : current.rubric,
+    reviewerSummary:
+      pickString(patch, ["reviewerSummary", "reviewer_summary"]) ??
+      current.reviewerSummary,
+    actionItems:
+      patch.actionItems || patch.action_items
+        ? asStringArray(patch.actionItems ?? patch.action_items)
+        : current.actionItems,
+    blockingArtifacts:
+      patch.blockingArtifacts || patch.blocking_artifacts
+        ? asStringArray(patch.blockingArtifacts ?? patch.blocking_artifacts)
+        : current.blockingArtifacts,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  manifest.review_session = serializeReviewSessionState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    reviewPacketResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.reviewPacketPath
+    ),
+    latestReviewResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.latestReviewPath
+    ),
+  };
+}
+
+export async function setGraphGuidedWritingState(params: {
+  projectRoot: string;
+  graphGuidedWriting: Record<string, unknown>;
+}): Promise<{
+  state: GraphGuidedWritingState;
+  anchorIndexResolvedPath: string | null;
+  readyForSubmit: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeGraphGuidedWritingState(manifest.graph_guided_writing);
+  const patch = asRecord(params.graphGuidedWriting) ?? {};
+  const next: GraphGuidedWritingState = {
+    ...current,
+    enabled: pickBoolean(patch, ["enabled"]) ?? current.enabled,
+    status: normalizeStage(patch.status) ?? current.status,
+    anchorIndexPath:
+      pickString(patch, ["anchorIndexPath", "anchor_index_path"]) ??
+      current.anchorIndexPath,
+    frontierFiles:
+      patch.frontierFiles || patch.frontier_files
+        ? asStringArray(patch.frontierFiles ?? patch.frontier_files)
+        : current.frontierFiles,
+    literaturePath:
+      pickString(patch, ["literaturePath", "literature_path"]) ??
+      current.literaturePath,
+    claimEvidencePacketPaths:
+      patch.claimEvidencePacketPaths || patch.claim_evidence_packet_paths
+        ? asStringArray(
+            patch.claimEvidencePacketPaths ?? patch.claim_evidence_packet_paths
+          )
+        : current.claimEvidencePacketPaths,
+    requiredEvidencePointerCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, [
+          "requiredEvidencePointerCount",
+          "required_evidence_pointer_count",
+        ]) ?? current.requiredEvidencePointerCount
+      )
+    ),
+    coveredHeadlineClaimCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, [
+          "coveredHeadlineClaimCount",
+          "covered_headline_claim_count",
+        ]) ?? current.coveredHeadlineClaimCount
+      )
+    ),
+    totalHeadlineClaimCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, [
+          "totalHeadlineClaimCount",
+          "total_headline_claim_count",
+        ]) ?? current.totalHeadlineClaimCount
+      )
+    ),
+    evidenceCoverageStatus:
+      normalizeStage(
+        patch.evidenceCoverageStatus ?? patch.evidence_coverage_status
+      ) ?? current.evidenceCoverageStatus,
+    missingEvidenceClaims:
+      patch.missingEvidenceClaims || patch.missing_evidence_claims
+        ? asStringArray(
+            patch.missingEvidenceClaims ?? patch.missing_evidence_claims
+          )
+        : current.missingEvidenceClaims,
+    citationSourceMode:
+      normalizeStage(patch.citationSourceMode ?? patch.citation_source_mode) ??
+      current.citationSourceMode,
+    scholarQueryReserved:
+      pickBoolean(patch, ["scholarQueryReserved", "scholar_query_reserved"]) ??
+      current.scholarQueryReserved,
+    scholarQuerySkillSlot:
+      pickString(patch, ["scholarQuerySkillSlot", "scholar_query_skill_slot"]) ??
+      current.scholarQuerySkillSlot,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  manifest.graph_guided_writing = serializeGraphGuidedWritingState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    anchorIndexResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.anchorIndexPath
+    ),
+    readyForSubmit: isGraphGuidedWritingReadyForSubmit(next),
+  };
+}
+
+export async function setExternalReviewState(params: {
+  projectRoot: string;
+  externalReview: Record<string, unknown>;
+}): Promise<{
+  state: ExternalReviewState;
+  submittedPdfResolvedPath: string | null;
+  externalReviewResolvedPath: string | null;
+  reviewResponseResolvedPath: string | null;
+  conclusionReady: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeExternalReviewState(manifest.external_review_state);
+  const patch = asRecord(params.externalReview) ?? {};
+  const next: ExternalReviewState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    provider: pickString(patch, ["provider"]) ?? current.provider,
+    reviewSkill:
+      pickString(patch, ["reviewSkill", "review_skill"]) ?? current.reviewSkill,
+    sourceLabel:
+      pickString(patch, ["sourceLabel", "source_label"]) ?? current.sourceLabel,
+    submissionId:
+      pickString(patch, ["submissionId", "submission_id"]) ?? current.submissionId,
+    submittedPdfPath:
+      pickString(patch, ["submittedPdfPath", "submitted_pdf_path"]) ??
+      current.submittedPdfPath,
+    externalReviewPath:
+      pickString(patch, ["externalReviewPath", "external_review_path"]) ??
+      current.externalReviewPath,
+    reviewResponsePath:
+      pickString(patch, ["reviewResponsePath", "review_response_path"]) ??
+      current.reviewResponsePath,
+    overallRecommendation:
+      pickString(patch, [
+        "overallRecommendation",
+        "overall_recommendation",
+      ]) ?? current.overallRecommendation,
+    requiredAction:
+      pickString(patch, ["requiredAction", "required_action"]) ??
+      current.requiredAction,
+    lastPolledAt:
+      pickString(patch, ["lastPolledAt", "last_polled_at"]) ?? current.lastPolledAt,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  if (isExternalReviewConclusionReady(next)) {
+    next.pendingReason = null;
+  } else if (!next.pendingReason) {
+    next.pendingReason =
+      "Mandatory external Stanford review is not yet concluded. Submit the compiled PDF and persist the review outcome before completion.";
+  }
+
+  manifest.external_review_state = serializeExternalReviewState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    submittedPdfResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.submittedPdfPath
+    ),
+    externalReviewResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.externalReviewPath
+    ),
+    reviewResponseResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.reviewResponsePath
+    ),
+    conclusionReady: isExternalReviewConclusionReady(next),
+  };
+}
+
+export async function setExperimentSearchState(params: {
+  projectRoot: string;
+  experimentSearch: Record<string, unknown>;
+}): Promise<{
+  state: ExperimentSearchState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+  readyForAnalysis: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = await loadExperimentSearchState({
+    projectRoot: params.projectRoot,
+    manifest,
+  });
+  const patch = asRecord(params.experimentSearch) ?? {};
+  const next: ExperimentSearchState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    currentMainStage:
+      normalizeStage(patch.currentMainStage ?? patch.current_main_stage) ??
+      current.currentMainStage,
+    currentSubstage:
+      normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
+      current.currentSubstage,
+    frontierNodeIds:
+      patch.frontierNodeIds || patch.frontier_node_ids
+        ? asStringArray(patch.frontierNodeIds ?? patch.frontier_node_ids)
+        : current.frontierNodeIds,
+    bestNodeId:
+      pickString(patch, ["bestNodeId", "best_node_id"]) ?? current.bestNodeId,
+    completedNodeIds:
+      patch.completedNodeIds || patch.completed_node_ids
+        ? asStringArray(patch.completedNodeIds ?? patch.completed_node_ids)
+        : current.completedNodeIds,
+    failedNodeIds:
+      patch.failedNodeIds || patch.failed_node_ids
+        ? asStringArray(patch.failedNodeIds ?? patch.failed_node_ids)
+        : current.failedNodeIds,
+    triedHyperparams:
+      patch.triedHyperparams || patch.tried_hyperparams
+        ? asStringArray(patch.triedHyperparams ?? patch.tried_hyperparams)
+        : current.triedHyperparams,
+    completedAblations:
+      patch.completedAblations || patch.completed_ablations
+        ? asStringArray(patch.completedAblations ?? patch.completed_ablations)
+        : current.completedAblations,
+    multiSeedStatus:
+      normalizeStage(patch.multiSeedStatus ?? patch.multi_seed_status) ??
+      current.multiSeedStatus,
+    evaluationSummaryPath:
+      pickString(patch, [
+        "evaluationSummaryPath",
+        "evaluation_summary_path",
+      ]) ?? current.evaluationSummaryPath,
+    plotPackStatus:
+      normalizeStage(patch.plotPackStatus ?? patch.plot_pack_status) ??
+      current.plotPackStatus,
+    plotPackPath:
+      pickString(patch, ["plotPackPath", "plot_pack_path"]) ??
+      current.plotPackPath,
+    stageProgressPath:
+      pickString(patch, ["stageProgressPath", "stage_progress_path"]) ??
+      current.stageProgressPath,
+    checkpointPath:
+      pickString(patch, ["checkpointPath", "checkpoint_path"]) ??
+      current.checkpointPath,
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.experiment_search = serializeExperimentSearchState(next);
+  await saveExperimentSearchStateFile(params.projectRoot, next);
+  await saveManifest(params.projectRoot, manifest);
+
+  const stateFilePath = getExperimentSearchPath(params.projectRoot);
+  return {
+    state: next,
+    stateFilePath,
+    stateFileExists: await pathExists(stateFilePath),
+    readyForAnalysis: isExperimentSearchReadyForAnalysis(next),
+  };
+}
+
+export async function setPaperQcState(params: {
+  projectRoot: string;
+  paperQc: Record<string, unknown>;
+}): Promise<{
+  state: PaperQcState;
+  latestReportResolvedPath: string | null;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizePaperQcState(manifest.paper_qc);
+  const patch = asRecord(params.paperQc) ?? {};
+  const next: PaperQcState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    compileStatus:
+      normalizeStage(patch.compileStatus ?? patch.compile_status) ??
+      current.compileStatus,
+    compileRoundCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["compileRoundCount", "compile_round_count"]) ??
+          current.compileRoundCount
+      )
+    ),
+    chktexStatus:
+      normalizeStage(patch.chktexStatus ?? patch.chktex_status) ??
+      current.chktexStatus,
+    pageBudgetStatus:
+      normalizeStage(patch.pageBudgetStatus ?? patch.page_budget_status) ??
+      current.pageBudgetStatus,
+    referenceStartPage:
+      pickNumber(patch, ["referenceStartPage", "reference_start_page"]) ??
+      current.referenceStartPage,
+    bodyPageCount:
+      pickNumber(patch, ["bodyPageCount", "body_page_count"]) ??
+      current.bodyPageCount,
+    unusedFigureStatus:
+      normalizeStage(patch.unusedFigureStatus ?? patch.unused_figure_status) ??
+      current.unusedFigureStatus,
+    invalidFigureRefStatus:
+      normalizeStage(
+        patch.invalidFigureRefStatus ?? patch.invalid_figure_ref_status
+      ) ?? current.invalidFigureRefStatus,
+    reflectionRoundCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, [
+          "reflectionRoundCount",
+          "reflection_round_count",
+        ]) ?? current.reflectionRoundCount
+      )
+    ),
+    latestReportPath:
+      pickString(patch, ["latestReportPath", "latest_report_path"]) ??
+      current.latestReportPath,
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.paper_qc = serializePaperQcState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    latestReportResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.latestReportPath
+    ),
+    hardFailure: isPaperQcHardFailure(next),
+  };
+}
+
+export async function setCitationCollectionState(params: {
+  projectRoot: string;
+  citationCollection: Record<string, unknown>;
+}): Promise<{
+  state: CitationCollectionState;
+  progressResolvedPath: string | null;
+  cacheBibResolvedPath: string | null;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeCitationCollectionState(manifest.citation_collection);
+  const patch = asRecord(params.citationCollection) ?? {};
+  const next: CitationCollectionState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    progressPath:
+      pickString(patch, ["progressPath", "progress_path"]) ??
+      current.progressPath,
+    cacheBibPath:
+      pickString(patch, ["cacheBibPath", "cache_bib_path"]) ??
+      current.cacheBibPath,
+    candidateCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["candidateCount", "candidate_count"]) ??
+          current.candidateCount
+      )
+    ),
+    verifiedCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["verifiedCount", "verified_count"]) ??
+          current.verifiedCount
+      )
+    ),
+    suspiciousCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["suspiciousCount", "suspicious_count"]) ??
+          current.suspiciousCount
+      )
+    ),
+    hallucinatedCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["hallucinatedCount", "hallucinated_count"]) ??
+          current.hallucinatedCount
+      )
+    ),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.citation_collection = serializeCitationCollectionState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    progressResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.progressPath
+    ),
+    cacheBibResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.cacheBibPath
+    ),
+    hardFailure: isCitationCollectionHardFailure(next),
+  };
+}
+
+export async function setFigureQcState(params: {
+  projectRoot: string;
+  figureQc: Record<string, unknown>;
+}): Promise<{
+  state: FigureQcState;
+  figureReviewResolvedPath: string | null;
+  figureSelectionResolvedPath: string | null;
+  hardFailure: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeFigureQcState(manifest.figure_qc);
+  const patch = asRecord(params.figureQc) ?? {};
+  const next: FigureQcState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    figureReviewPath:
+      pickString(patch, ["figureReviewPath", "figure_review_path"]) ??
+      current.figureReviewPath,
+    figureSelectionPath:
+      pickString(patch, ["figureSelectionPath", "figure_selection_path"]) ??
+      current.figureSelectionPath,
+    duplicateFigureStatus:
+      normalizeStage(
+        patch.duplicateFigureStatus ?? patch.duplicate_figure_status
+      ) ?? current.duplicateFigureStatus,
+    captionAlignmentStatus:
+      normalizeStage(
+        patch.captionAlignmentStatus ?? patch.caption_alignment_status
+      ) ?? current.captionAlignmentStatus,
+    textAlignmentStatus:
+      normalizeStage(
+        patch.textAlignmentStatus ?? patch.text_alignment_status
+      ) ?? current.textAlignmentStatus,
+    selectionStatus:
+      normalizeStage(patch.selectionStatus ?? patch.selection_status) ??
+      current.selectionStatus,
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.figure_qc = serializeFigureQcState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    figureReviewResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.figureReviewPath
+    ),
+    figureSelectionResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.figureSelectionPath
+    ),
+    hardFailure: isFigureQcHardFailure(next),
+  };
+}
+
+export async function setReviewIssueTrackerState(params: {
+  projectRoot: string;
+  reviewIssueTracker: Record<string, unknown>;
+}): Promise<{
+  state: ReviewIssueTrackerState;
+  issueManifestResolvedPath: string | null;
+  hardBlockersOpen: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = await hydrateReviewIssueTrackerState({
+    projectRoot: params.projectRoot,
+    value: manifest.review_issue_tracker,
+  });
+  const patch = asRecord(params.reviewIssueTracker) ?? {};
+  let next: ReviewIssueTrackerState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    openCounts:
+      patch.openCounts || patch.open_counts
+        ? normalizeReviewIssueCounts(patch.openCounts ?? patch.open_counts)
+        : current.openCounts,
+    issueManifestPath:
+      pickString(patch, ["issueManifestPath", "issue_manifest_path"]) ??
+      current.issueManifestPath,
+    lastReviewRound: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["lastReviewRound", "last_review_round"]) ??
+          current.lastReviewRound
+      )
+    ),
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+  };
+
+  next = await hydrateReviewIssueTrackerState({
+    projectRoot: params.projectRoot,
+    value: serializeReviewIssueTrackerState(next),
+  });
+
+  manifest.review_issue_tracker = serializeReviewIssueTrackerState(next);
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
+    issueManifestResolvedPath: resolveProjectArtifactPath(
+      params.projectRoot,
+      next.issueManifestPath
+    ),
+    hardBlockersOpen: hasBlockingReviewIssues(next),
   };
 }
 
@@ -6832,6 +9531,33 @@ export async function runWorkflowAutoIterator(params: {
   };
 
   result.auditPath = await writeAutoIteratorAudit(projectRoot, result);
+  await appendWorkflowTraceEvent({
+    projectRoot,
+    projectId,
+    kind: "auto_iterator",
+    action: "auto_iterator_tick",
+    functionName: "runWorkflowAutoIterator",
+    stage: stageAfter,
+    owner: ownerAfter,
+    agentId: actorRole,
+    sessionKey: null,
+    summary: `Auto iterator evaluated ${stageBefore} -> ${stageAfter}`,
+    details: {
+      mode,
+      stageBefore,
+      stageEffective,
+      stageAfter,
+      regressed,
+      gateBlocking: gateEvaluation.blocking,
+      blockingReason,
+      missingStageSignals: activeStageSignals,
+      configuredAutoMode: autoModeEvaluation.configuredMode,
+      effectiveAutoMode: autoModeEvaluation.effectiveMode,
+      ownerBefore,
+      ownerAfter,
+      nextAction,
+    },
+  });
   return result;
 }
 

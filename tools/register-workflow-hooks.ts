@@ -427,6 +427,12 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           formatWorkflowSnapshotForPrompt({
             snapshot,
             trigger,
+            detailLevel:
+              snapshot.role === "academic_writer" ||
+              snapshot.role === "reviewer" ||
+              snapshot.role === "cross-reviewer"
+                ? "focused"
+                : "full",
           }),
         ]
           .filter(Boolean)

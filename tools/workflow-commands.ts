@@ -536,6 +536,93 @@ function formatWorkflowStatusText(params: {
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
     `Experiment sync: ${snapshot.experimentSyncRequired ? `required (${snapshot.experimentPapernexusSyncStatus ?? "pending"})` : "not required"}`,
   ];
+  if (snapshot.experimentSearchStatus && snapshot.experimentSearchStatus !== "missing") {
+    lines.push(
+      `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {
+    lines.push(
+      `Writing session: status=${snapshot.writingSessionStatus}, current_section=${snapshot.writingCurrentSection ?? "unset"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`
+    );
+    lines.push(
+      `Writing evidence coverage: status=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}, packets_ready=${snapshot.writingSectionPacketsReady ? "true" : "false"}`
+    );
+  }
+  if (snapshot.reviewSessionStatus && snapshot.reviewSessionStatus !== "missing") {
+    lines.push(
+      `Review session: status=${snapshot.reviewSessionStatus}, scope=${snapshot.reviewSessionStageScope ?? "unset"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
+    );
+    const reviewRubric = snapshot.reviewRubricSummary ?? {};
+    const rubricPairs = [
+      ["originality", reviewRubric.originality],
+      ["quality", reviewRubric.quality],
+      ["clarity", reviewRubric.clarity],
+      ["significance", reviewRubric.significance],
+      ["soundness", reviewRubric.soundness],
+      ["citation_integrity", reviewRubric.citationIntegrity],
+      ["graph_evidence", reviewRubric.graphGroundedEvidenceSufficiency],
+    ].filter(([, value]) => typeof value === "number");
+    if (rubricPairs.length > 0) {
+      lines.push(
+        `Reviewer rubric: ${rubricPairs
+          .map(([key, value]) => `${key}=${value}`)
+          .join(", ")}`
+      );
+    }
+  }
+  if (
+    snapshot.reviewIssueTrackerStatus &&
+    snapshot.reviewIssueTrackerStatus !== "missing"
+  ) {
+    lines.push(
+      `Review issues: status=${snapshot.reviewIssueTrackerStatus}, critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}, low=${snapshot.reviewIssueLowCount ?? 0}`
+    );
+  }
+  if (
+    snapshot.graphGuidedWritingStatus &&
+    snapshot.graphGuidedWritingStatus !== "missing"
+  ) {
+    const missingClaims = Array.isArray(snapshot.graphGuidedWritingMissingEvidenceClaims)
+      ? snapshot.graphGuidedWritingMissingEvidenceClaims
+      : [];
+    lines.push(
+      `Graph-guided writing: status=${snapshot.graphGuidedWritingStatus}, evidence_coverage=${snapshot.graphGuidedWritingEvidenceCoverageStatus ?? "unknown"}, missing_claims=${missingClaims.join(",") || "none"}`
+    );
+    if (snapshot.graphGuidedWritingScholarReserved) {
+      lines.push(
+        `Scholar fallback slot: reserved=${snapshot.graphGuidedWritingScholarSkillSlot ?? "true"}`
+      );
+    } else {
+      lines.push("Scholar fallback slot: reserved=false");
+    }
+  }
+  if (
+    snapshot.citationCollectionStatus &&
+    snapshot.citationCollectionStatus !== "missing"
+  ) {
+    lines.push(
+      `Citation collection: status=${snapshot.citationCollectionStatus}, verified=${snapshot.citationCollectionVerifiedCount ?? 0}/${snapshot.citationCollectionCandidateCount ?? 0}, suspicious=${snapshot.citationCollectionSuspiciousCount ?? 0}, hallucinated=${snapshot.citationCollectionHallucinatedCount ?? 0}`
+    );
+  }
+  if (snapshot.paperQcStatus && snapshot.paperQcStatus !== "missing") {
+    lines.push(
+      `Paper QC: status=${snapshot.paperQcStatus}, compile=${snapshot.paperQcCompileStatus ?? "unset"}, chktex=${snapshot.paperQcChktexStatus ?? "unset"}, page_budget=${snapshot.paperQcPageBudgetStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.figureQcStatus && snapshot.figureQcStatus !== "missing") {
+    lines.push(
+      `Figure QC: status=${snapshot.figureQcStatus}, duplicate_figures=${snapshot.figureQcDuplicateFigureStatus ?? "unset"}, caption_alignment=${snapshot.figureQcCaptionAlignmentStatus ?? "unset"}, text_alignment=${snapshot.figureQcTextAlignmentStatus ?? "unset"}, selection=${snapshot.figureQcSelectionStatus ?? "unset"}`
+    );
+  }
+  if (
+    snapshot.externalReviewStatus &&
+    snapshot.externalReviewStatus !== "missing"
+  ) {
+    lines.push(
+      `External review: status=${snapshot.externalReviewStatus}, recommendation=${snapshot.externalReviewRecommendation ?? "unset"}, required_action=${snapshot.externalReviewRequiredAction ?? "unset"}`
+    );
+  }
   if (!snapshot.projectRoot) {
     lines.push(
       "Project binding: no active project is currently bound to this conversation or workflow session."

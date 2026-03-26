@@ -4,15 +4,24 @@ import {
   buildWorkflowSnapshot,
   canRoleContact,
   checkGraphPresenceForWorkflow,
+  getCitationCollectionStateSummary,
   getChannelProjectBindingForWorkflow,
   getCitationIntegrityStateSummary,
+  getExperimentSearchStateSummary,
+  getExternalReviewStateSummary,
   getExperimentMemorySummary,
+  getFigureQcStateSummary,
+  getGraphGuidedWritingStateSummary,
   getIdleResearchStateSummary,
   getInnovationReflectionStateSummary,
+  getPaperQcStateSummary,
   getProjectRootForWorkflow,
+  getReviewIssueTrackerStateSummary,
+  getReviewSessionStateSummary,
   getTheoryStateSummary,
   getWorkflowContactCooldown,
   getWritingContractStateSummary,
+  getWritingSessionStateSummary,
   inferTargetRoleFromToolParams,
   listChannelProjectBindingsForWorkflow,
   materializeTheoryAppendix,
@@ -24,7 +33,16 @@ import {
   recordTheoryState,
   recordWorkflowContactEvent,
   runWorkflowAutoIterator,
+  setCitationCollectionState,
+  setExperimentSearchState,
+  setExternalReviewState,
+  setFigureQcState,
+  setGraphGuidedWritingState,
   setIdleResearchState,
+  setPaperQcState,
+  setReviewIssueTrackerState,
+  setReviewSessionState,
+  setWritingSessionState,
   setWritingContractState,
   unbindChannelProjectForWorkflow,
   upsertExperimentLedgerEntry,
@@ -55,6 +73,7 @@ import {
   enqueueWorkflowTask,
 } from "./workflow-coordination";
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
+import { appendWorkflowTraceEvent } from "./workflow-trace";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -79,6 +98,55 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "send_mailbox",
   "ack_mailbox",
 ]);
+
+const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
+  get_snapshot: "buildWorkflowSnapshot",
+  check_graph_presence: "checkGraphPresenceForWorkflow",
+  auto_iterator_tick: "runWorkflowAutoIterator",
+  start_background_run: "startBackgroundWorkflowRun",
+  get_idle_research: "getIdleResearchStateSummary",
+  set_idle_research: "setIdleResearchState",
+  record_idle_research_run: "recordIdleResearchRun",
+  get_experiment_memory: "getExperimentMemorySummary",
+  get_innovation_reflection: "getInnovationReflectionStateSummary",
+  get_theory_state: "getTheoryStateSummary",
+  get_writing_contract: "getWritingContractStateSummary",
+  get_writing_session: "getWritingSessionStateSummary",
+  set_writing_session: "setWritingSessionState",
+  get_review_session: "getReviewSessionStateSummary",
+  set_review_session: "setReviewSessionState",
+  get_graph_guided_writing: "getGraphGuidedWritingStateSummary",
+  set_graph_guided_writing: "setGraphGuidedWritingState",
+  get_citation_integrity: "getCitationIntegrityStateSummary",
+  get_paper_qc: "getPaperQcStateSummary",
+  set_paper_qc: "setPaperQcState",
+  get_figure_qc: "getFigureQcStateSummary",
+  set_figure_qc: "setFigureQcState",
+  get_citation_collection: "getCitationCollectionStateSummary",
+  set_citation_collection: "setCitationCollectionState",
+  get_review_issue_tracker: "getReviewIssueTrackerStateSummary",
+  set_review_issue_tracker: "setReviewIssueTrackerState",
+  get_experiment_search: "getExperimentSearchStateSummary",
+  set_experiment_search: "setExperimentSearchState",
+  get_external_review_state: "getExternalReviewStateSummary",
+  set_external_review_state: "setExternalReviewState",
+  get_gate_review_state: "readGateReviewStore",
+  upsert_experiment: "upsertExperimentLedgerEntry",
+  record_theory_state: "recordTheoryState",
+  upsert_proof_packet: "upsertTheoryProofPacket",
+  materialize_theory_appendix: "materializeTheoryAppendix",
+  record_innovation_reflection: "recordInnovationReflection",
+  set_writing_contract: "setWritingContractState",
+  record_citation_verification: "recordCitationVerification",
+  get_channel_project_binding: "getChannelProjectBindingForWorkflow",
+  bind_channel_project: "bindChannelProjectForWorkflow",
+  unbind_channel_project: "unbindChannelProjectForWorkflow",
+  list_channel_project_bindings: "listChannelProjectBindingsForWorkflow",
+  dispatch_task: "dispatchWorkflowTaskToAgent",
+  read_mailbox: "readWorkflowMailboxForAgent",
+  send_mailbox: "queueWorkflowMailboxMessage",
+  ack_mailbox: "acknowledgeWorkflowMailboxMessage",
+};
 
 async function resolveWorkflowToolState(params: {
   plugin: PluginRegistrationContext;
@@ -308,7 +376,25 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_innovation_reflection",
               "get_theory_state",
               "get_writing_contract",
+              "get_writing_session",
+              "set_writing_session",
+              "get_review_session",
+              "set_review_session",
+              "get_graph_guided_writing",
+              "set_graph_guided_writing",
               "get_citation_integrity",
+              "get_paper_qc",
+              "set_paper_qc",
+              "get_figure_qc",
+              "set_figure_qc",
+              "get_citation_collection",
+              "set_citation_collection",
+              "get_review_issue_tracker",
+              "set_review_issue_tracker",
+              "get_experiment_search",
+              "set_experiment_search",
+              "get_external_review_state",
+              "set_external_review_state",
               "get_gate_review_state",
               "upsert_experiment",
               "record_theory_state",
@@ -368,6 +454,42 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           writingContract: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writingSession: {
+            type: "object",
+            additionalProperties: true,
+          },
+          reviewSession: {
+            type: "object",
+            additionalProperties: true,
+          },
+          externalReview: {
+            type: "object",
+            additionalProperties: true,
+          },
+          paperQc: {
+            type: "object",
+            additionalProperties: true,
+          },
+          figureQc: {
+            type: "object",
+            additionalProperties: true,
+          },
+          citationCollection: {
+            type: "object",
+            additionalProperties: true,
+          },
+          reviewIssueTracker: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentSearch: {
+            type: "object",
+            additionalProperties: true,
+          },
+          graphGuidedWriting: {
             type: "object",
             additionalProperties: true,
           },
@@ -441,10 +563,36 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             projectRequiredMessage,
             bindingRole,
           } = state;
+          const traceAction = async (
+            status: "started" | "failed",
+            details?: Record<string, unknown>
+          ) => {
+            if (!projectRoot) {
+              return;
+            }
+            await appendWorkflowTraceEvent({
+              projectRoot,
+              projectId: snapshot.projectId,
+              kind: "tool_action",
+              action,
+              functionName: WORKFLOW_ACTION_FUNCTIONS[action] ?? action,
+              stage: snapshot.currentStage,
+              owner: snapshot.ownerAgent,
+              agentId: ctx.agentId,
+              sessionKey: ctx.sessionKey,
+              summary: `research_workflow.${action} ${status}`,
+              details: {
+                status,
+                ...(details ?? {}),
+              },
+            });
+          };
+          await traceAction("started");
 
-          switch (action) {
-            case "get_snapshot":
-              return textResponse(JSON.stringify(snapshot, null, 2));
+          try {
+            switch (action) {
+              case "get_snapshot":
+                return textResponse(JSON.stringify(snapshot, null, 2));
             case "check_graph_presence": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const graphPresenceCheck = asObject(params.graphPresenceCheck);
@@ -755,12 +903,162 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_writing_session": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getWritingSessionStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_writing_session": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setWritingSessionState({
+                projectRoot: resolvedProjectRoot,
+                writingSession: requireObject(params.writingSession, "writingSession"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_review_session": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getReviewSessionStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_review_session": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setReviewSessionState({
+                projectRoot: resolvedProjectRoot,
+                reviewSession: requireObject(params.reviewSession, "reviewSession"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_graph_guided_writing": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getGraphGuidedWritingStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_graph_guided_writing": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setGraphGuidedWritingState({
+                projectRoot: resolvedProjectRoot,
+                graphGuidedWriting: requireObject(
+                  params.graphGuidedWriting,
+                  "graphGuidedWriting"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_citation_integrity": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getCitationIntegrityStateSummary({
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_paper_qc": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getPaperQcStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_paper_qc": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setPaperQcState({
+                projectRoot: resolvedProjectRoot,
+                paperQc: requireObject(params.paperQc, "paperQc"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_figure_qc": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getFigureQcStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_figure_qc": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setFigureQcState({
+                projectRoot: resolvedProjectRoot,
+                figureQc: requireObject(params.figureQc, "figureQc"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_citation_collection": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getCitationCollectionStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_citation_collection": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setCitationCollectionState({
+                projectRoot: resolvedProjectRoot,
+                citationCollection: requireObject(
+                  params.citationCollection,
+                  "citationCollection"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_review_issue_tracker": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getReviewIssueTrackerStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_review_issue_tracker": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setReviewIssueTrackerState({
+                projectRoot: resolvedProjectRoot,
+                reviewIssueTracker: requireObject(
+                  params.reviewIssueTracker,
+                  "reviewIssueTracker"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_experiment_search": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getExperimentSearchStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_experiment_search": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setExperimentSearchState({
+                projectRoot: resolvedProjectRoot,
+                experimentSearch: requireObject(
+                  params.experimentSearch,
+                  "experimentSearch"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_external_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getExternalReviewStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_external_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setExternalReviewState({
+                projectRoot: resolvedProjectRoot,
+                externalReview: requireObject(
+                  params.externalReview,
+                  "externalReview"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_gate_review_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -933,6 +1231,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             default:
               throw new Error(`Unsupported research_workflow action: ${action}`);
+            }
+          } catch (error) {
+            await traceAction("failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
           }
         };
 
