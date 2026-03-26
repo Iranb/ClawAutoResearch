@@ -190,3 +190,35 @@ test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime 
   assert.equal(result.channel, null);
   assert.match(result.error ?? "", /unavailable/i);
 });
+
+test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for PaperNexus-heavy commands", async () => {
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-papernexus-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "analyzer",
+    projectRoot: "/tmp/demo-project",
+    projectId: "demo-project",
+    stage: "frontier_mapping",
+    summary: "Run PaperNexus reflection over the current frontier pack.",
+    command: "/papernexus-reflection",
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.match(
+    result.sessionKey ?? "",
+    /^agent:analyzer:discord:group:paper-lab:subagent:papernexus-skill:/
+  );
+  assert.equal(calls.length, 1);
+  assert.match(
+    calls[0].sessionKey,
+    /^agent:analyzer:discord:group:paper-lab:subagent:papernexus-skill:/
+  );
+});

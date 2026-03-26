@@ -56,7 +56,8 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - inspect `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if present
    - count canonical papers added or changed since `paper_ingestion.last_graph_sync_at` or `graph_last_built_at`
    - if the project uses frequent paper ingestion, verify whether `papernexus watch` is active for this corpus; if not, restart or recommend restarting it
-   - if `paper_ingestion.refresh_required = true`, schedule `/graph-build --force` before the next ideation / novelty / revision decision
+   - if `paper_ingestion.refresh_required = true`, schedule `/graph-build` before the next ideation / novelty / revision decision
+   - do not add `--force`; if graph build keeps failing, surface the exact cache-first command for the user to run manually
 5. Reconcile idle-research state:
    - read `PROJECT_MANIFEST.json.idle_research` or call `research_workflow.get_idle_research`
    - if `idle_research.enabled = true`, confirm whether `last_digest_path` exists and whether the next round is due

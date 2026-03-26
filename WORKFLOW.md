@@ -175,24 +175,25 @@ The graph-backed brainstorming pack should preserve:
 - one plausible pilot
 - one plausible falsifier / failure condition
 
-Before graph build, Researcher must also maintain a project-local literature corpus:
+Before graph build, Researcher must also maintain a project-local paper selection that points into the shared global PaperNexus graph:
 
 - use `/papers-cool` for rough keyword search and venue sweep
 - when stable and available, also use `/pasa-paper-search` as a second retrieval source and merge by canonical identity; if PASA fails, continue with `papers-cool`
-- once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into the PaperNexus source tree
-- if Hugging Face does not provide valid markdown for an arXiv paper, try `/arxiv2md`
+- once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into the shared PaperNexus source tree
+- if Hugging Face does not provide valid markdown for an arXiv paper, try `/arxiv2md-api`, then `/arxiv2md`
 - if both markdown sources are unavailable, fall back to `/papers-cool` PDF download
-- if the current graph does not already contain a newly found key paper, Researcher must ingest it first and refresh graph state before novelty or innovation analysis
+- record every selected canonical paper in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
+- if the current shared graph does not already contain a newly found key paper, Researcher must queue a shared-graph refresh before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
 
 Paper source layout and refresh rules:
 
-- keep a stable `paper_source_dir` with `md/` and `pdf/` subdirectories
-- default `paper_source_dir` and `graph_source_dir` should point to the local PaperNexus source tree `~/.papernexus/papers/{project_id}` unless a project explicitly overrides them
+- keep a stable shared PaperNexus source tree with `md/` and `pdf/` subdirectories
+- project state should record which canonical papers are in scope via `PAPER_SOURCE_INDEX.json`; do not create a separate project-local corpus
 - use canonical filenames prefixed by arXiv ID, e.g. `<arxiv-id>--<normalized-title>.md`
 - deduplicate by canonical paper identity, not by raw filename
-- refresh the graph immediately if a newly ingested paper changes the novelty baseline or closest prior work
-- otherwise refresh when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
+- reconcile the shared graph immediately if a newly ingested paper changes the novelty baseline or closest prior work
+- otherwise reconcile when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
 
 ### Experiment-Informed Innovation Reflection Contract
 
@@ -289,7 +290,7 @@ This applies regardless of `AUTO_PROCEED`. Skipping a stage (e.g. going IDEA →
 | From stage | To stage | Completion signals (all must exist) |
 |------------|----------|--------------------------------------|
 | SETUP      | GRAPH_BUILD | `{PROJ}/PROJECT_MANIFEST.json` with `idle_research` block present, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, `{PROJ}/graph/` |
-| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`, and `paper_ingestion.graph_presence_status = ready` recorded in `{PROJ}/PROJECT_MANIFEST.json` |
+| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`, and `paper_ingestion.graph_presence_status = ready` recorded in `{PROJ}/PROJECT_MANIFEST.json` against the shared global graph |
 | FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, frontier files under `{PROJ}/graph/` (or legacy non-empty `{PROJ}/graph/subgraphs/`), and `current_micro_stage = frontiers_packaged` |
 | IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track, and when experiment memory contains newer evidence than the last ideation reflection, `{PROJ}/researcher/INNOVATION_REFLECTION.md` refreshed after the latest experiment results |
 | **PLAN**   | **CODE** | **`{PROJ}/orchestrator/PLAN.md`** AND **`{PROJ}/orchestrator/TODOS.md`** AND **`{PROJ}/orchestrator/PLAN_AUDIT.md`** |
@@ -316,7 +317,7 @@ The workflow is not allowed to rely on prose alone.
 
 Before a stage can be considered complete, the durable state files must be structurally usable by another agent after restart:
 
-- `{PROJ}/PROJECT_MANIFEST.json` must carry the current `project_id`, `owner_agent`, `current_stage`, `current_micro_stage`, `next_action`, `resume_action`, `required_artifacts`, `blocking_reason`, `last_heartbeat_at`, `last_handoff_at`, `paper_source_dir`, `memory_scope`, `audit`, latest graph-reasoning status, an `idle_research` block with the configured topic, budget, cooldown, and latest runtime summary, an `innovation_reflection` block with freshness status and the latest reflected experiment boundary, and a `writing_contract` block with template path, section order, and paragraph-logic state.
+- `{PROJ}/PROJECT_MANIFEST.json` must carry the current `project_id`, `owner_agent`, `current_stage`, `current_micro_stage`, `next_action`, `resume_action`, `required_artifacts`, `blocking_reason`, `last_heartbeat_at`, `last_handoff_at`, optional shared-graph override pointers such as `papernexus_corpus` / `paper_source_dir`, `memory_scope`, `audit`, latest graph-reasoning status, an `idle_research` block with the configured topic, budget, cooldown, and latest runtime summary, an `innovation_reflection` block with freshness status and the latest reflected experiment boundary, and a `writing_contract` block with template path, section order, and paragraph-logic state.
 - `{PROJ}/TRACK_REGISTRY.json` must carry explicit per-track fields for status, hypothesis, graph grounding, reasoning packet location, working memory location, synthesis packet location, evidence pointers, failure signature, retry condition, and last decision.
 - `{PROJ}/researcher/EXPERIMENT_LEDGER.json` must carry a structured per-experiment record with experiment id, track id, kind, status, checkpoint stage, config reference, result pointers, decision, and PaperNexus sync status.
 - `PROJECT_MANIFEST.json.experiment_memory` must mirror the latest ledger summary (`ledger_path`, `last_ledger_update_at`, `last_completed_experiment_id`, `last_failed_experiment_id`, `best_known_config_ref`, `papernexus_sync_status`, `papernexus_sync_required`).
@@ -461,26 +462,26 @@ Actions:
 ### Stage 0A · GRAPH_BUILD
 **Owner:** Researcher
 **Skills:** `/graph-build`
-**Inputs:** `{PROJ}/researcher/LITERATURE.md` or project literature corpus
+**Inputs:** `{PROJ}/researcher/LITERATURE.md`, `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, shared global PaperNexus graph
 **Outputs:**
-- `{PROJ}/graph/PAPERNEXUS_STATUS.json` — PaperNexus corpus status
-- `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — graph build summary
+- `{PROJ}/graph/PAPERNEXUS_STATUS.json` — shared PaperNexus graph status for this project's selected papers
+- `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — shared-graph reconciliation summary
 - `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` — preliminary brainstorm scaffold built during literature work
 
 ```
 Procedure:
-  1. Run /research-lit first if the project has not yet ingested key papers into a PaperNexus-readable source directory
+  1. Run /research-lit first if the project has not yet recorded key papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
   2. Use `/papers-cool` for broad discovery and venue sweep; if stable, also query `/pasa-paper-search` and merge by canonical identity
-  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the PaperNexus source tree; if that fails and the paper is on arXiv, try `/arxiv2md`; only if both markdown sources are unavailable, save PDF via `/papers-cool`
+  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the shared PaperNexus source tree; if that fails and the paper is on arXiv, try `/arxiv2md-api`, then `/arxiv2md`; only if all markdown sources are unavailable, save PDF via `/papers-cool`
   4. Apply the graph refresh trigger rule:
      - refresh now if 1 new paper changes novelty / closest prior work
      - refresh now if 3+ genuinely new canonical papers accumulated
      - refresh now if 2+ overlapping recent venue papers accumulated
      - otherwise defer until the next major checkpoint
-  5. Resolve PaperNexus root and project corpus
-  6. Check corpus status (`status` / registry) before trusting an existing corpus
-  7. Run /graph-build to index the ingested literature into a project-scoped corpus
-  8. If this project's paper folder changes often, prefer enabling `watch` or re-checking `status` before ideation
+  5. Resolve PaperNexus root and shared corpus
+  6. Check shared-graph status (`status` / registry) before trusting an existing graph
+  7. Run /graph-build to reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph; do not create a project-scoped corpus
+  8. If the shared graph is missing required papers, queue or request a shared-corpus refresh instead of rebuilding a project-local corpus
   9. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
   10. Save status + build report under {PROJ}/graph/
   11. Update {PROJ}/PROJECT_MANIFEST.json with graph readiness metadata and `current_micro_stage: "graph_validated"`
@@ -492,14 +493,14 @@ Procedure:
 ### Stage 0B · FRONTIER_MAPPING
 **Owner:** Researcher
 **Skills:** `/frontier-mapping`
-**Inputs:** `{PROJ}/graph/PAPERNEXUS_STATUS.json`, project literature corpus, `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
+**Inputs:** `{PROJ}/graph/PAPERNEXUS_STATUS.json`, shared global graph, `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 **Outputs:**
 - `{PROJ}/researcher/FRONTIER_REPORT.md` — candidate frontiers from the graph
 - `{PROJ}/graph/LIMITATION_FRONTIER.md`, `{PROJ}/graph/CONTRADICTION_FRONTIER.md`, `{PROJ}/graph/TRANSFER_FRONTIER.md`, `{PROJ}/graph/COMPOSITION_FRONTIER.md`, `{PROJ}/graph/ANCHOR_INDEX.md` — graph query snapshots
 
 ```
 Procedure:
-  1. Run `query`, `ideas`, and `brainstorm --mode diverge` against the project corpus
+  1. Run `query`, `ideas`, and `brainstorm --mode diverge` against the shared global graph constrained by this project's selected papers
   2. For each promising anchor, run `context` and `impact`
   3. Extract at least four frontier lenses: limitation, contradiction, transfer, composition
   4. Save concrete graph anchors, relation patterns, plausible pilots, and falsifiers
@@ -1097,7 +1098,7 @@ LOOP FOREVER (when AUTO_PROCEED=true):
 |---------|---------|
 | Too many active tracks | Park lower-value tracks until only 1–2 remain active |
 | Budget overrun on weak evidence | Trigger `/research-reflect`, then park or kill the weakest track |
-| PaperNexus corpus missing/stale | Re-run `/graph-build`, refresh `{PROJ}/graph/PAPERNEXUS_STATUS.json`, confirm `status`, then rerun `/frontier-mapping` before allowing IDEA to continue |
+| Shared PaperNexus graph missing/stale | Re-run `/graph-build`, refresh `{PROJ}/graph/PAPERNEXUS_STATUS.json`, confirm shared-graph status, then rerun `/frontier-mapping` before allowing IDEA to continue |
 | **Orchestrator skipped / PLAN.md or TODOS.md missing** | **Wake Orchestrator:** spawn Orchestrator with "Run /plan-research using {PROJ}/researcher/IDEA_REPORT.md; write PLAN.md and TODOS.md to {PROJ}/orchestrator/." Wait until both files exist. Optionally set `current_stage` back to PLAN first; then re-advance to CODE. Do not spawn Coder until both files exist. |
 | Experiment crash (OOM/bug) | Fix code → re-run; after 3 failures → post GATE with "experiment failed" |
 | No GPU available | Wait 30 min, retry; after 2h → post alert |

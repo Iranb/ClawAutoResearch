@@ -144,8 +144,9 @@
 1. `papers-cool` 作为稳定保底检索
 2. `pasa-paper-search` 作为可选第二检索源
 3. `hugging-face-paper-pages` 优先获取 Markdown
-4. `arxiv2md` 作为 arXiv Markdown fallback
-5. 只有前两种 Markdown 都失败时才下载 PDF
+4. `arxiv2md-api` 作为 arXiv 的 direct raw markdown fallback
+5. `arxiv2md` 作为 legacy 页面型 Markdown fallback
+6. 只有前三种 Markdown 都失败时才下载 PDF
 
 系统还会维护：
 

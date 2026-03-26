@@ -57,7 +57,7 @@
 ### 3.1 作用
 
 `research_workflow` 是现在最重要的插件工具。  
-它连接了 workflow snapshot、自动迭代器、idle research、实验账本、创新反思、写作约束和 mailbox。
+它连接了 workflow snapshot、自动迭代器、共享图 presence check、idle research、实验账本、创新反思、写作约束和 mailbox。
 
 ### 3.2 当前支持的动作
 
@@ -123,13 +123,13 @@
 用于把“图里是否已经有这些论文”做成真实检查，而不是只写一个时间戳。  
 它会：
 
-- 读取 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`，如果没有则回退到 `paper_source_dir / graph_source_dir`
+- 优先读取 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` 作为本项目的 canonical paper selection
 - 识别每篇 canonical paper 的 `source_kind`、`source_provider`、`retrieval_providers`，便于图谱追踪和来源审计
-- 检查当前 corpus 的 `.papernexus/sources.json`
+- 检查共享全局图对应 corpus 的 `.papernexus/sources.json`
 - 回写 `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_*`
 - 生成 `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`
 
-如果检查发现图中还缺 canonical papers，返回结果会是 `missing_papers` 或 `missing_corpus`；这会让 `graph_build -> frontier_mapping` 的推进被硬性阻断。
+如果检查发现共享图中还缺 canonical papers，返回结果会是 `missing_papers` 或 `missing_corpus`；这会让 `graph_build -> frontier_mapping` 的推进被硬性阻断。
 
 ### 4.4 `set_idle_research`
 

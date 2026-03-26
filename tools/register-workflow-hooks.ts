@@ -1,4 +1,5 @@
 import {
+  buildFocusedPromptAssembly,
   buildWorkflowSnapshot,
   canRoleContact,
   canRoleSpawn,
@@ -9,16 +10,23 @@ import {
   sanitizeAgentMentions,
   sanitizeMessageToolParams,
   shouldBlockCoderDatasetMutation,
+  shouldBlockPapernexusInlineExecution,
+  shouldBlockResearchGraphForce,
   shouldBlockInnovationWrite,
   shouldBlockProjectWrite,
   shouldBlockWriterTemplateWrite,
 } from "./workflow-guard";
 import {
+  buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
+import {
+  isWorkflowSubagentSessionKey,
+  looksLikePapernexusHeavyCommand,
+} from "./workflow-subagent-sessions";
 import { isWorkflowStageBroadcastMessage } from "./stage-broadcast";
 import {
   getToolContext,
@@ -32,6 +40,7 @@ import {
   buildWorkflowQueueContext,
   enqueueWorkflowTask,
 } from "./workflow-coordination";
+import { appendWorkflowTraceEvent } from "./workflow-trace";
 
 function collectStringFragments(value: unknown, acc: string[], depth = 0): void {
   if (depth > 4 || value == null) {
@@ -181,6 +190,32 @@ async function runBeforeToolCallHook(params: {
       return {
         block: true,
         blockReason: coderDatasetCheck.reason,
+      };
+    }
+
+    const researchGraphForceCheck = shouldBlockResearchGraphForce({
+      role: snapshot.role,
+      currentStage: snapshot.currentStage,
+      toolName,
+      toolParams,
+    });
+    if (researchGraphForceCheck.block) {
+      return {
+        block: true,
+        blockReason: researchGraphForceCheck.reason,
+      };
+    }
+
+    const papernexusInlineCheck = shouldBlockPapernexusInlineExecution({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+      sessionKey: params.agentCtx.sessionKey,
+    });
+    if (papernexusInlineCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusInlineCheck.reason,
       };
     }
 
@@ -407,6 +442,22 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         );
       } else if (
         snapshot.role &&
+        looksLikePapernexusHeavyCommand(latestPromptLikeText) &&
+        !hasBackgroundContinuationMarker(latestPromptLikeText) &&
+        !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
+      ) {
+        extraContext.push(
+          "[Slash Fast Path]",
+          "This turn appears to invoke a PaperNexus-heavy skill.",
+          "Before doing heavy PaperNexus work, call research_workflow with action start_background_run and backgroundRun.kind=papernexus_skill.",
+          `Pass backgroundRun.commandText as: ${JSON.stringify(
+            buildPapernexusSkillBackgroundCommand(latestPromptLikeText ?? "")
+          )}`,
+          "After the tool returns, reply briefly that the PaperNexus task has started in a dedicated subagent and stop. The background continuation will perform the real graph / PaperNexus work.",
+          "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role &&
         looksLikeResumePipelineCommand(latestPromptLikeText) &&
         !hasBackgroundContinuationMarker(latestPromptLikeText)
       ) {
@@ -421,22 +472,45 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           "[/Slash Fast Path]"
         );
       }
-      return {
-        prependContext: [
-          ...extraContext,
-          formatWorkflowSnapshotForPrompt({
-            snapshot,
+      const detailLevel =
+        snapshot.role === "academic_writer" ||
+        snapshot.role === "reviewer" ||
+        snapshot.role === "cross-reviewer"
+          ? "focused"
+          : "full";
+      const workflowPrompt =
+        detailLevel === "focused"
+          ? buildFocusedPromptAssembly({ snapshot }).text
+          : formatWorkflowSnapshotForPrompt({
+              snapshot,
+              trigger,
+              detailLevel,
+            });
+      if (detailLevel === "focused" && snapshot.projectRoot) {
+        const assembly = buildFocusedPromptAssembly({ snapshot });
+        await appendWorkflowTraceEvent({
+          projectRoot: snapshot.projectRoot,
+          projectId: snapshot.projectId,
+          kind: "prompt_assembly",
+          action: "focused_prompt_build",
+          functionName: "buildFocusedPromptAssembly",
+          stage: snapshot.currentStage,
+          owner: snapshot.ownerAgent,
+          agentId: snapshot.role,
+          sessionKey: agentCtx.sessionKey,
+          summary: `Focused prompt assembled for ${snapshot.role ?? "agent"}`,
+          details: {
             trigger,
-            detailLevel:
-              snapshot.role === "academic_writer" ||
-              snapshot.role === "reviewer" ||
-              snapshot.role === "cross-reviewer"
-                ? "focused"
-                : "full",
-          }),
-        ]
-          .filter(Boolean)
-          .join("\n"),
+            promptLayerProfile: assembly.metadata.promptLayerProfile,
+            promptPayloadSizes: assembly.metadata.promptPayloadSizes,
+            sectionContextId: assembly.metadata.sectionContextId,
+            reviewLane: assembly.metadata.reviewLane,
+            roundId: assembly.metadata.roundId,
+          },
+        });
+      }
+      return {
+        prependContext: [...extraContext, workflowPrompt].filter(Boolean).join("\n"),
       };
     },
     { priority: 40 }

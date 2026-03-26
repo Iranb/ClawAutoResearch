@@ -1041,6 +1041,24 @@ Section packet 不应被视为完全同质的对象。目标设计应按 section
 - writing scope 已确定
 - citation candidate 输入已组装完成
 
+此外，目标设计应把 `write_package` 做成一个**自动组装流水线**，而不只是一个手工填写的 manifest block。
+
+推荐机制：
+
+- `analyzer`、`researcher`、`academic_writer` 已存在的上游制品应先被确定性发现
+- 在证据足够时，系统应自动派生次级制品：
+  - `FIGURE_PACK.json`
+  - `TABLE_PACK.json`
+  - `CITATION_CANDIDATES.json`
+  - `SECTION_ASSEMBLY_QUEUE.json`
+- 系统应同时写出机器可读的 `WRITE_PACKAGE.json` 和 assembly report
+- 如果上游证据不足，系统不应静默维持 `ready`，而应：
+  - 将 `write_package.status` 置为 `partial` 或等价非 ready 状态
+  - 把缺口同步为可追踪 issue
+  - 在 trace 中记录本次 assembly 的来源、派生制品和阻塞项
+
+在自动化的激进模式里，推荐优先运行这条 assembly 流水线，再评估 `WRITE` gate。这样可以让“是否可写、写到什么粒度、还缺什么”变得更可控。
+
 ### 10.5 机械论文质量控制
 
 `paper_qc` 应成为一个真正的 workflow 一等状态块。

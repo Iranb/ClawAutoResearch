@@ -10,14 +10,24 @@ import {
   getChannelProjectBindingForWorkflow,
 } from "../tools/workflow-guard.ts";
 import {
+  buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
+  clearBackgroundWorkflowRunRegistryForTests,
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fast-paths-"));
 }
+
+test.beforeEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+});
+
+test.afterEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+});
 
 test("ensureWorkflowProjectRoot creates a project from configured projectsRoot and topic", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
@@ -53,6 +63,12 @@ test("ensureWorkflowProjectRoot creates a project from configured projectsRoot a
   assert.equal(idleResearchTemplate.enabled, false);
   assert.equal(idleResearchTemplate.topic, "CUB confirmation bias mitigation");
   assert.match(idleResearchTemplate.pending_reason, /sync the approved config/i);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(ensured.projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_source_dir, null);
+  assert.equal(manifest.graph_source_dir, null);
+  assert.equal(manifest.papernexus_corpus, null);
 });
 
 test("ensureWorkflowProjectRoot fails fast when projectsRoot is missing and workspace fallback is disabled", async (t) => {
@@ -190,7 +206,13 @@ test("buildResearchQueueBackgroundCommand appends the continuation marker once",
   assert.equal(buildResearchQueueBackgroundCommand(command), command);
 });
 
-test("startBackgroundWorkflowRun launches a deliverable background continuation and binds the project", async (t) => {
+test("buildPapernexusSkillBackgroundCommand appends the continuation marker once", () => {
+  const command = buildPapernexusSkillBackgroundCommand("/graph-build");
+  assert.match(command, /__BACKGROUND_CONTINUATION__:\s*true/i);
+  assert.equal(buildPapernexusSkillBackgroundCommand(command), command);
+});
+
+test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const runCalls = [];
@@ -234,11 +256,13 @@ test("startBackgroundWorkflowRun launches a deliverable background continuation 
   assert.equal(result.started, true);
   assert.equal(result.runId, "bg-run-1");
   assert.equal(runCalls.length, 1);
-  assert.equal(runCalls[0].sessionKey, sessionKey);
-  assert.equal(runCalls[0].deliver, true);
+  assert.notEqual(runCalls[0].sessionKey, sessionKey);
+  assert.match(runCalls[0].sessionKey, /^agent:researcher:discord:group:birds-room:subagent:/);
+  assert.equal(runCalls[0].deliver, false);
   assert.equal(runCalls[0].lane, "nested");
   assert.match(runCalls[0].message, /^\/research-pipeline\b/);
   assert.match(runCalls[0].message, /__BACKGROUND_CONTINUATION__:\s*true/i);
+  assert.equal(result.sessionKey, runCalls[0].sessionKey);
 
   await fs.access(path.join(result.projectRoot, "PROJECT_MANIFEST.json"));
   await fs.access(
@@ -289,6 +313,170 @@ test("startBackgroundWorkflowRun can bootstrap a research-queue continuation", a
   assert.equal(result.started, true);
   assert.equal(result.runId, "bg-run-queue-1");
   assert.equal(runCalls.length, 1);
+  assert.match(
+    runCalls[0].sessionKey,
+    /^agent:researcher:discord:group:queue-room:subagent:/
+  );
+  assert.equal(runCalls[0].deliver, false);
   assert.match(runCalls[0].message, /^\/research-queue\b/);
   assert.match(runCalls[0].message, /__BACKGROUND_CONTINUATION__:\s*true/i);
+});
+
+test("startBackgroundWorkflowRun caps researcher background subagents at two per channel", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const baseParams = {
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-limit-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+  };
+
+  const first = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery",
+    },
+  });
+  const second = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "avian migration drift",
+    },
+  });
+  const third = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "wetland morphology signals",
+    },
+  });
+
+  assert.equal(first.started, true);
+  assert.equal(second.started, true);
+  assert.equal(third.started, false);
+  assert.equal(third.runId, null);
+  assert.match(third.summary, /already has 2 active researcher background subagents/i);
+  assert.equal(runCalls.length, 2);
+});
+
+test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-limit-a",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery",
+    },
+  });
+  await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-limit-b",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "avian migration drift",
+    },
+  });
+
+  const otherChannel = await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:wetland-room",
+      sessionId: "session-bg-limit-c",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "wetland morphology signals",
+    },
+  });
+
+  assert.equal(otherChannel.started, true);
+  assert.equal(runCalls.length, 3);
 });

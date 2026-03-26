@@ -14,7 +14,7 @@
 
 - **`{PAPERNEXUS_PAPERS_ROOT}`**: `~/.papernexus/papers`
   - Local default PaperNexus paper source root
-  - New projects should default `paper_source_dir` and `graph_source_dir` to `{PAPERNEXUS_PAPERS_ROOT}/{proj-id}`
+  - New projects should normally rely on this shared source root instead of pinning per-project `paper_source_dir` / `graph_source_dir`
 
 - **`{PAPERNEXUS_INDEX_ROOT}`**: `~/.papernexus/index-store`
   - Local default PaperNexus index root
@@ -32,10 +32,10 @@
 
 For each project `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`:
 
-Default PaperNexus source and graph paths for a project:
+Default shared PaperNexus source and graph paths:
 
 ```text
-{PAPERNEXUS_PAPERS_ROOT}/{proj-id}/
+{PAPERNEXUS_PAPERS_ROOT}/
   md/
   pdf/
 
@@ -46,9 +46,9 @@ Default PaperNexus source and graph paths for a project:
 ```
 
 Notes:
-- `paper_source_dir` should usually point at `{PAPERNEXUS_PAPERS_ROOT}/{proj-id}`
-- `graph_source_dir` should record the source corpus directory used for the current graph build, which by default is the same as `paper_source_dir`
-- all agents should read and write against that default source tree instead of creating a second project-local graph corpus
+- projects should usually leave `paper_source_dir` and `graph_source_dir` unset unless they explicitly need to override the shared-global defaults
+- all agents should read and write against the shared source tree instead of creating a second project-local graph corpus
+- project-local state should record selected canonical papers via `researcher/PAPER_SOURCE_INDEX.json`, not by creating a project-specific corpus
 - the graph files themselves are not stored inside `graph_source_dir`; they are stored in the PaperNexus index area
 
 Project workspace structure:
@@ -60,7 +60,7 @@ Project workspace structure:
 ├── CLAIM_POLICY.md            # Claim support criteria
 ├── WORKFLOW.md                # Workflow snapshot (copied from workspace)
 ├── README.md                  # Project overview
-├── graph/                     # PaperNexus literature graph
+├── graph/                     # Workflow-facing graph readiness, frontier, and presence files
 ├── memory/                    # Project memory
 ├── researcher/                # Researcher outputs
 ├── orchestrator/              # Experiment plans

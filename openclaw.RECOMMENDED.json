@@ -4,6 +4,8 @@
   // 1. 这不是完整的 ~/.openclaw/openclaw.json，而是一份“与 openclaw-research 相关”的推荐片段。
   // 2. 把你需要的部分合并到真实的 ~/.openclaw/openclaw.json 里。
   // 3. 注释说明的是“这个字段在 openclaw-research 里负责什么”。
+  // 4. 这份推荐已经对齐当前的 workflow control plane、focused prompt、write_package 自动组装、
+  //    paper/review QC runtime state，以及 external review gate。
 
   "plugins": {
     // 启用 OpenClaw 的插件系统。
@@ -46,6 +48,8 @@
 
           // 是否把 workflow snapshot 注入到每个 agent 的上下文里。
           // 开启后，agent 更容易知道自己是谁、当前阶段是什么、下一步该做什么。
+          // 当前实现会尽量走 focused prompt assembly，而不是把整个 manifest 粗暴塞进 prompt。
+          // 推荐保持 true。
           "injectWorkflowContext": true,
 
           // 是否启用 workflow boundary enforcement。
@@ -61,6 +65,7 @@
 
           // 是否启用 heartbeat / idle turn 的后台检查。
           // 开启后 service 和 auto iterator 会在空闲或心跳时继续做 bounded reconcile。
+          // aggressive auto mode 下，write / submit 前也可能先自动组装 write_package。
           "heartbeatBackgroundChecks": true,
 
           // workflow mailbox 默认最多注入多少条待处理消息。
@@ -72,12 +77,15 @@
           "agentContactCooldownSeconds": 300,
 
           // 是否启用“频道/会话 -> 项目”的绑定。
+          // 当前代码默认值仍是 false，但从实际使用角度，推荐显式打开。
           // 开启后，不同 Discord/Telegram 会话可以绑定到不同项目，不必依赖 OPENCLAW_PROJECT。
+          // 这对多项目并行、自动恢复、mailbox 路由都更稳定。
           "enableChannelProjectBindings": true,
 
           // 频道绑定存储路径。
           // 留空时优先落到 {projectRoot}/.openclaw-research/channel-project-bindings.json；
           // 如果当前还没解析出项目，则会暂时回退到 workspace 侧。
+          // 如果你会在多个 workspace / 多个 Discord 会话之间共享同一套绑定，才建议显式填绝对路径。
           "channelProjectBindingsPath": "",
 
           // 默认 conference 模板路径。
@@ -90,16 +98,19 @@
 
           // 自动推进模式：
           // off           = 不自动推进，只做 guard / snapshot / 状态辅助
-          // conservative  = 自动唤起阶段 owner，但 submit 仍偏保守
-          // aggressive    = 在 gate review 通过时，允许更强自动推进
+          // conservative  = 推荐默认档；自动唤起阶段 owner，保留更稳的收口节奏
+          // aggressive    = 适合长时间无人值守；会结合 auto gate、风险降档和 write_package 自动组装
+          // 当前系统即便配置成 aggressive，也会在高风险阶段先自动讨论/补救，再决定是否降档。
           "autoMode": "conservative",
 
           "autoGate": {
             // 是否启用自动 gate review。
-            // 开启后，系统会在关键 gate 处组织多 agent 审核和评分。
+            // 开启后，系统会在关键 gate 处组织多 agent 审核和评分，
+            // 并结合当前 runtime state（如 write_package、review_issue_tracker、external_review_state）做决策。
             "enabled": true,
 
             // 是否允许在自动 gate 达标后自动进入 done。
+            // 现在系统已经有 external review 和更完整的硬 gate，所以全自动模式下保留 true 是合理的。
             // 如果你希望 submit 之后仍然必须手动收尾，可以改为 false。
             "allowAutonomousDone": true,
 
@@ -120,6 +131,7 @@
 
             "thresholds": {
               // REVIEW -> WRITE 的放行阈值。
+              // 注意：分数阈值不是唯一条件；runtime 仍会检查 unsupported claims 和 review issue 状态。
               "review_to_write": {
                 // 平均分阈值。
                 "avg": 7.8,
@@ -128,12 +140,14 @@
               },
 
               // WRITE -> SUBMIT 的放行阈值。
+              // 当前实现还会叠加 write_package、citation_integrity、section packet、paper/figure QC 等硬约束。
               "write_to_submit": {
                 "avg": 8.2,
                 "minSingle": 7.5
               },
 
               // SUBMIT -> DONE 的放行阈值。
+              // 当前实现还会结合 external review state、review issue tracker 和最终 gate 状态。
               "submit_to_done": {
                 "avg": 8.8,
                 "minSingle": 8.0
@@ -145,6 +159,7 @@
             // 是否启用 Lobster 作为“Agent 间任务交接后端”。
             // false = 完全使用插件内建 native dispatch
             // true  = Auto mode 下优先用 Lobster 做 handoff
+            // 当前推荐仍是 false，因为 native dispatch 已足够稳定，Lobster 更像增强项。
             "enabled": false,
 
             // 是否只在 Auto mode 激活时才使用 Lobster。
@@ -174,9 +189,10 @@
   },
 
   "tools": {
-    // 给 OpenClaw 全局额外放行 Lobster tool。
-    // 只有在你想手动运行 Lobster，或者启用了 lobsterHandoff.enabled=true 时才真正需要。
-    "alsoAllow": ["lobster"]
+    // 默认不额外放行 Lobster。
+    // 只有在你想手动运行 Lobster，或者启用了 lobsterHandoff.enabled=true 时，
+    // 再把这里改成 ["lobster"]。
+    "alsoAllow": []
   },
 
   "agents": {
@@ -188,8 +204,9 @@
           "every": "30m"
         },
         "tools": {
-          // Researcher 是整个科研工作流的主控角色，需要 research_workflow。
-          "allow": ["research_workflow"]
+          // Researcher 是整个科研工作流的主控角色。
+          // 除了 workflow control，也经常需要把 idea / experiment / daily log 写回 research_memory。
+          "allow": ["research_workflow", "research_memory"]
         }
       },
       {
@@ -200,7 +217,8 @@
         },
         "tools": {
           // Orchestrator 需要读写 PLAN / TODOS / PLAN_AUDIT，并参与 workflow 路由。
-          "allow": ["research_workflow"]
+          // 给它 research_memory，可以更稳定地消费已有调研脉络和实验记忆。
+          "allow": ["research_workflow", "research_memory"]
         }
       },
       {
@@ -222,7 +240,8 @@
         },
         "tools": {
           // Analyzer 需要 workflow 上下文，以及 QUALITY_AUDIT / theory state 等工具能力。
-          "allow": ["research_workflow"]
+          // 如果要把实验结论、失败模式和分析摘要结构化落盘，也建议放开 research_memory。
+          "allow": ["research_workflow", "research_memory"]
         }
       },
       {
@@ -244,7 +263,8 @@
         },
         "tools": {
           // Reviewer 需要 workflow snapshot、gate state、mailbox 和 review-related state。
-          "allow": ["research_workflow"]
+          // 给它 research_memory 后，也能通过结构化接口维护 REVIEW_STATE，而不是手改文件。
+          "allow": ["research_workflow", "research_memory"]
         }
       },
       {
@@ -267,6 +287,7 @@
           "enabled": true,
 
           // 软阈值，达到后更倾向于进行 memory flush / compact。
+          // 当前系统已经有 focused prompt assembly，这个阈值主要用于避免长轮次下的状态漂移。
           "softThresholdTokens": 4000
         }
       }

@@ -1,6 +1,6 @@
 ---
 name: frontier-mapping
-description: "Extract graph-grounded idea frontiers from a PaperNexus corpus: limitations, contradictions, transfers, and compositions. Use after /graph-build."
+description: "Extract graph-grounded idea frontiers from the shared global PaperNexus graph: limitations, contradictions, transfers, and compositions. Use after /graph-build."
 argument-hint: "[topic or project direction]"
 allowed-tools:
   - Bash(*)
@@ -14,7 +14,7 @@ allowed-tools:
 
 # Frontier Mapping
 
-Use PaperNexus graph traversal to produce a compact, reusable frontier report for brainstorming.
+Use PaperNexus graph traversal over the shared global graph, constrained by this project's selected papers, to produce a compact, reusable frontier report for brainstorming.
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/` and `{PROJ}/graph/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -29,21 +29,23 @@ Use PaperNexus graph traversal to produce a compact, reusable frontier report fo
 
 ## Query Passes
 
-For the current topic, run a minimum of these PaperNexus passes:
+For the current topic, run a minimum of these PaperNexus passes against the shared global graph:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js status --corpus <proj-id>
-node <PAPERNEXUS_ROOT>/src/cli/index.js query "<topic>" --corpus <proj-id>
-node <PAPERNEXUS_ROOT>/src/cli/index.js brainstorm "<topic>" --corpus <proj-id> --mode diverge --hops 2
-node <PAPERNEXUS_ROOT>/src/cli/index.js ideas "<topic>" --corpus <proj-id>
+node <PAPERNEXUS_ROOT>/src/cli/index.js status
+node <PAPERNEXUS_ROOT>/src/cli/index.js query "<topic>"
+node <PAPERNEXUS_ROOT>/src/cli/index.js brainstorm "<topic>" --mode diverge --hops 2
+node <PAPERNEXUS_ROOT>/src/cli/index.js ideas "<topic>"
 ```
 
 Then inspect at least one neighborhood for each promising anchor:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js context "<anchor>" --corpus <proj-id>
-node <PAPERNEXUS_ROOT>/src/cli/index.js impact "<anchor>" --corpus <proj-id>
+node <PAPERNEXUS_ROOT>/src/cli/index.js context "<anchor>"
+node <PAPERNEXUS_ROOT>/src/cli/index.js impact "<anchor>"
 ```
+
+Use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` and `{PROJ}/graph/PAPERNEXUS_STATUS.json` to constrain which anchors and papers are treated as in-scope for this project.
 
 ## Required Frontier Lenses
 

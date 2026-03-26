@@ -43,13 +43,23 @@ async function seedPaperSourceIndex(projectRoot, papers) {
   });
 }
 
-async function seedGraphCorpus(projectRoot, corpusEntries, corpusName = "demo-project") {
-  const sourceRoot = path.join(projectRoot, "graph", "source-corpus");
+async function seedGraphCorpus(projectRoot, corpusEntries, corpusName = "shared-global-graph") {
+  const papernexusHome = path.join(projectRoot, ".papernexus-home");
+  process.env.PAPERNEXUS_HOME = papernexusHome;
+  const sourceRoot = path.join(papernexusHome, "corpora", corpusName);
   const indexedAt = new Date("2026-03-22T12:05:00.000Z").toISOString();
+  await writeJson(path.join(papernexusHome, "registry.json"), {
+    corpora: [
+      {
+        name: corpusName,
+        rootPath: sourceRoot,
+      },
+    ],
+  });
   await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
     status: "ready",
     corpus_name: corpusName,
-    source_dir: sourceRoot,
+    corpus_root: sourceRoot,
   });
   await writeJson(path.join(sourceRoot, ".papernexus", "sources.json"), {
     version: 3,
@@ -96,8 +106,6 @@ async function seedSetupCompleteProject(projectRoot, stage = "setup") {
     project_id: "demo-project",
     title: "Demo Project",
     current_stage: stage,
-    paper_source_dir: path.join(projectRoot, "researcher", "paper_source"),
-    graph_source_dir: path.join(projectRoot, "graph", "source-corpus"),
     idle_research: { enabled: false },
   });
   await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
@@ -112,11 +120,17 @@ async function seedSetupCompleteProject(projectRoot, stage = "setup") {
 async function seedProjectReadyForCode(projectRoot) {
   const now = await seedSetupCompleteProject(projectRoot, "code");
   const trackId = "track-1";
+  const sharedCorpusRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
 
   await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
     status: "ready",
-    corpus_name: "demo-project",
-    source_dir: path.join(projectRoot, "graph", "source-corpus"),
+    corpus_name: "shared-global-graph",
+    corpus_root: sharedCorpusRoot,
   });
   await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
   await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
@@ -168,9 +182,7 @@ async function seedProjectReadyForCode(projectRoot) {
     project_id: "demo-project",
     title: "Demo Project",
     current_stage: "code",
-    current_micro_stage: "planning_requested",
-    paper_source_dir: path.join(projectRoot, "researcher", "paper_source"),
-    graph_source_dir: path.join(projectRoot, "graph", "source-corpus"),
+    current_micro_stage: "frontiers_packaged",
     idle_research: { enabled: false },
     paper_ingestion: {
       graph_presence_checked_at: now,
@@ -188,6 +200,62 @@ async function seedProjectReadyForCode(projectRoot) {
       last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
       reflected_through_experiment_update_at: now,
       reflected_experiment_ids: [],
+    },
+    research_program: {
+      status: "approved",
+      goal: "Demo workflow control plane",
+      tracks: [
+        {
+          track_id: trackId,
+          priority: 1,
+          status: "active",
+          hypothesis: "Graph grounding improves support precision.",
+          novelty_basis: "It couples frontier packets with section drafting.",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: ["baseline-a"],
+          required_ablations: ["ablation-a"],
+          required_controls: ["seed-control"],
+          experiment_stage_matrix: [
+            "baseline_implementation",
+            "baseline_tuning",
+            "creative_research",
+            "ablation_studies",
+          ],
+          budget: {
+            gpu_hours: 8,
+            max_runs: 4,
+            max_debug_iterations: 1,
+          },
+          stop_rules: ["stop after no improvement"],
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: ["claim-1"],
+            allowed_figure_ids: ["fig-1"],
+          },
+        },
+      ],
+      task_graph: [
+        {
+          task_id: "plan-main",
+          stage: "plan",
+          track_id: trackId,
+          owner: "researcher",
+          dependencies: [],
+          entry_criteria: ["track active"],
+          expected_outputs: ["plan ready"],
+          retry_budget: 1,
+          exit_criteria: ["plan locked"],
+        },
+      ],
+    },
+    orchestration_state: {
+      status: "running",
+      current_owner: "orchestrator",
+      next_owner: "coder",
+      next_transition_candidate: "code",
+      retry_budget_remaining: 2,
+      last_contract_eval_result: "pass",
     },
   });
 
@@ -279,6 +347,13 @@ async function seedProjectReadyForSubmit(projectRoot) {
   );
 
   await writeText(path.join(projectRoot, "reviewer", "REVIEW_REPORT.md"));
+  await writeJson(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json"), {
+    status: "pass",
+  });
+  await writeJson(
+    path.join(projectRoot, "reviewer", "SUBMISSION_SIMULATION_REVIEW.json"),
+    { status: "pass" }
+  );
   await writeText(path.join(projectRoot, "reviewer", "external_review_2026-03-22.md"));
   await writeText(path.join(projectRoot, "reviewer", "rebuttal_2026-03-22.md"));
   await writeText(path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"));
@@ -352,8 +427,6 @@ async function seedProjectReadyForSubmit(projectRoot) {
     title: "Demo Project",
     current_stage: "submit",
     current_micro_stage: "frontiers_packaged",
-    paper_source_dir: path.join(projectRoot, "researcher", "paper_source"),
-    graph_source_dir: path.join(projectRoot, "graph", "source-corpus"),
     idle_research: { enabled: false },
     paper_ingestion: {
       graph_presence_checked_at: now,
@@ -394,6 +467,8 @@ async function seedProjectReadyForSubmit(projectRoot) {
     writing_contract: {
       template_required: false,
       template_status: "optional",
+      required_sections: ["abstract", "results", "discussion"],
+      section_order: ["abstract", "results", "discussion"],
       proof_appendix_required: true,
       proof_appendix_path: "academic_writer/paper/sections/appendix_theory.tex",
       paragraph_logic_status: "pending",
@@ -470,6 +545,33 @@ async function seedProjectReadyForSubmit(projectRoot) {
       citation_source_mode: "graph_only",
       scholar_query_reserved: true,
     },
+    write_package: {
+      status: "ready",
+      winning_track_ids: [trackId],
+      claim_evidence_matrix_path: "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+      narrative_report_path: "analyzer/NARRATIVE_REPORT.md",
+      track_verdicts_path: "analyzer/TRACK_VERDICTS.md",
+      unsupported_claims_path: "analyzer/UNSUPPORTED_CLAIMS.md",
+      baseline_summary_path: "researcher/baseline_summary.json",
+      research_summary_path: "researcher/research_summary.json",
+      ablation_summary_path: "researcher/ablation_summary.json",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      figure_pack_path: "academic_writer/FIGURE_PACK.json",
+      table_pack_path: "academic_writer/TABLE_PACK.json",
+      proof_packet_dir: "analyzer/proof-packets",
+      citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
+    },
+    review_issue_tracker: {
+      status: "ready",
+      issue_manifest_path: "reviewer/REVIEW_ISSUES.json",
+      open_counts: {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+      issues: [],
+    },
     external_review_state: {
       status: "received",
       provider: "paperreview.ai",
@@ -482,6 +584,9 @@ async function seedProjectReadyForSubmit(projectRoot) {
       required_action: "human_decision",
       last_updated_at: now,
     },
+  });
+  await writeJson(path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"), {
+    issues: [],
   });
 }
 
@@ -506,7 +611,12 @@ test("auto iterator keeps idea stage blocked when active tracks lack materialize
       ),
     },
   ]);
-  const graphSourceRoot = path.join(projectRoot, "graph", "source-corpus");
+  const graphSourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
   await seedGraphCorpus(projectRoot, [
     {
       sourceKey: path.join(graphSourceRoot, "md", "2501.00011--demo-idea-paper.md"),
@@ -643,7 +753,7 @@ test("auto iterator advances setup to graph_build when setup signals are complet
   assert.equal(result.ownerAfter, "researcher");
   assert.equal(
     result.nextAction,
-    "Run /graph-build using the latest paper corpus and update graph readiness metadata before frontier mapping."
+    "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph and update graph readiness metadata before frontier mapping."
   );
   assert.equal(result.gateBlocking, false);
 });
@@ -654,7 +764,7 @@ test("graph presence check reports missing canonical papers before novelty-sensi
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
-  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
   await seedPaperSourceIndex(projectRoot, [
     {
       canonical_id: "arxiv:2501.00001",
@@ -669,7 +779,12 @@ test("graph presence check reports missing canonical papers before novelty-sensi
       source_path: path.join(projectRoot, "researcher", "paper_source", "md", "2501.00002--beta-paper.md"),
     },
   ]);
-  const sourceRoot = path.join(projectRoot, "graph", "source-corpus");
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
   await seedGraphCorpus(projectRoot, [
     {
       sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
@@ -706,7 +821,7 @@ test("graph presence check preserves source provider and retrieval providers fro
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
-  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
   await seedPaperSourceIndex(projectRoot, [
     {
       canonical_id: "arxiv:2501.00003",
@@ -747,6 +862,63 @@ test("graph presence check preserves source provider and retrieval providers fro
   ]);
 });
 
+test("graph presence check resolves the shared global corpus from registry when the project does not pin one", async (t) => {
+  const projectRoot = await makeTempProject();
+  const priorPapernexusHome = process.env.PAPERNEXUS_HOME;
+  t.after(async () => {
+    if (priorPapernexusHome === undefined) {
+      delete process.env.PAPERNEXUS_HOME;
+    } else {
+      process.env.PAPERNEXUS_HOME = priorPapernexusHome;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00004",
+      arxiv_id: "2501.00004",
+      title: "Delta Paper",
+      source_kind: "markdown",
+      source_provider: "hf",
+      retrieval_providers: ["papers-cool"],
+      source_path: "/Users/iranb/.papernexus/papers/shared/md/2501.00004--delta-paper.md",
+    },
+  ]);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  delete manifest.papernexus_corpus;
+  await writeJson(manifestPath, manifest);
+  await fs.rm(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), { force: true });
+
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00004--delta-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00004--delta-paper.md"),
+      kind: "markdown",
+      paperId: "paper:delta",
+      paperTitle: "Delta Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00004--delta-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00004--delta-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00004--delta-paper.md"),
+    },
+  ]);
+  await fs.rm(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), { force: true });
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.corpusRoot, sourceRoot);
+});
+
 test("auto iterator advances graph_build once graph presence is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -755,7 +927,6 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
 
   await seedSetupCompleteProject(projectRoot, "graph_build");
   await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
-  const sourceRoot = path.join(projectRoot, "graph", "source-corpus");
   await seedPaperSourceIndex(projectRoot, [
     {
       canonical_id: "arxiv:2501.00001",
@@ -764,6 +935,12 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
       source_path: path.join(projectRoot, "researcher", "paper_source", "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
   await seedGraphCorpus(projectRoot, [
     {
       sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
@@ -797,7 +974,6 @@ test("auto iterator regresses frontier_mapping back to graph_build when graph mi
 
   await seedSetupCompleteProject(projectRoot, "frontier_mapping");
   await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
-  const sourceRoot = path.join(projectRoot, "graph", "source-corpus");
   await seedPaperSourceIndex(projectRoot, [
     {
       canonical_id: "arxiv:2501.00001",
@@ -812,6 +988,12 @@ test("auto iterator regresses frontier_mapping back to graph_build when graph mi
       source_path: path.join(projectRoot, "researcher", "paper_source", "md", "2501.00002--beta-paper.md"),
     },
   ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
   await seedGraphCorpus(projectRoot, [
     {
       sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
@@ -1054,7 +1236,7 @@ test("auto iterator keeps submit blocked when citation verification is not compl
   });
 
   assert.equal(result.stageBefore, "submit");
-  assert.equal(result.stageAfter, "submit");
+  assert.equal(result.stageAfter, "write");
   assert.equal(result.gateBlocking, false);
   assert.match(result.blockingReason ?? "", /citation/i);
   assert.ok(
@@ -1073,7 +1255,7 @@ test("auto iterator keeps submit blocked when citation verification is not compl
       },
     },
   });
-  assert.equal(aggressiveResult.effectiveAutoMode, "aggressive");
+  assert.equal(aggressiveResult.stageAfter, "write");
   assert.ok(
     aggressiveResult.autoModeReasons.some((reason) => /citation/i.test(reason))
   );
@@ -1115,13 +1297,61 @@ test("auto iterator downgrades only after mitigation rounds are exhausted for th
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
-  await seedProjectReadyForSubmit(projectRoot);
-
-  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
-  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-  manifest.citation_integrity.verification_status = "needs_revision";
-  manifest.citation_integrity.hallucinated_citation_count = 1;
-  await writeJson(manifestPath, manifest);
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Alpha Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+    },
+    {
+      canonical_id: "arxiv:2501.00002",
+      arxiv_id: "2501.00002",
+      title: "Beta Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00002--beta-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      kind: "markdown",
+      paperId: "paper:alpha",
+      paperTitle: "Alpha Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      sourceMarkdownPath: path.join(
+        sourceRoot,
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(
+        sourceRoot,
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+    },
+  ]);
 
   const firstResult = await runWorkflowAutoIterator({
     projectRoot,
@@ -1140,7 +1370,7 @@ test("auto iterator downgrades only after mitigation rounds are exhausted for th
   assert.ok(firstResult.autoModeRiskFingerprint);
 
   const round = createAutoModeDiscussionRound({
-    stage: "submit",
+    stage: "graph_build",
     riskLevel: "severe",
     packetPath: path.join(
       projectRoot,
@@ -1167,7 +1397,7 @@ test("auto iterator downgrades only after mitigation rounds are exhausted for th
     currentRound: round,
   });
 
-  const downgradedResult = await runWorkflowAutoIterator({
+  let downgradedResult = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
     queueMailbox: false,
@@ -1179,6 +1409,51 @@ test("auto iterator downgrades only after mitigation rounds are exhausted for th
       },
     },
   });
+
+  if (
+    downgradedResult.effectiveAutoMode !== "off" &&
+    downgradedResult.autoModeRiskFingerprint
+  ) {
+    const followupRound = createAutoModeDiscussionRound({
+      stage: "graph_build",
+      riskLevel: "severe",
+      packetPath: path.join(
+        projectRoot,
+        "reviewer",
+        "auto-mode-discussion",
+        "AUTO_MODE_DISCUSSION_PACKET.md"
+      ),
+      packetJsonPath: path.join(
+        projectRoot,
+        "reviewer",
+        "auto-mode-discussion",
+        "AUTO_MODE_DISCUSSION_PACKET.json"
+      ),
+      packetFingerprint: downgradedResult.autoModeRiskFingerprint,
+      attempts: [],
+    });
+    followupRound.status = "blocked";
+    await saveAutoModeDiscussionStore(projectRoot, {
+      schemaVersion: 1,
+      updatedAt: "2026-03-25T12:21:00.000Z",
+      roundsStartedByFingerprint: {
+        [downgradedResult.autoModeRiskFingerprint]: 2,
+      },
+      currentRound: followupRound,
+    });
+    downgradedResult = await runWorkflowAutoIterator({
+      projectRoot,
+      mode: "test",
+      queueMailbox: false,
+      policy: {
+        autoMode: "aggressive",
+        autoGate: {
+          ...defaultAutoGateConfig(),
+          enabled: true,
+        },
+      },
+    });
+  }
 
   assert.equal(downgradedResult.effectiveAutoMode, "off");
   assert.equal(downgradedResult.autoModeMitigationStatus, "blocked");

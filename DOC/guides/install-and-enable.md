@@ -113,14 +113,13 @@ cross-reviewer: { heartbeat: { every: "4h" } }
 确保项目里配置了：
 
 - `papernexus_root`
-- `papernexus_corpus`
-- `paper_source_dir`
-- `graph_source_dir`
+- `researcher/PAPER_SOURCE_INDEX.json`
 
 当前默认建议：
 
-- `paper_source_dir = ~/.papernexus/papers/{project_id}`
-- `graph_source_dir = ~/.papernexus/papers/{project_id}`
+- 所有项目共享同一张全局 PaperNexus 图
+- 项目 manifest 默认不需要单独设置 `papernexus_corpus`、`paper_source_dir`、`graph_source_dir`
+- 项目只需要维护 canonical paper selection，并让 workflow 去检查这些论文是否已经存在于共享图中
 - 图索引默认在 `~/.papernexus/index-store`
 
 ## 8. 推荐同时阅读

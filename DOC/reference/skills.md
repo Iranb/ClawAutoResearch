@@ -61,8 +61,11 @@
 - `hugging-face-paper-pages`  
   优先获取论文 Markdown 页面。
 
+- `arxiv2md-api`  
+  当 Hugging Face 没有有效 Markdown 时，优先尝试 arxiv2md 的 direct raw markdown API。
+
 - `arxiv2md`  
-  当 Hugging Face 没有有效 Markdown 时，用 arxiv2md 作为第二 Markdown 来源。
+  当 direct raw markdown API 不可用时，用 arxiv2md 页面端作为下一层 Markdown fallback。
 
 - `papernexus`  
   调用或接入 PaperNexus 功能做图谱构建与操作。

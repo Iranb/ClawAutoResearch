@@ -256,6 +256,9 @@ function inferSourceProvider(
     return "hf";
   }
   if (joinedHints.includes("arxiv2md")) {
+    if (joinedHints.includes("api/markdown") || joinedHints.includes("arxiv2md-api")) {
+      return "arxiv2md-api";
+    }
     return "arxiv2md";
   }
   if (sourceKind === "pdf") {
@@ -281,15 +284,17 @@ function sourceProviderRank(provider: string | null): number {
     case "huggingface":
     case "hugging-face-paper-pages":
       return 0;
-    case "arxiv2md":
+    case "arxiv2md-api":
       return 1;
-    case "pdf":
+    case "arxiv2md":
       return 2;
-    case "papers-cool":
+    case "pdf":
       return 3;
+    case "papers-cool":
+      return 4;
     case "pasa":
     case "pasa-paper-search":
-      return 4;
+      return 5;
     default:
       return 5;
   }
@@ -333,13 +338,6 @@ function inferProjectId(projectRoot: string, manifest: ManifestLike): string | n
   return asString(manifest.project_id) ?? path.basename(projectRoot);
 }
 
-function getDefaultPaperSourceDir(projectId: string | null): string | null {
-  if (!projectId) {
-    return null;
-  }
-  return path.join(os.homedir(), ".papernexus", "papers", projectId);
-}
-
 function getGraphPresenceReportPath(projectRoot: string): string {
   return path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json");
 }
@@ -372,6 +370,25 @@ async function resolveCorpusRootFromRegistry(
     }
   }
   return null;
+}
+
+async function resolveDefaultCorpusFromRegistry(): Promise<{
+  corpusRoot: string | null;
+  corpusName: string | null;
+}> {
+  const registry = await readJsonIfExists<Record<string, unknown>>(getRegistryPath());
+  const corpora = Array.isArray(registry?.corpora) ? registry.corpora : [];
+  if (corpora.length !== 1) {
+    return {
+      corpusRoot: null,
+      corpusName: null,
+    };
+  }
+  const record = asRecord(corpora[0]);
+  return {
+    corpusRoot: pickString(record, ["rootPath", "root_path"]),
+    corpusName: pickString(record, ["name"]),
+  };
 }
 
 function collectSourceHints(record: Record<string, unknown> | null): string[] {
@@ -621,23 +638,8 @@ async function resolveExpectedPapers(params: {
       usedPaperSourceIndex: true,
     };
   }
-
-  const sourceDir =
-    pickString(params.manifest, ["paper_source_dir", "graph_source_dir"]) ??
-    getDefaultPaperSourceDir(params.projectId);
-  if (!sourceDir) {
-    return {
-      papers: [],
-      paperSourceIndexPath: await pathExists(paperSourceIndexPath)
-        ? paperSourceIndexPath
-        : null,
-      usedPaperSourceIndex: false,
-    };
-  }
-
-  const files = await collectPaperFiles(path.resolve(sourceDir));
   return {
-    papers: parseExpectedPapersFromFiles(files),
+    papers: [],
     paperSourceIndexPath: await pathExists(paperSourceIndexPath)
       ? paperSourceIndexPath
       : null,
@@ -652,17 +654,25 @@ async function resolveCorpusRoot(params: {
 }): Promise<{ corpusRoot: string | null; corpusName: string | null }> {
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
   const status = await readJsonIfExists<Record<string, unknown>>(statusPath);
-  const corpusName =
+  const explicitCorpusName =
     pickString(status, ["corpus_name", "corpusName"]) ??
-    pickString(params.manifest, ["papernexus_corpus"]) ??
-    params.projectId;
-  const registryRoot = await resolveCorpusRootFromRegistry(corpusName);
+    pickString(params.manifest, ["papernexus_corpus"]);
+  const registryRoot = await resolveCorpusRootFromRegistry(explicitCorpusName);
+  const defaultRegistryCorpus = explicitCorpusName
+    ? { corpusRoot: null, corpusName: null }
+    : await resolveDefaultCorpusFromRegistry();
+  const corpusName = explicitCorpusName ?? defaultRegistryCorpus.corpusName ?? null;
   const candidates = uniqueStrings([
-    pickString(status, ["corpus_root", "corpusRoot", "root_path", "rootPath", "source_dir", "sourceDir"]),
+    pickString(status, [
+      "corpus_root",
+      "corpusRoot",
+      "root_path",
+      "rootPath",
+      "source_dir",
+      "sourceDir",
+    ]),
     registryRoot,
-    pickString(params.manifest, ["graph_source_dir"]),
-    pickString(params.manifest, ["paper_source_dir"]),
-    getDefaultPaperSourceDir(params.projectId),
+    defaultRegistryCorpus.corpusRoot,
   ].filter((item): item is string => Boolean(item)));
 
   for (const candidate of candidates) {
@@ -814,7 +824,7 @@ function buildBlockingReason(
     return null;
   }
   if (status === "missing_sources") {
-    return "No canonical papers are available yet in PAPER_SOURCE_INDEX.json or paper_source_dir, so graph-grounded work cannot proceed.";
+    return "No canonical papers are recorded yet in PAPER_SOURCE_INDEX.json, so graph-grounded work cannot proceed.";
   }
   if (status === "missing_corpus") {
     return `PaperNexus corpus is not ready at ${corpusRoot ?? "the expected corpus root"} for ${expectedPaperCount} expected paper(s). Rebuild or refresh the corpus before frontier mapping or ideation.`;

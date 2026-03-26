@@ -212,28 +212,28 @@ sync_papernexus_skills() {
 
 get_existing_agent_ids() {
   local json
-  json=$(openclaw agents list --json 2>/dev/null) || true
+  json=$(get_openclaw_agents_json) || true
   if [[ -z "$json" ]]; then
     return 0
   fi
-  if command -v jq >/dev/null 2>&1; then
-    echo "$json" | jq -r '.[].id'
+  if command -v jq >/dev/null 2>&1 && printf '%s\n' "$json" | jq -e . >/dev/null 2>&1; then
+    printf '%s\n' "$json" | jq -r '.[].id'
   else
-    echo "$json" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+    printf '%s\n' "$json" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
   fi
 }
 
 get_existing_agent_workspace() {
   local id="$1"
   local json
-  json=$(openclaw agents list --json 2>/dev/null) || true
+  json=$(get_openclaw_agents_json) || true
   if [[ -z "$json" ]]; then
     return 0
   fi
-  if command -v jq >/dev/null 2>&1; then
-    echo "$json" | jq -r --arg id "$id" '.[] | select(.id == $id) | .workspace // empty'
+  if command -v jq >/dev/null 2>&1 && printf '%s\n' "$json" | jq -e . >/dev/null 2>&1; then
+    printf '%s\n' "$json" | jq -r --arg id "$id" '.[] | select(.id == $id) | .workspace // empty'
   else
-    echo "$json" | awk -v id="$id" '
+    printf '%s\n' "$json" | awk -v id="$id" '
       BEGIN { RS="\\{" }
       $0 ~ "\"id\"[[:space:]]*:[[:space:]]*\"" id "\"" {
         if (match($0, /"workspace"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
@@ -245,6 +245,56 @@ get_existing_agent_workspace() {
       }
     '
   fi
+}
+
+extract_first_json_array() {
+  awk '
+    BEGIN {
+      capture = 0
+      depth = 0
+    }
+    {
+      line = $0
+      if (!capture) {
+        if (line ~ /^[[:space:]]*\[/) {
+          capture = 1
+        } else {
+          next
+        }
+      }
+      print line
+      tmp = line
+      open_count = gsub(/\[/, "[", tmp)
+      tmp = line
+      close_count = gsub(/\]/, "]", tmp)
+      depth += open_count - close_count
+      if (capture && depth == 0) {
+        exit
+      }
+    }
+  '
+}
+
+get_openclaw_agents_json() {
+  local raw
+  local sanitized
+  raw=$(openclaw agents list --json 2>/dev/null) || true
+  if [[ -z "$raw" ]]; then
+    return 0
+  fi
+  sanitized=$(printf '%s\n' "$raw" | extract_first_json_array)
+  if [[ -n "$sanitized" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      if printf '%s\n' "$sanitized" | jq -e . >/dev/null 2>&1; then
+        printf '%s\n' "$sanitized"
+        return 0
+      fi
+    else
+      printf '%s\n' "$sanitized"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$raw"
 }
 
 agent_exists() {

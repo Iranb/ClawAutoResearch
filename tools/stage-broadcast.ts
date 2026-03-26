@@ -37,6 +37,20 @@ export type StageBroadcastResult = {
   idempotencyKey: string | null;
 };
 
+export type WorkflowStatusBroadcastStatus =
+  | "started"
+  | "blocked"
+  | "waiting"
+  | "handed_off";
+
+export type WorkflowStatusBroadcastResult = {
+  broadcasted: boolean;
+  reasonSkipped: string | null;
+  runId: string | null;
+  sessionKey: string | null;
+  idempotencyKey: string | null;
+};
+
 function roleToMention(role: string | null | undefined): string | null {
   if (!role) {
     return null;
@@ -168,6 +182,30 @@ function collectMentionTargets(params: {
 
 export function isWorkflowStageBroadcastMessage(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\[Workflow Stage Update\]/i.test(text));
+}
+
+export function buildWorkflowStatusBroadcastMessage(params: {
+  projectId: string | null;
+  projectRoot: string | null;
+  status: WorkflowStatusBroadcastStatus;
+  stage?: string | null;
+  summary: string;
+}) {
+  const lines = [
+    "WORKFLOW_STATUS_BROADCAST=1",
+    "BEGIN_UPDATE",
+    "[Workflow Status]",
+    `Project: ${params.projectId ?? "unknown"}`,
+    `Project Root: ${params.projectRoot ?? "unknown"}`,
+    `Status: ${params.status.replace(/_/g, " ")}`,
+    params.stage ? `Stage: ${formatStageLabel(params.stage)}` : null,
+    `Summary: ${params.summary.trim()}`,
+    "END_UPDATE",
+    "Post the exact update between BEGIN_UPDATE and END_UPDATE to the current channel.",
+    "Keep the update concise.",
+    "Do not call tools, do not continue the workflow, and stop immediately after the update.",
+  ];
+  return `${lines.filter(Boolean).join("\n")}\n`;
 }
 
 export function buildAutoIteratorStageBroadcastMessage(params: {
@@ -346,6 +384,79 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
     })
   ).runId;
 
+  return {
+    broadcasted: true,
+    reasonSkipped: null,
+    runId,
+    sessionKey: params.sessionKey,
+    idempotencyKey,
+  };
+}
+
+export async function maybeBroadcastWorkflowStatusUpdate(params: {
+  runtimeSubagent?: StageBroadcastRuntime;
+  sessionKey?: string | null;
+  projectId: string | null;
+  projectRoot: string | null;
+  status: WorkflowStatusBroadcastStatus;
+  stage?: string | null;
+  summary: string;
+  idempotencyKeySuffix?: string | null;
+}): Promise<WorkflowStatusBroadcastResult> {
+  if (!params.runtimeSubagent) {
+    return {
+      broadcasted: false,
+      reasonSkipped: "runtime_unavailable",
+      runId: null,
+      sessionKey: params.sessionKey ?? null,
+      idempotencyKey: null,
+    };
+  }
+  if (!params.sessionKey) {
+    return {
+      broadcasted: false,
+      reasonSkipped: "session_unavailable",
+      runId: null,
+      sessionKey: null,
+      idempotencyKey: null,
+    };
+  }
+  if (!params.summary.trim()) {
+    return {
+      broadcasted: false,
+      reasonSkipped: "empty_summary",
+      runId: null,
+      sessionKey: params.sessionKey,
+      idempotencyKey: null,
+    };
+  }
+
+  const idempotencyKey = [
+    "openclaw-research:status-broadcast",
+    params.sessionKey,
+    params.projectId ?? "unknown-project",
+    params.status,
+    params.stage ?? "unknown-stage",
+    params.idempotencyKeySuffix ?? params.summary.trim().slice(0, 80),
+  ].join(":");
+  const runId = (
+    await params.runtimeSubagent.run({
+      sessionKey: params.sessionKey,
+      message: buildWorkflowStatusBroadcastMessage({
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        status: params.status,
+        stage: params.stage,
+        summary: params.summary,
+      }),
+      lane: "nested",
+      deliver: true,
+      idempotencyKey,
+      extraSystemPrompt:
+        "WORKFLOW_STATUS_BROADCAST=1\n" +
+        "This is a synthetic workflow status broadcast. Post exactly one concise channel update, do not call tools, do not advance the workflow, and stop immediately after the update.",
+    })
+  ).runId;
   return {
     broadcasted: true,
     reasonSkipped: null,

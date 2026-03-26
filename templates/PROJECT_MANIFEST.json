@@ -84,6 +84,36 @@
     "pending_reason": null,
     "last_updated_at": null
   },
+  "research_program": {
+    "program_version": 1,
+    "status": "missing",
+    "goal": null,
+    "tracks": [],
+    "global_constraints": {
+      "max_active_tracks": null,
+      "must_run_multi_seed_before_analysis": true,
+      "must_run_plot_aggregation_before_write": true
+    },
+    "task_graph": [],
+    "last_updated_at": null,
+    "pending_reason": null
+  },
+  "orchestration_state": {
+    "status": "missing",
+    "active_ticket_id": null,
+    "stage_run_id": null,
+    "current_owner": null,
+    "next_owner": null,
+    "next_transition_candidate": null,
+    "blocking_category": null,
+    "blocking_reason": null,
+    "retry_budget_remaining": null,
+    "last_contract_eval_at": null,
+    "last_contract_eval_result": null,
+    "rollback_target_stage": null,
+    "resume_cursor": null,
+    "last_updated_at": null
+  },
   "innovation_reflection": {
     "required_after_experiments": true,
     "status": "missing",
@@ -174,6 +204,32 @@
     "template_mapping_path": null,
     "pending_reason": null
   },
+  "write_package": {
+    "status": "missing",
+    "assembly_status": null,
+    "assembly_mode": null,
+    "winning_track_ids": [],
+    "claim_evidence_matrix_path": null,
+    "narrative_report_path": null,
+    "track_verdicts_path": null,
+    "unsupported_claims_path": null,
+    "baseline_summary_path": null,
+    "research_summary_path": null,
+    "ablation_summary_path": null,
+    "evaluation_summary_path": null,
+    "figure_pack_path": null,
+    "table_pack_path": null,
+    "proof_packet_dir": null,
+    "citation_candidates_path": null,
+    "package_manifest_path": "academic_writer/WRITE_PACKAGE.json",
+    "assembly_report_path": "academic_writer/WRITE_PACKAGE_ASSEMBLY_REPORT.json",
+    "section_assembly_queue_path": "academic_writer/SECTION_ASSEMBLY_QUEUE.json",
+    "source_artifact_count": 0,
+    "derived_artifact_count": 0,
+    "assembled_at": null,
+    "pending_reason": null,
+    "last_updated_at": null
+  },
   "citation_integrity": {
     "enabled": true,
     "verification_required": true,
@@ -240,6 +296,7 @@
       "low": 0
     },
     "issue_manifest_path": "reviewer/REVIEW_ISSUES.json",
+    "issues": [],
     "last_review_round": 0,
     "last_updated_at": null,
     "pending_reason": null

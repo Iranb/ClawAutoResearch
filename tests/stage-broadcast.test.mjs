@@ -32,7 +32,7 @@ test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dis
         owner: "researcher",
         stage: "graph_build",
         summary: "Refresh graph inputs and verify missing papers.",
-        command: "/graph-build --force",
+        command: "/graph-build",
         blocking: false,
       },
     ],
@@ -53,7 +53,7 @@ test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dis
   assert.match(message, /Mailbox: msg-123/);
   assert.match(
     message,
-    /Agent participation: orchestrator: task dispatched, via direct_session \| researcher: Refresh graph inputs and verify missing papers., command \/graph-build --force/
+    /Agent participation: orchestrator: task dispatched, via direct_session \| researcher: Refresh graph inputs and verify missing papers., command \/graph-build/
   );
   assert.match(message, /Dispatch: dispatched=yes, owner=orchestrator/);
 });

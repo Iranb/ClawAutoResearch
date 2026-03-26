@@ -42,26 +42,28 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 2. **For EACH paper found** (ALL, not just selected few):
    - **Step 1:** Once the paper identity is confirmed (arXiv ID / paper URL), check HuggingFace for markdown (`/hugging-face-paper-pages`) immediately
    - **Step 2:** Validate the downloaded Markdown; if it is really HTML / error text / tiny stub, delete it and retry the HF fetch
-   - **Step 3:** If HF still has no valid markdown and the paper is on arXiv, try `/arxiv2md`
-   - **Step 4:** Validate the arxiv2md markdown; if it is HTML / error text / tiny stub, delete it and retry once
-   - **Step 5:** If both Markdown sources fail → download PDF to `paper_source_dir/pdf/`
-   - **Step 6:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
-   - **Step 7:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
+   - **Step 3:** If HF still has no valid markdown and the paper is on arXiv, try `/arxiv2md-api`
+   - **Step 4:** If direct API markdown still fails, try `/arxiv2md`
+   - **Step 5:** Validate the arXiv markdown; if it is HTML / error text / tiny stub, delete it and retry once
+   - **Step 6:** If all Markdown sources fail → download PDF to the shared PaperNexus source tree under `paper_source_dir/pdf/`
+   - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
+   - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
    - Run one bounded brainstorm synthesis pass over the currently ingested papers; this is mandatory during research, not postponed to IDEA
 4. **After ALL searches complete**:
    - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
-   - Run `/graph-build --force` for final corpus build
+   - Run `/graph-build` for final shared-graph reconciliation
+   - Do not use `--force`; if graph build fails, hand the exact non-force graph-build command to the user
    - Run `/frontier-mapping` to extract research frontiers
    - Write `{PROJ}/researcher/LITERATURE.md` with full survey
 
 **Do NOT:**
 - Skip HuggingFace check
 - Only process 1-2 papers from search results
-- Delay graph build until all searches complete (build incrementally)
-- Write LITERATURE.md before graph build
+- Delay shared-graph reconciliation until all searches complete (build incrementally)
+- Write LITERATURE.md before graph reconciliation
 - Keep invalid HTML / error-page downloads under `paper_source_dir`
 
 ---
@@ -79,8 +81,8 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 ```
 
 Default path policy:
-- for new projects, default `paper_source_dir` and `graph_source_dir` should both point to `~/.papernexus/papers/{proj-id}`
-- keep project reports and state under `{PROJ}/`, but keep canonical paper source files under the local PaperNexus source tree unless a project explicitly overrides it
+- for new projects, keep `paper_source_dir` and `graph_source_dir` unset in the manifest unless the project explicitly overrides the shared-global defaults
+- keep project reports and state under `{PROJ}/`, but keep canonical paper source files under the shared PaperNexus source tree unless a project explicitly overrides it
 
 Preferred filenames:
 
@@ -115,7 +117,7 @@ Rules:
 - if both markdown and PDF exist for the same paper, markdown is the preferred PaperNexus ingestion source
 - if a new markdown arrives for a paper that already has a PDF, keep the PDF only as fallback; do not treat it as a new paper
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
-- `/graph-build` must build from the default canonical paper source tree directly; do not create a second graph-only source tree for the same project
+- `/graph-build` must reconcile the project's canonical paper selection against the shared global graph; do not create a second graph-only source tree for the same project
 - after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
@@ -190,14 +192,14 @@ Rules:
 
 1. **As soon as the paper identity is confirmed, check HuggingFace FIRST:**
    ```
-   /hugging-face-paper-pages --arxiv <arxiv_id> --output-dir {PROJ}/researcher/paper_source/md/
+   /hugging-face-paper-pages --arxiv <arxiv_id> --output-dir {paper_source_dir}/md/
    ```
 
 2. **If HuggingFace has markdown:**
-   - Saved to `paper_source_dir/md/`
+   - Saved to the shared `paper_source_dir/md/`
    - Save or rename it to the canonical filename immediately: arXiv ID first, otherwise normalized title
    - Must pass format validation before being counted as ingested
-   - Add to graph build queue
+   - Add to graph reconciliation queue
    - Continue to next paper
 
 3. **If HuggingFace NO valid markdown and the paper has an arXiv ID:**
@@ -211,19 +213,19 @@ Rules:
 4. **If both Markdown sources fail:**
    - Download PDF via `/papers-cool`:
      ```
-     /papers-cool Download PDF for arxiv:<arxiv_id> to {PROJ}/researcher/paper_source/pdf/
+     /papers-cool Download PDF for arxiv:<arxiv_id> to {paper_source_dir}/pdf/
      ```
    - Save or rename the validated PDF to the canonical filename immediately after download
    - The saved PDF must pass format validation; bad HTML / text responses must be deleted and retried
 
 Do not postpone the HuggingFace attempt until after later filtering if the current search result already exposes a stable arXiv ID or paper URL.
 
-### Step 3: Incremental Graph Build
+### Step 3: Incremental Shared-Graph Reconciliation
 
 **After EACH search query** (when ≥3 new papers ingested):
 
 ```bash
-node <PAPERNEXUS>/src/cli/index.js analyze <paper_source_dir> --name <proj-id>
+/graph-build
 ```
 
 Update `{PROJ}/PROJECT_MANIFEST.json`:
@@ -237,6 +239,11 @@ Update `{PROJ}/PROJECT_MANIFEST.json`:
   }
 }
 ```
+
+Notes:
+- `/graph-build` now means "reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph"
+- do not create or name a new per-project corpus during this step
+- if required papers are missing from the shared graph, record the gap and request or queue a shared-graph refresh rather than building a project-local corpus
 
 ### Step 3.5: Brainstorm During Research (mandatory)
 
@@ -260,7 +267,7 @@ Frontier mapping should refine and package this brainstorm scaffold, not start i
 
 ### Step 4: Write Literature Report
 
-After all searches and graph builds complete:
+After all searches and shared-graph reconciliations complete:
 
 Write `{PROJ}/researcher/LITERATURE.md` with:
 - Search queries used
@@ -275,7 +282,7 @@ Also refresh `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` so the literature stage 
 
 ## HuggingFace Integration (PRIORITY 1)
 
-**Always check HuggingFace first, then arxiv2md, before downloading PDFs.**
+**Always check HuggingFace first, then arxiv2md-api, then arxiv2md, before downloading PDFs.**
 
 ### Why HuggingFace?
 
@@ -291,8 +298,8 @@ For each arXiv ID from search results:
 /hugging-face-paper-pages --arxiv <arxiv_id> --output-dir {paper_source_dir}/md/
 ```
 
-**Success:** Markdown saved, ready for graph build  
-**Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md`, and only then fall back to PDF download
+**Success:** Markdown saved, ready for shared-graph reconciliation  
+**Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md-api`, then `arxiv2md`, and only then fall back to PDF download
 
 ### Batch Processing
 
@@ -309,26 +316,25 @@ for arxiv_id in arxiv_batch:
 
 ## Graph Build Integration
 
-**Trigger graph build when:**
+**Trigger shared-graph reconciliation when:**
 
 1. ≥3 new papers ingested since last build
 2. A key paper (changes novelty baseline) is ingested
-3. All searches complete (final build)
+3. All searches complete (final reconciliation pass)
 
-**Graph build command:**
+**Graph build action:**
 
 ```bash
-PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
-  node <PAPERNEXUS>/src/cli/index.js analyze <paper_source_dir> --name <proj-id>
+/graph-build
 ```
 
-**After graph build:**
+**After graph reconciliation:**
 
-1. Check status: `node <PAPERNEXUS>/src/cli/index.js status --corpus <proj-id>`
+1. Check project graph presence against the shared global graph
 2. Update `PROJECT_MANIFEST.json` with:
    - `graph_last_built_at`
-   - `papernexus_corpus`
-   - `graph_source_dir`
+   - `paper_ingestion.last_graph_sync_at`
+   - shared-graph readiness metadata written by the workflow runtime
 
 ---
 
@@ -337,8 +343,9 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 - `/papers-cool` — Guaranteed paper search baseline and PDF fallback
 - `/pasa-paper-search` — Optional PASA-ranked discovery source to merge with papers.cool
 - `/hugging-face-paper-pages` — Fetch markdown from HuggingFace
-- `/arxiv2md` — Fallback markdown source for arXiv papers
-- `/graph-build` — Build PaperNexus corpus
+- `/arxiv2md-api` — Direct raw markdown fallback for arXiv papers
+- `/arxiv2md` — Legacy webpage markdown fallback for arXiv papers
+- `/graph-build` — Reconcile project paper selection against the shared global graph
 - `/frontier-mapping` — Extract research frontiers from graph
 
 ---
@@ -349,8 +356,8 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 |------|-------------|
 | `lit_search_*.json` | Raw search results |
 | `lit_search_pasa_*.json` | Optional PASA search results |
-| `paper_source/md/*.md` | HuggingFace markdown papers |
-| `paper_source/pdf/*.pdf` | Downloaded PDFs |
+| `{paper_source_dir}/md/*.md` | Shared-source markdown papers |
+| `{paper_source_dir}/pdf/*.pdf` | Shared-source PDF fallbacks |
 | `PAPER_SOURCE_INDEX.json` | Canonical paper index |
 | `RESEARCH_BRAINSTORM.md` | Brainstorm scaffold generated during research |
 | `LITERATURE.md` | Literature survey report |
@@ -359,4 +366,4 @@ PAPERNEXUS_PYTHON=/Users/iranb/mambaforge/bin/python \
 
 When literature ingestion, preliminary brainstorming, and the durable outputs are complete, Researcher may trigger the Lobster handoff workflow only if the current stage is actually ready to advance.
 
-Do not hand off if the graph still needs refresh, key papers are still missing from the corpus, or brainstorming is still stale relative to the new papers.
+Do not hand off if the shared graph still needs reconciliation, key papers are still missing from the shared graph, or brainstorming is still stale relative to the new papers.

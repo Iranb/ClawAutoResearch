@@ -1,11 +1,24 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
   type WorkflowGuardPolicy,
 } from "./workflow-guard";
+import {
+  buildWorkflowSubagentSessionKey,
+  derivePapernexusTaskLabel,
+  looksLikePapernexusHeavyCommand,
+  normalizeWorkflowSubagentParentSessionKey,
+} from "./workflow-subagent-sessions";
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeAgentId(value: unknown): string | null {
+  return readString(value)?.toLowerCase() ?? null;
 }
 
 export type BackgroundRunRequest = {
@@ -17,6 +30,17 @@ export type BackgroundRunRequest = {
   projectId?: string;
   projectRoot?: string;
   ensureProjectBinding?: boolean;
+};
+
+type BackgroundRunRegistryEntry = {
+  ownerAgent: string;
+  channelKey: string;
+  requesterSessionKey: string;
+  backgroundSessionKey: string;
+  runId: string;
+  kind: string;
+  startedAt: string;
+  lastCheckedAt: string | null;
 };
 
 export type BackgroundRunAgentContext = {
@@ -33,6 +57,146 @@ export type BackgroundRunSnapshot = {
   projectId: string | null;
   channelProjectBindingsEnabled: boolean;
 };
+
+const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
+const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
+
+function getBackgroundRunRegistryPath(): string {
+  return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
+}
+
+export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void> {
+  await fs.rm(getBackgroundRunRegistryPath(), { force: true });
+}
+
+function deriveBackgroundRunChannelKey(params: {
+  sessionKey?: string;
+  messageChannel?: string;
+}): string | null {
+  const normalizedParent = normalizeWorkflowSubagentParentSessionKey(params.sessionKey);
+  const sessionKey = readString(normalizedParent ?? params.sessionKey);
+  if (sessionKey?.startsWith("agent:")) {
+    const parts = sessionKey.split(":");
+    if (parts.length > 2) {
+      const suffix = parts.slice(2).join(":").trim();
+      if (suffix) {
+        return suffix;
+      }
+    }
+  }
+  return readString(params.messageChannel) ?? null;
+}
+
+async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]> {
+  try {
+    const raw = await fs.readFile(getBackgroundRunRegistryPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const record = entry as Record<string, unknown>;
+        const ownerAgent = normalizeAgentId(record.ownerAgent);
+        const channelKey = readString(record.channelKey);
+        const requesterSessionKey = readString(record.requesterSessionKey);
+        const backgroundSessionKey = readString(record.backgroundSessionKey);
+        const runId = readString(record.runId);
+        const kind = readString(record.kind) ?? "generic";
+        const startedAt = readString(record.startedAt);
+        const lastCheckedAt = readString(record.lastCheckedAt) ?? null;
+        if (
+          !ownerAgent ||
+          !channelKey ||
+          !requesterSessionKey ||
+          !backgroundSessionKey ||
+          !runId ||
+          !startedAt
+        ) {
+          return null;
+        }
+        return {
+          ownerAgent,
+          channelKey,
+          requesterSessionKey,
+          backgroundSessionKey,
+          runId,
+          kind,
+          startedAt,
+          lastCheckedAt,
+        } satisfies BackgroundRunRegistryEntry;
+      })
+      .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeBackgroundRunRegistry(entries: BackgroundRunRegistryEntry[]): Promise<void> {
+  const registryPath = getBackgroundRunRegistryPath();
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+}
+
+async function pruneBackgroundRunRegistry(params: {
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+  };
+}): Promise<BackgroundRunRegistryEntry[]> {
+  const now = Date.now();
+  const current = await readBackgroundRunRegistry();
+  const kept: BackgroundRunRegistryEntry[] = [];
+  for (const entry of current) {
+    const startedAtMs = Date.parse(entry.startedAt);
+    if (!Number.isFinite(startedAtMs) || now - startedAtMs > BACKGROUND_RUN_STALE_MS) {
+      continue;
+    }
+    if (params.runtimeSubagent?.waitForRun) {
+      try {
+        const waited = await params.runtimeSubagent.waitForRun({
+          runId: entry.runId,
+          timeoutMs: 1,
+        });
+        if (waited.status === "ok" || waited.status === "error") {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    kept.push({
+      ...entry,
+      lastCheckedAt: new Date(now).toISOString(),
+    });
+  }
+  await writeBackgroundRunRegistry(kept);
+  return kept;
+}
+
+async function upsertBackgroundRunRegistryEntry(
+  entry: BackgroundRunRegistryEntry
+): Promise<void> {
+  const current = await readBackgroundRunRegistry();
+  const next = current.filter(
+    (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
+  );
+  next.push(entry);
+  await writeBackgroundRunRegistry(next);
+}
 
 export function hasBackgroundContinuationMarker(
   text: string | null | undefined
@@ -79,6 +243,17 @@ export function buildResumePipelineBackgroundCommand(commandText: string): strin
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+export function buildPapernexusSkillBackgroundCommand(commandText: string): string {
+  const trimmed = commandText.trim();
+  if (!trimmed) {
+    return "/graph-build -- __BACKGROUND_CONTINUATION__: true";
+  }
+  if (hasBackgroundContinuationMarker(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
+}
+
 export async function startBackgroundWorkflowRun(params: {
   runtimeSubagent?: {
     run: (params: {
@@ -89,6 +264,10 @@ export async function startBackgroundWorkflowRun(params: {
       idempotencyKey?: string;
       extraSystemPrompt?: string;
     }) => Promise<{ runId: string }>;
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
   };
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
@@ -158,6 +337,8 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildResearchQueueBackgroundCommand(
             `/research-queue "${topic ?? ensuredProject?.title ?? "status"}"`
           )
+      : normalizedKind === "papernexus_skill"
+        ? buildPapernexusSkillBackgroundCommand("/graph-build")
       : null);
   if (!commandText) {
     throw new Error(
@@ -165,23 +346,85 @@ export async function startBackgroundWorkflowRun(params: {
     );
   }
 
+  const backgroundSessionKey =
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: params.agentCtx.sessionKey,
+      purpose:
+        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+          ? "papernexus-skill"
+          : `workflow-${normalizedKind}`,
+      segments: [
+        ensuredProject?.projectId ?? params.snapshot.projectId,
+        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+          ? derivePapernexusTaskLabel(commandText)
+          : topic,
+      ],
+    }) ?? params.agentCtx.sessionKey;
+
+  const ownerAgent =
+    normalizeAgentId(params.agentCtx.agentId) ?? normalizeAgentId(params.snapshot.role);
+  const channelKey = deriveBackgroundRunChannelKey({
+    sessionKey: params.agentCtx.sessionKey,
+    messageChannel: params.agentCtx.messageChannel,
+  });
+  if (ownerAgent === "researcher" && channelKey) {
+    const activeEntries = await pruneBackgroundRunRegistry({
+      runtimeSubagent: params.runtimeSubagent,
+    });
+    const activeChannelEntries = activeEntries.filter(
+      (entry) =>
+        entry.ownerAgent === "researcher" &&
+        entry.channelKey === channelKey &&
+        entry.backgroundSessionKey !== backgroundSessionKey
+    );
+    if (activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL) {
+      return {
+        started: false,
+        runId: null,
+        sessionKey: null,
+        projectRoot:
+          ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+        projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+        summary:
+          `Background workflow not started: this channel already has ` +
+          `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL} active Researcher background subagents. ` +
+          "Wait for one to finish before starting another.",
+      };
+    }
+  }
+
   const runId = (
     await params.runtimeSubagent.run({
-      sessionKey: params.agentCtx.sessionKey,
+      sessionKey: backgroundSessionKey,
       message: commandText,
       lane: "nested",
-      deliver: true,
-      idempotencyKey: `openclaw-research:bg:${params.agentCtx.sessionKey}:${Date.now()}`,
+      deliver: false,
+      idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
       extraSystemPrompt:
         "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-        "This run was launched from a slash-command fast path. Immediately acknowledge in-channel that the task has started, then continue the requested workflow. Report concise progress when a stage changes, when a blocker appears, or when a durable handoff is queued. Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+        "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
+        "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
+        "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
     })
   ).runId;
+
+  if (ownerAgent === "researcher" && channelKey) {
+    await upsertBackgroundRunRegistryEntry({
+      ownerAgent,
+      channelKey,
+      requesterSessionKey: params.agentCtx.sessionKey,
+      backgroundSessionKey,
+      runId,
+      kind: normalizedKind,
+      startedAt: new Date().toISOString(),
+      lastCheckedAt: null,
+    });
+  }
 
   return {
     started: true,
     runId,
-    sessionKey: params.agentCtx.sessionKey,
+    sessionKey: backgroundSessionKey,
     projectRoot:
       ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
     projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
@@ -191,6 +434,8 @@ export async function startBackgroundWorkflowRun(params: {
         ? `Background research pipeline started for ${topic ?? ensuredProject?.title ?? "research topic"}.`
         : normalizedKind === "resume_pipeline"
           ? `Background resume pipeline started for ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
+        : normalizedKind === "papernexus_skill"
+          ? `PaperNexus-heavy workflow task started in a dedicated subagent for ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
         : "Background workflow run started."),
   };
 }

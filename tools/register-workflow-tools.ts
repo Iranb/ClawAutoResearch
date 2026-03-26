@@ -1,4 +1,5 @@
 import {
+  assembleWritePackage,
   acknowledgeWorkflowMailboxMessage,
   bindChannelProjectForWorkflow,
   buildWorkflowSnapshot,
@@ -14,12 +15,15 @@ import {
   getGraphGuidedWritingStateSummary,
   getIdleResearchStateSummary,
   getInnovationReflectionStateSummary,
+  getOrchestrationStateSummary,
   getPaperQcStateSummary,
+  getResearchProgramStateSummary,
   getProjectRootForWorkflow,
   getReviewIssueTrackerStateSummary,
   getReviewSessionStateSummary,
   getTheoryStateSummary,
   getWorkflowContactCooldown,
+  getWritePackageStateSummary,
   getWritingContractStateSummary,
   getWritingSessionStateSummary,
   inferTargetRoleFromToolParams,
@@ -39,9 +43,12 @@ import {
   setFigureQcState,
   setGraphGuidedWritingState,
   setIdleResearchState,
+  setOrchestrationState,
   setPaperQcState,
+  setResearchProgramState,
   setReviewIssueTrackerState,
   setReviewSessionState,
+  setWritePackageState,
   setWritingSessionState,
   setWritingContractState,
   unbindChannelProjectForWorkflow,
@@ -109,8 +116,15 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   record_idle_research_run: "recordIdleResearchRun",
   get_experiment_memory: "getExperimentMemorySummary",
   get_innovation_reflection: "getInnovationReflectionStateSummary",
+  get_research_program: "getResearchProgramStateSummary",
+  set_research_program: "setResearchProgramState",
+  get_orchestration_state: "getOrchestrationStateSummary",
+  set_orchestration_state: "setOrchestrationState",
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
+  get_write_package: "getWritePackageStateSummary",
+  set_write_package: "setWritePackageState",
+  assemble_write_package: "assembleWritePackage",
   get_writing_session: "getWritingSessionStateSummary",
   set_writing_session: "setWritingSessionState",
   get_review_session: "getReviewSessionStateSummary",
@@ -374,8 +388,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "record_idle_research_run",
               "get_experiment_memory",
               "get_innovation_reflection",
+              "get_research_program",
+              "set_research_program",
+              "get_orchestration_state",
+              "set_orchestration_state",
               "get_theory_state",
               "get_writing_contract",
+              "get_write_package",
+              "set_write_package",
+              "assemble_write_package",
               "get_writing_session",
               "set_writing_session",
               "get_review_session",
@@ -441,6 +462,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          researchProgram: {
+            type: "object",
+            additionalProperties: true,
+          },
+          orchestrationState: {
+            type: "object",
+            additionalProperties: true,
+          },
           theoryState: {
             type: "object",
             additionalProperties: true,
@@ -454,6 +483,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           writingContract: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writePackage: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writePackageAssembly: {
             type: "object",
             additionalProperties: true,
           },
@@ -888,6 +925,42 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_research_program": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getResearchProgramStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_research_program": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setResearchProgramState({
+                projectRoot: resolvedProjectRoot,
+                researchProgram: requireObject(
+                  params.researchProgram,
+                  "researchProgram"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_orchestration_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getOrchestrationStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_orchestration_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setOrchestrationState({
+                projectRoot: resolvedProjectRoot,
+                orchestrationState: requireObject(
+                  params.orchestrationState,
+                  "orchestrationState"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_theory_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getTheoryStateSummary({
@@ -902,6 +975,33 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 policy: workflowPolicy,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_write_package": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getWritePackageStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_write_package": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setWritePackageState({
+                projectRoot: resolvedProjectRoot,
+                writePackage: requireObject(params.writePackage, "writePackage"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "assemble_write_package": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await assembleWritePackage({
+                projectRoot: resolvedProjectRoot,
+                mode: readString(asObject(params.writePackageAssembly)?.mode) ?? "deterministic",
+                trigger:
+                  readString(asObject(params.writePackageAssembly)?.trigger) ??
+                  "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_writing_session": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

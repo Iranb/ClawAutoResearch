@@ -116,6 +116,7 @@ type HandoffWorkflowTaskParams = {
   requesterSessionKey?: string;
   requesterChannel?: string | null;
   requesterAccountId?: string | null;
+  preferredSessionKeys?: string[] | null;
   fromRole?: string | null;
   toRole: DispatchableWorkflowRole;
   projectRoot: string;
@@ -403,6 +404,7 @@ export async function handoffWorkflowTaskToAgent(
         runtimeSubagent: params.runtimeSubagent,
         requesterSessionKey: params.requesterSessionKey,
         requesterChannel: params.requesterChannel ?? undefined,
+        preferredSessionKeys: params.preferredSessionKeys ?? undefined,
         fromRole: params.fromRole,
         toRole: params.toRole,
         projectRoot: params.projectRoot,

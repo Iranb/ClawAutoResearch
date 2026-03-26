@@ -93,27 +93,23 @@ idea 阶段的审计材料。
 
 ### `paper_source_dir`
 
-项目论文源目录，通常在 manifest 中记录。
+项目论文源覆盖目录，通常只在项目需要覆盖共享默认值时才在 manifest 中记录。
 
-默认建议值是：
+当前推荐是：
 
-- `~/.papernexus/papers/{project_id}`
-
-推荐把 Markdown / PDF 论文源统一放在这个本机默认 PaperNexus 源目录下。
+- 默认使用共享 PaperNexus 源树
+- 项目只通过 `researcher/PAPER_SOURCE_INDEX.json` 记录“本项目用了哪些 canonical papers”
+- 只有当项目真的需要覆盖共享默认值时，才显式设置 `paper_source_dir`
 
 ### `graph_source_dir`
 
-当前项目最近一次建图所使用的源目录。
-
-默认建议值是：
-
-- `~/.papernexus/papers/{project_id}`
+当前项目最近一次显式覆盖 shared-graph 输入源时所使用的目录。
 
 注意：
 
-- `graph_source_dir` 记录的是“建图输入源目录”
-- 它通常和 `paper_source_dir` 相同
-- 它不是最终图数据库文件所在目录
+- `graph_source_dir` 现在是可选覆盖项，不再是常规项目必填字段
+- 正常情况下，所有项目共享同一张全局 PaperNexus 图
+- 项目本地只记录 paper selection、presence check 和 graph readiness 元数据
 - 默认图索引通常位于 `~/.papernexus/index-store/.papernexus/`
 
 ## 5. Writer 与评审阶段产物

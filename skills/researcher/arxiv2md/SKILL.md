@@ -1,6 +1,6 @@
 ---
 name: arxiv2md
-description: "Fetch cleaned markdown from arxiv2md.org as a fallback when Hugging Face paper pages do not provide valid markdown."
+description: "Fetch cleaned markdown from the arxiv2md.org page endpoint as the legacy fallback after the direct arxiv2md API markdown fetch."
 argument-hint: "[arXiv ID / arXiv URL]"
 metadata:
   {"openclaw": {"emoji": "2️⃣", "requires": {"bins": ["python3"]}}}
@@ -15,9 +15,9 @@ allowed-tools:
 
 # arxiv2md
 
-Use [arxiv2md.org](https://arxiv2md.org/) as the second-choice markdown source for arXiv papers.
+Use [arxiv2md.org](https://arxiv2md.org/) as the legacy webpage-based markdown fallback for arXiv papers after the direct API markdown fetch.
 
-> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md -> papers-cool PDF`.
+> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
 
 ## Inputs
 

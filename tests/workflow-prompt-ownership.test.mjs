@@ -188,9 +188,10 @@ test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without f
     detailLevel: "focused",
   });
 
-  assert.match(prompt, /Prompt assembly:/i);
-  assert.match(prompt, /Use the active section packet as the main task payload/i);
-  assert.match(prompt, /Focus current section: results/i);
+  assert.match(prompt, /Layer 1: Stable Policy/i);
+  assert.match(prompt, /Layer 2: Stage-Local Control State/i);
+  assert.match(prompt, /Layer 3: Primary Payload/i);
+  assert.match(prompt, /section_context=results/i);
   assert.doesNotMatch(prompt, /Idle research:/);
   assert.doesNotMatch(prompt, /PaperNexus:/);
 });

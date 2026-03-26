@@ -1,0 +1,78 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+async function readJson(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+
+test("researcher exposes a direct markdown fallback skill before legacy arxiv2md and docs follow the new order", async () => {
+  const repoRoot = process.cwd();
+  const skillIndexPath = path.join(repoRoot, "skills", "index.json");
+  const skillIndex = await readJson(skillIndexPath);
+  const researcherSkills = skillIndex.researcher;
+
+  assert.ok(Array.isArray(researcherSkills));
+
+  const huggingFaceIndex = researcherSkills.indexOf("./researcher/hugging-face-paper-pages");
+  const directMarkdownIndex = researcherSkills.indexOf("./researcher/arxiv2md-api");
+  const arxiv2mdIndex = researcherSkills.indexOf("./researcher/arxiv2md");
+
+  assert.notEqual(huggingFaceIndex, -1);
+  assert.notEqual(directMarkdownIndex, -1);
+  assert.notEqual(arxiv2mdIndex, -1);
+  assert.ok(
+    huggingFaceIndex < directMarkdownIndex && directMarkdownIndex < arxiv2mdIndex,
+    "Expected arxiv2md-api to sit between hugging-face-paper-pages and arxiv2md."
+  );
+
+  const newSkillRoot = path.join(repoRoot, "skills", "researcher", "arxiv2md-api");
+  const skillMarkdown = await fs.readFile(path.join(newSkillRoot, "SKILL.md"), "utf8");
+  const skillScript = await fs.readFile(
+    path.join(newSkillRoot, "scripts", "fetch_arxiv2md_api.py"),
+    "utf8"
+  );
+
+  assert.match(skillMarkdown, /^---[\s\S]*name:\s*arxiv2md-api/m);
+  assert.match(skillMarkdown, /https:\/\/arxiv2md\.org\/api\/markdown\?url=/);
+  assert.match(skillScript, /https:\/\/arxiv2md\.org\/api\/markdown\?url=/);
+
+  const fullOrderDocs = [
+    path.join(repoRoot, "DOC", "overview.md"),
+    path.join(repoRoot, "DOC", "overview_zh.md"),
+    path.join(repoRoot, "DOC", "concepts", "architecture.md"),
+    path.join(repoRoot, "DOC", "concepts", "papernexus-memory-and-reflection.md"),
+    path.join(repoRoot, "skills", "researcher", "papers-cool", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "hugging-face-paper-pages", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "arxiv2md", "SKILL.md"),
+    path.join(repoRoot, "tools", "workflow-guard.ts"),
+  ];
+  const listOrderDocs = [
+    path.join(repoRoot, "DOC", "reference", "skills.md"),
+    path.join(repoRoot, "DOC", "reference", "slash-commands.md"),
+  ];
+
+  const expectedOrderPattern =
+    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}arxiv2md[\s\S]{0,220}(PDF|pdf)/i;
+  const expectedListOrderPattern =
+    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}arxiv2md/i;
+
+  for (const filePath of fullOrderDocs) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.match(
+      content,
+      expectedOrderPattern,
+      `Expected ${filePath} to mention the new markdown-first ingestion order.`
+    );
+  }
+
+  for (const filePath of listOrderDocs) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.match(
+      content,
+      expectedListOrderPattern,
+      `Expected ${filePath} to list the new markdown fallback order.`
+    );
+  }
+});

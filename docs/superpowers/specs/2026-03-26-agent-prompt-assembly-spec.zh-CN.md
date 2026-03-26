@@ -274,6 +274,12 @@ Writer 额外允许看到的摘要状态：
 - 与当前 section 直接相关的 `review_issue_tracker` issue delta
 - 当前 section 会受影响的 `figure_qc` fail / pending 摘要
 - 当前 round 必须解决的 `paper_qc` fail 摘要
+- `write_package` 的极短摘要，只限：
+  - `status`
+  - `assembly_status`
+  - `assembly_mode`
+  - `pending_reason`
+  - 与当前 section 直接相关的 queue / derived artifact 摘要
 - 如果当前轮正在补 citation，则给出 `citation_collection` 的极短进度摘要
 
 Writer 默认不应看到：
@@ -399,6 +405,19 @@ Focused 模式默认应避免显示：
 - `PaperNexus`
 - 长串 theory / graph / experiment 背景规则
 - 对当前子任务无直接影响的远端状态
+
+对于 `write_package`，Focused 模式尤其不应直接注入：
+
+- 完整 `WRITE_PACKAGE.json`
+- 完整 assembly report
+- 与当前 section 无关的全量 derived artifact payload
+
+更合理的做法是：
+
+- Layer 2 只给 `write_package` 的状态结论
+- Layer 3 只给当前 section 真正要消费的 queue item / section packet
+- Layer 4 才给与当前 section 直接相关的 `figure_pack` / `table_pack` / `citation_candidates` 摘要
+- 如果 assembly 仍有阻塞项，只给当前轮要处理的那几个 blocker，不重复 dump 全量缺口
 
 ---
 

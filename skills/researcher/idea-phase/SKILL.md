@@ -43,8 +43,9 @@ allowed-tools:
 - 先用 `/papers-cool` 做粗检索和 venue sweep
 - 如果稳定可用，可额外用 `/pasa-paper-search` 做第二检索源，并按 canonical identity 合并结果
 - 对关键论文优先用 `/hugging-face-paper-pages` 拉取全文 markdown
-- 若 Hugging Face 拿不到有效 markdown，则回退到 `/arxiv2md`
-- 若两路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
+- 若 Hugging Face 拿不到有效 markdown，则先回退到 `/arxiv2md-api`
+- 若 direct markdown API 也失败，再回退到 `/arxiv2md`
+- 若三路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
 - 把 markdown / PDF 保存到 PaperNexus 源目录，再进入 `/graph-build`
 - 如果当前 graph 里还没有这些关键论文，必须先刷新 graph，再进入创新点分析
 
@@ -167,7 +168,7 @@ allowed-tools:
 - 更新 `{PROJ}/researcher/IDEA_REPORT.md`
 - 如 reviewer 认为 portfolio 过宽，优先缩 scope 而不是保留更多 tracks
 
-如果文献阶段中新增了大量本地 paper markdown / PDF，且与当前 frontier 显著不同，必须在最终决定前重新运行 `/graph-build --force` 和 `/frontier-mapping`。
+如果文献阶段中新增了大量本地 paper markdown / PDF，且与当前 frontier 显著不同，必须在最终决定前重新运行 `/graph-build` 和 `/frontier-mapping`，且不要使用 `--force`。
 
 如果实验阶段新增了可反思的结果，且 `innovation_reflection` 重新变为 `pending`，不要继续写 `IDEA_REPORT.md` 或覆盖 `TRACK_REGISTRY.json`，先刷新 `/innovation-reflection`。
 

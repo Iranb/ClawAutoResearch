@@ -30,19 +30,21 @@ When `papers-cool` is used inside the automated research pipeline, it is the **g
 1. Use `papers-cool` for rough search, venue sweep, abstract fetch, and candidate filtering.
 2. If `/pasa-paper-search` is available and stable, merge its candidate set with the `papers-cool` set by canonical identity; do not replace `papers-cool` with PASA-only results.
 3. As soon as a search result confirms a concrete paper identity (for example arXiv ID, papers.cool paper page, arXiv URL, or Hugging Face paper URL), immediately try `/hugging-face-paper-pages` first for that paper.
-4. If Hugging Face does not provide valid Markdown, try `/arxiv2md` for the same arXiv paper.
-5. For each confirmed key paper, save the first valid full-paper Markdown into the project's `paper_source_dir/md/`.
-6. Only if neither Markdown source is available, use `papers-cool` to download the PDF into `paper_source_dir/pdf/`.
-7. Update the project's `PAPER_SOURCE_INDEX.json` using canonical paper identity (arXiv ID first), `source_provider` (`hf` / `arxiv2md` / `pdf`), and `retrieval_providers` (for example `["papers-cool", "pasa-paper-search"]`).
-8. When `/graph-build` runs, it must build from a canonical Markdown-first staged corpus: same-paper Markdown wins over PDF, and PDF is included only when Markdown is unavailable.
-9. If the paper is new, upgraded from PDF to Markdown, or likely changes the novelty/baseline picture, refresh PaperNexus with `/graph-build` or `/papernexus` before downstream novelty, idea, or planning decisions.
+4. If Hugging Face does not provide valid Markdown, try `/arxiv2md-api` for the same arXiv paper.
+5. If the direct raw-markdown API is unavailable, try `/arxiv2md` as the legacy webpage fallback for the same arXiv paper.
+6. For each confirmed key paper, save the first valid full-paper Markdown into the project's `paper_source_dir/md/`.
+7. Only if neither Markdown source is available, use `papers-cool` to download the PDF into `paper_source_dir/pdf/`.
+8. Update the project's `PAPER_SOURCE_INDEX.json` using canonical paper identity (arXiv ID first), `source_provider` (`hf` / `arxiv2md-api` / `arxiv2md` / `pdf`), and `retrieval_providers` (for example `["papers-cool", "pasa-paper-search"]`).
+9. When `/graph-build` runs, it must build from a canonical Markdown-first staged corpus: same-paper Markdown wins over PDF, and PDF is included only when Markdown is unavailable.
+10. If the paper is new, upgraded from PDF to Markdown, or likely changes the novelty/baseline picture, refresh PaperNexus with `/graph-build` or `/papernexus` before downstream novelty, idea, or planning decisions.
 
 Hard rules in this workflow:
 
 - Do not treat a `papers-cool` or PASA search result or abstract as sufficient evidence for innovation analysis.
 - Do not wait for a later “paper ingestion phase” once the paper identity is already known; try Hugging Face Markdown immediately.
 - Do not skip the Hugging Face Markdown attempt for key papers.
-- Do not skip the arxiv2md fallback for arXiv papers when Hugging Face Markdown is unavailable.
+- Do not skip the `/arxiv2md-api` fallback for arXiv papers when Hugging Face Markdown is unavailable.
+- Do not skip the legacy `/arxiv2md` fallback if the direct raw-markdown API is unavailable.
 - Do not let duplicate filenames masquerade as new literature; deduplicate by canonical paper identity.
 - Do not keep title-plus-ID mixed variants for the same paper; if arXiv ID exists, the final saved filename should be exactly that arXiv ID.
 - Do not overwrite `retrieval_providers`; merge them when the same paper is found by both `papers-cool` and PASA.
@@ -63,10 +65,11 @@ Identity is considered confirmed when at least one of these is available:
 Then the required order is:
 
 1. `/hugging-face-paper-pages`
-2. if no valid Markdown, `/arxiv2md`
-3. save the first valid Markdown if available
-4. validate the downloaded file; if it is HTML / error text / non-paper content, delete it and retry once
-5. only then `/papers-cool` PDF fallback if Markdown is still missing
+2. if no valid Markdown, `/arxiv2md-api`
+3. if the direct raw-markdown API still fails, `/arxiv2md`
+4. save the first valid Markdown if available
+5. validate the downloaded file; if it is HTML / error text / non-paper content, delete it and retry once
+6. only then `/papers-cool` PDF fallback if Markdown is still missing
 
 ### File validation rule
 
@@ -75,7 +78,7 @@ After every full-text fetch, validate the saved artifact before treating it as i
 - Markdown is invalid if it is really HTML, a rate-limit page, an access-denied page, or an obviously tiny stub instead of paper text.
 - PDF is invalid if it does not have a PDF header and instead looks like HTML or plain-text error output.
 - If validation fails, delete the bad file and retry using the next available source.
-- Preferred Markdown source order is Hugging Face first, arxiv2md second.
+- Preferred Markdown source order is Hugging Face first, arxiv2md-api second, arxiv2md third.
 
 ### Canonical filename rule
 
@@ -297,7 +300,7 @@ python scripts/download_paper.py https://papers.cool/arxiv/2602.20400 -o ./downl
 - **Abstract + PDF link only** and no dynamic content: `web_fetch` is enough; no script required.
 - **List pages**: use `list_papers_dynamic.py` (HTTP + BeautifulSoup; same as search). For static copy, `web_fetch` may suffice.
 - **按会议查询**: use `venue_papers.py <Venue.Year> --show N`，可选 `--group <子分类>`（如 Poster、Oral）；会议列表 use `list_venues.py`.
-- **Inside the research pipeline**: `papers-cool` does discovery first, then `/hugging-face-paper-pages`, then PDF fallback, then Markdown-first PaperNexus graph refresh if the paper is new or important.
+- **Inside the research pipeline**: `papers-cool` does discovery first, then `/hugging-face-paper-pages`, then `/arxiv2md-api`, then `/arxiv2md`, then PDF fallback, then Markdown-first PaperNexus graph refresh if the paper is new or important.
 - **Inside the research pipeline**: every downloaded full-text artifact must pass format validation before it is counted as ingested.
 
 ### Testing

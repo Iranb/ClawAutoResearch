@@ -108,22 +108,23 @@ Preferred full-text acquisition order:
 1. `papers-cool` as the guaranteed baseline search
 2. optional `pasa-paper-search` as a second retrieval source
 3. `hugging-face-paper-pages` for Markdown
-4. `arxiv2md` as the Markdown fallback for arXiv papers
-5. PDF only as the last fallback
+4. `arxiv2md-api` as the direct raw-markdown fallback for arXiv papers
+5. `arxiv2md` as the legacy Markdown fallback for arXiv papers
+6. PDF only as the last fallback
 
 Important guarantees:
 
 - papers are merged by canonical identity
 - `PAPER_SOURCE_INDEX.json` records source kind, source provider, and retrieval providers
 - graph presence is checked against the canonical paper set before novelty-sensitive work
-- stale or invalid downloads are rejected before they contaminate the corpus
+- stale or invalid downloads are rejected before they contaminate the shared graph inputs
 
-The default source roots are global PaperNexus paths such as:
+The default source roots are shared PaperNexus paths such as:
 
-- `~/.papernexus/papers/{project_id}`
+- `~/.papernexus/papers`
 - `~/.papernexus/index-store`
 
-Project-local `graph/` keeps workflow-facing reports, checks, and frontier files written directly into the default graph directory.
+Project-local `graph/` keeps workflow-facing reports, checks, and frontier files; it is not a separate corpus directory.
 
 ### 3. Brainstorming Starts During Research
 

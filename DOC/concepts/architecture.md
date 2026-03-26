@@ -93,7 +93,7 @@ Skill 本质上是操作流程模板，但它们本身并不能强制执行所�
 
 系统集成了两条外部知识链：
 
-- `papers-cool` 作为稳定检索基线，`pasa-paper-search` 作为可选第二检索源；二者合并后在确认论文身份后优先走 `hugging-face-paper-pages`，再走 `arxiv2md` 的 Markdown-first 获取链路
+- `papers-cool` 作为稳定检索基线，`pasa-paper-search` 作为可选第二检索源；二者合并后在确认论文身份后优先走 `hugging-face-paper-pages`，再走 `arxiv2md-api`，再走 `arxiv2md` 的 Markdown-first 获取链路
 - `PaperNexus` 的 PDF/Markdown 图谱能力
 
 这让文献发现、知识图谱、实验结果反思和创新生成可以共享同一套知识底座。
@@ -118,7 +118,7 @@ Skill 本质上是操作流程模板，但它们本身并不能强制执行所�
 
 ### 3.3 文献与图谱回路
 
-`papers-cool search (+ optional pasa-paper-search merge) -> once paper identity is confirmed -> hugging-face-paper-pages Markdown -> arxiv2md Markdown fallback -> PDF fallback only if both Markdown sources are unavailable -> graph refresh / PaperNexus`
+`papers-cool search (+ optional pasa-paper-search merge) -> once paper identity is confirmed -> hugging-face-paper-pages Markdown -> arxiv2md-api direct markdown fallback -> arxiv2md legacy markdown fallback -> PDF fallback only if all Markdown sources are unavailable -> graph refresh / PaperNexus`
 
 ### 3.4 实验与创新回路
 

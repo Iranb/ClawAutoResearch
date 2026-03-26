@@ -1,6 +1,6 @@
 ---
 name: graph-build
-description: "Build or refresh a project-local PaperNexus corpus before idea selection. Use on every new project and whenever the local literature set changes materially."
+description: "Reconcile a project's selected literature against the shared global PaperNexus graph before idea selection. Use on every new project and whenever the shared literature selection changes materially."
 argument-hint: "[topic or optional source dir]"
 allowed-tools:
   - Bash(*)
@@ -13,7 +13,7 @@ allowed-tools:
 
 # Graph Build
 
-Build a project-local literature graph with PaperNexus so later idea generation can traverse explicit problems, methods, claims, limitations, and evidence instead of relying only on flat summaries.
+Reconcile the current project's selected literature against the shared global PaperNexus graph so later idea generation can traverse explicit problems, methods, claims, limitations, and evidence instead of relying only on flat summaries.
 
 > **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -28,38 +28,36 @@ Use this order:
 
 If none exists, stop and report that PaperNexus is unavailable. Do not silently skip this stage for a new project.
 
-## Choose Source Corpus
+## Choose Paper Selection Input
 
-Pick the richest available source directory in this order:
+Pick the richest available project paper-selection input in this order:
 
 1. explicit argument path if provided
-2. `graph_source_dir` recorded in `{PROJ}/PROJECT_MANIFEST.json`
-3. `paper_source_dir` recorded in `{PROJ}/PROJECT_MANIFEST.json`
-4. `/Users/iranb/.papernexus/papers/{proj-id}` as the local default PaperNexus source tree
-5. `{PROJ}/papers/`
-6. `{PROJ}/literature/`
-7. `{PROJ}/researcher/lit_papers/`
-8. bootstrap fallback: use project literature notes directly (for example `LITERATURE.md`) until the default paper source fills up
+2. `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
+3. `{PROJ}/researcher/LITERATURE.md`
+4. `{PROJ}/researcher/lit_search_*.json`
+5. bootstrap fallback: use project literature notes directly until a proper `PAPER_SOURCE_INDEX.json` is available
 
 Default policy:
-- if the manifest does not yet pin `graph_source_dir`, treat `/Users/iranb/.papernexus/papers/{proj-id}` as the default source corpus
-- `graph_source_dir` should normally stay equal to `paper_source_dir`
-- all agents should read and write against this default source tree instead of staging a second graph-only corpus
-- the authoritative graph files still live in PaperNexus storage, typically under `~/.papernexus/index-store/.papernexus/`, not inside the paper source tree
+- keep `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project explicitly overrides the shared-global defaults
+- the authoritative graph lives in shared PaperNexus storage, typically under `~/.papernexus/index-store/.papernexus/`
+- this skill should not create or name a per-project corpus
+- the project should only record which canonical papers are in scope and whether those papers are present in the shared graph
 
 Preferred source types:
-- full-paper Markdown
-- local converted paper markdown
-- PDF papers only when Markdown is unavailable for the same canonical paper
+- `PAPER_SOURCE_INDEX.json` with canonical identities
+- full-paper Markdown / PDF already saved into the shared PaperNexus source tree
+- literature outputs that explain why the current paper set is in scope
 
-## Default Graph Source Rule (mandatory)
+## Shared Global Graph Rule (mandatory)
 
 Do not create a second project-local graph corpus such as `{PROJ}/graph/source-corpus/`.
+Do not run `papernexus analyze <source_dir> --name <proj-id>` as part of normal workflow-owned graph refreshes.
 
-Build from the default canonical paper source tree directly:
+Use the shared PaperNexus source tree and the shared global graph:
 
 ```text
-{paper_source_dir}/
+<shared-paper-source-root>/
   md/
     <canonical-paper>.md
   pdf/
@@ -71,38 +69,47 @@ Rules:
 - otherwise deduplicate by canonical paper identity in this order: arXiv ID, DOI, normalized title
 - if both `md/<paper>.md` and `pdf/<paper>.pdf` exist for the same canonical paper, treat the Markdown file as authoritative
 - include a PDF only when no Markdown exists for that canonical paper
-- if a new Markdown arrives for a paper that previously only had a PDF, build from the Markdown and keep the PDF only as fallback
-- treat `{paper_source_dir}/md/` as the highest-priority ingestion source
+- if a new Markdown arrives for a paper that previously only had a PDF, the shared graph should reconcile against the Markdown and keep the PDF only as fallback
 - do not create a second analyzed source tree just to deduplicate files
 - do not ingest invalid artifacts such as HTML pages saved as `.md` / `.pdf`, or text-like non-PDF error files
+- this skill is about presence reconciliation and readiness reporting, not corpus creation
 
 Here `<canonical-paper>` should match the normalized download stem:
 
 - arXiv ID if present, for example `2502.00032`
 - otherwise a transliterated title slug such as `graph-retrieval-benchmarks`
 
-The analyzed source dir should be the default canonical paper source tree itself, not a separately staged graph-only tree.
+The analyzed source dir, if a manual PaperNexus refresh is later needed, should be the shared canonical paper source tree itself, not a separately staged graph-only tree.
 
-## Build / Refresh the Corpus
+## Reconcile / Refresh the Shared Graph
 
-Use a project-stable corpus name:
+Normal workflow-owned action:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js analyze <source_dir> --name <proj-id>
-node <PAPERNEXUS_ROOT>/src/cli/index.js status --corpus <proj-id>
+/graph-build
 ```
 
-If the source corpus changed materially since the last build, rerun with `--force`.
+This should:
+- check whether the canonical papers recorded in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` are already present in the shared global graph
+- update project-local readiness metadata
+- record whether a shared-graph refresh is required
+- avoid rebuilding a project-specific corpus
+
+Hard rule:
+
+- do **not** use `--force` during literature research graph builds
+- do **not** use `--rebuild-pdf-markdown` during workflow-owned graph refreshes
+- if a shared-graph refresh is needed and the automated path fails, report the exact non-force command to the user and let the user run it manually instead of escalating to a forced rebuild
 
 Use these refresh triggers:
 - 1 newly ingested paper that changes the novelty baseline or closest prior work
 - 3 or more genuinely new canonical papers since the last graph sync
 - 2 or more new recent venue papers that materially overlap with the active track
 
-If the source tree changes frequently, prefer:
+If the shared source tree changes frequently, prefer a shared watch process such as:
 
 ```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js watch <source_dir> --name <proj-id>
+node <PAPERNEXUS_ROOT>/src/cli/index.js watch <shared_source_dir> --name <shared-corpus-name>
 ```
 
 ## Output Files
@@ -112,11 +119,13 @@ Write `{PROJ}/graph/PAPERNEXUS_STATUS.json`:
 ```json
 {
   "project_id": "proj_xxx",
-  "corpus_name": "proj_xxx",
+  "corpus_name": "shared-global-graph",
   "papernexus_root": "/abs/path/to/PaperNexus",
-  "source_dir": "/abs/path/to/source",
-  "built_at": "YYYY-MM-DDTHH:MM:SSZ",
-  "status": "ready"
+  "corpus_root": "/abs/path/to/shared/corpus",
+  "checked_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "status": "ready",
+  "mode": "shared_global_graph",
+  "missing_papers": []
 }
 ```
 
@@ -127,18 +136,15 @@ Write `{PROJ}/graph/GRAPH_BUILD_REPORT.md`:
 
 - Project: [proj-id]
 - PaperNexus root: [path]
-- Source dir: [path]
-- Raw paper source dir: [path]
-- Corpus name: [proj-id]
-- Build status: ready / failed
-- Notes: [coverage quality, Markdown-vs-PDF counts, missing Markdown fallbacks, bootstrap fallback, etc.]
+- Shared corpus root: [path]
+- Shared corpus name: [shared-global-graph or configured corpus]
+- Build status: ready / missing_papers / refresh_required / failed
+- Notes: [coverage quality, missing papers, Markdown-vs-PDF counts, missing Markdown fallbacks, manual command if refresh failed, etc.]
 ```
 
 Update `{PROJ}/PROJECT_MANIFEST.json` with:
 - `papernexus_root`
-- `papernexus_corpus`
-- `paper_source_dir`
-- `graph_source_dir` pointing to the same default source tree used for reading papers, normally equal to `paper_source_dir`
+- leave `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project intentionally overrides the shared-global defaults
 - `graph_last_built_at`
 - `paper_ingestion.last_graph_sync_at`
 - `paper_ingestion.new_files_since_graph: 0`
@@ -155,7 +161,8 @@ Update `{PROJ}/PROJECT_MANIFEST.json` with:
 
 Do not advance to frontier mapping if:
 - PaperNexus root cannot be resolved
-- the source directory is empty
-- the built corpus has effectively no useful content (for example 0 paper nodes or only a trivial bootstrap note)
-- the default source tree still contains duplicate Markdown and PDF entries for the same canonical paper and the Markdown/PDF precedence is not clear
-- the source tree still contains obviously invalid HTML / error-page artifacts that were not cleaned up
+- the project has no canonical papers recorded in `PAPER_SOURCE_INDEX.json`
+- the shared graph is missing required canonical papers
+- the shared graph has effectively no useful content for the project's selected papers
+- the shared source tree still contains duplicate Markdown and PDF entries for the same canonical paper and the Markdown/PDF precedence is not clear
+- the shared source tree still contains obviously invalid HTML / error-page artifacts that were not cleaned up

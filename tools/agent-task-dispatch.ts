@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  buildWorkflowSubagentSessionKey,
+  derivePapernexusTaskLabel,
+  looksLikePapernexusHeavyCommand,
+} from "./workflow-subagent-sessions";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -303,6 +308,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   requesterSessionKey?: string;
   requesterChannel?: string;
+  preferredSessionKeys?: string[] | null;
   fromRole?: string | null;
   toRole: DispatchableWorkflowRole;
   projectRoot: string;
@@ -344,10 +350,33 @@ export async function dispatchWorkflowTaskToAgent(params: {
   });
   const attempts: WorkflowTaskDispatchAttempt[] = [];
   const dispatchBatchId = randomUUID();
-  const candidates = deriveWorkflowDispatchSessionCandidates({
-    requesterSessionKey: params.requesterSessionKey,
-    targetRole: params.toRole,
-  });
+  const preferredCandidates = Array.isArray(params.preferredSessionKeys)
+    ? uniqueStrings(params.preferredSessionKeys)
+    : [];
+  const dedicatedPapernexusSessionKey =
+    preferredCandidates.length === 0 &&
+    looksLikePapernexusHeavyCommand(params.command ?? params.summary)
+      ? buildWorkflowSubagentSessionKey({
+          parentSessionKey: deriveAgentSessionKeyForRole({
+            requesterSessionKey: params.requesterSessionKey,
+            targetRole: params.toRole,
+          }),
+          purpose: "papernexus-skill",
+          segments: [
+            params.projectId,
+            derivePapernexusTaskLabel(params.command ?? params.summary),
+          ],
+        })
+      : null;
+  const candidates =
+    preferredCandidates.length > 0
+      ? preferredCandidates
+      : dedicatedPapernexusSessionKey
+        ? [dedicatedPapernexusSessionKey]
+      : deriveWorkflowDispatchSessionCandidates({
+          requesterSessionKey: params.requesterSessionKey,
+          targetRole: params.toRole,
+        });
 
   for (const [index, sessionKey] of candidates.entries()) {
     const attemptResult = await runSingleDispatchAttempt({

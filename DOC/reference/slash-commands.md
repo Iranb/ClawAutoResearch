@@ -30,8 +30,11 @@
 - `/hugging-face-paper-pages`  
   优先抓取论文 Markdown。
 
+- `/arxiv2md-api`  
+  当 Hugging Face 没有有效 Markdown 时，优先抓取 arxiv2md 的 direct raw markdown。
+
 - `/arxiv2md`  
-  当 Hugging Face 没有有效 Markdown 时，抓取 arxiv2md 的 Markdown。
+  当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
   构建或刷新项目图谱。

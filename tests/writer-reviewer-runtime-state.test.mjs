@@ -236,6 +236,16 @@ async function seedProjectReadyForWrite(projectRoot) {
   );
 
   await writeText(path.join(projectRoot, "reviewer", "REVIEW_REPORT.md"));
+  await writeJson(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json"), {
+    status: "pass",
+  });
+  await writeJson(
+    path.join(projectRoot, "reviewer", "SUBMISSION_SIMULATION_REVIEW.json"),
+    { status: "pass" }
+  );
+  await writeJson(path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"), {
+    issues: [],
+  });
   await writeText(path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"));
 
   await writeText(path.join(projectRoot, "cross-reviewer", "notes.md"));
@@ -281,6 +291,70 @@ async function seedProjectReadyForWrite(projectRoot) {
       reflected_through_experiment_update_at: now,
       reflected_experiment_ids: [experimentId],
     },
+    research_program: {
+      status: "approved",
+      goal: "Writer/reviewer runtime fixture",
+      tracks: [
+        {
+          track_id: trackId,
+          priority: 1,
+          status: "active",
+          hypothesis: "Graph grounding improves support precision.",
+          novelty_basis: "It couples frontier packets with section drafting.",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: ["baseline-a"],
+          required_ablations: ["ablation-a"],
+          required_controls: ["seed-control"],
+          experiment_stage_matrix: [
+            "baseline_implementation",
+            "baseline_tuning",
+            "creative_research",
+            "ablation_studies",
+          ],
+          budget: {
+            gpu_hours: 8,
+            max_runs: 4,
+            max_debug_iterations: 1,
+          },
+          stop_rules: ["stop after no improvement"],
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: ["claim-1"],
+            allowed_figure_ids: ["fig-1"],
+          },
+        },
+      ],
+      task_graph: [
+        {
+          task_id: "plan-main",
+          stage: "plan",
+          track_id: trackId,
+          owner: "researcher",
+          dependencies: [],
+          entry_criteria: ["track active"],
+          expected_outputs: ["plan ready"],
+          retry_budget: 1,
+          exit_criteria: ["plan locked"],
+        },
+      ],
+    },
+    orchestration_state: {
+      status: "running",
+      current_owner: "orchestrator",
+      next_owner: "coder",
+      next_transition_candidate: "code",
+      retry_budget_remaining: 2,
+      last_contract_eval_result: "pass",
+    },
+    experiment_search: {
+      status: "ready_for_analysis",
+      current_main_stage: "ablation_studies",
+      multi_seed_status: "ready",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+      plot_pack_path: "researcher/plot_pack.json",
+    },
     theory_state: {
       status: "draft",
       overall_signal: "green",
@@ -313,6 +387,40 @@ async function seedProjectReadyForWrite(projectRoot) {
       allowed_placeholder_count: 0,
       unresolved_placeholder_count: 0,
       hallucinated_citation_count: 0,
+    },
+    write_package: {
+      status: "ready",
+      winning_track_ids: [trackId],
+      claim_evidence_matrix_path: "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+      narrative_report_path: "analyzer/NARRATIVE_REPORT.md",
+      track_verdicts_path: "analyzer/TRACK_VERDICTS.md",
+      unsupported_claims_path: "analyzer/UNSUPPORTED_CLAIMS.md",
+      baseline_summary_path: "researcher/baseline_summary.json",
+      research_summary_path: "researcher/research_summary.json",
+      ablation_summary_path: "researcher/ablation_summary.json",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      figure_pack_path: "academic_writer/FIGURE_PACK.json",
+      table_pack_path: "academic_writer/TABLE_PACK.json",
+      proof_packet_dir: "analyzer/proof-packets",
+      citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
+    },
+    review_issue_tracker: {
+      status: "ready",
+      issue_manifest_path: "reviewer/REVIEW_ISSUES.json",
+      open_counts: {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+      issues: [],
+    },
+    review_session: {
+      status: "completed",
+      stage_scope: "review",
+      round: 1,
+      latest_review_path: "reviewer/REVIEW_REPORT.md",
+      verdict: "ready",
     },
   });
 }
@@ -874,6 +982,20 @@ test("write-stage gate blocks only on hard review/QC failures, not merely pendin
         medium: 2,
         low: 0,
       },
+      issues: [
+        {
+          issue_id: "surface-high-1",
+          lane: "surface",
+          severity: "high",
+          status: "open",
+        },
+        {
+          issue_id: "surface-medium-1",
+          lane: "surface",
+          severity: "medium",
+          status: "open",
+        },
+      ],
       last_review_round: 2,
       pending_reason: "One high-severity surface issue remains.",
     },
@@ -896,15 +1018,24 @@ test("write-stage gate blocks only on hard review/QC failures, not merely pendin
   await setReviewIssueTrackerState({
     projectRoot,
     reviewIssueTracker: {
-      status: "partially_resolved",
+      status: "waived",
       open_counts: {
         critical: 0,
         high: 0,
-        medium: 2,
+        medium: 0,
         low: 1,
       },
+      issues: [
+        {
+          issue_id: "surface-medium-1",
+          lane: "surface",
+          severity: "medium",
+          status: "waived",
+          waiver_reason: "Aggressive auto mode accepted the remaining wording issue.",
+        },
+      ],
       last_review_round: 3,
-      pending_reason: "Only medium/low surface issues remain.",
+      pending_reason: "Only waived medium or low-severity issues remain.",
     },
   });
 

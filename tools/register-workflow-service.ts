@@ -21,6 +21,7 @@ import {
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
+import { maybeBroadcastWorkflowStatusUpdate } from "./stage-broadcast";
 import {
   aggregateGateReviewRound,
   buildAutoGateReviewPrompt,
@@ -45,6 +46,7 @@ import {
   saveAutoModeDiscussionStore,
   type AutoModeDiscussionAttempt as AutoModeDiscussionReviewAttempt,
 } from "./workflow-auto-discussion";
+import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -193,6 +195,13 @@ type AutoModeMitigationDispatchAttempt = {
   runId: string | null;
   dispatchStrategy: string | null;
   error: string | null;
+};
+
+type WorkflowCoordinatorVisibleStatusUpdate = {
+  status: "started" | "blocked" | "waiting" | "handed_off";
+  stage: string | null;
+  summary: string;
+  dedupeKey: string;
 };
 
 const DEFAULT_WORKFLOW_COORDINATOR_INTERVAL_MS = 120_000;
@@ -465,12 +474,25 @@ function resolveResearcherIdleResearchSessionKey(params: {
         new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
     )[0];
   if (binding?.sessionKeySample) {
-    return deriveAgentSessionKeyForRole({
+    const baseSessionKey = deriveAgentSessionKeyForRole({
       requesterSessionKey: binding.sessionKeySample,
       targetRole: "researcher",
     });
+    return (
+      buildWorkflowSubagentSessionKey({
+        parentSessionKey: baseSessionKey,
+        purpose: "workflow-idle-research",
+        segments: [params.projectRoot],
+      }) ?? baseSessionKey
+    );
   }
-  return "agent:researcher:main";
+  return (
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: "agent:researcher:main",
+      purpose: "workflow-idle-research",
+      segments: [params.projectRoot],
+    }) ?? "agent:researcher:main"
+  );
 }
 
 function buildIdleResearchCoordinatorMessage(params: {
@@ -491,6 +513,172 @@ function buildIdleResearchCoordinatorMessage(params: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildResearcherWorkflowSubagentSessionKey(params: {
+  requesterSessionKey?: string | null;
+  projectRoot: string;
+  purpose: string;
+  segments?: Array<string | null | undefined>;
+}) {
+  const baseSessionKey = deriveAgentSessionKeyForRole({
+    requesterSessionKey: params.requesterSessionKey ?? undefined,
+    targetRole: "researcher",
+  });
+  return (
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: baseSessionKey,
+      purpose: params.purpose,
+      segments: [params.projectRoot, ...(params.segments ?? [])],
+    }) ?? baseSessionKey
+  );
+}
+
+function buildWorkflowCoordinatorDispatchSessionKeys(params: {
+  requesterSessionKey?: string | null;
+  owner: DispatchableWorkflowRole;
+  projectRoot: string;
+  purpose: string;
+  segments?: Array<string | null | undefined>;
+}): string[] | undefined {
+  if (params.owner !== "researcher") {
+    return undefined;
+  }
+  return [
+    buildResearcherWorkflowSubagentSessionKey({
+      requesterSessionKey: params.requesterSessionKey,
+      projectRoot: params.projectRoot,
+      purpose: params.purpose,
+      segments: params.segments,
+    }),
+  ];
+}
+
+export function deriveWorkflowCoordinatorStatusUpdate(params: {
+  projectId: string | null;
+  projectRoot: string;
+  stageAfter: string | null;
+  autoGateReview: AutoGateReviewAttempt;
+  autoModeDiscussion: AutoModeDiscussionAttempt;
+  autoMitigationDispatch: AutoModeMitigationDispatchAttempt;
+  autoStageLaunch: AutoStageLaunchAttempt;
+  idleResearchLaunch: IdleResearchLaunchAttempt;
+}): WorkflowCoordinatorVisibleStatusUpdate | null {
+  if (params.autoStageLaunch.launched && params.autoStageLaunch.owner) {
+    return {
+      status: "handed_off",
+      stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
+      summary: `Workflow handed off to ${params.autoStageLaunch.owner} for ${params.autoStageLaunch.stage ?? params.stageAfter ?? "the current"} stage.`,
+      dedupeKey: [
+        "handoff",
+        params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
+        params.autoStageLaunch.owner,
+        params.autoStageLaunch.dispatchStrategy ?? "unknown",
+      ].join(":"),
+    };
+  }
+  if (params.autoMitigationDispatch.launched && params.autoMitigationDispatch.owner) {
+    return {
+      status: "handed_off",
+      stage: params.autoMitigationDispatch.stage ?? params.stageAfter ?? null,
+      summary: `Auto-mode mitigation was handed off to ${params.autoMitigationDispatch.owner}.`,
+      dedupeKey: [
+        "mitigation",
+        params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
+        params.autoMitigationDispatch.owner,
+      ].join(":"),
+    };
+  }
+  if (params.idleResearchLaunch.launched) {
+    return {
+      status: "started",
+      stage: params.stageAfter ?? null,
+      summary: `Idle research started${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""}.`,
+      dedupeKey: [
+        "idle-research",
+        params.idleResearchLaunch.topic ?? "unknown-topic",
+        params.idleResearchLaunch.dueKey ?? "due-now",
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoGateReview.reason === "started" ||
+    params.autoGateReview.reason === "reviewing"
+  ) {
+    return {
+      status: "waiting",
+      stage: params.autoGateReview.stage ?? params.stageAfter ?? null,
+      summary: "Waiting for auto gate reviewer quorum at submit before progressing further.",
+      dedupeKey: [
+        "auto-gate",
+        params.autoGateReview.stage ?? params.stageAfter ?? "submit",
+        params.autoGateReview.status ?? params.autoGateReview.reason,
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoModeDiscussion.reason === "started" ||
+    params.autoModeDiscussion.reason === "reviewing"
+  ) {
+    return {
+      status: "waiting",
+      stage: params.autoModeDiscussion.stage ?? params.stageAfter ?? null,
+      summary: "Waiting for the auto-mode risk discussion to settle before the next dispatch.",
+      dedupeKey: [
+        "auto-discussion",
+        params.autoModeDiscussion.stage ?? params.stageAfter ?? "unknown",
+        params.autoModeDiscussion.fingerprint ?? "unknown",
+        params.autoModeDiscussion.status ?? params.autoModeDiscussion.reason,
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoStageLaunch.reason === "risk_discussion_pending" ||
+    params.autoStageLaunch.reason === "cooldown_active" ||
+    params.autoStageLaunch.reason === "already_launched"
+  ) {
+    const summary =
+      params.autoStageLaunch.reason === "risk_discussion_pending"
+        ? "Waiting for auto-mode risk discussion before handing off the next stage."
+        : params.autoStageLaunch.reason === "cooldown_active"
+          ? `Waiting for the workflow contact cooldown before handing off to ${params.autoStageLaunch.owner ?? "the next owner"}.`
+          : `Waiting for the already-running ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} stage handoff to finish.`;
+    return {
+      status: "waiting",
+      stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
+      summary,
+      dedupeKey: [
+        "stage-wait",
+        params.autoStageLaunch.reason,
+        params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
+        params.autoStageLaunch.owner ?? "unknown-owner",
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoStageLaunch.reason === "gate_blocked" ||
+    params.autoStageLaunch.reason === "dispatch_failed" ||
+    params.autoGateReview.reason === "already_rejected"
+  ) {
+    const summary =
+      params.autoGateReview.reason === "already_rejected"
+        ? "Blocked because the submit auto gate review rejected the packet."
+        : params.autoStageLaunch.reason === "gate_blocked"
+          ? `Blocked by the current ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} gate.`
+          : `Blocked because the handoff to ${params.autoStageLaunch.owner ?? "the next owner"} failed${params.autoStageLaunch.error ? `: ${params.autoStageLaunch.error}` : "."}`;
+    return {
+      status: "blocked",
+      stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
+      summary,
+      dedupeKey: [
+        "blocked",
+        params.autoStageLaunch.reason,
+        params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
+        params.autoStageLaunch.owner ?? "unknown-owner",
+      ].join(":"),
+    };
+  }
+  return null;
 }
 
 export async function maybeLaunchIdleResearchForProject(params: {
@@ -849,6 +1037,16 @@ export async function maybeLaunchAutoStageForProject(params: {
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
+        preferredSessionKeys: buildWorkflowCoordinatorDispatchSessionKeys({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          owner: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+          projectRoot: params.projectRoot,
+          purpose: "workflow-stage",
+          segments: [
+            action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+            action.command,
+          ],
+        }),
         fromRole: "researcher",
         toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
         projectRoot: params.projectRoot,
@@ -1587,10 +1785,22 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
       });
       const attempts: AutoModeDiscussionReviewAttempt[] = [];
       for (const reviewerRole of defaultAutoModeDiscussionPanel()) {
-        const sessionKey = deriveAgentSessionKeyForRole({
-          requesterSessionKey: requesterSessionKey ?? undefined,
-          targetRole: reviewerRole,
-        });
+        const sessionKey =
+          reviewerRole === "researcher"
+            ? buildResearcherWorkflowSubagentSessionKey({
+                requesterSessionKey: requesterSessionKey ?? undefined,
+                projectRoot: params.projectRoot,
+                purpose: "workflow-auto-discussion",
+                segments: [
+                  params.autoIteratorResult.stageAfter ?? null,
+                  riskLevel,
+                  `${roundsStarted + 1}`,
+                ],
+              })
+            : deriveAgentSessionKeyForRole({
+                requesterSessionKey: requesterSessionKey ?? undefined,
+                targetRole: reviewerRole,
+              });
         try {
           const started = await params.runtimeSubagent.run({
             sessionKey,
@@ -1791,6 +2001,16 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
+        preferredSessionKeys: buildWorkflowCoordinatorDispatchSessionKeys({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          owner,
+          projectRoot: params.projectRoot,
+          purpose: "workflow-mitigation",
+          segments: [
+            params.discussionAttempt.stage ?? params.autoIteratorResult.stageAfter ?? null,
+            params.autoIteratorResult.nextAction,
+          ],
+        }),
         fromRole: "researcher",
         toRole: owner,
         projectRoot: params.projectRoot,
@@ -1979,55 +2199,90 @@ export function createWorkflowCoordinatorService(
             };
           })
         );
-        const autoMitigationDispatches = (
-          await Promise.all(
-            discussionRefreshedResults.map((entry, index) =>
-              maybeDispatchAutoModeMitigationForProject({
-                runtimeSubagent: plugin.api.runtime?.subagent,
-                workflowPolicy,
-                projectRoot: entry.projectRoot,
-                projectId: entry.projectId,
-                autoIteratorResult: entry.result,
-                discussionAttempt: autoModeDiscussions[index],
-                launchedMitigationKeys,
-                logger,
-                deps,
-              })
-            )
+        const autoMitigationAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry, index) =>
+            maybeDispatchAutoModeMitigationForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              discussionAttempt: autoModeDiscussions[index],
+              launchedMitigationKeys,
+              logger,
+              deps,
+            })
           )
-        ).filter((entry) => entry.launched);
-        const autoStageLaunches = (
-          await Promise.all(
-            discussionRefreshedResults.map((entry) =>
-              maybeLaunchAutoStageForProject({
-                runtimeSubagent: plugin.api.runtime?.subagent,
-                workflowPolicy,
-                projectRoot: entry.projectRoot,
-                projectId: entry.projectId,
-                autoIteratorResult: entry.result,
-                launchedStageKeys,
-                logger,
-                deps,
-              })
-            )
+        );
+        const autoMitigationDispatches = autoMitigationAttempts.filter((entry) => entry.launched);
+        const autoStageAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry) =>
+            maybeLaunchAutoStageForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              launchedStageKeys,
+              logger,
+              deps,
+            })
           )
-        ).filter((entry) => entry.launched);
-        const idleResearchLaunches = (
-          await Promise.all(
-            discussionRefreshedResults.map((entry) =>
-              maybeLaunchIdleResearchForProject({
-                runtimeSubagent: plugin.api.runtime?.subagent,
-                workflowPolicy,
-                projectRoot: entry.projectRoot,
-                projectId: entry.projectId,
-                autoIteratorResult: entry.result,
-                launchedDueKeys: launchedIdleResearchDueKeys,
-                logger,
-                deps,
-              })
-            )
+        );
+        const autoStageLaunches = autoStageAttempts.filter((entry) => entry.launched);
+        const idleResearchAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry) =>
+            maybeLaunchIdleResearchForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              launchedDueKeys: launchedIdleResearchDueKeys,
+              logger,
+              deps,
+            })
           )
-        ).filter((entry) => entry.launched);
+        );
+        const idleResearchLaunches = idleResearchAttempts.filter((entry) => entry.launched);
+        await Promise.all(
+          discussionRefreshedResults.map(async (entry, index) => {
+            const statusUpdate = deriveWorkflowCoordinatorStatusUpdate({
+              projectId: entry.projectId,
+              projectRoot: entry.projectRoot,
+              stageAfter: entry.result.stageAfter ?? null,
+              autoGateReview: autoGateReviews[index],
+              autoModeDiscussion: autoModeDiscussions[index],
+              autoMitigationDispatch: autoMitigationAttempts[index],
+              autoStageLaunch: autoStageAttempts[index],
+              idleResearchLaunch: idleResearchAttempts[index],
+            });
+            if (!statusUpdate) {
+              return null;
+            }
+            const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+              projectRoot: entry.projectRoot,
+              workflowPolicy,
+              deps: {
+                runWorkflowAutoIterator,
+                listWorkflowCoordinatorProjects,
+                getIdleResearchStateSummary,
+                listChannelProjectBindingsForWorkflow,
+                ...deps,
+              },
+            });
+            return maybeBroadcastWorkflowStatusUpdate({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              sessionKey: requesterSessionKey,
+              projectId: entry.projectId,
+              projectRoot: entry.projectRoot,
+              status: statusUpdate.status,
+              stage: statusUpdate.stage,
+              summary: statusUpdate.summary,
+              idempotencyKeySuffix: statusUpdate.dedupeKey,
+            });
+          })
+        );
         logger.debug?.("Workflow coordinator pass completed.", {
           trigger,
           projectCount: discussionRefreshedResults.length,

@@ -33,6 +33,10 @@ import {
   normalizeWorkflowLobsterHandoffConfig,
   type WorkflowLobsterHandoffConfig,
 } from "./lobster-handoff";
+import {
+  isWorkflowSubagentSessionKey,
+  looksLikePapernexusHeavyCommand,
+} from "./workflow-subagent-sessions";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -457,6 +461,108 @@ type ExperimentSearchState = {
   lastUpdatedAt: string | null;
 };
 
+type ResearchProgramTrackBudget = {
+  gpuHours: number | null;
+  maxRuns: number | null;
+  maxDebugIterations: number | null;
+};
+
+type ResearchProgramTrackWriteScope = {
+  allowedClaimIds: string[];
+  allowedFigureIds: string[];
+};
+
+type ResearchProgramTrack = {
+  trackId: string;
+  priority: number | null;
+  status: string;
+  hypothesis: string | null;
+  noveltyBasis: string | null;
+  mainMetric: string | null;
+  successThreshold: string | null;
+  requiredBaselines: string[];
+  requiredAblations: string[];
+  requiredControls: string[];
+  experimentStageMatrix: string[];
+  budget: ResearchProgramTrackBudget;
+  stopRules: string[];
+  rollbackTriggers: string[];
+  writeScope: ResearchProgramTrackWriteScope;
+};
+
+type ResearchProgramTask = {
+  taskId: string;
+  stage: string | null;
+  trackId: string | null;
+  owner: string | null;
+  dependencies: string[];
+  entryCriteria: string[];
+  expectedOutputs: string[];
+  retryBudget: number | null;
+  exitCriteria: string[];
+};
+
+type ResearchProgramGlobalConstraints = {
+  maxActiveTracks: number | null;
+  mustRunMultiSeedBeforeAnalysis: boolean;
+  mustRunPlotAggregationBeforeWrite: boolean;
+};
+
+type ResearchProgramState = {
+  programVersion: number;
+  status: string;
+  goal: string | null;
+  tracks: ResearchProgramTrack[];
+  globalConstraints: ResearchProgramGlobalConstraints;
+  taskGraph: ResearchProgramTask[];
+  lastUpdatedAt: string | null;
+  pendingReason: string | null;
+};
+
+type OrchestrationState = {
+  status: string;
+  activeTicketId: string | null;
+  stageRunId: string | null;
+  currentOwner: string | null;
+  nextOwner: string | null;
+  nextTransitionCandidate: string | null;
+  blockingCategory: string | null;
+  blockingReason: string | null;
+  retryBudgetRemaining: number | null;
+  lastContractEvalAt: string | null;
+  lastContractEvalResult: string | null;
+  rollbackTargetStage: string | null;
+  resumeCursor: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type WritePackageState = {
+  status: string;
+  assemblyStatus: string | null;
+  assemblyMode: string | null;
+  winningTrackIds: string[];
+  claimEvidenceMatrixPath: string | null;
+  narrativeReportPath: string | null;
+  trackVerdictsPath: string | null;
+  unsupportedClaimsPath: string | null;
+  baselineSummaryPath: string | null;
+  researchSummaryPath: string | null;
+  ablationSummaryPath: string | null;
+  evaluationSummaryPath: string | null;
+  figurePackPath: string | null;
+  tablePackPath: string | null;
+  proofPacketDir: string | null;
+  citationCandidatesPath: string | null;
+  packageManifestPath: string | null;
+  assemblyReportPath: string | null;
+  sectionAssemblyQueuePath: string | null;
+  sourceArtifactCount: number;
+  derivedArtifactCount: number;
+  assembledAt: string | null;
+  pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
 type PaperQcState = {
   status: string;
   compileStatus: string;
@@ -504,10 +610,29 @@ type ReviewIssueCounts = {
   low: number;
 };
 
+type ReviewIssueState = {
+  issueId: string;
+  lane: string | null;
+  severity: string | null;
+  title: string | null;
+  description: string | null;
+  targetStage: string | null;
+  targetArtifact: string | null;
+  openedBy: string | null;
+  owner: string | null;
+  status: string | null;
+  fixArtifactPaths: string[];
+  verifiedAt: string | null;
+  waiverReason: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
 type ReviewIssueTrackerState = {
   status: string;
   openCounts: ReviewIssueCounts;
   issueManifestPath: string | null;
+  issues: ReviewIssueState[];
   lastReviewRound: number;
   lastUpdatedAt: string | null;
   pendingReason: string | null;
@@ -562,12 +687,27 @@ export type WorkflowSnapshot = {
   innovationReflectionLastAt: string | null;
   innovationReflectionPath: string | null;
   innovationReflectionPendingReason: string | null;
+  researchProgramStatus: string | null;
+  researchProgramTrackCount: number | null;
+  researchProgramActiveTrackCount: number | null;
+  researchProgramPrimaryGoal: string | null;
+  orchestrationStatus: string | null;
+  orchestrationBlockingCategory: string | null;
+  orchestrationNextTransitionCandidate: string | null;
+  orchestrationRetryBudgetRemaining: number | null;
+  orchestrationRollbackTargetStage: string | null;
   experimentSearchStatus: string | null;
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
   experimentSearchBestNodeId: string | null;
   experimentSearchMultiSeedStatus: string | null;
   experimentSearchPlotPackStatus: string | null;
+  writePackageStatus: string | null;
+  writePackageAssemblyStatus: string | null;
+  writePackageAssemblyMode: string | null;
+  writePackageWinningTrackCount: number | null;
+  writePackageDerivedArtifactCount: number | null;
+  writePackagePendingReason: string | null;
   theorySupportStatus: string | null;
   theorySupportSignal: string | null;
   theoryStatePath: string | null;
@@ -655,12 +795,31 @@ export type WorkflowSnapshot = {
   reviewIssueHighCount: number | null;
   reviewIssueMediumCount: number | null;
   reviewIssueLowCount: number | null;
+  reviewIssueSurfaceCount: number | null;
+  reviewIssueSubmissionCount: number | null;
   externalReviewStatus: string | null;
   externalReviewRecommendation: string | null;
   externalReviewRequiredAction: string | null;
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
   backgroundTasks: string[];
+};
+
+export type FocusedPromptAssembly = {
+  text: string;
+  metadata: {
+    sectionContextId: string | null;
+    reviewLane: string | null;
+    roundId: string | null;
+    promptLayerProfile: {
+      stable_policy: boolean;
+      stage_local_state: boolean;
+      primary_payload: boolean;
+      supporting_evidence: boolean;
+      reflection_delta: boolean;
+    };
+    promptPayloadSizes: Record<string, number>;
+  };
 };
 
 type GateState = {
@@ -820,6 +979,17 @@ const DEFAULT_FUTURE_SCHOLAR_VERIFICATION_SKILL = "future/literature-dehallucina
 const DEFAULT_PAPER_QC_REPORT_PATH = "academic_writer/PAPER_QC.md";
 const DEFAULT_FIGURE_REVIEW_PATH = "reviewer/SURFACE_REVIEW.json";
 const DEFAULT_FIGURE_SELECTION_PATH = "academic_writer/FIGURE_SELECTION.json";
+const DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH =
+  "reviewer/SUBMISSION_SIMULATION_REVIEW.json";
+const DEFAULT_WRITE_PACKAGE_MANIFEST_PATH = "academic_writer/WRITE_PACKAGE.json";
+const DEFAULT_WRITE_PACKAGE_ASSEMBLY_REPORT_PATH =
+  "academic_writer/WRITE_PACKAGE_ASSEMBLY_REPORT.json";
+const DEFAULT_SECTION_ASSEMBLY_QUEUE_PATH =
+  "academic_writer/SECTION_ASSEMBLY_QUEUE.json";
+const DEFAULT_FIGURE_PACK_PATH = "academic_writer/FIGURE_PACK.json";
+const DEFAULT_TABLE_PACK_PATH = "academic_writer/TABLE_PACK.json";
+const DEFAULT_CITATION_CANDIDATES_PATH =
+  "academic_writer/CITATION_CANDIDATES.json";
 
 type WritingModePreset = {
   mode: WritingMode;
@@ -939,7 +1109,7 @@ const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
     ],
     backgroundTasks: [
       "Continue literature survey and venue sweeps with /research-lit or /papers-cool; if PASA is responsive, use /pasa-paper-search as a second retrieval source and merge by canonical identity.",
-      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md for arXiv papers, and use papers-cool PDF fallback only if both Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
+      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md-api for arXiv papers, then arxiv2md as the legacy webpage fallback, and use papers-cool PDF fallback only if all Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
       "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
       "Keep reasoning packets and manifest next_action/resume_action current.",
     ],
@@ -1069,7 +1239,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Refresh PaperNexus grounding before downstream reasoning.",
     command:
-      "Run /graph-build using the latest paper corpus and update graph readiness metadata before frontier mapping.",
+      "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph and update graph readiness metadata before frontier mapping.",
   },
   frontier_mapping: {
     owner: "researcher",
@@ -1575,7 +1745,6 @@ export async function ensureWorkflowProjectRoot(params: {
   }
 
   const now = new Date().toISOString();
-  const defaultPaperSourceDir = getDefaultPapernexusSourceDir(projectId);
   const manifestCreated = await ensureJsonTemplateFile({
     targetPath: path.join(projectRoot, "PROJECT_MANIFEST.json"),
     templateRelativePath: "PROJECT_MANIFEST.json",
@@ -1590,8 +1759,6 @@ export async function ensureWorkflowProjectRoot(params: {
       next_action: '/research-pipeline "topic"',
       resume_action: '/resume-pipeline "<project_id>"',
       blocking_reason: "Project scaffold created; continue with literature collection and graph build.",
-      paper_source_dir: defaultPaperSourceDir,
-      graph_source_dir: defaultPaperSourceDir,
       memory_scope: {
         ...(asRecord(template.memory_scope) ?? {}),
         project_isolated: true,
@@ -3835,6 +4002,391 @@ function serializeExperimentSearchState(
   };
 }
 
+function normalizeResearchProgramTrackBudget(
+  value: unknown
+): ResearchProgramTrackBudget {
+  const record = asRecord(value) ?? {};
+  return {
+    gpuHours: pickNumber(record, ["gpuHours", "gpu_hours"]),
+    maxRuns: pickNumber(record, ["maxRuns", "max_runs"]),
+    maxDebugIterations: pickNumber(record, [
+      "maxDebugIterations",
+      "max_debug_iterations",
+    ]),
+  };
+}
+
+function serializeResearchProgramTrackBudget(
+  value: ResearchProgramTrackBudget
+): Record<string, unknown> {
+  return {
+    gpu_hours: value.gpuHours,
+    max_runs: value.maxRuns,
+    max_debug_iterations: value.maxDebugIterations,
+  };
+}
+
+function normalizeResearchProgramTrackWriteScope(
+  value: unknown
+): ResearchProgramTrackWriteScope {
+  const record = asRecord(value) ?? {};
+  return {
+    allowedClaimIds: asStringArray(
+      record.allowedClaimIds ?? record.allowed_claim_ids
+    ),
+    allowedFigureIds: asStringArray(
+      record.allowedFigureIds ?? record.allowed_figure_ids
+    ),
+  };
+}
+
+function serializeResearchProgramTrackWriteScope(
+  value: ResearchProgramTrackWriteScope
+): Record<string, unknown> {
+  return {
+    allowed_claim_ids: value.allowedClaimIds,
+    allowed_figure_ids: value.allowedFigureIds,
+  };
+}
+
+function normalizeResearchProgramTrack(value: unknown): ResearchProgramTrack {
+  const record = asRecord(value) ?? {};
+  return {
+    trackId:
+      pickString(record, ["trackId", "track_id"]) ??
+      `track-${Math.random().toString(36).slice(2, 8)}`,
+    priority: pickNumber(record, ["priority"]),
+    status: normalizeStage(record.status) ?? "draft",
+    hypothesis: pickString(record, ["hypothesis"]),
+    noveltyBasis: pickString(record, ["noveltyBasis", "novelty_basis"]),
+    mainMetric: pickString(record, ["mainMetric", "main_metric"]),
+    successThreshold: pickString(record, [
+      "successThreshold",
+      "success_threshold",
+    ]),
+    requiredBaselines: asStringArray(
+      record.requiredBaselines ?? record.required_baselines
+    ),
+    requiredAblations: asStringArray(
+      record.requiredAblations ?? record.required_ablations
+    ),
+    requiredControls: asStringArray(
+      record.requiredControls ?? record.required_controls
+    ),
+    experimentStageMatrix: asStringArray(
+      record.experimentStageMatrix ?? record.experiment_stage_matrix
+    ).map((entry) => normalizeStage(entry) ?? entry),
+    budget: normalizeResearchProgramTrackBudget(record.budget),
+    stopRules: asStringArray(record.stopRules ?? record.stop_rules),
+    rollbackTriggers: asStringArray(
+      record.rollbackTriggers ?? record.rollback_triggers
+    ),
+    writeScope: normalizeResearchProgramTrackWriteScope(record.writeScope ?? record.write_scope),
+  };
+}
+
+function serializeResearchProgramTrack(
+  value: ResearchProgramTrack
+): Record<string, unknown> {
+  return {
+    track_id: value.trackId,
+    priority: value.priority,
+    status: value.status,
+    hypothesis: value.hypothesis,
+    novelty_basis: value.noveltyBasis,
+    main_metric: value.mainMetric,
+    success_threshold: value.successThreshold,
+    required_baselines: value.requiredBaselines,
+    required_ablations: value.requiredAblations,
+    required_controls: value.requiredControls,
+    experiment_stage_matrix: value.experimentStageMatrix,
+    budget: serializeResearchProgramTrackBudget(value.budget),
+    stop_rules: value.stopRules,
+    rollback_triggers: value.rollbackTriggers,
+    write_scope: serializeResearchProgramTrackWriteScope(value.writeScope),
+  };
+}
+
+function normalizeResearchProgramTask(value: unknown): ResearchProgramTask {
+  const record = asRecord(value) ?? {};
+  return {
+    taskId:
+      pickString(record, ["taskId", "task_id"]) ??
+      `task-${Math.random().toString(36).slice(2, 8)}`,
+    stage: normalizeStage(record.stage),
+    trackId: pickString(record, ["trackId", "track_id"]),
+    owner: pickString(record, ["owner"]),
+    dependencies: asStringArray(record.dependencies),
+    entryCriteria: asStringArray(record.entryCriteria ?? record.entry_criteria),
+    expectedOutputs: asStringArray(record.expectedOutputs ?? record.expected_outputs),
+    retryBudget: pickNumber(record, ["retryBudget", "retry_budget"]),
+    exitCriteria: asStringArray(record.exitCriteria ?? record.exit_criteria),
+  };
+}
+
+function serializeResearchProgramTask(
+  value: ResearchProgramTask
+): Record<string, unknown> {
+  return {
+    task_id: value.taskId,
+    stage: value.stage,
+    track_id: value.trackId,
+    owner: value.owner,
+    dependencies: value.dependencies,
+    entry_criteria: value.entryCriteria,
+    expected_outputs: value.expectedOutputs,
+    retry_budget: value.retryBudget,
+    exit_criteria: value.exitCriteria,
+  };
+}
+
+function normalizeResearchProgramGlobalConstraints(
+  value: unknown
+): ResearchProgramGlobalConstraints {
+  const record = asRecord(value) ?? {};
+  return {
+    maxActiveTracks: pickNumber(record, [
+      "maxActiveTracks",
+      "max_active_tracks",
+    ]),
+    mustRunMultiSeedBeforeAnalysis:
+      pickBoolean(record, [
+        "mustRunMultiSeedBeforeAnalysis",
+        "must_run_multi_seed_before_analysis",
+      ]) ?? true,
+    mustRunPlotAggregationBeforeWrite:
+      pickBoolean(record, [
+        "mustRunPlotAggregationBeforeWrite",
+        "must_run_plot_aggregation_before_write",
+      ]) ?? true,
+  };
+}
+
+function serializeResearchProgramGlobalConstraints(
+  value: ResearchProgramGlobalConstraints
+): Record<string, unknown> {
+  return {
+    max_active_tracks: value.maxActiveTracks,
+    must_run_multi_seed_before_analysis: value.mustRunMultiSeedBeforeAnalysis,
+    must_run_plot_aggregation_before_write: value.mustRunPlotAggregationBeforeWrite,
+  };
+}
+
+function normalizeResearchProgramState(value: unknown): ResearchProgramState {
+  const record = asRecord(value) ?? {};
+  const taskGraphEntries = Array.isArray(record.taskGraph ?? record.task_graph)
+    ? ((record.taskGraph ?? record.task_graph) as unknown[])
+    : [];
+  return {
+    programVersion: Math.max(
+      1,
+      Math.floor(
+        pickNumber(record, ["programVersion", "program_version"]) ?? 1
+      )
+    ),
+    status: normalizeStage(record.status) ?? "missing",
+    goal: pickString(record, ["goal"]),
+    tracks: Array.isArray(record.tracks)
+      ? record.tracks.map((entry) => normalizeResearchProgramTrack(entry))
+      : [],
+    globalConstraints: normalizeResearchProgramGlobalConstraints(
+      record.globalConstraints ?? record.global_constraints
+    ),
+    taskGraph: taskGraphEntries.map((entry: unknown) =>
+      normalizeResearchProgramTask(entry)
+    ),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeResearchProgramState(
+  value: ResearchProgramState
+): Record<string, unknown> {
+  return {
+    program_version: value.programVersion,
+    status: value.status,
+    goal: value.goal,
+    tracks: value.tracks.map((entry) => serializeResearchProgramTrack(entry)),
+    global_constraints: serializeResearchProgramGlobalConstraints(
+      value.globalConstraints
+    ),
+    task_graph: value.taskGraph.map((entry) => serializeResearchProgramTask(entry)),
+    last_updated_at: value.lastUpdatedAt,
+    pending_reason: value.pendingReason,
+  };
+}
+
+function normalizeOrchestrationState(value: unknown): OrchestrationState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    activeTicketId: pickString(record, ["activeTicketId", "active_ticket_id"]),
+    stageRunId: pickString(record, ["stageRunId", "stage_run_id"]),
+    currentOwner: pickString(record, ["currentOwner", "current_owner"]),
+    nextOwner: pickString(record, ["nextOwner", "next_owner"]),
+    nextTransitionCandidate: pickString(record, [
+      "nextTransitionCandidate",
+      "next_transition_candidate",
+    ]),
+    blockingCategory: pickString(record, [
+      "blockingCategory",
+      "blocking_category",
+    ]),
+    blockingReason: pickString(record, ["blockingReason", "blocking_reason"]),
+    retryBudgetRemaining: pickNumber(record, [
+      "retryBudgetRemaining",
+      "retry_budget_remaining",
+    ]),
+    lastContractEvalAt: pickString(record, [
+      "lastContractEvalAt",
+      "last_contract_eval_at",
+    ]),
+    lastContractEvalResult: pickString(record, [
+      "lastContractEvalResult",
+      "last_contract_eval_result",
+    ]),
+    rollbackTargetStage: pickString(record, [
+      "rollbackTargetStage",
+      "rollback_target_stage",
+    ]),
+    resumeCursor: pickString(record, ["resumeCursor", "resume_cursor"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializeOrchestrationState(
+  value: OrchestrationState
+): Record<string, unknown> {
+  return {
+    status: value.status,
+    active_ticket_id: value.activeTicketId,
+    stage_run_id: value.stageRunId,
+    current_owner: value.currentOwner,
+    next_owner: value.nextOwner,
+    next_transition_candidate: value.nextTransitionCandidate,
+    blocking_category: value.blockingCategory,
+    blocking_reason: value.blockingReason,
+    retry_budget_remaining: value.retryBudgetRemaining,
+    last_contract_eval_at: value.lastContractEvalAt,
+    last_contract_eval_result: value.lastContractEvalResult,
+    rollback_target_stage: value.rollbackTargetStage,
+    resume_cursor: value.resumeCursor,
+    last_updated_at: value.lastUpdatedAt,
+  };
+}
+
+function normalizeWritePackageState(value: unknown): WritePackageState {
+  const record = asRecord(value) ?? {};
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    assemblyStatus:
+      normalizeStage(record.assemblyStatus ?? record.assembly_status) ?? null,
+    assemblyMode:
+      pickString(record, ["assemblyMode", "assembly_mode"]) ?? null,
+    winningTrackIds: asStringArray(
+      record.winningTrackIds ?? record.winning_track_ids
+    ),
+    claimEvidenceMatrixPath: pickString(record, [
+      "claimEvidenceMatrixPath",
+      "claim_evidence_matrix_path",
+    ]),
+    narrativeReportPath: pickString(record, [
+      "narrativeReportPath",
+      "narrative_report_path",
+    ]),
+    trackVerdictsPath: pickString(record, [
+      "trackVerdictsPath",
+      "track_verdicts_path",
+    ]),
+    unsupportedClaimsPath: pickString(record, [
+      "unsupportedClaimsPath",
+      "unsupported_claims_path",
+    ]),
+    baselineSummaryPath: pickString(record, [
+      "baselineSummaryPath",
+      "baseline_summary_path",
+    ]),
+    researchSummaryPath: pickString(record, [
+      "researchSummaryPath",
+      "research_summary_path",
+    ]),
+    ablationSummaryPath: pickString(record, [
+      "ablationSummaryPath",
+      "ablation_summary_path",
+    ]),
+    evaluationSummaryPath: pickString(record, [
+      "evaluationSummaryPath",
+      "evaluation_summary_path",
+    ]),
+    figurePackPath: pickString(record, ["figurePackPath", "figure_pack_path"]),
+    tablePackPath: pickString(record, ["tablePackPath", "table_pack_path"]),
+    proofPacketDir: pickString(record, ["proofPacketDir", "proof_packet_dir"]),
+    citationCandidatesPath: pickString(record, [
+      "citationCandidatesPath",
+      "citation_candidates_path",
+    ]),
+    packageManifestPath: pickString(record, [
+      "packageManifestPath",
+      "package_manifest_path",
+    ]),
+    assemblyReportPath: pickString(record, [
+      "assemblyReportPath",
+      "assembly_report_path",
+    ]),
+    sectionAssemblyQueuePath: pickString(record, [
+      "sectionAssemblyQueuePath",
+      "section_assembly_queue_path",
+    ]),
+    sourceArtifactCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["sourceArtifactCount", "source_artifact_count"]) ?? 0
+      )
+    ),
+    derivedArtifactCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["derivedArtifactCount", "derived_artifact_count"]) ?? 0
+      )
+    ),
+    assembledAt: pickString(record, ["assembledAt", "assembled_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializeWritePackageState(
+  value: WritePackageState
+): Record<string, unknown> {
+  return {
+    status: value.status,
+    assembly_status: value.assemblyStatus,
+    assembly_mode: value.assemblyMode,
+    winning_track_ids: value.winningTrackIds,
+    claim_evidence_matrix_path: value.claimEvidenceMatrixPath,
+    narrative_report_path: value.narrativeReportPath,
+    track_verdicts_path: value.trackVerdictsPath,
+    unsupported_claims_path: value.unsupportedClaimsPath,
+    baseline_summary_path: value.baselineSummaryPath,
+    research_summary_path: value.researchSummaryPath,
+    ablation_summary_path: value.ablationSummaryPath,
+    evaluation_summary_path: value.evaluationSummaryPath,
+    figure_pack_path: value.figurePackPath,
+    table_pack_path: value.tablePackPath,
+    proof_packet_dir: value.proofPacketDir,
+    citation_candidates_path: value.citationCandidatesPath,
+    package_manifest_path: value.packageManifestPath,
+    assembly_report_path: value.assemblyReportPath,
+    section_assembly_queue_path: value.sectionAssemblyQueuePath,
+    source_artifact_count: value.sourceArtifactCount,
+    derived_artifact_count: value.derivedArtifactCount,
+    assembled_at: value.assembledAt,
+    pending_reason: value.pendingReason,
+    last_updated_at: value.lastUpdatedAt,
+  };
+}
+
 function normalizePaperQcState(value: unknown): PaperQcState {
   const record = asRecord(value) ?? {};
   return {
@@ -4016,6 +4568,53 @@ function serializeReviewIssueCounts(
   };
 }
 
+function normalizeReviewIssueState(value: unknown): ReviewIssueState {
+  const record = asRecord(value) ?? {};
+  return {
+    issueId:
+      pickString(record, ["issueId", "issue_id", "id"]) ??
+      `issue-${Math.random().toString(36).slice(2, 8)}`,
+    lane: normalizeStage(record.lane) ?? null,
+    severity: normalizeStage(record.severity) ?? "low",
+    title: pickString(record, ["title"]),
+    description: pickString(record, ["description"]),
+    targetStage: normalizeStage(record.targetStage ?? record.target_stage),
+    targetArtifact: pickString(record, ["targetArtifact", "target_artifact"]),
+    openedBy: pickString(record, ["openedBy", "opened_by"]),
+    owner: pickString(record, ["owner"]),
+    status: normalizeStage(record.status) ?? "open",
+    fixArtifactPaths: asStringArray(
+      record.fixArtifactPaths ?? record.fix_artifact_paths
+    ),
+    verifiedAt: pickString(record, ["verifiedAt", "verified_at"]),
+    waiverReason: pickString(record, ["waiverReason", "waiver_reason"]),
+    createdAt: pickString(record, ["createdAt", "created_at"]),
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function serializeReviewIssueState(
+  issue: ReviewIssueState
+): Record<string, unknown> {
+  return {
+    issue_id: issue.issueId,
+    lane: issue.lane,
+    severity: issue.severity,
+    title: issue.title,
+    description: issue.description,
+    target_stage: issue.targetStage,
+    target_artifact: issue.targetArtifact,
+    opened_by: issue.openedBy,
+    owner: issue.owner,
+    status: issue.status,
+    fix_artifact_paths: issue.fixArtifactPaths,
+    verified_at: issue.verifiedAt,
+    waiver_reason: issue.waiverReason,
+    created_at: issue.createdAt,
+    updated_at: issue.updatedAt,
+  };
+}
+
 function normalizeReviewIssueTrackerState(
   value: unknown
 ): ReviewIssueTrackerState {
@@ -4028,6 +4627,9 @@ function normalizeReviewIssueTrackerState(
     issueManifestPath:
       pickString(record, ["issueManifestPath", "issue_manifest_path"]) ??
       DEFAULT_REVIEW_ISSUES_PATH,
+    issues: Array.isArray(record.issues)
+      ? record.issues.map((issue) => normalizeReviewIssueState(issue))
+      : [],
     lastReviewRound: Math.max(
       0,
       Math.floor(
@@ -4046,6 +4648,7 @@ function serializeReviewIssueTrackerState(
     status: state.status,
     open_counts: serializeReviewIssueCounts(state.openCounts),
     issue_manifest_path: state.issueManifestPath,
+    issues: state.issues.map((issue) => serializeReviewIssueState(issue)),
     last_review_round: state.lastReviewRound,
     last_updated_at: state.lastUpdatedAt,
     pending_reason: state.pendingReason,
@@ -4442,18 +5045,95 @@ function isCitationCollectionHardFailure(
   return normalizeStage(state.status) === "blocked" || state.hallucinatedCount > 0;
 }
 
-function hasBlockingReviewIssues(state: ReviewIssueTrackerState): boolean {
-  return state.status !== "waived" &&
-    (state.openCounts.critical > 0 || state.openCounts.high > 0);
+const REQUIRED_RESEARCH_PROGRAM_EXPERIMENT_STAGES = [
+  "baseline_implementation",
+  "baseline_tuning",
+  "creative_research",
+  "ablation_studies",
+];
+
+function isResolvedReviewIssueStatus(status: string | null): boolean {
+  return ["fixed", "verified", "waived", "closed", "resolved"].includes(
+    normalizeStage(status) ?? ""
+  );
 }
 
-function summarizeReviewIssuesFromManifest(value: unknown): ReviewIssueCounts {
+function countReviewIssueLanes(issues: ReviewIssueState[]): {
+  surface: number;
+  submission: number;
+} {
+  let surface = 0;
+  let submission = 0;
+  for (const issue of issues) {
+    if (isResolvedReviewIssueStatus(issue.status)) {
+      continue;
+    }
+    const lane = normalizeStage(issue.lane);
+    if (lane === "surface") {
+      surface += 1;
+    } else if (lane === "submission") {
+      submission += 1;
+    }
+  }
+  return { surface, submission };
+}
+
+function hasUnwaivedMediumOrHigherReviewIssues(
+  state: ReviewIssueTrackerState
+): boolean {
+  if (state.status === "waived") {
+    return false;
+  }
+  if (state.issues.length === 0) {
+    return (
+      state.openCounts.critical > 0 ||
+      state.openCounts.high > 0 ||
+      state.openCounts.medium > 0
+    );
+  }
+  return state.issues.some((issue) => {
+    if (isResolvedReviewIssueStatus(issue.status)) {
+      return false;
+    }
+    const severity = normalizeStage(issue.severity);
+    if (!["critical", "high", "medium"].includes(severity ?? "")) {
+      return false;
+    }
+    return !(severity === "medium" && issue.waiverReason);
+  });
+}
+
+function hasBlockingReviewIssues(state: ReviewIssueTrackerState): boolean {
+  if (state.status === "waived") {
+    return false;
+  }
+  if (state.issues.length > 0) {
+    return state.issues.some((issue) => {
+      if (isResolvedReviewIssueStatus(issue.status)) {
+        return false;
+      }
+      const severity = normalizeStage(issue.severity);
+      return severity === "critical" || severity === "high";
+    });
+  }
+  return state.openCounts.critical > 0 || state.openCounts.high > 0;
+}
+
+function extractReviewIssues(value: unknown): ReviewIssueState[] {
   const record = asRecord(value);
   const issues = Array.isArray(record?.issues)
     ? record.issues
     : Array.isArray(value)
       ? value
       : [];
+  return issues.map((issue) => normalizeReviewIssueState(issue));
+}
+
+function summarizeReviewIssuesFromManifest(value: unknown): {
+  issues: ReviewIssueState[];
+  counts: ReviewIssueCounts;
+} {
+  const issues = extractReviewIssues(value);
   const counts: ReviewIssueCounts = {
     critical: 0,
     high: 0,
@@ -4461,12 +5141,10 @@ function summarizeReviewIssuesFromManifest(value: unknown): ReviewIssueCounts {
     low: 0,
   };
   for (const issue of issues) {
-    const issueRecord = asRecord(issue) ?? {};
-    const status = normalizeStage(issueRecord.status);
-    if (["fixed", "verified", "waived", "closed", "resolved"].includes(status ?? "")) {
+    if (isResolvedReviewIssueStatus(issue.status)) {
       continue;
     }
-    const severity = normalizeStage(issueRecord.severity);
+    const severity = normalizeStage(issue.severity);
     if (severity === "critical") {
       counts.critical += 1;
     } else if (severity === "high") {
@@ -4477,7 +5155,7 @@ function summarizeReviewIssuesFromManifest(value: unknown): ReviewIssueCounts {
       counts.low += 1;
     }
   }
-  return counts;
+  return { issues, counts };
 }
 
 async function hydrateReviewIssueTrackerState(params: {
@@ -4498,10 +5176,920 @@ async function hydrateReviewIssueTrackerState(params: {
   if (!issueManifest) {
     return state;
   }
+  const hydrated = summarizeReviewIssuesFromManifest(issueManifest);
   return {
     ...state,
-    openCounts: summarizeReviewIssuesFromManifest(issueManifest),
+    issues: hydrated.issues,
+    openCounts: hydrated.counts,
   };
+}
+
+function getResearchProgramValidationErrors(
+  state: ResearchProgramState
+): string[] {
+  const errors: string[] = [];
+  const activeTracks = state.tracks.filter(
+    (track) => normalizeStage(track.status) === "active"
+  );
+  if (!["approved", "ready", "running"].includes(normalizeStage(state.status) ?? "")) {
+    errors.push(
+      `PROJECT_MANIFEST.json.research_program.status must be approved/ready/running (current: ${state.status})`
+    );
+  }
+  if (!state.goal) {
+    errors.push("PROJECT_MANIFEST.json.research_program.goal is required");
+  }
+  if (activeTracks.length === 0) {
+    errors.push(
+      "PROJECT_MANIFEST.json.research_program must define at least one active track"
+    );
+  }
+  if (state.globalConstraints.maxActiveTracks != null) {
+    if (activeTracks.length > state.globalConstraints.maxActiveTracks) {
+      errors.push(
+        `active track count ${activeTracks.length} exceeds research_program.global_constraints.max_active_tracks=${state.globalConstraints.maxActiveTracks}`
+      );
+    }
+  }
+  for (const track of activeTracks) {
+    if (!track.hypothesis) {
+      errors.push(`research_program track ${track.trackId} missing hypothesis`);
+    }
+    if (!track.noveltyBasis) {
+      errors.push(`research_program track ${track.trackId} missing novelty_basis`);
+    }
+    if (!track.mainMetric) {
+      errors.push(`research_program track ${track.trackId} missing main_metric`);
+    }
+    if (!track.successThreshold) {
+      errors.push(`research_program track ${track.trackId} missing success_threshold`);
+    }
+    if (track.requiredBaselines.length === 0) {
+      errors.push(`research_program track ${track.trackId} requires at least one baseline`);
+    }
+    if (track.requiredAblations.length === 0) {
+      errors.push(`research_program track ${track.trackId} requires at least one ablation`);
+    }
+    if (track.stopRules.length === 0) {
+      errors.push(`research_program track ${track.trackId} requires stop_rules`);
+    }
+    if (track.rollbackTriggers.length === 0) {
+      errors.push(
+        `research_program track ${track.trackId} requires rollback_triggers`
+      );
+    }
+    const stageMatrix = new Set(
+      track.experimentStageMatrix.map((entry) => normalizeStage(entry) ?? entry)
+    );
+    for (const requiredStage of REQUIRED_RESEARCH_PROGRAM_EXPERIMENT_STAGES) {
+      if (!stageMatrix.has(requiredStage)) {
+        errors.push(
+          `research_program track ${track.trackId} is missing experiment_stage_matrix entry ${requiredStage}`
+        );
+      }
+    }
+    if (
+      track.writeScope.allowedClaimIds.length === 0 &&
+      track.writeScope.allowedFigureIds.length === 0
+    ) {
+      errors.push(
+        `research_program track ${track.trackId} must declare write_scope allowed claims or figures`
+      );
+    }
+    if (
+      track.budget.gpuHours == null &&
+      track.budget.maxRuns == null &&
+      track.budget.maxDebugIterations == null
+    ) {
+      errors.push(`research_program track ${track.trackId} must declare a budget`);
+    }
+  }
+  for (const track of activeTracks) {
+    const hasTask = state.taskGraph.some(
+      (task) =>
+        task.trackId === track.trackId &&
+        task.entryCriteria.length > 0 &&
+        task.expectedOutputs.length > 0 &&
+        task.exitCriteria.length > 0
+    );
+    if (!hasTask) {
+      errors.push(
+        `research_program track ${track.trackId} requires task_graph coverage with entry/output/exit criteria`
+      );
+    }
+  }
+  return errors;
+}
+
+function getOrchestrationStateValidationErrors(
+  state: OrchestrationState,
+  currentStage: string | null
+): string[] {
+  const errors: string[] = [];
+  if (!["running", "ready", "waiting", "blocked"].includes(normalizeStage(state.status) ?? "")) {
+    errors.push(
+      `PROJECT_MANIFEST.json.orchestration_state.status must be ready/running/waiting/blocked (current: ${state.status})`
+    );
+  }
+  if (!state.currentOwner) {
+    errors.push("PROJECT_MANIFEST.json.orchestration_state.current_owner is required");
+  }
+  if (!state.nextTransitionCandidate) {
+    errors.push(
+      "PROJECT_MANIFEST.json.orchestration_state.next_transition_candidate is required"
+    );
+  }
+  if (currentStage && state.nextTransitionCandidate) {
+    const expectedNext = STAGE_REQUIREMENTS[currentStage]?.nextStage ?? null;
+    if (
+      expectedNext &&
+      normalizeStage(state.nextTransitionCandidate) !== normalizeStage(expectedNext)
+    ) {
+      errors.push(
+        `orchestration_state.next_transition_candidate should be ${expectedNext} while current_stage=${currentStage} (current: ${state.nextTransitionCandidate})`
+      );
+    }
+  }
+  if (state.retryBudgetRemaining != null && state.retryBudgetRemaining < 0) {
+    errors.push(
+      "PROJECT_MANIFEST.json.orchestration_state.retry_budget_remaining must be >= 0"
+    );
+  }
+  return errors;
+}
+
+function getWritePackageValidationErrors(state: WritePackageState): string[] {
+  const errors: string[] = [];
+  if (!["ready", "assembled", "approved"].includes(normalizeStage(state.status) ?? "")) {
+    errors.push(
+      `PROJECT_MANIFEST.json.write_package.status must be ready/assembled/approved (current: ${state.status})`
+    );
+  }
+  if (state.winningTrackIds.length === 0) {
+    errors.push("PROJECT_MANIFEST.json.write_package.winning_track_ids is required");
+  }
+  for (const field of [
+    ["claim_evidence_matrix_path", state.claimEvidenceMatrixPath],
+    ["narrative_report_path", state.narrativeReportPath],
+    ["track_verdicts_path", state.trackVerdictsPath],
+    ["unsupported_claims_path", state.unsupportedClaimsPath],
+    ["baseline_summary_path", state.baselineSummaryPath],
+    ["research_summary_path", state.researchSummaryPath],
+    ["ablation_summary_path", state.ablationSummaryPath],
+    ["evaluation_summary_path", state.evaluationSummaryPath],
+    ["figure_pack_path", state.figurePackPath],
+    ["table_pack_path", state.tablePackPath],
+    ["proof_packet_dir", state.proofPacketDir],
+    ["citation_candidates_path", state.citationCandidatesPath],
+  ] as Array<[string, string | null]>) {
+    if (!field[1]) {
+      errors.push(`PROJECT_MANIFEST.json.write_package.${field[0]} is required`);
+    }
+  }
+  return errors;
+}
+
+function toProjectRelativeArtifactPath(
+  projectRoot: string,
+  targetPath: string | null
+): string | null {
+  if (!targetPath) {
+    return null;
+  }
+  if (!path.isAbsolute(targetPath)) {
+    return targetPath.replace(/\\/g, "/");
+  }
+  const relative = path.relative(projectRoot, targetPath);
+  if (!relative || relative.startsWith("..")) {
+    return path.normalize(targetPath).replace(/\\/g, "/");
+  }
+  return relative.replace(/\\/g, "/");
+}
+
+function uniqueStringList(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(asString(value))))];
+}
+
+async function selectExistingArtifactPath(params: {
+  projectRoot: string;
+  candidates: Array<string | null | undefined>;
+}): Promise<string | null> {
+  for (const candidate of params.candidates) {
+    const value = asString(candidate);
+    if (!value) {
+      continue;
+    }
+    const resolved = resolveProjectArtifactPath(params.projectRoot, value);
+    if (resolved && (await pathExists(resolved))) {
+      return toProjectRelativeArtifactPath(params.projectRoot, resolved);
+    }
+  }
+  return null;
+}
+
+async function selectExistingNonEmptyDirectory(params: {
+  projectRoot: string;
+  candidates: Array<string | null | undefined>;
+}): Promise<string | null> {
+  for (const candidate of params.candidates) {
+    const value = asString(candidate);
+    if (!value) {
+      continue;
+    }
+    const resolved = resolveProjectArtifactPath(params.projectRoot, value);
+    if (resolved && (await isNonEmptyDirectory(resolved))) {
+      return toProjectRelativeArtifactPath(params.projectRoot, resolved);
+    }
+  }
+  return null;
+}
+
+function inferWritePackageWinningTrackIds(params: {
+  current: WritePackageState;
+  researchProgram: ResearchProgramState;
+  trackRegistry: TrackRegistryLike | null;
+}): string[] {
+  if (params.current.winningTrackIds.length > 0) {
+    return [...params.current.winningTrackIds];
+  }
+  const programTracks = params.researchProgram.tracks
+    .filter((track) => normalizeStage(track.status) === "active")
+    .map((track) => track.trackId);
+  if (programTracks.length > 0) {
+    return uniqueStringList(programTracks);
+  }
+  return uniqueStringList(
+    getActiveTracks(params.trackRegistry).map((track) =>
+      pickString(track, ["track_id", "trackId"])
+    )
+  );
+}
+
+function buildSectionAssemblyQueuePayload(params: {
+  manifest: Record<string, unknown>;
+  now: string;
+  winningTrackIds: string[];
+}): {
+  status: string;
+  sections: Array<Record<string, unknown>>;
+  summary: Record<string, unknown>;
+} {
+  const writingContract = normalizeWritingContractState(params.manifest.writing_contract);
+  const writingSession = normalizeWritingSessionState(params.manifest.writing_session);
+  const sectionIds = uniqueStringList([
+    ...writingContract.sectionOrder,
+    ...writingContract.requiredSections,
+    ...writingSession.draftOrder,
+    ...Object.keys(writingSession.sectionPackets),
+  ]).map((entry) => normalizeStage(entry) ?? entry);
+  const sections = sectionIds.map((sectionId) => {
+    const packet = writingSession.sectionPackets[sectionId];
+    return {
+      section: sectionId,
+      section_class: packet?.sectionClass ?? null,
+      status: packet?.status ?? "planned",
+      stale: packet?.stale ?? false,
+      goal: packet?.goal ?? null,
+      packet_path: packet?.packetPath ?? null,
+      draft_path: packet?.draftPath ?? null,
+      review_path: packet?.reviewPath ?? null,
+      review_verdict: packet?.reviewVerdict ?? null,
+      required_figure_ids: packet?.requiredFigureIds ?? [],
+      required_citation_count: packet?.requiredCitationCount ?? 0,
+      dependent_sections: packet?.dependentSections ?? [],
+      track_scope: params.winningTrackIds,
+    };
+  });
+  return {
+    status: sections.length > 0 ? "assembled" : "missing",
+    sections,
+    summary: {
+      generated_at: params.now,
+      winning_track_ids: params.winningTrackIds,
+      active_section: writingSession.currentSection,
+      finalized_sections: writingSession.finalizedSections,
+      compile_safe_sections: writingSession.compileSafeSections,
+    },
+  };
+}
+
+function buildWritePackageAssemblyIssues(params: {
+  blockingInputs: Array<{
+    code: string;
+    label: string;
+    description: string;
+    targetArtifact: string | null;
+  }>;
+  existingIssues: ReviewIssueState[];
+  now: string;
+}): ReviewIssueState[] {
+  const nextById = new Map<string, ReviewIssueState>();
+  for (const issue of params.existingIssues) {
+    nextById.set(issue.issueId, issue);
+  }
+
+  const activeIds = new Set<string>();
+  for (const blocker of params.blockingInputs) {
+    const issueId = `write-package-${blocker.code}`;
+    activeIds.add(issueId);
+    const current = nextById.get(issueId);
+    nextById.set(issueId, {
+      issueId,
+      lane: "evidence",
+      severity: "medium",
+      title: `write_package missing: ${blocker.label}`,
+      description: blocker.description,
+      targetStage: "write",
+      targetArtifact: blocker.targetArtifact,
+      openedBy: "write_package_assembler",
+      owner: "academic_writer",
+      status: "open",
+      fixArtifactPaths: blocker.targetArtifact ? [blocker.targetArtifact] : [],
+      verifiedAt: null,
+      waiverReason: current?.waiverReason ?? null,
+      createdAt: current?.createdAt ?? params.now,
+      updatedAt: params.now,
+    });
+  }
+
+  for (const [issueId, issue] of nextById.entries()) {
+    if (!issueId.startsWith("write-package-")) {
+      continue;
+    }
+    if (activeIds.has(issueId)) {
+      continue;
+    }
+    if (isResolvedReviewIssueStatus(issue.status)) {
+      continue;
+    }
+    nextById.set(issueId, {
+      ...issue,
+      status: "closed",
+      verifiedAt: params.now,
+      updatedAt: params.now,
+    });
+  }
+
+  return [...nextById.values()].sort((left, right) =>
+    (left.issueId ?? "").localeCompare(right.issueId ?? "")
+  );
+}
+
+async function syncWritePackageAssemblyIssues(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  blockingInputs: Array<{
+    code: string;
+    label: string;
+    description: string;
+    targetArtifact: string | null;
+  }>;
+  now: string;
+}): Promise<ReviewIssueTrackerState> {
+  const currentTracker = await hydrateReviewIssueTrackerState({
+    projectRoot: params.projectRoot,
+    value: params.manifest.review_issue_tracker,
+  });
+  const issues = buildWritePackageAssemblyIssues({
+    blockingInputs: params.blockingInputs,
+    existingIssues: currentTracker.issues,
+    now: params.now,
+  });
+  const unresolvedCount = issues.filter(
+    (issue) => !isResolvedReviewIssueStatus(issue.status)
+  ).length;
+  const result = await setReviewIssueTrackerState({
+    projectRoot: params.projectRoot,
+    reviewIssueTracker: {
+      status: unresolvedCount > 0 ? "open" : "ready",
+      issue_manifest_path:
+        currentTracker.issueManifestPath ?? DEFAULT_REVIEW_ISSUES_PATH,
+      issues: issues.map((issue) => serializeReviewIssueState(issue)),
+      last_review_round: currentTracker.lastReviewRound,
+      pending_reason:
+        unresolvedCount > 0
+          ? "write_package assembly still has unresolved upstream evidence gaps."
+          : null,
+      last_updated_at: params.now,
+    },
+  });
+  return result.state;
+}
+
+export async function assembleWritePackage(params: {
+  projectRoot: string;
+  mode?: string | null;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  state: WritePackageState;
+  validationErrors: string[];
+  derivedArtifacts: string[];
+  blockingInputs: string[];
+  packageManifestResolvedPath: string | null;
+  assemblyReportResolvedPath: string | null;
+  sectionAssemblyQueueResolvedPath: string | null;
+}> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const manifest = await readManifestEnsured(projectRoot);
+  const trackRegistry =
+    await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"));
+  const current = normalizeWritePackageState(manifest.write_package);
+  const researchProgram = normalizeResearchProgramState(manifest.research_program);
+  const experimentSearch = normalizeExperimentSearchState(manifest.experiment_search);
+  const figureQc = normalizeFigureQcState(manifest.figure_qc);
+  const graphGuidedWriting = normalizeGraphGuidedWritingState(
+    manifest.graph_guided_writing
+  );
+  const now = new Date().toISOString();
+  const winningTrackIds = inferWritePackageWinningTrackIds({
+    current,
+    researchProgram,
+    trackRegistry,
+  });
+
+  const claimEvidenceMatrixPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.claimEvidenceMatrixPath,
+      "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+    ],
+  });
+  const narrativeReportPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.narrativeReportPath,
+      "analyzer/NARRATIVE_REPORT.md",
+    ],
+  });
+  const trackVerdictsPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.trackVerdictsPath,
+      "analyzer/TRACK_VERDICTS.md",
+    ],
+  });
+  const unsupportedClaimsPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.unsupportedClaimsPath,
+      "analyzer/UNSUPPORTED_CLAIMS.md",
+    ],
+  });
+  const baselineSummaryPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.baselineSummaryPath,
+      "researcher/baseline_summary.json",
+    ],
+  });
+  const researchSummaryPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.researchSummaryPath,
+      "researcher/research_summary.json",
+    ],
+  });
+  const ablationSummaryPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.ablationSummaryPath,
+      "researcher/ablation_summary.json",
+    ],
+  });
+  const evaluationSummaryPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.evaluationSummaryPath,
+      experimentSearch.evaluationSummaryPath,
+      "researcher/evaluation_summary.json",
+    ],
+  });
+  const proofPacketDir = await selectExistingNonEmptyDirectory({
+    projectRoot,
+    candidates: [
+      current.proofPacketDir,
+      pickString(manifest.theory_state as Record<string, unknown>, [
+        "proof_packet_dir",
+        "proofPacketDir",
+      ]),
+      "analyzer/proof-packets",
+    ],
+  });
+
+  const derivedArtifacts: string[] = [];
+  const blockingInputs: Array<{
+    code: string;
+    label: string;
+    description: string;
+    targetArtifact: string | null;
+  }> = [];
+
+  const sourceArtifactPaths = uniqueStringList([
+    claimEvidenceMatrixPath,
+    narrativeReportPath,
+    trackVerdictsPath,
+    unsupportedClaimsPath,
+    baselineSummaryPath,
+    researchSummaryPath,
+    ablationSummaryPath,
+    evaluationSummaryPath,
+    proofPacketDir,
+  ]);
+
+  const packageManifestPath =
+    current.packageManifestPath ?? DEFAULT_WRITE_PACKAGE_MANIFEST_PATH;
+  const assemblyReportPath =
+    current.assemblyReportPath ?? DEFAULT_WRITE_PACKAGE_ASSEMBLY_REPORT_PATH;
+  const sectionAssemblyQueuePath =
+    current.sectionAssemblyQueuePath ?? DEFAULT_SECTION_ASSEMBLY_QUEUE_PATH;
+
+  for (const [code, label, artifactPath] of [
+    ["winning_tracks", "winning track ids", winningTrackIds.length > 0 ? "TRACK_REGISTRY.json / research_program" : null],
+    ["claim_evidence_matrix", "claim evidence matrix", claimEvidenceMatrixPath],
+    ["narrative_report", "narrative report", narrativeReportPath],
+    ["track_verdicts", "track verdicts", trackVerdictsPath],
+    ["unsupported_claims", "unsupported claims", unsupportedClaimsPath],
+    ["baseline_summary", "baseline summary", baselineSummaryPath],
+    ["research_summary", "research summary", researchSummaryPath],
+    ["ablation_summary", "ablation summary", ablationSummaryPath],
+    ["evaluation_summary", "evaluation summary", evaluationSummaryPath],
+    ["proof_packet_dir", "proof packet directory", proofPacketDir],
+  ] as Array<[string, string, string | null]>) {
+    if (!artifactPath) {
+      blockingInputs.push({
+        code,
+        label,
+        description: `write_package assembly could not find a usable ${label} artifact.`,
+        targetArtifact: artifactPath,
+      });
+    }
+  }
+
+  const sectionQueuePayload = buildSectionAssemblyQueuePayload({
+    manifest,
+    now,
+    winningTrackIds,
+  });
+  let sectionQueueArtifactPath: string | null = null;
+  if (sectionQueuePayload.sections.length > 0) {
+    const resolved = resolveProjectArtifactPath(projectRoot, sectionAssemblyQueuePath);
+    if (resolved) {
+      await writeJsonEnsured(resolved, {
+        schema_version: 1,
+        status: sectionQueuePayload.status,
+        ...sectionQueuePayload.summary,
+        section_queue: sectionQueuePayload.sections,
+      });
+      sectionQueueArtifactPath = toProjectRelativeArtifactPath(projectRoot, resolved);
+      derivedArtifacts.push(sectionQueueArtifactPath ?? sectionAssemblyQueuePath);
+    }
+  } else {
+    blockingInputs.push({
+      code: "section_assembly_queue",
+      label: "section assembly queue",
+      description:
+        "write_package assembly could not derive any active section packet or ordered section queue.",
+      targetArtifact: sectionAssemblyQueuePath,
+    });
+  }
+
+  let figurePackPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [current.figurePackPath, DEFAULT_FIGURE_PACK_PATH],
+  });
+  if (!figurePackPath) {
+    const requiredFigureIds = uniqueStringList([
+      ...researchProgram.tracks.flatMap((track) => track.writeScope.allowedFigureIds),
+      ...Object.values(normalizeWritingSessionState(manifest.writing_session).sectionPackets).flatMap(
+        (packet) => packet.requiredFigureIds
+      ),
+    ]);
+    const figureSourceArtifacts = uniqueStringList([
+      experimentSearch.plotPackPath,
+      figureQc.figureReviewPath,
+      figureQc.figureSelectionPath,
+      graphGuidedWriting.anchorIndexPath,
+      ...graphGuidedWriting.frontierFiles,
+    ]);
+    if (requiredFigureIds.length > 0 || figureSourceArtifacts.length > 0) {
+      const resolved = resolveProjectArtifactPath(projectRoot, DEFAULT_FIGURE_PACK_PATH);
+      if (resolved) {
+        const plotPackResolved = resolveProjectArtifactPath(
+          projectRoot,
+          experimentSearch.plotPackPath
+        );
+        const plotPack =
+          plotPackResolved && (await pathExists(plotPackResolved))
+            ? await readJsonIfExists<Record<string, unknown>>(plotPackResolved)
+            : null;
+        await writeJsonEnsured(resolved, {
+          schema_version: 1,
+          generated_at: now,
+          winning_track_ids: winningTrackIds,
+          figure_ids: requiredFigureIds,
+          source_artifacts: figureSourceArtifacts,
+          plot_pack: plotPack,
+          surface_review_path: figureQc.figureReviewPath ?? DEFAULT_FIGURE_REVIEW_PATH,
+          selection_path:
+            figureQc.figureSelectionPath ?? DEFAULT_FIGURE_SELECTION_PATH,
+        });
+        figurePackPath = toProjectRelativeArtifactPath(projectRoot, resolved);
+        derivedArtifacts.push(figurePackPath ?? DEFAULT_FIGURE_PACK_PATH);
+      }
+    }
+  }
+  if (!figurePackPath) {
+    blockingInputs.push({
+      code: "figure_pack",
+      label: "figure pack",
+      description:
+        "write_package assembly could not derive a figure pack from plot outputs, allowed figures, or figure review inputs.",
+      targetArtifact: DEFAULT_FIGURE_PACK_PATH,
+    });
+  }
+
+  let tablePackPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [current.tablePackPath, DEFAULT_TABLE_PACK_PATH],
+  });
+  if (!tablePackPath) {
+    const tableSources = uniqueStringList([
+      baselineSummaryPath,
+      researchSummaryPath,
+      ablationSummaryPath,
+      evaluationSummaryPath,
+    ]);
+    if (tableSources.length > 0) {
+      const resolved = resolveProjectArtifactPath(projectRoot, DEFAULT_TABLE_PACK_PATH);
+      if (resolved) {
+        await writeJsonEnsured(resolved, {
+          schema_version: 1,
+          generated_at: now,
+          winning_track_ids: winningTrackIds,
+          source_summaries: tableSources,
+          suggested_tables: tableSources.map((sourcePath) => ({
+            table_id: path.basename(sourcePath, path.extname(sourcePath)),
+            source_path: sourcePath,
+          })),
+        });
+        tablePackPath = toProjectRelativeArtifactPath(projectRoot, resolved);
+        derivedArtifacts.push(tablePackPath ?? DEFAULT_TABLE_PACK_PATH);
+      }
+    }
+  }
+  if (!tablePackPath) {
+    blockingInputs.push({
+      code: "table_pack",
+      label: "table pack",
+      description:
+        "write_package assembly could not derive a table pack because no usable summary artifacts were found.",
+      targetArtifact: DEFAULT_TABLE_PACK_PATH,
+    });
+  }
+
+  let citationCandidatesPath = await selectExistingArtifactPath({
+    projectRoot,
+    candidates: [
+      current.citationCandidatesPath,
+      DEFAULT_CITATION_CANDIDATES_PATH,
+    ],
+  });
+  if (!citationCandidatesPath) {
+    const bibliographyPath = await selectExistingArtifactPath({
+      projectRoot,
+      candidates: [
+        pickString(manifest.citation_integrity as Record<string, unknown>, [
+          "bibliography_path",
+          "bibliographyPath",
+        ]),
+        DEFAULT_CITATION_BIB_PATH,
+      ],
+    });
+    const citationSourceArtifacts = uniqueStringList([
+      bibliographyPath,
+      claimEvidenceMatrixPath,
+      graphGuidedWriting.anchorIndexPath,
+      ...graphGuidedWriting.frontierFiles,
+    ]);
+    if (citationSourceArtifacts.length > 0) {
+      const resolved = resolveProjectArtifactPath(
+        projectRoot,
+        DEFAULT_CITATION_CANDIDATES_PATH
+      );
+      if (resolved) {
+        const bibliographyResolved = resolveProjectArtifactPath(
+          projectRoot,
+          bibliographyPath
+        );
+        const bibliographyText =
+          bibliographyResolved && (await pathExists(bibliographyResolved))
+            ? await readTextIfExists(bibliographyResolved)
+            : null;
+        const bibliographyEntryCount =
+          bibliographyText?.match(/@\w+\s*\{/g)?.length ?? 0;
+        await writeJsonEnsured(resolved, {
+          schema_version: 1,
+          generated_at: now,
+          winning_track_ids: winningTrackIds,
+          bibliography_path: bibliographyPath,
+          bibliography_entry_count: bibliographyEntryCount,
+          source_artifacts: citationSourceArtifacts,
+        });
+        citationCandidatesPath = toProjectRelativeArtifactPath(projectRoot, resolved);
+        derivedArtifacts.push(
+          citationCandidatesPath ?? DEFAULT_CITATION_CANDIDATES_PATH
+        );
+      }
+    }
+  }
+  if (!citationCandidatesPath) {
+    blockingInputs.push({
+      code: "citation_candidates",
+      label: "citation candidates",
+      description:
+        "write_package assembly could not derive citation candidates from bibliography or graph/evidence artifacts.",
+      targetArtifact: DEFAULT_CITATION_CANDIDATES_PATH,
+    });
+  }
+
+  const next: WritePackageState = {
+    ...current,
+    status: blockingInputs.length === 0 ? "ready" : "partial",
+    assemblyStatus: blockingInputs.length === 0 ? "ready" : "partial",
+    assemblyMode: asString(params.mode) ?? "deterministic",
+    winningTrackIds,
+    claimEvidenceMatrixPath,
+    narrativeReportPath,
+    trackVerdictsPath,
+    unsupportedClaimsPath,
+    baselineSummaryPath,
+    researchSummaryPath,
+    ablationSummaryPath,
+    evaluationSummaryPath,
+    figurePackPath,
+    tablePackPath,
+    proofPacketDir,
+    citationCandidatesPath,
+    packageManifestPath,
+    assemblyReportPath,
+    sectionAssemblyQueuePath: sectionQueueArtifactPath ?? sectionAssemblyQueuePath,
+    sourceArtifactCount: sourceArtifactPaths.length,
+    derivedArtifactCount: uniqueStringList(derivedArtifacts).length,
+    assembledAt: now,
+    pendingReason:
+      blockingInputs.length === 0
+        ? null
+        : `write_package assembly is still missing ${blockingInputs
+            .map((item) => item.label)
+            .join(", ")}`,
+    lastUpdatedAt: now,
+  };
+
+  const packageManifestResolvedPath = resolveProjectArtifactPath(
+    projectRoot,
+    packageManifestPath
+  );
+  if (packageManifestResolvedPath) {
+    await writeJsonEnsured(packageManifestResolvedPath, {
+      schema_version: 1,
+      generated_at: now,
+      status: next.status,
+      assembly_status: next.assemblyStatus,
+      assembly_mode: next.assemblyMode,
+      winning_track_ids: next.winningTrackIds,
+      claim_evidence_matrix_path: next.claimEvidenceMatrixPath,
+      narrative_report_path: next.narrativeReportPath,
+      track_verdicts_path: next.trackVerdictsPath,
+      unsupported_claims_path: next.unsupportedClaimsPath,
+      baseline_summary_path: next.baselineSummaryPath,
+      research_summary_path: next.researchSummaryPath,
+      ablation_summary_path: next.ablationSummaryPath,
+      evaluation_summary_path: next.evaluationSummaryPath,
+      figure_pack_path: next.figurePackPath,
+      table_pack_path: next.tablePackPath,
+      proof_packet_dir: next.proofPacketDir,
+      citation_candidates_path: next.citationCandidatesPath,
+      section_assembly_queue_path: next.sectionAssemblyQueuePath,
+      source_artifact_count: next.sourceArtifactCount,
+      derived_artifact_count: next.derivedArtifactCount,
+      pending_reason: next.pendingReason,
+      blocking_inputs: blockingInputs.map((item) => ({
+        code: item.code,
+        label: item.label,
+        description: item.description,
+        target_artifact: item.targetArtifact,
+      })),
+      section_queue: sectionQueuePayload.sections,
+    });
+  }
+
+  const assemblyReportResolvedPath = resolveProjectArtifactPath(
+    projectRoot,
+    assemblyReportPath
+  );
+  if (assemblyReportResolvedPath) {
+    await writeJsonEnsured(assemblyReportResolvedPath, {
+      schema_version: 1,
+      generated_at: now,
+      trigger: asString(params.trigger) ?? "manual",
+      mode: asString(params.mode) ?? "deterministic",
+      source_artifacts: sourceArtifactPaths,
+      derived_artifacts: uniqueStringList(derivedArtifacts),
+      blocking_inputs: blockingInputs.map((item) => ({
+        code: item.code,
+        label: item.label,
+        description: item.description,
+        target_artifact: item.targetArtifact,
+      })),
+    });
+  }
+
+  manifest.write_package = serializeWritePackageState(next);
+  await saveManifest(projectRoot, manifest);
+  const issueTracker = await syncWritePackageAssemblyIssues({
+    projectRoot,
+    manifest,
+    blockingInputs,
+    now,
+  });
+
+  const validationErrors = getWritePackageValidationErrors(next);
+  await appendWorkflowTraceEvent({
+    projectRoot,
+    projectId: inferProjectId(projectRoot, manifest),
+    kind: "write_package_assembly",
+    action: "assemble_write_package",
+    functionName: "assembleWritePackage",
+    stage: normalizeStage(manifest.current_stage),
+    owner: asString(manifest.owner_agent),
+    agentId: params.agentId ?? null,
+    sessionKey: null,
+    summary: `write_package assembly ${blockingInputs.length === 0 ? "ready" : "partial"}`,
+    details: {
+      mode: asString(params.mode) ?? "deterministic",
+      trigger: asString(params.trigger) ?? "manual",
+      stateStatus: next.status,
+      assemblyStatus: next.assemblyStatus,
+      derivedArtifacts: uniqueStringList(derivedArtifacts),
+      blockingInputs: blockingInputs.map((item) => item.label),
+      reviewIssueCounts: issueTracker.openCounts,
+    },
+  });
+
+  return {
+    state: next,
+    validationErrors,
+    derivedArtifacts: uniqueStringList(derivedArtifacts),
+    blockingInputs: blockingInputs.map((item) => item.description),
+    packageManifestResolvedPath,
+    assemblyReportResolvedPath,
+    sectionAssemblyQueueResolvedPath: resolveProjectArtifactPath(
+      projectRoot,
+      next.sectionAssemblyQueuePath
+    ),
+  };
+}
+
+function getWritingSectionContractViolations(params: {
+  writingSession: WritingSessionState;
+  writingContract: WritingContractState;
+}): string[] {
+  const violations: string[] = [];
+  const finalLikeStatuses = new Set(["finalized", "frozen"]);
+  for (const section of params.writingContract.requiredSections) {
+    const normalized = normalizeStage(section) ?? section;
+    const packet = params.writingSession.sectionPackets[normalized];
+    if (!packet) {
+      violations.push(`writing_session missing section packet for required section ${section}`);
+      continue;
+    }
+    if (packet.status === "stale" || packet.stale) {
+      violations.push(`section packet ${section} is stale`);
+    }
+    if (
+      params.writingSession.finalizedSections.includes(normalized) &&
+      !finalLikeStatuses.has(packet.status)
+    ) {
+      violations.push(
+        `finalized section ${section} must have packet status finalized/frozen (current: ${packet.status})`
+      );
+    }
+    if (
+      params.writingSession.compileSafeSections.includes(normalized) &&
+      !params.writingSession.finalizedSections.includes(normalized)
+    ) {
+      violations.push(`compile_safe section ${section} must also be finalized`);
+    }
+  }
+  const currentSection = params.writingSession.currentSection;
+  if (currentSection) {
+    const packet = params.writingSession.sectionPackets[currentSection];
+    if (packet && packet.status === "frozen") {
+      violations.push(`current_section ${currentSection} cannot be frozen`);
+    }
+  }
+  return violations;
 }
 
 function isReflectableExperiment(entry: ExperimentLedgerEntry): boolean {
@@ -5065,6 +6653,20 @@ async function getMissingStageSignals(params: {
       if (!(await pathExists(path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md")))) {
         missing.push("{PROJ}/orchestrator/PLAN_AUDIT.md");
       }
+      {
+        const researchProgram = normalizeResearchProgramState(
+          manifest?.research_program
+        );
+        missing.push(...getResearchProgramValidationErrors(researchProgram));
+      }
+      {
+        const orchestrationState = normalizeOrchestrationState(
+          manifest?.orchestration_state
+        );
+        missing.push(
+          ...getOrchestrationStateValidationErrors(orchestrationState, currentStage)
+        );
+      }
       break;
     case "code":
       if (!(await hasExperimentBundle(projectRoot))) {
@@ -5091,6 +6693,17 @@ async function getMissingStageSignals(params: {
       }
       if (!manifestFieldExists(manifest, ["experiment_memory", "last_ledger_update_at"])) {
         missing.push("PROJECT_MANIFEST.json.experiment_memory.last_ledger_update_at");
+      }
+      {
+        const experimentSearch = await loadExperimentSearchState({
+          projectRoot,
+          manifest,
+        });
+        if (!isExperimentSearchReadyForAnalysis(experimentSearch)) {
+          missing.push(
+            `PROJECT_MANIFEST.json.experiment_search must be ready_for_analysis with multi_seed + plot pack complete before ANALYZE (current: status=${experimentSearch.status}, multi_seed=${experimentSearch.multiSeedStatus}, plot_pack=${experimentSearch.plotPackStatus})`
+          );
+        }
       }
       break;
     case "analyze":
@@ -5120,6 +6733,27 @@ async function getMissingStageSignals(params: {
       if (!reviewReport && !reviewCompleted) {
         missing.push("{PROJ}/reviewer/REVIEW_REPORT.md or completed REVIEW_STATE.json");
       }
+      {
+        const figureQc = normalizeFigureQcState(manifest?.figure_qc);
+        const surfaceReviewPath = resolveProjectArtifactPath(
+          projectRoot,
+          figureQc.figureReviewPath ?? DEFAULT_FIGURE_REVIEW_PATH
+        );
+        if (!surfaceReviewPath || !(await pathExists(surfaceReviewPath))) {
+          missing.push(
+            `{PROJ}/${figureQc.figureReviewPath ?? DEFAULT_FIGURE_REVIEW_PATH}`
+          );
+        }
+      }
+      {
+        const submissionSimulationPath = path.join(
+          projectRoot,
+          DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH
+        );
+        if (!(await pathExists(submissionSimulationPath))) {
+          missing.push(`{PROJ}/${DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH}`);
+        }
+      }
       const unsupportedPrimaryClaims =
         await findUnsupportedPrimaryClaimsInSelectedWritingScope({
           projectRoot,
@@ -5135,6 +6769,7 @@ async function getMissingStageSignals(params: {
         const writingContract = normalizeWritingContractState(
           manifest?.writing_contract
         );
+        const writePackage = normalizeWritePackageState(manifest?.write_package);
         const writingContractEval = await evaluateWritingContractState({
           projectRoot,
           state: writingContract,
@@ -5178,12 +6813,18 @@ async function getMissingStageSignals(params: {
           const writingSession = normalizeWritingSessionState(
             manifest?.writing_session
           );
+          const sectionViolations = getWritingSectionContractViolations({
+            writingSession,
+            writingContract,
+          });
+          missing.push(...sectionViolations);
           if (!isWritingSessionReadyForSubmit(writingSession)) {
             missing.push(
               `PROJECT_MANIFEST.json.writing_session must be ready_for_submit with publication-ready section packets and covered graph evidence (current: status=${writingSession.status}, coverage=${writingSession.graphEvidenceCoverageStatus})`
             );
           }
         }
+        missing.push(...getWritePackageValidationErrors(writePackage));
         {
           const graphGuidedWriting = normalizeGraphGuidedWritingState(
             manifest?.graph_guided_writing
@@ -5202,6 +6843,11 @@ async function getMissingStageSignals(params: {
           if (hasBlockingReviewIssues(reviewIssueTracker)) {
             missing.push(
               `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before submit handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
+            );
+          }
+          if (hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
+            missing.push(
+              "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before submit handoff"
             );
           }
         }
@@ -5307,6 +6953,15 @@ async function getMissingStageSignals(params: {
           projectRoot,
           citationIntegrity.bibliographyPath
         );
+        if (
+          citationIntegrity.enabled &&
+          citationIntegrity.verificationRequired &&
+          citationIntegrity.verificationStatus !== "verified"
+        ) {
+          missing.push(
+            `PROJECT_MANIFEST.json.citation_integrity.verification_status = verified (current: ${citationIntegrity.verificationStatus})`
+          );
+        }
         if (citationIntegrity.enabled && bibliographyPath && !(await pathExists(bibliographyPath))) {
           missing.push(
             `citation bibliography at ${citationIntegrity.bibliographyPath ?? DEFAULT_CITATION_BIB_PATH}`
@@ -5471,7 +7126,7 @@ function buildDynamicTasks(params: {
         paperIngestion.new_files_since_graph > 0))
   ) {
     tasks.unshift(
-      "PaperNexus refresh is pending; run /graph-build or /papernexus before the next novelty or planning decision."
+      "Shared PaperNexus graph reconciliation is pending; run /graph-build or /papernexus before the next novelty or planning decision."
     );
   }
 
@@ -5486,7 +7141,7 @@ function buildDynamicTasks(params: {
   ) {
     const missingSummary = summarizeGraphPresenceMissing(paperIngestion);
     tasks.unshift(
-      `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and refresh /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
+      `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and reconcile the shared global graph via /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
     );
   }
 
@@ -5722,6 +7377,15 @@ export async function buildWorkflowSnapshot(params: {
         manifest: projectState.manifest,
       })
     : normalizeExperimentSearchState(asRecord(projectState.manifest?.experiment_search));
+  const researchProgram = normalizeResearchProgramState(
+    asRecord(projectState.manifest?.research_program)
+  );
+  const orchestrationState = normalizeOrchestrationState(
+    asRecord(projectState.manifest?.orchestration_state)
+  );
+  const writePackage = normalizeWritePackageState(
+    asRecord(projectState.manifest?.write_package)
+  );
   const theorySupport = normalizeTheorySupportState(
     asRecord(projectState.manifest?.theory_state)
   );
@@ -5756,6 +7420,7 @@ export async function buildWorkflowSnapshot(params: {
   const externalReview = normalizeExternalReviewState(
     asRecord(projectState.manifest?.external_review_state)
   );
+  const reviewIssueLaneCounts = countReviewIssueLanes(reviewIssueTracker.issues);
   const recommendedOwner = currentStage ? STAGE_REQUIREMENTS[currentStage]?.owner ?? null : null;
   const recentExperiments = buildExperimentMemoryDigest(projectState.experimentLedger, 5);
   const experimentSyncRequired =
@@ -5785,12 +7450,8 @@ export async function buildWorkflowSnapshot(params: {
     citationIntegrity.verificationReportPath
   );
   const defaultPapernexusSourceDir = getDefaultPapernexusSourceDir(projectState.projectId);
-  const resolvedPaperSourceDir =
-    asString(projectState.manifest?.paper_source_dir) ?? defaultPapernexusSourceDir;
-  const resolvedGraphSourceDir =
-    asString(projectState.manifest?.graph_source_dir) ??
-    resolvedPaperSourceDir ??
-    defaultPapernexusSourceDir;
+  const resolvedPaperSourceDir = asString(projectState.manifest?.paper_source_dir) ?? null;
+  const resolvedGraphSourceDir = asString(projectState.manifest?.graph_source_dir) ?? null;
 
   return {
     projectRoot: projectState.projectRoot,
@@ -5860,12 +7521,31 @@ export async function buildWorkflowSnapshot(params: {
     innovationReflectionLastAt: innovationReflection.lastReflectionAt,
     innovationReflectionPath: innovationReflection.lastReflectionPath,
     innovationReflectionPendingReason: innovationReflection.pendingReason,
+    researchProgramStatus: researchProgram.status,
+    researchProgramTrackCount: researchProgram.tracks.length,
+    researchProgramActiveTrackCount: researchProgram.tracks.filter(
+      (track) => normalizeStage(track.status) === "active"
+    ).length,
+    researchProgramPrimaryGoal: researchProgram.goal,
+    orchestrationStatus: orchestrationState.status,
+    orchestrationBlockingCategory: orchestrationState.blockingCategory,
+    orchestrationNextTransitionCandidate:
+      orchestrationState.nextTransitionCandidate,
+    orchestrationRetryBudgetRemaining:
+      orchestrationState.retryBudgetRemaining,
+    orchestrationRollbackTargetStage: orchestrationState.rollbackTargetStage,
     experimentSearchStatus: experimentSearch.status,
     experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
     experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
     experimentSearchBestNodeId: experimentSearch.bestNodeId,
     experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
     experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
+    writePackageStatus: writePackage.status,
+    writePackageAssemblyStatus: writePackage.assemblyStatus,
+    writePackageAssemblyMode: writePackage.assemblyMode,
+    writePackageWinningTrackCount: writePackage.winningTrackIds.length,
+    writePackageDerivedArtifactCount: writePackage.derivedArtifactCount,
+    writePackagePendingReason: writePackage.pendingReason,
     theorySupportStatus: theorySupport.status,
     theorySupportSignal: theorySupport.overallSignal,
     theoryStatePath: theorySupport.theoryStatePath,
@@ -5970,6 +7650,8 @@ export async function buildWorkflowSnapshot(params: {
     reviewIssueHighCount: reviewIssueTracker.openCounts.high,
     reviewIssueMediumCount: reviewIssueTracker.openCounts.medium,
     reviewIssueLowCount: reviewIssueTracker.openCounts.low,
+    reviewIssueSurfaceCount: reviewIssueLaneCounts.surface,
+    reviewIssueSubmissionCount: reviewIssueLaneCounts.submission,
     externalReviewStatus: externalReview.status,
     externalReviewRecommendation: externalReview.overallRecommendation,
     externalReviewRequiredAction: externalReview.requiredAction,
@@ -5997,6 +7679,94 @@ export async function buildWorkflowSnapshot(params: {
   };
 }
 
+export function buildFocusedPromptAssembly(params: {
+  snapshot: Partial<WorkflowSnapshot>;
+}): FocusedPromptAssembly {
+  const snapshot = params.snapshot;
+  const sectionContextId =
+    normalizeStage(snapshot.writingCurrentSection ?? null) ??
+    normalizeStage(snapshot.currentStage ?? null);
+  const reviewLane =
+    (snapshot.reviewIssueSurfaceCount ?? 0) > 0
+      ? "surface"
+      : (snapshot.reviewIssueSubmissionCount ?? 0) > 0
+        ? "submission"
+        : snapshot.role === "reviewer" || snapshot.role === "cross-reviewer"
+          ? "evidence"
+          : null;
+  const roundId =
+    typeof snapshot.reviewSessionRound === "number" && snapshot.reviewSessionRound > 0
+      ? `review-round-${snapshot.reviewSessionRound}`
+      : null;
+  const layer1 = [
+    "Layer 1: Stable Policy",
+    `Role=${snapshot.role ?? "unknown"}`,
+    `Owner=${snapshot.recommendedOwner ?? snapshot.ownerAgent ?? "unset"}`,
+    "Do only the owner-scoped task for this round.",
+    "Do not widen scope or replay the entire workflow history.",
+  ].join("\n");
+  const layer2 = [
+    "Layer 2: Stage-Local Control State",
+    `Stage=${snapshot.currentStage ?? "unknown"}/${snapshot.currentMicroStage ?? "unknown"}`,
+    `next_action=${snapshot.nextAction ?? "unset"}`,
+    `blocking_reason=${snapshot.blockingReason ?? "none"}`,
+    `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ") || "none"}`,
+    `orchestration=${snapshot.orchestrationStatus ?? "unknown"} -> ${snapshot.orchestrationNextTransitionCandidate ?? "unset"}`,
+  ].join("\n");
+  const layer3 = [
+    "Layer 3: Primary Payload",
+    `section_context=${sectionContextId ?? "unset"}`,
+    `writing_status=${snapshot.writingSessionStatus ?? "unknown"}`,
+    `section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`,
+    `write_package=${snapshot.writePackageStatus ?? "unknown"}/${snapshot.writePackageAssemblyStatus ?? "unknown"} mode=${snapshot.writePackageAssemblyMode ?? "unset"} derived=${snapshot.writePackageDerivedArtifactCount ?? 0}`,
+    `review_lane=${reviewLane ?? "unset"}`,
+  ].join("\n");
+  const layer4 = [
+    "Layer 4: Supporting Evidence",
+    `graph_coverage=${snapshot.writingGraphEvidenceCoverageStatus ?? snapshot.graphGuidedWritingEvidenceCoverageStatus ?? "unknown"}`,
+    `review_issues=critical:${snapshot.reviewIssueCriticalCount ?? 0}, high:${snapshot.reviewIssueHighCount ?? 0}, medium:${snapshot.reviewIssueMediumCount ?? 0}`,
+    `paper_qc=${snapshot.paperQcStatus ?? "unknown"} compile:${snapshot.paperQcCompileStatus ?? "unknown"} page:${snapshot.paperQcPageBudgetStatus ?? "unknown"}`,
+    `figure_qc=caption:${snapshot.figureQcCaptionAlignmentStatus ?? "unknown"} text:${snapshot.figureQcTextAlignmentStatus ?? "unknown"}`,
+  ].join("\n");
+  const layer5 = [
+    "Layer 5: Reflection Delta",
+    `round_id=${roundId ?? "none"}`,
+    `review_verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`,
+    `review_summary=${snapshot.reviewSessionSummary ?? "none"}`,
+  ].join("\n");
+  const text = [
+    "[Workflow Guard]",
+    layer1,
+    layer2,
+    layer3,
+    layer4,
+    layer5,
+    "[/Workflow Guard]",
+  ].join("\n");
+  return {
+    text,
+    metadata: {
+      sectionContextId,
+      reviewLane,
+      roundId,
+      promptLayerProfile: {
+        stable_policy: true,
+        stage_local_state: true,
+        primary_payload: true,
+        supporting_evidence: true,
+        reflection_delta: true,
+      },
+      promptPayloadSizes: {
+        stable_policy: layer1.length,
+        stage_local_state: layer2.length,
+        primary_payload: layer3.length,
+        supporting_evidence: layer4.length,
+        reflection_delta: layer5.length,
+      },
+    },
+  };
+}
+
 export function formatWorkflowSnapshotForPrompt(params: {
   snapshot: WorkflowSnapshot;
   trigger?: string;
@@ -6004,107 +7774,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
 }): string {
   const { snapshot, trigger } = params;
   if ((params.detailLevel ?? "full") === "focused") {
-    const lines: string[] = [];
-    lines.push("[Workflow Guard]");
-    lines.push(`Agent role: ${snapshot.role ?? "unknown"}`);
-    lines.push(`Project: ${snapshot.projectId ?? "unset"}`);
-    lines.push(`Stage: ${snapshot.currentStage ?? "unknown"} / ${snapshot.currentMicroStage ?? "unknown"}`);
-    lines.push(`Manifest owner: ${snapshot.ownerAgent ?? "unset"}`);
-    if (snapshot.recommendedOwner) {
-      lines.push(`Expected owner for this stage: ${snapshot.recommendedOwner}`);
-    }
-    if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
-      lines.push(
-        `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
-      );
-      lines.push(
-        `Non-owner rule: do not perform the stage work yourself. Route or hand off the task to ${snapshot.recommendedOwner}.`
-      );
-    } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
-      lines.push(
-        `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
-      );
-    }
-    if (snapshot.nextAction) {
-      lines.push(`next_action: ${snapshot.nextAction}`);
-    }
-    if (snapshot.resumeAction) {
-      lines.push(`resume_action: ${snapshot.resumeAction}`);
-    }
-    if (snapshot.blockingReason) {
-      lines.push(`blocking_reason: ${snapshot.blockingReason}`);
-    }
-    if (snapshot.allowedWriteScopes.length > 0) {
-      lines.push("Allowed writes:");
-      for (const scope of snapshot.allowedWriteScopes) {
-        lines.push(`- ${scope}`);
-      }
-    }
-    lines.push(
-      "Communication rule: do not use raw @agent mentions in chat. Use sessions_send or workflow mailbox for real routing."
-    );
-    lines.push(
-      "Stage completion rule: call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself."
-    );
-    if (snapshot.missingStageSignals.length > 0) {
-      lines.push("Missing stage signals:");
-      for (const signal of snapshot.missingStageSignals.slice(0, 5)) {
-        lines.push(`- ${signal}`);
-      }
-    }
-    lines.push("Prompt assembly:");
-    if (snapshot.role === "academic_writer") {
-      lines.push(
-        "Use the active section packet as the main task payload."
-      );
-      lines.push(
-        `Focus current section: ${snapshot.writingCurrentSection ?? "unset"}`
-      );
-      lines.push(
-        `Current writing state: status=${snapshot.writingSessionStatus ?? "unknown"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}, evidence_coverage=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}`
-      );
-      if (
-        (snapshot.reviewIssueHighCount ?? 0) > 0 ||
-        (snapshot.reviewIssueCriticalCount ?? 0) > 0 ||
-        (snapshot.reviewIssueMediumCount ?? 0) > 0
-      ) {
-        lines.push(
-          `Immediate issue delta: critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}`
-        );
-      }
-      if (
-        snapshot.paperQcStatus &&
-        snapshot.paperQcStatus !== "missing"
-      ) {
-        lines.push(
-          `Late-stage QC delta: paper_qc compile=${snapshot.paperQcCompileStatus ?? "unset"}, page_budget=${snapshot.paperQcPageBudgetStatus ?? "unset"}; figure_qc caption=${snapshot.figureQcCaptionAlignmentStatus ?? "unset"}, text=${snapshot.figureQcTextAlignmentStatus ?? "unset"}`
-        );
-      }
-      lines.push(
-        "Keep full workflow state out of the active drafting task. Use only the current round, immediate blockers, and the narrow evidence needed for this section."
-      );
-    } else if (snapshot.role === "reviewer" || snapshot.role === "cross-reviewer") {
-      lines.push(
-        "Use the active review packet or issue set as the main task payload."
-      );
-      lines.push(
-        `Current review state: status=${snapshot.reviewSessionStatus ?? "unknown"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
-      );
-      if (snapshot.reviewIssueTrackerStatus && snapshot.reviewIssueTrackerStatus !== "missing") {
-        lines.push(
-          `Issue tracker summary: status=${snapshot.reviewIssueTrackerStatus}, critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}, low=${snapshot.reviewIssueLowCount ?? 0}`
-        );
-      }
-      lines.push(
-        "Prefer unresolved issue deltas over replaying the entire workflow history."
-      );
-    } else {
-      lines.push(
-        "Prioritize the immediate stage-local task payload over distant workflow state."
-      );
-    }
-    lines.push("[/Workflow Guard]");
-    return lines.join("\n");
+    return buildFocusedPromptAssembly({ snapshot }).text;
   }
   const lines: string[] = [];
   lines.push("[Workflow Guard]");
@@ -6242,6 +7912,21 @@ export function formatWorkflowSnapshotForPrompt(params: {
   if (snapshot.innovationReflectionPendingReason) {
     lines.push(`Innovation reflection pending_reason: ${snapshot.innovationReflectionPendingReason}`);
   }
+  if (snapshot.researchProgramStatus) {
+    lines.push(
+      `Research program: status=${snapshot.researchProgramStatus}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
+    );
+  }
+  if (snapshot.orchestrationStatus) {
+    lines.push(
+      `Orchestration: status=${snapshot.orchestrationStatus}, next_transition=${snapshot.orchestrationNextTransitionCandidate ?? "unset"}, blocking_category=${snapshot.orchestrationBlockingCategory ?? "none"}, retry_budget_remaining=${snapshot.orchestrationRetryBudgetRemaining ?? "unset"}, rollback_target=${snapshot.orchestrationRollbackTargetStage ?? "unset"}`
+    );
+  }
+  if (snapshot.experimentSearchStatus) {
+    lines.push(
+      `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
+    );
+  }
   lines.push(
     `Writing contract: mode=${snapshot.writingPaperMode ?? "legacy"}, template_required=${snapshot.writingTemplateRequired ? "true" : "false"}, template_status=${snapshot.writingTemplateStatus ?? "unknown"}, paragraph_logic=${snapshot.paragraphLogicStatus ?? "unknown"}, kg_storyline=${snapshot.kgStorylineStatus ?? "unknown"}`
   );
@@ -6298,6 +7983,11 @@ export function formatWorkflowSnapshotForPrompt(params: {
       );
     }
   }
+  if (snapshot.writePackageStatus) {
+    lines.push(
+      `Write package: status=${snapshot.writePackageStatus}, assembly=${snapshot.writePackageAssemblyStatus ?? "unknown"}, mode=${snapshot.writePackageAssemblyMode ?? "unset"}, winning_tracks=${snapshot.writePackageWinningTrackCount ?? 0}, derived_artifacts=${snapshot.writePackageDerivedArtifactCount ?? 0}, pending_reason=${snapshot.writePackagePendingReason ?? "none"}`
+    );
+  }
   if (snapshot.reviewSessionStatus && snapshot.reviewSessionStatus !== "missing") {
     lines.push(
       `Review session: status=${snapshot.reviewSessionStatus}, scope=${snapshot.reviewSessionStageScope ?? "unset"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
@@ -6322,6 +8012,11 @@ export function formatWorkflowSnapshotForPrompt(params: {
     if (snapshot.reviewSessionSummary) {
       lines.push(`Review summary: ${snapshot.reviewSessionSummary}`);
     }
+  }
+  if (snapshot.reviewIssueTrackerStatus && snapshot.reviewIssueTrackerStatus !== "missing") {
+    lines.push(
+      `Review issue tracker: status=${snapshot.reviewIssueTrackerStatus}, critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}, low=${snapshot.reviewIssueLowCount ?? 0}, surface=${snapshot.reviewIssueSurfaceCount ?? 0}, submission=${snapshot.reviewIssueSubmissionCount ?? 0}`
+    );
   }
   if (
     snapshot.graphGuidedWritingStatus &&
@@ -6387,7 +8082,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md -> only if both Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> /graph-build or /papernexus refresh."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> /graph-build shared-graph reconciliation or /papernexus shared-corpus refresh."
   );
   lines.push(
     "Idle research rule: if idle_research is enabled and due, prefer /idle-research on that topic over ad hoc literature drift. Record each round through research_workflow.record_idle_research_run."
@@ -6456,6 +8151,23 @@ function getToolCommandText(toolParams: Record<string, unknown>): string | null 
     asString(toolParams.script) ??
     asString(toolParams.shellCommand)
   );
+}
+
+function getToolPayloadText(toolParams: Record<string, unknown>): string | null {
+  const values = uniqueStringList(
+    [
+      getToolCommandText(toolParams),
+      asString(toolParams.message),
+      asString(toolParams.text),
+      asString(toolParams.content),
+      asString(toolParams.body),
+      asString(toolParams.prompt),
+    ].filter((value): value is string => Boolean(value))
+  );
+  if (values.length === 0) {
+    return null;
+  }
+  return values.join("\n");
 }
 
 function commandLikelyMutatesDataset(command: string): boolean {
@@ -6661,6 +8373,74 @@ export function shouldBlockCoderDatasetMutation(params: {
     block: true,
     reason:
       "Coder must treat dataset directories as read-only. Do not create, delete, patch, chmod, extract, or sync files into datasets/ from bash; use {PROJ}/coder/, logs/, results/, or remote scratch instead.",
+  };
+}
+
+export function shouldBlockResearchGraphForce(params: {
+  role: WorkflowRole | null;
+  currentStage: string | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (params.role !== "researcher") {
+    return { block: false };
+  }
+  if (!["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText) {
+    return { block: false };
+  }
+
+  const usesGraphBuildForce = /\/graph-build\b[\s\S]*--force\b/i.test(payloadText);
+  const usesPapernexusForce =
+    /\bpapernexus\b[\s\S]*\b(?:analyze|materialize|build-graph|optimize|watch|stage1|stage2|stage3|stage4)\b[\s\S]*--force\b/i.test(
+      payloadText
+    ) ||
+    /src\/cli\/index\.js\b[\s\S]*\b(?:analyze|materialize|build-graph|optimize|watch|stage1|stage2|stage3|stage4)\b[\s\S]*--force\b/i.test(
+      payloadText
+    ) ||
+    /--rebuild-pdf-markdown\b/i.test(payloadText);
+
+  if (!usesGraphBuildForce && !usesPapernexusForce) {
+    return { block: false };
+  }
+
+  return {
+    block: true,
+    reason:
+      "During literature graph refresh, do not use --force or --rebuild-pdf-markdown. Keep PaperNexus cache-first and run /graph-build or papernexus analyze without --force; if the graph build still fails, hand the exact cache-first command to the user instead of forcing a rebuild.",
+  };
+}
+
+export function shouldBlockPapernexusInlineExecution(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+  sessionKey: string | null | undefined;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (isWorkflowSubagentSessionKey(params.sessionKey)) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!looksLikePapernexusHeavyCommand(payloadText)) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      "PaperNexus-heavy work must run in a dedicated subagent session to avoid stalling the foreground agent. Start a background run first, then let that subagent execute /graph-build, /frontier-mapping, /papernexus, or related PaperNexus commands.",
   };
 }
 
@@ -6968,6 +8748,51 @@ export async function getInnovationReflectionStateSummary(params: {
     due: isInnovationReflectionDue({ state, ledger }),
     latestExperimentUpdateAt: basis.latestExperimentUpdateAt,
     experimentIds: basis.experimentIds,
+  };
+}
+
+export async function getResearchProgramStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ResearchProgramState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeResearchProgramState(manifest.research_program);
+  return {
+    state,
+    validationErrors: getResearchProgramValidationErrors(state),
+  };
+}
+
+export async function getOrchestrationStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: OrchestrationState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeOrchestrationState(manifest.orchestration_state);
+  return {
+    state,
+    validationErrors: getOrchestrationStateValidationErrors(
+      state,
+      normalizeStage(manifest.current_stage)
+    ),
+  };
+}
+
+export async function getWritePackageStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: WritePackageState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeWritePackageState(manifest.write_package);
+  return {
+    state,
+    validationErrors: getWritePackageValidationErrors(state),
   };
 }
 
@@ -7735,12 +9560,16 @@ export async function getReviewIssueTrackerStateSummary(params: {
   issueManifestResolvedPath: string | null;
   issueManifestExists: boolean;
   hardBlockersOpen: boolean;
+  mediumOrHigherIssuesNeedDisposition: boolean;
+  surfaceIssueCount: number;
+  submissionIssueCount: number;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const state = await hydrateReviewIssueTrackerState({
     projectRoot: params.projectRoot,
     value: manifest.review_issue_tracker,
   });
+  const laneCounts = countReviewIssueLanes(state.issues);
   const issueManifestResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     state.issueManifestPath
@@ -7752,6 +9581,10 @@ export async function getReviewIssueTrackerStateSummary(params: {
       ? await pathExists(issueManifestResolvedPath)
       : false,
     hardBlockersOpen: hasBlockingReviewIssues(state),
+    mediumOrHigherIssuesNeedDisposition:
+      hasUnwaivedMediumOrHigherReviewIssues(state),
+    surfaceIssueCount: laneCounts.surface,
+    submissionIssueCount: laneCounts.submission,
   };
 }
 
@@ -8450,6 +10283,212 @@ export async function setExternalReviewState(params: {
   };
 }
 
+export async function setResearchProgramState(params: {
+  projectRoot: string;
+  researchProgram: Record<string, unknown>;
+}): Promise<{
+  state: ResearchProgramState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeResearchProgramState(manifest.research_program);
+  const patch = asRecord(params.researchProgram) ?? {};
+  const patchedTaskGraph = Array.isArray(patch.taskGraph ?? patch.task_graph)
+    ? ((patch.taskGraph ?? patch.task_graph) as unknown[])
+    : [];
+  const merged = normalizeResearchProgramState({
+    ...serializeResearchProgramState(current),
+    ...patch,
+    tracks:
+      Array.isArray(patch.tracks) && patch.tracks.length > 0
+        ? patch.tracks
+        : current.tracks.map((track) => serializeResearchProgramTrack(track)),
+    task_graph:
+      patchedTaskGraph.length > 0
+        ? patchedTaskGraph
+        : current.taskGraph.map((task) => serializeResearchProgramTask(task)),
+    global_constraints:
+      asRecord(patch.globalConstraints ?? patch.global_constraints) ?? current.globalConstraints,
+    last_updated_at:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  });
+  manifest.research_program = serializeResearchProgramState(merged);
+  await saveManifest(params.projectRoot, manifest);
+  return {
+    state: merged,
+    validationErrors: getResearchProgramValidationErrors(merged),
+  };
+}
+
+export async function setOrchestrationState(params: {
+  projectRoot: string;
+  orchestrationState: Record<string, unknown>;
+}): Promise<{
+  state: OrchestrationState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeOrchestrationState(manifest.orchestration_state);
+  const patch = asRecord(params.orchestrationState) ?? {};
+  const next: OrchestrationState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    activeTicketId:
+      pickString(patch, ["activeTicketId", "active_ticket_id"]) ??
+      current.activeTicketId,
+    stageRunId:
+      pickString(patch, ["stageRunId", "stage_run_id"]) ?? current.stageRunId,
+    currentOwner:
+      pickString(patch, ["currentOwner", "current_owner"]) ?? current.currentOwner,
+    nextOwner:
+      pickString(patch, ["nextOwner", "next_owner"]) ?? current.nextOwner,
+    nextTransitionCandidate:
+      pickString(patch, [
+        "nextTransitionCandidate",
+        "next_transition_candidate",
+      ]) ?? current.nextTransitionCandidate,
+    blockingCategory:
+      pickString(patch, ["blockingCategory", "blocking_category"]) ??
+      current.blockingCategory,
+    blockingReason:
+      pickString(patch, ["blockingReason", "blocking_reason"]) ??
+      current.blockingReason,
+    retryBudgetRemaining:
+      pickNumber(patch, ["retryBudgetRemaining", "retry_budget_remaining"]) ??
+      current.retryBudgetRemaining,
+    lastContractEvalAt:
+      pickString(patch, ["lastContractEvalAt", "last_contract_eval_at"]) ??
+      current.lastContractEvalAt,
+    lastContractEvalResult:
+      pickString(patch, [
+        "lastContractEvalResult",
+        "last_contract_eval_result",
+      ]) ?? current.lastContractEvalResult,
+    rollbackTargetStage:
+      pickString(patch, ["rollbackTargetStage", "rollback_target_stage"]) ??
+      current.rollbackTargetStage,
+    resumeCursor:
+      pickString(patch, ["resumeCursor", "resume_cursor"]) ?? current.resumeCursor,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+  manifest.orchestration_state = serializeOrchestrationState(next);
+  await saveManifest(params.projectRoot, manifest);
+  return {
+    state: next,
+    validationErrors: getOrchestrationStateValidationErrors(
+      next,
+      normalizeStage(manifest.current_stage)
+    ),
+  };
+}
+
+export async function setWritePackageState(params: {
+  projectRoot: string;
+  writePackage: Record<string, unknown>;
+}): Promise<{
+  state: WritePackageState;
+  validationErrors: string[];
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeWritePackageState(manifest.write_package);
+  const patch = asRecord(params.writePackage) ?? {};
+  const next: WritePackageState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    assemblyStatus:
+      normalizeStage(patch.assemblyStatus ?? patch.assembly_status) ??
+      current.assemblyStatus,
+    assemblyMode:
+      pickString(patch, ["assemblyMode", "assembly_mode"]) ??
+      current.assemblyMode,
+    winningTrackIds:
+      patch.winningTrackIds || patch.winning_track_ids
+        ? asStringArray(patch.winningTrackIds ?? patch.winning_track_ids)
+        : current.winningTrackIds,
+    claimEvidenceMatrixPath:
+      pickString(patch, [
+        "claimEvidenceMatrixPath",
+        "claim_evidence_matrix_path",
+      ]) ?? current.claimEvidenceMatrixPath,
+    narrativeReportPath:
+      pickString(patch, ["narrativeReportPath", "narrative_report_path"]) ??
+      current.narrativeReportPath,
+    trackVerdictsPath:
+      pickString(patch, ["trackVerdictsPath", "track_verdicts_path"]) ??
+      current.trackVerdictsPath,
+    unsupportedClaimsPath:
+      pickString(patch, ["unsupportedClaimsPath", "unsupported_claims_path"]) ??
+      current.unsupportedClaimsPath,
+    baselineSummaryPath:
+      pickString(patch, ["baselineSummaryPath", "baseline_summary_path"]) ??
+      current.baselineSummaryPath,
+    researchSummaryPath:
+      pickString(patch, ["researchSummaryPath", "research_summary_path"]) ??
+      current.researchSummaryPath,
+    ablationSummaryPath:
+      pickString(patch, ["ablationSummaryPath", "ablation_summary_path"]) ??
+      current.ablationSummaryPath,
+    evaluationSummaryPath:
+      pickString(patch, ["evaluationSummaryPath", "evaluation_summary_path"]) ??
+      current.evaluationSummaryPath,
+    figurePackPath:
+      pickString(patch, ["figurePackPath", "figure_pack_path"]) ??
+      current.figurePackPath,
+    tablePackPath:
+      pickString(patch, ["tablePackPath", "table_pack_path"]) ??
+      current.tablePackPath,
+    proofPacketDir:
+      pickString(patch, ["proofPacketDir", "proof_packet_dir"]) ??
+      current.proofPacketDir,
+    citationCandidatesPath:
+      pickString(patch, [
+        "citationCandidatesPath",
+        "citation_candidates_path",
+      ]) ?? current.citationCandidatesPath,
+    packageManifestPath:
+      pickString(patch, ["packageManifestPath", "package_manifest_path"]) ??
+      current.packageManifestPath,
+    assemblyReportPath:
+      pickString(patch, ["assemblyReportPath", "assembly_report_path"]) ??
+      current.assemblyReportPath,
+    sectionAssemblyQueuePath:
+      pickString(patch, [
+        "sectionAssemblyQueuePath",
+        "section_assembly_queue_path",
+      ]) ?? current.sectionAssemblyQueuePath,
+    sourceArtifactCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["sourceArtifactCount", "source_artifact_count"]) ??
+          current.sourceArtifactCount
+      )
+    ),
+    derivedArtifactCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["derivedArtifactCount", "derived_artifact_count"]) ??
+          current.derivedArtifactCount
+      )
+    ),
+    assembledAt:
+      pickString(patch, ["assembledAt", "assembled_at"]) ?? current.assembledAt,
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+  manifest.write_package = serializeWritePackageState(next);
+  await saveManifest(params.projectRoot, manifest);
+  return {
+    state: next,
+    validationErrors: getWritePackageValidationErrors(next),
+  };
+}
+
 export async function setExperimentSearchState(params: {
   projectRoot: string;
   experimentSearch: Record<string, unknown>;
@@ -8751,6 +10790,7 @@ export async function setReviewIssueTrackerState(params: {
   state: ReviewIssueTrackerState;
   issueManifestResolvedPath: string | null;
   hardBlockersOpen: boolean;
+  mediumOrHigherIssuesNeedDisposition: boolean;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = await hydrateReviewIssueTrackerState({
@@ -8761,6 +10801,9 @@ export async function setReviewIssueTrackerState(params: {
   let next: ReviewIssueTrackerState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
+    issues: Array.isArray(patch.issues)
+      ? patch.issues.map((issue) => normalizeReviewIssueState(issue))
+      : current.issues,
     openCounts:
       patch.openCounts || patch.open_counts
         ? normalizeReviewIssueCounts(patch.openCounts ?? patch.open_counts)
@@ -8782,6 +10825,20 @@ export async function setReviewIssueTrackerState(params: {
       pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
   };
 
+  if (Array.isArray(patch.issues) && !(patch.openCounts || patch.open_counts)) {
+    next.openCounts = summarizeReviewIssuesFromManifest(next.issues).counts;
+  }
+
+  const issueManifestResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.issueManifestPath
+  );
+  if (Array.isArray(patch.issues) && issueManifestResolvedPath) {
+    await writeJsonEnsured(issueManifestResolvedPath, {
+      issues: next.issues.map((issue) => serializeReviewIssueState(issue)),
+    });
+  }
+
   next = await hydrateReviewIssueTrackerState({
     projectRoot: params.projectRoot,
     value: serializeReviewIssueTrackerState(next),
@@ -8792,11 +10849,10 @@ export async function setReviewIssueTrackerState(params: {
 
   return {
     state: next,
-    issueManifestResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.issueManifestPath
-    ),
+    issueManifestResolvedPath,
     hardBlockersOpen: hasBlockingReviewIssues(next),
+    mediumOrHigherIssuesNeedDisposition:
+      hasUnwaivedMediumOrHigherReviewIssues(next),
   };
 }
 
@@ -9190,6 +11246,24 @@ export async function runWorkflowAutoIterator(params: {
   const mode = asString(params.mode) ?? "manual";
   const stageBefore =
     normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  const writePackageBefore = normalizeWritePackageState(manifest.write_package);
+  if (
+    workflowPolicy.autoMode === "aggressive" &&
+    (stageBefore === "write" || stageBefore === "submit") &&
+    !["ready", "assembled", "approved"].includes(
+      normalizeStage(writePackageBefore.status) ?? ""
+    )
+  ) {
+    await assembleWritePackage({
+      projectRoot,
+      mode: "aggressive",
+      trigger: "auto_iterator",
+      agentId: actorRole,
+    });
+    manifest =
+      (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
+      manifest;
+  }
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
   if (["graph_build", "frontier_mapping", "idea"].includes(stageBefore)) {
     graphPresenceCheck = await checkGraphPresenceForWorkflow({
@@ -9421,7 +11495,7 @@ export async function runWorkflowAutoIterator(params: {
       owner: "researcher",
       summary: "PaperNexus graph refresh is pending and should run before novelty-sensitive work.",
       command:
-        "Run /graph-build --force (or the PaperNexus refresh path) before continuing frontier mapping or ideation.",
+        "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph (cache-first, without --force) before continuing frontier mapping or ideation. If shared-graph tooling is unavailable or reconciliation still fails, hand the exact non-force command to the user to run manually.",
       mailboxQueued: false,
       mailboxMessageId: null,
       cooldownRemainingSeconds: null,

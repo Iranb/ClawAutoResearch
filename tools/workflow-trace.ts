@@ -2,7 +2,11 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 
-export type WorkflowTraceEventKind = "tool_action" | "auto_iterator";
+export type WorkflowTraceEventKind =
+  | "tool_action"
+  | "auto_iterator"
+  | "prompt_assembly"
+  | "write_package_assembly";
 
 export type WorkflowTraceEvent = {
   recordedAt: string;
