@@ -22,7 +22,7 @@ Use this skill when the project already has experiment evidence and the next inn
 Produce a PaperNexus-grounded reflection packet that connects:
 
 - latest experiment evidence from `{PROJ}/researcher/EXPERIMENT_LEDGER.json`
-- current graph frontier from the project PaperNexus corpus
+- current graph frontier from the shared global PaperNexus graph constrained by this project's selected papers
 - reusable lessons and "do not repeat" constraints for the next idea round
 
 The authoritative output is:
@@ -53,6 +53,7 @@ Do not hand-edit `PROJECT_MANIFEST.json.innovation_reflection`.
    - note repeated failures, weak assumptions, and strongest wins
 3. Confirm the PaperNexus corpus is usable enough for reasoning:
    - if the corpus is stale or key papers are missing, refresh graph state before trusting the reflection
+   - if new material arrived through the dashboard or Web/API upload path, prefer the queued import-task route and task logs instead of manually moving files into the shared source tree
 4. Run a graph-backed reflection pass with PaperNexus:
 
 ```bash
@@ -68,6 +69,7 @@ papernexus brainstorm "<topic or track>" --corpus <name> --mode converge
    - which graph-backed opportunities were validated
    - which ones were contradicted
    - which failures imply a new constraint, composition path, or transfer path
+   - prefer brainstorm-quality anchors over raw graph prominence when deciding which opportunities are worth carrying forward
 6. Write `{PROJ}/researcher/INNOVATION_REFLECTION.md`.
 7. Immediately call `research_workflow.record_innovation_reflection` with the new path and refreshed experiment coverage.
 
@@ -117,6 +119,8 @@ Use this section order:
 - Use the reflection to tighten the next brainstorm, not to retroactively justify a weak idea.
 - If reflection support is thin, say so explicitly and keep the next idea scope narrow.
 - If a previous reflection already covers the newest experiments, reuse it instead of rewriting it without new evidence.
+- If a remote PaperNexus `/api/*` path is used, resolve `Authorization: Bearer <token>` from the configured token source.
+- Do not delete shared graph data or run `backup-export`, `backup-unpack`, or `backup-load` during normal reflection work.
 
 ## Completion
 

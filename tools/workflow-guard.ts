@@ -7213,6 +7213,18 @@ function buildDynamicTasks(params: {
 
   if (
     params.role === "researcher" &&
+    ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
+  ) {
+    tasks.unshift(
+      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import-task path (`/api/imports`) instead of manually copying files into the shared paper source tree."
+    );
+    tasks.unshift(
+      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and use `ideas` plus `brainstorm --mode diverge|converge` before trusting raw full-graph prominence."
+    );
+  }
+
+  if (
+    params.role === "researcher" &&
     params.currentStage === "plan" &&
     params.missingStageSignals.some((signal) => signal.includes("orchestrator"))
   ) {
@@ -8227,7 +8239,16 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> /graph-build shared-graph reconciliation or /papernexus shared-corpus refresh."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus import tasks when material enters through UI/API upload -> /graph-build shared-graph reconciliation."
+  );
+  lines.push(
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and `.papernexus/imports/` task logs instead of manually copying files into the shared paper source tree."
+  );
+  lines.push(
+    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and use `ideas` plus `brainstorm --mode diverge` / `--mode converge` before trusting raw full-graph prominence."
+  );
+  lines.push(
+    "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
   );
   lines.push(
     "Idle research rule: if idle_research is enabled and due, prefer /idle-research on that topic over ad hoc literature drift. Record each round through research_workflow.record_idle_research_run."
@@ -8586,6 +8607,43 @@ export function shouldBlockPapernexusInlineExecution(params: {
     block: true,
     reason:
       "PaperNexus-heavy work must run in a dedicated subagent session to avoid stalling the foreground agent. Start a background run first, then let that subagent execute /graph-build, /frontier-mapping, /papernexus, or related PaperNexus commands.",
+  };
+}
+
+export function shouldBlockPapernexusDestructiveOperation(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText) {
+    return { block: false };
+  }
+
+  const usesBackupCommand =
+    /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:backup-export|backup-unpack|backup-load)\b/i.test(
+      payloadText
+    );
+  const deletesSharedStorage =
+    /\brm\b[\s\S]*-(?:[A-Za-z]*r[A-Za-z]*f|[A-Za-z]*f[A-Za-z]*r|[A-Za-z]*r|[A-Za-z]*f)\b[\s\S]*(?:~\/|\/)[^\n]*\.papernexus(?:\/[^\s"'`|;&]*)?/i.test(
+      payloadText
+    ) ||
+    /\bfind\b[\s\S]*\.papernexus[\s\S]*\b-delete\b/i.test(payloadText);
+
+  if (!usesBackupCommand && !deletesSharedStorage) {
+    return { block: false };
+  }
+
+  return {
+    block: true,
+    reason:
+      "Do not delete shared PaperNexus graph storage or run backup-export, backup-unpack, or backup-load during normal agent operation. Report the need and wait for an explicit human request before destructive or whole-database archive actions.",
   };
 }
 

@@ -160,6 +160,8 @@ Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
 - after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request a shared-graph refresh before innovation analysis
+- if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task path (`POST /api/imports`) and task logs under `.papernexus/imports/` instead of manually copying those uploads into the shared paper source tree
+- if the workflow calls PaperNexus `/api/*`, resolve `Authorization: Bearer <token>` from the configured token source instead of assuming anonymous access
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
 - Do **not** enter idea selection without `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 - Do **not** enter idea selection until `{PROJ}/graph/LIMITATION_FRONTIER.md`, `CONTRADICTION_FRONTIER.md`, `TRANSFER_FRONTIER.md`, `COMPOSITION_FRONTIER.md`, and `ANCHOR_INDEX.md` exist
@@ -170,6 +172,7 @@ Rules:
   - `/frontier-mapping "$ARGUMENTS"`
   - `/papernexus-agentic-reasoning "$ARGUMENTS"` for the surviving track or frontier item whose evidence changed
 - Do not use `--force` for these workflow-owned literature graph refreshes; if graph build fails, give the exact cache-first command to the user instead of forcing a rebuild
+- Do not delete shared PaperNexus storage or run `backup-export`, `backup-unpack`, or `backup-load` during normal workflow operation
 - After Stage 0.5, ensure `{PROJ}/PROJECT_MANIFEST.json` points to the latest shared-graph readiness state and frontier report
 
 Graph refresh trigger:

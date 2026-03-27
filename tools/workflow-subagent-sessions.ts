@@ -7,6 +7,8 @@ const PAPERNEXUS_SLASH_COMMAND_RE =
 
 const PAPERNEXUS_CLI_COMMAND_RE =
   /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:status|query|brainstorm|ideas|context|impact|analyze|watch|materialize|llm-optimize|build-graph|merge-graph|write-index|enhance|service|logs)\b/i;
+const PAPERNEXUS_API_COMMAND_RE =
+  /\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:imports|status|query|context|impact|ideas|brainstorm|graph|enhance|logs)(?:\b|\/|\?)/i;
 
 function slugSessionSegment(value: string | null | undefined): string | null {
   const raw = readString(value);
@@ -49,7 +51,11 @@ export function looksLikePapernexusHeavyCommand(
   if (!raw) {
     return false;
   }
-  return PAPERNEXUS_SLASH_COMMAND_RE.test(raw) || PAPERNEXUS_CLI_COMMAND_RE.test(raw);
+  return (
+    PAPERNEXUS_SLASH_COMMAND_RE.test(raw) ||
+    PAPERNEXUS_CLI_COMMAND_RE.test(raw) ||
+    PAPERNEXUS_API_COMMAND_RE.test(raw)
+  );
 }
 
 export function derivePapernexusTaskLabel(
@@ -66,6 +72,7 @@ export function derivePapernexusTaskLabel(
     return slashMatch[1];
   }
   for (const label of [
+    "imports",
     "query",
     "brainstorm",
     "ideas",

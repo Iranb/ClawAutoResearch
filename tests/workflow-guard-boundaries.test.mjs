@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   shouldBlockPapernexusInlineExecution,
+  shouldBlockPapernexusDestructiveOperation,
   shouldBlockCoderDatasetMutation,
   shouldBlockResearchGraphForce,
 } from "../tools/workflow-guard.ts";
@@ -115,4 +116,45 @@ test("foreground papernexus inline guard allows researcher bash execution inside
   });
 
   assert.equal(result.block, false);
+});
+
+test("papernexus destructive guard blocks backup and restore commands during normal agent operation", () => {
+  const result = shouldBlockPapernexusDestructiveOperation({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command: "papernexus backup-load /tmp/papernexus-backup.tgz --name shared-global-graph",
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /backup|restore/i);
+});
+
+test("papernexus destructive guard blocks removing shared graph storage from bash", () => {
+  const result = shouldBlockPapernexusDestructiveOperation({
+    role: "analyzer",
+    toolName: "bash",
+    toolParams: {
+      command: "rm -rf ~/.papernexus/index-store ~/.papernexus/papers",
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /delete|shared graph|corpus/i);
+});
+
+test("foreground papernexus inline guard treats remote import api calls as heavy work", () => {
+  const result = shouldBlockPapernexusInlineExecution({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        "curl -X POST https://papernexus.example/api/imports?name=shared-global-graph -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /dedicated subagent/i);
 });

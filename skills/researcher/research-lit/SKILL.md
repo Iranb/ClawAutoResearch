@@ -48,6 +48,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 6:** If all Markdown sources fail → download PDF to the shared PaperNexus source tree under `paper_source_dir/pdf/`
    - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
+   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task route (`POST /api/imports`) and its `.papernexus/imports/` task logs over manually copying the upload into the shared source tree
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -65,6 +66,8 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 - Delay shared-graph reconciliation until all searches complete (build incrementally)
 - Write LITERATURE.md before graph reconciliation
 - Keep invalid HTML / error-page downloads under `paper_source_dir`
+- Manually move UI/API-uploaded papers into the shared source tree when the queued PaperNexus import-task path is available
+- Call destructive PaperNexus backup / restore commands as part of normal literature work
 
 ---
 
@@ -119,6 +122,7 @@ Rules:
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
 - `/graph-build` must reconcile the project's canonical paper selection against the shared global graph; do not create a second graph-only source tree for the same project
 - after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
+- if a remote PaperNexus API flow is used, assume authenticated access and resolve `Authorization: Bearer <token>` from the configured token source instead of assuming anonymous access
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
 

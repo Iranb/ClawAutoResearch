@@ -205,6 +205,32 @@ test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without f
   assert.doesNotMatch(prompt, /PaperNexus:/);
 });
 
+test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainstorm-quality PaperNexus rules", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      currentStage: "frontier_mapping",
+      currentMicroStage: "frontiers_packaged",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      nextAction: "/frontier-mapping",
+      paperSourceDir: "/Users/demo/.papernexus/papers",
+      graphSourceDir: "/Users/demo/.papernexus/index-store",
+      graphPresenceStatus: "ready",
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "auto",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusApiTokenService: "papernexus-api-token",
+      papernexusApiTokenAccount: "default",
+    },
+  });
+
+  assert.match(prompt, /queued import-task path/i);
+  assert.match(prompt, /brainstorm-quality node view/i);
+  assert.match(prompt, /ideas[\s\S]*brainstorm/i);
+  assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
+});
+
 test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () => {
   const policy = getWorkflowGuardPolicy({
     papernexusApiBaseUrl: "https://papernexus.example/api",

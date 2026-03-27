@@ -47,6 +47,12 @@ node <PAPERNEXUS_ROOT>/src/cli/index.js impact "<anchor>"
 
 Use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` and `{PROJ}/graph/PAPERNEXUS_STATUS.json` to constrain which anchors and papers are treated as in-scope for this project.
 
+Prefer the brainstorm-quality node layer when selecting primary anchors:
+
+- trust `brainstormEligible`, `brainstormScore`, and `brainstormTier` over raw visual prominence on the full graph
+- use the full graph for provenance and neighborhood inspection, but use the brainstorm-quality view for ideation-first anchoring
+- if a remote PaperNexus `/api/*` call is needed, resolve `Authorization: Bearer <token>` from the configured token source
+
 ## Required Frontier Lenses
 
 Build four sections:
@@ -127,6 +133,7 @@ If `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` exists, treat it as mandatory upst
 - convert the best hooks into graph-backed frontier items
 
 Do not ignore earlier research-stage brainstorming and restart from a blank slate.
+Do not delete shared graph data or run PaperNexus backup / restore commands during frontier work.
 
 After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
 

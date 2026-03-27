@@ -10,6 +10,7 @@ import {
   sanitizeAgentMentions,
   sanitizeMessageToolParams,
   shouldBlockCoderDatasetMutation,
+  shouldBlockPapernexusDestructiveOperation,
   shouldBlockPapernexusInlineExecution,
   shouldBlockResearchGraphForce,
   shouldBlockInnovationWrite,
@@ -216,6 +217,18 @@ async function runBeforeToolCallHook(params: {
       return {
         block: true,
         blockReason: papernexusInlineCheck.reason,
+      };
+    }
+
+    const papernexusDestructiveCheck = shouldBlockPapernexusDestructiveOperation({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+    });
+    if (papernexusDestructiveCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusDestructiveCheck.reason,
       };
     }
 
