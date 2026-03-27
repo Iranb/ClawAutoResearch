@@ -34,11 +34,19 @@ If the plugin-level workflow config provides remote PaperNexus access settings, 
 
 - `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
 - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+- `plugins.entries.openclaw-research.config.papernexusApiTokenSource`
+- `plugins.entries.openclaw-research.config.papernexusApiTokenService`
+- `plugins.entries.openclaw-research.config.papernexusApiTokenAccount`
 - optional `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
 
 Rules:
 
-- when using the PaperNexus Web/API, send `Authorization: Bearer <token>` from the configured env var
+- when using the PaperNexus Web/API, resolve `Authorization: Bearer <token>` from the configured token source
+- `auto` means: env first, then native OS keychain
+- native keychain means:
+  - macOS Keychain on `darwin`
+  - Secret Service / `secret-tool` on `linux`
+  - PasswordVault on `win32`
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
 - local CLI access remains the normal fallback when the remote API is not configured or the task explicitly needs local repo operations

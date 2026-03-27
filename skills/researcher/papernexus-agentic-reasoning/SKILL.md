@@ -282,6 +282,8 @@ papernexus analyze
 
 This now retries only previously failed LLM-assisted papers and reuses snapshots for papers that already succeeded.
 
+If the new material enters through a UI or API upload, prefer the queued import-task path instead of manually moving files into the main paper source directory. Import tasks keep their own logs under `.papernexus/imports/` and merge into the main single graph after processing.
+
 For ongoing usage:
 
 ```bash
@@ -294,13 +296,13 @@ When the background services are healthy:
 
 - `watch` keeps the graph fresh
 - `serve` keeps dashboard/API and enhancement workers alive
+- remote dashboard/API access now requires the configured PaperNexus token, so agent workflows that call `/api/*` must include `Authorization: Bearer <token>`
 
 Important Stage 4 boundary:
 
 - `merge-graph` canonicalizes near-duplicate `Dataset` / `Benchmark` nodes inside the staged graph before final commit
 - merge-time LLM node deletion is currently disabled; do not rely on `--node-llm-check` for staged graph cleanup
 - `write-index` commits the staged graph that Stage 3 and `merge-graph` prepared
-- `write-index` creates a backup under `<rootPath>/.papernexus-backups/` before overwriting the committed graph
 - if raw paper files changed after Stage 3 and those new files must be included in reasoning, rerun Stage 1-3 before Stage 4
 - if you want to inspect or clean duplicate evaluation nodes before final commit, run `papernexus merge-graph --continue`
 - if the staged graph still contains low-value generic evaluation nodes, handle them through merge heuristics or later manual review; do not rely on `--node-llm-check` right now
@@ -316,6 +318,11 @@ Use this policy:
 2. inspect theory, storyline, or reflection overlays if available
 3. decide whether the issue is a clear factual graph error or only an interpretation gap
 4. mutate only if the correction is explicit, local, and high-confidence
+
+Agent safety rule:
+
+- reasoning agents may add or update understanding in the current graph
+- they must not delete corpus data, restore whole-database archives, or run backup/restore commands unless a human explicitly requests it
 
 Good mutation cases:
 

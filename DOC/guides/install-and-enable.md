@@ -124,8 +124,15 @@ cross-reviewer: { heartbeat: { every: "4h" } }
 - 如果你启用了远程 PaperNexus Web/API，建议同时配置：
   - `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
   - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+  - `plugins.entries.openclaw-research.config.papernexusApiTokenSource`
+  - `plugins.entries.openclaw-research.config.papernexusApiTokenService`
+  - `plugins.entries.openclaw-research.config.papernexusApiTokenAccount`
   - 可选的 `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
 - Bearer token 推荐只放在环境变量里，例如 `PAPERNEXUS_API_TOKEN`，不要直接写进配置文件
+- 如果你希望插件原生走系统 keychain，则把 `papernexusApiTokenSource` 设为 `auto` 或 `os_keychain`
+- 跨平台的 keychain / secret-store 存储、读取、导出命令模板见：
+  - [CONFIG.md](../../CONFIG.md)
+  - [DOC/reference/configuration.md](../reference/configuration.md)
 
 ## 8. 推荐同时阅读
 

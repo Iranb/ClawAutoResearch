@@ -41,6 +41,9 @@ function makeBaseSnapshot() {
     defaultPapernexusIndexRoot: null,
     papernexusApiBaseUrl: null,
     papernexusApiTokenEnv: null,
+    papernexusApiTokenSource: null,
+    papernexusApiTokenService: null,
+    papernexusApiTokenAccount: null,
     papernexusMineruHttpUrl: null,
     idleResearchEnabled: false,
     idleResearchTopic: null,
@@ -206,11 +209,17 @@ test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () =
   const policy = getWorkflowGuardPolicy({
     papernexusApiBaseUrl: "https://papernexus.example/api",
     papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    papernexusApiTokenSource: "auto",
+    papernexusApiTokenService: "papernexus-api-token",
+    papernexusApiTokenAccount: "default",
     papernexusMineruHttpUrl: "http://mineru.example:30000",
   });
 
   assert.equal(policy.papernexusApiBaseUrl, "https://papernexus.example/api");
   assert.equal(policy.papernexusApiTokenEnv, "PAPERNEXUS_API_TOKEN");
+  assert.equal(policy.papernexusApiTokenSource, "auto");
+  assert.equal(policy.papernexusApiTokenService, "papernexus-api-token");
+  assert.equal(policy.papernexusApiTokenAccount, "default");
   assert.equal(policy.papernexusMineruHttpUrl, "http://mineru.example:30000");
 });
 
@@ -226,17 +235,23 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
       graphRefreshRequired: true,
       papernexusApiBaseUrl: "https://papernexus.example/api",
       papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusApiTokenSource: "auto",
+      papernexusApiTokenService: "papernexus-api-token",
+      papernexusApiTokenAccount: "default",
       papernexusMineruHttpUrl: "http://mineru.example:30000",
     },
   });
 
   assert.match(prompt, /PaperNexus remote access:/);
   assert.match(prompt, /api=https:\/\/papernexus\.example\/api/);
+  assert.match(prompt, /token_source=auto/);
   assert.match(prompt, /token_env=PAPERNEXUS_API_TOKEN/);
+  assert.match(prompt, /keychain_service=papernexus-api-token/);
+  assert.match(prompt, /keychain_account=default/);
   assert.match(prompt, /mineru_http=http:\/\/mineru\.example:30000/);
   assert.match(
     prompt,
-    /Use Authorization: Bearer from env PAPERNEXUS_API_TOKEN for PaperNexus Web\/API access/i
+    /Resolve the PaperNexus bearer token in auto mode/i
   );
   assert.match(
     prompt,

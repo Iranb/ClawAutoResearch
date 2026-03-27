@@ -34,6 +34,7 @@ function createResearchWorkflowTool(params = {}) {
   const api = {
     runtime: {},
     logger: {},
+    pluginConfig: params.pluginConfig,
     registerTool(spec) {
       registeredTool = spec;
     },
@@ -60,6 +61,48 @@ async function executeWorkflowTool(tool, params) {
   assert.equal(response.content[0]?.type, "text");
   return JSON.parse(response.content[0].text);
 }
+
+test("research_workflow get_papernexus_remote_access returns a redacted token status", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PAPERNEXUS_API_TOKEN = "super-secret-token";
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusApiTokenService: "papernexus-api-token",
+      papernexusApiTokenAccount: "default",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "get_papernexus_remote_access",
+  });
+  assert.equal(result.tokenAvailable, true);
+  assert.equal(result.tokenSourceResolved, "env");
+  assert.equal(result.token, "[REDACTED]");
+  assert.equal(result.summary.tokenSourceConfigured, "env");
+  assert.equal(result.summary.tokenEnv, "PAPERNEXUS_API_TOKEN");
+});
 
 test("research_workflow runtime-state actions persist manifest state and append temp traces", async (t) => {
   const projectRoot = await makeProjectRoot();

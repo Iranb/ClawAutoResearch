@@ -81,6 +81,7 @@ import {
 } from "./workflow-coordination";
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
+import { inspectPapernexusRemoteAccess } from "./papernexus-secret";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -108,6 +109,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_snapshot: "buildWorkflowSnapshot",
+  get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   check_graph_presence: "checkGraphPresenceForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
@@ -380,6 +382,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "string",
             enum: [
               "get_snapshot",
+              "get_papernexus_remote_access",
               "check_graph_presence",
               "auto_iterator_tick",
               "start_background_run",
@@ -630,6 +633,27 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             switch (action) {
               case "get_snapshot":
                 return textResponse(JSON.stringify(snapshot, null, 2));
+            case "get_papernexus_remote_access": {
+              const access = await inspectPapernexusRemoteAccess({
+                apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+                tokenSource: workflowPolicy.papernexusApiTokenSource,
+                tokenEnv: workflowPolicy.papernexusApiTokenEnv,
+                tokenService: workflowPolicy.papernexusApiTokenService,
+                tokenAccount: workflowPolicy.papernexusApiTokenAccount,
+                mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
+                tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...access,
+                    token: access.tokenAvailable ? "[REDACTED]" : null,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
             case "check_graph_presence": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const graphPresenceCheck = asObject(params.graphPresenceCheck);

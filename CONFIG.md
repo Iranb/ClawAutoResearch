@@ -101,6 +101,14 @@ Recommended plugin-level settings in `~/.openclaw/openclaw.json`:
   - Remote PaperNexus Web/API base URL
 - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
   - Env-var name that stores the PaperNexus API bearer token
+- `plugins.entries.openclaw-research.config.papernexusApiTokenSource`
+  - `env | os_keychain | auto`
+- `plugins.entries.openclaw-research.config.papernexusApiTokenService`
+  - Native keychain service/resource name
+- `plugins.entries.openclaw-research.config.papernexusApiTokenAccount`
+  - Native keychain account/user name
+- `plugins.entries.openclaw-research.config.papernexusApiTokenLookupTimeoutMs`
+  - Keychain lookup timeout in milliseconds
 - `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
   - Optional remote MinerU HTTP endpoint for PDF materialization
 
@@ -108,8 +116,92 @@ Workflow behavior when these are configured:
 
 - Researcher prompt injection will tell agents to prefer the configured remote PaperNexus Web/API endpoint for graph-heavy tasks
 - PaperNexus API calls should use `Authorization: Bearer <token>` from the configured env var
+- When `papernexusApiTokenSource = auto`, resolution order is: configured env var first, then native OS keychain
+- When `papernexusApiTokenSource = os_keychain`, resolution uses:
+  - macOS: Keychain generic password via `security`
+  - Linux: Secret Service via `secret-tool`
+  - Windows: PasswordVault via PowerShell / WinRT
 - PDF materialization should prefer remote MinerU before local Docling or Marker
 - Raw tokens should stay in env only and must not be copied into project artifacts, manifests, or chat logs
+
+### Native keychain examples
+
+macOS store:
+
+```bash
+security add-generic-password -U -s papernexus-api-token -a default -w "YOUR_TOKEN"
+```
+
+macOS read / verify:
+
+```bash
+security find-generic-password -s papernexus-api-token -a default -w
+```
+
+macOS export to env for the current shell:
+
+```bash
+export PAPERNEXUS_API_TOKEN="$(security find-generic-password -s papernexus-api-token -a default -w)"
+```
+
+Linux store:
+
+```bash
+secret-tool store --label="PaperNexus API token" service papernexus-api-token account default
+```
+
+Linux read / verify:
+
+```bash
+secret-tool lookup service papernexus-api-token account default
+```
+
+Linux export to env for the current shell:
+
+```bash
+export PAPERNEXUS_API_TOKEN="$(secret-tool lookup service papernexus-api-token account default)"
+```
+
+Windows PowerShell store:
+
+```powershell
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] > $null
+$vault = New-Object Windows.Security.Credentials.PasswordVault
+$cred = New-Object Windows.Security.Credentials.PasswordCredential("papernexus-api-token","default","YOUR_TOKEN")
+$vault.Add($cred)
+```
+
+Windows PowerShell read / verify:
+
+```powershell
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] > $null
+$vault = New-Object Windows.Security.Credentials.PasswordVault
+$cred = $vault.Retrieve("papernexus-api-token","default")
+$cred.RetrievePassword()
+$cred.Password
+```
+
+Windows PowerShell export to env for the current shell:
+
+```powershell
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] > $null
+$vault = New-Object Windows.Security.Credentials.PasswordVault
+$cred = $vault.Retrieve("papernexus-api-token","default")
+$cred.RetrievePassword()
+$env:PAPERNEXUS_API_TOKEN = $cred.Password
+```
+
+Recommended plugin config for native keychain support:
+
+```json
+{
+  "papernexusApiTokenSource": "auto",
+  "papernexusApiTokenEnv": "PAPERNEXUS_API_TOKEN",
+  "papernexusApiTokenService": "papernexus-api-token",
+  "papernexusApiTokenAccount": "default",
+  "papernexusApiTokenLookupTimeoutMs": 2000
+}
+```
 
 ## Related Files
 

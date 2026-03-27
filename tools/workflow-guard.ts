@@ -37,6 +37,10 @@ import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
 } from "./workflow-subagent-sessions";
+import {
+  normalizePapernexusApiTokenSource,
+  summarizePapernexusRemoteAccessConfig,
+} from "./papernexus-secret";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -53,6 +57,10 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   defaultJournalTemplatePath?: string;
   papernexusApiBaseUrl?: string;
   papernexusApiTokenEnv?: string;
+  papernexusApiTokenSource?: string;
+  papernexusApiTokenService?: string;
+  papernexusApiTokenAccount?: string;
+  papernexusApiTokenLookupTimeoutMs?: number;
   papernexusMineruHttpUrl?: string;
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
@@ -675,6 +683,9 @@ export type WorkflowSnapshot = {
   defaultPapernexusIndexRoot: string | null;
   papernexusApiBaseUrl: string | null;
   papernexusApiTokenEnv: string | null;
+  papernexusApiTokenSource: string | null;
+  papernexusApiTokenService: string | null;
+  papernexusApiTokenAccount: string | null;
   papernexusMineruHttpUrl: string | null;
   idleResearchEnabled: boolean;
   idleResearchTopic: string | null;
@@ -909,6 +920,10 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   defaultJournalTemplatePath: "",
   papernexusApiBaseUrl: "",
   papernexusApiTokenEnv: "",
+  papernexusApiTokenSource: "auto",
+  papernexusApiTokenService: "papernexus-api-token",
+  papernexusApiTokenAccount: "default",
+  papernexusApiTokenLookupTimeoutMs: 2000,
   papernexusMineruHttpUrl: "",
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
@@ -1411,6 +1426,20 @@ function normalizePolicy(
     papernexusApiTokenEnv:
       asString(config?.papernexusApiTokenEnv) ??
       DEFAULT_POLICY.papernexusApiTokenEnv,
+    papernexusApiTokenSource:
+      normalizePapernexusApiTokenSource(config?.papernexusApiTokenSource) ??
+      DEFAULT_POLICY.papernexusApiTokenSource,
+    papernexusApiTokenService:
+      asString(config?.papernexusApiTokenService) ??
+      DEFAULT_POLICY.papernexusApiTokenService,
+    papernexusApiTokenAccount:
+      asString(config?.papernexusApiTokenAccount) ??
+      DEFAULT_POLICY.papernexusApiTokenAccount,
+    papernexusApiTokenLookupTimeoutMs:
+      typeof config?.papernexusApiTokenLookupTimeoutMs === "number" &&
+      Number.isFinite(config.papernexusApiTokenLookupTimeoutMs)
+        ? Math.max(250, Math.floor(config.papernexusApiTokenLookupTimeoutMs))
+        : DEFAULT_POLICY.papernexusApiTokenLookupTimeoutMs,
     papernexusMineruHttpUrl:
       asString(config?.papernexusMineruHttpUrl) ??
       DEFAULT_POLICY.papernexusMineruHttpUrl,
@@ -7123,6 +7152,9 @@ function buildDynamicTasks(params: {
   unreadMailbox: WorkflowMailboxItem[];
   papernexusApiBaseUrl: string | null;
   papernexusApiTokenEnv: string | null;
+  papernexusApiTokenSource: string | null;
+  papernexusApiTokenService: string | null;
+  papernexusApiTokenAccount: string | null;
   papernexusMineruHttpUrl: string | null;
 }): string[] {
   if (!params.role) {
@@ -7175,7 +7207,7 @@ function buildDynamicTasks(params: {
       params.papernexusMineruHttpUrl)
   ) {
     tasks.unshift(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Keep the token in env only; do not paste secrets into chat, prompts, or project files.`
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
     );
   }
 
@@ -7486,18 +7518,29 @@ export async function buildWorkflowSnapshot(params: {
   const defaultPapernexusSourceDir = getDefaultPapernexusSourceDir(projectState.projectId);
   const resolvedPaperSourceDir = asString(projectState.manifest?.paper_source_dir) ?? null;
   const resolvedGraphSourceDir = asString(projectState.manifest?.graph_source_dir) ?? null;
-  const papernexusApiBaseUrl =
-    policy.papernexusApiBaseUrl.trim().length > 0
-      ? policy.papernexusApiBaseUrl
-      : null;
-  const papernexusApiTokenEnv =
-    policy.papernexusApiTokenEnv.trim().length > 0
-      ? policy.papernexusApiTokenEnv
-      : null;
-  const papernexusMineruHttpUrl =
-    policy.papernexusMineruHttpUrl.trim().length > 0
-      ? policy.papernexusMineruHttpUrl
-      : null;
+  const papernexusAccessConfigured =
+    (policy.papernexusApiBaseUrl ?? "").trim().length > 0 ||
+    (policy.papernexusApiTokenEnv ?? "").trim().length > 0 ||
+    (policy.papernexusMineruHttpUrl ?? "").trim().length > 0 ||
+    normalizePapernexusApiTokenSource(policy.papernexusApiTokenSource) !==
+      DEFAULT_POLICY.papernexusApiTokenSource ||
+    ((policy.papernexusApiTokenService ?? "").trim().length > 0 &&
+      (policy.papernexusApiTokenService ?? "").trim() !==
+        DEFAULT_POLICY.papernexusApiTokenService) ||
+    ((policy.papernexusApiTokenAccount ?? "").trim().length > 0 &&
+      (policy.papernexusApiTokenAccount ?? "").trim() !==
+        DEFAULT_POLICY.papernexusApiTokenAccount);
+  const papernexusAccess = papernexusAccessConfigured
+    ? summarizePapernexusRemoteAccessConfig({
+        apiBaseUrl: policy.papernexusApiBaseUrl,
+        tokenEnv: policy.papernexusApiTokenEnv,
+        tokenSource: policy.papernexusApiTokenSource,
+        tokenService: policy.papernexusApiTokenService,
+        tokenAccount: policy.papernexusApiTokenAccount,
+        mineruHttpUrl: policy.papernexusMineruHttpUrl,
+        tokenLookupTimeoutMs: policy.papernexusApiTokenLookupTimeoutMs,
+      })
+    : null;
 
   return {
     projectRoot: projectState.projectRoot,
@@ -7546,9 +7589,12 @@ export async function buildWorkflowSnapshot(params: {
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
     defaultPapernexusIndexRoot: getDefaultPapernexusIndexRoot(),
-    papernexusApiBaseUrl,
-    papernexusApiTokenEnv,
-    papernexusMineruHttpUrl,
+    papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
+    papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
+    papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
+    papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
+    papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
+    papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
     idleResearchEnabled: idleResearch.enabled,
     idleResearchTopic: idleResearch.topic,
     idleResearchStatus: idleResearch.status,
@@ -7724,18 +7770,12 @@ export async function buildWorkflowSnapshot(params: {
       citationReportPath: resolvedCitationReportPath,
       recentExperiments,
       unreadMailbox,
-      papernexusApiBaseUrl:
-        policy.papernexusApiBaseUrl.trim().length > 0
-          ? policy.papernexusApiBaseUrl
-          : null,
-      papernexusApiTokenEnv:
-        policy.papernexusApiTokenEnv.trim().length > 0
-          ? policy.papernexusApiTokenEnv
-          : null,
-      papernexusMineruHttpUrl:
-        policy.papernexusMineruHttpUrl.trim().length > 0
-          ? policy.papernexusMineruHttpUrl
-          : null,
+      papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
+      papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
+      papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
+      papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
+      papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
+      papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
     }),
   };
 }
@@ -7950,14 +7990,35 @@ export function formatWorkflowSnapshotForPrompt(params: {
     if (
       snapshot.papernexusApiBaseUrl ||
       snapshot.papernexusApiTokenEnv ||
+      snapshot.papernexusApiTokenSource ||
+      snapshot.papernexusApiTokenService ||
+      snapshot.papernexusApiTokenAccount ||
       snapshot.papernexusMineruHttpUrl
     ) {
       lines.push(
-        `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
+        `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
       );
-      if (snapshot.papernexusApiBaseUrl && snapshot.papernexusApiTokenEnv) {
+      if (
+        snapshot.papernexusApiBaseUrl &&
+        snapshot.papernexusApiTokenSource === "env" &&
+        snapshot.papernexusApiTokenEnv
+      ) {
         lines.push(
           `Remote API rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}. Never print the raw token in chat, prompts, logs, or project files.`
+        );
+      } else if (
+        snapshot.papernexusApiBaseUrl &&
+        snapshot.papernexusApiTokenSource === "os_keychain"
+      ) {
+        lines.push(
+          `Remote API rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusApiBaseUrl}. Never print or persist the raw token.`
+        );
+      } else if (
+        snapshot.papernexusApiBaseUrl &&
+        snapshot.papernexusApiTokenSource === "auto"
+      ) {
+        lines.push(
+          `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
         );
       } else if (snapshot.papernexusApiBaseUrl) {
         lines.push(

@@ -109,6 +109,28 @@
         "default": "",
         "description": "Environment variable name that stores the PaperNexus API bearer token. The workflow will reference this env var name in prompts and never persist the raw token into project files."
       },
+      "papernexusApiTokenSource": {
+        "type": "string",
+        "enum": ["env", "os_keychain", "auto"],
+        "default": "auto",
+        "description": "How the workflow should resolve the PaperNexus API bearer token: from an environment variable, from the native OS keychain, or auto (env first, then OS keychain)."
+      },
+      "papernexusApiTokenService": {
+        "type": "string",
+        "default": "papernexus-api-token",
+        "description": "Native keychain service/resource name used when PaperNexus API token resolution needs the OS credential store."
+      },
+      "papernexusApiTokenAccount": {
+        "type": "string",
+        "default": "default",
+        "description": "Native keychain account/user name used when PaperNexus API token resolution needs the OS credential store."
+      },
+      "papernexusApiTokenLookupTimeoutMs": {
+        "type": "number",
+        "minimum": 250,
+        "default": 2000,
+        "description": "Timeout for native OS keychain lookups when resolving the PaperNexus API bearer token."
+      },
       "papernexusMineruHttpUrl": {
         "type": "string",
         "default": "",
@@ -289,6 +311,18 @@
     },
     "papernexusApiTokenEnv": {
       "label": "PaperNexus API Token Env"
+    },
+    "papernexusApiTokenSource": {
+      "label": "PaperNexus API Token Source"
+    },
+    "papernexusApiTokenService": {
+      "label": "PaperNexus API Token Service"
+    },
+    "papernexusApiTokenAccount": {
+      "label": "PaperNexus API Token Account"
+    },
+    "papernexusApiTokenLookupTimeoutMs": {
+      "label": "PaperNexus Token Lookup Timeout (ms)"
     },
     "papernexusMineruHttpUrl": {
       "label": "PaperNexus MinerU HTTP URL"
