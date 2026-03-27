@@ -28,6 +28,21 @@ Use this order:
 
 If none exists, stop and report that PaperNexus is unavailable. Do not silently skip this stage for a new project.
 
+## Remote Access Preference
+
+If the plugin-level workflow config provides remote PaperNexus access settings, prefer them during graph-heavy work:
+
+- `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
+- `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+- optional `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
+
+Rules:
+
+- when using the PaperNexus Web/API, send `Authorization: Bearer <token>` from the configured env var
+- never paste the raw token into chat, prompts, or project files
+- if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
+- local CLI access remains the normal fallback when the remote API is not configured or the task explicitly needs local repo operations
+
 ## Choose Paper Selection Input
 
 Pick the richest available project paper-selection input in this order:

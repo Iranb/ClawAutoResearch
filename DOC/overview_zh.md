@@ -161,6 +161,8 @@
 
 这样后续图谱检查、刷新和复用就更稳定。
 
+如果在插件全局配置里设置了远程 PaperNexus Web/API，Researcher 应优先把这个远程入口用于 graph-heavy 访问，并通过配置好的 bearer-token env 来访问，而不是默认假设匿名本地访问。如果还配置了 remote MinerU URL，则 PDF materialization 也应先走这个远程解析路径，再考虑本地 Docling 或 Marker fallback。
+
 ### 3. 调研阶段强制包含头脑风暴
 
 头脑风暴现在不再只发生在 IDEA 阶段。

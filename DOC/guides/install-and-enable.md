@@ -121,6 +121,11 @@ cross-reviewer: { heartbeat: { every: "4h" } }
 - 项目 manifest 默认不需要单独设置 `papernexus_corpus`、`paper_source_dir`、`graph_source_dir`
 - 项目只需要维护 canonical paper selection，并让 workflow 去检查这些论文是否已经存在于共享图中
 - 图索引默认在 `~/.papernexus/index-store`
+- 如果你启用了远程 PaperNexus Web/API，建议同时配置：
+  - `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
+  - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+  - 可选的 `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
+- Bearer token 推荐只放在环境变量里，例如 `PAPERNEXUS_API_TOKEN`，不要直接写进配置文件
 
 ## 8. 推荐同时阅读
 

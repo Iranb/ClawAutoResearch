@@ -96,6 +96,21 @@
           // 配置后，journal 模式写作时会先把模板复制进项目，再由 writer 在项目内编辑。
           "defaultJournalTemplatePath": "",
 
+          // 可选的 PaperNexus 远程 Web/API 地址。
+          // 配置后，Researcher 在 graph / PaperNexus 阶段会优先把它当成远程访问入口，
+          // 不再默认假设只能本地访问 PaperNexus。
+          "papernexusApiBaseUrl": "http://127.0.0.1:4175",
+
+          // 存放 PaperNexus API Bearer token 的环境变量名。
+          // 推荐只在环境变量里放 secret，不要把明文 token 写进 openclaw.json。
+          // 当前 workflow prompt 会引用这个 env 名，但不会把 token 值写进项目状态或 prompt trace。
+          "papernexusApiTokenEnv": "PAPERNEXUS_API_TOKEN",
+
+          // 可选的 remote MinerU HTTP 地址。
+          // 参照 PaperNexus 最新 SKILL：PDF materialization 默认优先 remote mineru；
+          // 只有远程不可达或任务明确要求时，才考虑本地 docling / marker fallback。
+          "papernexusMineruHttpUrl": "",
+
           // 自动推进模式：
           // off           = 不自动推进，只做 guard / snapshot / 状态辅助
           // conservative  = 推荐默认档；自动唤起阶段 owner，保留更稳的收口节奏

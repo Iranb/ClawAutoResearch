@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatWorkflowSnapshotForPrompt } from "../tools/workflow-guard.ts";
+import {
+  formatWorkflowSnapshotForPrompt,
+  getWorkflowGuardPolicy,
+} from "../tools/workflow-guard.ts";
 
 function makeBaseSnapshot() {
   return {
@@ -36,6 +39,9 @@ function makeBaseSnapshot() {
     graphSourceDir: null,
     defaultPapernexusSourceDir: null,
     defaultPapernexusIndexRoot: null,
+    papernexusApiBaseUrl: null,
+    papernexusApiTokenEnv: null,
+    papernexusMineruHttpUrl: null,
     idleResearchEnabled: false,
     idleResearchTopic: null,
     idleResearchStatus: null,
@@ -194,4 +200,46 @@ test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without f
   assert.match(prompt, /section_context=results/i);
   assert.doesNotMatch(prompt, /Idle research:/);
   assert.doesNotMatch(prompt, /PaperNexus:/);
+});
+
+test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () => {
+  const policy = getWorkflowGuardPolicy({
+    papernexusApiBaseUrl: "https://papernexus.example/api",
+    papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    papernexusMineruHttpUrl: "http://mineru.example:30000",
+  });
+
+  assert.equal(policy.papernexusApiBaseUrl, "https://papernexus.example/api");
+  assert.equal(policy.papernexusApiTokenEnv, "PAPERNEXUS_API_TOKEN");
+  assert.equal(policy.papernexusMineruHttpUrl, "http://mineru.example:30000");
+});
+
+test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus access safely", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "graph_build",
+      currentMicroStage: "graph_refresh_requested",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      graphRefreshRequired: true,
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusMineruHttpUrl: "http://mineru.example:30000",
+    },
+  });
+
+  assert.match(prompt, /PaperNexus remote access:/);
+  assert.match(prompt, /api=https:\/\/papernexus\.example\/api/);
+  assert.match(prompt, /token_env=PAPERNEXUS_API_TOKEN/);
+  assert.match(prompt, /mineru_http=http:\/\/mineru\.example:30000/);
+  assert.match(
+    prompt,
+    /Use Authorization: Bearer from env PAPERNEXUS_API_TOKEN for PaperNexus Web\/API access/i
+  );
+  assert.match(
+    prompt,
+    /Prefer remote MinerU at http:\/\/mineru\.example:30000 for PDF materialization/i
+  );
 });

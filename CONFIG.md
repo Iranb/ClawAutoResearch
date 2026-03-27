@@ -84,9 +84,32 @@ The `{PROJECTS_ROOT}` path is determined by:
   - In Discord multi-project setups, channel-to-project binding is usually preferred
   - Example: `export OPENCLAW_PROJECT=my-first-detection`
 
+- **`PAPERNEXUS_API_TOKEN`**: Recommended PaperNexus Web/API bearer token env var
+  - Keep the raw token in environment only
+  - Reference the env-var name from plugin config via `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+  - The workflow only exposes the env-var name to agents; it should never persist the raw token into project files or prompts
+
 - **`PAPERNEXUS_ROOT`**: Optional PaperNexus repository root
   - Can be used when PaperNexus is not discoverable as a sibling repository
   - Helps `graph-build` and related skills resolve the local PaperNexus installation
+
+## Remote PaperNexus Access
+
+Recommended plugin-level settings in `~/.openclaw/openclaw.json`:
+
+- `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
+  - Remote PaperNexus Web/API base URL
+- `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+  - Env-var name that stores the PaperNexus API bearer token
+- `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
+  - Optional remote MinerU HTTP endpoint for PDF materialization
+
+Workflow behavior when these are configured:
+
+- Researcher prompt injection will tell agents to prefer the configured remote PaperNexus Web/API endpoint for graph-heavy tasks
+- PaperNexus API calls should use `Authorization: Bearer <token>` from the configured env var
+- PDF materialization should prefer remote MinerU before local Docling or Marker
+- Raw tokens should stay in env only and must not be copied into project artifacts, manifests, or chat logs
 
 ## Related Files
 
@@ -99,6 +122,7 @@ The `{PROJECTS_ROOT}` path is determined by:
 ```bash
 # Optional local fallback when channel binding is not used
 export OPENCLAW_PROJECT=my-project
+export PAPERNEXUS_API_TOKEN=...
 
 # Project path resolves to:
 # {PROJECTS_ROOT}/my-project

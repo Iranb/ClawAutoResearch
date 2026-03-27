@@ -99,6 +99,21 @@
         "default": "",
         "description": "Optional default journal paper template path. When configured, journal writing mode copies this template into each project before Writer edits it."
       },
+      "papernexusApiBaseUrl": {
+        "type": "string",
+        "default": "",
+        "description": "Optional remote PaperNexus Web/API base URL. When configured, workflow prompts steer graph-heavy tasks toward the remote PaperNexus service instead of assuming local-only access."
+      },
+      "papernexusApiTokenEnv": {
+        "type": "string",
+        "default": "",
+        "description": "Environment variable name that stores the PaperNexus API bearer token. The workflow will reference this env var name in prompts and never persist the raw token into project files."
+      },
+      "papernexusMineruHttpUrl": {
+        "type": "string",
+        "default": "",
+        "description": "Optional remote MinerU HTTP endpoint used by PaperNexus for PDF materialization. When configured, the workflow prefers this remote parser path before local Docling or Marker fallbacks."
+      },
       "autoMode": {
         "type": "string",
         "enum": ["off", "conservative", "aggressive"],
@@ -268,6 +283,15 @@
     },
     "defaultJournalTemplatePath": {
       "label": "Default Journal Template Path"
+    },
+    "papernexusApiBaseUrl": {
+      "label": "PaperNexus API Base URL"
+    },
+    "papernexusApiTokenEnv": {
+      "label": "PaperNexus API Token Env"
+    },
+    "papernexusMineruHttpUrl": {
+      "label": "PaperNexus MinerU HTTP URL"
     },
     "autoMode": {
       "label": "Auto Mode"

@@ -69,6 +69,15 @@
 - `defaultJournalTemplatePath`  
   可选的 journal 默认模板路径。启用 `paper_mode = journal` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
 
+- `papernexusApiBaseUrl`  
+  可选的 PaperNexus 远程 Web/API 地址。配置后，workflow prompt 会优先引导 Researcher / PaperNexus-heavy 流程使用这个远程入口，而不是默认假设只能本地访问。
+
+- `papernexusApiTokenEnv`  
+  存放 PaperNexus API Bearer token 的环境变量名。推荐只在环境变量里放 secret，不把明文 token 写进 `openclaw.json` 或项目文件。
+
+- `papernexusMineruHttpUrl`  
+  可选的 remote MinerU HTTP 地址。配置后，涉及 PDF materialization 的 PaperNexus 流程会优先走 remote mineru，再考虑本地 docling / marker fallback。
+
 ## 3. `~/.openclaw/openclaw.json`
 
 这是你真实运行时使用的 OpenClaw 主配置文件，不是仓库内文件。
@@ -130,6 +139,9 @@
    - `writing_contract`
    - `paper_source_dir`
    - `papernexus_root`
+   - `papernexusApiBaseUrl`
+   - `papernexusApiTokenEnv`
+   - `papernexusMineruHttpUrl`
 5. 如果你要在同一个 Discord 服务里并行跑多个项目：
    - 打开 `enableChannelProjectBindings`
    - 显式设置共享 `channelProjectBindingsPath`
@@ -167,3 +179,18 @@
 
 - `enableChannelProjectBindings`
 - `channelProjectBindingsPath`
+
+### 想让 Researcher 优先走远程 PaperNexus
+
+确保以下配置已经设置：
+
+- `papernexusApiBaseUrl`
+- `papernexusApiTokenEnv`
+
+如果你的 PaperNexus 也暴露了远程 MinerU，再补上：
+
+- `papernexusMineruHttpUrl`
+
+并在运行 OpenClaw 的环境里提供对应 token env，例如：
+
+- `PAPERNEXUS_API_TOKEN`

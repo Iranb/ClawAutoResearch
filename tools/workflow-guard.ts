@@ -51,6 +51,9 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   agentContactCooldownSeconds?: number;
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
+  papernexusApiBaseUrl?: string;
+  papernexusApiTokenEnv?: string;
+  papernexusMineruHttpUrl?: string;
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
@@ -670,6 +673,9 @@ export type WorkflowSnapshot = {
   graphSourceDir: string | null;
   defaultPapernexusSourceDir: string | null;
   defaultPapernexusIndexRoot: string | null;
+  papernexusApiBaseUrl: string | null;
+  papernexusApiTokenEnv: string | null;
+  papernexusMineruHttpUrl: string | null;
   idleResearchEnabled: boolean;
   idleResearchTopic: string | null;
   idleResearchStatus: string | null;
@@ -901,6 +907,9 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   channelProjectBindingsPath: "",
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
+  papernexusApiBaseUrl: "",
+  papernexusApiTokenEnv: "",
+  papernexusMineruHttpUrl: "",
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
   lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
@@ -1396,6 +1405,15 @@ function normalizePolicy(
     defaultJournalTemplatePath:
       asString(config?.defaultJournalTemplatePath) ??
       DEFAULT_POLICY.defaultJournalTemplatePath,
+    papernexusApiBaseUrl:
+      asString(config?.papernexusApiBaseUrl) ??
+      DEFAULT_POLICY.papernexusApiBaseUrl,
+    papernexusApiTokenEnv:
+      asString(config?.papernexusApiTokenEnv) ??
+      DEFAULT_POLICY.papernexusApiTokenEnv,
+    papernexusMineruHttpUrl:
+      asString(config?.papernexusMineruHttpUrl) ??
+      DEFAULT_POLICY.papernexusMineruHttpUrl,
     autoMode:
       config && typeof config === "object"
         ? normalizeWorkflowAutoMode((config as Record<string, unknown>).autoMode)
@@ -7103,6 +7121,9 @@ function buildDynamicTasks(params: {
   citationReportPath: string | null;
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
+  papernexusApiBaseUrl: string | null;
+  papernexusApiTokenEnv: string | null;
+  papernexusMineruHttpUrl: string | null;
 }): string[] {
   if (!params.role) {
     return [];
@@ -7142,6 +7163,19 @@ function buildDynamicTasks(params: {
     const missingSummary = summarizeGraphPresenceMissing(paperIngestion);
     tasks.unshift(
       `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and reconcile the shared global graph via /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
+    );
+  }
+
+  if (
+    params.role === "researcher" &&
+    (["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "") ||
+      paperIngestion?.refresh_required === true) &&
+    (params.papernexusApiBaseUrl ||
+      params.papernexusApiTokenEnv ||
+      params.papernexusMineruHttpUrl)
+  ) {
+    tasks.unshift(
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Keep the token in env only; do not paste secrets into chat, prompts, or project files.`
     );
   }
 
@@ -7452,6 +7486,18 @@ export async function buildWorkflowSnapshot(params: {
   const defaultPapernexusSourceDir = getDefaultPapernexusSourceDir(projectState.projectId);
   const resolvedPaperSourceDir = asString(projectState.manifest?.paper_source_dir) ?? null;
   const resolvedGraphSourceDir = asString(projectState.manifest?.graph_source_dir) ?? null;
+  const papernexusApiBaseUrl =
+    policy.papernexusApiBaseUrl.trim().length > 0
+      ? policy.papernexusApiBaseUrl
+      : null;
+  const papernexusApiTokenEnv =
+    policy.papernexusApiTokenEnv.trim().length > 0
+      ? policy.papernexusApiTokenEnv
+      : null;
+  const papernexusMineruHttpUrl =
+    policy.papernexusMineruHttpUrl.trim().length > 0
+      ? policy.papernexusMineruHttpUrl
+      : null;
 
   return {
     projectRoot: projectState.projectRoot,
@@ -7500,6 +7546,9 @@ export async function buildWorkflowSnapshot(params: {
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
     defaultPapernexusIndexRoot: getDefaultPapernexusIndexRoot(),
+    papernexusApiBaseUrl,
+    papernexusApiTokenEnv,
+    papernexusMineruHttpUrl,
     idleResearchEnabled: idleResearch.enabled,
     idleResearchTopic: idleResearch.topic,
     idleResearchStatus: idleResearch.status,
@@ -7675,6 +7724,18 @@ export async function buildWorkflowSnapshot(params: {
       citationReportPath: resolvedCitationReportPath,
       recentExperiments,
       unreadMailbox,
+      papernexusApiBaseUrl:
+        policy.papernexusApiBaseUrl.trim().length > 0
+          ? policy.papernexusApiBaseUrl
+          : null,
+      papernexusApiTokenEnv:
+        policy.papernexusApiTokenEnv.trim().length > 0
+          ? policy.papernexusApiTokenEnv
+          : null,
+      papernexusMineruHttpUrl:
+        policy.papernexusMineruHttpUrl.trim().length > 0
+          ? policy.papernexusMineruHttpUrl
+          : null,
     }),
   };
 }
@@ -7886,6 +7947,29 @@ export function formatWorkflowSnapshotForPrompt(params: {
     lines.push(
       `PaperNexus local defaults: papers=${snapshot.defaultPapernexusSourceDir ?? "unset"}, index=${snapshot.defaultPapernexusIndexRoot ?? "unset"}`
     );
+    if (
+      snapshot.papernexusApiBaseUrl ||
+      snapshot.papernexusApiTokenEnv ||
+      snapshot.papernexusMineruHttpUrl
+    ) {
+      lines.push(
+        `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
+      );
+      if (snapshot.papernexusApiBaseUrl && snapshot.papernexusApiTokenEnv) {
+        lines.push(
+          `Remote API rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}. Never print the raw token in chat, prompts, logs, or project files.`
+        );
+      } else if (snapshot.papernexusApiBaseUrl) {
+        lines.push(
+          `Remote API rule: prefer the configured PaperNexus Web/API endpoint at ${snapshot.papernexusApiBaseUrl} instead of assuming anonymous local access.`
+        );
+      }
+      if (snapshot.papernexusMineruHttpUrl) {
+        lines.push(
+          `PDF parser rule: Prefer remote MinerU at ${snapshot.papernexusMineruHttpUrl} for PDF materialization. Do not switch to local Docling or Marker unless the remote endpoint is unavailable or the task explicitly requires a local parser.`
+        );
+      }
+    }
   }
 
   lines.push(

@@ -138,8 +138,9 @@ Guidelines:
 - Stage 3 persists a staged graph under `.papernexus/staged/`; the merge stage rewrites that staged graph in place; Stage 4 consumes the merged staged graph and removes it after a successful commit.
 - Stage semantics:
   - Stage 1 `--continue` reuses markdown cache and snapshots when fingerprints still match; `--force` rematerializes source states; add `--rebuild-pdf-markdown` only when you really want to regenerate every PDF-derived markdown cache.
-  - Stage 2 `--continue` only retries or fills snapshots that still need LLM enrichment; `--force` reruns LLM optimization for all staged papers without re-decoding PDFs.
-  - Stage 3 `--continue` reuses the staged graph if it still matches the latest manifest; `--force` rebuilds the staged graph from snapshots.
+  - Stage 2 `--continue` is now dirty-only: it only reruns papers whose semantic objects or relation extraction are stale for the current config, failed but still retryable, or genuinely changed. If nothing is dirty, Stage 2 returns `reused: true` and does not rewrite the manifest.
+  - Stage 2 keeps separate semantic/relation freshness state per snapshot, so unchanged papers and already-complete sub-stages are reused directly.
+  - Stage 3 `--continue` reuses the staged graph if it still matches the latest manifest snapshot state, not just a fresh timestamp; a no-op Stage 2 should no longer invalidate Stage 3 by itself.
   - `merge-graph --continue` reuses an already-merged staged graph when it is still fresh; `--force` reruns canonicalization from the Stage 3 graph.
   - LLM-driven staged node deletion/renaming is currently disabled. Do not rely on `--node-llm-check` for merge-time pruning.
 - Stage 4 `--continue` commits the staged graph that Stage 3 and `merge-graph` already prepared; `--force` recommits that staged graph. Stage 4 now validates against the staged manifest, not raw input rescans.
