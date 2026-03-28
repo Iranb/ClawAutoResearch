@@ -32,7 +32,7 @@ async function makeProjectRoot() {
 function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
   const api = {
-    runtime: {},
+    runtime: params.runtime ?? {},
     logger: {},
     pluginConfig: params.pluginConfig,
     registerTool(spec) {
@@ -102,6 +102,48 @@ test("research_workflow get_papernexus_remote_access returns a redacted token st
   assert.equal(result.token, "[REDACTED]");
   assert.equal(result.summary.tokenSourceConfigured, "env");
   assert.equal(result.summary.tokenEnv, "PAPERNEXUS_API_TOKEN");
+});
+
+test("research_workflow gate-state actions persist timed-default confirmation metadata", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const setResult = await executeWorkflowTool(tool, {
+    action: "set_gate_state",
+    gateState: {
+      current_stage: "review",
+      last_gate: "CONFIRM-RESUME-1",
+      gate_status: "waiting",
+      gate_type: "timed_default",
+      auto_proceed: false,
+      confirmation_requested_at: "2026-03-28T09:00:00.000Z",
+      confirmation_deadline_at: "2026-03-28T10:00:00.000Z",
+      default_action: "resume_recommended_stage",
+      default_action_reason:
+        "No user reply within 1h; continue with the workflow-safe default branch.",
+    },
+  });
+  assert.equal(setResult.state.gateType, "timed_default");
+  assert.equal(setResult.timedDefaultEligible, true);
+
+  const summary = await executeWorkflowTool(tool, {
+    action: "get_gate_state",
+  });
+  assert.equal(summary.state.lastGate, "CONFIRM-RESUME-1");
+  assert.equal(summary.state.confirmationDeadlineAt, "2026-03-28T10:00:00.000Z");
+  assert.equal(summary.timedDefaultEligible, true);
 });
 
 test("research_workflow runtime-state actions persist manifest state and append temp traces", async (t) => {

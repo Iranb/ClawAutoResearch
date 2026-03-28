@@ -32,6 +32,27 @@ export type BackgroundRunRequest = {
   ensureProjectBinding?: boolean;
 };
 
+export type BackgroundRunRegistryViewEntry = BackgroundRunRegistryEntry & {
+  deleteEligible: boolean;
+  idleForMs: number | null;
+};
+
+export type BackgroundRunStartResult = {
+  started: boolean;
+  reason:
+    | "started"
+    | "channel_capacity_reached"
+    | "runtime_unavailable"
+    | "session_unavailable";
+  runId: string | null;
+  sessionKey: string | null;
+  projectRoot: string | null;
+  projectId: string | null;
+  summary: string;
+  reusedIdleSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
+};
+
 type BackgroundRunRegistryEntry = {
   ownerAgent: string;
   channelKey: string;
@@ -72,6 +93,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "research_pipeline":
     case "research_queue":
     case "resume_pipeline":
+    case "idle_research":
       return "research";
     case "papernexus_skill":
       return "papernexus";
@@ -238,6 +260,144 @@ async function pruneBackgroundRunRegistry(params: {
   return kept;
 }
 
+function toBackgroundRunRegistryViewEntry(
+  entry: BackgroundRunRegistryEntry,
+  nowMs: number
+): BackgroundRunRegistryViewEntry {
+  const idleReference =
+    entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+  const idleReferenceMs = Date.parse(idleReference);
+  const idleForMs =
+    entry.status === "idle" && Number.isFinite(idleReferenceMs)
+      ? Math.max(0, nowMs - idleReferenceMs)
+      : null;
+  return {
+    ...entry,
+    deleteEligible: entry.status === "idle",
+    idleForMs,
+  };
+}
+
+function matchesBackgroundRunRegistryFilters(
+  entry: BackgroundRunRegistryEntry,
+  filters: {
+    ownerAgent?: string | null;
+    channelKey?: string | null;
+    family?: string | null;
+    projectId?: string | null;
+    projectRoot?: string | null;
+  }
+): boolean {
+  const ownerAgent = normalizeAgentId(filters.ownerAgent);
+  if (ownerAgent && entry.ownerAgent !== ownerAgent) {
+    return false;
+  }
+  const channelKey = readString(filters.channelKey) ?? null;
+  if (channelKey && entry.channelKey !== channelKey) {
+    return false;
+  }
+  const family = readString(filters.family) ?? null;
+  if (family && entry.family !== family) {
+    return false;
+  }
+  return backgroundRunRegistryEntryMatchesProject(
+    entry,
+    readString(filters.projectId) ?? null,
+    readString(filters.projectRoot) ?? null
+  );
+}
+
+export async function listBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+  };
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+}): Promise<{
+  entries: BackgroundRunRegistryViewEntry[];
+}> {
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+  });
+  const nowMs = Date.now();
+  return {
+    entries: refreshed
+      .filter((entry) => matchesBackgroundRunRegistryFilters(entry, params))
+      .map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  };
+}
+
+export async function pruneBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+    deleteSession?: (params: {
+      sessionKey: string;
+      deleteTranscript?: boolean;
+    }) => Promise<void>;
+  };
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  idleOlderThanMs?: number;
+  deleteSessions?: boolean;
+}): Promise<{
+  kept: BackgroundRunRegistryViewEntry[];
+  removed: BackgroundRunRegistryViewEntry[];
+}> {
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+  });
+  const nowMs = Date.now();
+  const idleOlderThanMs =
+    typeof params.idleOlderThanMs === "number" && Number.isFinite(params.idleOlderThanMs)
+      ? Math.max(0, Math.floor(params.idleOlderThanMs))
+      : BACKGROUND_RUN_STALE_MS;
+  const kept: BackgroundRunRegistryEntry[] = [];
+  const removed: BackgroundRunRegistryEntry[] = [];
+  for (const entry of refreshed) {
+    if (!matchesBackgroundRunRegistryFilters(entry, params)) {
+      kept.push(entry);
+      continue;
+    }
+    const idleReference =
+      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+    const idleReferenceMs = Date.parse(idleReference);
+    const idleForMs =
+      entry.status === "idle" && Number.isFinite(idleReferenceMs)
+        ? Math.max(0, nowMs - idleReferenceMs)
+        : 0;
+    if (entry.status === "idle" && idleForMs >= idleOlderThanMs) {
+      removed.push(entry);
+      continue;
+    }
+    kept.push(entry);
+  }
+  await writeBackgroundRunRegistry(kept);
+  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
+    for (const entry of removed) {
+      await params.runtimeSubagent.deleteSession({
+        sessionKey: entry.backgroundSessionKey,
+        deleteTranscript: false,
+      });
+    }
+  }
+  return {
+    kept: kept.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+    removed: removed.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  };
+}
+
 async function upsertBackgroundRunRegistryEntry(
   entry: BackgroundRunRegistryEntry
 ): Promise<void> {
@@ -319,12 +479,16 @@ export async function startBackgroundWorkflowRun(params: {
       status: "ok" | "error" | "timeout";
       error?: string;
     }>;
+    deleteSession?: (params: {
+      sessionKey: string;
+      deleteTranscript?: boolean;
+    }) => Promise<void>;
   };
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
   snapshot: BackgroundRunSnapshot;
   backgroundRun: BackgroundRunRequest;
-}) {
+}): Promise<BackgroundRunStartResult> {
   if (!params.runtimeSubagent) {
     throw new Error(
       "Background workflow execution requires gateway runtime.subagent access."
@@ -391,6 +555,8 @@ export async function startBackgroundWorkflowRun(params: {
           )
       : normalizedKind === "papernexus_skill"
         ? buildPapernexusSkillBackgroundCommand("/graph-build")
+      : normalizedKind === "idle_research"
+        ? requestedCommandText ?? null
       : null);
   if (!commandText) {
     throw new Error(
@@ -415,6 +581,7 @@ export async function startBackgroundWorkflowRun(params: {
     params.snapshot.projectRoot ??
     null;
   let reusableBackgroundSessionKey: string | null = null;
+  let activeResearcherSessionsInChannel: number | null = null;
   if (ownerAgent === "researcher" && channelKey) {
     const registryEntries = await pruneBackgroundRunRegistry({
       runtimeSubagent: params.runtimeSubagent,
@@ -439,9 +606,11 @@ export async function startBackgroundWorkflowRun(params: {
         entry.status === "active" &&
         entry.backgroundSessionKey !== reusableBackgroundSessionKey
     );
+    activeResearcherSessionsInChannel = activeChannelEntries.length;
     if (activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL) {
       return {
         started: false,
+        reason: "channel_capacity_reached",
         runId: null,
         sessionKey: null,
         projectRoot:
@@ -451,6 +620,8 @@ export async function startBackgroundWorkflowRun(params: {
           `Background workflow not started: this channel already has ` +
           `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL} active Researcher background subagents. ` +
           "Wait for one to finish before starting another.",
+        reusedIdleSession: false,
+        activeResearcherSessionsInChannel,
       };
     }
   }
@@ -505,6 +676,7 @@ export async function startBackgroundWorkflowRun(params: {
 
   return {
     started: true,
+    reason: "started",
     runId,
     sessionKey: backgroundSessionKey,
     projectRoot:
@@ -516,8 +688,12 @@ export async function startBackgroundWorkflowRun(params: {
         ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background research pipeline started for"} ${topic ?? ensuredProject?.title ?? "research topic"}.`
         : normalizedKind === "resume_pipeline"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
+        : normalizedKind === "idle_research"
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Idle research started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current project"}.`
         : normalizedKind === "papernexus_skill"
           ? `${reusableBackgroundSessionKey ? "Reused an idle dedicated PaperNexus subagent and started" : "PaperNexus-heavy workflow task started in a dedicated subagent for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
         : "Background workflow run started."),
+    reusedIdleSession: Boolean(reusableBackgroundSessionKey),
+    activeResearcherSessionsInChannel,
   };
 }

@@ -1153,6 +1153,46 @@ test("auto iterator keeps submit blocked in aggressive mode while auto gate revi
   assert.match(result.gateReason ?? "", /auto review is pending/i);
 });
 
+test("auto iterator clears a timed-default waiting gate after the confirmation deadline expires", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForCode(projectRoot);
+  await writeJson(path.join(projectRoot, "researcher", "GATE_STATE.json"), {
+    current_stage: "code",
+    last_gate: "CONFIRM-RESUME-1",
+    gate_status: "waiting",
+    gate_type: "timed_default",
+    auto_proceed: false,
+    confirmation_requested_at: "2026-03-28T09:00:00.000Z",
+    confirmation_deadline_at: "2026-03-28T10:00:00.000Z",
+    default_action: "resume_recommended_stage",
+    default_action_reason:
+      "No user reply within 1h; continue with the workflow-safe default branch.",
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    now: "2026-03-28T10:05:00.000Z",
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "code");
+  assert.equal(result.gateBlocking, false);
+  assert.equal(result.timedDefaultTriggered, true);
+  assert.match(result.gateReason ?? "", /timed-default/i);
+
+  const savedGate = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "GATE_STATE.json"), "utf8")
+  );
+  assert.equal(savedGate.gate_status, "approved");
+  assert.equal(savedGate.default_action_executed_at, "2026-03-28T10:05:00.000Z");
+});
+
 test("auto iterator advances submit to done when aggressive auto gate review is approved", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

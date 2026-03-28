@@ -10,6 +10,7 @@ import {
   enqueueWorkflowTask,
   resolveWorkflowProjectQueueKey,
 } from "./workflow-coordination";
+import { startBackgroundWorkflowRun } from "./workflow-fast-paths";
 import {
   getIdleResearchStateSummary,
   listChannelProjectBindingsForWorkflow,
@@ -97,13 +98,17 @@ type IdleResearchLaunchAttempt = {
     | "idle_research_disabled"
     | "idle_research_not_due"
     | "idle_research_topic_missing"
-    | "idle_research_already_launched";
+    | "idle_research_already_launched"
+    | "channel_capacity_reached";
   projectId: string | null;
   projectRoot: string;
   topic: string | null;
   sessionKey: string | null;
   runId: string | null;
   dueKey: string | null;
+  summary: string | null;
+  reusedIdleSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
 };
 
 type AutoStageLaunchAttempt = {
@@ -558,6 +563,8 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   projectId: string | null;
   projectRoot: string;
   stageAfter: string | null;
+  timedDefaultTriggered?: boolean;
+  timedDefaultSummary?: string | null;
   autoGateReview: AutoGateReviewAttempt;
   autoModeDiscussion: AutoModeDiscussionAttempt;
   autoMitigationDispatch: AutoModeMitigationDispatchAttempt;
@@ -589,15 +596,47 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
       ].join(":"),
     };
   }
+  if (params.timedDefaultTriggered) {
+    return {
+      status: "started",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.timedDefaultSummary ??
+        "No user reply arrived before the confirmation deadline, so the workflow continued through the default safe branch.",
+      dedupeKey: [
+        "timed-default",
+        params.stageAfter ?? "unknown-stage",
+        params.projectId ?? path.basename(params.projectRoot),
+      ].join(":"),
+    };
+  }
   if (params.idleResearchLaunch.launched) {
     return {
       status: "started",
       stage: params.stageAfter ?? null,
-      summary: `Idle research started${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""}.`,
+      summary:
+        params.idleResearchLaunch.summary ??
+        `Idle research started${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""}.`,
       dedupeKey: [
         "idle-research",
         params.idleResearchLaunch.topic ?? "unknown-topic",
         params.idleResearchLaunch.dueKey ?? "due-now",
+        params.idleResearchLaunch.reusedIdleSession ? "reused" : "fresh",
+      ].join(":"),
+    };
+  }
+  if (params.idleResearchLaunch.reason === "channel_capacity_reached") {
+    return {
+      status: "waiting",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.idleResearchLaunch.summary ??
+        `Waiting to start idle research${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""} because this channel already has active Researcher background sessions.`,
+      dedupeKey: [
+        "idle-research",
+        "capacity",
+        params.idleResearchLaunch.topic ?? "unknown-topic",
+        String(params.idleResearchLaunch.activeResearcherSessionsInChannel ?? "unknown"),
       ].join(":"),
     };
   }
@@ -720,6 +759,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey: null,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -734,6 +776,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey: null,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -752,6 +797,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey: null,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (!idleResearch.due) {
@@ -765,6 +813,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey: null,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (!topic) {
@@ -778,6 +829,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey: null,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -796,6 +850,9 @@ export async function maybeLaunchIdleResearchForProject(params: {
           sessionKey: null,
           runId: null,
           dueKey,
+          summary: null,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -804,24 +861,55 @@ export async function maybeLaunchIdleResearchForProject(params: {
         workflowPolicy: params.workflowPolicy,
         deps,
       });
-      const runId = (
-        await params.runtimeSubagent.run({
+      const launched = await startBackgroundWorkflowRun({
+        runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: params.projectRoot,
           sessionKey,
-          message: buildIdleResearchCoordinatorMessage({
+          messageChannel: "discord",
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          channelProjectBindingsEnabled:
+            params.workflowPolicy.enableChannelProjectBindings === true,
+        },
+        backgroundRun: {
+          kind: "idle_research",
+          commandText: buildIdleResearchCoordinatorMessage({
             projectId: params.projectId,
             projectRoot: params.projectRoot,
             topic,
           }),
-          lane: "nested",
-          deliver: false,
-          idempotencyKey: slugifyForIdempotency(
-            `openclaw-research:idle-research:${params.projectId ?? path.basename(params.projectRoot)}:${dueKey}`
-          ),
-          extraSystemPrompt:
-            "Workflow idle-research background continuation.\n" +
-            "Execute only for the specified project, obey the idle_research contract, and record the round durably.",
-        })
-      ).runId;
+          topic,
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+          ensureProjectBinding: false,
+          summary: `Idle research started for ${topic}.`,
+        },
+      });
+      if (!launched.started || !launched.runId || !launched.sessionKey) {
+        return {
+          launched: false,
+          reason:
+            launched.reason === "channel_capacity_reached"
+              ? "channel_capacity_reached"
+              : "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          topic,
+          sessionKey: null,
+          runId: null,
+          dueKey,
+          summary: launched.summary,
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel:
+            launched.activeResearcherSessionsInChannel,
+        };
+      }
       params.launchedDueKeys.set(params.projectRoot, dueKey);
       return {
         launched: true,
@@ -829,9 +917,13 @@ export async function maybeLaunchIdleResearchForProject(params: {
         projectId: params.projectId,
         projectRoot: params.projectRoot,
         topic,
-        sessionKey,
-        runId,
+        sessionKey: launched.sessionKey,
+        runId: launched.runId,
         dueKey,
+        summary: launched.summary,
+        reusedIdleSession: launched.reusedIdleSession,
+        activeResearcherSessionsInChannel:
+          launched.activeResearcherSessionsInChannel,
       };
     },
   });
@@ -2251,6 +2343,8 @@ export function createWorkflowCoordinatorService(
               projectId: entry.projectId,
               projectRoot: entry.projectRoot,
               stageAfter: entry.result.stageAfter ?? null,
+              timedDefaultTriggered: entry.result.timedDefaultTriggered === true,
+              timedDefaultSummary: entry.result.gateReason,
               autoGateReview: autoGateReviews[index],
               autoModeDiscussion: autoModeDiscussions[index],
               autoMitigationDispatch: autoMitigationAttempts[index],

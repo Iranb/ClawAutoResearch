@@ -13,6 +13,7 @@ import {
   getExternalReviewStateSummary,
   getExperimentMemorySummary,
   getFigureQcStateSummary,
+  getGateStateSummary,
   getGraphGuidedWritingStateSummary,
   getIdleResearchStateSummary,
   getInnovationReflectionStateSummary,
@@ -44,6 +45,7 @@ import {
   setExperimentSearchState,
   setExternalReviewState,
   setFigureQcState,
+  setGateStateForWorkflow,
   setGraphGuidedWritingState,
   setIdleResearchState,
   setOrchestrationState,
@@ -65,6 +67,8 @@ import {
 import { maybeBroadcastAutoIteratorStageChange } from "./stage-broadcast";
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
+  listBackgroundWorkflowRuns,
+  pruneBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
 } from "./workflow-fast-paths";
@@ -102,6 +106,8 @@ type AutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
+  "set_gate_state",
+  "prune_background_sessions",
   "bind_channel_project",
   "unbind_channel_project",
   "dispatch_task",
@@ -152,6 +158,10 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_experiment_search: "setExperimentSearchState",
   get_external_review_state: "getExternalReviewStateSummary",
   set_external_review_state: "setExternalReviewState",
+  get_gate_state: "getGateStateSummary",
+  set_gate_state: "setGateStateForWorkflow",
+  list_background_sessions: "listBackgroundWorkflowRuns",
+  prune_background_sessions: "pruneBackgroundWorkflowRuns",
   get_gate_review_state: "readGateReviewStore",
   upsert_experiment: "upsertExperimentLedgerEntry",
   record_theory_state: "recordTheoryState",
@@ -428,6 +438,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_experiment_search",
               "get_external_review_state",
               "set_external_review_state",
+              "get_gate_state",
+              "set_gate_state",
+              "list_background_sessions",
+              "prune_background_sessions",
               "get_gate_review_state",
               "upsert_experiment",
               "record_theory_state",
@@ -542,7 +556,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          gateState: {
+            type: "object",
+            additionalProperties: true,
+          },
           graphGuidedWriting: {
+            type: "object",
+            additionalProperties: true,
+          },
+          backgroundSessions: {
             type: "object",
             additionalProperties: true,
           },
@@ -842,6 +864,57 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 agentCtx: ctx,
                 snapshot,
                 backgroundRun,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "list_background_sessions": {
+              const backgroundSessions = asObject(params.backgroundSessions);
+              const result = await listBackgroundWorkflowRuns({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
+                channelKey:
+                  readString(backgroundSessions?.channelKey) ??
+                  readString(channelBinding?.channelKey) ??
+                  snapshot.channelProjectBindingKey,
+                family: readString(backgroundSessions?.family),
+                projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
+                projectRoot: readString(backgroundSessions?.projectRoot) ?? projectRoot,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "prune_background_sessions": {
+              const backgroundSessions = asObject(params.backgroundSessions);
+              const result = await pruneBackgroundWorkflowRuns({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
+                channelKey:
+                  readString(backgroundSessions?.channelKey) ??
+                  readString(channelBinding?.channelKey) ??
+                  snapshot.channelProjectBindingKey,
+                family: readString(backgroundSessions?.family),
+                projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
+                projectRoot: readString(backgroundSessions?.projectRoot) ?? projectRoot,
+                idleOlderThanMs: readNumber(backgroundSessions?.idleOlderThanMs),
+                deleteSessions: backgroundSessions?.deleteSessions === true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_gate_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await getGateStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_gate_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const gateState = requireObject<Record<string, unknown>>(
+                params.gateState,
+                "gateState"
+              );
+              const result = await setGateStateForWorkflow({
+                projectRoot: resolvedProjectRoot,
+                gateState,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

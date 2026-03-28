@@ -899,8 +899,16 @@ type GateState = {
   currentStage: string | null;
   lastGate: string | null;
   gateStatus: string | null;
+  gateType: string | null;
   gateTimestamp: string | null;
   autoProceed: boolean | null;
+  confirmationRequestedAt: string | null;
+  confirmationDeadlineAt: string | null;
+  defaultAction: string | null;
+  defaultActionReason: string | null;
+  defaultActionExecutedAt: string | null;
+  userOverrideReceivedAt: string | null;
+  userOverrideValue: string | null;
   revisionCount: number | null;
   notes: string | null;
 };
@@ -936,6 +944,7 @@ export type AutoIteratorResult = {
   regressed: boolean;
   gateBlocking: boolean;
   gateReason: string | null;
+  timedDefaultTriggered: boolean;
   missingStageSignals: string[];
   ownerBefore: string | null;
   ownerAfter: WorkflowRole | null;
@@ -2717,6 +2726,7 @@ function normalizeGateState(value: unknown): GateState {
     currentStage: normalizeStage(record.current_stage ?? record.currentStage),
     lastGate: pickString(record, ["last_gate", "lastGate"]),
     gateStatus: normalizeStage(record.gate_status ?? record.gateStatus),
+    gateType: normalizeStage(record.gate_type ?? record.gateType),
     gateTimestamp: pickString(record, ["gate_timestamp", "gateTimestamp"]),
     autoProceed:
       typeof record.auto_proceed === "boolean"
@@ -2724,6 +2734,31 @@ function normalizeGateState(value: unknown): GateState {
         : typeof record.autoProceed === "boolean"
           ? record.autoProceed
           : null,
+    confirmationRequestedAt: pickString(record, [
+      "confirmation_requested_at",
+      "confirmationRequestedAt",
+    ]),
+    confirmationDeadlineAt: pickString(record, [
+      "confirmation_deadline_at",
+      "confirmationDeadlineAt",
+    ]),
+    defaultAction: pickString(record, ["default_action", "defaultAction"]),
+    defaultActionReason: pickString(record, [
+      "default_action_reason",
+      "defaultActionReason",
+    ]),
+    defaultActionExecutedAt: pickString(record, [
+      "default_action_executed_at",
+      "defaultActionExecutedAt",
+    ]),
+    userOverrideReceivedAt: pickString(record, [
+      "user_override_received_at",
+      "userOverrideReceivedAt",
+    ]),
+    userOverrideValue: pickString(record, [
+      "user_override_value",
+      "userOverrideValue",
+    ]),
     revisionCount:
       typeof record.revision_count === "number" && Number.isFinite(record.revision_count)
         ? Math.max(0, Math.floor(record.revision_count))
@@ -2739,8 +2774,16 @@ function serializeGateState(state: GateState): Record<string, unknown> {
     current_stage: state.currentStage,
     last_gate: state.lastGate,
     gate_status: state.gateStatus,
+    gate_type: state.gateType,
     gate_timestamp: state.gateTimestamp,
     auto_proceed: state.autoProceed,
+    confirmation_requested_at: state.confirmationRequestedAt,
+    confirmation_deadline_at: state.confirmationDeadlineAt,
+    default_action: state.defaultAction,
+    default_action_reason: state.defaultActionReason,
+    default_action_executed_at: state.defaultActionExecutedAt,
+    user_override_received_at: state.userOverrideReceivedAt,
+    user_override_value: state.userOverrideValue,
     revision_count: state.revisionCount,
     notes: state.notes,
   };
@@ -2754,6 +2797,82 @@ async function readGateState(projectRoot: string): Promise<GateState> {
 
 async function saveGateState(projectRoot: string, gateState: GateState): Promise<void> {
   await writeJsonEnsured(getGateStatePath(projectRoot), serializeGateState(gateState));
+}
+
+function computeGateConfirmationDeadline(state: GateState): string | null {
+  if (state.confirmationDeadlineAt) {
+    return state.confirmationDeadlineAt;
+  }
+  if (!state.confirmationRequestedAt) {
+    return null;
+  }
+  const requestedMs = Date.parse(state.confirmationRequestedAt);
+  if (!Number.isFinite(requestedMs)) {
+    return null;
+  }
+  return new Date(requestedMs + 60 * 60 * 1000).toISOString();
+}
+
+function isTimedDefaultGate(state: GateState): boolean {
+  return normalizeStage(state.gateType) === "timed_default";
+}
+
+function hasTimedDefaultGateExpired(state: GateState, now: string): boolean {
+  if (!isTimedDefaultGate(state)) {
+    return false;
+  }
+  const deadline = computeGateConfirmationDeadline(state);
+  if (!deadline) {
+    return false;
+  }
+  return Date.parse(now) >= Date.parse(deadline);
+}
+
+export async function getGateStateSummary(params: {
+  projectRoot: string;
+  now?: string;
+}): Promise<{
+  state: GateState;
+  timedDefaultEligible: boolean;
+  timedDefaultExpired: boolean;
+  confirmationDeadlineAt: string | null;
+}> {
+  const state = await readGateState(params.projectRoot);
+  const confirmationDeadlineAt = computeGateConfirmationDeadline(state);
+  const now = params.now ?? new Date().toISOString();
+  return {
+    state: {
+      ...state,
+      confirmationDeadlineAt,
+    },
+    timedDefaultEligible: isTimedDefaultGate(state),
+    timedDefaultExpired: hasTimedDefaultGateExpired(state, now),
+    confirmationDeadlineAt,
+  };
+}
+
+export async function setGateStateForWorkflow(params: {
+  projectRoot: string;
+  gateState: Record<string, unknown>;
+}): Promise<{
+  state: GateState;
+  timedDefaultEligible: boolean;
+  timedDefaultExpired: boolean;
+  confirmationDeadlineAt: string | null;
+}> {
+  const current = await readGateState(params.projectRoot);
+  const next = normalizeGateState({
+    ...serializeGateState(current),
+    ...params.gateState,
+  });
+  next.confirmationDeadlineAt = computeGateConfirmationDeadline(next);
+  await saveGateState(params.projectRoot, next);
+  return {
+    state: next,
+    timedDefaultEligible: isTimedDefaultGate(next),
+    timedDefaultExpired: hasTimedDefaultGateExpired(next, new Date().toISOString()),
+    confirmationDeadlineAt: next.confirmationDeadlineAt,
+  };
 }
 
 function getProjectsStatePath(projectRoot: string): string {
@@ -2814,34 +2933,52 @@ async function evaluateGateBlocking(params: {
   hasStageWorkRemaining?: boolean;
   effectiveAutoMode: WorkflowAutoMode;
   autoGate: WorkflowAutoGateConfig;
-}): Promise<{ blocking: boolean; reason: string | null }> {
+  now: string;
+}): Promise<{
+  blocking: boolean;
+  reason: string | null;
+  timedDefaultTriggered: boolean;
+}> {
   const stage = params.stage;
   const gateStatus = params.gateState.gateStatus;
   const lastGate = params.gateState.lastGate?.trim().toUpperCase() ?? null;
   if (stage === "submit" && params.hasStageWorkRemaining !== true) {
-    return evaluateSubmitAutoGate({
+    const submitResult = await evaluateSubmitAutoGate({
       projectRoot: params.projectRoot,
       autoMode: params.effectiveAutoMode,
       autoGate: params.autoGate,
       hasStageWorkRemaining: false,
     });
+    return {
+      ...submitResult,
+      timedDefaultTriggered: false,
+    };
   }
   if (gateStatus !== "waiting") {
-    return { blocking: false, reason: null };
+    return { blocking: false, reason: null, timedDefaultTriggered: false };
+  }
+  if (hasTimedDefaultGateExpired(params.gateState, params.now)) {
+    return {
+      blocking: false,
+      reason: `Timed-default ${lastGate ?? "workflow gate"} expired after the confirmation deadline; continuing via the default workflow-safe branch.`,
+      timedDefaultTriggered: true,
+    };
   }
   if (lastGate === "GATE-5") {
     return {
       blocking: true,
       reason: "GATE-5 revision decision is waiting on human input.",
+      timedDefaultTriggered: false,
     };
   }
   if (params.gateState.autoProceed === false) {
     return {
       blocking: true,
       reason: `${lastGate ?? "workflow gate"} is waiting and AUTO_PROCEED=false.`,
+      timedDefaultTriggered: false,
     };
   }
-  return { blocking: false, reason: null };
+  return { blocking: false, reason: null, timedDefaultTriggered: false };
 }
 
 async function syncProjectsStateEntry(params: {
@@ -12521,6 +12658,7 @@ export async function runWorkflowAutoIterator(params: {
   queueMailbox?: boolean;
   cooldownSeconds?: number;
   policy?: WorkflowGuardPolicy;
+  now?: string;
 }): Promise<AutoIteratorResult> {
   const projectRoot = path.resolve(params.projectRoot);
   const workflowPolicy = normalizePolicy(params.policy as Record<string, unknown> | undefined);
@@ -12532,7 +12670,7 @@ export async function runWorkflowAutoIterator(params: {
   let manifest = { ...(manifestRaw ?? {}) };
   const gateState = await readGateState(projectRoot);
   const actorRole = normalizeRole(params.agentId);
-  const now = new Date().toISOString();
+  const now = params.now ?? new Date().toISOString();
   const projectId = inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
   const stageBefore =
@@ -12632,6 +12770,7 @@ export async function runWorkflowAutoIterator(params: {
     hasStageWorkRemaining: effectiveMissingSignals.length > 0,
     effectiveAutoMode: autoModeEvaluation.effectiveMode,
     autoGate: workflowPolicy.autoGate,
+    now,
   });
 
   let stageAfter = stageEffective;
@@ -12700,11 +12839,16 @@ export async function runWorkflowAutoIterator(params: {
         ? gateState.lastGate ?? "GATE-5"
         : gateState.lastGate,
     gateStatus:
-      gateEvaluation.blocking
+      gateEvaluation.timedDefaultTriggered
+        ? "approved"
+        : gateEvaluation.blocking
         ? "waiting"
         : gateState.gateStatus === "waiting"
           ? "approved"
           : gateState.gateStatus,
+    defaultActionExecutedAt: gateEvaluation.timedDefaultTriggered
+      ? gateState.defaultActionExecutedAt ?? now
+      : gateState.defaultActionExecutedAt,
   };
   await saveGateState(projectRoot, nextGateState);
 
@@ -12883,6 +13027,7 @@ export async function runWorkflowAutoIterator(params: {
     regressed,
     gateBlocking: gateEvaluation.blocking,
     gateReason: gateEvaluation.reason,
+    timedDefaultTriggered: gateEvaluation.timedDefaultTriggered,
     missingStageSignals: activeStageSignals,
     ownerBefore,
     ownerAfter,

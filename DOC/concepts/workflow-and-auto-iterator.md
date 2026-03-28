@@ -156,3 +156,20 @@ list: [
 - ledger 中出现了新的可反思实验结果
 - `innovation_reflection` 仍然是旧的
 - 插件会要求先刷新 `INNOVATION_REFLECTION.md`
+
+## 11. Discord 响应性与后台子 Agent
+
+随着 workflow 越来越依赖后台子 Agent、shared graph、PaperNexus import 和自动调度，`Researcher` 的一个新问题变得越来越重要：
+
+- 用户在 Discord 或 Dashboard 上触发任务后，前台容易“看起来没有反应”
+- 实际上后台可能已经在排队、等待 PaperNexus import、等待 graph refresh，或者复用了已有子会话
+
+因此，后续 workflow 的一个重点演进方向是：
+
+- 统一 `Researcher` 的后台子 Agent 会话池
+- 给用户可见的 `started / queued / waiting / blocked / completed` 状态广播
+- 将 `waiting_import / waiting_graph / reconciling` 建模成正式 runtime state
+
+详细设计见：
+
+- [Researcher Discord 响应性与后台子 Agent 控制设计](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/specs/2026-03-28-researcher-discord-responsiveness-design.zh-CN.md)

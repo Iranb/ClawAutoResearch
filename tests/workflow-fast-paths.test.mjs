@@ -14,6 +14,8 @@ import {
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   clearBackgroundWorkflowRunRegistryForTests,
+  listBackgroundWorkflowRuns,
+  pruneBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
 
@@ -254,7 +256,9 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   });
 
   assert.equal(result.started, true);
+  assert.equal(result.reason, "started");
   assert.equal(result.runId, "bg-run-1");
+  assert.equal(result.reusedIdleSession, false);
   assert.equal(runCalls.length, 1);
   assert.notEqual(runCalls[0].sessionKey, sessionKey);
   assert.match(runCalls[0].sessionKey, /^agent:researcher:discord:group:birds-room:subagent:/);
@@ -383,7 +387,9 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
   assert.equal(first.started, true);
   assert.equal(second.started, true);
   assert.equal(third.started, false);
+  assert.equal(third.reason, "channel_capacity_reached");
   assert.equal(third.runId, null);
+  assert.equal(third.activeResearcherSessionsInChannel, 2);
   assert.match(third.summary, /already has 2 active researcher background subagents/i);
   assert.equal(runCalls.length, 2);
 });
@@ -544,7 +550,94 @@ test("startBackgroundWorkflowRun reuses an idle researcher subagent session for 
 
   assert.equal(first.started, true);
   assert.equal(second.started, true);
+  assert.equal(second.reusedIdleSession, true);
   assert.equal(runCalls.length, 2);
   assert.equal(second.sessionKey, first.sessionKey);
   assert.equal(runCalls[1].sessionKey, runCalls[0].sessionKey);
+});
+
+test("background workflow run inventory reports active then idle sessions and prune removes eligible idle entries", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const deletedSessions = [];
+  const completedRunIds = new Set();
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+    async waitForRun(params) {
+      return completedRunIds.has(params.runId)
+        ? { status: "ok" }
+        : { status: "timeout" };
+    },
+    async deleteSession(params) {
+      deletedSessions.push(params);
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const launch = await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:inventory-room",
+      sessionId: "session-bg-inventory-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      projectId: "inventory-project",
+      topic: "inventory topic",
+    },
+  });
+
+  const activeInventory = await listBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+  });
+  assert.equal(activeInventory.entries.length, 1);
+  assert.equal(activeInventory.entries[0].status, "active");
+  assert.equal(activeInventory.entries[0].deleteEligible, false);
+
+  completedRunIds.add(launch.runId);
+
+  const idleInventory = await listBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+  });
+  assert.equal(idleInventory.entries.length, 1);
+  assert.equal(idleInventory.entries[0].status, "idle");
+  assert.equal(idleInventory.entries[0].deleteEligible, true);
+
+  const pruned = await pruneBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+    idleOlderThanMs: 0,
+    deleteSessions: true,
+  });
+  assert.equal(pruned.removed.length, 1);
+  assert.equal(pruned.removed[0].status, "idle");
+  assert.equal(deletedSessions.length, 1);
+
+  const afterPrune = await listBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+  });
+  assert.equal(afterPrune.entries.length, 0);
 });

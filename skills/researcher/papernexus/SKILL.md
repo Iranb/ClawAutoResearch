@@ -1,6 +1,6 @@
 ---
 name: papernexus
-description: Use this skill when working inside the PaperNexus repository to understand its CLI, corpus layout, storage backends, enhancement worker, and service workflow. Helpful for agents making code changes, running the CLI, debugging config/path issues, or operating PaperNexus as a local research graph system.
+description: Use this skill when working inside the PaperNexus repository to understand its API-first graph workflow, corpus layout, storage backends, enhancement worker, and service model while keeping live-graph operations on authenticated HTTP endpoints.
 ---
 
 # PaperNexus
@@ -14,12 +14,63 @@ PaperNexus is a local-first research knowledge graph system for papers.
 Key capabilities:
 
 - ingest PDF or Markdown sources
-- use remote `mineru` over HTTP as the preferred default PDF-to-Markdown parser, with `docling` and `marker` as switchable fallbacks
+- use `docling` as the repo-default PDF-to-Markdown parser, while allowing deployments to override to remote `mineru` over HTTP or local `marker`
 - build and incrementally update a multilayer research graph
 - store the authoritative graph in Kuzu by default
 - keep a lite JSON graph for fast read paths
+- accept queued API imports with per-task logs and content-fingerprint dedupe
 - run background theory/storyline enhancement workers
+- run import and authoritative-sync background workers behind `serve`
 - expose CLI, local web UI, and MCP server workflows
+
+## Live Graph Access Policy
+
+When touching a running user graph, use the authenticated HTTP API only.
+
+This applies to:
+
+- uploading new PDF or Markdown sources into the graph
+- checking import status
+- reading corpus metadata or graph payloads
+- reading enhancement overlays for a paper or corpus
+- performing graph-backed query or reasoning requests
+
+Do not use local CLI commands such as `papernexus analyze`, `papernexus materialize`, `papernexus stage1-4`, `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, or `papernexus brainstorm` against a live user graph.
+
+Allowed live-graph entrypoints:
+
+- `GET /api/health`
+- `GET /api/corpora`
+- `GET /api/corpus?name=<corpus>`
+- `GET /api/corpus-meta?name=<corpus>`
+- `GET /api/enhancements?name=<corpus>`
+- `GET /api/paper-enhancement?name=<corpus>&paperId=<paperId>`
+- `GET /api/imports?name=<corpus>`
+- `POST /api/imports?name=<corpus>`
+- `GET /api/imports/:taskId`
+- `GET /api/imports/:taskId/log`
+- `POST /api/query`
+- `POST /api/context`
+- `POST /api/impact`
+- `POST /api/ideas`
+- `POST /api/brainstorm`
+- `POST /api/path-trace`
+- `POST /api/evidence-chain`
+- `POST /api/reflection-chain`
+- `POST /api/research-brief`
+- `POST /api/brainstorm-brief`
+- `POST /api/theory-brief`
+- `POST /api/storyline-brief`
+
+Every `/api/*` request must include:
+
+- `Authorization: Bearer <token>`
+
+Important query policy:
+
+- prefer the typed HTTP query APIs over raw graph downloads whenever they fit the task
+- use `GET /api/corpus` only when you truly need raw graph inspection beyond what the typed APIs expose
+- if the available API payload is insufficient for the requested reasoning task, report that the server lacks the needed query endpoint; do not fall back to local CLI against the live graph
 
 ## Important Paths
 
@@ -112,9 +163,10 @@ Guidelines:
 - Multiple `sources.inputs` may feed one corpus; that is not the same as cross-corpus federation.
 - `~` expansion in config paths is supported and should resolve to the user home directory.
 - The graph backend defaults to Kuzu when the `kuzu` package is available.
-- The default PDF parser is remote `mineru` in HTTP API mode; agents should prefer this path whenever a task needs PDF materialization.
+- Repo default: `docling` is the default PDF parser unless config overrides it.
+- Deployment policy: do not assume the parser from repo defaults alone. Check `config.json`, CLI flags, or the running service config first. Many deployed corpora pin `analyze.pdfParser = "mineru"` with `analyze.mineruHttpUrl`.
 - For MinerU HTTP API, use `analyze.mineruHttpUrl` or `--mineru-http-url` to specify the remote endpoint (e.g., `http://211.71.76.29:30000`).
-- Agent policy: when the source is a PDF, try the remote MinerU path first; do not switch to local Docling or Marker unless the remote endpoint is unavailable or the task explicitly requires a local parser.
+- If a live deployment is already configured for remote MinerU, prefer staying on that configured path rather than switching parsers ad hoc.
 - Remote MinerU failure handling should default to stopping with a warning. Only use `--mineru-remote-failure docling` when the task explicitly wants an automatic fallback.
 - For local macOS OCR with Docling, use `analyze.doclingOcrEngine = "ocrmac"` or `--docling-ocr-engine ocrmac`.
 - For Docling PDF parsing backend, use `analyze.doclingPdfBackend` or `--docling-pdf-backend`. Available backends: `pypdfium2` (recommended), `pdfplumber`, `fitz`, `pypdf`.
@@ -134,6 +186,18 @@ Guidelines:
 - `papernexus optimize` is still available as a convenience path for stages 2-5 together.
 - Ad hoc PDF/Markdown uploads should normally enter through queued import tasks under `.papernexus/imports/`, not by moving files directly into the main paper source tree during automation.
 - Import tasks keep per-task `events.log` files and stay in a separate directory even after their parsed content is merged into the main graph.
+- `POST /api/imports` supports two input styles:
+  - client-uploaded file content through `files[].contentBase64`
+  - server-side single-file collection through `serverFilePath`
+- `serverFilePath` is resolved on the API server machine, must be an absolute single-file path, and does not support directory recursion.
+- `POST /api/imports` now content-dedupes identical uploads. When the same file content is uploaded again for the same corpus, the API can return the existing task with `deduped: true` instead of creating a new task.
+- Completed import task directories should not be treated as long-lived active scan roots. Completed imported sources are preserved through manifest-backed reuse instead of repeated directory rescans.
+- Agent live-graph policy:
+  - ingest new papers through `POST /api/imports`
+  - read graph state through the typed query APIs first
+  - use `/api/corpus`, `/api/corpus-meta`, `/api/enhancements`, and `/api/paper-enhancement` as supporting raw/overlay reads
+  - if an operation exists only in CLI and not in the HTTP API, report the limitation instead of using local CLI against the live graph
+- Import-task execution should rebuild against the current committed corpus manifest and merge the task's `sourcesDir` on top of that base graph. Do not trust stored `task.inputPaths` as the authoritative rebuild root if they look stale or cross-machine.
 - Single-graph safety:
   - Once a corpus already exists at an index root, Stage 1-4 commands must keep using that same configured input scope.
   - If you pass a narrower or different path on the same index root, PaperNexus now refuses instead of silently shrinking the graph.
@@ -160,6 +224,8 @@ Guidelines:
 - When using `mineru` with a remote HTTP backend, PaperNexus now probes reachability first. Default behavior is to stop on unreachable backends. Set `--mineru-remote-failure docling` or `analyze.mineruRemoteFailureMode = "docling"` to fall back to Docling instead.
 - `watch --force` only matters for the initial startup pass; later file-change reindexes run with `force: false` so background watching stays incremental.
 - `service install` defaults to both `watch` and `serve` if `--services` is omitted.
+- `serve` starts the dashboard/API plus the enhancement worker, import worker, and authoritative sync worker.
+- When a MinerU HTTP backend is configured, `serve` also performs a best-effort background MinerU warmup on startup. This should never block server startup, so warmup success belongs in logs, not startup gating.
 - `papernexus logs watch` prints the current auto-index tmp log path and current log contents.
 - All `/api/*` routes served by `papernexus serve` now require a token.
 - Configure the server token with `serve.apiToken` or `PAPERNEXUS_API_TOKEN`.
@@ -169,7 +235,11 @@ Guidelines:
 - Set `PAPERNEXUS_GRAPH_BACKEND=json` to force legacy JSON graph storage.
 - Environment variables: `PAPERNEXUS_PDF_PARSER`, `PAPERNEXUS_MINERU_CMD`, `PAPERNEXUS_MINERU_HTTP_URL`, `PAPERNEXUS_DOCLING_CMD`, `PAPERNEXUS_DOCLING_OCR_ENGINE`, `PAPERNEXUS_DOCLING_PDF_BACKEND`, `PAPERNEXUS_MARKER_CMD`, `PAPERNEXUS_GRAPH_BACKEND`, `PAPERNEXUS_HOME`.
 
-## Preferred Command Style
+## Preferred Command Style For Repo Development
+
+Use the CLI only for repo-local development, isolated fixture testing, or implementation work inside this repository.
+
+Do not use these CLI commands as the control plane for a live remote graph.
 
 Prefer the globally linked CLI if available:
 
@@ -209,9 +279,6 @@ papernexus analyze --force --pdf-parser docling --docling-pdf-backend pypdfium2 
 papernexus analyze --semantic-extraction auto --provider openai --model gpt-4o-mini
 papernexus probe  # Test LLM connectivity
 papernexus watch
-papernexus status --corpus <name>
-papernexus brainstorm "<topic>" --corpus <name>
-papernexus brainstorm "<topic>" --corpus <name> --mode diverge
 papernexus enhance --once
 papernexus serve
 papernexus service install
@@ -245,7 +312,10 @@ Read these first when you need orientation:
 - Prefer remote MinerU for PDF work. If an agent is about to run `analyze`, `materialize`, or any parser debug flow against PDFs, assume `mineruHttpUrl` is the first-choice path and mention that choice in the reasoning or command examples.
 - Treat local Docling and Marker as fallback or special-case tools, not the default recommendation, unless the user explicitly asks for local parsing.
 - If a task involves ad hoc uploaded PDFs or Markdown from a UI/API flow, prefer the queued import-task path over manually copying those files into the main paper source directory.
+- If an import, stage, or worker run appears stuck, report the exact stage, latest task log lines, elapsed time, and the most likely blocker or stale-path cause. Do not keep retrying the same command in a loop without new evidence.
+- If a task involves the live graph, assume the authenticated HTTP API is the only allowed interface unless the user explicitly asks for isolated local repo testing.
 - If a task involves the Web API, do not assume anonymous access. Use the configured PaperNexus API token and include it as `Authorization: Bearer <token>` unless the user explicitly says another auth path is in place.
+- Do not fall back from a missing API feature to local CLI graph operations. Report the missing endpoint or unsupported workflow clearly.
 - When an ingestion run failed only because LLM requests were unavailable, prefer rerunning `papernexus llm-optimize`, `papernexus optimize`, or `papernexus analyze` before reaching for `--force`.
 - Prefer `papernexus materialize` first when debugging PDF parsing or markdown cache issues, `papernexus llm-optimize` when debugging LLM extraction, `papernexus build-graph` when debugging graph projection, `papernexus merge-graph` when debugging duplicate or low-quality evaluation nodes, and `papernexus write-index` when debugging final persistence.
 - If Stage 3 already succeeded and you specifically need to inspect or fix duplicate `Dataset` / `Benchmark` nodes before commit, run `papernexus merge-graph --continue`.
@@ -272,7 +342,7 @@ npm test
 
 ## Service Model
 
-PaperNexus background services currently target macOS `launchd`.
+PaperNexus built-in background service installation currently targets macOS `launchd`.
 
 Supported services:
 
@@ -297,6 +367,45 @@ Watch log:
 papernexus logs watch
 ```
 
+### Linux PM2 Operation
+
+On Linux, prefer a process supervisor such as `pm2` instead of `papernexus service install`.
+
+If you only need the UI/API and import processing:
+
+```bash
+pm2 start "node ./src/cli/index.js serve --config /data16T/hyq/.papernexus/config.json" --name papernexus-serve --cwd /data16T/hyq/autoresearch/PaperNexus
+```
+
+If you also want background file watching:
+
+```bash
+pm2 start "node ./src/cli/index.js watch --config /data16T/hyq/.papernexus/config.json" --name papernexus-watch --cwd /data16T/hyq/autoresearch/PaperNexus
+```
+
+Persist across reboot:
+
+```bash
+pm2 save
+pm2 startup systemd -u hyq --hp /data16T/hyq
+```
+
+Operational commands:
+
+```bash
+pm2 status
+pm2 logs papernexus-serve
+pm2 restart papernexus-serve
+pm2 restart papernexus-watch
+```
+
+Notes:
+
+- keep `serve.apiToken` in the config file or provide it through environment
+- use `serve` alone when you only need the API/UI and queued import handling
+- add `watch` only when you also want filesystem-triggered incremental reindexing
+- after `pm2 startup`, run the generated `sudo` command once on the server so PM2 itself is restored on boot
+
 ## Graph Mutation Support
 
 PaperNexus currently supports graph mutation for the indexed corpus.
@@ -319,6 +428,15 @@ Do not assume every visible node in the raw graph is a good ideation anchor. Pre
 - multi-word, reusable research-object names
 - non-trivial evidence text
 - `brainstormTier` of `medium` or `high`
+
+Current ideation behavior to remember:
+
+- `ideas` and `brainstorm` still start from the brainstorm-quality node view rather than the full noisy graph
+- they now add a one-shot local Leiden community analysis at query time, not a persisted full-graph clustering index
+- the local community graph is concept-only: brainstorm-eligible `Problem`, `Method`, `Claim`, `Finding`, `Limitation`, `Assumption`, `FutureDirection`, and `ResearchGoal` nodes participate directly
+- `Paper` nodes only act as temporary bridge evidence for weak co-occurrence edges and do not appear as community members
+- explicit concept-concept edges remain the backbone; paper co-occurrence only adds bounded weak edges
+- if the local projected graph is too small, too sparse, or too slow, the search layer should fall back to the older heuristics instead of forcing a community result
 
 What is supported:
 

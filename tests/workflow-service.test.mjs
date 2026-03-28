@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  clearBackgroundWorkflowRunRegistryForTests,
+} from "../tools/workflow-fast-paths.ts";
+import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
   listWorkflowCoordinatorProjects,
@@ -22,6 +25,14 @@ import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.t
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
 }
+
+test.beforeEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+});
+
+test.afterEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+});
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -267,6 +278,189 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
   assert.equal(duplicate.launched, false);
   assert.equal(duplicate.reason, "idle_research_already_launched");
   assert.equal(runs.length, 1);
+});
+
+test("maybeLaunchIdleResearchForProject reports channel capacity pressure instead of masking it as runtime failure", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const runCalls = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `idle-run-${runCalls.length}` };
+    },
+  };
+
+  await maybeLaunchIdleResearchForProject({
+    runtimeSubagent,
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot: "/tmp/projects/alpha",
+    projectId: "alpha",
+    autoIteratorResult: {
+      recommendedActions: [
+        {
+          kind: "background",
+          owner: "researcher",
+          command:
+            'Run /idle-research for "contrastive spectral pruning" and record the round through research_workflow.record_idle_research_run.',
+        },
+      ],
+    },
+    launchedDueKeys: new Map(),
+    deps: {
+      async getIdleResearchStateSummary() {
+        return {
+          state: {
+            enabled: true,
+            topic: "contrastive spectral pruning",
+          },
+          due: true,
+          nextDueAt: null,
+        };
+      },
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot: "/tmp/projects/alpha",
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+            },
+          ],
+        };
+      },
+    },
+  });
+  await maybeLaunchIdleResearchForProject({
+    runtimeSubagent,
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot: "/tmp/projects/beta",
+    projectId: "beta",
+    autoIteratorResult: {
+      recommendedActions: [
+        {
+          kind: "background",
+          owner: "researcher",
+          command:
+            'Run /idle-research for "semantic shift robustness" and record the round through research_workflow.record_idle_research_run.',
+        },
+      ],
+    },
+    launchedDueKeys: new Map(),
+    deps: {
+      async getIdleResearchStateSummary() {
+        return {
+          state: {
+            enabled: true,
+            topic: "semantic shift robustness",
+          },
+          due: true,
+          nextDueAt: null,
+        };
+      },
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot: "/tmp/projects/beta",
+              projectId: "beta",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  const blocked = await maybeLaunchIdleResearchForProject({
+    runtimeSubagent,
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot: "/tmp/projects/gamma",
+    projectId: "gamma",
+    autoIteratorResult: {
+      recommendedActions: [
+        {
+          kind: "background",
+          owner: "researcher",
+          command:
+            'Run /idle-research for "robust calibration drift" and record the round through research_workflow.record_idle_research_run.',
+        },
+      ],
+    },
+    launchedDueKeys: new Map(),
+    deps: {
+      async getIdleResearchStateSummary() {
+        return {
+          state: {
+            enabled: true,
+            topic: "robust calibration drift",
+          },
+          due: true,
+          nextDueAt: null,
+        };
+      },
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot: "/tmp/projects/gamma",
+              projectId: "gamma",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(blocked.launched, false);
+  assert.equal(blocked.reason, "channel_capacity_reached");
+  assert.equal(blocked.activeResearcherSessionsInChannel, 2);
+  assert.match(blocked.summary ?? "", /already has 2 active researcher background subagents/i);
 });
 
 test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto mode", async (t) => {
@@ -874,6 +1068,164 @@ test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states"
   });
   assert.equal(waiting?.status, "waiting");
   assert.match(waiting?.summary ?? "", /waiting/i);
+
+  const timedDefault = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "code",
+    timedDefaultTriggered: true,
+    timedDefaultSummary:
+      "Timed-default GATE-2 expired after the confirmation deadline; continuing via the default workflow-safe branch.",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "code",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "code",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "code",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "code",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+  assert.equal(timedDefault?.status, "started");
+  assert.match(timedDefault?.summary ?? "", /timed-default/i);
+
+  const idleCapacity = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "idea",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "idea",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "idea",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "idea",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "idea",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "channel_capacity_reached",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: "contrastive spectral pruning",
+      sessionKey: null,
+      runId: null,
+      dueKey: "due-now",
+      summary:
+        "Background workflow not started: this channel already has 2 active Researcher background subagents. Wait for one to finish before starting another.",
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: 2,
+    },
+  });
+  assert.equal(idleCapacity?.status, "waiting");
+  assert.match(idleCapacity?.summary ?? "", /already has 2 active Researcher background subagents/i);
 });
 
 test("workflow coordinator broadcasts visible handed-off status updates to the bound session", async (t) => {
