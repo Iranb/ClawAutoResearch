@@ -31,6 +31,9 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 8. Use a clean teaser and pipeline figure.
 9. Use readable, minimal-ink tables.
 10. Keep formatting consistent and tidy.
+11. Use formal academic tone and precise terminology throughout.
+12. Keep terminology consistent and define new terms before reuse.
+13. Final manuscript sections should be proper paragraphs, not bullet dumps, unless the user explicitly asks for outline form.
 
 ## Paragraph Clarity Check (Important)
 
@@ -90,6 +93,7 @@ Use `references/paper-review.md` for the full checklist and workflow.
 5. If a claim cannot be supported by results, weaken or remove the claim.
 6. Before finalizing, append and answer a five-dimension self-review question list, then revise the paper based on unresolved items.
 7. Do not load all section references (Introduction/Abstract/Related Work/Method/Experiments/Conclusion) at once; load only the specific section guide needed for the current edit target.
+8. Make paragraph-to-paragraph flow explicit: each paragraph should build on the previous one and use transitions that make the next paragraph feel necessary.
 
 ## Output Contract
 

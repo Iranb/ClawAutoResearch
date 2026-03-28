@@ -10,7 +10,15 @@ import {
   enqueueWorkflowTask,
   resolveWorkflowProjectQueueKey,
 } from "./workflow-coordination";
-import { startBackgroundWorkflowRun } from "./workflow-fast-paths";
+import {
+  acquireBackgroundWorkflowSession,
+  drainQueuedBackgroundWorkflowRuns,
+  enqueueQueuedBackgroundWorkflowRun,
+  getBackgroundWorkflowRunByQueueKey,
+  hasPendingBackgroundWorkflowQueueKey,
+  recordBackgroundWorkflowRun,
+  startBackgroundWorkflowRun,
+} from "./workflow-fast-paths";
 import {
   getIdleResearchStateSummary,
   listChannelProjectBindingsForWorkflow,
@@ -118,6 +126,7 @@ type AutoStageLaunchAttempt = {
     | "auto_mode_disabled"
     | "risk_discussion_pending"
     | "no_runtime_subagent"
+    | "session_pool_full"
     | "gate_blocked"
     | "no_drive_stage_action"
     | "cooldown_active"
@@ -132,6 +141,8 @@ type AutoStageLaunchAttempt = {
   dispatchStrategy: string | null;
   launchKey: string | null;
   error: string | null;
+  reusedServiceSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
 };
 
 type AutoGateReviewAttempt = {
@@ -188,6 +199,7 @@ type AutoModeMitigationDispatchAttempt = {
   reason:
     | "not_needed"
     | "no_runtime_subagent"
+    | "session_pool_full"
     | "already_dispatched"
     | "dispatch_failed"
     | "started";
@@ -200,10 +212,12 @@ type AutoModeMitigationDispatchAttempt = {
   runId: string | null;
   dispatchStrategy: string | null;
   error: string | null;
+  reusedServiceSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
 };
 
 type WorkflowCoordinatorVisibleStatusUpdate = {
-  status: "started" | "blocked" | "waiting" | "handed_off";
+  status: "started" | "continued" | "queued" | "blocked" | "waiting" | "handed_off";
   stage: string | null;
   summary: string;
   dedupeKey: string;
@@ -530,11 +544,12 @@ function buildResearcherWorkflowSubagentSessionKey(params: {
     requesterSessionKey: params.requesterSessionKey ?? undefined,
     targetRole: "researcher",
   });
+  const projectSessionSegment = path.basename(path.resolve(params.projectRoot));
   return (
     buildWorkflowSubagentSessionKey({
       parentSessionKey: baseSessionKey,
       purpose: params.purpose,
-      segments: [params.projectRoot, ...(params.segments ?? [])],
+      segments: [projectSessionSegment, ...(params.segments ?? [])],
     }) ?? baseSessionKey
   );
 }
@@ -575,12 +590,17 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     return {
       status: "handed_off",
       stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
-      summary: `Workflow handed off to ${params.autoStageLaunch.owner} for ${params.autoStageLaunch.stage ?? params.stageAfter ?? "the current"} stage.`,
+      summary:
+        params.autoStageLaunch.owner === "researcher" &&
+        params.autoStageLaunch.reusedServiceSession
+          ? `Workflow handed off to ${params.autoStageLaunch.owner} for ${params.autoStageLaunch.stage ?? params.stageAfter ?? "the current"} stage using an idle reused Researcher service session.`
+          : `Workflow handed off to ${params.autoStageLaunch.owner} for ${params.autoStageLaunch.stage ?? params.stageAfter ?? "the current"} stage.`,
       dedupeKey: [
         "handoff",
         params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
         params.autoStageLaunch.owner,
         params.autoStageLaunch.dispatchStrategy ?? "unknown",
+        params.autoStageLaunch.reusedServiceSession ? "reused" : "fresh",
       ].join(":"),
     };
   }
@@ -588,17 +608,22 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     return {
       status: "handed_off",
       stage: params.autoMitigationDispatch.stage ?? params.stageAfter ?? null,
-      summary: `Auto-mode mitigation was handed off to ${params.autoMitigationDispatch.owner}.`,
+      summary:
+        params.autoMitigationDispatch.owner === "researcher" &&
+        params.autoMitigationDispatch.reusedServiceSession
+          ? "Auto-mode mitigation was handed off to Researcher using an idle reused service session."
+          : `Auto-mode mitigation was handed off to ${params.autoMitigationDispatch.owner}.`,
       dedupeKey: [
         "mitigation",
         params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
         params.autoMitigationDispatch.owner,
+        params.autoMitigationDispatch.reusedServiceSession ? "reused" : "fresh",
       ].join(":"),
     };
   }
   if (params.timedDefaultTriggered) {
     return {
-      status: "started",
+      status: "continued",
       stage: params.stageAfter ?? null,
       summary:
         params.timedDefaultSummary ??
@@ -627,11 +652,11 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   }
   if (params.idleResearchLaunch.reason === "channel_capacity_reached") {
     return {
-      status: "waiting",
+      status: "queued",
       stage: params.stageAfter ?? null,
       summary:
         params.idleResearchLaunch.summary ??
-        `Waiting to start idle research${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""} because this channel already has active Researcher background sessions.`,
+        `Queued idle research${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""} until a Researcher background session becomes idle in this channel.`,
       dedupeKey: [
         "idle-research",
         "capacity",
@@ -674,16 +699,20 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   if (
     params.autoStageLaunch.reason === "risk_discussion_pending" ||
     params.autoStageLaunch.reason === "cooldown_active" ||
-    params.autoStageLaunch.reason === "already_launched"
+    params.autoStageLaunch.reason === "already_launched" ||
+    params.autoStageLaunch.reason === "session_pool_full"
   ) {
     const summary =
       params.autoStageLaunch.reason === "risk_discussion_pending"
         ? "Waiting for auto-mode risk discussion before handing off the next stage."
         : params.autoStageLaunch.reason === "cooldown_active"
-          ? `Waiting for the workflow contact cooldown before handing off to ${params.autoStageLaunch.owner ?? "the next owner"}.`
-          : `Waiting for the already-running ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} stage handoff to finish.`;
+          ? `Queued the next stage handoff until the workflow contact cooldown clears for ${params.autoStageLaunch.owner ?? "the next owner"}.`
+          : params.autoStageLaunch.reason === "session_pool_full"
+            ? `Queued the ${params.autoStageLaunch.stage ?? params.stageAfter ?? "current"} stage until an idle Researcher service session is available.`
+            : `Queued behind the already-running ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} stage handoff.`;
     return {
-      status: "waiting",
+      status:
+        params.autoStageLaunch.reason === "risk_discussion_pending" ? "waiting" : "queued",
       stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
       summary,
       dedupeKey: [
@@ -691,6 +720,19 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         params.autoStageLaunch.reason,
         params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
         params.autoStageLaunch.owner ?? "unknown-owner",
+      ].join(":"),
+    };
+  }
+  if (params.autoMitigationDispatch.reason === "session_pool_full") {
+    return {
+      status: "queued",
+      stage: params.autoMitigationDispatch.stage ?? params.stageAfter ?? null,
+      summary:
+        "Queued the mitigation pass until an idle Researcher service session is available.",
+      dedupeKey: [
+        "mitigation-wait",
+        params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
+        params.autoMitigationDispatch.owner ?? "researcher",
       ].join(":"),
     };
   }
@@ -997,6 +1039,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (
@@ -1018,6 +1062,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (!params.runtimeSubagent) {
@@ -1033,6 +1079,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (params.autoIteratorResult.gateBlocking) {
@@ -1048,6 +1096,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -1072,6 +1122,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if ((action.cooldownRemainingSeconds ?? 0) > 0) {
@@ -1087,6 +1139,8 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -1117,6 +1171,32 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
+        };
+      }
+      const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
+        queueKey: launchKey,
+        projectId: params.projectId ?? null,
+        projectRoot: params.projectRoot,
+      });
+      if (pendingQueueState.active || pendingQueueState.queued) {
+        return {
+          launched: false,
+          reason: pendingQueueState.active ? "already_launched" : "session_pool_full",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey,
+          error: pendingQueueState.queued
+            ? "Researcher stage handoff is already queued for the shared service session pool."
+            : null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -1125,20 +1205,89 @@ export async function maybeLaunchAutoStageForProject(params: {
         workflowPolicy: params.workflowPolicy,
         deps,
       });
+      const defaultResearcherRequesterSessionKey =
+        requesterSessionKey ?? "agent:researcher:main";
+      const preferredResearcherSessionKeys = buildWorkflowCoordinatorDispatchSessionKeys({
+        requesterSessionKey: requesterSessionKey ?? undefined,
+        owner: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+        projectRoot: params.projectRoot,
+        purpose: "workflow-stage",
+        segments: [
+          action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          action.command,
+        ],
+      });
+      let researcherSessionLease:
+        | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
+        | null = null;
+      if (action.owner === "researcher") {
+        researcherSessionLease = await acquireBackgroundWorkflowSession({
+          runtimeSubagent: params.runtimeSubagent,
+          ownerAgent: "researcher",
+          requesterSessionKey: defaultResearcherRequesterSessionKey,
+          preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
+          family: "research",
+          kind: "workflow_stage_dispatch",
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+        });
+        if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+          await enqueueQueuedBackgroundWorkflowRun({
+            source: "workflow_auto_stage",
+            ownerAgent: "researcher",
+            requesterSessionKey: defaultResearcherRequesterSessionKey,
+            preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
+            family: "research",
+            kind: "workflow_stage_dispatch",
+            projectId: params.projectId ?? undefined,
+            projectRoot: params.projectRoot,
+            queueKey: launchKey,
+            summary:
+              `Queued the ${action.stage ?? params.autoIteratorResult.stageAfter ?? "current"} stage handoff until an idle Researcher service session becomes available.`,
+            dispatchPayload: {
+              requesterChannel: null,
+              preferredSessionKeys: preferredResearcherSessionKeys ?? [],
+              fromRole: "researcher",
+              toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+              projectRoot: params.projectRoot,
+              projectId: params.projectId,
+              stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+              summary: action.summary,
+              command: action.command,
+              mailboxMessageId: action.mailboxMessageId ?? null,
+              extraBody:
+                "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+              waitTimeoutMs: 5000,
+              retryOnTimeout: true,
+              enableSpawnFallback: true,
+            },
+          });
+          return {
+            launched: false,
+            reason: "session_pool_full",
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+            owner: action.owner,
+            sessionKey: null,
+            runId: null,
+            dispatchStrategy: null,
+            launchKey,
+            error: `Researcher service session pool is at capacity for this channel (${researcherSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
+            reusedServiceSession: false,
+            activeResearcherSessionsInChannel:
+              researcherSessionLease.activeResearcherSessionsInChannel,
+          };
+        }
+      }
       const dispatch = await handoffWorkflowTaskToAgent({
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
-        preferredSessionKeys: buildWorkflowCoordinatorDispatchSessionKeys({
-          requesterSessionKey: requesterSessionKey ?? undefined,
-          owner: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
-          projectRoot: params.projectRoot,
-          purpose: "workflow-stage",
-          segments: [
-            action.stage ?? params.autoIteratorResult.stageAfter ?? null,
-            action.command,
-          ],
-        }),
+        preferredSessionKeys:
+          action.owner === "researcher"
+            ? [researcherSessionLease?.sessionKey ?? preferredResearcherSessionKeys?.[0] ?? defaultResearcherRequesterSessionKey]
+            : preferredResearcherSessionKeys,
         fromRole: "researcher",
         toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
         projectRoot: params.projectRoot,
@@ -1169,7 +1318,30 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: dispatch.strategy,
           launchKey,
           error: dispatch.error,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel:
+            researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
         };
+      }
+
+      if (
+        action.owner === "researcher" &&
+        researcherSessionLease?.channelKey &&
+        dispatch.runId &&
+        dispatch.sessionKey
+      ) {
+        await recordBackgroundWorkflowRun({
+          ownerAgent: "researcher",
+          channelKey: researcherSessionLease.channelKey,
+          requesterSessionKey: defaultResearcherRequesterSessionKey,
+          backgroundSessionKey: dispatch.sessionKey,
+          runId: dispatch.runId,
+          queueKey: launchKey,
+          kind: "workflow_stage_dispatch",
+          family: "research",
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+        });
       }
 
       params.launchedStageKeys.set(params.projectRoot, {
@@ -1194,6 +1366,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         dispatchStrategy: dispatch.strategy,
         launchKey,
         error: null,
+        reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
+        activeResearcherSessionsInChannel:
+          researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
       };
     },
   });
@@ -1268,7 +1443,45 @@ async function pollAutoModeDiscussionAttempts(params: {
 }) {
   return Promise.all(
     params.attempts.map(async (attempt) => {
-      if (attempt.status !== "pending" || !attempt.runId || !params.runtimeSubagent.waitForRun) {
+      if (attempt.status !== "pending") {
+        return attempt;
+      }
+      if (!attempt.runId && attempt.queueKey) {
+        const activeQueuedRun = await getBackgroundWorkflowRunByQueueKey({
+          queueKey: attempt.queueKey,
+          runtimeSubagent: params.runtimeSubagent,
+        });
+        if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
+          return {
+            ...attempt,
+            sessionKey: activeQueuedRun.backgroundSessionKey,
+            runId: activeQueuedRun.runId,
+          };
+        }
+        const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
+          queueKey: attempt.queueKey,
+        });
+        if (pendingQueueState.queued || pendingQueueState.active) {
+          return attempt;
+        }
+        return {
+          ...attempt,
+          status: "error" as const,
+          completedAt: nowIso(),
+          error: "Queued auto discussion reviewer run disappeared before launch.",
+          result: parseAutoModeDiscussionResult(
+            JSON.stringify({
+              riskAssessment: "blocked",
+              confidence: 0,
+              recommendedOwner: "researcher",
+              blockers: ["Queued auto discussion reviewer run disappeared before launch."],
+              summary: "Queued auto discussion reviewer run disappeared before launch.",
+            }),
+            attempt.reviewerRole
+          ),
+        };
+      }
+      if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
         return attempt;
       }
       const waited = await params.runtimeSubagent.waitForRun({
@@ -1877,7 +2090,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
       });
       const attempts: AutoModeDiscussionReviewAttempt[] = [];
       for (const reviewerRole of defaultAutoModeDiscussionPanel()) {
-        const sessionKey =
+        let sessionKey: string | null =
           reviewerRole === "researcher"
             ? buildResearcherWorkflowSubagentSessionKey({
                 requesterSessionKey: requesterSessionKey ?? undefined,
@@ -1893,6 +2106,86 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
                 requesterSessionKey: requesterSessionKey ?? undefined,
                 targetRole: reviewerRole,
               });
+        const researcherDiscussionQueueKey =
+          reviewerRole === "researcher"
+            ? [
+                "auto-discussion",
+                params.projectId ?? path.basename(params.projectRoot),
+                packet.packetFingerprint,
+                `${roundsStarted + 1}`,
+                reviewerRole,
+              ].join(":")
+            : null;
+        let researcherSessionLease:
+          | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
+          | null = null;
+        if (reviewerRole === "researcher") {
+          researcherSessionLease = await acquireBackgroundWorkflowSession({
+            runtimeSubagent: params.runtimeSubagent,
+            ownerAgent: "researcher",
+            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+            preferredSessionKey: sessionKey,
+            family: "research",
+            kind: "workflow_auto_discussion",
+            projectId: params.projectId ?? undefined,
+            projectRoot: params.projectRoot,
+          });
+          if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+            await enqueueQueuedBackgroundWorkflowRun({
+              source: "workflow_auto_discussion",
+              ownerAgent: "researcher",
+              requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+              preferredSessionKey: sessionKey,
+              family: "research",
+              kind: "workflow_auto_discussion",
+              projectId: params.projectId ?? undefined,
+              projectRoot: params.projectRoot,
+              queueKey: researcherDiscussionQueueKey,
+              summary:
+                "Queued the researcher auto discussion reviewer until an idle Researcher service session becomes available.",
+              runPayload: {
+                message: buildAutoModeDiscussionPrompt({
+                  projectRoot: params.projectRoot,
+                  projectId: params.projectId,
+                  stage: params.autoIteratorResult.stageAfter ?? null,
+                  riskLevel: riskLevel as "caution" | "severe",
+                  reviewerRole,
+                  packetPath: packet.packetPath,
+                  packetJsonPath: packet.packetJsonPath,
+                }),
+                lane: "nested",
+                deliver: false,
+                idempotencyKey: slugifyForIdempotency(
+                  `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
+                ),
+                extraSystemPrompt:
+                  "Workflow auto risk discussion reviewer.\n" +
+                  "Review only the supplied risk packet and return the required JSON schema.",
+              },
+            });
+            params.logger?.debug?.("Queued researcher auto discussion reviewer because the shared service session pool is at capacity.", {
+              projectId: params.projectId,
+              projectRoot: params.projectRoot,
+              stage: params.autoIteratorResult.stageAfter ?? null,
+              riskLevel,
+              activeResearcherSessionsInChannel:
+                researcherSessionLease.activeResearcherSessionsInChannel,
+            });
+            attempts.push({
+              reviewerRole,
+              sessionKey: sessionKey ?? "",
+              runId: null,
+              queueKey: researcherDiscussionQueueKey,
+              status: "pending",
+              launchedAt: nowIso(),
+              completedAt: null,
+              error: null,
+              result: null,
+            });
+            continue;
+          }
+          sessionKey = researcherSessionLease.sessionKey;
+        }
         try {
           const started = await params.runtimeSubagent.run({
             sessionKey,
@@ -1914,10 +2207,24 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               "Workflow auto risk discussion reviewer.\n" +
               "Review only the supplied risk packet and return the required JSON schema.",
           });
+          if (reviewerRole === "researcher" && researcherSessionLease?.channelKey) {
+            await recordBackgroundWorkflowRun({
+              ownerAgent: "researcher",
+              channelKey: researcherSessionLease.channelKey,
+              requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+              backgroundSessionKey: sessionKey,
+              runId: started.runId,
+              kind: "workflow_auto_discussion",
+              family: "research",
+              projectId: params.projectId ?? undefined,
+              projectRoot: params.projectRoot,
+            });
+          }
           attempts.push({
             reviewerRole,
             sessionKey,
             runId: started.runId,
+            queueKey: researcherDiscussionQueueKey,
             status: "pending",
             launchedAt: nowIso(),
             completedAt: null,
@@ -1929,6 +2236,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             reviewerRole,
             sessionKey,
             runId: null,
+            queueKey: researcherDiscussionQueueKey,
             status: "error",
             launchedAt: nowIso(),
             completedAt: nowIso(),
@@ -2032,6 +2340,8 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           runId: null,
           dispatchStrategy: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
       if (!params.runtimeSubagent) {
@@ -2047,6 +2357,8 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           runId: null,
           dispatchStrategy: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -2081,6 +2393,8 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           runId: null,
           dispatchStrategy: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
         };
       }
 
@@ -2089,20 +2403,101 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         workflowPolicy: params.workflowPolicy,
         deps,
       });
+      const defaultResearcherRequesterSessionKey =
+        requesterSessionKey ?? "agent:researcher:main";
+      const preferredResearcherSessionKeys = buildWorkflowCoordinatorDispatchSessionKeys({
+        requesterSessionKey: requesterSessionKey ?? undefined,
+        owner,
+        projectRoot: params.projectRoot,
+        purpose: "workflow-mitigation",
+        segments: [
+          params.discussionAttempt.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          params.autoIteratorResult.nextAction,
+        ],
+      });
+      let researcherSessionLease:
+        | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
+        | null = null;
+      if (owner === "researcher") {
+        researcherSessionLease = await acquireBackgroundWorkflowSession({
+          runtimeSubagent: params.runtimeSubagent,
+          ownerAgent: "researcher",
+          requesterSessionKey: defaultResearcherRequesterSessionKey,
+          preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
+          family: "research",
+          kind: "workflow_mitigation_dispatch",
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+        });
+        if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+          await enqueueQueuedBackgroundWorkflowRun({
+            source: "workflow_auto_mitigation",
+            ownerAgent: "researcher",
+            requesterSessionKey: defaultResearcherRequesterSessionKey,
+            preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
+            family: "research",
+            kind: "workflow_mitigation_dispatch",
+            projectId: params.projectId ?? undefined,
+            projectRoot: params.projectRoot,
+            queueKey: launchKey,
+            summary:
+              "Queued the mitigation pass until an idle Researcher service session becomes available.",
+            dispatchPayload: {
+              requesterChannel: null,
+              preferredSessionKeys: preferredResearcherSessionKeys ?? [],
+              fromRole: "researcher",
+              toRole: owner,
+              projectRoot: params.projectRoot,
+              projectId: params.projectId,
+              stage: params.autoIteratorResult.stageAfter ?? null,
+              summary:
+                params.discussionAttempt.summary ??
+                "Resolve the current auto-mode risk before the next workflow advance.",
+              command:
+                params.autoIteratorResult.nextAction ??
+                "Run research_workflow.auto_iterator_tick after the mitigation pass.",
+              mailboxMessageId: null,
+              extraBody: buildAutoMitigationExtraBody({
+                packetPath: params.discussionAttempt.packetPath,
+                summary: params.discussionAttempt.summary,
+                actionItems: params.discussionAttempt.actionItems,
+                blockers: params.discussionAttempt.blockers,
+              }),
+              waitTimeoutMs: 5000,
+              retryOnTimeout: true,
+              enableSpawnFallback: true,
+            },
+          });
+          return {
+            launched: false,
+            reason: "session_pool_full",
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            fingerprint: params.discussionAttempt.fingerprint,
+            stage: params.discussionAttempt.stage,
+            owner,
+            sessionKey: null,
+            runId: null,
+            dispatchStrategy: null,
+            error: `Researcher service session pool is at capacity for this channel (${researcherSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
+            reusedServiceSession: false,
+            activeResearcherSessionsInChannel:
+              researcherSessionLease.activeResearcherSessionsInChannel,
+          };
+        }
+      }
       const dispatch = await handoffWorkflowTaskToAgent({
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
-        preferredSessionKeys: buildWorkflowCoordinatorDispatchSessionKeys({
-          requesterSessionKey: requesterSessionKey ?? undefined,
-          owner,
-          projectRoot: params.projectRoot,
-          purpose: "workflow-mitigation",
-          segments: [
-            params.discussionAttempt.stage ?? params.autoIteratorResult.stageAfter ?? null,
-            params.autoIteratorResult.nextAction,
-          ],
-        }),
+        preferredSessionKeys:
+          owner === "researcher"
+            ? [
+                researcherSessionLease?.sessionKey ??
+                  preferredResearcherSessionKeys?.[0] ??
+                  defaultResearcherRequesterSessionKey,
+              ]
+            : preferredResearcherSessionKeys,
         fromRole: "researcher",
         toRole: owner,
         projectRoot: params.projectRoot,
@@ -2140,7 +2535,30 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           runId: dispatch.runId,
           dispatchStrategy: dispatch.strategy,
           error: dispatch.error,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel:
+            researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
         };
+      }
+
+      if (
+        owner === "researcher" &&
+        researcherSessionLease?.channelKey &&
+        dispatch.runId &&
+        dispatch.sessionKey
+      ) {
+        await recordBackgroundWorkflowRun({
+          ownerAgent: "researcher",
+          channelKey: researcherSessionLease.channelKey,
+          requesterSessionKey: defaultResearcherRequesterSessionKey,
+          backgroundSessionKey: dispatch.sessionKey,
+          runId: dispatch.runId,
+          queueKey: launchKey,
+          kind: "workflow_mitigation_dispatch",
+          family: "research",
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+        });
       }
 
       params.launchedMitigationKeys.set(params.projectRoot, {
@@ -2165,6 +2583,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         runId: dispatch.runId,
         dispatchStrategy: dispatch.strategy,
         error: null,
+        reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
+        activeResearcherSessionsInChannel:
+          researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
       };
     },
   });
@@ -2206,6 +2627,9 @@ export function createWorkflowCoordinatorService(
     inFlightTick = (async () => {
       try {
         const workflowPolicy = plugin.getWorkflowPolicy();
+        const drainedQueue = await drainQueuedBackgroundWorkflowRuns({
+          runtimeSubagent: plugin.api.runtime?.subagent,
+        });
         const results = await runWorkflowCoordinatorPass({
           projectsRoot: workflowPolicy.projectsRoot,
           policy: workflowPolicy,
@@ -2379,6 +2803,8 @@ export function createWorkflowCoordinatorService(
         );
         logger.debug?.("Workflow coordinator pass completed.", {
           trigger,
+          queuedBackgroundRunsStarted: drainedQueue.started.length,
+          queuedBackgroundRunsRemaining: drainedQueue.remaining.length,
           projectCount: discussionRefreshedResults.length,
           results: summarizeCoordinatorPass(discussionRefreshedResults),
           autoGateReviews,

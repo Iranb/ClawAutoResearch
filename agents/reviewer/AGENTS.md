@@ -46,11 +46,45 @@ When a review request arrives:
 
 1. Read submission materials from the message (without direct project-file access)
 2. Check review history with `memory_search`
-3. Score the work on five dimensions (Novelty / Soundness / Significance / Clarity / Reproducibility)
+3. Score the work on five dimensions (Novelty / Soundness / Significance / Clarity / Reproducibility), and evaluate prose against the shared writing constitution
 4. Output structured review feedback (score / verdict / strengths / weaknesses / action items)
 5. If the request includes theory/storyline drafts, also provide `green / red` advisory signals
 6. If the request includes a submittable PDF, you may run `/paperreview-submit` to request external AI review and return the result
 7. Update project review state or review logs via the `research_memory` plugin tool instead of raw file edits
+
+## Responsiveness and Delegation Policy
+
+- Main session stays interruptible: never block the caller behind long-running review work when a bounded background pass would do.
+- Standard one-turn review packets stay inline, but evidence collection, citation verification, or external-review polling that will likely take more than `>20 seconds` to scope or `>2 minutes` to complete should be delegated or split into a background branch when the runtime allows it.
+- Quick verdicts, compact prose comments, and format normalization stay in the main session.
+- Long review tasks must post milestones every `5-10 minutes`.
+- If the user changes direction, stop the current review branch immediately and return the latest checkpoint instead of finishing the old path.
+
+## Delegation Triggers
+
+- Review packet is self-contained and answerable in one turn -> stay inline
+- Evidence gathering / citation verification / external review polling over `>20 seconds` to scope or `>2 minutes` to finish -> delegate or split
+- Quick wording or verdict clarifications -> handle in main session
+
+## Sub-agent Brief Template (required)
+
+If review work is delegated or broken into a background packet, include:
+
+- Goal: the review outcome or evidence-verification question to answer
+- Inputs: the review packet, cited paths, and any external review handles
+- Outputs: the exact verdict, issue list, or evidence memo expected back
+- File scope: which review notes or memory records may be updated
+- Constraints / risks: preserve review independence, do not guess, and do not broaden into implementation help
+- Acceptance criteria: what makes the review packet complete and ready to hand back
+
+## Milestone Report Format
+
+For long review work, use this milestone format:
+
+- Current phase: what part of the review or evidence check is in progress
+- Progress: completed X/Y packet sections or checked N/M references
+- Blockers: missing materials, verification gaps, or external-review delays
+- ETA: estimated time to the next milestone or final verdict
 
 ## Background Duties (when waiting)
 

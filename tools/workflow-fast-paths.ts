@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  dispatchWorkflowTaskToAgent,
+  type DispatchableWorkflowRole,
+} from "./agent-task-dispatch";
 import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
@@ -51,6 +56,26 @@ export type BackgroundRunStartResult = {
   summary: string;
   reusedIdleSession: boolean;
   activeResearcherSessionsInChannel: number | null;
+  queued: boolean;
+  queueKey: string | null;
+};
+
+export type QueuedBackgroundWorkflowDrainResult = {
+  started: BackgroundRunStartResult[];
+  remaining: BackgroundWorkflowQueueEntry[];
+};
+
+export type BackgroundWorkflowSessionLease = {
+  acquired: boolean;
+  reason: "acquired" | "channel_capacity_reached";
+  sessionKey: string | null;
+  reusedIdleSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
+  channelKey: string | null;
+  ownerAgent: string | null;
+  family: string;
+  projectId: string | null;
+  projectRoot: string | null;
 };
 
 type BackgroundRunRegistryEntry = {
@@ -59,6 +84,7 @@ type BackgroundRunRegistryEntry = {
   requesterSessionKey: string;
   backgroundSessionKey: string;
   runId: string;
+  queueKey: string | null;
   kind: string;
   family: string;
   status: "active" | "idle";
@@ -67,6 +93,57 @@ type BackgroundRunRegistryEntry = {
   startedAt: string;
   lastCheckedAt: string | null;
   lastFinishedAt: string | null;
+};
+
+type BackgroundWorkflowQueueRunPayload = {
+  message: string;
+  lane: string;
+  deliver: boolean;
+  idempotencyKey: string | null;
+  extraSystemPrompt: string | null;
+};
+
+type BackgroundWorkflowQueueDispatchPayload = {
+  requesterChannel: string | null;
+  preferredSessionKeys: string[];
+  fromRole: string | null;
+  toRole: DispatchableWorkflowRole;
+  projectRoot: string;
+  projectId: string | null;
+  stage: string | null;
+  summary: string;
+  command: string | null;
+  mailboxMessageId: string | null;
+  extraBody: string | null;
+  waitTimeoutMs: number | null;
+  retryOnTimeout: boolean;
+  enableSpawnFallback: boolean;
+};
+
+type BackgroundWorkflowQueueEntry = {
+  queueId: string;
+  queueKey: string;
+  source:
+    | "start_background_run"
+    | "workflow_auto_stage"
+    | "workflow_auto_discussion"
+    | "workflow_auto_mitigation";
+  entryType: "background_run" | "dispatch_task";
+  ownerAgent: string;
+  channelKey: string;
+  requesterSessionKey: string;
+  messageChannel: string | null;
+  preferredSessionKey: string | null;
+  family: string;
+  kind: string;
+  projectId: string | null;
+  projectRoot: string | null;
+  queuedAt: string;
+  lastAttemptedAt: string | null;
+  attemptCount: number;
+  summary: string | null;
+  runPayload: BackgroundWorkflowQueueRunPayload | null;
+  dispatchPayload: BackgroundWorkflowQueueDispatchPayload | null;
 };
 
 export type BackgroundRunAgentContext = {
@@ -87,6 +164,9 @@ export type BackgroundRunSnapshot = {
 const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
 const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
+const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
+const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
+const BACKGROUND_QUEUE_FILENAME = "openclaw-research-background-queue.json";
 
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {
@@ -119,11 +199,31 @@ function backgroundRunRegistryEntryMatchesProject(
 }
 
 function getBackgroundRunRegistryPath(): string {
+  const override = readString(
+    process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH
+  );
+  if (override) {
+    return path.resolve(override);
+  }
   return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
+}
+
+function getBackgroundQueuePath(): string {
+  const override = readString(
+    process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH
+  );
+  if (override) {
+    return path.resolve(override);
+  }
+  return path.join(os.tmpdir(), BACKGROUND_QUEUE_FILENAME);
 }
 
 export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void> {
   await fs.rm(getBackgroundRunRegistryPath(), { force: true });
+}
+
+export async function clearBackgroundWorkflowQueueForTests(): Promise<void> {
+  await fs.rm(getBackgroundQueuePath(), { force: true });
 }
 
 function deriveBackgroundRunChannelKey(params: {
@@ -162,6 +262,7 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
         const requesterSessionKey = readString(record.requesterSessionKey);
         const backgroundSessionKey = readString(record.backgroundSessionKey);
         const runId = readString(record.runId);
+        const queueKey = readString(record.queueKey) ?? null;
         const kind = readString(record.kind) ?? "generic";
         const family = readString(record.family) ?? deriveBackgroundRunFamily(kind);
         const status = readString(record.status) === "idle" ? "idle" : "active";
@@ -186,6 +287,7 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
           requesterSessionKey,
           backgroundSessionKey,
           runId,
+          queueKey,
           kind,
           family,
           status,
@@ -209,10 +311,337 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
   }
 }
 
+async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEntry[]> {
+  try {
+    const raw = await fs.readFile(getBackgroundQueuePath(), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const record = entry as Record<string, unknown>;
+        const queueId = readString(record.queueId);
+        const queueKey = readString(record.queueKey);
+        const source = readString(record.source);
+        const entryType = readString(record.entryType);
+        const ownerAgent = normalizeAgentId(record.ownerAgent);
+        const channelKey = readString(record.channelKey);
+        const requesterSessionKey = readString(record.requesterSessionKey);
+        const messageChannel = readString(record.messageChannel) ?? null;
+        const preferredSessionKey = readString(record.preferredSessionKey) ?? null;
+        const family = readString(record.family);
+        const kind = readString(record.kind);
+        const projectId = readString(record.projectId) ?? null;
+        const projectRoot = readString(record.projectRoot) ?? null;
+        const queuedAt = readString(record.queuedAt);
+        const lastAttemptedAt = readString(record.lastAttemptedAt) ?? null;
+        const attemptCount = Number.isFinite(record.attemptCount)
+          ? Math.max(0, Math.floor(Number(record.attemptCount)))
+          : 0;
+        const summary = readString(record.summary) ?? null;
+        const runPayload =
+          record.runPayload && typeof record.runPayload === "object"
+            ? {
+                message:
+                  readString((record.runPayload as Record<string, unknown>).message) ?? "",
+                lane:
+                  readString((record.runPayload as Record<string, unknown>).lane) ?? "nested",
+                deliver:
+                  (record.runPayload as Record<string, unknown>).deliver === true,
+                idempotencyKey:
+                  readString(
+                    (record.runPayload as Record<string, unknown>).idempotencyKey
+                  ) ?? null,
+                extraSystemPrompt:
+                  readString(
+                    (record.runPayload as Record<string, unknown>).extraSystemPrompt
+                  ) ?? null,
+              }
+            : null;
+        const dispatchPayload =
+          record.dispatchPayload && typeof record.dispatchPayload === "object"
+            ? {
+                requesterChannel:
+                  readString(
+                    (record.dispatchPayload as Record<string, unknown>).requesterChannel
+                  ) ?? null,
+                preferredSessionKeys: Array.isArray(
+                  (record.dispatchPayload as Record<string, unknown>).preferredSessionKeys
+                )
+                  ? ((record.dispatchPayload as Record<string, unknown>)
+                      .preferredSessionKeys as unknown[])
+                      .map((value) => readString(value) ?? null)
+                      .filter((value): value is string => Boolean(value))
+                  : [],
+                fromRole:
+                  readString((record.dispatchPayload as Record<string, unknown>).fromRole) ??
+                  null,
+                toRole:
+                  (readString(
+                    (record.dispatchPayload as Record<string, unknown>).toRole
+                  ) as DispatchableWorkflowRole | undefined) ?? "researcher",
+                projectRoot:
+                  readString(
+                    (record.dispatchPayload as Record<string, unknown>).projectRoot
+                  ) ?? projectRoot ?? "",
+                projectId:
+                  readString(
+                    (record.dispatchPayload as Record<string, unknown>).projectId
+                  ) ?? projectId,
+                stage:
+                  readString((record.dispatchPayload as Record<string, unknown>).stage) ??
+                  null,
+                summary:
+                  readString((record.dispatchPayload as Record<string, unknown>).summary) ??
+                  "",
+                command:
+                  readString((record.dispatchPayload as Record<string, unknown>).command) ??
+                  null,
+                mailboxMessageId:
+                  readString(
+                    (record.dispatchPayload as Record<string, unknown>).mailboxMessageId
+                  ) ?? null,
+                extraBody:
+                  readString((record.dispatchPayload as Record<string, unknown>).extraBody) ??
+                  null,
+                waitTimeoutMs: Number.isFinite(
+                  (record.dispatchPayload as Record<string, unknown>).waitTimeoutMs
+                )
+                  ? Math.max(
+                      0,
+                      Math.floor(
+                        Number(
+                          (record.dispatchPayload as Record<string, unknown>).waitTimeoutMs
+                        )
+                      )
+                    )
+                  : null,
+                retryOnTimeout:
+                  (record.dispatchPayload as Record<string, unknown>).retryOnTimeout === true,
+                enableSpawnFallback:
+                  (record.dispatchPayload as Record<string, unknown>).enableSpawnFallback !==
+                  false,
+              }
+            : null;
+        if (
+          !queueId ||
+          !queueKey ||
+          !source ||
+          !entryType ||
+          !ownerAgent ||
+          !channelKey ||
+          !requesterSessionKey ||
+          !family ||
+          !kind ||
+          !queuedAt
+        ) {
+          return null;
+        }
+        if (entryType === "background_run" && !runPayload?.message) {
+          return null;
+        }
+        if (entryType === "dispatch_task" && !dispatchPayload?.projectRoot) {
+          return null;
+        }
+        return {
+          queueId,
+          queueKey,
+          source: source as BackgroundWorkflowQueueEntry["source"],
+          entryType: entryType as BackgroundWorkflowQueueEntry["entryType"],
+          ownerAgent,
+          channelKey,
+          requesterSessionKey,
+          messageChannel,
+          preferredSessionKey,
+          family,
+          kind,
+          projectId,
+          projectRoot,
+          queuedAt,
+          lastAttemptedAt,
+          attemptCount,
+          summary,
+          runPayload,
+          dispatchPayload,
+        } satisfies BackgroundWorkflowQueueEntry;
+      })
+      .filter((entry): entry is BackgroundWorkflowQueueEntry => Boolean(entry));
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
 async function writeBackgroundRunRegistry(entries: BackgroundRunRegistryEntry[]): Promise<void> {
   const registryPath = getBackgroundRunRegistryPath();
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
   await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+}
+
+async function writeBackgroundWorkflowQueue(
+  entries: BackgroundWorkflowQueueEntry[]
+): Promise<void> {
+  const queuePath = getBackgroundQueuePath();
+  await fs.mkdir(path.dirname(queuePath), { recursive: true });
+  await fs.writeFile(queuePath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+}
+
+async function pruneBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEntry[]> {
+  const now = Date.now();
+  const current = await readBackgroundWorkflowQueue();
+  const kept = current.filter((entry) => {
+    const freshnessReference = entry.lastAttemptedAt ?? entry.queuedAt;
+    const freshnessMs = Date.parse(freshnessReference);
+    return Number.isFinite(freshnessMs) && now - freshnessMs <= BACKGROUND_QUEUE_STALE_MS;
+  });
+  await writeBackgroundWorkflowQueue(kept);
+  return kept;
+}
+
+async function upsertBackgroundWorkflowQueueEntry(
+  entry: BackgroundWorkflowQueueEntry
+): Promise<{
+  entry: BackgroundWorkflowQueueEntry;
+  queuePosition: number;
+}> {
+  const current = await pruneBackgroundWorkflowQueue();
+  const existing = current.find((candidate) => candidate.queueKey === entry.queueKey) ?? null;
+  if (existing) {
+    return {
+      entry: existing,
+      queuePosition:
+        current
+          .sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt))
+          .findIndex((candidate) => candidate.queueKey === existing.queueKey) + 1,
+    };
+  }
+  const next = [...current, entry];
+  next.sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt));
+  await writeBackgroundWorkflowQueue(next);
+  return {
+    entry,
+    queuePosition: next.findIndex((candidate) => candidate.queueKey === entry.queueKey) + 1,
+  };
+}
+
+async function removeBackgroundWorkflowQueueEntries(queueKeys: string[]): Promise<void> {
+  if (queueKeys.length === 0) {
+    return;
+  }
+  const current = await pruneBackgroundWorkflowQueue();
+  const blocked = new Set(queueKeys);
+  const next = current.filter((entry) => !blocked.has(entry.queueKey));
+  await writeBackgroundWorkflowQueue(next);
+}
+
+async function touchBackgroundWorkflowQueueEntry(params: {
+  queueKey: string;
+  error?: string | null;
+}): Promise<void> {
+  const current = await pruneBackgroundWorkflowQueue();
+  const next = current.map((entry) =>
+    entry.queueKey === params.queueKey
+      ? {
+          ...entry,
+          lastAttemptedAt: new Date().toISOString(),
+          attemptCount: entry.attemptCount + 1,
+          summary: params.error ? params.error : entry.summary,
+        }
+      : entry
+  );
+  await writeBackgroundWorkflowQueue(next);
+}
+
+export async function hasPendingBackgroundWorkflowQueueKey(params: {
+  queueKey?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+}): Promise<{
+  queued: boolean;
+  active: boolean;
+}> {
+  const queueKey = readString(params.queueKey);
+  if (!queueKey) {
+    return { queued: false, active: false };
+  }
+  const queueEntries = await pruneBackgroundWorkflowQueue();
+  const queued = queueEntries.some(
+    (entry) =>
+      entry.queueKey === queueKey &&
+      backgroundRunRegistryEntryMatchesProject(
+        {
+          ownerAgent: entry.ownerAgent,
+          channelKey: entry.channelKey,
+          requesterSessionKey: entry.requesterSessionKey,
+          backgroundSessionKey: entry.preferredSessionKey ?? entry.requesterSessionKey,
+          runId: entry.queueId,
+          queueKey: entry.queueKey,
+          kind: entry.kind,
+          family: entry.family,
+          status: "active",
+          projectId: entry.projectId,
+          projectRoot: entry.projectRoot,
+          startedAt: entry.queuedAt,
+          lastCheckedAt: entry.lastAttemptedAt,
+          lastFinishedAt: null,
+        },
+        readString(params.projectId) ?? null,
+        readString(params.projectRoot) ?? null
+      )
+  );
+  const activeEntries = await pruneBackgroundRunRegistry({});
+  const active = activeEntries.some(
+    (entry) =>
+      entry.status === "active" &&
+      entry.queueKey === queueKey &&
+      backgroundRunRegistryEntryMatchesProject(
+        entry,
+        readString(params.projectId) ?? null,
+        readString(params.projectRoot) ?? null
+      )
+  );
+  return { queued, active };
+}
+
+export async function getBackgroundWorkflowRunByQueueKey(params: {
+  queueKey?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+  };
+}): Promise<BackgroundRunRegistryEntry | null> {
+  const queueKey = readString(params.queueKey);
+  if (!queueKey) {
+    return null;
+  }
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+  });
+  return (
+    refreshed.find(
+      (entry) =>
+        entry.queueKey === queueKey &&
+        backgroundRunRegistryEntryMatchesProject(
+          entry,
+          readString(params.projectId) ?? null,
+          readString(params.projectRoot) ?? null
+        )
+    ) ?? null
+  );
 }
 
 async function pruneBackgroundRunRegistry(params: {
@@ -409,6 +838,417 @@ async function upsertBackgroundRunRegistryEntry(
   await writeBackgroundRunRegistry(next);
 }
 
+export async function acquireBackgroundWorkflowSession(params: {
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+  };
+  ownerAgent?: string | null;
+  requesterSessionKey?: string | null;
+  messageChannel?: string | null;
+  preferredSessionKey?: string | null;
+  family?: string | null;
+  kind?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+}): Promise<BackgroundWorkflowSessionLease> {
+  const ownerAgent = normalizeAgentId(params.ownerAgent);
+  const family =
+    readString(params.family) ??
+    deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic");
+  const projectId = readString(params.projectId) ?? null;
+  const projectRoot = readString(params.projectRoot) ?? null;
+  const channelKey = deriveBackgroundRunChannelKey({
+    sessionKey: params.requesterSessionKey ?? undefined,
+    messageChannel: params.messageChannel ?? undefined,
+  });
+
+  if (ownerAgent !== "researcher" || !channelKey) {
+    return {
+      acquired: true,
+      reason: "acquired",
+      sessionKey:
+        readString(params.preferredSessionKey) ??
+        readString(params.requesterSessionKey) ??
+        null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+      channelKey,
+      ownerAgent,
+      family,
+      projectId,
+      projectRoot,
+    };
+  }
+
+  const registryEntries = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+  });
+  const reusableBackgroundSessionKey =
+    registryEntries.find(
+      (entry) =>
+        entry.ownerAgent === "researcher" &&
+        entry.channelKey === channelKey &&
+        entry.status === "idle" &&
+        entry.family === family &&
+        backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot)
+    )?.backgroundSessionKey ?? null;
+  const activeChannelEntries = registryEntries.filter(
+    (entry) =>
+      entry.ownerAgent === "researcher" &&
+      entry.channelKey === channelKey &&
+      entry.status === "active" &&
+      entry.backgroundSessionKey !== reusableBackgroundSessionKey
+  );
+  const activeResearcherSessionsInChannel = activeChannelEntries.length;
+  if (
+    !reusableBackgroundSessionKey &&
+    activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL
+  ) {
+    return {
+      acquired: false,
+      reason: "channel_capacity_reached",
+      sessionKey: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel,
+      channelKey,
+      ownerAgent,
+      family,
+      projectId,
+      projectRoot,
+    };
+  }
+
+  return {
+    acquired: true,
+    reason: "acquired",
+    sessionKey:
+      reusableBackgroundSessionKey ??
+      readString(params.preferredSessionKey) ??
+      readString(params.requesterSessionKey) ??
+      null,
+    reusedIdleSession: Boolean(reusableBackgroundSessionKey),
+    activeResearcherSessionsInChannel,
+    channelKey,
+    ownerAgent,
+    family,
+    projectId,
+    projectRoot,
+  };
+}
+
+export async function recordBackgroundWorkflowRun(params: {
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  requesterSessionKey?: string | null;
+  backgroundSessionKey?: string | null;
+  runId?: string | null;
+  queueKey?: string | null;
+  kind?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+}): Promise<void> {
+  const ownerAgent = normalizeAgentId(params.ownerAgent);
+  const channelKey = readString(params.channelKey);
+  const requesterSessionKey = readString(params.requesterSessionKey);
+  const backgroundSessionKey = readString(params.backgroundSessionKey);
+  const runId = readString(params.runId);
+  if (
+    ownerAgent !== "researcher" ||
+    !channelKey ||
+    !requesterSessionKey ||
+    !backgroundSessionKey ||
+    !runId
+  ) {
+    return;
+  }
+  await upsertBackgroundRunRegistryEntry({
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    backgroundSessionKey,
+    runId,
+    queueKey: readString(params.queueKey) ?? null,
+    kind: readString(params.kind) ?? "generic",
+    family:
+      readString(params.family) ??
+      deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
+    status: "active",
+    projectId: readString(params.projectId) ?? null,
+    projectRoot: readString(params.projectRoot) ?? null,
+    startedAt: new Date().toISOString(),
+    lastCheckedAt: null,
+    lastFinishedAt: null,
+  });
+}
+
+function buildBackgroundRunQueueKey(params: {
+  requesterSessionKey?: string | null;
+  kind?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  topic?: string | null;
+  commandText?: string | null;
+}): string {
+  return [
+    "background-run",
+    readString(params.requesterSessionKey) ?? "unknown-requester",
+    readString(params.family) ??
+      deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
+    readString(params.kind) ?? "generic",
+    readString(params.projectId) ?? readString(params.projectRoot) ?? "unknown-project",
+    readString(params.topic) ?? readString(params.commandText) ?? "generic-task",
+  ].join(":");
+}
+
+export async function enqueueQueuedBackgroundWorkflowRun(params: {
+  source: BackgroundWorkflowQueueEntry["source"];
+  ownerAgent?: string | null;
+  requesterSessionKey?: string | null;
+  messageChannel?: string | null;
+  preferredSessionKey?: string | null;
+  family?: string | null;
+  kind?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  queueKey?: string | null;
+  summary?: string | null;
+  runPayload?: BackgroundWorkflowQueueRunPayload | null;
+  dispatchPayload?: BackgroundWorkflowQueueDispatchPayload | null;
+}): Promise<{
+  entry: BackgroundWorkflowQueueEntry;
+  queuePosition: number;
+}> {
+  const ownerAgent = normalizeAgentId(params.ownerAgent) ?? "researcher";
+  const requesterSessionKey =
+    readString(params.requesterSessionKey) ?? "agent:researcher:main";
+  const messageChannel = readString(params.messageChannel) ?? null;
+  const channelKey = deriveBackgroundRunChannelKey({
+    sessionKey: requesterSessionKey,
+    messageChannel: messageChannel ?? undefined,
+  });
+  if (!channelKey) {
+    throw new Error("Cannot queue a background workflow run without a channel key.");
+  }
+  const family =
+    readString(params.family) ??
+    deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic");
+  const kind = readString(params.kind) ?? "generic";
+  const queueKey =
+    readString(params.queueKey) ??
+    buildBackgroundRunQueueKey({
+      requesterSessionKey,
+      family,
+      kind,
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      topic: params.summary,
+    });
+  const entry: BackgroundWorkflowQueueEntry = {
+    queueId: randomUUID(),
+    queueKey,
+    source: params.source,
+    entryType: params.dispatchPayload ? "dispatch_task" : "background_run",
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    messageChannel,
+    preferredSessionKey: readString(params.preferredSessionKey) ?? null,
+    family,
+    kind,
+    projectId: readString(params.projectId) ?? null,
+    projectRoot: readString(params.projectRoot) ?? null,
+    queuedAt: new Date().toISOString(),
+    lastAttemptedAt: null,
+    attemptCount: 0,
+    summary: readString(params.summary) ?? null,
+    runPayload: params.runPayload ?? null,
+    dispatchPayload: params.dispatchPayload ?? null,
+  };
+  return upsertBackgroundWorkflowQueueEntry(entry);
+}
+
+export async function drainQueuedBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: {
+    run: (params: {
+      sessionKey: string;
+      message: string;
+      lane?: string;
+      deliver?: boolean;
+      idempotencyKey?: string;
+      extraSystemPrompt?: string;
+    }) => Promise<{ runId: string }>;
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+    getSessionMessages?: (params: {
+      sessionKey: string;
+      limit?: number;
+    }) => Promise<{ messages: unknown[] }>;
+  };
+}): Promise<QueuedBackgroundWorkflowDrainResult> {
+  const runtimeSubagent = params.runtimeSubagent;
+  if (!runtimeSubagent) {
+    return {
+      started: [],
+      remaining: await pruneBackgroundWorkflowQueue(),
+    };
+  }
+
+  const queue = await pruneBackgroundWorkflowQueue();
+  const started: BackgroundRunStartResult[] = [];
+  const processedQueueKeys = new Set<string>();
+
+  for (const entry of queue) {
+    const lastAttemptedAtMs = entry.lastAttemptedAt
+      ? Date.parse(entry.lastAttemptedAt)
+      : null;
+    if (
+      lastAttemptedAtMs &&
+      Number.isFinite(lastAttemptedAtMs) &&
+      Date.now() - lastAttemptedAtMs < BACKGROUND_QUEUE_RETRY_BACKOFF_MS
+    ) {
+      continue;
+    }
+
+    const sessionLease = await acquireBackgroundWorkflowSession({
+      runtimeSubagent,
+      ownerAgent: entry.ownerAgent,
+      requesterSessionKey: entry.requesterSessionKey,
+      messageChannel: entry.messageChannel,
+      preferredSessionKey: entry.preferredSessionKey,
+      family: entry.family,
+      kind: entry.kind,
+      projectId: entry.projectId,
+      projectRoot: entry.projectRoot,
+    });
+    if (!sessionLease.acquired || !sessionLease.sessionKey) {
+      continue;
+    }
+
+    try {
+      if (entry.entryType === "dispatch_task" && entry.dispatchPayload) {
+        const dispatch = await dispatchWorkflowTaskToAgent({
+          runtimeSubagent,
+          requesterSessionKey: entry.requesterSessionKey,
+          requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
+          preferredSessionKeys: [
+            sessionLease.sessionKey,
+            ...entry.dispatchPayload.preferredSessionKeys.filter(
+              (candidate) => candidate !== sessionLease.sessionKey
+            ),
+          ],
+          fromRole: entry.dispatchPayload.fromRole,
+          toRole: entry.dispatchPayload.toRole,
+          projectRoot: entry.dispatchPayload.projectRoot,
+          projectId: entry.dispatchPayload.projectId,
+          stage: entry.dispatchPayload.stage,
+          summary: entry.dispatchPayload.summary,
+          command: entry.dispatchPayload.command,
+          mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+          extraBody: entry.dispatchPayload.extraBody,
+          waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
+          retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
+          enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
+        });
+        if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+          await touchBackgroundWorkflowQueueEntry({
+            queueKey: entry.queueKey,
+            error: dispatch.error ?? "Queued workflow dispatch did not start.",
+          });
+          continue;
+        }
+        await recordBackgroundWorkflowRun({
+          ownerAgent: entry.ownerAgent,
+          channelKey: entry.channelKey,
+          requesterSessionKey: entry.requesterSessionKey,
+          backgroundSessionKey: dispatch.sessionKey,
+          runId: dispatch.runId,
+          queueKey: entry.queueKey,
+          kind: entry.kind,
+          family: entry.family,
+          projectId: entry.projectId,
+          projectRoot: entry.projectRoot,
+        });
+        processedQueueKeys.add(entry.queueKey);
+        started.push({
+          started: true,
+          reason: "started",
+          runId: dispatch.runId,
+          sessionKey: dispatch.sessionKey,
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+          summary:
+            entry.summary ??
+            `Queued workflow dispatch resumed for ${entry.projectId ?? "the current project"}.`,
+          reusedIdleSession: sessionLease.reusedIdleSession,
+          activeResearcherSessionsInChannel:
+            sessionLease.activeResearcherSessionsInChannel,
+          queued: false,
+          queueKey: entry.queueKey,
+        });
+        continue;
+      }
+
+      if (entry.runPayload) {
+        const startedRun = await runtimeSubagent.run({
+          sessionKey: sessionLease.sessionKey,
+          message: entry.runPayload.message,
+          lane: entry.runPayload.lane,
+          deliver: entry.runPayload.deliver,
+          idempotencyKey: entry.runPayload.idempotencyKey ?? undefined,
+          extraSystemPrompt: entry.runPayload.extraSystemPrompt ?? undefined,
+        });
+        await recordBackgroundWorkflowRun({
+          ownerAgent: entry.ownerAgent,
+          channelKey: entry.channelKey,
+          requesterSessionKey: entry.requesterSessionKey,
+          backgroundSessionKey: sessionLease.sessionKey,
+          runId: startedRun.runId,
+          queueKey: entry.queueKey,
+          kind: entry.kind,
+          family: entry.family,
+          projectId: entry.projectId,
+          projectRoot: entry.projectRoot,
+        });
+        processedQueueKeys.add(entry.queueKey);
+        started.push({
+          started: true,
+          reason: "started",
+          runId: startedRun.runId,
+          sessionKey: sessionLease.sessionKey,
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+          summary:
+            entry.summary ??
+            `Queued background workflow resumed for ${entry.projectId ?? "the current project"}.`,
+          reusedIdleSession: sessionLease.reusedIdleSession,
+          activeResearcherSessionsInChannel:
+            sessionLease.activeResearcherSessionsInChannel,
+          queued: false,
+          queueKey: entry.queueKey,
+        });
+      }
+    } catch (error) {
+      await touchBackgroundWorkflowQueueEntry({
+        queueKey: entry.queueKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  await removeBackgroundWorkflowQueueEntries(Array.from(processedQueueKeys));
+  return {
+    started,
+    remaining: await pruneBackgroundWorkflowQueue(),
+  };
+}
+
 export function hasBackgroundContinuationMarker(
   text: string | null | undefined
 ): boolean {
@@ -580,54 +1420,19 @@ export async function startBackgroundWorkflowRun(params: {
     readString(params.backgroundRun.projectRoot) ??
     params.snapshot.projectRoot ??
     null;
+  const queueKey = buildBackgroundRunQueueKey({
+    requesterSessionKey: params.agentCtx.sessionKey,
+    family: normalizedFamily,
+    kind: normalizedKind,
+    projectId: resolvedProjectId,
+    projectRoot: resolvedProjectRoot,
+    topic,
+    commandText,
+  });
   let reusableBackgroundSessionKey: string | null = null;
   let activeResearcherSessionsInChannel: number | null = null;
-  if (ownerAgent === "researcher" && channelKey) {
-    const registryEntries = await pruneBackgroundRunRegistry({
-      runtimeSubagent: params.runtimeSubagent,
-    });
-    reusableBackgroundSessionKey =
-      registryEntries.find(
-        (entry) =>
-          entry.ownerAgent === "researcher" &&
-          entry.channelKey === channelKey &&
-          entry.status === "idle" &&
-          entry.family === normalizedFamily &&
-          backgroundRunRegistryEntryMatchesProject(
-            entry,
-            resolvedProjectId,
-            resolvedProjectRoot
-          )
-      )?.backgroundSessionKey ?? null;
-    const activeChannelEntries = registryEntries.filter(
-      (entry) =>
-        entry.ownerAgent === "researcher" &&
-        entry.channelKey === channelKey &&
-        entry.status === "active" &&
-        entry.backgroundSessionKey !== reusableBackgroundSessionKey
-    );
-    activeResearcherSessionsInChannel = activeChannelEntries.length;
-    if (activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL) {
-      return {
-        started: false,
-        reason: "channel_capacity_reached",
-        runId: null,
-        sessionKey: null,
-        projectRoot:
-          ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-        projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
-        summary:
-          `Background workflow not started: this channel already has ` +
-          `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL} active Researcher background subagents. ` +
-          "Wait for one to finish before starting another.",
-        reusedIdleSession: false,
-        activeResearcherSessionsInChannel,
-      };
-    }
-  }
 
-  const backgroundSessionKey =
-    reusableBackgroundSessionKey ??
+  const preferredBackgroundSessionKey =
     buildWorkflowSubagentSessionKey({
       parentSessionKey: params.agentCtx.sessionKey,
       purpose:
@@ -638,8 +1443,70 @@ export async function startBackgroundWorkflowRun(params: {
         normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
           ? [derivePapernexusTaskLabel(commandText), resolvedProjectId]
           : [resolvedProjectId, topic],
-    }) ??
-    params.agentCtx.sessionKey;
+    }) ?? params.agentCtx.sessionKey;
+
+  const sessionLease = await acquireBackgroundWorkflowSession({
+    runtimeSubagent: params.runtimeSubagent,
+    ownerAgent,
+    requesterSessionKey: params.agentCtx.sessionKey,
+    messageChannel: params.agentCtx.messageChannel,
+    preferredSessionKey: preferredBackgroundSessionKey,
+    family: normalizedFamily,
+    kind: normalizedKind,
+    projectId: resolvedProjectId,
+    projectRoot: resolvedProjectRoot,
+  });
+  reusableBackgroundSessionKey = sessionLease.reusedIdleSession
+    ? sessionLease.sessionKey
+    : null;
+  activeResearcherSessionsInChannel =
+    sessionLease.activeResearcherSessionsInChannel;
+  if (!sessionLease.acquired || !sessionLease.sessionKey) {
+    const queued = await enqueueQueuedBackgroundWorkflowRun({
+      source: "start_background_run",
+      ownerAgent,
+      requesterSessionKey: params.agentCtx.sessionKey,
+      messageChannel: params.agentCtx.messageChannel,
+      preferredSessionKey: preferredBackgroundSessionKey,
+      family: normalizedFamily,
+      kind: normalizedKind,
+      projectId: resolvedProjectId,
+      projectRoot: resolvedProjectRoot,
+      queueKey,
+      summary:
+        readString(params.backgroundRun.summary) ??
+        `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+      runPayload: {
+        message: commandText,
+        lane: "nested",
+        deliver: false,
+        idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
+        extraSystemPrompt:
+          "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
+          "This queued run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
+          "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
+          "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+      },
+    });
+    return {
+      started: false,
+      reason: "channel_capacity_reached",
+      runId: null,
+      sessionKey: null,
+      projectRoot:
+        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      summary:
+        `Queued background workflow because this channel already has ` +
+        `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL} active Researcher background subagents. ` +
+        `It will auto-start when a pooled session becomes idle${queued.queuePosition > 0 ? ` (queue position ${queued.queuePosition})` : ""}.`,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel,
+      queued: true,
+      queueKey: queued.entry.queueKey,
+    };
+  }
+  const backgroundSessionKey = sessionLease.sessionKey;
 
   const runId = (
     await params.runtimeSubagent.run({
@@ -657,20 +1524,17 @@ export async function startBackgroundWorkflowRun(params: {
   ).runId;
 
   if (ownerAgent === "researcher" && channelKey) {
-    await upsertBackgroundRunRegistryEntry({
+    await recordBackgroundWorkflowRun({
       ownerAgent,
       channelKey,
       requesterSessionKey: params.agentCtx.sessionKey,
       backgroundSessionKey,
       runId,
+      queueKey,
       kind: normalizedKind,
       family: normalizedFamily,
-      status: "active",
       projectId: resolvedProjectId,
       projectRoot: resolvedProjectRoot,
-      startedAt: new Date().toISOString(),
-      lastCheckedAt: null,
-      lastFinishedAt: null,
     });
   }
 
@@ -695,5 +1559,7 @@ export async function startBackgroundWorkflowRun(params: {
         : "Background workflow run started."),
     reusedIdleSession: Boolean(reusableBackgroundSessionKey),
     activeResearcherSessionsInChannel,
+    queued: false,
+    queueKey,
   };
 }

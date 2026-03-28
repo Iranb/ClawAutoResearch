@@ -115,12 +115,15 @@ Respect `allowed_placeholder_count` from citation integrity state. If the budget
 - Introduction: end with numbered contribution list
 - All tables: `\booktabs` package (no vertical rules)
 - All figures: vector PDF format
+- Use formal academic tone, precise terminology, and consistent terminology across the manuscript
+- Keep final manuscript prose in proper paragraphs rather than bullet-dump note form
 - Avoid: "In this paper, we…", "It is worth noting that…"
 
 **Paragraph logic rule**:
 - each paragraph has one explicit role: opening / challenge / method / evidence / limitation / transition
 - the first sentence should state that role or claim
 - sentence order should make the relation explicit: cause, contrast, consequence, refinement, or example
+- each paragraph should build on the previous paragraph with a smooth transition that makes the next move feel necessary
 - the final sentence should bridge to the next paragraph or section when possible
 - if a paragraph cannot be reverse-outlined cleanly, rewrite it before sending to Cross-Reviewer
 

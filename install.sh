@@ -21,6 +21,15 @@ PAPERNEXUS_DIR="${PAPERNEXUS_DIR:-/Users/iranb/Library/Mobile Documents/com~appl
 DRY_RUN=false
 FORCE_ROLE_FILES=false
 SKIP_AGENT_CREATE=false
+INSTALL_MODE="full"
+INSTALL_MODE_LABEL="FULL INSTALL"
+RUN_AGENT_PHASE=true
+RUN_PAPERNEXUS_PHASE=true
+RUN_SKILL_PHASE=true
+RUN_PLUGIN_LINK_PHASE=true
+RUN_WORKSPACE_PHASE=true
+FORCE_MENU_INPUT="${OPENCLAW_INSTALL_FORCE_MENU:-}"
+ORIGINAL_ARG_COUNT=$#
 
 usage() {
   cat <<'EOF'
@@ -36,6 +45,7 @@ Environment:
   OPENCLAW_HOME       默认是 ~/.openclaw
   OPENCLAW_CONFIG_PATH 默认是 $OPENCLAW_HOME/openclaw.json
   PAPERNEXUS_DIR      默认是 /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus
+  OPENCLAW_INSTALL_FORCE_MENU=1 可在非 TTY 环境强制显示快捷菜单
 EOF
 }
 
@@ -66,6 +76,17 @@ expand_path() {
   echo "${1//\~/$HOME}"
 }
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run() {
   if $DRY_RUN; then
     printf '  [dry-run]'
@@ -86,6 +107,123 @@ die() {
   echo ""
   echo "ERROR: $1" >&2
   exit 1
+}
+
+prompt_install_mode() {
+  echo ""
+  echo "[ Quick Mode ]"
+  echo "  1. 完整安装"
+  echo "  2. 仅同步 skills"
+  echo "  3. 仅同步 workspace"
+  echo "  4. 高级自定义"
+
+  while true; do
+    read -r -p "  请选择 [1-4，回车默认 1]: " selection || die "未读取到安装模式，请重试。"
+    case "$selection" in
+      ""|1)
+        INSTALL_MODE="full"
+        INSTALL_MODE_LABEL="FULL INSTALL"
+        return 0
+        ;;
+      2)
+        INSTALL_MODE="skills-only"
+        INSTALL_MODE_LABEL="SKILLS ONLY"
+        return 0
+        ;;
+      3)
+        INSTALL_MODE="workspace-only"
+        INSTALL_MODE_LABEL="WORKSPACE ONLY"
+        return 0
+        ;;
+      4)
+        INSTALL_MODE="advanced-custom"
+        INSTALL_MODE_LABEL="ADVANCED CUSTOM"
+        return 0
+        ;;
+      *)
+        echo "  请输入 1 到 4。"
+        ;;
+    esac
+  done
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default="${2:-y}"
+  local suffix
+  local answer
+
+  if [[ "$default" == "y" ]]; then
+    suffix="[Y/n]"
+  else
+    suffix="[y/N]"
+  fi
+
+  while true; do
+    read -r -p "  $prompt $suffix " answer || die "未读取到确认输入，请重试。"
+    if [[ -z "$answer" ]]; then
+      [[ "$default" == "y" ]]
+      return
+    fi
+    case "$answer" in
+      y|Y|yes|YES)
+        return 0
+        ;;
+      n|N|no|NO)
+        return 1
+        ;;
+      *)
+        echo "  请输入 y 或 n。"
+        ;;
+    esac
+  done
+}
+
+configure_install_mode() {
+  RUN_AGENT_PHASE=false
+  RUN_PAPERNEXUS_PHASE=false
+  RUN_SKILL_PHASE=false
+  RUN_PLUGIN_LINK_PHASE=false
+  RUN_WORKSPACE_PHASE=false
+
+  case "$INSTALL_MODE" in
+    full)
+      RUN_AGENT_PHASE=true
+      RUN_PAPERNEXUS_PHASE=true
+      RUN_SKILL_PHASE=true
+      RUN_PLUGIN_LINK_PHASE=true
+      RUN_WORKSPACE_PHASE=true
+      ;;
+    skills-only)
+      RUN_PAPERNEXUS_PHASE=true
+      RUN_SKILL_PHASE=true
+      ;;
+    workspace-only)
+      RUN_WORKSPACE_PHASE=true
+      ;;
+    advanced-custom)
+      echo ""
+      echo "[ Advanced Custom ]"
+      if prompt_yes_no "创建或检查 Agents？" "y"; then
+        RUN_AGENT_PHASE=true
+      fi
+      if prompt_yes_no "同步本机 PaperNexus skills？" "y"; then
+        RUN_PAPERNEXUS_PHASE=true
+      fi
+      if prompt_yes_no "检查重复 skill 并同步 skills？" "y"; then
+        RUN_SKILL_PHASE=true
+      fi
+      if prompt_yes_no "创建或更新插件链接？" "y"; then
+        RUN_PLUGIN_LINK_PHASE=true
+      fi
+      if prompt_yes_no "同步 workspace 配置、模板和角色根文件？" "y"; then
+        RUN_WORKSPACE_PHASE=true
+      fi
+      ;;
+    *)
+      die "未知安装模式: $INSTALL_MODE"
+      ;;
+  esac
 }
 
 ensure_dir() {
@@ -370,6 +508,14 @@ sync_plugin_link() {
   fi
 }
 
+if is_truthy "$FORCE_MENU_INPUT"; then
+  prompt_install_mode
+elif (( ORIGINAL_ARG_COUNT == 0 )) && [[ -t 0 ]]; then
+  prompt_install_mode
+fi
+
+configure_install_mode
+
 OC_DIR_EXPANDED=$(expand_path "$OC_DIR")
 OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OC_DIR_EXPANDED/openclaw.json}"
 OC_PLUGINS_DIR="$OC_DIR_EXPANDED/plugins"
@@ -384,16 +530,23 @@ echo ""
 echo "  Plugin:  $PLUGIN_DIR"
 echo "  Target:  $OC_DIR_EXPANDED"
 echo "  PaperNexus: $PAPERNEXUS_DIR"
+echo "  Mode:    $INSTALL_MODE_LABEL"
 echo "  Mode:    $([ "$DRY_RUN" = true ] && echo 'DRY RUN (no changes)' || echo 'LIVE')"
 echo "  Force:   $([ "$FORCE_ROLE_FILES" = true ] && echo 'overwrite role root files' || echo 'preserve existing role root files')"
-echo "  Agents:  $([ "$SKIP_AGENT_CREATE" = true ] && echo 'skip openclaw agents add' || echo 'create/check via openclaw')"
+if ! $RUN_AGENT_PHASE; then
+  echo "  Agents:  skipped by selected mode"
+elif [ "$SKIP_AGENT_CREATE" = true ]; then
+  echo "  Agents:  skip openclaw agents add"
+else
+  echo "  Agents:  create/check via openclaw"
+fi
 echo ""
 
 echo "[ Pre-flight ]"
 
 if ! command -v openclaw >/dev/null 2>&1; then
-  if $SKIP_AGENT_CREATE; then
-    echo "  WARN: 未找到 openclaw 命令，但已启用 --skip-agent-create；将跳过 Agent 创建，仅继续同步插件与工作区文件。"
+  if ! $RUN_AGENT_PHASE || $SKIP_AGENT_CREATE; then
+    echo "  WARN: 未找到 openclaw 命令，但当前不会执行 Agent 创建；将继续同步其余内容。"
   else
     die "未找到 openclaw 命令，请先安装 OpenClaw CLI 并确保在 PATH 中，或使用 --skip-agent-create 跳过 Agent 创建。"
   fi
@@ -433,7 +586,9 @@ AGENTS=(
   "cross-reviewer|Cross-Reviewer|workspace-cross-reviewer"
 )
 
-if $SKIP_AGENT_CREATE; then
+if ! $RUN_AGENT_PHASE; then
+  echo "  -> SKIP 添加 Agents（当前模式未包含）"
+elif $SKIP_AGENT_CREATE; then
   echo "  -> SKIP 全部 Agent 创建（已启用 --skip-agent-create）"
 else
   for entry in "${AGENTS[@]}"; do
@@ -466,117 +621,133 @@ fi
 echo ""
 echo "[2/7] 同步本机 PaperNexus Skills（如果存在）..."
 
-sync_papernexus_skills
+if $RUN_PAPERNEXUS_PHASE; then
+  sync_papernexus_skills
+else
+  echo "  -> SKIP PaperNexus skills 同步（当前模式未包含）"
+fi
 
 echo ""
 echo "[3/7] 检查重复技能..."
 
-DUPLICATES=()
-
-for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
-  skill_src="$PLUGIN_DIR/skills/$agent"
-  ws_root="$(workspace_for_agent "$agent")"
-  ws_skills="$ws_root/skills"
-
-  [[ -d "$skill_src" ]] || continue
-  [[ -d "$ws_skills" ]] || continue
-
-  for skill_dir in "$skill_src"/*/; do
-    [[ -d "$skill_dir" ]] || continue
-    skill_name=$(basename "$skill_dir")
-    dst="$ws_skills/$skill_name"
-    if [[ -d "$dst" && "$skill_name" != "self-improving-agent" ]]; then
-      DUPLICATES+=("$agent|$skill_name|$dst")
-    fi
-  done
-done
-
 DELETE_DUPLICATES=false
-if [[ ${#DUPLICATES[@]} -gt 0 ]]; then
-  echo "  发现重复 skills："
-  for entry in "${DUPLICATES[@]}"; do
-    IFS='|' read -r agent skill_name dst <<< "$entry"
-    echo "    - $agent/$skill_name -> $dst"
+if $RUN_SKILL_PHASE; then
+  DUPLICATES=()
+
+  for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
+    skill_src="$PLUGIN_DIR/skills/$agent"
+    ws_root="$(workspace_for_agent "$agent")"
+    ws_skills="$ws_root/skills"
+
+    [[ -d "$skill_src" ]] || continue
+    [[ -d "$ws_skills" ]] || continue
+
+    for skill_dir in "$skill_src"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      skill_name=$(basename "$skill_dir")
+      dst="$ws_skills/$skill_name"
+      if [[ -d "$dst" && "$skill_name" != "self-improving-agent" ]]; then
+        DUPLICATES+=("$agent|$skill_name|$dst")
+      fi
+    done
   done
-  echo "  规则：若为重复 skill，仅保留 self-improving-agent；其余重复项删除后再复制插件版本。"
-  if $DRY_RUN; then
-    echo "  [dry-run] 实际执行时会先询问你是否删除这些重复 skills。"
-  else
-    read -r -p "  确认删除上述重复 skills 并用插件版本覆盖吗？[y/N] " confirm_delete
-    if [[ "$confirm_delete" =~ ^[Yy]$ ]]; then
-      DELETE_DUPLICATES=true
+
+  if [[ ${#DUPLICATES[@]} -gt 0 ]]; then
+    echo "  发现重复 skills："
+    for entry in "${DUPLICATES[@]}"; do
+      IFS='|' read -r agent skill_name dst <<< "$entry"
+      echo "    - $agent/$skill_name -> $dst"
+    done
+    echo "  规则：若为重复 skill，仅保留 self-improving-agent；其余重复项删除后再复制插件版本。"
+    if $DRY_RUN; then
+      echo "  [dry-run] 实际执行时会先询问你是否删除这些重复 skills。"
+    else
+      read -r -p "  确认删除上述重复 skills 并用插件版本覆盖吗？[y/N] " confirm_delete
+      if [[ "$confirm_delete" =~ ^[Yy]$ ]]; then
+        DELETE_DUPLICATES=true
+      fi
     fi
+  else
+    echo "  -> 未发现需要确认删除的重复 skills"
   fi
 else
-  echo "  -> 未发现需要确认删除的重复 skills"
+  echo "  -> SKIP 检查重复技能（当前模式未包含）"
 fi
 
 echo ""
 echo "[4/7] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
 
-for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
-  skill_src="$PLUGIN_DIR/skills/$agent"
-  ws_root="$(workspace_for_agent "$agent")"
-  ws_skills="$ws_root/skills"
+if $RUN_SKILL_PHASE; then
+  for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
+    skill_src="$PLUGIN_DIR/skills/$agent"
+    ws_root="$(workspace_for_agent "$agent")"
+    ws_skills="$ws_root/skills"
 
-  [[ -d "$skill_src" ]] || continue
-  ensure_dir "$ws_skills"
+    [[ -d "$skill_src" ]] || continue
+    ensure_dir "$ws_skills"
 
-  for skill_dir in "$skill_src"/*/; do
-    [[ -d "$skill_dir" ]] || continue
-    skill_name=$(basename "$skill_dir")
-    dst="$ws_skills/$skill_name"
+    for skill_dir in "$skill_src"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      skill_name=$(basename "$skill_dir")
+      dst="$ws_skills/$skill_name"
 
-    if [[ -L "$skill_dir" ]]; then
-      if [[ -L "$dst" || -d "$dst" ]]; then
-        if [[ "$skill_name" == "self-improving-agent" ]]; then
-          echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
-        else
-          if $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
-            remove_path "$dst"
-            if $DRY_RUN; then
-              echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
-            else
-              ln -s "$(readlink "$skill_dir")" "$dst"
-              echo "  -> RELINK $agent/$skill_name"
-            fi
+      if [[ -L "$skill_dir" ]]; then
+        if [[ -L "$dst" || -d "$dst" ]]; then
+          if [[ "$skill_name" == "self-improving-agent" ]]; then
+            echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
           else
-            echo "  -> SKIP $agent/$skill_name (保留现有版本)"
+            if $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
+              remove_path "$dst"
+              if $DRY_RUN; then
+                echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
+              else
+                ln -s "$(readlink "$skill_dir")" "$dst"
+                echo "  -> RELINK $agent/$skill_name"
+              fi
+            else
+              echo "  -> SKIP $agent/$skill_name (保留现有版本)"
+            fi
+          fi
+        else
+          if $DRY_RUN; then
+            echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
+          else
+            ln -s "$(readlink "$skill_dir")" "$dst"
+            echo "  -> LINK $agent/$skill_name"
           fi
         fi
       else
-        if $DRY_RUN; then
-          echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
+        if [[ -d "$dst" ]]; then
+          if [[ "$skill_name" == "self-improving-agent" ]]; then
+            echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
+          elif $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
+            remove_path "$dst"
+            run cp -R "$skill_dir" "$dst"
+            echo "  -> REPLACE $agent/$skill_name"
+          else
+            echo "  -> SKIP $agent/$skill_name (保留现有版本)"
+          fi
         else
-          ln -s "$(readlink "$skill_dir")" "$dst"
-          echo "  -> LINK $agent/$skill_name"
-        fi
-      fi
-    else
-      if [[ -d "$dst" ]]; then
-        if [[ "$skill_name" == "self-improving-agent" ]]; then
-          echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
-        elif $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
-          remove_path "$dst"
           run cp -R "$skill_dir" "$dst"
-          echo "  -> REPLACE $agent/$skill_name"
-        else
-          echo "  -> SKIP $agent/$skill_name (保留现有版本)"
+          echo "  -> COPY $agent/$skill_name"
         fi
-      else
-        run cp -R "$skill_dir" "$dst"
-        echo "  -> COPY $agent/$skill_name"
       fi
-    fi
+    done
   done
-done
+else
+  echo "  -> SKIP 同步 skills（当前模式未包含）"
+fi
 
 echo ""
 echo "[5/7] 创建插件链接..."
 
-sync_plugin_link "$PLUGIN_LINK"
-if [[ -e "$PLUGIN_LINK" && ! -L "$PLUGIN_LINK" ]]; then
-  PLUGIN_REFERENCE_PATH="$PLUGIN_DIR"
+if $RUN_PLUGIN_LINK_PHASE; then
+  sync_plugin_link "$PLUGIN_LINK"
+  if [[ -e "$PLUGIN_LINK" && ! -L "$PLUGIN_LINK" ]]; then
+    PLUGIN_REFERENCE_PATH="$PLUGIN_DIR"
+  fi
+else
+  echo "  -> SKIP 创建插件链接（当前模式未包含）"
 fi
 
 echo ""
@@ -586,44 +757,48 @@ RESEARCHER_WS="$OC_DIR_EXPANDED/workspace-researcher"
 REVIEWER_WS="$OC_DIR_EXPANDED/workspace-reviewer"
 CROSS_REVIEWER_WS="$OC_DIR_EXPANDED/workspace-cross-reviewer"
 
-for ws_root in "$RESEARCHER_WS" "$REVIEWER_WS" "$CROSS_REVIEWER_WS"; do
-  ensure_dir "$ws_root"
-done
-
-echo "  -> 复制共享核心配置文件..."
-CORE_FILES=(CONFIG.md WORKFLOW.md WORKSPACE.md)
-for ws_root in "$RESEARCHER_WS" "$REVIEWER_WS" "$CROSS_REVIEWER_WS"; do
-  ws_name=$(basename "$ws_root")
-  for file in "${CORE_FILES[@]}"; do
-    copy_file "$PLUGIN_DIR/$file" "$ws_root/$file" "$ws_name/$file"
+if $RUN_WORKSPACE_PHASE; then
+  for ws_root in "$RESEARCHER_WS" "$REVIEWER_WS" "$CROSS_REVIEWER_WS"; do
+    ensure_dir "$ws_root"
   done
-done
 
-echo "  -> 复制研究工作区模板文件..."
-TEMPLATE_FILES=(
-  PROJECT_MANIFEST.json
-  TRACK_REGISTRY.json
-  CLAIM_POLICY.md
-  EXPERIMENT_LEDGER.json
-  EXPERIMENT_REGISTRY.md
-  IDEA_TOURNAMENT_STATE.json
-  PROJECTS_STATE.json
-)
-for file in "${TEMPLATE_FILES[@]}"; do
-  copy_file "$PLUGIN_DIR/templates/$file" "$RESEARCHER_WS/$file" "workspace-researcher/$file"
-done
-
-if [[ -d "$PLUGIN_DIR/templates/memory" ]]; then
-  ensure_dir "$RESEARCHER_WS/memory"
-  for file in ideation-memory.md experiment-memory.md; do
-    copy_file "$PLUGIN_DIR/templates/memory/$file" "$RESEARCHER_WS/memory/$file" "workspace-researcher/memory/$file"
+  echo "  -> 复制共享核心配置文件..."
+  CORE_FILES=(CONFIG.md WORKFLOW.md WORKSPACE.md)
+  for ws_root in "$RESEARCHER_WS" "$REVIEWER_WS" "$CROSS_REVIEWER_WS"; do
+    ws_name=$(basename "$ws_root")
+    for file in "${CORE_FILES[@]}"; do
+      copy_file "$PLUGIN_DIR/$file" "$ws_root/$file" "$ws_name/$file"
+    done
   done
+
+  echo "  -> 复制研究工作区模板文件..."
+  TEMPLATE_FILES=(
+    PROJECT_MANIFEST.json
+    TRACK_REGISTRY.json
+    CLAIM_POLICY.md
+    EXPERIMENT_LEDGER.json
+    EXPERIMENT_REGISTRY.md
+    IDEA_TOURNAMENT_STATE.json
+    PROJECTS_STATE.json
+  )
+  for file in "${TEMPLATE_FILES[@]}"; do
+    copy_file "$PLUGIN_DIR/templates/$file" "$RESEARCHER_WS/$file" "workspace-researcher/$file"
+  done
+
+  if [[ -d "$PLUGIN_DIR/templates/memory" ]]; then
+    ensure_dir "$RESEARCHER_WS/memory"
+    for file in ideation-memory.md experiment-memory.md; do
+      copy_file "$PLUGIN_DIR/templates/memory/$file" "$RESEARCHER_WS/memory/$file" "workspace-researcher/memory/$file"
+    done
+  fi
+
+  echo "  -> 同步 workspace root 角色配置..."
+  copy_role_bundle "researcher" "$RESEARCHER_WS" "$FORCE_ROLE_FILES"
+  copy_role_bundle "reviewer" "$REVIEWER_WS" "$FORCE_ROLE_FILES"
+  copy_role_bundle "cross-reviewer" "$CROSS_REVIEWER_WS" "$FORCE_ROLE_FILES"
+else
+  echo "  -> SKIP 同步工作区配置（当前模式未包含）"
 fi
-
-echo "  -> 同步 workspace root 角色配置..."
-copy_role_bundle "researcher" "$RESEARCHER_WS" "$FORCE_ROLE_FILES"
-copy_role_bundle "reviewer" "$REVIEWER_WS" "$FORCE_ROLE_FILES"
-copy_role_bundle "cross-reviewer" "$CROSS_REVIEWER_WS" "$FORCE_ROLE_FILES"
 
 echo ""
 echo "[7/7] 完成安装收尾..."
@@ -633,15 +808,33 @@ echo "╔═══════════════════════�
 echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete            ' || echo 'Complete                    ')║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-if $SKIP_AGENT_CREATE; then
+if ! $RUN_AGENT_PHASE; then
+  echo "  1. Agents: 当前模式未包含"
+elif $SKIP_AGENT_CREATE; then
   echo "  1. Agents: 已跳过 openclaw Agent 创建；如需创建可移除 --skip-agent-create 后重跑"
 else
   echo "  1. Agents: 已添加或检查研究工作流所需 agents"
 fi
-echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则相关 skills 已先同步到插件仓库"
-echo "  3. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
-echo "  4. Plugin: 已创建或检查 $PLUGIN_LINK"
-echo "  5. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
+if $RUN_PAPERNEXUS_PHASE; then
+  echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则相关 skills 已先同步到插件仓库"
+else
+  echo "  2. PaperNexus: 当前模式未包含"
+fi
+if $RUN_SKILL_PHASE; then
+  echo "  3. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
+else
+  echo "  3. Skills: 当前模式未包含"
+fi
+if $RUN_PLUGIN_LINK_PHASE; then
+  echo "  4. Plugin: 已创建或检查 $PLUGIN_LINK"
+else
+  echo "  4. Plugin: 当前模式未包含"
+fi
+if $RUN_WORKSPACE_PHASE; then
+  echo "  5. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
+else
+  echo "  5. Workspace: 当前模式未包含"
+fi
 echo "  6. Config: 未修改你的 openclaw.json"
 echo "  7. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
 echo ""

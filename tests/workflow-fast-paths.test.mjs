@@ -4,6 +4,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = path.join(
+  os.tmpdir(),
+  "openclaw-research-background-runs-workflow-fast-paths.json"
+);
+process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH = path.join(
+  os.tmpdir(),
+  "openclaw-research-background-queue-workflow-fast-paths.json"
+);
+
 import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
@@ -13,6 +22,8 @@ import {
   buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
+  clearBackgroundWorkflowQueueForTests,
+  drainQueuedBackgroundWorkflowRuns,
   clearBackgroundWorkflowRunRegistryForTests,
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
@@ -25,10 +36,12 @@ async function makeTempWorkspace() {
 
 test.beforeEach(async () => {
   await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
 });
 
 test.afterEach(async () => {
   await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
 });
 
 test("ensureWorkflowProjectRoot creates a project from configured projectsRoot and topic", async (t) => {
@@ -388,10 +401,93 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
   assert.equal(second.started, true);
   assert.equal(third.started, false);
   assert.equal(third.reason, "channel_capacity_reached");
+  assert.equal(third.queued, true);
   assert.equal(third.runId, null);
   assert.equal(third.activeResearcherSessionsInChannel, 2);
-  assert.match(third.summary, /already has 2 active researcher background subagents/i);
+  assert.match(third.summary, /queued/i);
   assert.equal(runCalls.length, 2);
+});
+
+test("queued researcher background runs persist and auto-replay when a pooled session becomes idle", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const completedRunIds = new Set();
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+    async waitForRun(params) {
+      return completedRunIds.has(params.runId)
+        ? { status: "ok" }
+        : { status: "timeout" };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const baseParams = {
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-limit-queued",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+  };
+
+  const first = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery",
+    },
+  });
+  const second = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "avian migration drift",
+    },
+  });
+  const queued = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "wetland morphology signals",
+    },
+  });
+
+  assert.equal(first.started, true);
+  assert.equal(second.started, true);
+  assert.equal(queued.started, false);
+  assert.equal(queued.queued, true);
+
+  completedRunIds.add(first.runId);
+  const drain = await drainQueuedBackgroundWorkflowRuns({
+    runtimeSubagent,
+  });
+
+  assert.equal(drain.started.length, 1);
+  assert.equal(drain.remaining.length, 0);
+  assert.equal(drain.started[0].reason, "started");
+  assert.equal(drain.started[0].queued, false);
+  assert.equal(typeof drain.started[0].sessionKey, "string");
+  assert.equal(runCalls.length, 3);
 });
 
 test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel", async (t) => {

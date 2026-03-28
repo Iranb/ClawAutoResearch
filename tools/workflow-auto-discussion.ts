@@ -30,6 +30,7 @@ export type AutoModeDiscussionAttempt = {
   reviewerRole: AutoModeDiscussionReviewerRole;
   sessionKey: string;
   runId: string | null;
+  queueKey?: string | null;
   status: "pending" | "completed" | "error";
   launchedAt: string;
   completedAt: string | null;
@@ -299,6 +300,7 @@ export async function readAutoModeDiscussionStore(
               "reviewer",
             sessionKey: readString(attempt.sessionKey) ?? "",
             runId: readString(attempt.runId),
+            queueKey: readString(attempt.queueKey),
             status: attemptStatus,
             launchedAt: readString(attempt.launchedAt) ?? new Date(0).toISOString(),
             completedAt: readString(attempt.completedAt),

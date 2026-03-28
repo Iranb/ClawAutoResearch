@@ -1359,4 +1359,45 @@ test("focused prompt assembly returns layered payload metadata for current secti
     reflection_delta: true,
   });
   assert.equal(typeof assembly.metadata.promptPayloadSizes.primary_payload, "number");
+  assert.match(assembly.text, /formal academic tone/i);
+  assert.match(assembly.text, /consistent terminology/i);
+  assert.match(assembly.text, /one paragraph = one message|one paragraph for one message/i);
+  assert.match(assembly.text, /proper paragraphs/i);
+  assert.match(assembly.text, /smooth transitions|bridge to the next paragraph/i);
+});
+
+test("focused prompt assembly gives reviewers the same writing constitution", () => {
+  const assembly = buildFocusedPromptAssembly({
+    snapshot: {
+      projectRoot: "/tmp/demo-project",
+      projectId: "demo-project",
+      role: "reviewer",
+      currentStage: "review",
+      currentMicroStage: "prose",
+      ownerAgent: "reviewer",
+      recommendedOwner: "reviewer",
+      nextAction: "Review the discussion section for clarity and citation support.",
+      resumeAction: "/review-phase",
+      blockingReason: "discussion section still has vague transitions",
+      allowedWriteScopes: ["{PROJ}/reviewer/**"],
+      missingStageSignals: ["discussion section still has vague transitions"],
+      reviewSessionStatus: "running",
+      reviewSessionRound: 3,
+      reviewSessionVerdict: "needs_revision",
+      reviewIssueCriticalCount: 0,
+      reviewIssueHighCount: 1,
+      reviewIssueMediumCount: 2,
+      reviewIssueLowCount: 1,
+      paperQcStatus: "running",
+      paperQcCompileStatus: "pass",
+      paperQcPageBudgetStatus: "pass",
+      figureQcCaptionAlignmentStatus: "pass",
+      figureQcTextAlignmentStatus: "pass",
+    },
+  });
+
+  assert.match(assembly.text, /review against the shared writing constitution/i);
+  assert.match(assembly.text, /formal academic tone/i);
+  assert.match(assembly.text, /consistent terminology/i);
+  assert.match(assembly.text, /smooth transitions|paragraph-to-paragraph flow/i);
 });

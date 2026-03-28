@@ -18,6 +18,7 @@ import {
   getIdleResearchStateSummary,
   getInnovationReflectionStateSummary,
   getOrchestrationStateSummary,
+  getPaperIngestionStateSummary,
   getPaperQcStateSummary,
   getResearchProgramStateSummary,
   getProjectRootForWorkflow,
@@ -49,6 +50,7 @@ import {
   setGraphGuidedWritingState,
   setIdleResearchState,
   setOrchestrationState,
+  setPaperIngestionState,
   setPaperQcState,
   setResearchProgramState,
   setReviewIssueTrackerState,
@@ -64,7 +66,10 @@ import {
   dispatchWorkflowTaskToAgent,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
-import { maybeBroadcastAutoIteratorStageChange } from "./stage-broadcast";
+import {
+  maybeBroadcastAutoIteratorStageChange,
+  maybeBroadcastWorkflowStatusUpdate,
+} from "./stage-broadcast";
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
   listBackgroundWorkflowRuns,
@@ -107,6 +112,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
   "set_gate_state",
+  "set_paper_ingestion",
   "prune_background_sessions",
   "bind_channel_project",
   "unbind_channel_project",
@@ -134,6 +140,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_research_program: "setResearchProgramState",
   get_orchestration_state: "getOrchestrationStateSummary",
   set_orchestration_state: "setOrchestrationState",
+  get_paper_ingestion: "getPaperIngestionStateSummary",
+  set_paper_ingestion: "setPaperIngestionState",
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
   get_write_package: "getWritePackageStateSummary",
@@ -414,6 +422,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_research_program",
               "get_orchestration_state",
               "set_orchestration_state",
+              "get_paper_ingestion",
+              "set_paper_ingestion",
               "get_theory_state",
               "get_writing_contract",
               "get_write_package",
@@ -497,6 +507,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           orchestrationState: {
+            type: "object",
+            additionalProperties: true,
+          },
+          paperIngestion: {
             type: "object",
             additionalProperties: true,
           },
@@ -841,12 +855,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       recommendedActions: result.recommendedActions,
                       agentTaskDispatch: dispatchResult,
                     });
+              const statusBroadcast =
+                result.timedDefaultTriggered === true
+                  ? await maybeBroadcastWorkflowStatusUpdate({
+                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      sessionKey: ctx.sessionKey,
+                      projectId: snapshot.projectId,
+                      projectRoot,
+                      status: "continued",
+                      stage: result.stageAfter,
+                      summary:
+                        result.gateReason ??
+                        "The workflow continued through the default safe branch after the confirmation deadline expired.",
+                      idempotencyKeySuffix: [
+                        "timed-default",
+                        result.stageAfter ?? "unknown-stage",
+                      ].join(":"),
+                    })
+                  : {
+                      broadcasted: false,
+                      reasonSkipped: "not_needed",
+                      runId: null,
+                      sessionKey: ctx.sessionKey ?? null,
+                      idempotencyKey: null,
+                    };
               return textResponse(
                 JSON.stringify(
                   {
                     ...result,
                     agentTaskDispatch: dispatchResult,
                     stageBroadcast,
+                    statusBroadcast,
                   },
                   null,
                   2
@@ -865,7 +904,46 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 snapshot,
                 backgroundRun,
               });
-              return textResponse(JSON.stringify(result, null, 2));
+              const resolvedProjectId = result.projectId ?? snapshot.projectId;
+              const resolvedProjectRoot = result.projectRoot ?? projectRoot;
+              const statusBroadcast =
+                resolvedProjectRoot && ctx.sessionKey
+                  ? await maybeBroadcastWorkflowStatusUpdate({
+                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      sessionKey: ctx.sessionKey,
+                      projectId: resolvedProjectId,
+                      projectRoot: resolvedProjectRoot,
+                      status: result.started
+                        ? "started"
+                        : result.reason === "channel_capacity_reached"
+                          ? "queued"
+                          : "waiting",
+                      stage: snapshot.currentStage,
+                      summary: result.summary,
+                      idempotencyKeySuffix: [
+                        "start-background-run",
+                        backgroundRun.kind ?? "generic",
+                        result.reason,
+                        result.reusedIdleSession ? "reused" : "fresh",
+                      ].join(":"),
+                    })
+                  : {
+                      broadcasted: false,
+                      reasonSkipped: resolvedProjectRoot ? "session_unavailable" : "project_unavailable",
+                      runId: null,
+                      sessionKey: ctx.sessionKey ?? null,
+                      idempotencyKey: null,
+                    };
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...result,
+                    statusBroadcast,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "list_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
@@ -1198,6 +1276,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_paper_ingestion": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getPaperIngestionStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_paper_ingestion": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: requireObject(params.paperIngestion, "paperIngestion"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_paper_qc": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
+import {
+  clearBackgroundWorkflowRunRegistryForTests,
+  recordBackgroundWorkflowRun,
+} from "../tools/workflow-fast-paths.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
 
@@ -144,6 +148,331 @@ test("research_workflow gate-state actions persist timed-default confirmation me
   assert.equal(summary.state.lastGate, "CONFIRM-RESUME-1");
   assert.equal(summary.state.confirmationDeadlineAt, "2026-03-28T10:00:00.000Z");
   assert.equal(summary.timedDefaultEligible, true);
+});
+
+test("research_workflow paper-ingestion actions persist formal waiting and reconcile states", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const setImportWaiting = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Queued PaperNexus import imp-42 is still parsing the uploaded PDF.",
+      import_task_ids: ["imp-42"],
+      last_import_task_id: "imp-42",
+      last_import_status: "running",
+      graph_version_seen: "shared-global-v41",
+      reconcile_required: false,
+    },
+  });
+  assert.equal(setImportWaiting.state.runtimeStatus, "waiting_import");
+  assert.equal(setImportWaiting.state.importTaskIds.length, 1);
+
+  const setReconcile = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      waiting_reason: "A newer shared graph version is available and the current topic packets must reconcile.",
+      import_task_ids: ["imp-42"],
+      last_import_task_id: "imp-42",
+      last_import_status: "completed",
+      graph_version_seen: "shared-global-v42",
+      reconcile_required: true,
+    },
+  });
+  assert.equal(setReconcile.state.runtimeStatus, "reconciling");
+  assert.equal(setReconcile.state.reconcileRequired, true);
+
+  const summary = await executeWorkflowTool(tool, {
+    action: "get_paper_ingestion",
+  });
+  assert.equal(summary.state.runtimeStatus, "reconciling");
+  assert.equal(summary.state.lastImportStatus, "completed");
+  assert.equal(summary.state.graphVersionSeen, "shared-global-v42");
+  assert.equal(summary.state.reconcileRequired, true);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.paperIngestionRuntimeStatus, "reconciling");
+  assert.equal(snapshot.paperIngestionReconcileRequired, true);
+  assert.equal(snapshot.paperIngestionImportTaskCount, 1);
+});
+
+test("research_workflow auto_iterator_tick broadcasts a continued status when timed-default proceeds", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "code",
+        owner_agent: "coder",
+        idle_research: { enabled: false },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "set_gate_state",
+    gateState: {
+      current_stage: "code",
+      last_gate: "CONFIRM-RESUME-1",
+      gate_status: "waiting",
+      gate_type: "timed_default",
+      auto_proceed: false,
+      confirmation_requested_at: "1999-12-31T23:00:00.000Z",
+      confirmation_deadline_at: "2000-01-01T00:00:00.000Z",
+      default_action: "resume_recommended_stage",
+      default_action_reason:
+        "No user reply within 1h; continue with the workflow-safe default branch.",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "auto_iterator_tick",
+    iterator: {
+      mode: "test",
+      queueMailbox: false,
+      dispatchTasks: false,
+      broadcastStageChange: false,
+    },
+  });
+
+  assert.equal(result.timedDefaultTriggered, true);
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: continued/i.test(entry.message)
+    )
+  );
+});
+
+test("research_workflow start_background_run broadcasts queued status when the researcher pool is full", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const registryPath = path.join(
+    os.tmpdir(),
+    `openclaw-research-background-runs-workflow-runtime-tools-${Date.now()}-queued.json`
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousRegistryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousRegistryPath === undefined) {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+    } else {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = previousRegistryPath;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(registryPath, { force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
+  await clearBackgroundWorkflowRunRegistryForTests();
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-1",
+    runId: "run-active-1",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "demo-project",
+    projectRoot,
+  });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-2",
+    runId: "run-active-2",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+        async waitForRun() {
+          return { status: "timeout" };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "start_background_run",
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "queued topic",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(result.reason, "channel_capacity_reached");
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: queued/i.test(entry.message) &&
+        /already has 2 active Researcher background subagents/i.test(entry.message)
+    )
+  );
+});
+
+test("research_workflow start_background_run broadcasts reused status context when an idle researcher session is reused", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const registryPath = path.join(
+    os.tmpdir(),
+    `openclaw-research-background-runs-workflow-runtime-tools-${Date.now()}-reused.json`
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousRegistryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  const runtimeCalls = [];
+  const reusedSessionKey = "agent:researcher:discord:group:paper-lab:workflow-research-pipeline";
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousRegistryPath === undefined) {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+    } else {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = previousRegistryPath;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(registryPath, { force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
+  await clearBackgroundWorkflowRunRegistryForTests();
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: reusedSessionKey,
+    runId: "run-finished-1",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+        async waitForRun() {
+          return { status: "ok" };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "start_background_run",
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "reused topic",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.reusedIdleSession, true);
+  assert.equal(result.sessionKey, reusedSessionKey);
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === false && entry.sessionKey === reusedSessionKey
+    )
+  );
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: started/i.test(entry.message) &&
+        /Reused an idle Researcher subagent and started/i.test(entry.message)
+    )
+  );
 });
 
 test("research_workflow runtime-state actions persist manifest state and append temp traces", async (t) => {

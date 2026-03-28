@@ -622,6 +622,17 @@ type WritePackageState = {
   lastUpdatedAt: string | null;
 };
 
+type PaperIngestionState = {
+  runtimeStatus: string;
+  waitingReason: string | null;
+  importTaskIds: string[];
+  lastImportTaskId: string | null;
+  lastImportStatus: string | null;
+  graphVersionSeen: string | null;
+  reconcileRequired: boolean;
+  lastUpdatedAt: string | null;
+};
+
 type PaperQcState = {
   status: string;
   compileStatus: string;
@@ -725,6 +736,12 @@ export type WorkflowSnapshot = {
   graphPresenceExpectedPapers: number | null;
   graphPresencePresentPapers: number | null;
   graphPresenceMissingPapers: number | null;
+  paperIngestionRuntimeStatus: string | null;
+  paperIngestionWaitingReason: string | null;
+  paperIngestionImportTaskCount: number | null;
+  paperIngestionLastImportStatus: string | null;
+  paperIngestionGraphVersionSeen: string | null;
+  paperIngestionReconcileRequired: boolean;
   paperSourceDir: string | null;
   graphSourceDir: string | null;
   defaultPapernexusSourceDir: string | null;
@@ -4839,6 +4856,59 @@ function serializeWritePackageState(
   };
 }
 
+function normalizePaperIngestionRuntimeStatus(value: unknown): string {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "waiting_import":
+    case "waiting_graph":
+    case "reconciling":
+    case "ready":
+    case "blocked":
+    case "idle":
+      return normalized;
+    default:
+      return "idle";
+  }
+}
+
+function normalizePaperIngestionState(value: unknown): PaperIngestionState {
+  const record = asRecord(value) ?? {};
+  const importTaskIdsRaw = record.import_task_ids ?? record.importTaskIds;
+  return {
+    runtimeStatus: normalizePaperIngestionRuntimeStatus(
+      record.runtimeStatus ?? record.runtime_status
+    ),
+    waitingReason: pickString(record, ["waitingReason", "waiting_reason"]),
+    importTaskIds: Array.isArray(importTaskIdsRaw)
+      ? importTaskIdsRaw
+          .map((entry: unknown) => asString(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      : [],
+    lastImportTaskId: pickString(record, ["lastImportTaskId", "last_import_task_id"]),
+    lastImportStatus:
+      normalizeStage(record.lastImportStatus ?? record.last_import_status) ?? null,
+    graphVersionSeen: pickString(record, ["graphVersionSeen", "graph_version_seen"]),
+    reconcileRequired:
+      record.reconcileRequired === true || record.reconcile_required === true,
+    lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+  };
+}
+
+function serializePaperIngestionState(
+  value: PaperIngestionState
+): Record<string, unknown> {
+  return {
+    runtime_status: value.runtimeStatus,
+    waiting_reason: value.waitingReason,
+    import_task_ids: value.importTaskIds,
+    last_import_task_id: value.lastImportTaskId,
+    last_import_status: value.lastImportStatus,
+    graph_version_seen: value.graphVersionSeen,
+    reconcile_required: value.reconcileRequired,
+    last_updated_at: value.lastUpdatedAt,
+  };
+}
+
 function normalizePaperQcState(value: unknown): PaperQcState {
   const record = asRecord(value) ?? {};
   return {
@@ -7870,6 +7940,7 @@ function buildDynamicTasks(params: {
   const policy = ROLE_POLICIES[params.role];
   const tasks = [...policy.backgroundTasks];
   const paperIngestion = asRecord(params.manifest?.paper_ingestion);
+  const paperIngestionState = normalizePaperIngestionState(paperIngestion);
   const experimentMemory = asRecord(params.manifest?.experiment_memory);
   const graphWatch = asRecord(params.manifest?.graph_watch);
   const nextAction = asString(params.manifest?.next_action);
@@ -7886,6 +7957,22 @@ function buildDynamicTasks(params: {
   ) {
     tasks.unshift(
       "Shared PaperNexus graph reconciliation is pending; run /graph-build or /papernexus before the next novelty or planning decision."
+    );
+  }
+
+  if (params.role === "researcher" && paperIngestionState.runtimeStatus === "waiting_import") {
+    tasks.unshift(
+      `Paper ingestion is waiting on remote import completion${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Continue only bounded non-novelty work until the import tasks finish.`
+    );
+  }
+  if (params.role === "researcher" && paperIngestionState.runtimeStatus === "waiting_graph") {
+    tasks.unshift(
+      `Paper ingestion is waiting on shared-graph refresh${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Do not finalize novelty-sensitive reasoning until graph refresh completes.`
+    );
+  }
+  if (params.role === "researcher" && paperIngestionState.runtimeStatus === "reconciling") {
+    tasks.unshift(
+      `Paper ingestion is reconciling against a newer shared graph version${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Refresh the affected topic packets before advancing novelty-sensitive work.`
     );
   }
 
@@ -8157,6 +8244,7 @@ export async function buildWorkflowSnapshot(params: {
     limit: policy.maxWorkflowInboxMessages,
   });
   const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
+  const paperIngestionState = normalizePaperIngestionState(paperIngestion);
   const experimentMemory = asRecord(projectState.manifest?.experiment_memory);
   const idleResearch = normalizeIdleResearchState(
     asRecord(projectState.manifest?.idle_research)
@@ -8315,6 +8403,12 @@ export async function buildWorkflowSnapshot(params: {
         "graph_presence_missing_count",
         "graphPresenceMissingCount",
       ]),
+    paperIngestionRuntimeStatus: paperIngestionState.runtimeStatus,
+    paperIngestionWaitingReason: paperIngestionState.waitingReason,
+    paperIngestionImportTaskCount: paperIngestionState.importTaskIds.length,
+    paperIngestionLastImportStatus: paperIngestionState.lastImportStatus,
+    paperIngestionGraphVersionSeen: paperIngestionState.graphVersionSeen,
+    paperIngestionReconcileRequired: paperIngestionState.reconcileRequired,
     paperSourceDir: resolvedPaperSourceDir,
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
@@ -8539,13 +8633,17 @@ export function buildFocusedPromptAssembly(params: {
     typeof snapshot.reviewSessionRound === "number" && snapshot.reviewSessionRound > 0
       ? `review-round-${snapshot.reviewSessionRound}`
       : null;
-  const layer1 = [
+  const layer1Lines = [
     "Layer 1: Stable Policy",
     `Role=${snapshot.role ?? "unknown"}`,
     `Owner=${snapshot.recommendedOwner ?? snapshot.ownerAgent ?? "unset"}`,
     "Do only the owner-scoped task for this round.",
     "Do not widen scope or replay the entire workflow history.",
-  ].join("\n");
+  ];
+  if (shouldApplySharedWritingConstitution(snapshot)) {
+    layer1Lines.push(...getSharedWritingConstitutionLines(snapshot.role ?? null));
+  }
+  const layer1 = layer1Lines.join("\n");
   const layer2 = [
     "Layer 2: Stage-Local Control State",
     `Stage=${snapshot.currentStage ?? "unknown"}/${snapshot.currentMicroStage ?? "unknown"}`,
@@ -8559,6 +8657,7 @@ export function buildFocusedPromptAssembly(params: {
     `section_context=${sectionContextId ?? "unset"}`,
     `writing_status=${snapshot.writingSessionStatus ?? "unknown"}`,
     `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
+    `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
     `section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`,
     `write_package=${snapshot.writePackageStatus ?? "unknown"}/${snapshot.writePackageAssemblyStatus ?? "unknown"} mode=${snapshot.writePackageAssemblyMode ?? "unset"} derived=${snapshot.writePackageDerivedArtifactCount ?? 0}`,
     `review_lane=${reviewLane ?? "unset"}`,
@@ -8607,6 +8706,39 @@ export function buildFocusedPromptAssembly(params: {
       },
     },
   };
+}
+
+function shouldApplySharedWritingConstitution(snapshot: Partial<WorkflowSnapshot>): boolean {
+  const role = snapshot.role ?? null;
+  const stage = normalizeStage(snapshot.currentStage ?? null);
+  return (
+    role === "academic_writer" ||
+    role === "reviewer" ||
+    role === "cross-reviewer" ||
+    stage === "write" ||
+    stage === "review"
+  );
+}
+
+function getSharedWritingConstitutionLines(role: string | null): string[] {
+  const lines = [
+    "Shared writing constitution: final paper prose must read as a cohesive academic narrative, not as a pile of isolated facts or bullet dumps.",
+    "Shared writing constitution: maintain formal academic tone, precise terminology, and consistent terminology across the manuscript.",
+    "Shared writing constitution: use proper paragraphs in manuscript prose unless the task explicitly asks for an outline or checklist.",
+    "Shared writing constitution: one paragraph = one message; the first sentence should state the paragraph role or topic sentence.",
+    "Shared writing constitution: each paragraph should build on the previous one with smooth transitions and explicit sentence relations such as cause, contrast, consequence, refinement, or example.",
+    "Shared writing constitution: define terms before reuse, preserve meaning and hedging during revision, and integrate evidence into the narrative instead of listing disconnected facts.",
+  ];
+  if (role === "reviewer" || role === "cross-reviewer") {
+    lines.push(
+      "Shared writing constitution review rule: review against the shared writing constitution. Flag broken topic sentences, weak paragraph-to-paragraph flow, terminology drift, unsupported transitions, and bullet-dump prose."
+    );
+  } else {
+    lines.push(
+      "Shared writing constitution execution rule: draft and revise until the prose satisfies the shared writing constitution, and bridge to the next paragraph or section whenever possible."
+    );
+  }
+  return lines;
 }
 
 export function formatWorkflowSnapshotForPrompt(params: {
@@ -8721,6 +8853,17 @@ export function formatWorkflowSnapshotForPrompt(params: {
     );
     if (snapshot.graphRefreshReason) {
       lines.push(`Graph refresh reason: ${snapshot.graphRefreshReason}`);
+    }
+    if (
+      snapshot.paperIngestionRuntimeStatus &&
+      snapshot.paperIngestionRuntimeStatus !== "idle"
+    ) {
+      lines.push(
+        `Paper ingestion runtime: status=${snapshot.paperIngestionRuntimeStatus}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, last_import_status=${snapshot.paperIngestionLastImportStatus ?? "unknown"}, graph_version_seen=${snapshot.paperIngestionGraphVersionSeen ?? "unknown"}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
+      );
+      if (snapshot.paperIngestionWaitingReason) {
+        lines.push(`Paper ingestion waiting reason: ${snapshot.paperIngestionWaitingReason}`);
+      }
     }
     if (snapshot.graphPresenceReportPath) {
       lines.push(`Graph presence report: ${snapshot.graphPresenceReportPath}`);
@@ -9005,6 +9148,9 @@ export function formatWorkflowSnapshotForPrompt(params: {
   lines.push(
     "Innovation reflection rule: if experiments have produced new evidence since the last reflection, run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before proposing or locking a new innovation direction."
   );
+  if (shouldApplySharedWritingConstitution(snapshot)) {
+    lines.push(...getSharedWritingConstitutionLines(snapshot.role ?? null));
+  }
   if (snapshot.role === "analyzer" || snapshot.currentStage === "analyze") {
     lines.push(
       "Theory packet rule: Analyzer should not stop at THEORY_SUPPORT_NOTE.md. Write analyzer/THEORY_STATE.json plus analyzer/proof-packets/*.json so theorem / lemma candidates, assumptions, derivation outlines, and caveats become structured objects for Writer."
@@ -9036,7 +9182,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
       "KG storyline rule: when writing_contract.kg_storyline_required is true, build and use a KG storyline packet that maps problem -> gap -> method -> evidence -> limitations before broadening prose."
     );
     lines.push(
-      "Paragraph logic rule: each paragraph should carry one message, the opening sentence should state the paragraph role, and the closing sentence should bridge to the next paragraph or section. Reverse-outline each section and keep WRITING_SIGNALS.md current."
+      "Paragraph audit rule: reverse-outline each section, keep WRITING_SIGNALS.md current, and update paragraph_logic_status after every local coherence pass."
     );
     lines.push(
       "Citation integrity rule: citations must come from real sources of truth (DBLP/CrossRef/DataCite/Semantic Scholar or equivalent). Do not invent BibTeX, and do not finalize submission until the citation integrity gate is verified."
@@ -10564,6 +10710,17 @@ export async function getPaperQcStateSummary(params: {
   };
 }
 
+export async function getPaperIngestionStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: PaperIngestionState;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  return {
+    state: normalizePaperIngestionState(manifest.paper_ingestion),
+  };
+}
+
 export async function getCitationCollectionStateSummary(params: {
   projectRoot: string;
 }): Promise<{
@@ -12075,6 +12232,59 @@ export async function setPaperQcState(params: {
       next.latestReportPath
     ),
     hardFailure: isPaperQcHardFailure(next),
+  };
+}
+
+export async function setPaperIngestionState(params: {
+  projectRoot: string;
+  paperIngestion: Record<string, unknown>;
+}): Promise<{
+  state: PaperIngestionState;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizePaperIngestionState(manifest.paper_ingestion);
+  const patch = asRecord(params.paperIngestion) ?? {};
+  const importTaskIdsRaw = patch.import_task_ids ?? patch.importTaskIds;
+  const next: PaperIngestionState = {
+    ...current,
+    runtimeStatus: normalizePaperIngestionRuntimeStatus(
+      patch.runtimeStatus ?? patch.runtime_status ?? current.runtimeStatus
+    ),
+    waitingReason:
+      pickString(patch, ["waitingReason", "waiting_reason"]) ?? current.waitingReason,
+    importTaskIds: Array.isArray(importTaskIdsRaw)
+      ? importTaskIdsRaw
+          .map((entry: unknown) => asString(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      : current.importTaskIds,
+    lastImportTaskId:
+      pickString(patch, ["lastImportTaskId", "last_import_task_id"]) ??
+      current.lastImportTaskId,
+    lastImportStatus:
+      normalizeStage(patch.lastImportStatus ?? patch.last_import_status) ??
+      current.lastImportStatus,
+    graphVersionSeen:
+      pickString(patch, ["graphVersionSeen", "graph_version_seen"]) ??
+      current.graphVersionSeen,
+    reconcileRequired:
+      patch.reconcileRequired === true ||
+      patch.reconcile_required === true ||
+      (patch.reconcileRequired === false || patch.reconcile_required === false
+        ? false
+        : current.reconcileRequired),
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.paper_ingestion = {
+    ...(asRecord(manifest.paper_ingestion) ?? {}),
+    ...serializePaperIngestionState(next),
+  };
+  await saveManifest(params.projectRoot, manifest);
+
+  return {
+    state: next,
   };
 }
 

@@ -130,6 +130,41 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/paper-phase` — Stage 7 (WRITE, via Writer)
 - `/research-pipeline` — full pipeline from Stage 1
 
+## Responsiveness and Delegation Policy
+
+- Main session stays interruptible: never block the user behind long-running work.
+- If a task is multi-step, uncertain, or likely to take more than `>20 seconds` to plan safely, spawn a background sub-agent instead of monopolizing the main session.
+- Code analysis, documentation synthesis, large writing packets, or graph-digestion passes that will likely take more than `>2 minutes` should also be delegated.
+- Quick questions, small status updates, and simple format conversions stay in the main session.
+- Long tasks must post milestones every `5-10 minutes` so the user can redirect or stop the work without waiting for the end.
+- If the user changes direction, stop the current branch immediately, summarize the current checkpoint, and wait for the new instruction.
+
+## Delegation Triggers
+
+- Research / multi-step tasks: `>20 seconds` to reason or route safely -> delegate
+- Code analysis / documentation / large synthesis passes: `>2 minutes` -> delegate
+- Quick questions / tiny rewrites / format conversion -> handle in main session
+
+## Sub-agent Brief Template (required)
+
+When spawning a sub-agent, always include:
+
+- Goal: what outcome the sub-agent must deliver
+- Inputs: which files, messages, artifacts, or context packets to read first
+- Outputs: what exact artifact, summary, or decision packet must come back
+- File scope: which files or directories may be changed
+- Constraints / risks: what the sub-agent must not do, plus any likely traps
+- Acceptance criteria: how to tell the work is complete and handoff-ready
+
+## Milestone Report Format
+
+For any delegated task that runs beyond a quick turn, require milestone updates in this format:
+
+- Current phase: what the sub-agent is doing right now
+- Progress: completed X/Y checkpoints or scanned N/M artifacts
+- Blockers: what is slowing or blocking progress, if anything
+- ETA: estimated time to the next milestone or final handoff
+
 ## Sub-agents
 
 Subtasks may be delegated with `sessions_spawn`:
