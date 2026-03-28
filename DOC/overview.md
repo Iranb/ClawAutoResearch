@@ -318,8 +318,8 @@ Important note:
 At minimum, make sure your real OpenClaw config:
 
 - loads `~/.openclaw/plugins`
-- enables `openclaw-research`
-- sets `plugins.entries.openclaw-research.config.projectsRoot`
+- enables `ClawAutoResearch`
+- sets `plugins.entries.ClawAutoResearch.config.projectsRoot`
 - allows `research_workflow` for active roles
 - keeps `researcher` as the default owner for this workflow
 - configures heartbeat per agent instead of relying on one global default
@@ -330,7 +330,7 @@ A minimal plugin config looks like:
 {
   "plugins": {
     "entries": {
-      "openclaw-research": {
+      "ClawAutoResearch": {
         "enabled": true,
         "config": {
           "projectsRoot": "/Users/iranb/Downloads/AutoResearchProjects",
@@ -426,7 +426,7 @@ You can set global default templates in plugin config:
 {
   "plugins": {
     "entries": {
-      "openclaw-research": {
+      "ClawAutoResearch": {
         "enabled": true,
         "config": {
           "defaultConferenceTemplatePath": "/absolute/path/to/conference-template/main.tex",

@@ -10,8 +10,8 @@ import { registerResearchCommands } from "./tools/register-research-commands";
 import { registerWorkflowService } from "./tools/register-workflow-service";
 
 export default definePluginEntry({
-  id: "openclaw-research",
-  name: "OpenClaw Research",
+  id: "ClawAutoResearch",
+  name: "ClawAutoResearch",
   description: "Multi-agent automated research plugin with workflow guardrails.",
   register: registerOpenClawResearchPlugin,
 });

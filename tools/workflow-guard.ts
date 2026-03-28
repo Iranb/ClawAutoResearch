@@ -1870,7 +1870,7 @@ export async function ensureWorkflowProjectRoot(params: {
   });
   if (!projectsRoot) {
     throw new Error(
-      "projectsRoot is not configured for openclaw-research. Set plugins.entries.openclaw-research.config.projectsRoot (or OPENCLAW_PROJECTS_ROOT), or explicitly enable allowWorkspaceFallback if you want project scaffolds under the agent workspace."
+      "projectsRoot is not configured for ClawAutoResearch. Set plugins.entries.ClawAutoResearch.config.projectsRoot (or OPENCLAW_PROJECTS_ROOT), or explicitly enable allowWorkspaceFallback if you want project scaffolds under the agent workspace."
     );
   }
   const projectRoot = path.resolve(

@@ -363,8 +363,8 @@ bash install.sh --skip-agent-create
 至少要确保：
 
 - `~/.openclaw/plugins` 被加载
-- `openclaw-research` 被启用
-- `plugins.entries.openclaw-research.config.projectsRoot` 已配置
+- `ClawAutoResearch` 被启用
+- `plugins.entries.ClawAutoResearch.config.projectsRoot` 已配置
 - 工作角色允许 `research_workflow`
 - `researcher` 是默认 owner
 - 按每个 Agent 显式配置 heartbeat，而不是只配一个全局 `30m`
@@ -375,7 +375,7 @@ bash install.sh --skip-agent-create
 {
   "plugins": {
     "entries": {
-      "openclaw-research": {
+      "ClawAutoResearch": {
         "enabled": true,
         "config": {
           "projectsRoot": "/Users/iranb/Downloads/AutoResearchProjects",
@@ -471,7 +471,7 @@ Researcher 负责：
 {
   "plugins": {
     "entries": {
-      "openclaw-research": {
+      "ClawAutoResearch": {
         "enabled": true,
         "config": {
           "defaultConferenceTemplatePath": "/absolute/path/to/conference-template/main.tex",

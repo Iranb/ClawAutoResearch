@@ -1,4 +1,4 @@
-# CONFIG.md — OpenClaw Research Configuration
+# CONFIG.md — ClawAutoResearch Configuration
 
 > This file is a path and configuration cheat sheet.
 > For the full narrative configuration guide, see [DOC/reference/configuration.md](./DOC/reference/configuration.md).
@@ -10,7 +10,7 @@
 - **`{PROJECTS_ROOT}`**: `/Users/iranb/Downloads/AutoResearchProjects`
   - Root directory for all research projects
   - Each project is isolated under `{PROJECTS_ROOT}/{proj-id}/`
-  - Configure it in `openclaw.json` as `plugins.entries.openclaw-research.config.projectsRoot`
+  - Configure it in `openclaw.json` as `plugins.entries.ClawAutoResearch.config.projectsRoot`
 
 - **`{PAPERNEXUS_PAPERS_ROOT}`**: `~/.papernexus/papers`
   - Local default PaperNexus paper source root
@@ -74,7 +74,7 @@ Project workspace structure:
 
 The `{PROJECTS_ROOT}` path is determined by:
 
-1. **Plugin config** (highest priority): `openclaw.json` → `plugins.entries.openclaw-research.config.projectsRoot`
+1. **Plugin config** (highest priority): `openclaw.json` → `plugins.entries.ClawAutoResearch.config.projectsRoot`
 2. **Default**: `~/.openclaw/projects`
 
 ## Environment Variables
@@ -86,7 +86,7 @@ The `{PROJECTS_ROOT}` path is determined by:
 
 - **`PAPERNEXUS_API_TOKEN`**: Recommended PaperNexus Web/API bearer token env var
   - Keep the raw token in environment only
-  - Reference the env-var name from plugin config via `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+  - Reference the env-var name from plugin config via `plugins.entries.ClawAutoResearch.config.papernexusApiTokenEnv`
   - The workflow only exposes the env-var name to agents; it should never persist the raw token into project files or prompts
 
 - **`PAPERNEXUS_ROOT`**: Optional PaperNexus repository root
@@ -97,19 +97,19 @@ The `{PROJECTS_ROOT}` path is determined by:
 
 Recommended plugin-level settings in `~/.openclaw/openclaw.json`:
 
-- `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiBaseUrl`
   - Remote PaperNexus Web/API base URL
-- `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiTokenEnv`
   - Env-var name that stores the PaperNexus API bearer token
-- `plugins.entries.openclaw-research.config.papernexusApiTokenSource`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiTokenSource`
   - `env | os_keychain | auto`
-- `plugins.entries.openclaw-research.config.papernexusApiTokenService`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiTokenService`
   - Native keychain service/resource name
-- `plugins.entries.openclaw-research.config.papernexusApiTokenAccount`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiTokenAccount`
   - Native keychain account/user name
-- `plugins.entries.openclaw-research.config.papernexusApiTokenLookupTimeoutMs`
+- `plugins.entries.ClawAutoResearch.config.papernexusApiTokenLookupTimeoutMs`
   - Keychain lookup timeout in milliseconds
-- `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
+- `plugins.entries.ClawAutoResearch.config.papernexusMineruHttpUrl`
   - Optional remote MinerU HTTP endpoint for PDF materialization
 
 Workflow behavior when these are configured:
@@ -218,7 +218,7 @@ export PAPERNEXUS_API_TOKEN=...
 
 # Project path resolves to:
 # {PROJECTS_ROOT}/my-project
-# = <plugins.entries.openclaw-research.config.projectsRoot>/my-project
+# = <plugins.entries.ClawAutoResearch.config.projectsRoot>/my-project
 ```
 
 ---

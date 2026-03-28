@@ -34,7 +34,7 @@
   review state 超过多久会被判定为不适合直接恢复。
 
 - `projectsRoot`  
-  项目总根目录。应配置在 `plugins.entries.openclaw-research.config.projectsRoot`，不要放在顶层 `openclaw.json`，否则会触发 `unrecognizedKeys`。
+  项目总根目录。应配置在 `plugins.entries.ClawAutoResearch.config.projectsRoot`，不要放在顶层 `openclaw.json`，否则会触发 `unrecognizedKeys`。
 
 - `injectWorkflowContext`  
   是否在每轮 prompt 中注入 workflow snapshot。

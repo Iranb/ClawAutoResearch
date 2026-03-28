@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenClaw Research Plugin Installer
+# ClawAutoResearch Plugin Installer
 # Usage:
 #   bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create]
 #
@@ -7,7 +7,7 @@
 #   1. 可选地添加或检查研究工作流所需的 agents
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
 #   3. 若本机存在 PaperNexus 仓库，则自动把相关 Skills 同步到本仓库后再安装
-#   4. 创建/更新插件链接到 ~/.openclaw/plugins/openclaw-research
+#   4. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
 #   5. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
 #   6. 不修改用户 openclaw.json
 #   7. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
@@ -519,12 +519,12 @@ configure_install_mode
 OC_DIR_EXPANDED=$(expand_path "$OC_DIR")
 OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OC_DIR_EXPANDED/openclaw.json}"
 OC_PLUGINS_DIR="$OC_DIR_EXPANDED/plugins"
-PLUGIN_LINK="$OC_PLUGINS_DIR/openclaw-research"
+PLUGIN_LINK="$OC_PLUGINS_DIR/ClawAutoResearch"
 PLUGIN_REFERENCE_PATH="$PLUGIN_LINK"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║   OpenClaw Research Plugin — Installer              ║"
+echo "║   ClawAutoResearch Plugin — Installer               ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 echo "  Plugin:  $PLUGIN_DIR"

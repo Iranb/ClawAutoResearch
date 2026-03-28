@@ -1,4 +1,4 @@
-# openclaw-research
+# ClawAutoResearch
 
 介绍性文档已经统一收口到 [`DOC/`](./DOC/README.md)。
 

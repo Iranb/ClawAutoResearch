@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-research",
+  "name": "claw-auto-research",
   "version": "1.0.0",
   "description": "Multi-agent automated research plugin for OpenClaw",
   "type": "module",
@@ -29,16 +29,16 @@
     "paper-writing",
     "experiment-management"
   ],
-  "author": "OpenClaw Research Team",
+  "author": "ClawAutoResearch Team",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OpenClawThings/openclaw-research.git"
+    "url": "https://github.com/OpenClawThings/ClawAutoResearch.git"
   },
   "bugs": {
-    "url": "https://github.com/OpenClawThings/openclaw-research/issues"
+    "url": "https://github.com/OpenClawThings/ClawAutoResearch/issues"
   },
-  "homepage": "https://github.com/OpenClawThings/openclaw-research#readme",
+  "homepage": "https://github.com/OpenClawThings/ClawAutoResearch#readme",
   "files": [
     "dist/",
     "tools/",
@@ -71,6 +71,6 @@
   },
   "openclaw": {
     "extensions": ["./dist/index.js"],
-    "pluginId": "openclaw-research"
+    "pluginId": "ClawAutoResearch"
   }
 }

@@ -16,7 +16,7 @@
 - 检查是否已有构建产物
 - 可选地创建或检查 workflow agents
 - 如果本机存在 `PaperNexus`，先同步相关 skills
-- 创建或更新 `~/.openclaw/plugins/openclaw-research` 符号链接
+- 创建或更新 `~/.openclaw/plugins/ClawAutoResearch` 符号链接
 - 同步共享 workspace 配置与模板
 - 同步角色配置文件
 - 保留仓库内 `DOC/`、`openclaw.RECOMMENDED.json` 作为参考文档
@@ -46,7 +46,7 @@ bash install.sh
 
 确认：
 
-- `~/.openclaw/plugins/openclaw-research`
+- `~/.openclaw/plugins/ClawAutoResearch`
 
 ### 5.2 OpenClaw 配置能看到该插件
 
@@ -122,12 +122,12 @@ cross-reviewer: { heartbeat: { every: "4h" } }
 - 项目只需要维护 canonical paper selection，并让 workflow 去检查这些论文是否已经存在于共享图中
 - 图索引默认在 `~/.papernexus/index-store`
 - 如果你启用了远程 PaperNexus Web/API，建议同时配置：
-  - `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
-  - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
-  - `plugins.entries.openclaw-research.config.papernexusApiTokenSource`
-  - `plugins.entries.openclaw-research.config.papernexusApiTokenService`
-  - `plugins.entries.openclaw-research.config.papernexusApiTokenAccount`
-  - 可选的 `plugins.entries.openclaw-research.config.papernexusMineruHttpUrl`
+  - `plugins.entries.ClawAutoResearch.config.papernexusApiBaseUrl`
+  - `plugins.entries.ClawAutoResearch.config.papernexusApiTokenEnv`
+  - `plugins.entries.ClawAutoResearch.config.papernexusApiTokenSource`
+  - `plugins.entries.ClawAutoResearch.config.papernexusApiTokenService`
+  - `plugins.entries.ClawAutoResearch.config.papernexusApiTokenAccount`
+  - 可选的 `plugins.entries.ClawAutoResearch.config.papernexusMineruHttpUrl`
 - Bearer token 推荐只放在环境变量里，例如 `PAPERNEXUS_API_TOKEN`，不要直接写进配置文件
 - 如果你希望插件原生走系统 keychain，则把 `papernexusApiTokenSource` 设为 `auto` 或 `os_keychain`
 - 跨平台的 keychain / secret-store 存储、读取、导出命令模板见：

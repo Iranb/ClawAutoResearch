@@ -1,9 +1,9 @@
 {
-  // openclaw-research 推荐配置总览（JSONC）
+  // ClawAutoResearch 推荐配置总览（JSONC）
   // 用法：
-  // 1. 这不是完整的 ~/.openclaw/openclaw.json，而是一份“与 openclaw-research 相关”的推荐片段。
+  // 1. 这不是完整的 ~/.openclaw/openclaw.json，而是一份“与 ClawAutoResearch 相关”的推荐片段。
   // 2. 把你需要的部分合并到真实的 ~/.openclaw/openclaw.json 里。
-  // 3. 注释说明的是“这个字段在 openclaw-research 里负责什么”。
+  // 3. 注释说明的是“这个字段在 ClawAutoResearch 里负责什么”。
   // 4. 这份推荐已经对齐当前的 workflow control plane、focused prompt、write_package 自动组装、
   //    paper/review QC runtime state，以及 external review gate。
 
@@ -15,8 +15,8 @@
       "paths": ["~/.openclaw/plugins"]
     },
     "entries": {
-      "openclaw-research": {
-        // 真正启用 openclaw-research 插件。
+      "ClawAutoResearch": {
+        // 真正启用 ClawAutoResearch 插件。
         "enabled": true,
         "config": {
           // 是否允许在没有 OPENCLAW_PROJECT 时把 research memory 写回 workspace 级别。
