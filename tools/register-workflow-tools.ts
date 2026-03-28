@@ -4,6 +4,7 @@ import {
   bindChannelProjectForWorkflow,
   buildWorkflowSnapshot,
   canRoleContact,
+  getBrainstormCycleStateSummary,
   checkGraphPresenceForWorkflow,
   getCitationCollectionStateSummary,
   getChannelProjectBindingForWorkflow,
@@ -36,7 +37,9 @@ import {
   recordInnovationReflection,
   recordTheoryState,
   recordWorkflowContactEvent,
+  runBrainstormCycle,
   runWorkflowAutoIterator,
+  setBrainstormCycleState,
   setCitationCollectionState,
   setExperimentSearchState,
   setExternalReviewState,
@@ -118,6 +121,9 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   record_idle_research_run: "recordIdleResearchRun",
   get_experiment_memory: "getExperimentMemorySummary",
   get_innovation_reflection: "getInnovationReflectionStateSummary",
+  get_brainstorm_cycle: "getBrainstormCycleStateSummary",
+  set_brainstorm_cycle: "setBrainstormCycleState",
+  run_brainstorm_cycle: "runBrainstormCycle",
   get_research_program: "getResearchProgramStateSummary",
   set_research_program: "setResearchProgramState",
   get_orchestration_state: "getOrchestrationStateSummary",
@@ -391,6 +397,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "record_idle_research_run",
               "get_experiment_memory",
               "get_innovation_reflection",
+              "get_brainstorm_cycle",
+              "set_brainstorm_cycle",
+              "run_brainstorm_cycle",
               "get_research_program",
               "set_research_program",
               "get_orchestration_state",
@@ -462,6 +471,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           innovationReflection: {
+            type: "object",
+            additionalProperties: true,
+          },
+          brainstormCycle: {
             type: "object",
             additionalProperties: true,
           },
@@ -948,6 +961,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_brainstorm_cycle": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getBrainstormCycleStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_brainstorm_cycle": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setBrainstormCycleState({
+                projectRoot: resolvedProjectRoot,
+                brainstormCycle: requireObject(
+                  params.brainstormCycle,
+                  "brainstormCycle"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "run_brainstorm_cycle": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await runBrainstormCycle({
+                projectRoot: resolvedProjectRoot,
+                brainstormCycle: requireObject(
+                  params.brainstormCycle,
+                  "brainstormCycle"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

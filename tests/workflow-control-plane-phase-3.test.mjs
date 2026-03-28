@@ -7,10 +7,12 @@ import path from "node:path";
 import {
   assembleWritePackage,
   buildFocusedPromptAssembly,
+  getBrainstormCycleStateSummary,
   getOrchestrationStateSummary,
   getResearchProgramStateSummary,
   getReviewIssueTrackerStateSummary,
   getWritePackageStateSummary,
+  runBrainstormCycle,
   runWorkflowAutoIterator,
   setExperimentSearchState,
   setOrchestrationState,
@@ -29,6 +31,49 @@ async function writeJson(filePath, value) {
 async function writeText(filePath, value = "# artifact\n") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, value, "utf8");
+}
+
+async function seedPaperSourceIndex(projectRoot, papers) {
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers,
+  });
+}
+
+async function seedGraphCorpus(projectRoot, corpusEntries, corpusName = "shared-global-graph") {
+  const papernexusHome = path.join(projectRoot, ".papernexus-home");
+  process.env.PAPERNEXUS_HOME = papernexusHome;
+  const sourceRoot = path.join(papernexusHome, "corpora", corpusName);
+  const indexedAt = new Date("2026-03-22T12:05:00.000Z").toISOString();
+  await writeJson(path.join(papernexusHome, "registry.json"), {
+    corpora: [
+      {
+        name: corpusName,
+        rootPath: sourceRoot,
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: corpusName,
+    corpus_root: sourceRoot,
+  });
+  await writeJson(path.join(sourceRoot, ".papernexus", "sources.json"), {
+    version: 3,
+    corpusName,
+    rootPath: sourceRoot,
+    inputPath: sourceRoot,
+    inputPaths: [sourceRoot],
+    sourceMode: "markdown",
+    indexedAt,
+    sources: corpusEntries,
+  });
+  await writeJson(path.join(sourceRoot, ".papernexus", "meta.json"), {
+    name: corpusName,
+    rootPath: sourceRoot,
+    indexedAt,
+    paperCount: corpusEntries.filter((entry) => entry.activeInGraph !== false).length,
+    sourceCount: corpusEntries.length,
+  });
 }
 
 async function makeProjectRoot() {
@@ -93,6 +138,24 @@ async function seedPlanProject(projectRoot) {
       },
     ],
   });
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "paper-1",
+      title: "Demo Paper",
+      arxiv_id: "1234.56789",
+      source_provider: "hugging-face-paper-pages",
+      retrieval_providers: ["hugging-face-paper-pages"],
+    },
+  ]);
+  await seedGraphCorpus(projectRoot, [
+    {
+      canonicalId: "paper-1",
+      title: "Demo Paper",
+      sourceProvider: "hugging-face-paper-pages",
+      retrievalProviders: ["hugging-face-paper-pages"],
+      activeInGraph: true,
+    },
+  ]);
   await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
     schemaVersion: 1,
     projectId: "demo-project",
@@ -127,6 +190,50 @@ async function seedPlanProject(projectRoot) {
   await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
   await writeText(path.join(projectRoot, "researcher", "IDEA_REPORT.md"));
   await writeText(path.join(projectRoot, "researcher", "IDEA_AUDIT.md"));
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "TOPIC_SUMMARY.json"),
+    {
+      objective: "Demo brainstorm topic",
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "RESEARCH_BRIEF.json"),
+    {
+      anchors: ["anchor-demo"],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "BRAINSTORM_BRIEF.json"),
+    {
+      mode: "diverge_then_converge",
+    }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "LOGIC_CHAIN.md"),
+    "# Logic chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "EVIDENCE_CHAIN.md"),
+    "# Evidence chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "REASONING_TRACE.jsonl"),
+    "{\"step\":\"seed\"}\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "QUESTION_PACKET.md"),
+    "# Question packet\n"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "WORKING_MEMORY.json"),
+    {
+      hypothesis: "track-main",
+    }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "SYNTHESIS_PACKET.md"),
+    "# Synthesis packet\n"
+  );
   await writeText(
     path.join(projectRoot, "researcher", "working-memory", "track-main.md"),
     "working memory\n"
@@ -161,6 +268,44 @@ async function seedPlanProject(projectRoot) {
       status: "ready",
       last_reflection_at: now,
       last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+    },
+    brainstorm_cycle: {
+      status: "reconciled",
+      mode: "aggressive",
+      topic: "Demo brainstorm topic",
+      basis_stage: "frontier_mapping",
+      track_id: "track-main",
+      rounds: [
+        {
+          round_id: "seed-round",
+          label: "seed",
+          status: "completed",
+          options: [
+            {
+              option_id: "seed-option",
+              title: "Seed option",
+              score: 0.9,
+            },
+          ],
+        },
+      ],
+      selected_round_id: "seed-round",
+      selected_option_id: "seed-option",
+      selected_option_title: "Seed option",
+      selected_option_score: 0.9,
+      selection_mode: "aggressive",
+      topic_summary_path: "researcher/reasoning/track-main/TOPIC_SUMMARY.json",
+      research_brief_path: "researcher/reasoning/track-main/RESEARCH_BRIEF.json",
+      brainstorm_brief_path: "researcher/reasoning/track-main/BRAINSTORM_BRIEF.json",
+      logic_chain_path: "researcher/reasoning/track-main/LOGIC_CHAIN.md",
+      evidence_chain_path: "researcher/reasoning/track-main/EVIDENCE_CHAIN.md",
+      reasoning_trace_path: "researcher/reasoning/track-main/REASONING_TRACE.jsonl",
+      question_packet_path: "researcher/reasoning/track-main/QUESTION_PACKET.md",
+      working_memory_path: "researcher/reasoning/track-main/WORKING_MEMORY.json",
+      synthesis_packet_path: "researcher/reasoning/track-main/SYNTHESIS_PACKET.md",
+      graph_version_seen: "global-v0",
+      import_task_ids_seen: [],
+      latest_run_at: now,
     },
     paper_ingestion: {
       graph_presence_checked_at: now,
@@ -1016,6 +1161,115 @@ test("auto iterator enforces research program semantics, experiment-search readi
   assert.ok(
     result.missingStageSignals.some((signal) => signal.includes("citation_integrity"))
   );
+});
+
+test("frontier and idea stages require a reconciled brainstorm cycle, and aggressive mode keeps the highest-scoring option", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedPlanProject(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "frontier_mapping";
+  manifest.owner_agent = "researcher";
+  manifest.brainstorm_cycle = {
+    status: "missing",
+  };
+  await writeJson(manifestPath, manifest);
+
+  let result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "researcher",
+    mode: "phase-3-brainstorm-frontier-gate",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageAfter, "frontier_mapping");
+  assert.ok(
+    result.missingStageSignals.some((signal) => signal.includes("brainstorm_cycle"))
+  );
+
+  const brainstormCycle = await runBrainstormCycle({
+    projectRoot,
+    brainstormCycle: {
+      mode: "aggressive",
+      topic: "Graph-grounded novelty selection",
+      basis_stage: "frontier_mapping",
+      track_id: "track-main",
+      graph_version_seen: "global-v7",
+      import_task_ids_seen: ["imp-a", "imp-b"],
+      topic_summary: {
+        objective: "Select the strongest novelty route from shared graph evidence.",
+      },
+      research_brief: {
+        anchors: ["anchor-main"],
+        graph_scope: "shared-global",
+      },
+      brainstorm_brief: {
+        mode: "diverge_then_converge",
+      },
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "diverge",
+          status: "completed",
+          options: [
+            {
+              option_id: "opt-low",
+              title: "Conservative extension",
+              score: 0.51,
+              summary: "Safe but weak novelty.",
+              logic_chain: "# Logic low\n",
+              evidence_chain: "# Evidence low\n",
+              reasoning_trace: [{ step: "baseline", conclusion: "weak gap" }],
+              question_packet: "# Questions low\n",
+              working_memory: { hypothesis: "low" },
+              synthesis_packet: "# Synthesis low\n",
+            },
+            {
+              option_id: "opt-high",
+              title: "Best novelty route",
+              score: 0.97,
+              summary: "Strongest graph-grounded novelty route.",
+              logic_chain: "# Logic high\n",
+              evidence_chain: "# Evidence high\n",
+              reasoning_trace: [{ step: "compose anchors", conclusion: "strong gap" }],
+              question_packet: "# Questions high\n",
+              working_memory: { hypothesis: "high" },
+              synthesis_packet: "# Synthesis high\n",
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(brainstormCycle.state.selectedOptionId, "opt-high");
+  assert.equal(brainstormCycle.validationErrors.length, 0);
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "researcher",
+    mode: "phase-3-brainstorm-frontier-gate",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageAfter, "idea");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "researcher",
+    mode: "phase-3-brainstorm-idea-gate",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageAfter, "plan");
+
+  const summary = await getBrainstormCycleStateSummary({
+    projectRoot,
+  });
+  assert.equal(summary.state.selectedOptionId, "opt-high");
+  assert.equal(summary.chainBundleReady, true);
 });
 
 test("aggressive auto iterator auto-assembles the write package before evaluating the write-stage gate", async (t) => {

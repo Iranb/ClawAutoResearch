@@ -363,8 +363,8 @@ export async function dispatchWorkflowTaskToAgent(params: {
           }),
           purpose: "papernexus-skill",
           segments: [
-            params.projectId,
             derivePapernexusTaskLabel(params.command ?? params.summary),
+            params.projectId,
           ],
         })
       : null;

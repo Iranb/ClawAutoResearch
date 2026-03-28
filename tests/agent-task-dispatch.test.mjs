@@ -222,3 +222,36 @@ test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for Paper
     /^agent:analyzer:discord:group:paper-lab:subagent:papernexus-skill:/
   );
 });
+
+test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as heavy work", async () => {
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-papernexus-typed-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "researcher",
+    projectRoot: "/tmp/demo-project",
+    projectId: "demo-project",
+    stage: "frontier_mapping",
+    summary: "Run a typed brainstorm brief against the shared graph.",
+    command:
+      "curl -X POST https://papernexus.example/api/brainstorm-brief -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.match(
+    result.sessionKey ?? "",
+    /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:brainstorm-brief/
+  );
+  assert.equal(calls.length, 1);
+  assert.match(
+    calls[0].sessionKey,
+    /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:brainstorm-brief/
+  );
+});

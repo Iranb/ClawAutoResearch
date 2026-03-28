@@ -638,6 +638,40 @@ test("auto iterator keeps idea stage blocked when active tracks lack materialize
       ),
     },
   ]);
+  await writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"), {
+    objective: "Seeded brainstorm bundle",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "RESEARCH_BRIEF.json"), {
+    anchors: ["paper:demo-idea"],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "BRAINSTORM_BRIEF.json"),
+    { mode: "diverge_then_converge" }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "REASONING_TRACE.jsonl"),
+    "{\"step\":\"seed\"}\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"),
+    { hypothesis: "demo" }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+    "# Synthesis\n"
+  );
   await fs.rm(path.join(projectRoot, "researcher", "reasoning", trackId), {
     recursive: true,
     force: true,
@@ -654,6 +688,31 @@ test("auto iterator keeps idea stage blocked when active tracks lack materialize
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   manifest.current_stage = "idea";
   manifest.current_micro_stage = "frontiers_packaged";
+  manifest.brainstorm_cycle = {
+    status: "reconciled",
+    mode: "aggressive",
+    topic: "Seeded brainstorm bundle",
+    basis_stage: "frontier_mapping",
+    track_id: trackId,
+    rounds: [
+      {
+        round_id: "seed-round",
+        options: [{ option_id: "seed-option", score: 0.8 }],
+      },
+    ],
+    selected_round_id: "seed-round",
+    selected_option_id: "seed-option",
+    selected_option_score: 0.8,
+    topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.json",
+    research_brief_path: "researcher/brainstorm-cycle/RESEARCH_BRIEF.json",
+    brainstorm_brief_path: "researcher/brainstorm-cycle/BRAINSTORM_BRIEF.json",
+    logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
+    evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
+    reasoning_trace_path: "researcher/brainstorm-cycle/REASONING_TRACE.jsonl",
+    question_packet_path: "researcher/brainstorm-cycle/QUESTION_PACKET.md",
+    working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+    synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+  };
   await writeJson(manifestPath, manifest);
 
   const result = await runWorkflowAutoIterator({

@@ -2,13 +2,128 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const PAPERNEXUS_CLI_LABELS = [
+  "research-brief",
+  "brainstorm-brief",
+  "evidence-chain",
+  "reflection-chain",
+  "path-trace",
+  "theory-brief",
+  "storyline-brief",
+  "paper-enhancement",
+  "corpus-meta",
+  "build-graph",
+  "merge-graph",
+  "write-index",
+  "llm-optimize",
+  "materialize",
+  "enhancements",
+  "enhance",
+  "imports",
+  "corpora",
+  "corpus",
+  "status",
+  "query",
+  "brainstorm",
+  "ideas",
+  "context",
+  "impact",
+  "analyze",
+  "watch",
+  "service",
+  "logs",
+] as const;
+
+const PAPERNEXUS_API_LABELS = [
+  "brainstorm-brief",
+  "research-brief",
+  "evidence-chain",
+  "reflection-chain",
+  "storyline-brief",
+  "theory-brief",
+  "paper-enhancement",
+  "path-trace",
+  "corpus-meta",
+  "enhancements",
+  "brainstorm",
+  "imports",
+  "context",
+  "impact",
+  "ideas",
+  "query",
+  "corpora",
+  "corpus",
+  "graph",
+  "enhance",
+  "status",
+  "logs",
+] as const;
+
+const PAPERNEXUS_LIVE_GRAPH_CLI_READ_LABELS = [
+  "research-brief",
+  "brainstorm-brief",
+  "evidence-chain",
+  "reflection-chain",
+  "path-trace",
+  "theory-brief",
+  "storyline-brief",
+  "paper-enhancement",
+  "corpus-meta",
+  "enhancements",
+  "corpora",
+  "corpus",
+  "status",
+  "query",
+  "brainstorm",
+  "ideas",
+  "context",
+  "impact",
+] as const;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const PAPERNEXUS_CLI_LABEL_PATTERN = PAPERNEXUS_CLI_LABELS.map(escapeRegex).join("|");
+const PAPERNEXUS_API_LABEL_PATTERN = PAPERNEXUS_API_LABELS.map(escapeRegex).join("|");
+
 const PAPERNEXUS_SLASH_COMMAND_RE =
   /^\s*\/(?:graph-build|frontier-mapping|papernexus(?:-agentic-reasoning)?|papernexus-reflection)\b/i;
 
 const PAPERNEXUS_CLI_COMMAND_RE =
-  /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:status|query|brainstorm|ideas|context|impact|analyze|watch|materialize|llm-optimize|build-graph|merge-graph|write-index|enhance|service|logs)\b/i;
+  new RegExp(
+    String.raw`\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:${PAPERNEXUS_CLI_LABEL_PATTERN})\b`,
+    "i"
+  );
 const PAPERNEXUS_API_COMMAND_RE =
-  /\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:imports|status|query|context|impact|ideas|brainstorm|graph|enhance|logs)(?:\b|\/|\?)/i;
+  new RegExp(
+    String.raw`\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:${PAPERNEXUS_API_LABEL_PATTERN})(?:\b|\/|\?)`,
+    "i"
+  );
+const PAPERNEXUS_LIVE_GRAPH_CLI_READ_RE = new RegExp(
+  String.raw`\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:${PAPERNEXUS_LIVE_GRAPH_CLI_READ_LABELS.map(escapeRegex).join("|")})\b`,
+  "i"
+);
+
+function extractPapernexusApiLabel(text: string): string | null {
+  const match = text.match(
+    new RegExp(String.raw`\/api\/(${PAPERNEXUS_API_LABEL_PATTERN})(?:\b|\/|\?)`, "i")
+  );
+  const candidate = match?.[1]?.toLowerCase() ?? null;
+  return candidate && PAPERNEXUS_API_LABELS.includes(candidate as (typeof PAPERNEXUS_API_LABELS)[number])
+    ? candidate
+    : null;
+}
+
+function extractPapernexusCliLabel(text: string): string | null {
+  for (const label of PAPERNEXUS_CLI_LABELS) {
+    const re = new RegExp(`\\b${escapeRegex(label)}\\b`, "i");
+    if (re.test(text)) {
+      return label;
+    }
+  }
+  return null;
+}
 
 function slugSessionSegment(value: string | null | undefined): string | null {
   const raw = readString(value);
@@ -58,6 +173,16 @@ export function looksLikePapernexusHeavyCommand(
   );
 }
 
+export function looksLikePapernexusLiveGraphCliReadCommand(
+  text: string | null | undefined
+): boolean {
+  const raw = readString(text);
+  if (!raw) {
+    return false;
+  }
+  return PAPERNEXUS_LIVE_GRAPH_CLI_READ_RE.test(raw);
+}
+
 export function derivePapernexusTaskLabel(
   text: string | null | undefined
 ): string {
@@ -71,28 +196,13 @@ export function derivePapernexusTaskLabel(
   if (slashMatch?.[1]) {
     return slashMatch[1];
   }
-  for (const label of [
-    "imports",
-    "query",
-    "brainstorm",
-    "ideas",
-    "context",
-    "impact",
-    "analyze",
-    "watch",
-    "materialize",
-    "llm-optimize",
-    "build-graph",
-    "merge-graph",
-    "write-index",
-    "enhance",
-    "service",
-    "logs",
-  ]) {
-    const re = new RegExp(`\\b${label.replace("-", "\\-")}\\b`, "i");
-    if (re.test(raw)) {
-      return label;
-    }
+  const apiLabel = extractPapernexusApiLabel(raw);
+  if (apiLabel) {
+    return apiLabel;
+  }
+  const cliLabel = extractPapernexusCliLabel(raw);
+  if (cliLabel) {
+    return cliLabel;
   }
   return "task";
 }

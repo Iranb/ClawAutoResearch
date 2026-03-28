@@ -480,3 +480,71 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel"
   assert.equal(otherChannel.started, true);
   assert.equal(runCalls.length, 3);
 });
+
+test("startBackgroundWorkflowRun reuses an idle researcher subagent session for the same channel and project family", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const completedRunIds = new Set();
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+    async waitForRun(params) {
+      return completedRunIds.has(params.runId)
+        ? { status: "ok" }
+        : { status: "timeout" };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const baseParams = {
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:reuse-room",
+      sessionId: "session-bg-reuse-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+  };
+
+  const first = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      projectId: "bird-graph",
+      topic: "bird species discovery",
+    },
+  });
+  completedRunIds.add(first.runId);
+
+  const second = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_queue",
+      projectId: "bird-graph",
+      topic: "bird shortlist refresh",
+    },
+  });
+
+  assert.equal(first.started, true);
+  assert.equal(second.started, true);
+  assert.equal(runCalls.length, 2);
+  assert.equal(second.sessionKey, first.sessionKey);
+  assert.equal(runCalls[1].sessionKey, runCalls[0].sessionKey);
+});

@@ -39,8 +39,13 @@ type BackgroundRunRegistryEntry = {
   backgroundSessionKey: string;
   runId: string;
   kind: string;
+  family: string;
+  status: "active" | "idle";
+  projectId: string | null;
+  projectRoot: string | null;
   startedAt: string;
   lastCheckedAt: string | null;
+  lastFinishedAt: string | null;
 };
 
 export type BackgroundRunAgentContext = {
@@ -61,6 +66,35 @@ export type BackgroundRunSnapshot = {
 const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
 const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
+
+function deriveBackgroundRunFamily(kind: string): string {
+  switch (kind) {
+    case "research_pipeline":
+    case "research_queue":
+    case "resume_pipeline":
+      return "research";
+    case "papernexus_skill":
+      return "papernexus";
+    default:
+      return kind || "generic";
+  }
+}
+
+function backgroundRunRegistryEntryMatchesProject(
+  entry: BackgroundRunRegistryEntry,
+  projectId: string | null,
+  projectRoot: string | null
+): boolean {
+  const normalizedProjectId = readString(projectId) ?? null;
+  const normalizedProjectRoot = readString(projectRoot) ?? null;
+  if (normalizedProjectId && entry.projectId) {
+    return normalizedProjectId === entry.projectId;
+  }
+  if (normalizedProjectRoot && entry.projectRoot) {
+    return path.normalize(normalizedProjectRoot) === path.normalize(entry.projectRoot);
+  }
+  return normalizedProjectId == null && normalizedProjectRoot == null;
+}
 
 function getBackgroundRunRegistryPath(): string {
   return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
@@ -107,8 +141,13 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
         const backgroundSessionKey = readString(record.backgroundSessionKey);
         const runId = readString(record.runId);
         const kind = readString(record.kind) ?? "generic";
+        const family = readString(record.family) ?? deriveBackgroundRunFamily(kind);
+        const status = readString(record.status) === "idle" ? "idle" : "active";
+        const projectId = readString(record.projectId) ?? null;
+        const projectRoot = readString(record.projectRoot) ?? null;
         const startedAt = readString(record.startedAt);
         const lastCheckedAt = readString(record.lastCheckedAt) ?? null;
+        const lastFinishedAt = readString(record.lastFinishedAt) ?? null;
         if (
           !ownerAgent ||
           !channelKey ||
@@ -126,8 +165,13 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
           backgroundSessionKey,
           runId,
           kind,
+          family,
+          status,
+          projectId,
+          projectRoot,
           startedAt,
           lastCheckedAt,
+          lastFinishedAt,
         } satisfies BackgroundRunRegistryEntry;
       })
       .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
@@ -161,27 +205,34 @@ async function pruneBackgroundRunRegistry(params: {
   const current = await readBackgroundRunRegistry();
   const kept: BackgroundRunRegistryEntry[] = [];
   for (const entry of current) {
-    const startedAtMs = Date.parse(entry.startedAt);
-    if (!Number.isFinite(startedAtMs) || now - startedAtMs > BACKGROUND_RUN_STALE_MS) {
+    const freshnessReference =
+      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+    const freshnessMs = Date.parse(freshnessReference);
+    if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
       continue;
     }
-    if (params.runtimeSubagent?.waitForRun) {
+    let nextEntry: BackgroundRunRegistryEntry = {
+      ...entry,
+      lastCheckedAt: new Date(now).toISOString(),
+    };
+    if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
       try {
         const waited = await params.runtimeSubagent.waitForRun({
           runId: entry.runId,
           timeoutMs: 1,
         });
         if (waited.status === "ok" || waited.status === "error") {
-          continue;
+          nextEntry = {
+            ...nextEntry,
+            status: "idle",
+            lastFinishedAt: new Date(now).toISOString(),
+          };
         }
       } catch {
         continue;
       }
     }
-    kept.push({
-      ...entry,
-      lastCheckedAt: new Date(now).toISOString(),
-    });
+    kept.push(nextEntry);
   }
   await writeBackgroundRunRegistry(kept);
   return kept;
@@ -286,6 +337,7 @@ export async function startBackgroundWorkflowRun(params: {
   }
 
   const normalizedKind = readString(params.backgroundRun.kind)?.toLowerCase() ?? "generic";
+  const normalizedFamily = deriveBackgroundRunFamily(normalizedKind);
   const requestedCommandText = readString(params.backgroundRun.commandText);
   const topic =
     readString(params.backgroundRun.topic) ?? readString(params.backgroundRun.title);
@@ -346,36 +398,46 @@ export async function startBackgroundWorkflowRun(params: {
     );
   }
 
-  const backgroundSessionKey =
-    buildWorkflowSubagentSessionKey({
-      parentSessionKey: params.agentCtx.sessionKey,
-      purpose:
-        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
-          ? "papernexus-skill"
-          : `workflow-${normalizedKind}`,
-      segments: [
-        ensuredProject?.projectId ?? params.snapshot.projectId,
-        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
-          ? derivePapernexusTaskLabel(commandText)
-          : topic,
-      ],
-    }) ?? params.agentCtx.sessionKey;
-
   const ownerAgent =
     normalizeAgentId(params.agentCtx.agentId) ?? normalizeAgentId(params.snapshot.role);
   const channelKey = deriveBackgroundRunChannelKey({
     sessionKey: params.agentCtx.sessionKey,
     messageChannel: params.agentCtx.messageChannel,
   });
+  const resolvedProjectId =
+    ensuredProject?.projectId ??
+    readString(params.backgroundRun.projectId) ??
+    params.snapshot.projectId ??
+    null;
+  const resolvedProjectRoot =
+    ensuredProject?.projectRoot ??
+    readString(params.backgroundRun.projectRoot) ??
+    params.snapshot.projectRoot ??
+    null;
+  let reusableBackgroundSessionKey: string | null = null;
   if (ownerAgent === "researcher" && channelKey) {
-    const activeEntries = await pruneBackgroundRunRegistry({
+    const registryEntries = await pruneBackgroundRunRegistry({
       runtimeSubagent: params.runtimeSubagent,
     });
-    const activeChannelEntries = activeEntries.filter(
+    reusableBackgroundSessionKey =
+      registryEntries.find(
+        (entry) =>
+          entry.ownerAgent === "researcher" &&
+          entry.channelKey === channelKey &&
+          entry.status === "idle" &&
+          entry.family === normalizedFamily &&
+          backgroundRunRegistryEntryMatchesProject(
+            entry,
+            resolvedProjectId,
+            resolvedProjectRoot
+          )
+      )?.backgroundSessionKey ?? null;
+    const activeChannelEntries = registryEntries.filter(
       (entry) =>
         entry.ownerAgent === "researcher" &&
         entry.channelKey === channelKey &&
-        entry.backgroundSessionKey !== backgroundSessionKey
+        entry.status === "active" &&
+        entry.backgroundSessionKey !== reusableBackgroundSessionKey
     );
     if (activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL) {
       return {
@@ -392,6 +454,21 @@ export async function startBackgroundWorkflowRun(params: {
       };
     }
   }
+
+  const backgroundSessionKey =
+    reusableBackgroundSessionKey ??
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: params.agentCtx.sessionKey,
+      purpose:
+        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+          ? "papernexus-skill"
+          : `workflow-${normalizedKind}`,
+      segments:
+        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+          ? [derivePapernexusTaskLabel(commandText), resolvedProjectId]
+          : [resolvedProjectId, topic],
+    }) ??
+    params.agentCtx.sessionKey;
 
   const runId = (
     await params.runtimeSubagent.run({
@@ -416,8 +493,13 @@ export async function startBackgroundWorkflowRun(params: {
       backgroundSessionKey,
       runId,
       kind: normalizedKind,
+      family: normalizedFamily,
+      status: "active",
+      projectId: resolvedProjectId,
+      projectRoot: resolvedProjectRoot,
       startedAt: new Date().toISOString(),
       lastCheckedAt: null,
+      lastFinishedAt: null,
     });
   }
 
@@ -431,11 +513,11 @@ export async function startBackgroundWorkflowRun(params: {
     summary:
       readString(params.backgroundRun.summary) ??
       (normalizedKind === "research_pipeline"
-        ? `Background research pipeline started for ${topic ?? ensuredProject?.title ?? "research topic"}.`
+        ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background research pipeline started for"} ${topic ?? ensuredProject?.title ?? "research topic"}.`
         : normalizedKind === "resume_pipeline"
-          ? `Background resume pipeline started for ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "papernexus_skill"
-          ? `PaperNexus-heavy workflow task started in a dedicated subagent for ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
+          ? `${reusableBackgroundSessionKey ? "Reused an idle dedicated PaperNexus subagent and started" : "PaperNexus-heavy workflow task started in a dedicated subagent for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
         : "Background workflow run started."),
   };
 }

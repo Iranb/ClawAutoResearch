@@ -274,6 +274,97 @@ test("research_workflow runtime-state actions persist manifest state and append 
   assert.equal(experimentSearch.state.currentMainStage, "creative_research");
   assert.equal(experimentSearch.stateFileExists, true);
 
+  const brainstormCycle = await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      mode: "aggressive",
+      topic: "Graph-grounded novelty synthesis for section planning",
+      basis_stage: "frontier_mapping",
+      track_id: "track-main",
+      graph_version_seen: "global-v42",
+      import_task_ids_seen: ["imp-1", "imp-2"],
+      topic_summary: {
+        objective: "Produce a reconciled novelty bundle before ideation.",
+        constraints: ["stay within shared graph evidence"],
+      },
+      research_brief: {
+        anchors: ["anchor-a", "anchor-b"],
+        frontier_focus: "limitations and transfer gaps",
+      },
+      brainstorm_brief: {
+        mode: "diverge",
+        requested_rounds: 2,
+      },
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "diverge",
+          status: "completed",
+          options: [
+            {
+              option_id: "opt-a",
+              title: "Baseline router",
+              score: 0.62,
+              summary: "A conservative graph-router extension.",
+              logic_chain: "# Logic A\n",
+              evidence_chain: "# Evidence A\n",
+              reasoning_trace: [{ step: "inspect-anchor-a", conclusion: "partial gap" }],
+              question_packet: "# Questions A\n",
+              working_memory: { hypothesis: "A" },
+              synthesis_packet: "# Synthesis A\n",
+            },
+            {
+              option_id: "opt-b",
+              title: "Compositional novelty router",
+              score: 0.93,
+              summary: "A stronger graph-grounded novelty direction.",
+              logic_chain: "# Logic B\n",
+              evidence_chain: "# Evidence B\n",
+              reasoning_trace: [{ step: "inspect-anchor-b", conclusion: "composable gap" }],
+              question_packet: "# Questions B\n",
+              working_memory: { hypothesis: "B" },
+              synthesis_packet: "# Synthesis B\n",
+              reflection_chain: { stance: "keep" },
+              theory_brief: { theorem_seed: "lemma-demo" },
+              storyline_brief: { arc: "gap -> method -> evidence" },
+            },
+          ],
+        },
+        {
+          round_id: "round-2",
+          label: "converge",
+          status: "completed",
+          options: [
+            {
+              option_id: "opt-c",
+              title: "Converged shortlist",
+              score: 0.81,
+              summary: "A merged shortlist with lower score than opt-b.",
+              logic_chain: "# Logic C\n",
+              evidence_chain: "# Evidence C\n",
+              reasoning_trace: [{ step: "compare-a-b", conclusion: "opt-b wins" }],
+              question_packet: "# Questions C\n",
+              working_memory: { hypothesis: "C" },
+              synthesis_packet: "# Synthesis C\n",
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(brainstormCycle.state.status, "reconciled");
+  assert.equal(brainstormCycle.state.selectedOptionId, "opt-b");
+  assert.equal(brainstormCycle.state.selectedRoundId, "round-1");
+  assert.equal(brainstormCycle.chainBundleReady, true);
+
+  const brainstormCycleSummary = await executeWorkflowTool(tool, {
+    action: "get_brainstorm_cycle",
+  });
+  assert.equal(brainstormCycleSummary.state.selectedOptionId, "opt-b");
+  assert.equal(brainstormCycleSummary.state.rounds.length, 2);
+  assert.equal(brainstormCycleSummary.logicChainExists, true);
+  assert.equal(brainstormCycleSummary.reasoningTraceExists, true);
+
   const writingSummary = await executeWorkflowTool(tool, {
     action: "get_writing_session",
   });
@@ -333,12 +424,20 @@ test("research_workflow runtime-state actions persist manifest state and append 
   assert.equal(manifest.citation_collection.status, "running");
   assert.equal(manifest.review_issue_tracker.status, "open");
   assert.equal(manifest.experiment_search.status, "running");
+  assert.equal(manifest.brainstorm_cycle.status, "reconciled");
+  assert.equal(manifest.brainstorm_cycle.selected_option_id, "opt-b");
 
   const experimentSearchFile = JSON.parse(
     await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"), "utf8")
   );
   assert.equal(experimentSearchFile.status, "running");
   assert.equal(experimentSearchFile.best_node_id, "node-3");
+
+  const brainstormLogic = await fs.readFile(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "LOGIC_CHAIN.md"),
+    "utf8"
+  );
+  assert.match(brainstormLogic, /Logic B/);
 
   const rawTrace = await fs.readFile(tracePath, "utf8");
   const traceEvents = rawTrace
@@ -418,6 +517,14 @@ test("research_workflow runtime-state actions persist manifest state and append 
         event.kind === "tool_action" &&
         event.action === "set_experiment_search" &&
         event.functionName === "setExperimentSearchState"
+    )
+  );
+  assert.ok(
+    traceEvents.some(
+      (event) =>
+        event.kind === "tool_action" &&
+        event.action === "run_brainstorm_cycle" &&
+        event.functionName === "runBrainstormCycle"
     )
   );
   assert.ok(

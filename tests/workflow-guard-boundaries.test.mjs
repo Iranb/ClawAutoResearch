@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  shouldBlockPapernexusLiveGraphCliRead,
   shouldBlockPapernexusInlineExecution,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockCoderDatasetMutation,
@@ -105,17 +106,38 @@ test("foreground papernexus inline guard blocks researcher bash execution outsid
   assert.match(result.reason ?? "", /dedicated subagent/i);
 });
 
-test("foreground papernexus inline guard allows researcher bash execution inside subagent sessions", () => {
+test("foreground papernexus inline guard allows authenticated PaperNexus API execution inside subagent sessions", () => {
   const result = shouldBlockPapernexusInlineExecution({
     role: "researcher",
     toolName: "bash",
     toolParams: {
-      command: 'papernexus query "multimodal adaptation"',
+      command:
+        "curl -X POST https://papernexus.example/api/query -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
     },
     sessionKey: "agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:query",
   });
 
   assert.equal(result.block, false);
+});
+
+test("papernexus live-graph cli read guard blocks local query commands even inside subagent sessions", () => {
+  for (const command of [
+    'papernexus query "multimodal adaptation"',
+    'papernexus brainstorm "multimodal adaptation"',
+    'src/cli/index.js evidence-chain "multimodal adaptation"',
+    'src/cli/index.js research-brief "multimodal adaptation"',
+  ]) {
+    const result = shouldBlockPapernexusLiveGraphCliRead({
+      role: "researcher",
+      toolName: "bash",
+      toolParams: {
+        command,
+      },
+    });
+
+    assert.equal(result.block, true);
+    assert.match(result.reason ?? "", /authenticated http api|live graph/i);
+  }
 });
 
 test("papernexus destructive guard blocks backup and restore commands during normal agent operation", () => {
@@ -157,4 +179,23 @@ test("foreground papernexus inline guard treats remote import api calls as heavy
 
   assert.equal(result.block, true);
   assert.match(result.reason ?? "", /dedicated subagent/i);
+});
+
+test("foreground papernexus inline guard treats remote typed brief and chain APIs as heavy work", () => {
+  for (const command of [
+    "curl -X POST https://papernexus.example/api/brainstorm-brief -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+    "curl -X POST https://papernexus.example/api/evidence-chain -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+    "curl -X POST https://papernexus.example/api/path-trace -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+  ]) {
+    const result = shouldBlockPapernexusInlineExecution({
+      role: "researcher",
+      toolName: "bash",
+      toolParams: {
+        command,
+      },
+      sessionKey: "agent:researcher:discord:group:paper-lab",
+    });
+    assert.equal(result.block, true);
+    assert.match(result.reason ?? "", /dedicated subagent/i);
+  }
 });

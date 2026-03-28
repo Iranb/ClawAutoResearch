@@ -227,7 +227,9 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
 
   assert.match(prompt, /queued import-task path/i);
   assert.match(prompt, /brainstorm-quality node view/i);
-  assert.match(prompt, /ideas[\s\S]*brainstorm/i);
+  assert.match(prompt, /research-brief/i);
+  assert.match(prompt, /brainstorm-brief/i);
+  assert.match(prompt, /evidence-chain/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
 });
 
@@ -278,6 +280,10 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
   assert.match(
     prompt,
     /Resolve the PaperNexus bearer token in auto mode/i
+  );
+  assert.match(
+    prompt,
+    /never use local `papernexus query\/context\/impact\/ideas\/brainstorm\/\.\.\.` CLI reads/i
   );
   assert.match(
     prompt,

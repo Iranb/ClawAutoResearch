@@ -12,6 +12,7 @@ import {
   shouldBlockCoderDatasetMutation,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockPapernexusInlineExecution,
+  shouldBlockPapernexusLiveGraphCliRead,
   shouldBlockResearchGraphForce,
   shouldBlockInnovationWrite,
   shouldBlockProjectWrite,
@@ -204,6 +205,18 @@ async function runBeforeToolCallHook(params: {
       return {
         block: true,
         blockReason: researchGraphForceCheck.reason,
+      };
+    }
+
+    const papernexusCliReadCheck = shouldBlockPapernexusLiveGraphCliRead({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+    });
+    if (papernexusCliReadCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusCliReadCheck.reason,
       };
     }
 
@@ -461,12 +474,12 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       ) {
         extraContext.push(
           "[Slash Fast Path]",
-          "This turn appears to invoke a PaperNexus-heavy skill.",
-          "Before doing heavy PaperNexus work, call research_workflow with action start_background_run and backgroundRun.kind=papernexus_skill.",
+          "This turn appears to invoke authenticated PaperNexus live-graph work.",
+          "Before calling remote typed PaperNexus APIs or other heavy graph work, call research_workflow with action start_background_run and backgroundRun.kind=papernexus_skill.",
           `Pass backgroundRun.commandText as: ${JSON.stringify(
             buildPapernexusSkillBackgroundCommand(latestPromptLikeText ?? "")
           )}`,
-          "After the tool returns, reply briefly that the PaperNexus task has started in a dedicated subagent and stop. The background continuation will perform the real graph / PaperNexus work.",
+          "After the tool returns, reply briefly that the PaperNexus task has started in a dedicated subagent and stop. The background continuation will perform the real typed brief / brainstorm / evidence / graph work.",
           "[/Slash Fast Path]"
         );
       } else if (

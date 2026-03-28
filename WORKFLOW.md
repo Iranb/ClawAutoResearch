@@ -158,14 +158,16 @@ Default portfolio rule:
 
 PaperNexus is not just a pre-processing step. Before any idea divergence, the pipeline must build a **brainstorm pack** grounded in the graph.
 
-At minimum, the brainstorming flow must use these PaperNexus capabilities against the project corpus:
+At minimum, the brainstorming flow must use authenticated typed PaperNexus capabilities against the shared project graph:
 
-- `status` — verify corpus exists, is current enough, and has non-trivial coverage
-- `query` — retrieve topic-relevant graph anchors
-- `context` — inspect local neighborhoods around promising anchors
-- `impact` — trace upstream / downstream influence or dependencies
-- `ideas` — extract graph-grounded opportunity candidates
-- `brainstorm` — run explicit `diverge` / `converge` passes over the topic
+- `GET /api/corpus-meta` or equivalent status endpoint — verify the shared graph exists, is current enough, and has non-trivial coverage
+- `POST /api/query` — retrieve topic-relevant graph anchors
+- `POST /api/context` — inspect local neighborhoods around promising anchors
+- `POST /api/impact` — trace upstream / downstream influence or dependencies
+- `POST /api/research-brief` — compress the topic into a compact graph-grounded research brief
+- `POST /api/ideas` — extract graph-grounded opportunity candidates
+- `POST /api/brainstorm` and `POST /api/brainstorm-brief` — run explicit divergence / convergence passes over the topic
+- `POST /api/path-trace`, `POST /api/evidence-chain`, `POST /api/reflection-chain`, `POST /api/theory-brief`, and `POST /api/storyline-brief` when the topic requires justification, mechanism, experiment reflection, or narrative closure
 
 The graph-backed brainstorming pack should preserve:
 
@@ -185,6 +187,7 @@ Before graph build, Researcher must also maintain a project-local paper selectio
 - record every selected canonical paper in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
 - if new PDFs or Markdown arrive through the PaperNexus UI or Web/API, prefer the queued import-task path under `.papernexus/imports/` or `POST /api/imports`; do not manually copy those ad hoc uploads into the shared paper source tree during automation
 - if a workflow calls PaperNexus `/api/*`, assume authenticated access and use `Authorization: Bearer <token>` from the configured token source
+- for a live shared graph, authenticated HTTP API requests are required; do not use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads in workflow execution
 - if the current shared graph does not already contain a newly found key paper, Researcher must queue a shared-graph refresh before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
 
@@ -196,7 +199,7 @@ Paper source layout and refresh rules:
 - deduplicate by canonical paper identity, not by raw filename
 - reconcile the shared graph immediately if a newly ingested paper changes the novelty baseline or closest prior work
 - otherwise reconcile when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
-- for ideation, prefer the brainstorm-quality node layer (`brainstormEligible`, `brainstormScore`, `brainstormTier`) over the raw full graph when choosing anchors for `ideas` and `brainstorm`
+- for ideation, prefer the brainstorm-quality node layer (`brainstormEligible`, `brainstormScore`, `brainstormTier`) over the raw full graph when choosing anchors for `ideas`, `brainstorm`, and typed brief / chain endpoints
 - agents may add or update understanding in the shared graph, but must not delete shared corpus data or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks
 
 ### Experiment-Informed Innovation Reflection Contract
@@ -208,7 +211,7 @@ The reflection flow must:
 
 - read the latest experiment memory via `research_workflow.get_experiment_memory`
 - inspect the latest `innovation_reflection` state from `{PROJ}/PROJECT_MANIFEST.json` or `research_workflow.get_innovation_reflection`
-- use PaperNexus `query`, `context`, `impact`, `ideas`, and at least one `brainstorm` pass to reinterpret the latest experiment evidence
+- use authenticated PaperNexus `query`, `context`, `impact`, `ideas`, plus typed `reflection-chain`, `evidence-chain`, `theory-brief`, or `storyline-brief` calls as needed to reinterpret the latest experiment evidence
 - produce `{PROJ}/researcher/INNOVATION_REFLECTION.md`
 - record the refresh through `research_workflow.record_innovation_reflection` instead of hand-editing `PROJECT_MANIFEST.json`
 
@@ -505,9 +508,9 @@ Procedure:
 
 ```
 Procedure:
-  1. Run `query`, `ideas`, and `brainstorm --mode diverge` against the shared global graph constrained by this project's selected papers
+  1. Run `query`, `research-brief`, `ideas`, and `brainstorm` / `brainstorm-brief` divergence against the shared global graph constrained by this project's selected papers
   1a. Prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) over the noisy raw full graph when choosing primary anchors
-  2. For each promising anchor, run `context` and `impact`
+  2. For each promising anchor, run `context`, `impact`, and typed `path-trace` / `evidence-chain` when the anchor needs a more explicit logic path
   3. Extract at least four frontier lenses: limitation, contradiction, transfer, composition
   4. Save concrete graph anchors, relation patterns, plausible pilots, and falsifiers
   5. Package compact frontier prompts and graph frontier files for later idea divergence / convergence
@@ -537,7 +540,7 @@ Procedure:
   1. Confirm {PROJ}/researcher/FRONTIER_REPORT.md and the required frontier files under graph/ exist; if missing, go back to FRONTIER_MAPPING
   2. If experiment memory contains reflectable evidence and `innovation_reflection` is stale or missing, run /innovation-reflection before proposing a new track set
   3. Run /idea-phase as a graph-grounded dialectic loop, not a one-shot prompt brainstorm
-  4. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas` / `brainstorm --mode diverge` outputs, preferring brainstorm-quality anchors over raw graph prominence
+  4. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas`, `brainstorm`, and `brainstorm-brief` outputs, preferring brainstorm-quality anchors over raw graph prominence
   5. Reuse `{PROJ}/researcher/INNOVATION_REFLECTION.md` as a negative-constraint and transfer-lesson packet whenever prior experiment evidence exists
   6. For each track, preserve a graph evidence packet:
      - anchor nodes / relations

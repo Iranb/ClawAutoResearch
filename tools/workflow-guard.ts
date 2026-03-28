@@ -36,6 +36,7 @@ import {
 import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
+  looksLikePapernexusLiveGraphCliReadCommand,
 } from "./workflow-subagent-sessions";
 import {
   normalizePapernexusApiTokenSource,
@@ -241,6 +242,53 @@ type InnovationReflectionState = {
   lastReflectionPath: string | null;
   reflectedThroughExperimentUpdateAt: string | null;
   reflectedExperimentIds: string[];
+  pendingReason: string | null;
+};
+
+type BrainstormCycleOptionState = {
+  optionId: string;
+  title: string | null;
+  summary: string | null;
+  score: number | null;
+  status: string | null;
+  verdict: string | null;
+};
+
+type BrainstormCycleRoundState = {
+  roundId: string;
+  label: string | null;
+  status: string | null;
+  focus: string | null;
+  options: BrainstormCycleOptionState[];
+};
+
+type BrainstormCycleState = {
+  status: string;
+  mode: string | null;
+  topic: string | null;
+  basisStage: string | null;
+  trackId: string | null;
+  rounds: BrainstormCycleRoundState[];
+  selectedRoundId: string | null;
+  selectedOptionId: string | null;
+  selectedOptionTitle: string | null;
+  selectedOptionScore: number | null;
+  selectionMode: string | null;
+  topicSummaryPath: string | null;
+  researchBriefPath: string | null;
+  brainstormBriefPath: string | null;
+  logicChainPath: string | null;
+  evidenceChainPath: string | null;
+  reasoningTracePath: string | null;
+  questionPacketPath: string | null;
+  workingMemoryPath: string | null;
+  synthesisPacketPath: string | null;
+  reflectionChainPath: string | null;
+  theoryBriefPath: string | null;
+  storylineBriefPath: string | null;
+  graphVersionSeen: string | null;
+  importTaskIdsSeen: string[];
+  latestRunAt: string | null;
   pendingReason: string | null;
 };
 
@@ -704,6 +752,14 @@ export type WorkflowSnapshot = {
   innovationReflectionLastAt: string | null;
   innovationReflectionPath: string | null;
   innovationReflectionPendingReason: string | null;
+  brainstormCycleStatus: string | null;
+  brainstormCycleTopic: string | null;
+  brainstormCycleBasisStage: string | null;
+  brainstormCycleTrackId: string | null;
+  brainstormCycleGraphVersionSeen: string | null;
+  brainstormCycleImportTaskCount: number | null;
+  brainstormCycleChainBundleReady: boolean;
+  brainstormCyclePendingReason: string | null;
   researchProgramStatus: string | null;
   researchProgramTrackCount: number | null;
   researchProgramActiveTrackCount: number | null;
@@ -1014,6 +1070,31 @@ const DEFAULT_FIGURE_PACK_PATH = "academic_writer/FIGURE_PACK.json";
 const DEFAULT_TABLE_PACK_PATH = "academic_writer/TABLE_PACK.json";
 const DEFAULT_CITATION_CANDIDATES_PATH =
   "academic_writer/CITATION_CANDIDATES.json";
+const DEFAULT_BRAINSTORM_CYCLE_DIR = "researcher/brainstorm-cycle";
+const DEFAULT_BRAINSTORM_TOPIC_SUMMARY_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/TOPIC_SUMMARY.json`;
+const DEFAULT_BRAINSTORM_RESEARCH_BRIEF_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/RESEARCH_BRIEF.json`;
+const DEFAULT_BRAINSTORM_BRIEF_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/BRAINSTORM_BRIEF.json`;
+const DEFAULT_BRAINSTORM_LOGIC_CHAIN_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/LOGIC_CHAIN.md`;
+const DEFAULT_BRAINSTORM_EVIDENCE_CHAIN_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/EVIDENCE_CHAIN.md`;
+const DEFAULT_BRAINSTORM_REASONING_TRACE_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/REASONING_TRACE.jsonl`;
+const DEFAULT_BRAINSTORM_QUESTION_PACKET_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/QUESTION_PACKET.md`;
+const DEFAULT_BRAINSTORM_WORKING_MEMORY_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/WORKING_MEMORY.json`;
+const DEFAULT_BRAINSTORM_SYNTHESIS_PACKET_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/SYNTHESIS_PACKET.md`;
+const DEFAULT_BRAINSTORM_REFLECTION_CHAIN_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/REFLECTION_CHAIN.json`;
+const DEFAULT_BRAINSTORM_THEORY_BRIEF_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/THEORY_BRIEF.json`;
+const DEFAULT_BRAINSTORM_STORYLINE_BRIEF_PATH =
+  `${DEFAULT_BRAINSTORM_CYCLE_DIR}/STORYLINE_BRIEF.json`;
 
 type WritingModePreset = {
   mode: WritingMode;
@@ -1984,6 +2065,11 @@ async function readTextIfExists(targetPath: string): Promise<string | null> {
 async function writeJsonEnsured(targetPath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeTextEnsured(targetPath: string, value: string): Promise<void> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value, "utf8");
 }
 
 function getProjectRoot(options?: {
@@ -2970,6 +3056,188 @@ function serializeInnovationReflectionState(
     reflected_through_experiment_update_at:
       state.reflectedThroughExperimentUpdateAt,
     reflected_experiment_ids: state.reflectedExperimentIds,
+    pending_reason: state.pendingReason,
+  };
+}
+
+function normalizeBrainstormCycleOptionState(
+  value: unknown
+): BrainstormCycleOptionState | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const optionId =
+    pickString(record, ["optionId", "option_id"]) ??
+    pickString(record, ["id"]);
+  if (!optionId) {
+    return null;
+  }
+  return {
+    optionId,
+    title: pickString(record, ["title", "name"]),
+    summary: pickString(record, ["summary", "description"]),
+    score: pickNumber(record, ["score", "ranking_score", "rank_score"]),
+    status: normalizeStage(record.status),
+    verdict: pickString(record, ["verdict", "decision"]),
+  };
+}
+
+function serializeBrainstormCycleOptionState(
+  state: BrainstormCycleOptionState
+): Record<string, unknown> {
+  return {
+    option_id: state.optionId,
+    title: state.title,
+    summary: state.summary,
+    score: state.score,
+    status: state.status,
+    verdict: state.verdict,
+  };
+}
+
+function normalizeBrainstormCycleRoundState(
+  value: unknown
+): BrainstormCycleRoundState | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const roundId =
+    pickString(record, ["roundId", "round_id"]) ??
+    pickString(record, ["id"]);
+  if (!roundId) {
+    return null;
+  }
+  const rawOptions = Array.isArray(record.options) ? record.options : [];
+  return {
+    roundId,
+    label: pickString(record, ["label", "name"]),
+    status: normalizeStage(record.status),
+    focus: pickString(record, ["focus"]),
+    options: rawOptions
+      .map((option) => normalizeBrainstormCycleOptionState(option))
+      .filter((option): option is BrainstormCycleOptionState => Boolean(option)),
+  };
+}
+
+function serializeBrainstormCycleRoundState(
+  state: BrainstormCycleRoundState
+): Record<string, unknown> {
+  return {
+    round_id: state.roundId,
+    label: state.label,
+    status: state.status,
+    focus: state.focus,
+    options: state.options.map((option) =>
+      serializeBrainstormCycleOptionState(option)
+    ),
+  };
+}
+
+function normalizeBrainstormCycleState(value: unknown): BrainstormCycleState {
+  const record = asRecord(value) ?? {};
+  const rounds = Array.isArray(record.rounds)
+    ? record.rounds
+        .map((round) => normalizeBrainstormCycleRoundState(round))
+        .filter((round): round is BrainstormCycleRoundState => Boolean(round))
+    : [];
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    mode: pickString(record, ["mode"]),
+    topic: pickString(record, ["topic"]),
+    basisStage: normalizeStage(record.basisStage ?? record.basis_stage),
+    trackId: pickString(record, ["trackId", "track_id"]),
+    rounds,
+    selectedRoundId: pickString(record, ["selectedRoundId", "selected_round_id"]),
+    selectedOptionId: pickString(record, [
+      "selectedOptionId",
+      "selected_option_id",
+    ]),
+    selectedOptionTitle: pickString(record, [
+      "selectedOptionTitle",
+      "selected_option_title",
+    ]),
+    selectedOptionScore: pickNumber(record, [
+      "selectedOptionScore",
+      "selected_option_score",
+    ]),
+    selectionMode: pickString(record, ["selectionMode", "selection_mode"]),
+    topicSummaryPath:
+      pickString(record, ["topicSummaryPath", "topic_summary_path"]) ??
+      DEFAULT_BRAINSTORM_TOPIC_SUMMARY_PATH,
+    researchBriefPath:
+      pickString(record, ["researchBriefPath", "research_brief_path"]) ??
+      DEFAULT_BRAINSTORM_RESEARCH_BRIEF_PATH,
+    brainstormBriefPath:
+      pickString(record, ["brainstormBriefPath", "brainstorm_brief_path"]) ??
+      DEFAULT_BRAINSTORM_BRIEF_PATH,
+    logicChainPath:
+      pickString(record, ["logicChainPath", "logic_chain_path"]) ??
+      DEFAULT_BRAINSTORM_LOGIC_CHAIN_PATH,
+    evidenceChainPath:
+      pickString(record, ["evidenceChainPath", "evidence_chain_path"]) ??
+      DEFAULT_BRAINSTORM_EVIDENCE_CHAIN_PATH,
+    reasoningTracePath:
+      pickString(record, ["reasoningTracePath", "reasoning_trace_path"]) ??
+      DEFAULT_BRAINSTORM_REASONING_TRACE_PATH,
+    questionPacketPath:
+      pickString(record, ["questionPacketPath", "question_packet_path"]) ??
+      DEFAULT_BRAINSTORM_QUESTION_PACKET_PATH,
+    workingMemoryPath:
+      pickString(record, ["workingMemoryPath", "working_memory_path"]) ??
+      DEFAULT_BRAINSTORM_WORKING_MEMORY_PATH,
+    synthesisPacketPath:
+      pickString(record, ["synthesisPacketPath", "synthesis_packet_path"]) ??
+      DEFAULT_BRAINSTORM_SYNTHESIS_PACKET_PATH,
+    reflectionChainPath:
+      pickString(record, ["reflectionChainPath", "reflection_chain_path"]) ??
+      DEFAULT_BRAINSTORM_REFLECTION_CHAIN_PATH,
+    theoryBriefPath:
+      pickString(record, ["theoryBriefPath", "theory_brief_path"]) ??
+      DEFAULT_BRAINSTORM_THEORY_BRIEF_PATH,
+    storylineBriefPath:
+      pickString(record, ["storylineBriefPath", "storyline_brief_path"]) ??
+      DEFAULT_BRAINSTORM_STORYLINE_BRIEF_PATH,
+    graphVersionSeen: pickString(record, ["graphVersionSeen", "graph_version_seen"]),
+    importTaskIdsSeen: asStringArray(
+      record.importTaskIdsSeen ?? record.import_task_ids_seen
+    ),
+    latestRunAt: pickString(record, ["latestRunAt", "latest_run_at"]),
+    pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeBrainstormCycleState(
+  state: BrainstormCycleState
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    mode: state.mode,
+    topic: state.topic,
+    basis_stage: state.basisStage,
+    track_id: state.trackId,
+    rounds: state.rounds.map((round) => serializeBrainstormCycleRoundState(round)),
+    selected_round_id: state.selectedRoundId,
+    selected_option_id: state.selectedOptionId,
+    selected_option_title: state.selectedOptionTitle,
+    selected_option_score: state.selectedOptionScore,
+    selection_mode: state.selectionMode,
+    topic_summary_path: state.topicSummaryPath,
+    research_brief_path: state.researchBriefPath,
+    brainstorm_brief_path: state.brainstormBriefPath,
+    logic_chain_path: state.logicChainPath,
+    evidence_chain_path: state.evidenceChainPath,
+    reasoning_trace_path: state.reasoningTracePath,
+    question_packet_path: state.questionPacketPath,
+    working_memory_path: state.workingMemoryPath,
+    synthesis_packet_path: state.synthesisPacketPath,
+    reflection_chain_path: state.reflectionChainPath,
+    theory_brief_path: state.theoryBriefPath,
+    storyline_brief_path: state.storylineBriefPath,
+    graph_version_seen: state.graphVersionSeen,
+    import_task_ids_seen: state.importTaskIdsSeen,
+    latest_run_at: state.latestRunAt,
     pending_reason: state.pendingReason,
   };
 }
@@ -5413,6 +5681,292 @@ function toProjectRelativeArtifactPath(
   return relative.replace(/\\/g, "/");
 }
 
+function getBrainstormCycleRootRelativeDir(trackId: string | null): string {
+  const normalizedTrackId = trackId?.trim().replace(/[\\/]/g, "_") ?? null;
+  if (normalizedTrackId) {
+    return `researcher/reasoning/${normalizedTrackId}`;
+  }
+  return DEFAULT_BRAINSTORM_CYCLE_DIR;
+}
+
+function getBrainstormCycleDefaultPaths(trackId: string | null): {
+  topicSummaryPath: string;
+  researchBriefPath: string;
+  brainstormBriefPath: string;
+  logicChainPath: string;
+  evidenceChainPath: string;
+  reasoningTracePath: string;
+  questionPacketPath: string;
+  workingMemoryPath: string;
+  synthesisPacketPath: string;
+  reflectionChainPath: string;
+  theoryBriefPath: string;
+  storylineBriefPath: string;
+} {
+  const root = getBrainstormCycleRootRelativeDir(trackId);
+  return {
+    topicSummaryPath: `${root}/TOPIC_SUMMARY.json`,
+    researchBriefPath: `${root}/RESEARCH_BRIEF.json`,
+    brainstormBriefPath: `${root}/BRAINSTORM_BRIEF.json`,
+    logicChainPath: `${root}/LOGIC_CHAIN.md`,
+    evidenceChainPath: `${root}/EVIDENCE_CHAIN.md`,
+    reasoningTracePath: `${root}/REASONING_TRACE.jsonl`,
+    questionPacketPath: `${root}/QUESTION_PACKET.md`,
+    workingMemoryPath: `${root}/WORKING_MEMORY.json`,
+    synthesisPacketPath: `${root}/SYNTHESIS_PACKET.md`,
+    reflectionChainPath: `${root}/REFLECTION_CHAIN.json`,
+    theoryBriefPath: `${root}/THEORY_BRIEF.json`,
+    storylineBriefPath: `${root}/STORYLINE_BRIEF.json`,
+  };
+}
+
+function isBrainstormCycleReady(state: BrainstormCycleState): boolean {
+  return ["ready", "reconciled"].includes(normalizeStage(state.status) ?? "");
+}
+
+function getBrainstormCycleValidationErrors(
+  state: BrainstormCycleState
+): string[] {
+  const errors: string[] = [];
+  if (!state.topic) {
+    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.topic is required");
+  }
+  if (!state.basisStage) {
+    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.basis_stage is required");
+  }
+  for (const [field, value] of [
+    ["topic_summary_path", state.topicSummaryPath],
+    ["research_brief_path", state.researchBriefPath],
+    ["brainstorm_brief_path", state.brainstormBriefPath],
+    ["logic_chain_path", state.logicChainPath],
+    ["evidence_chain_path", state.evidenceChainPath],
+    ["reasoning_trace_path", state.reasoningTracePath],
+    ["question_packet_path", state.questionPacketPath],
+    ["working_memory_path", state.workingMemoryPath],
+    ["synthesis_packet_path", state.synthesisPacketPath],
+  ] as Array<[string, string | null]>) {
+    if (!value) {
+      errors.push(`PROJECT_MANIFEST.json.brainstorm_cycle.${field} is required`);
+    }
+  }
+  if (isBrainstormCycleReady(state)) {
+    if (state.rounds.length === 0) {
+      errors.push(
+        "PROJECT_MANIFEST.json.brainstorm_cycle.rounds must contain at least one completed brainstorm round"
+      );
+    }
+    if (!state.selectedRoundId) {
+      errors.push(
+        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_round_id is required when the brainstorm cycle is ready"
+      );
+    }
+    if (!state.selectedOptionId) {
+      errors.push(
+        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_option_id is required when the brainstorm cycle is ready"
+      );
+    }
+  }
+  return errors;
+}
+
+async function fileHasMeaningfulJsonContent(targetPath: string | null): Promise<boolean> {
+  if (!targetPath) {
+    return false;
+  }
+  try {
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed == null) {
+      return false;
+    }
+    if (Array.isArray(parsed)) {
+      return parsed.length > 0;
+    }
+    if (typeof parsed === "object") {
+      return Object.keys(parsed as Record<string, unknown>).length > 0;
+    }
+    if (typeof parsed === "string") {
+      return parsed.trim().length > 0;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderMarkdownishPayload(value: unknown): string {
+  if (typeof value === "string") {
+    return value.endsWith("\n") ? value : `${value}\n`;
+  }
+  if (value == null) {
+    return "";
+  }
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function renderReasoningTracePayload(value: unknown): string {
+  if (typeof value === "string") {
+    return value.endsWith("\n") ? value : `${value}\n`;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")
+      .concat(value.length > 0 ? "\n" : "");
+  }
+  if (value == null) {
+    return "";
+  }
+  return `${JSON.stringify(value)}\n`;
+}
+
+function hasMeaningfulPayload(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return value != null;
+}
+
+function pickBrainstormPayload(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function extractBrainstormCandidateRecords(
+  value: unknown
+): Array<{
+  round: BrainstormCycleRoundState;
+  roundRecord: Record<string, unknown>;
+  option: BrainstormCycleOptionState;
+  optionRecord: Record<string, unknown>;
+}> {
+  const rounds = Array.isArray(asRecord(value)?.rounds) ? (asRecord(value)?.rounds as unknown[]) : [];
+  const candidates: Array<{
+    round: BrainstormCycleRoundState;
+    roundRecord: Record<string, unknown>;
+    option: BrainstormCycleOptionState;
+    optionRecord: Record<string, unknown>;
+  }> = [];
+  for (const rawRound of rounds) {
+    const roundRecord = asRecord(rawRound);
+    const round = normalizeBrainstormCycleRoundState(rawRound);
+    if (!round || !roundRecord) {
+      continue;
+    }
+    const rawOptions = Array.isArray(roundRecord.options) ? roundRecord.options : [];
+    for (const rawOption of rawOptions) {
+      const optionRecord = asRecord(rawOption);
+      const option = normalizeBrainstormCycleOptionState(rawOption);
+      if (!option || !optionRecord) {
+        continue;
+      }
+      candidates.push({
+        round,
+        roundRecord,
+        option,
+        optionRecord,
+      });
+    }
+  }
+  return candidates;
+}
+
+function selectBrainstormCandidate(params: {
+  brainstormCycle: Record<string, unknown>;
+  current: BrainstormCycleState;
+}):
+  | {
+      round: BrainstormCycleRoundState;
+      roundRecord: Record<string, unknown>;
+      option: BrainstormCycleOptionState;
+      optionRecord: Record<string, unknown>;
+      mode: string | null;
+    }
+  | null {
+  const candidates = extractBrainstormCandidateRecords(params.brainstormCycle);
+  const selectedOptionId =
+    pickString(params.brainstormCycle, ["selectedOptionId", "selected_option_id"]) ??
+    params.current.selectedOptionId;
+  const selectionMode =
+    pickString(params.brainstormCycle, ["selectionMode", "selection_mode"]) ??
+    pickString(params.brainstormCycle, ["mode"]) ??
+    params.current.selectionMode ??
+    params.current.mode;
+  if (selectedOptionId) {
+    const explicit = candidates.find(
+      (candidate) => candidate.option.optionId === selectedOptionId
+    );
+    if (explicit) {
+      return { ...explicit, mode: selectionMode };
+    }
+  }
+  if (candidates.length === 0) {
+    return null;
+  }
+  if ((normalizeStage(selectionMode) ?? selectionMode) === "aggressive") {
+    const ranked = [...candidates].sort(
+      (left, right) => (right.option.score ?? -Infinity) - (left.option.score ?? -Infinity)
+    );
+    return { ...ranked[0], mode: selectionMode };
+  }
+  return { ...candidates[0], mode: selectionMode };
+}
+
+async function getBrainstormCycleMissingSignals(params: {
+  projectRoot: string;
+  manifest: ManifestLike | null;
+}): Promise<string[]> {
+  const state = normalizeBrainstormCycleState(params.manifest?.brainstorm_cycle);
+  const missing: string[] = [];
+  if (!isBrainstormCycleReady(state)) {
+    missing.push(
+      `PROJECT_MANIFEST.json.brainstorm_cycle.status = ready|reconciled (current: ${state.status})`
+    );
+  }
+  missing.push(...getBrainstormCycleValidationErrors(state));
+
+  const jsonArtifacts: Array<[string, string | null]> = [
+    ["topic_summary_path", state.topicSummaryPath],
+    ["research_brief_path", state.researchBriefPath],
+    ["brainstorm_brief_path", state.brainstormBriefPath],
+    ["working_memory_path", state.workingMemoryPath],
+  ];
+  for (const [field, artifactPath] of jsonArtifacts) {
+    const resolved = resolveProjectArtifactPath(params.projectRoot, artifactPath);
+    if (!(await fileHasMeaningfulJsonContent(resolved))) {
+      missing.push(
+        `PROJECT_MANIFEST.json.brainstorm_cycle.${field} must point to a non-empty JSON artifact (${artifactPath ?? "unset"})`
+      );
+    }
+  }
+  const textArtifacts: Array<[string, string | null]> = [
+    ["logic_chain_path", state.logicChainPath],
+    ["evidence_chain_path", state.evidenceChainPath],
+    ["reasoning_trace_path", state.reasoningTracePath],
+    ["question_packet_path", state.questionPacketPath],
+    ["synthesis_packet_path", state.synthesisPacketPath],
+  ];
+  for (const [field, artifactPath] of textArtifacts) {
+    const resolved = resolveProjectArtifactPath(params.projectRoot, artifactPath);
+    if (!(await fileHasNonWhitespaceContent(resolved))) {
+      missing.push(
+        `PROJECT_MANIFEST.json.brainstorm_cycle.${field} must point to a non-empty artifact (${artifactPath ?? "unset"})`
+      );
+    }
+  }
+  return uniqueStrings(missing);
+}
+
 function uniqueStringList(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(asString(value))))];
 }
@@ -6613,9 +7167,18 @@ async function getMissingStageSignals(params: {
           );
         }
       }
-      if (normalizeStage(manifest?.current_micro_stage) !== "frontiers_packaged") {
+      if (
+        normalizeStage(manifest?.current_stage) === "frontier_mapping" &&
+        normalizeStage(manifest?.current_micro_stage) !== "frontiers_packaged"
+      ) {
         missing.push("PROJECT_MANIFEST.json.current_micro_stage = frontiers_packaged");
       }
+      missing.push(
+        ...(await getBrainstormCycleMissingSignals({
+          projectRoot,
+          manifest,
+        }))
+      );
       break;
     case "idea": {
       if (!(await pathExists(path.join(projectRoot, "researcher", "IDEA_REPORT.md")))) {
@@ -6688,6 +7251,12 @@ async function getMissingStageSignals(params: {
           );
         }
       }
+      missing.push(
+        ...(await getBrainstormCycleMissingSignals({
+          projectRoot,
+          manifest,
+        }))
+      );
       break;
     }
     case "plan":
@@ -7209,6 +7778,9 @@ function buildDynamicTasks(params: {
     tasks.unshift(
       `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
     );
+    tasks.unshift(
+      "Do not read the live shared graph through local `papernexus query/context/impact/ideas/brainstorm/...` CLI commands. In workflow mode, live-graph reads must use authenticated `/api/*` endpoints."
+    );
   }
 
   if (
@@ -7216,10 +7788,16 @@ function buildDynamicTasks(params: {
     ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
   ) {
     tasks.unshift(
+      "For each novelty-sensitive topic, summarize the topic, call PaperNexus typed endpoints such as `research-brief`, `brainstorm-brief`, `ideas`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+    );
+    tasks.unshift(
+      "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
+    );
+    tasks.unshift(
       "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import-task path (`/api/imports`) instead of manually copying files into the shared paper source tree."
     );
     tasks.unshift(
-      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and use `ideas` plus `brainstorm --mode diverge|converge` before trusting raw full-graph prominence."
+      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed API briefs/chains over raw full-graph inspection. Use `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
     );
   }
 
@@ -7449,6 +8027,9 @@ export async function buildWorkflowSnapshot(params: {
   const innovationReflection = normalizeInnovationReflectionState(
     asRecord(projectState.manifest?.innovation_reflection)
   );
+  const brainstormCycle = normalizeBrainstormCycleState(
+    asRecord(projectState.manifest?.brainstorm_cycle)
+  );
   const experimentSearch = projectState.projectRoot
     ? await loadExperimentSearchState({
         projectRoot: projectState.projectRoot,
@@ -7628,6 +8209,16 @@ export async function buildWorkflowSnapshot(params: {
     innovationReflectionLastAt: innovationReflection.lastReflectionAt,
     innovationReflectionPath: innovationReflection.lastReflectionPath,
     innovationReflectionPendingReason: innovationReflection.pendingReason,
+    brainstormCycleStatus: brainstormCycle.status,
+    brainstormCycleTopic: brainstormCycle.topic,
+    brainstormCycleBasisStage: brainstormCycle.basisStage,
+    brainstormCycleTrackId: brainstormCycle.trackId,
+    brainstormCycleGraphVersionSeen: brainstormCycle.graphVersionSeen,
+    brainstormCycleImportTaskCount: brainstormCycle.importTaskIdsSeen.length,
+    brainstormCycleChainBundleReady:
+      isBrainstormCycleReady(brainstormCycle) &&
+      getBrainstormCycleValidationErrors(brainstormCycle).length === 0,
+    brainstormCyclePendingReason: brainstormCycle.pendingReason,
     researchProgramStatus: researchProgram.status,
     researchProgramTrackCount: researchProgram.tracks.length,
     researchProgramActiveTrackCount: researchProgram.tracks.filter(
@@ -7830,6 +8421,7 @@ export function buildFocusedPromptAssembly(params: {
     "Layer 3: Primary Payload",
     `section_context=${sectionContextId ?? "unset"}`,
     `writing_status=${snapshot.writingSessionStatus ?? "unknown"}`,
+    `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
     `section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`,
     `write_package=${snapshot.writePackageStatus ?? "unknown"}/${snapshot.writePackageAssemblyStatus ?? "unknown"} mode=${snapshot.writePackageAssemblyMode ?? "unset"} derived=${snapshot.writePackageDerivedArtifactCount ?? 0}`,
     `review_lane=${reviewLane ?? "unset"}`,
@@ -8029,9 +8621,12 @@ export function formatWorkflowSnapshotForPrompt(params: {
         snapshot.papernexusApiBaseUrl &&
         snapshot.papernexusApiTokenSource === "auto"
       ) {
-        lines.push(
+      lines.push(
           `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
-        );
+      );
+      lines.push(
+        "Live graph rule: never use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads against the running shared graph; use authenticated `/api/*` endpoints instead."
+      );
       } else if (snapshot.papernexusApiBaseUrl) {
         lines.push(
           `Remote API rule: prefer the configured PaperNexus Web/API endpoint at ${snapshot.papernexusApiBaseUrl} instead of assuming anonymous local access.`
@@ -8068,6 +8663,20 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
   if (snapshot.innovationReflectionPendingReason) {
     lines.push(`Innovation reflection pending_reason: ${snapshot.innovationReflectionPendingReason}`);
+  }
+  if (snapshot.brainstormCycleStatus) {
+    lines.push(
+      `Brainstorm cycle: status=${snapshot.brainstormCycleStatus}, topic=${snapshot.brainstormCycleTopic ?? "unset"}, basis_stage=${snapshot.brainstormCycleBasisStage ?? "unset"}, track=${snapshot.brainstormCycleTrackId ?? "unset"}, graph_version=${snapshot.brainstormCycleGraphVersionSeen ?? "unset"}, import_tasks=${snapshot.brainstormCycleImportTaskCount ?? 0}, chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
+    );
+    if (snapshot.brainstormCyclePendingReason) {
+      lines.push(`Brainstorm cycle pending_reason: ${snapshot.brainstormCyclePendingReason}`);
+    }
+    lines.push(
+      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed endpoints such as `research-brief`, `brainstorm-brief`, `ideas`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`, and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
+    );
+    lines.push(
+      "Brainstorm selection rule: multiple brainstorm rounds may coexist, but aggressive auto mode should keep all candidates and promote the highest-scoring option to the selected durable bundle."
+    );
   }
   if (snapshot.researchProgramStatus) {
     lines.push(
@@ -8245,7 +8854,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
     "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and `.papernexus/imports/` task logs instead of manually copying files into the shared paper source tree."
   );
   lines.push(
-    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and use `ideas` plus `brainstorm --mode diverge` / `--mode converge` before trusting raw full-graph prominence."
+    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed endpoints like `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief` before trusting raw full-graph prominence."
   );
   lines.push(
     "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
@@ -8606,7 +9215,29 @@ export function shouldBlockPapernexusInlineExecution(params: {
   return {
     block: true,
     reason:
-      "PaperNexus-heavy work must run in a dedicated subagent session to avoid stalling the foreground agent. Start a background run first, then let that subagent execute /graph-build, /frontier-mapping, /papernexus, or related PaperNexus commands.",
+      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Start a background run first, then let that subagent execute remote typed PaperNexus calls, /graph-build, /frontier-mapping, /papernexus, or related PaperNexus commands.",
+  };
+}
+
+export function shouldBlockPapernexusLiveGraphCliRead(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!looksLikePapernexusLiveGraphCliReadCommand(payloadText)) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use authenticated HTTP API endpoints instead (`/api/query`, `/api/context`, `/api/impact`, `/api/ideas`, `/api/brainstorm`, `/api/research-brief`, `/api/brainstorm-brief`, `/api/path-trace`, `/api/evidence-chain`, `/api/reflection-chain`, `/api/theory-brief`, `/api/storyline-brief`, or related typed endpoints).",
   };
 }
 
@@ -8951,6 +9582,110 @@ export async function getInnovationReflectionStateSummary(params: {
     due: isInnovationReflectionDue({ state, ledger }),
     latestExperimentUpdateAt: basis.latestExperimentUpdateAt,
     experimentIds: basis.experimentIds,
+  };
+}
+
+export async function getBrainstormCycleStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: BrainstormCycleState;
+  validationErrors: string[];
+  chainBundleReady: boolean;
+  topicSummaryResolvedPath: string | null;
+  topicSummaryExists: boolean;
+  researchBriefResolvedPath: string | null;
+  researchBriefExists: boolean;
+  brainstormBriefResolvedPath: string | null;
+  brainstormBriefExists: boolean;
+  logicChainResolvedPath: string | null;
+  logicChainExists: boolean;
+  evidenceChainResolvedPath: string | null;
+  evidenceChainExists: boolean;
+  reasoningTraceResolvedPath: string | null;
+  reasoningTraceExists: boolean;
+  questionPacketResolvedPath: string | null;
+  questionPacketExists: boolean;
+  workingMemoryResolvedPath: string | null;
+  workingMemoryExists: boolean;
+  synthesisPacketResolvedPath: string | null;
+  synthesisPacketExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeBrainstormCycleState(manifest.brainstorm_cycle);
+  const validationErrors = getBrainstormCycleValidationErrors(state);
+  const topicSummaryResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.topicSummaryPath
+  );
+  const researchBriefResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.researchBriefPath
+  );
+  const brainstormBriefResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.brainstormBriefPath
+  );
+  const logicChainResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.logicChainPath
+  );
+  const evidenceChainResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.evidenceChainPath
+  );
+  const reasoningTraceResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.reasoningTracePath
+  );
+  const questionPacketResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.questionPacketPath
+  );
+  const workingMemoryResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.workingMemoryPath
+  );
+  const synthesisPacketResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.synthesisPacketPath
+  );
+  const contentChecks = await Promise.all([
+    fileHasMeaningfulJsonContent(topicSummaryResolvedPath),
+    fileHasMeaningfulJsonContent(researchBriefResolvedPath),
+    fileHasMeaningfulJsonContent(brainstormBriefResolvedPath),
+    fileHasNonWhitespaceContent(logicChainResolvedPath),
+    fileHasNonWhitespaceContent(evidenceChainResolvedPath),
+    fileHasNonWhitespaceContent(reasoningTraceResolvedPath),
+    fileHasNonWhitespaceContent(questionPacketResolvedPath),
+    fileHasMeaningfulJsonContent(workingMemoryResolvedPath),
+    fileHasNonWhitespaceContent(synthesisPacketResolvedPath),
+  ]);
+  const chainBundleReady =
+    isBrainstormCycleReady(state) &&
+    validationErrors.length === 0 &&
+    contentChecks.every(Boolean);
+  return {
+    state,
+    validationErrors,
+    chainBundleReady,
+    topicSummaryResolvedPath,
+    topicSummaryExists: contentChecks[0],
+    researchBriefResolvedPath,
+    researchBriefExists: contentChecks[1],
+    brainstormBriefResolvedPath,
+    brainstormBriefExists: contentChecks[2],
+    logicChainResolvedPath,
+    logicChainExists: contentChecks[3],
+    evidenceChainResolvedPath,
+    evidenceChainExists: contentChecks[4],
+    reasoningTraceResolvedPath,
+    reasoningTraceExists: contentChecks[5],
+    questionPacketResolvedPath,
+    questionPacketExists: contentChecks[6],
+    workingMemoryResolvedPath,
+    workingMemoryExists: contentChecks[7],
+    synthesisPacketResolvedPath,
+    synthesisPacketExists: contentChecks[8],
   };
 }
 
@@ -10483,6 +11218,359 @@ export async function setExternalReviewState(params: {
       next.reviewResponsePath
     ),
     conclusionReady: isExternalReviewConclusionReady(next),
+  };
+}
+
+export async function setBrainstormCycleState(params: {
+  projectRoot: string;
+  brainstormCycle: Record<string, unknown>;
+}): Promise<{
+  state: BrainstormCycleState;
+  validationErrors: string[];
+  chainBundleReady: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeBrainstormCycleState(manifest.brainstorm_cycle);
+  const patch = asRecord(params.brainstormCycle) ?? {};
+  const trackId =
+    pickString(patch, ["trackId", "track_id"]) ?? current.trackId;
+  const defaultPaths = getBrainstormCycleDefaultPaths(trackId);
+  const preferScopedDefaults = Boolean(trackId && trackId !== current.trackId);
+  const next = normalizeBrainstormCycleState({
+    ...serializeBrainstormCycleState(current),
+    ...patch,
+    track_id: trackId,
+    topic_summary_path:
+      pickString(patch, ["topicSummaryPath", "topic_summary_path"]) ??
+      (preferScopedDefaults ? defaultPaths.topicSummaryPath : current.topicSummaryPath) ??
+      defaultPaths.topicSummaryPath,
+    research_brief_path:
+      pickString(patch, ["researchBriefPath", "research_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.researchBriefPath : current.researchBriefPath) ??
+      defaultPaths.researchBriefPath,
+    brainstorm_brief_path:
+      pickString(patch, ["brainstormBriefPath", "brainstorm_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.brainstormBriefPath : current.brainstormBriefPath) ??
+      defaultPaths.brainstormBriefPath,
+    logic_chain_path:
+      pickString(patch, ["logicChainPath", "logic_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.logicChainPath : current.logicChainPath) ??
+      defaultPaths.logicChainPath,
+    evidence_chain_path:
+      pickString(patch, ["evidenceChainPath", "evidence_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.evidenceChainPath : current.evidenceChainPath) ??
+      defaultPaths.evidenceChainPath,
+    reasoning_trace_path:
+      pickString(patch, ["reasoningTracePath", "reasoning_trace_path"]) ??
+      (preferScopedDefaults ? defaultPaths.reasoningTracePath : current.reasoningTracePath) ??
+      defaultPaths.reasoningTracePath,
+    question_packet_path:
+      pickString(patch, ["questionPacketPath", "question_packet_path"]) ??
+      (preferScopedDefaults ? defaultPaths.questionPacketPath : current.questionPacketPath) ??
+      defaultPaths.questionPacketPath,
+    working_memory_path:
+      pickString(patch, ["workingMemoryPath", "working_memory_path"]) ??
+      (preferScopedDefaults ? defaultPaths.workingMemoryPath : current.workingMemoryPath) ??
+      defaultPaths.workingMemoryPath,
+    synthesis_packet_path:
+      pickString(patch, ["synthesisPacketPath", "synthesis_packet_path"]) ??
+      (preferScopedDefaults ? defaultPaths.synthesisPacketPath : current.synthesisPacketPath) ??
+      defaultPaths.synthesisPacketPath,
+    reflection_chain_path:
+      pickString(patch, ["reflectionChainPath", "reflection_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.reflectionChainPath : current.reflectionChainPath) ??
+      defaultPaths.reflectionChainPath,
+    theory_brief_path:
+      pickString(patch, ["theoryBriefPath", "theory_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.theoryBriefPath : current.theoryBriefPath) ??
+      defaultPaths.theoryBriefPath,
+    storyline_brief_path:
+      pickString(patch, ["storylineBriefPath", "storyline_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.storylineBriefPath : current.storylineBriefPath) ??
+      defaultPaths.storylineBriefPath,
+  });
+  manifest.brainstorm_cycle = serializeBrainstormCycleState(next);
+  await saveManifest(params.projectRoot, manifest);
+  const summary = await getBrainstormCycleStateSummary({
+    projectRoot: params.projectRoot,
+  });
+  return {
+    state: next,
+    validationErrors: summary.validationErrors,
+    chainBundleReady: summary.chainBundleReady,
+  };
+}
+
+export async function runBrainstormCycle(params: {
+  projectRoot: string;
+  brainstormCycle: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  state: BrainstormCycleState;
+  validationErrors: string[];
+  chainBundleReady: boolean;
+  selectedRoundId: string | null;
+  selectedOptionId: string | null;
+  topicSummaryResolvedPath: string | null;
+  researchBriefResolvedPath: string | null;
+  brainstormBriefResolvedPath: string | null;
+  logicChainResolvedPath: string | null;
+  evidenceChainResolvedPath: string | null;
+  reasoningTraceResolvedPath: string | null;
+  questionPacketResolvedPath: string | null;
+  workingMemoryResolvedPath: string | null;
+  synthesisPacketResolvedPath: string | null;
+}> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const manifest = await readManifestEnsured(projectRoot);
+  const current = normalizeBrainstormCycleState(manifest.brainstorm_cycle);
+  const patch = asRecord(params.brainstormCycle) ?? {};
+  const trackId =
+    pickString(patch, ["trackId", "track_id"]) ?? current.trackId;
+  const defaultPaths = getBrainstormCycleDefaultPaths(trackId);
+  const preferScopedDefaults = Boolean(trackId && trackId !== current.trackId);
+  const selection = selectBrainstormCandidate({
+    brainstormCycle: patch,
+    current,
+  });
+  const next = normalizeBrainstormCycleState({
+    ...serializeBrainstormCycleState(current),
+    ...patch,
+    mode: pickString(patch, ["mode"]) ?? current.mode,
+    track_id: trackId,
+    selection_mode: selection?.mode ?? current.selectionMode,
+    selected_round_id:
+      selection?.round.roundId ??
+      pickString(patch, ["selectedRoundId", "selected_round_id"]) ??
+      current.selectedRoundId,
+    selected_option_id:
+      selection?.option.optionId ??
+      pickString(patch, ["selectedOptionId", "selected_option_id"]) ??
+      current.selectedOptionId,
+    selected_option_title:
+      selection?.option.title ??
+      pickString(patch, ["selectedOptionTitle", "selected_option_title"]) ??
+      current.selectedOptionTitle,
+    selected_option_score:
+      selection?.option.score ??
+      pickNumber(patch, ["selectedOptionScore", "selected_option_score"]) ??
+      current.selectedOptionScore,
+    status:
+      normalizeStage(patch.status) ??
+      (selection ? "reconciled" : current.status),
+    topic_summary_path:
+      pickString(patch, ["topicSummaryPath", "topic_summary_path"]) ??
+      (preferScopedDefaults ? defaultPaths.topicSummaryPath : current.topicSummaryPath) ??
+      defaultPaths.topicSummaryPath,
+    research_brief_path:
+      pickString(patch, ["researchBriefPath", "research_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.researchBriefPath : current.researchBriefPath) ??
+      defaultPaths.researchBriefPath,
+    brainstorm_brief_path:
+      pickString(patch, ["brainstormBriefPath", "brainstorm_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.brainstormBriefPath : current.brainstormBriefPath) ??
+      defaultPaths.brainstormBriefPath,
+    logic_chain_path:
+      pickString(patch, ["logicChainPath", "logic_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.logicChainPath : current.logicChainPath) ??
+      defaultPaths.logicChainPath,
+    evidence_chain_path:
+      pickString(patch, ["evidenceChainPath", "evidence_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.evidenceChainPath : current.evidenceChainPath) ??
+      defaultPaths.evidenceChainPath,
+    reasoning_trace_path:
+      pickString(patch, ["reasoningTracePath", "reasoning_trace_path"]) ??
+      (preferScopedDefaults ? defaultPaths.reasoningTracePath : current.reasoningTracePath) ??
+      defaultPaths.reasoningTracePath,
+    question_packet_path:
+      pickString(patch, ["questionPacketPath", "question_packet_path"]) ??
+      (preferScopedDefaults ? defaultPaths.questionPacketPath : current.questionPacketPath) ??
+      defaultPaths.questionPacketPath,
+    working_memory_path:
+      pickString(patch, ["workingMemoryPath", "working_memory_path"]) ??
+      (preferScopedDefaults ? defaultPaths.workingMemoryPath : current.workingMemoryPath) ??
+      defaultPaths.workingMemoryPath,
+    synthesis_packet_path:
+      pickString(patch, ["synthesisPacketPath", "synthesis_packet_path"]) ??
+      (preferScopedDefaults ? defaultPaths.synthesisPacketPath : current.synthesisPacketPath) ??
+      defaultPaths.synthesisPacketPath,
+    reflection_chain_path:
+      pickString(patch, ["reflectionChainPath", "reflection_chain_path"]) ??
+      (preferScopedDefaults ? defaultPaths.reflectionChainPath : current.reflectionChainPath) ??
+      defaultPaths.reflectionChainPath,
+    theory_brief_path:
+      pickString(patch, ["theoryBriefPath", "theory_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.theoryBriefPath : current.theoryBriefPath) ??
+      defaultPaths.theoryBriefPath,
+    storyline_brief_path:
+      pickString(patch, ["storylineBriefPath", "storyline_brief_path"]) ??
+      (preferScopedDefaults ? defaultPaths.storylineBriefPath : current.storylineBriefPath) ??
+      defaultPaths.storylineBriefPath,
+    latest_run_at:
+      pickString(patch, ["latestRunAt", "latest_run_at"]) ??
+      new Date().toISOString(),
+  });
+
+  const artifactSpecs: Array<{
+    payload: unknown;
+    targetPath: string | null;
+    writer: "json" | "text" | "trace";
+  }> = [
+    {
+      payload: pickBrainstormPayload(patch, ["topic_summary", "topicSummary"]),
+      targetPath: next.topicSummaryPath,
+      writer: "json",
+    },
+    {
+      payload: pickBrainstormPayload(patch, ["research_brief", "researchBrief"]),
+      targetPath: next.researchBriefPath,
+      writer: "json",
+    },
+    {
+      payload: pickBrainstormPayload(patch, ["brainstorm_brief", "brainstormBrief"]),
+      targetPath: next.brainstormBriefPath,
+      writer: "json",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "logic_chain",
+          "logicChain",
+        ]) ?? pickBrainstormPayload(patch, ["logic_chain", "logicChain"]),
+      targetPath: next.logicChainPath,
+      writer: "text",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "evidence_chain",
+          "evidenceChain",
+        ]) ?? pickBrainstormPayload(patch, ["evidence_chain", "evidenceChain"]),
+      targetPath: next.evidenceChainPath,
+      writer: "text",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "reasoning_trace",
+          "reasoningTrace",
+        ]) ?? pickBrainstormPayload(patch, ["reasoning_trace", "reasoningTrace"]),
+      targetPath: next.reasoningTracePath,
+      writer: "trace",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "question_packet",
+          "questionPacket",
+        ]) ?? pickBrainstormPayload(patch, ["question_packet", "questionPacket"]),
+      targetPath: next.questionPacketPath,
+      writer: "text",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "working_memory",
+          "workingMemory",
+        ]) ?? pickBrainstormPayload(patch, ["working_memory", "workingMemory"]),
+      targetPath: next.workingMemoryPath,
+      writer: "json",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "synthesis_packet",
+          "synthesisPacket",
+        ]) ?? pickBrainstormPayload(patch, ["synthesis_packet", "synthesisPacket"]),
+      targetPath: next.synthesisPacketPath,
+      writer: "text",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "reflection_chain",
+          "reflectionChain",
+        ]) ?? pickBrainstormPayload(patch, ["reflection_chain", "reflectionChain"]),
+      targetPath: next.reflectionChainPath,
+      writer: "json",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "theory_brief",
+          "theoryBrief",
+        ]) ?? pickBrainstormPayload(patch, ["theory_brief", "theoryBrief"]),
+      targetPath: next.theoryBriefPath,
+      writer: "json",
+    },
+    {
+      payload:
+        pickBrainstormPayload(selection?.optionRecord ?? {}, [
+          "storyline_brief",
+          "storylineBrief",
+        ]) ?? pickBrainstormPayload(patch, ["storyline_brief", "storylineBrief"]),
+      targetPath: next.storylineBriefPath,
+      writer: "json",
+    },
+  ];
+
+  for (const spec of artifactSpecs) {
+    const resolved = resolveProjectArtifactPath(projectRoot, spec.targetPath);
+    if (!resolved || !hasMeaningfulPayload(spec.payload)) {
+      continue;
+    }
+    if (spec.writer === "json") {
+      await writeJsonEnsured(resolved, spec.payload);
+    } else if (spec.writer === "trace") {
+      await writeTextEnsured(resolved, renderReasoningTracePayload(spec.payload));
+    } else {
+      await writeTextEnsured(resolved, renderMarkdownishPayload(spec.payload));
+    }
+  }
+
+  if (trackId) {
+    const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+    const trackRegistry = await readJsonIfExists<TrackRegistryLike>(trackRegistryPath);
+    const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+    let changed = false;
+    for (const entry of tracks) {
+      const track = asRecord(entry);
+      if (!track) {
+        continue;
+      }
+      const candidateTrackId = pickString(track, ["track_id", "trackId"]);
+      if (candidateTrackId !== trackId) {
+        continue;
+      }
+      track.reasoning_packet_dir = getBrainstormCycleRootRelativeDir(trackId);
+      track.working_memory_path = next.workingMemoryPath;
+      track.synthesis_packet_path = next.synthesisPacketPath;
+      changed = true;
+    }
+    if (changed && trackRegistry) {
+      await writeJsonEnsured(trackRegistryPath, trackRegistry);
+    }
+  }
+
+  manifest.brainstorm_cycle = serializeBrainstormCycleState(next);
+  await saveManifest(projectRoot, manifest);
+  const summary = await getBrainstormCycleStateSummary({ projectRoot });
+  return {
+    state: next,
+    validationErrors: summary.validationErrors,
+    chainBundleReady: summary.chainBundleReady,
+    selectedRoundId: next.selectedRoundId,
+    selectedOptionId: next.selectedOptionId,
+    topicSummaryResolvedPath: summary.topicSummaryResolvedPath,
+    researchBriefResolvedPath: summary.researchBriefResolvedPath,
+    brainstormBriefResolvedPath: summary.brainstormBriefResolvedPath,
+    logicChainResolvedPath: summary.logicChainResolvedPath,
+    evidenceChainResolvedPath: summary.evidenceChainResolvedPath,
+    reasoningTraceResolvedPath: summary.reasoningTraceResolvedPath,
+    questionPacketResolvedPath: summary.questionPacketResolvedPath,
+    workingMemoryResolvedPath: summary.workingMemoryResolvedPath,
+    synthesisPacketResolvedPath: summary.synthesisPacketResolvedPath,
   };
 }
 
