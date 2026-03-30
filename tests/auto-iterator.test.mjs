@@ -81,6 +81,36 @@ async function seedGraphCorpus(projectRoot, corpusEntries, corpusName = "shared-
   return { sourceRoot, indexedAt };
 }
 
+async function seedRemoteGraphStatus(
+  projectRoot,
+  {
+    corpusName = "shared-global-graph",
+    corpusRoot = "https://papernexus.example/corpora/shared-global-graph",
+    status = "ready",
+    expectedPaperCount = 0,
+    presentPaperCount = 0,
+    missingPapers = [],
+  } = {}
+) {
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    project_id: "demo-project",
+    corpus_name: corpusName,
+    corpus_root: corpusRoot,
+    checked_at: "2026-03-22T12:05:00.000Z",
+    status,
+    mode: "remote_api",
+    expected_paper_count: expectedPaperCount,
+    present_paper_count: presentPaperCount,
+    missing_paper_count: missingPapers.length,
+    missing_papers: missingPapers,
+    refresh_required: missingPapers.length > 0 || status !== "ready",
+    refresh_reason:
+      missingPapers.length > 0 || status !== "ready"
+        ? "Remote graph is not ready."
+        : null,
+  });
+}
+
 function buildEmptyLedger(projectId, updatedAt) {
   return {
     schemaVersion: 1,
@@ -976,6 +1006,188 @@ test("graph presence check resolves the shared global corpus from registry when 
 
   assert.equal(result.status, "ready");
   assert.equal(result.corpusRoot, sourceRoot);
+});
+
+test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps without treating metadata keys as papers", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    schema_version: 1,
+    project_id: "demo-project",
+    updated_at: "2026-03-22T12:00:00.000Z",
+    papers: {
+      "2501.00011": {
+        arxiv_id: "2501.00011",
+        title: "Omega Paper",
+        source_provider: "arxiv2md-api",
+        retrieval_providers: ["papers-cool"],
+      },
+      "2501.00012": {
+        arxiv_id: "2501.00012",
+        title: "Sigma Paper",
+        source_provider: "hf",
+        retrieval_providers: ["papers-cool", "hugging-face-paper-pages"],
+      },
+    },
+    summary: "metadata only",
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "GCD",
+    corpusRoot: "https://papernexus.example/corpora/GCD",
+    expectedPaperCount: 2,
+    presentPaperCount: 2,
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: "https://papernexus.example/api",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.expectedPaperCount, 2);
+  assert.equal(result.presentPaperCount, 2);
+  assert.equal(result.missingPaperCount, 0);
+
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(report.expected_paper_count, 2);
+  assert.equal(report.present_paper_count, 2);
+  assert.equal(report.missing_paper_count, 0);
+});
+
+test("graph presence check does not fall back to local corpus files when remote PaperNexus access is configured", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00021",
+      arxiv_id: "2501.00021",
+      title: "Remote Only Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00021--remote-only-paper.md"
+      ),
+    },
+  ]);
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(
+        projectRoot,
+        ".papernexus-home",
+        "corpora",
+        "shared-global-graph",
+        "md",
+        "2501.00021--remote-only-paper.md"
+      ),
+      inputPath: path.join(
+        projectRoot,
+        ".papernexus-home",
+        "corpora",
+        "shared-global-graph",
+        "md",
+        "2501.00021--remote-only-paper.md"
+      ),
+      kind: "markdown",
+      paperId: "paper:remote-only",
+      paperTitle: "Remote Only Paper",
+      activeInGraph: true,
+    },
+  ]);
+  await fs.rm(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), { force: true });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: "https://papernexus.example/api",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "missing_corpus");
+  assert.match(result.blockingReason ?? "", /remote PaperNexus/i);
+  assert.equal(result.presentPaperCount, 0);
+  assert.equal(result.missingPaperCount, 1);
+});
+
+test("auto iterator uses remote graph status for graph_build when remote PaperNexus access is configured", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    papers: {
+      "2501.00031": {
+        arxiv_id: "2501.00031",
+        title: "Remote Frontier Paper",
+        source_provider: "arxiv2md-api",
+        retrieval_providers: ["papers-cool"],
+      },
+    },
+    summary: "metadata only",
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "GCD",
+    corpusRoot: "https://papernexus.example/corpora/GCD",
+    expectedPaperCount: 1,
+    presentPaperCount: 1,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.graphPresenceCheck?.status, "ready");
+  assert.equal(result.stageAfter, "frontier_mapping");
 });
 
 test("auto iterator advances graph_build once graph presence is ready", async (t) => {

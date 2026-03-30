@@ -628,9 +628,30 @@ type PaperIngestionState = {
   importTaskIds: string[];
   lastImportTaskId: string | null;
   lastImportStatus: string | null;
+  completedPapers: PaperIngestionCompletedPaper[];
+  paperOperations: PaperIngestionPaperOperation[];
   graphVersionSeen: string | null;
   reconcileRequired: boolean;
   lastUpdatedAt: string | null;
+};
+
+type PaperIngestionCompletedPaper = {
+  canonicalId: string | null;
+  title: string | null;
+  importTaskId: string | null;
+};
+
+type PaperIngestionPaperOperation = {
+  canonicalId: string | null;
+  title: string | null;
+  importTaskId: string | null;
+  phase: "import" | "graph";
+  status: "queued" | "running" | "completed" | "timed_out" | "failed";
+  timeoutSeconds: number | null;
+  startedAt: string | null;
+  deadlineAt: string | null;
+  finishedAt: string | null;
+  detail: string | null;
 };
 
 type PaperQcState = {
@@ -4871,9 +4892,33 @@ function normalizePaperIngestionRuntimeStatus(value: unknown): string {
   }
 }
 
+function normalizePaperIngestionOperationPhase(
+  value: unknown
+): PaperIngestionPaperOperation["phase"] {
+  return normalizeStage(value) === "graph" ? "graph" : "import";
+}
+
+function normalizePaperIngestionOperationStatus(
+  value: unknown
+): PaperIngestionPaperOperation["status"] {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "queued":
+    case "running":
+    case "completed":
+    case "timed_out":
+    case "failed":
+      return normalized;
+    default:
+      return "queued";
+  }
+}
+
 function normalizePaperIngestionState(value: unknown): PaperIngestionState {
   const record = asRecord(value) ?? {};
   const importTaskIdsRaw = record.import_task_ids ?? record.importTaskIds;
+  const completedPapersRaw = record.completed_papers ?? record.completedPapers;
+  const paperOperationsRaw = record.paper_operations ?? record.paperOperations;
   return {
     runtimeStatus: normalizePaperIngestionRuntimeStatus(
       record.runtimeStatus ?? record.runtime_status
@@ -4887,6 +4932,8 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
     lastImportTaskId: pickString(record, ["lastImportTaskId", "last_import_task_id"]),
     lastImportStatus:
       normalizeStage(record.lastImportStatus ?? record.last_import_status) ?? null,
+    completedPapers: normalizeCompletedPaperEntries(completedPapersRaw),
+    paperOperations: normalizePaperIngestionPaperOperations(paperOperationsRaw),
     graphVersionSeen: pickString(record, ["graphVersionSeen", "graph_version_seen"]),
     reconcileRequired:
       record.reconcileRequired === true || record.reconcile_required === true,
@@ -4903,9 +4950,294 @@ function serializePaperIngestionState(
     import_task_ids: value.importTaskIds,
     last_import_task_id: value.lastImportTaskId,
     last_import_status: value.lastImportStatus,
+    completed_papers: value.completedPapers.map(serializeCompletedPaperEntry),
+    paper_operations: value.paperOperations.map(serializePaperIngestionPaperOperation),
     graph_version_seen: value.graphVersionSeen,
     reconcile_required: value.reconcileRequired,
     last_updated_at: value.lastUpdatedAt,
+  };
+}
+
+function normalizeCompletedPaperEntry(
+  value: unknown
+): PaperIngestionCompletedPaper | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const canonicalId = pickString(record, ["canonicalId", "canonical_id"]);
+  const title = pickString(record, ["title"]);
+  const importTaskId = pickString(record, ["importTaskId", "import_task_id"]);
+  if (!canonicalId && !title && !importTaskId) {
+    return null;
+  }
+  return {
+    canonicalId,
+    title,
+    importTaskId,
+  };
+}
+
+function normalizeCompletedPaperEntries(
+  value: unknown
+): PaperIngestionCompletedPaper[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionCompletedPaper[] = [];
+  for (const item of value) {
+    const normalized = normalizeCompletedPaperEntry(item);
+    if (!normalized) {
+      continue;
+    }
+    const existingIndex = entries.findIndex((entry) =>
+      areCompletedPaperEntriesEquivalent(entry, normalized)
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = mergeCompletedPaperEntryValues(
+        entries[existingIndex],
+        normalized
+      );
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializeCompletedPaperEntry(
+  value: PaperIngestionCompletedPaper
+): Record<string, unknown> {
+  return {
+    canonical_id: value.canonicalId,
+    title: value.title,
+    import_task_id: value.importTaskId,
+  };
+}
+
+function normalizePaperIngestionPaperOperation(
+  value: unknown
+): PaperIngestionPaperOperation | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const canonicalId = pickString(record, ["canonicalId", "canonical_id"]);
+  const title = pickString(record, ["title"]);
+  const importTaskId = pickString(record, ["importTaskId", "import_task_id"]);
+  if (!canonicalId && !title && !importTaskId) {
+    return null;
+  }
+  const timeoutSecondsRaw = pickNumber(record, [
+    "timeoutSeconds",
+    "timeout_seconds",
+  ]);
+  return {
+    canonicalId,
+    title,
+    importTaskId,
+    phase: normalizePaperIngestionOperationPhase(record.phase),
+    status: normalizePaperIngestionOperationStatus(record.status),
+    timeoutSeconds:
+      typeof timeoutSecondsRaw === "number" && Number.isFinite(timeoutSecondsRaw)
+        ? Math.max(1, Math.floor(timeoutSecondsRaw))
+        : null,
+    startedAt: pickString(record, ["startedAt", "started_at"]),
+    deadlineAt: pickString(record, ["deadlineAt", "deadline_at"]),
+    finishedAt: pickString(record, ["finishedAt", "finished_at"]),
+    detail: pickString(record, ["detail", "reason", "message"]),
+  };
+}
+
+function normalizePaperIngestionPaperOperations(
+  value: unknown
+): PaperIngestionPaperOperation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionPaperOperation[] = [];
+  for (const item of value) {
+    const normalized = normalizePaperIngestionPaperOperation(item);
+    if (!normalized) {
+      continue;
+    }
+    const existingIndex = entries.findIndex((entry) =>
+      arePaperIngestionPaperOperationsEquivalent(entry, normalized)
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = mergePaperIngestionOperationValues(
+        entries[existingIndex],
+        normalized
+      );
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializePaperIngestionPaperOperation(
+  value: PaperIngestionPaperOperation
+): Record<string, unknown> {
+  return {
+    canonical_id: value.canonicalId,
+    title: value.title,
+    import_task_id: value.importTaskId,
+    phase: value.phase,
+    status: value.status,
+    timeout_seconds: value.timeoutSeconds,
+    started_at: value.startedAt,
+    deadline_at: value.deadlineAt,
+    finished_at: value.finishedAt,
+    detail: value.detail,
+  };
+}
+
+function areCompletedPaperEntriesEquivalent(
+  left: PaperIngestionCompletedPaper,
+  right: PaperIngestionCompletedPaper
+): boolean {
+  if (left.canonicalId && right.canonicalId && left.canonicalId === right.canonicalId) {
+    return true;
+  }
+  if (left.importTaskId && right.importTaskId && left.importTaskId === right.importTaskId) {
+    return true;
+  }
+  if (left.title && right.title && left.title === right.title) {
+    return true;
+  }
+  return false;
+}
+
+function mergeCompletedPaperEntryValues(
+  current: PaperIngestionCompletedPaper,
+  patch: PaperIngestionCompletedPaper
+): PaperIngestionCompletedPaper {
+  return {
+    canonicalId: current.canonicalId ?? patch.canonicalId,
+    title: current.title ?? patch.title,
+    importTaskId: current.importTaskId ?? patch.importTaskId,
+  };
+}
+
+function arePaperIngestionPaperOperationsEquivalent(
+  left: PaperIngestionPaperOperation,
+  right: PaperIngestionPaperOperation
+): boolean {
+  if (left.phase !== right.phase) {
+    return false;
+  }
+  if (left.canonicalId && right.canonicalId && left.canonicalId === right.canonicalId) {
+    return true;
+  }
+  if (left.importTaskId && right.importTaskId && left.importTaskId === right.importTaskId) {
+    return true;
+  }
+  if (left.title && right.title && left.title === right.title) {
+    return true;
+  }
+  return false;
+}
+
+function mergePaperIngestionOperationValues(
+  current: PaperIngestionPaperOperation,
+  patch: PaperIngestionPaperOperation
+): PaperIngestionPaperOperation {
+  return {
+    canonicalId: current.canonicalId ?? patch.canonicalId,
+    title: current.title ?? patch.title,
+    importTaskId: current.importTaskId ?? patch.importTaskId,
+    phase: patch.phase,
+    status: patch.status,
+    timeoutSeconds: patch.timeoutSeconds ?? current.timeoutSeconds,
+    startedAt: current.startedAt ?? patch.startedAt,
+    deadlineAt: current.deadlineAt ?? patch.deadlineAt,
+    finishedAt: patch.finishedAt ?? current.finishedAt,
+    detail: patch.detail ?? current.detail,
+  };
+}
+
+function isPaperIngestionOperationTerminal(
+  value: PaperIngestionPaperOperation["status"]
+): boolean {
+  return value === "completed" || value === "timed_out" || value === "failed";
+}
+
+function mergePaperIngestionOperations(params: {
+  current: PaperIngestionPaperOperation[];
+  patch: unknown;
+}): {
+  paperOperations: PaperIngestionPaperOperation[];
+  newlyTerminalPaperOperations: PaperIngestionPaperOperation[];
+} {
+  const currentEntries = normalizePaperIngestionPaperOperations(params.current);
+  const patchEntries = normalizePaperIngestionPaperOperations(params.patch);
+  if (patchEntries.length === 0) {
+    return {
+      paperOperations: currentEntries,
+      newlyTerminalPaperOperations: [],
+    };
+  }
+  const merged = [...currentEntries];
+  const newlyTerminalPaperOperations: PaperIngestionPaperOperation[] = [];
+  for (const entry of patchEntries) {
+    const existingIndex = merged.findIndex((currentEntry) =>
+      arePaperIngestionPaperOperationsEquivalent(currentEntry, entry)
+    );
+    if (existingIndex >= 0) {
+      const previous = merged[existingIndex];
+      const next = mergePaperIngestionOperationValues(previous, entry);
+      merged[existingIndex] = next;
+      if (
+        isPaperIngestionOperationTerminal(next.status) &&
+        previous.status !== next.status
+      ) {
+        newlyTerminalPaperOperations.push(next);
+      }
+      continue;
+    }
+    merged.push(entry);
+    if (isPaperIngestionOperationTerminal(entry.status)) {
+      newlyTerminalPaperOperations.push(entry);
+    }
+  }
+  return {
+    paperOperations: merged,
+    newlyTerminalPaperOperations,
+  };
+}
+
+function mergeCompletedPaperEntries(params: {
+  current: PaperIngestionCompletedPaper[];
+  patch: unknown;
+}): {
+  completedPapers: PaperIngestionCompletedPaper[];
+  newlyCompletedPapers: PaperIngestionCompletedPaper[];
+} {
+  const currentEntries = normalizeCompletedPaperEntries(params.current);
+  const patchEntries = normalizeCompletedPaperEntries(params.patch);
+  if (patchEntries.length === 0) {
+    return {
+      completedPapers: currentEntries,
+      newlyCompletedPapers: [],
+    };
+  }
+  const merged = [...currentEntries];
+  const newlyCompletedPapers: PaperIngestionCompletedPaper[] = [];
+  for (const entry of patchEntries) {
+    const existingIndex = merged.findIndex((currentEntry) =>
+      areCompletedPaperEntriesEquivalent(currentEntry, entry)
+    );
+    if (existingIndex >= 0) {
+      merged[existingIndex] = mergeCompletedPaperEntryValues(merged[existingIndex], entry);
+      continue;
+    }
+    merged.push(entry);
+    newlyCompletedPapers.push(entry);
+  }
+  return {
+    completedPapers: merged,
+    newlyCompletedPapers,
   };
 }
 
@@ -9134,6 +9466,9 @@ export function formatWorkflowSnapshotForPrompt(params: {
     "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and `.papernexus/imports/` task logs instead of manually copying files into the shared paper source tree."
   );
   lines.push(
+    "PaperNexus bounded-ingestion rule: use one paper per `/api/imports` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
+  );
+  lines.push(
     "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed endpoints like `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief` before trusting raw full-graph prominence."
   );
   lines.push(
@@ -9522,6 +9857,118 @@ export function shouldBlockPapernexusLiveGraphCliRead(params: {
     reason:
       "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use authenticated HTTP API endpoints instead (`/api/query`, `/api/context`, `/api/impact`, `/api/ideas`, `/api/brainstorm`, `/api/research-brief`, `/api/brainstorm-brief`, `/api/path-trace`, `/api/evidence-chain`, `/api/reflection-chain`, `/api/theory-brief`, `/api/storyline-brief`, or related typed endpoints).",
   };
+}
+
+export function shouldBlockPapernexusLocalGraphProcessing(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+  remoteApiBaseUrl?: string | null;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!params.remoteApiBaseUrl) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText) {
+    return { block: false };
+  }
+  const usesLocalGraphProcessing =
+    /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:analyze|materialize|build-graph|merge-graph|write-index|llm-optimize|optimize|watch|stage1|stage2|stage3|stage4)\b/i.test(
+      payloadText
+    );
+  if (!usesLocalGraphProcessing) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl}). ` +
+      "Use the configured authenticated remote API and remote graph workflow instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
+  };
+}
+
+export function shouldBlockPapernexusMultiPaperImport(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText || !/\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText)) {
+    return { block: false };
+  }
+  const uploadsMultipleFiles =
+    /"files"\s*:\s*\[[\s\S]*?\}\s*,\s*\{/i.test(payloadText) ||
+    /'files'\s*:\s*\[[\s\S]*?\}\s*,\s*\{/i.test(payloadText);
+  if (!uploadsMultipleFiles) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      "Queued PaperNexus imports must be single-paper only. Submit one paper per `/api/imports` call so each paper can time out independently, continue to the next item, and emit its own progress update.",
+  };
+}
+
+export function shouldBlockPapernexusLongWaitImportCommand(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText || !/\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText)) {
+    return { block: false };
+  }
+  const usesLoopWithSleep =
+    (/\bwhile\b/i.test(payloadText) ||
+      /\buntil\b/i.test(payloadText) ||
+      /\bfor\b[\s\S]*\bdo\b/i.test(payloadText)) &&
+    /\bsleep\b/i.test(payloadText);
+  if (usesLoopWithSleep) {
+    return {
+      block: true,
+      reason:
+        "Do not long-poll PaperNexus import tasks in a shell loop. Bound each paper to at most 60s total wait, record timeout state, report it, and move on to the next paper instead of waiting indefinitely.",
+    };
+  }
+  if (/\bcurl\b/i.test(payloadText)) {
+    const maxTimeMatch = payloadText.match(/--max-time(?:=|\s+)(\d+)/i);
+    const maxTimeSeconds = maxTimeMatch
+      ? Number.parseInt(maxTimeMatch[1] ?? "", 10)
+      : Number.NaN;
+    if (!Number.isFinite(maxTimeSeconds)) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus import and import-status requests must set `curl --max-time` and keep each paper within a 60s budget.",
+      };
+    }
+    if (maxTimeSeconds > 60) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus import and import-status requests must cap each paper at 60s or less. Record timeout state and continue with the next paper instead of waiting longer.",
+      };
+    }
+  }
+  return { block: false };
 }
 
 export function shouldBlockPapernexusDestructiveOperation(params: {
@@ -12240,11 +12687,23 @@ export async function setPaperIngestionState(params: {
   paperIngestion: Record<string, unknown>;
 }): Promise<{
   state: PaperIngestionState;
+  newlyCompletedPapers: PaperIngestionCompletedPaper[];
+  newlyTerminalPaperOperations: PaperIngestionPaperOperation[];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizePaperIngestionState(manifest.paper_ingestion);
   const patch = asRecord(params.paperIngestion) ?? {};
   const importTaskIdsRaw = patch.import_task_ids ?? patch.importTaskIds;
+  const completedPapersRaw = patch.completed_papers ?? patch.completedPapers;
+  const paperOperationsRaw = patch.paper_operations ?? patch.paperOperations;
+  const completedPaperUpdate = mergeCompletedPaperEntries({
+    current: current.completedPapers,
+    patch: completedPapersRaw,
+  });
+  const paperOperationUpdate = mergePaperIngestionOperations({
+    current: current.paperOperations,
+    patch: paperOperationsRaw,
+  });
   const next: PaperIngestionState = {
     ...current,
     runtimeStatus: normalizePaperIngestionRuntimeStatus(
@@ -12263,6 +12722,8 @@ export async function setPaperIngestionState(params: {
     lastImportStatus:
       normalizeStage(patch.lastImportStatus ?? patch.last_import_status) ??
       current.lastImportStatus,
+    completedPapers: completedPaperUpdate.completedPapers,
+    paperOperations: paperOperationUpdate.paperOperations,
     graphVersionSeen:
       pickString(patch, ["graphVersionSeen", "graph_version_seen"]) ??
       current.graphVersionSeen,
@@ -12285,6 +12746,8 @@ export async function setPaperIngestionState(params: {
 
   return {
     state: next,
+    newlyCompletedPapers: completedPaperUpdate.newlyCompletedPapers,
+    newlyTerminalPaperOperations: paperOperationUpdate.newlyTerminalPaperOperations,
   };
 }
 
@@ -12908,6 +13371,15 @@ export async function runWorkflowAutoIterator(params: {
     graphPresenceCheck = await checkGraphPresenceForWorkflow({
       projectRoot,
       updateManifest: true,
+      remoteAccess: {
+        apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+        tokenSource: workflowPolicy.papernexusApiTokenSource,
+        tokenEnv: workflowPolicy.papernexusApiTokenEnv,
+        tokenService: workflowPolicy.papernexusApiTokenService,
+        tokenAccount: workflowPolicy.papernexusApiTokenAccount,
+        mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
+        tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+      },
     });
     manifest =
       (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??

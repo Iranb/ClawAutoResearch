@@ -212,6 +212,315 @@ test("research_workflow paper-ingestion actions persist formal waiting and recon
   assert.equal(snapshot.paperIngestionImportTaskCount, 1);
 });
 
+test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const firstResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      waiting_reason: "Shared graph is reconciling after a completed import.",
+      last_import_status: "completed",
+      completed_papers: [
+        {
+          canonical_id: "arxiv:2502.00032",
+          title: "Retrieval-Augmented Experiment Planning",
+          import_task_id: "imp-42",
+        },
+      ],
+    },
+  });
+  assert.equal(firstResult.state.completedPapers.length, 1);
+  assert.equal(firstResult.state.completedPapers[0].canonicalId, "arxiv:2502.00032");
+  assert.equal(firstResult.completedPaperBroadcasts.length, 1);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: completed/i.test(entry.message) &&
+        /Retrieval-Augmented Experiment Planning/.test(entry.message) &&
+        /imp-42/.test(entry.message)
+    )
+  );
+
+  const completedBroadcastCountAfterFirst = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: completed/i.test(entry.message)
+  ).length;
+
+  const repeatedResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      last_import_status: "completed",
+      completed_papers: [
+        {
+          canonical_id: "arxiv:2502.00032",
+          title: "Retrieval-Augmented Experiment Planning",
+          import_task_id: "imp-42",
+        },
+      ],
+    },
+  });
+  assert.equal(repeatedResult.state.completedPapers.length, 1);
+  assert.equal(repeatedResult.completedPaperBroadcasts.length, 0);
+
+  const completedBroadcastCountAfterRepeat = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: completed/i.test(entry.message)
+  ).length;
+  assert.equal(completedBroadcastCountAfterRepeat, completedBroadcastCountAfterFirst);
+
+  const secondResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      last_import_status: "completed",
+      completed_papers: [
+        {
+          canonical_id: "doi:10.1000/demo-paper",
+          title: "Graph Refresh Timing for Shared Research Corpora",
+          import_task_id: "imp-77",
+        },
+      ],
+    },
+  });
+  assert.equal(secondResult.state.completedPapers.length, 2);
+  assert.equal(secondResult.completedPaperBroadcasts.length, 1);
+
+  const completedBroadcastCountAfterSecond = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: completed/i.test(entry.message)
+  ).length;
+  assert.equal(completedBroadcastCountAfterSecond, completedBroadcastCountAfterFirst + 1);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /Graph Refresh Timing for Shared Research Corpora/.test(entry.message) &&
+        /imp-77/.test(entry.message)
+    )
+  );
+});
+
+test("research_workflow set_paper_ingestion merges enriched completion metadata without rebroadcasting", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const initialResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      last_import_status: "completed",
+      completed_papers: [
+        {
+          title: "Queued Corpus Merge For Planning Agents",
+          import_task_id: "imp-108",
+        },
+      ],
+    },
+  });
+  assert.equal(initialResult.state.completedPapers.length, 1);
+  assert.equal(initialResult.completedPaperBroadcasts.length, 1);
+
+  const enrichedResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      last_import_status: "completed",
+      completed_papers: [
+        {
+          canonical_id: "arxiv:2601.00108",
+          title: "Queued Corpus Merge For Planning Agents",
+          import_task_id: "imp-108",
+        },
+      ],
+    },
+  });
+  assert.equal(enrichedResult.state.completedPapers.length, 1);
+  assert.equal(
+    enrichedResult.state.completedPapers[0].canonicalId,
+    "arxiv:2601.00108"
+  );
+  assert.equal(enrichedResult.completedPaperBroadcasts.length, 0);
+
+  const completedBroadcastCount = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: completed/i.test(entry.message)
+  ).length;
+  assert.equal(completedBroadcastCount, 1);
+});
+
+test("research_workflow set_paper_ingestion tracks per-paper timeout state and broadcasts it once", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const firstResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Queued PaperNexus import imp-71 timed out after 60 seconds; moved on to the next paper.",
+      last_import_task_id: "imp-71",
+      last_import_status: "timeout",
+      paper_operations: [
+        {
+          canonical_id: "arxiv:2603.19918",
+          title: "Learning Like Humans: Analogical Concept Learning for Generalized Category Discovery",
+          import_task_id: "imp-71",
+          phase: "import",
+          status: "timed_out",
+          timeout_seconds: 60,
+          started_at: "2026-03-30T03:10:00.000Z",
+          deadline_at: "2026-03-30T03:11:00.000Z",
+          finished_at: "2026-03-30T03:11:00.000Z",
+          detail: "Timed out after 60 seconds while waiting for the remote import task to finish.",
+        },
+      ],
+    },
+  });
+  assert.equal(firstResult.state.paperOperations.length, 1);
+  assert.equal(firstResult.state.paperOperations[0].status, "timed_out");
+  assert.equal(firstResult.state.paperOperations[0].timeoutSeconds, 60);
+  assert.equal(firstResult.paperOperationBroadcasts.length, 1);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: waiting/i.test(entry.message) &&
+        /timed out after 60s/i.test(entry.message) &&
+        /Learning Like Humans/.test(entry.message) &&
+        /imp-71/.test(entry.message)
+    )
+  );
+
+  const timeoutBroadcastCountAfterFirst = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: waiting/i.test(entry.message) &&
+      /timed out after 60s/i.test(entry.message)
+  ).length;
+
+  const repeatedResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "waiting_import",
+      last_import_task_id: "imp-71",
+      last_import_status: "timeout",
+      paper_operations: [
+        {
+          canonical_id: "arxiv:2603.19918",
+          title: "Learning Like Humans: Analogical Concept Learning for Generalized Category Discovery",
+          import_task_id: "imp-71",
+          phase: "import",
+          status: "timed_out",
+          timeout_seconds: 60,
+          started_at: "2026-03-30T03:10:00.000Z",
+          deadline_at: "2026-03-30T03:11:00.000Z",
+          finished_at: "2026-03-30T03:11:00.000Z",
+        },
+      ],
+    },
+  });
+  assert.equal(repeatedResult.state.paperOperations.length, 1);
+  assert.equal(repeatedResult.paperOperationBroadcasts.length, 0);
+
+  const timeoutBroadcastCountAfterRepeat = runtimeCalls.filter(
+    (entry) =>
+      entry.deliver === true &&
+      /\[Workflow Status\]/.test(entry.message) &&
+      /Status: waiting/i.test(entry.message) &&
+      /timed out after 60s/i.test(entry.message)
+  ).length;
+  assert.equal(timeoutBroadcastCountAfterRepeat, timeoutBroadcastCountAfterFirst);
+});
+
 test("research_workflow auto_iterator_tick broadcasts a continued status when timed-default proceeds", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

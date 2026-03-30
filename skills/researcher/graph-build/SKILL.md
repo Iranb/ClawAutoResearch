@@ -18,19 +18,11 @@ Reconcile the current project's selected literature against the shared global Pa
 > **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
-## Resolve PaperNexus Root
+## Remote Access Requirement
 
-Use this order:
+Workflow-owned graph work must use the configured remote PaperNexus Web/API. Do not resolve or use a local `PAPERNEXUS_ROOT` for graph reconciliation when remote access is configured.
 
-1. `$PAPERNEXUS_ROOT` if set and contains `src/cli/index.js`
-2. Sibling repo `../PaperNexus` relative to the current `openclaw-research` checkout
-3. Sibling repo `{PROJECTS_ROOT}/../PaperNexus`
-
-If none exists, stop and report that PaperNexus is unavailable. Do not silently skip this stage for a new project.
-
-## Remote Access Preference
-
-If the plugin-level workflow config provides remote PaperNexus access settings, prefer them during graph-heavy work:
+Read the remote access settings from the plugin-level workflow config:
 
 - `plugins.entries.openclaw-research.config.papernexusApiBaseUrl`
 - `plugins.entries.openclaw-research.config.papernexusApiTokenEnv`
@@ -49,7 +41,8 @@ Rules:
   - PasswordVault on `win32`
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
-- local CLI access remains the normal fallback when the remote API is not configured or the task explicitly needs local repo operations
+- do not fall back to local `papernexus` / `src/cli/index.js` graph-processing commands for workflow-owned graph reconciliation
+- if the remote API is unavailable or unauthenticated, stop and report that remote PaperNexus access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
 
@@ -117,17 +110,22 @@ This should:
 - update project-local readiness metadata
 - record whether a shared-graph refresh is required
 - avoid rebuilding a project-specific corpus
+- treat remote graph advancement as incremental per-paper reconciliation, not one giant all-papers wait
+- after each completed paper import, run a short reconciliation/status pass and report progress before moving to the next paper
 
 Hard rule:
 
 - do **not** use `--force` during literature research graph builds
 - do **not** use `--rebuild-pdf-markdown` during workflow-owned graph refreshes
 - if a shared-graph refresh is needed and the automated path fails, report the exact non-force command to the user and let the user run it manually instead of escalating to a forced rebuild
+- do **not** wait indefinitely for one remote paper import or one graph-reconcile attempt; cap each paper at 60 seconds, record timeout state, and continue with the next paper
+- do **not** bundle multiple papers into one remote queued import just to reduce API calls; the workflow needs one-paper progress and timeout isolation
 
 Use these refresh triggers:
 - 1 newly ingested paper that changes the novelty baseline or closest prior work
 - 3 or more genuinely new canonical papers since the last graph sync
 - 2 or more new recent venue papers that materially overlap with the active track
+- when running a multi-paper batch, reconcile after each completed paper and keep the final `/graph-build` pass short; it should summarize readiness, not become an unbounded wait loop
 
 If the shared source tree changes frequently, prefer a shared watch process such as:
 
@@ -158,7 +156,7 @@ Write `{PROJ}/graph/GRAPH_BUILD_REPORT.md`:
 # Graph Build Report
 
 - Project: [proj-id]
-- PaperNexus root: [path]
+- PaperNexus access: [remote api base url]
 - Shared corpus root: [path]
 - Shared corpus name: [shared-global-graph or configured corpus]
 - Build status: ready / missing_papers / refresh_required / failed

@@ -2,6 +2,10 @@ import os from "node:os";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import {
+  inspectPapernexusRemoteAccess,
+  type PapernexusRemoteAccessConfig,
+} from "./papernexus-secret";
 
 export type GraphPresenceStatus =
   | "ready"
@@ -128,6 +132,22 @@ function pickString(
     const value = asString(source[key]);
     if (value) {
       return value;
+    }
+  }
+  return null;
+}
+
+function pickCount(
+  source: Record<string, unknown> | null,
+  keys: string[]
+): number | null {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
     }
   }
   return null;
@@ -508,6 +528,14 @@ function parsePaperSourceIndex(raw: unknown): ExpectedPaper[] {
           entries = (record[key] as unknown[]).map((value) => ({ value }));
           break;
         }
+        const nestedRecord = asRecord(record[key]);
+        if (nestedRecord) {
+          entries = Object.entries(nestedRecord).map(([nestedKey, value]) => ({
+            key: nestedKey,
+            value,
+          }));
+          break;
+        }
       }
       if (entries.length === 0) {
         entries = Object.entries(record).map(([key, value]) => ({ key, value }));
@@ -852,9 +880,261 @@ function serializeMissingPapers(missingPapers: GraphPresenceMissingPaper[]) {
   }));
 }
 
+function toMissingPaper(expected: ExpectedPaper): GraphPresenceMissingPaper {
+  return {
+    canonicalId: expected.canonicalId,
+    title: expected.title,
+    normalizedTitle: expected.normalizedTitle,
+    arxivId: expected.arxivId,
+    doi: expected.doi,
+    sourceKind: expected.sourceKind,
+    sourceProvider: expected.sourceProvider,
+    retrievalProviders: expected.retrievalProviders,
+  };
+}
+
+function matchExpectedPaperDescriptor(
+  expectedPapers: ExpectedPaper[],
+  record: Record<string, unknown> | null
+): ExpectedPaper | null {
+  if (!record) {
+    return null;
+  }
+  const canonicalId = pickString(record, ["canonical_id", "canonicalId", "id"]);
+  if (canonicalId) {
+    const direct = expectedPapers.find((paper) => paper.canonicalId === canonicalId);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const arxivId = normalizeArxivId(
+    pickString(record, ["arxiv_id", "arxivId", "arxiv", "paper_id", "paperId"])
+  );
+  if (arxivId) {
+    const direct = expectedPapers.find((paper) => paper.arxivId === arxivId);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const doi = normalizeDoi(pickString(record, ["doi", "doi_url", "doiUrl"]));
+  if (doi) {
+    const direct = expectedPapers.find((paper) => paper.doi === doi);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const normalizedTitle = normalizeTitle(
+    pickString(record, ["normalized_title", "normalizedTitle", "title", "paper_title", "paperTitle"])
+  );
+  if (normalizedTitle) {
+    const direct = expectedPapers.find((paper) => paper.normalizedTitle === normalizedTitle);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  return null;
+}
+
+function mergeRemoteMissingPapers(params: {
+  expectedPapers: ExpectedPaper[];
+  statusRecord: Record<string, unknown> | null;
+  expectedPaperCount: number;
+  presentPaperCount: number;
+}): GraphPresenceMissingPaper[] {
+  const missingRaw = Array.isArray(params.statusRecord?.missing_papers)
+    ? params.statusRecord?.missing_papers
+    : Array.isArray(params.statusRecord?.missingPapers)
+      ? params.statusRecord?.missingPapers
+      : [];
+  const collected: GraphPresenceMissingPaper[] = [];
+  const seen = new Set<string>();
+  for (const item of missingRaw) {
+    const record = asRecord(item);
+    const matchedExpected = matchExpectedPaperDescriptor(params.expectedPapers, record);
+    const missingPaper = matchedExpected
+      ? toMissingPaper(matchedExpected)
+      : (() => {
+          const parsed = buildExpectedPaperFromRecord(
+            record ?? {},
+            pickString(record, ["canonical_id", "canonicalId", "id"]) ?? undefined
+          );
+          return parsed ? toMissingPaper(parsed) : null;
+        })();
+    if (!missingPaper || seen.has(missingPaper.canonicalId)) {
+      continue;
+    }
+    seen.add(missingPaper.canonicalId);
+    collected.push(missingPaper);
+  }
+
+  if (collected.length > 0) {
+    return collected;
+  }
+
+  const inferredMissingCount = Math.max(
+    0,
+    params.expectedPaperCount - params.presentPaperCount
+  );
+  if (inferredMissingCount === 0) {
+    return [];
+  }
+  return params.expectedPapers.slice(0, inferredMissingCount).map((paper) => toMissingPaper(paper));
+}
+
+async function checkGraphPresenceViaRemoteStatus(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  projectId: string | null;
+  checkedAt: string;
+  reportPath: string;
+  expected: {
+    papers: ExpectedPaper[];
+    paperSourceIndexPath: string | null;
+    usedPaperSourceIndex: boolean;
+  };
+  remoteAccess: PapernexusRemoteAccessConfig;
+}): Promise<GraphPresenceCheckResult> {
+  const remoteInspection = await inspectPapernexusRemoteAccess(params.remoteAccess);
+  const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
+  const statusRecord = await readJsonIfExists<Record<string, unknown>>(statusPath);
+  const remoteApiBaseUrl = remoteInspection.summary.apiBaseUrl;
+
+  let status: GraphPresenceStatus = "ready";
+  let refreshReason: string | null = null;
+  let presentPaperCount = params.expected.papers.length;
+  let missingPapers: GraphPresenceMissingPaper[] = [];
+
+  if (params.expected.papers.length === 0) {
+    status = "missing_sources";
+  } else if (!remoteInspection.tokenAvailable) {
+    status = "missing_corpus";
+    refreshReason =
+      `Configured remote PaperNexus access is unavailable${remoteApiBaseUrl ? ` at ${remoteApiBaseUrl}` : ""}` +
+      `${remoteInspection.tokenError ? `: ${remoteInspection.tokenError}` : "."}` +
+      " Fix the remote token/configuration and rerun /graph-build before frontier mapping or ideation.";
+    presentPaperCount = 0;
+  } else if (!statusRecord) {
+    status = "missing_corpus";
+    refreshReason =
+      `No remote PaperNexus graph status is recorded yet for ${remoteApiBaseUrl ?? "the configured API"}. ` +
+      "Run /graph-build with the configured remote PaperNexus endpoint before frontier mapping or ideation.";
+    presentPaperCount = 0;
+  } else {
+    const statusExpectedCount =
+      pickCount(statusRecord, ["expected_paper_count", "expectedPaperCount"]) ??
+      params.expected.papers.length;
+    presentPaperCount =
+      pickCount(statusRecord, ["present_paper_count", "presentPaperCount"]) ?? 0;
+    missingPapers = mergeRemoteMissingPapers({
+      expectedPapers: params.expected.papers,
+      statusRecord,
+      expectedPaperCount: statusExpectedCount,
+      presentPaperCount,
+    });
+    const normalizedStatus =
+      pickString(statusRecord, ["status"])?.trim().toLowerCase() ?? null;
+    const statusRefreshReason =
+      pickString(statusRecord, ["refresh_reason", "refreshReason"]) ?? null;
+
+    if (statusExpectedCount !== params.expected.papers.length) {
+      status = "missing_corpus";
+      refreshReason =
+        `Remote PaperNexus graph status is stale for ${remoteApiBaseUrl ?? "the configured API"}: ` +
+        `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
+        "Rerun /graph-build before frontier mapping or ideation.";
+      presentPaperCount = Math.min(presentPaperCount, params.expected.papers.length);
+    } else if (normalizedStatus === "missing_corpus") {
+      status = "missing_corpus";
+      refreshReason =
+        statusRefreshReason ??
+        buildBlockingReason(
+          "missing_corpus",
+          [],
+          params.expected.papers.length,
+          remoteApiBaseUrl
+        );
+    } else if (
+      normalizedStatus === "missing_papers" ||
+      missingPapers.length > 0 ||
+      presentPaperCount < params.expected.papers.length
+    ) {
+      status = "missing_papers";
+      refreshReason =
+        statusRefreshReason ??
+        buildBlockingReason(
+          "missing_papers",
+          missingPapers,
+          params.expected.papers.length,
+          remoteApiBaseUrl
+        );
+    } else {
+      status = "ready";
+      presentPaperCount = params.expected.papers.length;
+      refreshReason = null;
+    }
+  }
+
+  const result: GraphPresenceCheckResult = {
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    checkedAt: params.checkedAt,
+    status,
+    blockingReason: refreshReason,
+    reportPath: params.reportPath,
+    paperSourceIndexPath: params.expected.paperSourceIndexPath,
+    usedPaperSourceIndex: params.expected.usedPaperSourceIndex,
+    expectedPaperCount: params.expected.papers.length,
+    presentPaperCount,
+    missingPaperCount:
+      status === "ready"
+        ? 0
+        : Math.max(
+            0,
+            missingPapers.length > 0
+              ? missingPapers.length
+              : params.expected.papers.length - presentPaperCount
+          ),
+    corpusRoot:
+      pickString(statusRecord, ["corpus_root", "corpusRoot"]) ?? remoteApiBaseUrl ?? null,
+    corpusName: pickString(statusRecord, ["corpus_name", "corpusName"]),
+    corpusManifestPath: null,
+    corpusMetaPath: null,
+    refreshRequired: status === "missing_corpus" || status === "missing_papers",
+    refreshReason,
+    presentPapers: [],
+    missingPapers: status === "ready" ? [] : missingPapers,
+    manifestUpdated: false,
+  };
+
+  await writeJsonEnsured(params.reportPath, {
+    checked_at: params.checkedAt,
+    project_id: params.projectId,
+    status: result.status,
+    blocking_reason: result.blockingReason,
+    corpus_root: result.corpusRoot,
+    corpus_name: result.corpusName,
+    paper_source_index_path: result.paperSourceIndexPath,
+    used_paper_source_index: result.usedPaperSourceIndex,
+    expected_paper_count: result.expectedPaperCount,
+    present_paper_count: result.presentPaperCount,
+    missing_paper_count: result.missingPaperCount,
+    refresh_required: result.refreshRequired,
+    refresh_reason: result.refreshReason,
+    missing_papers: serializeMissingPapers(result.missingPapers),
+    present_papers: [],
+  });
+
+  return result;
+}
+
 export async function checkGraphPresenceForWorkflow(params: {
   projectRoot: string;
   updateManifest?: boolean;
+  remoteAccess?: PapernexusRemoteAccessConfig | null;
 }): Promise<GraphPresenceCheckResult> {
   const projectRoot = path.resolve(params.projectRoot);
   const manifest = await readManifest(projectRoot);
@@ -867,6 +1147,38 @@ export async function checkGraphPresenceForWorkflow(params: {
     manifest,
     projectId,
   });
+  const remoteApiBaseUrl = asString(params.remoteAccess?.apiBaseUrl);
+  if (remoteApiBaseUrl) {
+    const result = await checkGraphPresenceViaRemoteStatus({
+      projectRoot,
+      manifest,
+      projectId,
+      checkedAt,
+      reportPath,
+      expected,
+      remoteAccess: params.remoteAccess ?? {},
+    });
+
+    if (params.updateManifest !== false) {
+      const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
+      manifest.paper_ingestion = {
+        ...paperIngestion,
+        graph_presence_checked_at: checkedAt,
+        graph_presence_status: result.status,
+        graph_presence_report_path: path.relative(projectRoot, reportPath),
+        graph_presence_expected_papers: result.expectedPaperCount,
+        graph_presence_present_papers: result.presentPaperCount,
+        graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
+        refresh_required: result.refreshRequired ? true : false,
+        refresh_reason: result.refreshRequired ? result.refreshReason : null,
+      };
+      await saveManifest(projectRoot, manifest);
+      result.manifestUpdated = true;
+    }
+
+    return result;
+  }
+
   const corpusResolution = await resolveCorpusRoot({
     projectRoot,
     manifest,

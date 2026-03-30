@@ -713,6 +713,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   graphPresenceCheck?.update_manifest === false
                     ? false
                     : true,
+                remoteAccess: {
+                  apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+                  tokenSource: workflowPolicy.papernexusApiTokenSource,
+                  tokenEnv: workflowPolicy.papernexusApiTokenEnv,
+                  tokenService: workflowPolicy.papernexusApiTokenService,
+                  tokenAccount: workflowPolicy.papernexusApiTokenAccount,
+                  mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
+                  tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+                },
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -1290,7 +1299,107 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
                 paperIngestion: requireObject(params.paperIngestion, "paperIngestion"),
               });
-              return textResponse(JSON.stringify(result, null, 2));
+              const completedPaperBroadcasts: Array<
+                Awaited<ReturnType<typeof maybeBroadcastWorkflowStatusUpdate>>
+              > = [];
+              const paperOperationBroadcasts: Array<
+                Awaited<ReturnType<typeof maybeBroadcastWorkflowStatusUpdate>>
+              > = [];
+              for (const completedPaper of result.newlyCompletedPapers) {
+                const paperLabel =
+                  completedPaper.title ??
+                  completedPaper.canonicalId ??
+                  completedPaper.importTaskId ??
+                  "unknown paper";
+                const summaryParts = [`PaperNexus import completed: ${paperLabel}`];
+                if (completedPaper.canonicalId) {
+                  summaryParts.push(`(${completedPaper.canonicalId})`);
+                }
+                if (completedPaper.importTaskId) {
+                  summaryParts.push(`via task ${completedPaper.importTaskId}`);
+                }
+                const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  sessionKey: ctx.sessionKey,
+                  projectId: snapshot.projectId,
+                  projectRoot: resolvedProjectRoot,
+                  status: "completed",
+                  stage: snapshot.currentStage,
+                  summary: `${summaryParts.join(" ")}.`,
+                  idempotencyKeySuffix: [
+                    "set-paper-ingestion",
+                    "completed-paper",
+                    completedPaper.canonicalId ?? "unknown-canonical",
+                    completedPaper.importTaskId ?? "unknown-import-task",
+                    completedPaper.title ?? "unknown-title",
+                  ].join(":"),
+                });
+                completedPaperBroadcasts.push(broadcastResult);
+              }
+              for (const operation of result.newlyTerminalPaperOperations) {
+                if (!["timed_out", "failed"].includes(operation.status)) {
+                  continue;
+                }
+                const paperLabel =
+                  operation.title ??
+                  operation.canonicalId ??
+                  operation.importTaskId ??
+                  "unknown paper";
+                const phaseLabel =
+                  operation.phase === "graph" ? "graph reconcile" : "import";
+                const timeoutLabel =
+                  typeof operation.timeoutSeconds === "number"
+                    ? `${operation.timeoutSeconds}s`
+                    : "the configured time budget";
+                const summaryParts = [
+                  `PaperNexus ${phaseLabel} ${
+                    operation.status === "timed_out"
+                      ? `timed out after ${timeoutLabel}`
+                      : "failed"
+                  }: ${paperLabel}`,
+                ];
+                if (operation.canonicalId) {
+                  summaryParts.push(`(${operation.canonicalId})`);
+                }
+                if (operation.importTaskId) {
+                  summaryParts.push(`via task ${operation.importTaskId}`);
+                }
+                if (operation.status === "timed_out") {
+                  summaryParts.push("Moved on to the next paper instead of waiting indefinitely.");
+                } else if (operation.detail) {
+                  summaryParts.push(operation.detail);
+                }
+                const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  sessionKey: ctx.sessionKey,
+                  projectId: snapshot.projectId,
+                  projectRoot: resolvedProjectRoot,
+                  status: operation.status === "failed" ? "blocked" : "waiting",
+                  stage: snapshot.currentStage,
+                  summary: summaryParts.join(" "),
+                  idempotencyKeySuffix: [
+                    "set-paper-ingestion",
+                    "paper-operation",
+                    operation.phase,
+                    operation.status,
+                    operation.canonicalId ?? "unknown-canonical",
+                    operation.importTaskId ?? "unknown-import-task",
+                    operation.title ?? "unknown-title",
+                  ].join(":"),
+                });
+                paperOperationBroadcasts.push(broadcastResult);
+              }
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...result,
+                    completedPaperBroadcasts,
+                    paperOperationBroadcasts,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "get_paper_qc": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

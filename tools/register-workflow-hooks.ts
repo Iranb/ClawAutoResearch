@@ -12,7 +12,10 @@ import {
   shouldBlockCoderDatasetMutation,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockPapernexusInlineExecution,
+  shouldBlockPapernexusLongWaitImportCommand,
+  shouldBlockPapernexusLocalGraphProcessing,
   shouldBlockPapernexusLiveGraphCliRead,
+  shouldBlockPapernexusMultiPaperImport,
   shouldBlockResearchGraphForce,
   shouldBlockInnovationWrite,
   shouldBlockProjectWrite,
@@ -217,6 +220,43 @@ async function runBeforeToolCallHook(params: {
       return {
         block: true,
         blockReason: papernexusCliReadCheck.reason,
+      };
+    }
+
+    const papernexusLocalGraphProcessingCheck = shouldBlockPapernexusLocalGraphProcessing({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+      remoteApiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+    });
+    if (papernexusLocalGraphProcessingCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusLocalGraphProcessingCheck.reason,
+      };
+    }
+
+    const papernexusMultiPaperImportCheck = shouldBlockPapernexusMultiPaperImport({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+    });
+    if (papernexusMultiPaperImportCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusMultiPaperImportCheck.reason,
+      };
+    }
+
+    const papernexusLongWaitImportCheck = shouldBlockPapernexusLongWaitImportCommand({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+    });
+    if (papernexusLongWaitImportCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusLongWaitImportCheck.reason,
       };
     }
 

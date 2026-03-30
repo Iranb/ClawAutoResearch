@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   shouldBlockPapernexusLiveGraphCliRead,
+  shouldBlockPapernexusLongWaitImportCommand,
+  shouldBlockPapernexusLocalGraphProcessing,
+  shouldBlockPapernexusMultiPaperImport,
   shouldBlockPapernexusInlineExecution,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockCoderDatasetMutation,
@@ -138,6 +141,67 @@ test("papernexus live-graph cli read guard blocks local query commands even insi
     assert.equal(result.block, true);
     assert.match(result.reason ?? "", /authenticated http api|live graph/i);
   }
+});
+
+test("papernexus local graph-processing guard blocks local analyze/build commands when remote PaperNexus is configured", () => {
+  for (const command of [
+    "papernexus analyze /tmp/papers --name demo-project",
+    "papernexus build-graph --name demo-project",
+    "node src/cli/index.js watch /tmp/papers --name demo-project",
+  ]) {
+    const result = shouldBlockPapernexusLocalGraphProcessing({
+      role: "researcher",
+      toolName: "bash",
+      toolParams: {
+        command,
+      },
+      remoteApiBaseUrl: "https://papernexus.example/api",
+    });
+
+    assert.equal(result.block, true);
+    assert.match(result.reason ?? "", /remote PaperNexus|authenticated/i);
+  }
+});
+
+test("papernexus import guard blocks multi-paper queued imports in one request", () => {
+  const result = shouldBlockPapernexusMultiPaperImport({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        "curl -sS --max-time 30 -X POST https://papernexus.example/api/imports?name=shared-global-graph -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN' --data '{\"files\":[{\"name\":\"a.pdf\",\"contentBase64\":\"aaa\"},{\"name\":\"b.pdf\",\"contentBase64\":\"bbb\"}]}'",
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /one paper per import|single-paper/i);
+});
+
+test("papernexus import wait guard blocks long polling loops around remote imports", () => {
+  const result = shouldBlockPapernexusLongWaitImportCommand({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        "for i in 1 2 3 4 5; do curl -sS --max-time 30 https://papernexus.example/api/imports/imp-42?name=shared-global-graph -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'; sleep 15; done",
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /60s|move on|next paper/i);
+});
+
+test("papernexus import wait guard allows a single-paper bounded remote import request", () => {
+  const result = shouldBlockPapernexusLongWaitImportCommand({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        "curl -sS --max-time 30 -X POST https://papernexus.example/api/imports?name=shared-global-graph -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN' --data '{\"files\":[{\"name\":\"single.pdf\",\"contentBase64\":\"aaa\"}]}'",
+    },
+  });
+
+  assert.equal(result.block, false);
 });
 
 test("papernexus destructive guard blocks backup and restore commands during normal agent operation", () => {
