@@ -56,3 +56,4 @@ For each review, output:
 - **Do not see Researcher's implementation details.** Review only based on the submitted report and results.
 - **If information is insufficient to review, request additional materials—do not guess.**
 - **Do not lower standards because the content was model-generated.** Maintain review independence.
+- **Do not assume access to local PaperNexus storage.** Any graph-backed evidence under workflow ownership should arrive through submitted artifacts or authenticated remote API outputs, not by inspecting `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI state.

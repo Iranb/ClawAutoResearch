@@ -20,7 +20,7 @@ Reconcile the current project's selected literature against the shared global Pa
 
 ## Remote Access Requirement
 
-Workflow-owned graph work must use the configured remote PaperNexus Web/API. Do not resolve or use a local `PAPERNEXUS_ROOT` for graph reconciliation when remote access is configured.
+Workflow-owned graph work must use the configured remote PaperNexus Web/API. Do not resolve or use local PaperNexus runtime roots or shared-disk graph storage for graph reconciliation when remote access is configured.
 
 Read the remote access settings from the plugin-level workflow config:
 
@@ -41,7 +41,7 @@ Rules:
   - PasswordVault on `win32`
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
-- do not fall back to local `papernexus` / `src/cli/index.js` graph-processing commands for workflow-owned graph reconciliation
+- do not fall back to local `papernexus` CLI graph-processing commands for workflow-owned graph reconciliation
 - if the remote API is unavailable or unauthenticated, stop and report that remote PaperNexus access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
@@ -56,13 +56,13 @@ Pick the richest available project paper-selection input in this order:
 
 Default policy:
 - keep `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project explicitly overrides the shared-global defaults
-- the authoritative graph lives in shared PaperNexus storage, typically under `~/.papernexus/index-store/.papernexus/`
+- the authoritative graph lives behind the configured remote PaperNexus Web/API
 - this skill should not create or name a per-project corpus
 - the project should only record which canonical papers are in scope and whether those papers are present in the shared graph
 
 Preferred source types:
 - `PAPER_SOURCE_INDEX.json` with canonical identities
-- full-paper Markdown / PDF already saved into the shared PaperNexus source tree
+- full-paper Markdown / PDF already saved into project-local staging under `{PROJ}/researcher/paper-staging/`
 - literature outputs that explain why the current paper set is in scope
 
 ## Shared Global Graph Rule (mandatory)
@@ -70,10 +70,10 @@ Preferred source types:
 Do not create a second project-local graph corpus such as `{PROJ}/graph/source-corpus/`.
 Do not run `papernexus analyze <source_dir> --name <proj-id>` as part of normal workflow-owned graph refreshes.
 
-Use the shared PaperNexus source tree and the shared global graph:
+Use project-local staging plus the shared global graph exposed through the configured remote API:
 
 ```text
-<shared-paper-source-root>/
+{PROJ}/researcher/paper-staging/
   md/
     <canonical-paper>.md
   pdf/
@@ -95,7 +95,7 @@ Here `<canonical-paper>` should match the normalized download stem:
 - arXiv ID if present, for example `2502.00032`
 - otherwise a transliterated title slug such as `graph-retrieval-benchmarks`
 
-The analyzed source dir, if a manual PaperNexus refresh is later needed, should be the shared canonical paper source tree itself, not a separately staged graph-only tree.
+These staged files are temporary workflow inputs for remote PaperNexus imports. They are not a shared local PaperNexus corpus and must not be read from home-directory shared PaperNexus storage.
 
 ## Reconcile / Refresh the Shared Graph
 
@@ -127,11 +127,7 @@ Use these refresh triggers:
 - 2 or more new recent venue papers that materially overlap with the active track
 - when running a multi-paper batch, reconcile after each completed paper and keep the final `/graph-build` pass short; it should summarize readiness, not become an unbounded wait loop
 
-If the shared source tree changes frequently, prefer a shared watch process such as:
-
-```bash
-node <PAPERNEXUS_ROOT>/src/cli/index.js watch <shared_source_dir> --name <shared-corpus-name>
-```
+If remote ingestion keeps falling behind, stop and report that the configured remote PaperNexus service or import worker needs attention. Do not fall back to local watch/analyze commands.
 
 ## Output Files
 
@@ -141,11 +137,11 @@ Write `{PROJ}/graph/PAPERNEXUS_STATUS.json`:
 {
   "project_id": "proj_xxx",
   "corpus_name": "shared-global-graph",
-  "papernexus_root": "/abs/path/to/PaperNexus",
-  "corpus_root": "/abs/path/to/shared/corpus",
+  "remote_api_base_url": "https://papernexus.example/api",
+  "corpus_root": "https://papernexus.example/api",
   "checked_at": "YYYY-MM-DDTHH:MM:SSZ",
   "status": "ready",
-  "mode": "shared_global_graph",
+  "mode": "remote_api",
   "missing_papers": []
 }
 ```
@@ -164,7 +160,6 @@ Write `{PROJ}/graph/GRAPH_BUILD_REPORT.md`:
 ```
 
 Update `{PROJ}/PROJECT_MANIFEST.json` with:
-- `papernexus_root`
 - leave `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project intentionally overrides the shared-global defaults
 - `graph_last_built_at`
 - `paper_ingestion.last_graph_sync_at`
@@ -181,7 +176,7 @@ Update `{PROJ}/PROJECT_MANIFEST.json` with:
 ## Hard Stop Conditions
 
 Do not advance to frontier mapping if:
-- PaperNexus root cannot be resolved
+- remote PaperNexus access cannot be resolved
 - the project has no canonical papers recorded in `PAPER_SOURCE_INDEX.json`
 - the shared graph is missing required canonical papers
 - the shared graph has effectively no useful content for the project's selected papers

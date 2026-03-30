@@ -1,6 +1,6 @@
 ---
 name: papernexus
-description: Use this skill when working inside the PaperNexus repository to understand its API-first graph workflow, corpus layout, storage backends, enhancement worker, and service model while keeping live-graph operations on authenticated HTTP endpoints.
+description: Use this skill when working inside the PaperNexus repository to understand its API-first graph workflow, remote service model, staging conventions, enhancement worker, and authenticated HTTP endpoints without depending on home-directory shared paper/index storage.
 ---
 
 # PaperNexus
@@ -9,7 +9,7 @@ Use this skill when the task is about the PaperNexus codebase itself.
 
 ## What This Repo Is
 
-PaperNexus is a local-first research knowledge graph system for papers.
+PaperNexus is an API-first research knowledge graph system for papers.
 
 Key capabilities:
 
@@ -74,30 +74,23 @@ Important query policy:
 
 ## Important Paths
 
-Assume these defaults unless the repo config says otherwise:
+For workflow and operator usage, prefer these locations:
 
-- paper source default: `/Users/iranb/.papernexus/papers`
-- index root default: `/Users/iranb/.papernexus/index-store`
-- runtime config default: `/Users/iranb/.papernexus/config.json`
-- launchd logs: `/Users/iranb/.papernexus/logs`
+- project-local staging root: `{PROJ}/researcher/paper-staging`
+- remote service base URL: configured `papernexusApiBaseUrl`
+- remote import queue: `POST /api/imports?name=<corpus>`
+- remote import logs: `GET /api/imports/:taskId/log`
+- runtime config / service logs: only inspect local service files when the task is explicitly about PaperNexus deployment debugging
 
-Inside each corpus root, PaperNexus writes:
-
-- `.papernexus/graph.kuzu` as the default authoritative graph
-- `.papernexus/graph.lite.json` as the lite read index
-- `.papernexus/meta.json`
-- `.papernexus/sources.json`
-- `.papernexus/papers/*.json` for per-paper semantic snapshots
-- `.papernexus/markdown/` as the unified markdown working cache for both PDF-derived markdown and copied source markdown
-- `.papernexus/imports/` for queued ad hoc upload tasks, task logs, and upload-specific source files
+Do not assume home-directory shared paper storage or home-directory index roots as the source of truth for workflow tasks. For live systems, the source of truth is the authenticated remote API plus project-local staging inputs.
 
 ## Paper Markdown Storage Conventions
 
-If full-paper Markdown files already exist, store them as source inputs under the paper source directory, not inside `.papernexus`.
+If full-paper Markdown files already exist, store them as source inputs under a project-local staging directory, not inside `.papernexus`.
 
 Recommended location:
 
-- `/Users/iranb/.papernexus/papers`
+- `{PROJ}/researcher/paper-staging/md`
 
 ### File Naming
 
@@ -135,13 +128,11 @@ Recommended patterns:
 Examples:
 
 ```text
-/Users/iranb/.papernexus/papers/
-  llm-reasoning/
+{PROJ}/researcher/paper-staging/
+  md/
     self-refine-2023.md
     reflexion-2023.md
-  biomedical-discovery/
     graph-augmented-literature-mapping.md
-  experiment-planning/
     retrieval-augmented-experiment-planning.md
 ```
 
@@ -490,8 +481,8 @@ Do not use mutation as the only long-term source of truth.
 When making operational suggestions, prefer:
 
 - corpus name from config if present
-- paper source under `/Users/iranb/.papernexus/papers`
-- index under `/Users/iranb/.papernexus/index-store`
+- project-local staging under `{PROJ}/researcher/paper-staging`
+- authenticated remote API endpoints instead of shared-disk paper/index roots
 - Kuzu as the default graph backend
 
 When debugging unexpected directories under the repo, suspect:

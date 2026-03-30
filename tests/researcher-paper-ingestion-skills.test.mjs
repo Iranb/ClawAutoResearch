@@ -76,3 +76,43 @@ test("researcher exposes a direct markdown fallback skill before legacy arxiv2md
     );
   }
 });
+
+test("workflow-owned researcher skills describe remote-only staging instead of local PaperNexus storage", async () => {
+  const repoRoot = process.cwd();
+  const docsThatMustAvoidLocalStorage = [
+    path.join(repoRoot, "skills", "researcher", "research-pipeline", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "research-lit", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "papers-cool", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "hugging-face-paper-pages", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "arxiv2md-api", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "arxiv2md", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "frontier-mapping", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "idea-phase", "SKILL.md"),
+  ];
+
+  for (const filePath of docsThatMustAvoidLocalStorage) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.doesNotMatch(
+      content,
+      /~\/\.papernexus\/papers|\/Users\/iranb\/\.papernexus\/papers|~\/\.papernexus\/index-store|PAPERNEXUS_ROOT|src\/cli\/index\.js (?:query|context|impact|ideas|brainstorm|status)/i,
+      `Expected ${filePath} to avoid local PaperNexus storage/CLI guidance in remote-only mode.`
+    );
+  }
+
+  const docsThatMustTeachRemoteOnly = [
+    path.join(repoRoot, "skills", "researcher", "research-pipeline", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "research-lit", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "frontier-mapping", "SKILL.md"),
+  ];
+
+  for (const filePath of docsThatMustTeachRemoteOnly) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.match(
+      content,
+      /project-local staging|POST \/api\/imports|\/api\/query|\/api\/brainstorm|remote PaperNexus/i,
+      `Expected ${filePath} to teach remote-only PaperNexus workflow usage.`
+    );
+  }
+});

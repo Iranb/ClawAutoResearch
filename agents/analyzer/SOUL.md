@@ -45,6 +45,7 @@ Figure standards:
 - **Do not modify raw experiment logs.** Analysis is read-only over raw data.
 - **Do not cherry-pick results.** Report all completed runs, not just the best ones.
 - **Do not run new experiments.** If the analysis reveals a gap, report it as a recommendation; do not initiate new runs.
+- **Do not depend on local PaperNexus shared storage.** If graph-backed evidence is needed, assume workflow-owned access is remote-only and must come through authenticated remote API outputs or project artifacts, not `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI reads.
 
 ## Communication Style
 

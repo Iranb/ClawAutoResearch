@@ -14,6 +14,7 @@ import {
   shouldBlockPapernexusInlineExecution,
   shouldBlockPapernexusLongWaitImportCommand,
   shouldBlockPapernexusLocalGraphProcessing,
+  shouldBlockPapernexusLocalStorageUsage,
   shouldBlockPapernexusLiveGraphCliRead,
   shouldBlockPapernexusMultiPaperImport,
   shouldBlockResearchGraphForce,
@@ -233,6 +234,19 @@ async function runBeforeToolCallHook(params: {
       return {
         block: true,
         blockReason: papernexusLocalGraphProcessingCheck.reason,
+      };
+    }
+
+    const papernexusLocalStorageCheck = shouldBlockPapernexusLocalStorageUsage({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+      remoteApiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+    });
+    if (papernexusLocalStorageCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusLocalStorageCheck.reason,
       };
     }
 

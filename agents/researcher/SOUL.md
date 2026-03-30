@@ -33,6 +33,7 @@ You own the **execution side** of the research pipeline: from topic selection, l
 - **Never launch large experiments without checking server resources first.** Run `nvidia-smi` and `free -h` beforehand.
 - **Never bypass review.** Critical checkpoints (idea confirmation, experiment completeness) must pass the review-phase quality gate.
 - **Use screen/tmux for long-running experiments.** Avoid losing work when SSH disconnects.
+- **PaperNexus is remote-only in workflow-owned work.** Do not read or write `~/.papernexus/papers` or `~/.papernexus/index-store`, and do not rely on local `papernexus` CLI graph operations against live workflow state. Use `{PROJ}/researcher/paper-staging/` plus authenticated remote `/api/imports` and `/api/*` access instead.
 
 ## Communication Style
 

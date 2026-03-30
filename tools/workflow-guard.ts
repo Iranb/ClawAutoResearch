@@ -1689,6 +1689,24 @@ function getDefaultPapernexusIndexRoot(): string {
   return path.join(os.homedir(), ".papernexus", "index-store");
 }
 
+function isLocalPapernexusStoragePath(value: string | null | undefined): boolean {
+  const raw = value?.trim();
+  if (!raw) {
+    return false;
+  }
+  if (/\bPAPERNEXUS_ROOT\b/i.test(raw)) {
+    return true;
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  return /(?:^|[=\s"'`])(?:~|\$HOME|\$\{HOME\}|\/[^\s"'`|;&]*)\/\.papernexus\/(?:papers|index-store)(?:\/|$)/i.test(
+    normalized
+  );
+}
+
+function isRemoteOnlyPapernexusWorkflow(apiBaseUrl: string | null | undefined): boolean {
+  return Boolean(apiBaseUrl && apiBaseUrl.trim());
+}
+
 function getTemplatesRoot(): string {
   return path.resolve(MODULE_DIR, "..", "templates");
 }
@@ -8335,6 +8353,9 @@ function buildDynamicTasks(params: {
       `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
     );
     tasks.unshift(
+      "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus authenticated `/api/imports` / `/api/*` calls instead."
+    );
+    tasks.unshift(
       "Do not read the live shared graph through local `papernexus query/context/impact/ideas/brainstorm/...` CLI commands. In workflow mode, live-graph reads must use authenticated `/api/*` endpoints."
     );
   }
@@ -8350,7 +8371,7 @@ function buildDynamicTasks(params: {
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     tasks.unshift(
-      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import-task path (`/api/imports`) instead of manually copying files into the shared paper source tree."
+      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import-task path (`/api/imports`) from project-local staging instead of reading or writing `~/.papernexus/papers` directly."
     );
     tasks.unshift(
       "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed API briefs/chains over raw full-graph inspection. Use `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
@@ -8665,9 +8686,6 @@ export async function buildWorkflowSnapshot(params: {
     projectState.projectRoot,
     citationIntegrity.verificationReportPath
   );
-  const defaultPapernexusSourceDir = getDefaultPapernexusSourceDir(projectState.projectId);
-  const resolvedPaperSourceDir = asString(projectState.manifest?.paper_source_dir) ?? null;
-  const resolvedGraphSourceDir = asString(projectState.manifest?.graph_source_dir) ?? null;
   const papernexusAccessConfigured =
     (policy.papernexusApiBaseUrl ?? "").trim().length > 0 ||
     (policy.papernexusApiTokenEnv ?? "").trim().length > 0 ||
@@ -8691,6 +8709,29 @@ export async function buildWorkflowSnapshot(params: {
         tokenLookupTimeoutMs: policy.papernexusApiTokenLookupTimeoutMs,
       })
     : null;
+  const remoteOnlyPapernexus = isRemoteOnlyPapernexusWorkflow(
+    papernexusAccess?.apiBaseUrl ?? null
+  );
+  const defaultPapernexusSourceDir = remoteOnlyPapernexus
+    ? null
+    : getDefaultPapernexusSourceDir(projectState.projectId);
+  const defaultPapernexusIndexRoot = remoteOnlyPapernexus
+    ? null
+    : getDefaultPapernexusIndexRoot();
+  const resolvedPaperSourceDir = (() => {
+    const value = asString(projectState.manifest?.paper_source_dir) ?? null;
+    if (remoteOnlyPapernexus && isLocalPapernexusStoragePath(value)) {
+      return null;
+    }
+    return value;
+  })();
+  const resolvedGraphSourceDir = (() => {
+    const value = asString(projectState.manifest?.graph_source_dir) ?? null;
+    if (remoteOnlyPapernexus && isLocalPapernexusStoragePath(value)) {
+      return null;
+    }
+    return value;
+  })();
 
   return {
     projectRoot: projectState.projectRoot,
@@ -8744,7 +8785,7 @@ export async function buildWorkflowSnapshot(params: {
     paperSourceDir: resolvedPaperSourceDir,
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
-    defaultPapernexusIndexRoot: getDefaultPapernexusIndexRoot(),
+    defaultPapernexusIndexRoot,
     papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
     papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
     papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
@@ -9176,7 +9217,17 @@ export function formatWorkflowSnapshotForPrompt(params: {
     }
   }
 
-  if (snapshot.graphRefreshRequired || snapshot.paperSourceDir || snapshot.graphSourceDir) {
+  if (
+    snapshot.graphRefreshRequired ||
+    snapshot.paperSourceDir ||
+    snapshot.graphSourceDir ||
+    snapshot.papernexusApiBaseUrl ||
+    snapshot.papernexusApiTokenEnv ||
+    snapshot.papernexusApiTokenSource ||
+    snapshot.papernexusApiTokenService ||
+    snapshot.papernexusApiTokenAccount ||
+    snapshot.papernexusMineruHttpUrl
+  ) {
     lines.push(
       `PaperNexus: paper_source=${snapshot.paperSourceDir ?? "unset"}, graph_source=${snapshot.graphSourceDir ?? "unset"}, refresh_required=${snapshot.graphRefreshRequired ? "true" : "false"}`
     );
@@ -9200,9 +9251,6 @@ export function formatWorkflowSnapshotForPrompt(params: {
     if (snapshot.graphPresenceReportPath) {
       lines.push(`Graph presence report: ${snapshot.graphPresenceReportPath}`);
     }
-    lines.push(
-      `PaperNexus local defaults: papers=${snapshot.defaultPapernexusSourceDir ?? "unset"}, index=${snapshot.defaultPapernexusIndexRoot ?? "unset"}`
-    );
     if (
       snapshot.papernexusApiBaseUrl ||
       snapshot.papernexusApiTokenEnv ||
@@ -9213,6 +9261,9 @@ export function formatWorkflowSnapshotForPrompt(params: {
     ) {
       lines.push(
         `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
+      );
+      lines.push(
+        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus authenticated `/api/imports` and `/api/*` requests instead."
       );
       if (
         snapshot.papernexusApiBaseUrl &&
@@ -9249,6 +9300,10 @@ export function formatWorkflowSnapshotForPrompt(params: {
           `PDF parser rule: Prefer remote MinerU at ${snapshot.papernexusMineruHttpUrl} for PDF materialization. Do not switch to local Docling or Marker unless the remote endpoint is unavailable or the task explicitly requires a local parser.`
         );
       }
+    } else {
+      lines.push(
+        `PaperNexus local defaults: papers=${snapshot.defaultPapernexusSourceDir ?? "unset"}, index=${snapshot.defaultPapernexusIndexRoot ?? "unset"}`
+      );
     }
   }
 
@@ -9463,7 +9518,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
     "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus import tasks when material enters through UI/API upload -> /graph-build shared-graph reconciliation."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and `.papernexus/imports/` task logs instead of manually copying files into the shared paper source tree."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and its import-task logs. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `/api/imports` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
@@ -9890,6 +9945,47 @@ export function shouldBlockPapernexusLocalGraphProcessing(params: {
     reason:
       `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl}). ` +
       "Use the configured authenticated remote API and remote graph workflow instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
+  };
+}
+
+export function shouldBlockPapernexusLocalStorageUsage(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+  remoteApiBaseUrl?: string | null;
+}): { block: boolean; reason?: string } {
+  if (!params.role || !isRemoteOnlyPapernexusWorkflow(params.remoteApiBaseUrl)) {
+    return { block: false };
+  }
+
+  if (["read", "write", "edit", "grep", "glob"].includes(params.toolName)) {
+    const pathCandidates = [
+      asString(params.toolParams.path),
+      asString(params.toolParams.file_path),
+      asString(params.toolParams.cwd),
+      asString(params.toolParams.glob),
+    ].filter((value): value is string => Boolean(value));
+    if (pathCandidates.some((value) => isLocalPapernexusStoragePath(value))) {
+      return {
+        block: true,
+        reason:
+          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and authenticated remote API calls instead.`,
+      };
+    }
+    return { block: false };
+  }
+
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText || !isLocalPapernexusStoragePath(payloadText)) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus authenticated /api/imports and /api/* requests instead.`,
   };
 }
 

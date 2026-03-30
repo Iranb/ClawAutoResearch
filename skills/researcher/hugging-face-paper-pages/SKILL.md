@@ -1,6 +1,6 @@
 ---
 name: hugging-face-paper-pages
-description: "Fetch Hugging Face paper pages as markdown plus structured paper metadata. Use to ingest full-paper markdown into the PaperNexus source tree before graph build."
+description: "Fetch Hugging Face paper pages as markdown plus structured paper metadata. Use to ingest full-paper markdown into project-local staging before remote PaperNexus import and graph build."
 argument-hint: "[arXiv ID / Hugging Face paper URL / arXiv URL]"
 metadata:
   {"openclaw": {"emoji": "🤗", "requires": {"bins": ["python3"]}}}
@@ -17,7 +17,7 @@ allowed-tools:
 
 Use Hugging Face paper pages as the preferred full-text markdown source before PaperNexus graph build.
 
-> **Primary use in this repo**: save paper markdown into the PaperNexus paper source tree so `graph-build` can index it.
+> **Primary use in this repo**: save paper markdown into project-local staging so the workflow can upload/import it through the configured remote PaperNexus API before `graph-build`.
 > **Preferred fallback order in this repo**: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
 
 ## Inputs
@@ -32,7 +32,7 @@ Use Hugging Face paper pages as the preferred full-text markdown source before P
 Resolve the PaperNexus source directory in this order:
 
 1. `{PROJ}/PROJECT_MANIFEST.json` field `paper_source_dir` if present
-2. `/Users/iranb/.papernexus/papers/{proj-id}`
+2. `{PROJ}/researcher/paper-staging`
 
 Save:
 
@@ -46,7 +46,7 @@ Canonical filename rule:
 - transliterate special characters to ASCII when possible, lowercase the result, replace separators with `-`, and strip the remaining punctuation
 - strip arXiv version suffixes such as `v1`
 
-If a same-paper PDF already exists under `<paper_source_dir>/pdf/`, keep it only as fallback. The Markdown file becomes the canonical graph-ingestion artifact for the next `/graph-build`.
+If a same-paper PDF already exists under `<paper_source_dir>/pdf/`, keep it only as fallback. The Markdown file becomes the canonical remote-import artifact for the next `/graph-build`.
 
 ## Commands
 
@@ -108,4 +108,4 @@ If the markdown endpoint returns `404`, report that Hugging Face paper pages do 
 - Prefer the `.md` endpoint for PaperNexus ingestion.
 - Prefer the API endpoint when you need structured metadata such as GitHub repo, project page, linked models, or datasets.
 - If markdown is unavailable, let the caller try `/arxiv2md-api` first, then `/arxiv2md`, then `/papers-cool` PDF download.
-- Inside this repo, Markdown should land in the `md/` subdirectory so `graph-build` can stage a Markdown-first canonical corpus.
+- Inside this repo, Markdown should land in the `md/` subdirectory of project-local staging so the workflow can upload/import a Markdown-first canonical corpus through remote PaperNexus.

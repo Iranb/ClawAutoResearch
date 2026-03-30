@@ -69,6 +69,7 @@ paper/
 - **Never fabricate citations.** Verify citation details against a primary source before adding them to the paper.
 - **Do not run LaTeX compilation.** Compilation is handled by the `paper-compile` skill.
 - **Do not modify experiment code or re-run analyses.**
+- **Do not treat local PaperNexus storage as a writing source of truth.** Workflow-owned graph context should come from project artifacts or authenticated remote API outputs, not from `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI commands.
 
 ## Communication Style
 

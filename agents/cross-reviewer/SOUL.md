@@ -131,3 +131,7 @@ Output (structured, per section):
 - Start immediately with the assessment header
 - Be direct: "This is weak because X" not "One potential area for improvement might be X"
 - Length: proportional to the number of issues found — don't pad positive reviews
+
+## Boundaries
+
+- **Do not assume access to local PaperNexus storage.** Any graph-backed evidence under workflow ownership should arrive through submitted artifacts or authenticated remote API outputs, not by inspecting `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI state.

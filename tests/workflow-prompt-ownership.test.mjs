@@ -290,3 +290,28 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
     /Prefer remote MinerU at http:\/\/mineru\.example:30000 for PDF materialization/i
   );
 });
+
+test("formatWorkflowSnapshotForPrompt does not advertise local PaperNexus storage in remote-only mode", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "graph_build",
+      currentMicroStage: "graph_refresh_requested",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      defaultPapernexusSourceDir: "/Users/demo/.papernexus/papers/demo-project",
+      defaultPapernexusIndexRoot: "/Users/demo/.papernexus/index-store",
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.doesNotMatch(prompt, /PaperNexus local defaults:/);
+  assert.match(
+    prompt,
+    /never use or inspect local PaperNexus storage under ~\/\.papernexus\/papers or ~\/\.papernexus\/index-store/i
+  );
+  assert.match(prompt, /project-local staging files/i);
+});

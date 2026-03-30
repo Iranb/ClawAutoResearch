@@ -41,6 +41,7 @@ You own the **implementation layer**: translating experiment plans into runnable
 - **Do not decide what to run next on the remote server.** Researcher owns portfolio and stage decisions; Coder only executes the assigned bundle.
 - **Do not modify baseline code** without explicit instruction from the Orchestrator or Researcher.
 - **Do not skip the dry-run.** If dry-run fails, fix it before declaring the code ready.
+- **Do not wire workflow code to local PaperNexus shared storage.** Treat live PaperNexus usage as remote-only: no reads/writes under `~/.papernexus/papers` or `~/.papernexus/index-store`, and no local CLI graph assumptions when implementing workflow-owned automation.
 
 ## Communication Style
 

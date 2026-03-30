@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   shouldBlockPapernexusLiveGraphCliRead,
+  shouldBlockPapernexusLocalStorageUsage,
   shouldBlockPapernexusLongWaitImportCommand,
   shouldBlockPapernexusLocalGraphProcessing,
   shouldBlockPapernexusMultiPaperImport,
@@ -161,6 +162,47 @@ test("papernexus local graph-processing guard blocks local analyze/build command
     assert.equal(result.block, true);
     assert.match(result.reason ?? "", /remote PaperNexus|authenticated/i);
   }
+});
+
+test("papernexus local storage guard blocks bash commands that depend on ~/.papernexus storage in remote-only mode", () => {
+  const result = shouldBlockPapernexusLocalStorageUsage({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command: "ls ~/.papernexus/papers/gcd-part-manifold-2026/md && echo $PAPERNEXUS_ROOT",
+    },
+    remoteApiBaseUrl: "https://papernexus.example/api",
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /remote-only|project-local staging|~\/\.papernexus/i);
+});
+
+test("papernexus local storage guard blocks direct reads from ~/.papernexus storage in remote-only mode", () => {
+  const result = shouldBlockPapernexusLocalStorageUsage({
+    role: "analyzer",
+    toolName: "read",
+    toolParams: {
+      path: "/Users/demo/.papernexus/index-store/.papernexus/meta.json",
+    },
+    remoteApiBaseUrl: "https://papernexus.example/api",
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /remote-only|shared storage/i);
+});
+
+test("papernexus local storage guard allows project-local staging files in remote-only mode", () => {
+  const result = shouldBlockPapernexusLocalStorageUsage({
+    role: "researcher",
+    toolName: "read",
+    toolParams: {
+      path: "/tmp/demo-project/researcher/paper-staging/2502.00032.md",
+    },
+    remoteApiBaseUrl: "https://papernexus.example/api",
+  });
+
+  assert.equal(result.block, false);
 });
 
 test("papernexus import guard blocks multi-paper queued imports in one request", () => {

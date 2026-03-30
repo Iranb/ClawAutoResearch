@@ -68,6 +68,52 @@ test("channel-project binding resolves workflow snapshot without OPENCLAW_PROJEC
   assert.equal(snapshot.channelProjectBindingKey, "discord:group:paper-lab");
 });
 
+test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");
+  const sessionKey = "agent:researcher:discord:group:remote-only-room";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+
+  assert.equal(snapshot.projectRoot, projectRoot);
+  assert.equal(snapshot.defaultPapernexusSourceDir, null);
+  assert.equal(snapshot.defaultPapernexusIndexRoot, null);
+  assert.equal(snapshot.papernexusApiBaseUrl, "https://papernexus.example/api");
+});
+
 test("research memory paths follow the current channel binding", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "vision-track");

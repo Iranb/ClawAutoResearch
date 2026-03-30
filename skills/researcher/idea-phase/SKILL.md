@@ -25,8 +25,8 @@ allowed-tools:
 ```
 /research-lit → /graph-build → /frontier-mapping → /innovation-reflection (if due) → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
      ↓               ↓                ↓                           ↓                        ↓                  ↓                  ↓                    ↓
-  landscape      local corpus     graph frontier         实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
-  + gaps         + PaperNexus     + frontier files       + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
+  landscape      remote graph     graph frontier         实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
+  + gaps         + API-backed KG  + frontier files       + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
 ```
 
 ## Execution
@@ -46,12 +46,12 @@ allowed-tools:
 - 若 Hugging Face 拿不到有效 markdown，则先回退到 `/arxiv2md-api`
 - 若 direct markdown API 也失败，再回退到 `/arxiv2md`
 - 若三路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
-- 把 markdown / PDF 保存到 PaperNexus 源目录，再进入 `/graph-build`
+- 把 markdown / PDF 保存到 `{PROJ}/researcher/paper-staging/` 作为项目内 staging，再通过远程导入进入 `/graph-build`
 - 如果当前 graph 里还没有这些关键论文，必须先刷新 graph，再进入创新点分析
 
 **Output**:
 - `{PROJ}/researcher/LITERATURE.md`（landscape、gaps、key methods、baselines）
-- `paper_source_dir` 下的 markdown / PDF 语料
+- `{PROJ}/researcher/paper-staging/` 下的 markdown / PDF staging 语料
 `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 ### Phase 2: Graph Build
@@ -60,7 +60,7 @@ allowed-tools:
 /graph-build "$ARGUMENTS"
 ```
 
-构建或刷新 `{PROJ}/graph/` 下的 PaperNexus corpus。优先使用本地 PDF / Markdown 文献；若项目里尚无本地 paper corpus，则可用 `LITERATURE.md` 作为 bootstrap graph source。
+通过远程 PaperNexus API 对 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` 和 `{PROJ}/researcher/paper-staging/` 做 graph reconciliation。不要依赖任何 home 目录下的共享 PaperNexus 存储或本地 CLI graph roots。
 
 **Output**:
 - `{PROJ}/graph/PAPERNEXUS_STATUS.json`

@@ -45,10 +45,10 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 3:** If HF still has no valid markdown and the paper is on arXiv, try `/arxiv2md-api`
    - **Step 4:** If direct API markdown still fails, try `/arxiv2md`
    - **Step 5:** Validate the arXiv markdown; if it is HTML / error text / tiny stub, delete it and retry once
-   - **Step 6:** If all Markdown sources fail → download PDF to the shared PaperNexus source tree under `paper_source_dir/pdf/`
+   - **Step 6:** If all Markdown sources fail → download PDF to the project-local staging dir under `paper_source_dir/pdf/`
    - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
-   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task route (`POST /api/imports`) and its `.papernexus/imports/` task logs over manually copying the upload into the shared source tree
+   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task route (`POST /api/imports`) and its remote task logs over manually copying the upload into workflow-owned shared storage
    - **Step 10:** Use exactly one paper per queued import call. Do not send multi-file `files[]` batches to `/api/imports`; each paper must become its own remote task so timeout and progress are isolated
    - **Step 11:** Bound each queued import to at most 60 seconds total wait. If the task has not reached `completed` within 60 seconds, call `research_workflow.set_paper_ingestion` with `paper_operations=[{phase:\"import\",status:\"timed_out\",...}]`, report the timeout, and move on to the next paper instead of polling indefinitely
    - **Step 12:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
@@ -88,7 +88,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 
 Default path policy:
 - for new projects, keep `paper_source_dir` and `graph_source_dir` unset in the manifest unless the project explicitly overrides the shared-global defaults
-- keep project reports and state under `{PROJ}/`, but keep canonical paper source files under the shared PaperNexus source tree unless a project explicitly overrides it
+- in remote-only workflow mode, treat `paper_source_dir` as project-local staging under `{PROJ}/researcher/paper-staging/`, not as any home-directory shared PaperNexus storage
 
 Preferred filenames:
 
@@ -126,6 +126,7 @@ Rules:
 - `/graph-build` must reconcile the project's canonical paper selection against the shared global graph; do not create a second graph-only source tree for the same project
 - after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
 - if a remote PaperNexus API flow is used, assume authenticated access and resolve `Authorization: Bearer <token>` from the configured token source instead of assuming anonymous access
+- do not treat any home-directory shared PaperNexus storage as workflow-owned when remote access is configured
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
 
@@ -203,7 +204,7 @@ Rules:
    ```
 
 2. **If HuggingFace has markdown:**
-   - Saved to the shared `paper_source_dir/md/`
+   - Saved to the project-local staging dir `paper_source_dir/md/`
    - Save or rename it to the canonical filename immediately: arXiv ID first, otherwise normalized title
    - Must pass format validation before being counted as ingested
    - Add to graph reconciliation queue
