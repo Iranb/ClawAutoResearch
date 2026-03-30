@@ -40,6 +40,7 @@ export type StageBroadcastResult = {
 export type WorkflowStatusBroadcastStatus =
   | "started"
   | "continued"
+  | "completed"
   | "queued"
   | "blocked"
   | "waiting"
