@@ -110,7 +110,7 @@ idea 阶段的审计材料。
 - `graph_source_dir` 现在是可选覆盖项，不再是常规项目必填字段
 - 正常情况下，所有项目共享同一张全局 PaperNexus 图
 - 项目本地只记录 paper selection、presence check 和 graph readiness 元数据
-- 默认图索引通常位于 `~/.papernexus/index-store/.papernexus/`
+- 默认图索引应由配置中的远程 PaperNexus 服务与项目侧状态决定，不再依赖 `~/.papernexus/index-store/.papernexus/` 作为 workflow 默认来源
 
 ## 5. Writer 与评审阶段产物
 

@@ -119,12 +119,7 @@ Important guarantees:
 - graph presence is checked against the canonical paper set before novelty-sensitive work
 - stale or invalid downloads are rejected before they contaminate the shared graph inputs
 
-The default source roots are shared PaperNexus paths such as:
-
-- `~/.papernexus/papers`
-- `~/.papernexus/index-store`
-
-If a remote PaperNexus Web/API is configured in plugin policy, Researcher should prefer that remote endpoint for graph-heavy access and use the configured bearer-token env var instead of assuming anonymous local access. If a remote MinerU URL is also configured, PDF materialization should prefer that remote parser path before local Docling or Marker fallbacks.
+If a remote PaperNexus Web/API is configured in plugin policy, Researcher should treat that endpoint as the default graph access path and use project-local staging for temporary paper inputs. Do not assume `~/.papernexus/papers` or `~/.papernexus/index-store` are workflow-owned defaults. If a remote MinerU URL is also configured, PDF materialization should prefer that remote parser path before local Docling or Marker fallbacks.
 
 Project-local `graph/` keeps workflow-facing reports, checks, and frontier files; it is not a separate corpus directory.
 
