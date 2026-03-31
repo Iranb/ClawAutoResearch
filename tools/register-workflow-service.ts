@@ -19,6 +19,12 @@ import {
   recordBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
 } from "./workflow-fast-paths";
+import { readWorkflowAnnounceOutboxStore } from "./workflow-runtime-state.js";
+import {
+  orchestrateWorkflowTransition,
+  recordWorkflowAnnounceEvent,
+} from "./workflow-session-orchestrator.js";
+import { recoverWorkflowRuntimeState } from "./workflow-runtime-recovery.js";
 import {
   getIdleResearchStateSummary,
   listChannelProjectBindingsForWorkflow,
@@ -43,6 +49,7 @@ import {
   saveGateReviewStore,
   type GateReviewAttempt,
   type GateReviewReviewerRole,
+  type GateReviewResult,
 } from "./workflow-auto-gate";
 import {
   aggregateAutoModeDiscussionRound,
@@ -54,6 +61,7 @@ import {
   readAutoModeDiscussionStore,
   saveAutoModeDiscussionStore,
   type AutoModeDiscussionAttempt as AutoModeDiscussionReviewAttempt,
+  type AutoModeDiscussionResult,
 } from "./workflow-auto-discussion";
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 
@@ -230,12 +238,86 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function slugifyForIdempotency(value: string): string {
   return value.replace(/[^a-z0-9_.:-]+/gi, "-");
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function readGateReviewAnnounceResult(params: {
+  entries: Array<{ announceId: string; payload: Record<string, unknown> | null }>;
+  attempt: GateReviewAttempt;
+}): GateReviewResult | null {
+  if (!params.attempt.runId) {
+    return null;
+  }
+  const targetAnnounceId = `gate-review:${params.attempt.runId}:${params.attempt.reviewerRole}`;
+  const match = params.entries.find((entry) => entry.announceId === targetAnnounceId);
+  const payload = asRecord(match?.payload);
+  const result = asRecord(payload?.result);
+  if (result) {
+    const parsed = parseGateReviewResult(
+      JSON.stringify(result),
+      params.attempt.reviewerRole
+    );
+    return {
+      ...parsed,
+      createdAt: readString(result.createdAt) ?? parsed.createdAt,
+      runId: readString(result.runId) ?? params.attempt.runId,
+      rawText: readString(result.rawText) ?? parsed.rawText,
+    };
+  }
+  const rawText = readString(payload?.rawText ?? payload?.text);
+  if (!rawText) {
+    return null;
+  }
+  const parsed = parseGateReviewResult(rawText, params.attempt.reviewerRole);
+  return {
+    ...parsed,
+    runId: readString(payload?.runId) ?? parsed.runId ?? params.attempt.runId,
+  };
+}
+
+function readAutoModeDiscussionAnnounceResult(params: {
+  entries: Array<{ announceId: string; payload: Record<string, unknown> | null }>;
+  attempt: AutoModeDiscussionReviewAttempt;
+}): AutoModeDiscussionResult | null {
+  if (!params.attempt.runId) {
+    return null;
+  }
+  const targetAnnounceId = `auto-discussion:${params.attempt.runId}:${params.attempt.reviewerRole}`;
+  const match = params.entries.find((entry) => entry.announceId === targetAnnounceId);
+  const payload = asRecord(match?.payload);
+  const result = asRecord(payload?.result);
+  if (result) {
+    const parsed = parseAutoModeDiscussionResult(
+      JSON.stringify(result),
+      params.attempt.reviewerRole
+    );
+    return {
+      ...parsed,
+      createdAt: readString(result.createdAt) ?? parsed.createdAt,
+      runId: readString(result.runId) ?? params.attempt.runId,
+      rawText: readString(result.rawText) ?? parsed.rawText,
+    };
+  }
+  const rawText = readString(payload?.rawText ?? payload?.text);
+  if (!rawText) {
+    return null;
+  }
+  const parsed = parseAutoModeDiscussionResult(rawText, params.attempt.reviewerRole);
+  return {
+    ...parsed,
+    runId: readString(payload?.runId) ?? parsed.runId ?? params.attempt.runId,
+  };
 }
 
 function resolveWorkflowRequesterSessionKey(params: {
@@ -999,6 +1081,175 @@ function buildAutoStageLaunchKey(params: {
   ].join("::");
 }
 
+async function launchWorkflowDispatchTransition(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  source: string;
+  queueKey: string;
+  owner: DispatchableWorkflowRole;
+  projectRoot: string;
+  projectId: string | null;
+  requesterSessionKey: string;
+  requesterChannel?: string | null;
+  preferredSessionKeys: string[];
+  family: string;
+  kind: string;
+  stage: string | null;
+  summary: string;
+  command?: string | null;
+  mailboxMessageId?: string | null;
+  extraBody?: string | null;
+  autoModeActive: boolean;
+  fromRole?: string | null;
+  logger?: WorkflowCoordinatorLogger;
+}) {
+  return orchestrateWorkflowTransition({
+    transition: {
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      queueKey: params.queueKey,
+      source: params.source,
+      entryType: "dispatch_task",
+      ownerAgent: params.owner,
+      channelKey: params.requesterChannel ?? params.requesterSessionKey,
+      requesterSessionKey: params.requesterSessionKey,
+      messageChannel: params.requesterChannel ?? null,
+      preferredSessionKey: params.preferredSessionKeys[0] ?? null,
+      family: params.family,
+      kind: params.kind,
+      summary: params.summary,
+      parentSessionKey: params.requesterSessionKey,
+      depth: 1,
+      dispatchPayload: {
+        requesterChannel: params.requesterChannel ?? null,
+        requesterAccountId: null,
+        preferredSessionKeys: params.preferredSessionKeys,
+        fromRole: params.fromRole ?? "researcher",
+        toRole: params.owner,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: params.stage,
+        summary: params.summary,
+        command: params.command ?? null,
+        mailboxMessageId: params.mailboxMessageId ?? null,
+        extraBody: params.extraBody ?? null,
+        waitTimeoutMs: 5000,
+        retryOnTimeout: true,
+        enableSpawnFallback: true,
+        useWorkflowHandoff: true,
+        autoModeActive: params.autoModeActive,
+      },
+    },
+    spawn: async () => {
+      const dispatch = await handoffWorkflowTaskToAgent({
+        runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel ?? undefined,
+        preferredSessionKeys: params.preferredSessionKeys,
+        fromRole: params.fromRole ?? "researcher",
+        toRole: params.owner,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: params.stage,
+        summary: params.summary,
+        command: params.command ?? null,
+        mailboxMessageId: params.mailboxMessageId ?? null,
+        extraBody: params.extraBody ?? null,
+        waitTimeoutMs: 5000,
+        retryOnTimeout: true,
+        enableSpawnFallback: true,
+        autoModeActive: params.autoModeActive,
+        logger: params.logger,
+      });
+      if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+        throw new Error(
+          dispatch.error ??
+            `Failed to dispatch workflow transition ${params.queueKey}.`
+        );
+      }
+      return {
+        runId: dispatch.runId,
+        sessionKey: dispatch.sessionKey,
+        runtime:
+          dispatch.channel === "sessions_spawn"
+            ? "subagent"
+            : "legacy_dispatch",
+        role: params.owner,
+        agentId: params.owner,
+        ownerAgent: params.owner,
+        strategy: dispatch.strategy ?? "workflow_dispatch",
+        parentSessionKey: params.requesterSessionKey,
+        depth: 1,
+      };
+    },
+  });
+}
+
+async function launchWorkflowNestedRunTransition(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  source: string;
+  queueKey: string;
+  ownerAgent: string;
+  sessionKey: string;
+  requesterSessionKey: string;
+  projectRoot: string;
+  projectId: string | null;
+  family: string;
+  kind: string;
+  summary: string;
+  message: string;
+  idempotencyKey: string;
+  extraSystemPrompt: string;
+  depth?: number;
+}) {
+  return orchestrateWorkflowTransition({
+    transition: {
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      queueKey: params.queueKey,
+      source: params.source,
+      entryType: "background_run",
+      ownerAgent: params.ownerAgent,
+      channelKey: params.requesterSessionKey,
+      requesterSessionKey: params.requesterSessionKey,
+      preferredSessionKey: params.sessionKey,
+      family: params.family,
+      kind: params.kind,
+      summary: params.summary,
+      parentSessionKey: params.requesterSessionKey,
+      depth: params.depth ?? 1,
+      runPayload: {
+        message: params.message,
+        lane: "nested",
+        deliver: false,
+        idempotencyKey: params.idempotencyKey,
+        extraSystemPrompt: params.extraSystemPrompt,
+      },
+    },
+    spawn: async () => {
+      const started = await params.runtimeSubagent.run({
+        sessionKey: params.sessionKey,
+        message: params.message,
+        lane: "nested",
+        deliver: false,
+        idempotencyKey: params.idempotencyKey,
+        extraSystemPrompt: params.extraSystemPrompt,
+      });
+      return {
+        runId: started.runId,
+        sessionKey: params.sessionKey,
+        runtime: "subagent",
+        role: params.ownerAgent,
+        agentId: params.ownerAgent,
+        ownerAgent: params.ownerAgent,
+        parentSessionKey: params.requesterSessionKey,
+        depth: params.depth ?? 1,
+      };
+    },
+  });
+}
+
 export async function maybeLaunchAutoStageForProject(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -1245,6 +1496,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           kind: "workflow_stage_dispatch",
           projectId: params.projectId ?? undefined,
           projectRoot: params.projectRoot,
+          projectsRoot: params.workflowPolicy.projectsRoot,
         });
         if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
           await enqueueQueuedBackgroundWorkflowRun({
@@ -1256,6 +1508,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             kind: "workflow_stage_dispatch",
             projectId: params.projectId ?? undefined,
             projectRoot: params.projectRoot,
+            projectsRoot: params.workflowPolicy.projectsRoot,
             queueKey: launchKey,
             summary:
               `Queued the ${action.stage ?? params.autoIteratorResult.stageAfter ?? "current"} stage handoff until an idle Researcher service session becomes available.`,
@@ -1300,33 +1553,39 @@ export async function maybeLaunchAutoStageForProject(params: {
           };
         }
       }
-      const dispatch = await handoffWorkflowTaskToAgent({
+      const dispatchLaunch = await launchWorkflowDispatchTransition({
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
-        requesterSessionKey: requesterSessionKey ?? undefined,
+        source: "workflow_auto_stage",
+        queueKey: launchKey,
+        owner: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        requesterSessionKey: requesterSessionKey ?? defaultResearcherRequesterSessionKey,
         requesterChannel: requesterBinding.messageChannel ?? undefined,
         preferredSessionKeys:
           action.owner === "researcher"
-            ? [researcherSessionLease?.sessionKey ?? preferredResearcherSessionKeys?.[0] ?? defaultResearcherRequesterSessionKey]
-            : preferredResearcherSessionKeys,
+            ? [
+                researcherSessionLease?.sessionKey ??
+                  preferredResearcherSessionKeys?.[0] ??
+                  defaultResearcherRequesterSessionKey,
+              ]
+            : preferredResearcherSessionKeys ?? [],
+        family: "research",
+        kind: "workflow_stage_dispatch",
         fromRole: "researcher",
-        toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
         stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
         summary: action.summary,
         command: action.command,
         mailboxMessageId: action.mailboxMessageId ?? null,
         extraBody:
           "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
-        waitTimeoutMs: 5000,
-        retryOnTimeout: true,
-        enableSpawnFallback: true,
         autoModeActive:
-          (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !== "off",
+          (params.autoIteratorResult.effectiveAutoMode ??
+            params.workflowPolicy.autoMode) !== "off",
         logger: params.logger,
       });
-      if (!dispatch.dispatched) {
+      if (!dispatchLaunch.launched) {
         return {
           launched: false,
           reason: "dispatch_failed",
@@ -1334,11 +1593,11 @@ export async function maybeLaunchAutoStageForProject(params: {
           projectRoot: params.projectRoot,
           stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
           owner: action.owner,
-          sessionKey: dispatch.sessionKey,
-          runId: dispatch.runId,
-          dispatchStrategy: dispatch.strategy,
+          sessionKey: dispatchLaunch.sessionKey,
+          runId: dispatchLaunch.runId,
+          dispatchStrategy: dispatchLaunch.strategy,
           launchKey,
-          error: dispatch.error,
+          error: dispatchLaunch.error,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
@@ -1348,20 +1607,21 @@ export async function maybeLaunchAutoStageForProject(params: {
       if (
         action.owner === "researcher" &&
         researcherSessionLease?.channelKey &&
-        dispatch.runId &&
-        dispatch.sessionKey
+        dispatchLaunch.runId &&
+        dispatchLaunch.sessionKey
       ) {
         await recordBackgroundWorkflowRun({
           ownerAgent: "researcher",
           channelKey: researcherSessionLease.channelKey,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
-          backgroundSessionKey: dispatch.sessionKey,
-          runId: dispatch.runId,
+          backgroundSessionKey: dispatchLaunch.sessionKey,
+          runId: dispatchLaunch.runId,
           queueKey: launchKey,
           kind: "workflow_stage_dispatch",
           family: "research",
           projectId: params.projectId ?? undefined,
           projectRoot: params.projectRoot,
+          projectsRoot: params.workflowPolicy.projectsRoot,
         });
       }
 
@@ -1373,7 +1633,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         projectRoot: params.projectRoot,
         fromAgent: "researcher",
         toAgent: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
-        channel: dispatch.channel ?? "sessions_send",
+        channel: "sessions_spawn",
       });
       return {
         launched: true,
@@ -1382,9 +1642,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         projectRoot: params.projectRoot,
         stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
         owner: action.owner,
-        sessionKey: dispatch.sessionKey,
-        runId: dispatch.runId,
-        dispatchStrategy: dispatch.strategy,
+        sessionKey: dispatchLaunch.sessionKey,
+        runId: dispatchLaunch.runId,
+        dispatchStrategy: dispatchLaunch.strategy,
         launchKey,
         error: null,
         reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
@@ -1398,94 +1658,176 @@ export async function maybeLaunchAutoStageForProject(params: {
 async function pollGateReviewAttempts(params: {
   runtimeSubagent: RuntimeSubagentApi;
   attempts: GateReviewAttempt[];
+  projectRoot: string;
+  projectId: string | null;
 }) {
-  return Promise.all(
-    params.attempts.map(async (attempt) => {
-      if (attempt.status !== "pending" || !attempt.runId || !params.runtimeSubagent.waitForRun) {
-        return attempt;
-      }
-      const waited = await params.runtimeSubagent.waitForRun({
-        runId: attempt.runId,
-        timeoutMs: 1,
+  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
+  const nextAttempts: GateReviewAttempt[] = [];
+
+  for (const attempt of params.attempts) {
+    if (attempt.status !== "pending") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+
+    const announcedResult = readGateReviewAnnounceResult({
+      entries: announceStore.entries,
+      attempt,
+    });
+    if (announcedResult) {
+      nextAttempts.push({
+        ...attempt,
+        status: "completed",
+        completedAt: attempt.completedAt ?? nowIso(),
+        error: null,
+        result: {
+          ...announcedResult,
+          runId: announcedResult.runId ?? attempt.runId,
+        },
       });
-      if (waited.status === "timeout") {
-        return attempt;
-      }
-      if (waited.status === "error") {
-        return {
-          ...attempt,
-          status: "error" as const,
-          completedAt: nowIso(),
-          error: waited.error ?? "gate review run failed",
-          result: parseGateReviewResult(
+      continue;
+    }
+
+    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+      nextAttempts.push(attempt);
+      continue;
+    }
+
+    const waited = await params.runtimeSubagent.waitForRun({
+      runId: attempt.runId,
+      timeoutMs: 1,
+    });
+    if (waited.status === "timeout") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (waited.status === "error") {
+      const failedAttempt = {
+        ...attempt,
+        status: "error" as const,
+        completedAt: nowIso(),
+        error: waited.error ?? "gate review run failed",
+        result: parseGateReviewResult(
+          JSON.stringify({
+            verdict: "block",
+            overallScore: 0,
+            criticalBlockers: [waited.error ?? "gate review run failed"],
+            summary: "Gate review run failed before returning a valid response.",
+          }),
+          attempt.reviewerRole
+        ),
+      };
+      await recordWorkflowAnnounceEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        announceId: `gate-review:${attempt.runId}:${attempt.reviewerRole}`,
+        parentSessionKey: null,
+        childSessionKey: attempt.sessionKey,
+        deliveryMode: "internal",
+        summary: `Gate reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+        payload: {
+          reviewerRole: attempt.reviewerRole,
+          runId: attempt.runId,
+          status: "error",
+          error: failedAttempt.error,
+          completedAt: failedAttempt.completedAt,
+          result: failedAttempt.result,
+        },
+      });
+      nextAttempts.push(failedAttempt);
+      continue;
+    }
+
+    const messages = params.runtimeSubagent.getSessionMessages
+      ? await params.runtimeSubagent.getSessionMessages({
+          sessionKey: attempt.sessionKey,
+          limit: 20,
+        })
+      : { messages: [] };
+    const latestText = extractLatestAssistantText(messages.messages);
+    const completedAttempt = {
+      ...attempt,
+      status: "completed" as const,
+      completedAt: nowIso(),
+      error: null,
+      result: {
+        ...parseGateReviewResult(
+          latestText ??
             JSON.stringify({
               verdict: "block",
               overallScore: 0,
-              criticalBlockers: [waited.error ?? "gate review run failed"],
-              summary: "Gate review run failed before returning a valid response.",
+              criticalBlockers: ["Reviewer returned no readable response."],
+              summary: "No readable gate review response was found in the session transcript.",
             }),
-            attempt.reviewerRole
-          ),
-        };
-      }
-      const messages = params.runtimeSubagent.getSessionMessages
-        ? await params.runtimeSubagent.getSessionMessages({
-            sessionKey: attempt.sessionKey,
-            limit: 20,
-          })
-        : { messages: [] };
-      const latestText = extractLatestAssistantText(messages.messages);
-      return {
-        ...attempt,
-        status: "completed" as const,
-        completedAt: nowIso(),
-        error: null,
-        result: {
-          ...parseGateReviewResult(
-            latestText ??
-              JSON.stringify({
-                verdict: "block",
-                overallScore: 0,
-                criticalBlockers: ["Reviewer returned no readable response."],
-                summary: "No readable gate review response was found in the session transcript.",
-              }),
-            attempt.reviewerRole
-          ),
-          runId: attempt.runId,
-        },
-      };
-    })
-  );
+          attempt.reviewerRole
+        ),
+        runId: attempt.runId,
+      },
+    };
+    await recordWorkflowAnnounceEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      announceId: `gate-review:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Gate reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        completedAt: completedAttempt.completedAt,
+        result: completedAttempt.result,
+      },
+    });
+    nextAttempts.push(completedAttempt);
+  }
+
+  return nextAttempts;
 }
 
 async function pollAutoModeDiscussionAttempts(params: {
   runtimeSubagent: RuntimeSubagentApi;
   attempts: AutoModeDiscussionReviewAttempt[];
+  projectRoot: string;
+  projectId: string | null;
+  projectsRoot?: string | null;
 }) {
-  return Promise.all(
-    params.attempts.map(async (attempt) => {
-      if (attempt.status !== "pending") {
-        return attempt;
-      }
-      if (!attempt.runId && attempt.queueKey) {
-        const activeQueuedRun = await getBackgroundWorkflowRunByQueueKey({
-          queueKey: attempt.queueKey,
-          runtimeSubagent: params.runtimeSubagent,
-        });
-        if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
-          return {
-            ...attempt,
-            sessionKey: activeQueuedRun.backgroundSessionKey,
-            runId: activeQueuedRun.runId,
-          };
-        }
+  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
+  const nextAttempts: AutoModeDiscussionReviewAttempt[] = [];
+
+  for (const originalAttempt of params.attempts) {
+    let attempt = originalAttempt;
+    if (attempt.status !== "pending") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (!attempt.runId && attempt.queueKey) {
+      const activeQueuedRun = await getBackgroundWorkflowRunByQueueKey({
+        queueKey: attempt.queueKey,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        projectsRoot: params.projectsRoot,
+        runtimeSubagent: params.runtimeSubagent,
+      });
+      if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
+        attempt = {
+          ...attempt,
+          sessionKey: activeQueuedRun.backgroundSessionKey,
+          runId: activeQueuedRun.runId,
+        };
+      } else {
         const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
           queueKey: attempt.queueKey,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          projectsRoot: params.projectsRoot,
         });
         if (pendingQueueState.queued || pendingQueueState.active) {
-          return attempt;
+          nextAttempts.push(attempt);
+          continue;
         }
-        return {
+        nextAttempts.push({
           ...attempt,
           status: "error" as const,
           completedAt: nowIso(),
@@ -1500,66 +1842,124 @@ async function pollAutoModeDiscussionAttempts(params: {
             }),
             attempt.reviewerRole
           ),
-        };
+        });
+        continue;
       }
-      if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
-        return attempt;
-      }
-      const waited = await params.runtimeSubagent.waitForRun({
-        runId: attempt.runId,
-        timeoutMs: 1,
+    }
+    const announcedResult = readAutoModeDiscussionAnnounceResult({
+      entries: announceStore.entries,
+      attempt,
+    });
+    if (announcedResult) {
+      nextAttempts.push({
+        ...attempt,
+        status: "completed",
+        completedAt: attempt.completedAt ?? nowIso(),
+        error: null,
+        result: {
+          ...announcedResult,
+          runId: announcedResult.runId ?? attempt.runId,
+        },
       });
-      if (waited.status === "timeout") {
-        return attempt;
-      }
-      if (waited.status === "error") {
-        return {
-          ...attempt,
-          status: "error" as const,
-          completedAt: nowIso(),
-          error: waited.error ?? "auto discussion run failed",
-          result: parseAutoModeDiscussionResult(
+      continue;
+    }
+    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    const waited = await params.runtimeSubagent.waitForRun({
+      runId: attempt.runId,
+      timeoutMs: 1,
+    });
+    if (waited.status === "timeout") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (waited.status === "error") {
+      const failedAttempt = {
+        ...attempt,
+        status: "error" as const,
+        completedAt: nowIso(),
+        error: waited.error ?? "auto discussion run failed",
+        result: parseAutoModeDiscussionResult(
+          JSON.stringify({
+            riskAssessment: "blocked",
+            confidence: 0,
+            recommendedOwner: "researcher",
+            blockers: [waited.error ?? "auto discussion run failed"],
+            summary: "Auto discussion run failed before returning a valid response.",
+          }),
+          attempt.reviewerRole
+        ),
+      };
+      await recordWorkflowAnnounceEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        announceId: `auto-discussion:${attempt.runId}:${attempt.reviewerRole}`,
+        parentSessionKey: null,
+        childSessionKey: attempt.sessionKey,
+        deliveryMode: "internal",
+        summary: `Auto discussion reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+        payload: {
+          reviewerRole: attempt.reviewerRole,
+          runId: attempt.runId,
+          status: "error",
+          error: failedAttempt.error,
+          completedAt: failedAttempt.completedAt,
+          result: failedAttempt.result,
+        },
+      });
+      nextAttempts.push(failedAttempt);
+      continue;
+    }
+    const messages = params.runtimeSubagent.getSessionMessages
+      ? await params.runtimeSubagent.getSessionMessages({
+          sessionKey: attempt.sessionKey,
+          limit: 20,
+        })
+      : { messages: [] };
+    const latestText = extractLatestAssistantText(messages.messages);
+    const completedAttempt = {
+      ...attempt,
+      status: "completed" as const,
+      completedAt: nowIso(),
+      error: null,
+      result: {
+        ...parseAutoModeDiscussionResult(
+          latestText ??
             JSON.stringify({
               riskAssessment: "blocked",
               confidence: 0,
               recommendedOwner: "researcher",
-              blockers: [waited.error ?? "auto discussion run failed"],
-              summary: "Auto discussion run failed before returning a valid response.",
+              blockers: ["Reviewer returned no readable response."],
+              summary:
+                "No readable auto discussion response was found in the session transcript.",
             }),
-            attempt.reviewerRole
-          ),
-        };
-      }
-      const messages = params.runtimeSubagent.getSessionMessages
-        ? await params.runtimeSubagent.getSessionMessages({
-            sessionKey: attempt.sessionKey,
-            limit: 20,
-          })
-        : { messages: [] };
-      const latestText = extractLatestAssistantText(messages.messages);
-      return {
-        ...attempt,
-        status: "completed" as const,
-        completedAt: nowIso(),
-        error: null,
-        result: {
-          ...parseAutoModeDiscussionResult(
-            latestText ??
-              JSON.stringify({
-                riskAssessment: "blocked",
-                confidence: 0,
-                recommendedOwner: "researcher",
-                blockers: ["Reviewer returned no readable response."],
-                summary:
-                  "No readable auto discussion response was found in the session transcript.",
-              }),
-            attempt.reviewerRole
-          ),
-          runId: attempt.runId,
-        },
-      };
-    })
-  );
+          attempt.reviewerRole
+        ),
+        runId: attempt.runId,
+      },
+    };
+    await recordWorkflowAnnounceEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      announceId: `auto-discussion:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Auto discussion reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        completedAt: completedAttempt.completedAt,
+        result: completedAttempt.result,
+      },
+    });
+    nextAttempts.push(completedAttempt);
+  }
+
+  return nextAttempts;
 }
 
 function buildAutoMitigationLaunchKey(params: {
@@ -1723,6 +2123,8 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
         const attempts = await pollGateReviewAttempts({
           runtimeSubagent: params.runtimeSubagent,
           attempts: currentRound.attempts,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
         });
         const nextRound = {
           ...currentRound,
@@ -1778,9 +2180,22 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           requesterSessionKey: requesterSessionKey ?? undefined,
           targetRole: reviewerRole,
         });
+        const queueKey = slugifyForIdempotency(
+          `openclaw-research:auto-gate:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
+        );
         try {
-          const started = await params.runtimeSubagent.run({
+          const started = await launchWorkflowNestedRunTransition({
+            runtimeSubagent: params.runtimeSubagent,
+            source: "workflow_auto_gate_review",
+            queueKey,
+            ownerAgent: reviewerRole,
             sessionKey,
+            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            family: "review",
+            kind: "workflow_auto_gate_review",
+            summary: `Run auto gate review for ${reviewerRole}.`,
             message: buildAutoGateReviewPrompt({
               projectRoot: params.projectRoot,
               projectId: params.projectId,
@@ -1790,15 +2205,16 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
               packetPath: packet.packetPath,
               packetJsonPath: packet.packetJsonPath,
             }),
-            lane: "nested",
-            deliver: false,
-            idempotencyKey: slugifyForIdempotency(
-              `openclaw-research:auto-gate:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
-            ),
+            idempotencyKey: queueKey,
             extraSystemPrompt:
               "Workflow auto gate reviewer.\n" +
               "Review only the supplied gate packet and return the required JSON schema.",
           });
+          if (!started.launched || !started.runId) {
+            throw new Error(
+              started.error ?? "Gate reviewer run failed to launch through the workflow runtime."
+            );
+          }
           attempts.push({
             reviewerRole,
             sessionKey,
@@ -2023,6 +2439,9 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         const attempts = await pollAutoModeDiscussionAttempts({
           runtimeSubagent: params.runtimeSubagent,
           attempts: currentRound.attempts,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          projectsRoot: params.workflowPolicy.projectsRoot,
         });
         const nextRound = {
           ...currentRound,
@@ -2150,6 +2569,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             kind: "workflow_auto_discussion",
             projectId: params.projectId ?? undefined,
             projectRoot: params.projectRoot,
+            projectsRoot: params.workflowPolicy.projectsRoot,
           });
           if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
             await enqueueQueuedBackgroundWorkflowRun({
@@ -2161,6 +2581,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               kind: "workflow_auto_discussion",
               projectId: params.projectId ?? undefined,
               projectRoot: params.projectRoot,
+              projectsRoot: params.workflowPolicy.projectsRoot,
               queueKey: researcherDiscussionQueueKey,
               summary:
                 "Queued the researcher auto discussion reviewer until an idle Researcher service session becomes available.",
@@ -2208,8 +2629,21 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           sessionKey = researcherSessionLease.sessionKey;
         }
         try {
-          const started = await params.runtimeSubagent.run({
+          const queueKey = slugifyForIdempotency(
+            `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
+          );
+          const started = await launchWorkflowNestedRunTransition({
+            runtimeSubagent: params.runtimeSubagent,
+            source: "workflow_auto_discussion",
+            queueKey,
+            ownerAgent: reviewerRole,
             sessionKey,
+            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            family: "review",
+            kind: "workflow_auto_discussion",
+            summary: `Run auto discussion review for ${reviewerRole}.`,
             message: buildAutoModeDiscussionPrompt({
               projectRoot: params.projectRoot,
               projectId: params.projectId,
@@ -2219,15 +2653,17 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               packetPath: packet.packetPath,
               packetJsonPath: packet.packetJsonPath,
             }),
-            lane: "nested",
-            deliver: false,
-            idempotencyKey: slugifyForIdempotency(
-              `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
-            ),
+            idempotencyKey: queueKey,
             extraSystemPrompt:
               "Workflow auto risk discussion reviewer.\n" +
               "Review only the supplied risk packet and return the required JSON schema.",
           });
+          if (!started.launched || !started.runId) {
+            throw new Error(
+              started.error ??
+                "Auto discussion reviewer failed to launch through the workflow runtime."
+            );
+          }
           if (reviewerRole === "researcher" && researcherSessionLease?.channelKey) {
             await recordBackgroundWorkflowRun({
               ownerAgent: "researcher",
@@ -2239,6 +2675,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               family: "research",
               projectId: params.projectId ?? undefined,
               projectRoot: params.projectRoot,
+              projectsRoot: params.workflowPolicy.projectsRoot,
             });
           }
           attempts.push({
@@ -2450,6 +2887,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           kind: "workflow_mitigation_dispatch",
           projectId: params.projectId ?? undefined,
           projectRoot: params.projectRoot,
+          projectsRoot: params.workflowPolicy.projectsRoot,
         });
         if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
           await enqueueQueuedBackgroundWorkflowRun({
@@ -2461,6 +2899,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             kind: "workflow_mitigation_dispatch",
             projectId: params.projectId ?? undefined,
             projectRoot: params.projectRoot,
+            projectsRoot: params.workflowPolicy.projectsRoot,
             queueKey: launchKey,
             summary:
               "Queued the mitigation pass until an idle Researcher service session becomes available.",
@@ -2513,10 +2952,15 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           };
         }
       }
-      const dispatch = await handoffWorkflowTaskToAgent({
+      const dispatchLaunch = await launchWorkflowDispatchTransition({
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
-        requesterSessionKey: requesterSessionKey ?? undefined,
+        source: "workflow_auto_mitigation",
+        queueKey: launchKey,
+        owner,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        requesterSessionKey: requesterSessionKey ?? defaultResearcherRequesterSessionKey,
         requesterChannel: requesterBinding.messageChannel ?? undefined,
         preferredSessionKeys:
           owner === "researcher"
@@ -2525,11 +2969,10 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
                   preferredResearcherSessionKeys?.[0] ??
                   defaultResearcherRequesterSessionKey,
               ]
-            : preferredResearcherSessionKeys,
+            : preferredResearcherSessionKeys ?? [],
+        family: "research",
+        kind: "workflow_mitigation_dispatch",
         fromRole: "researcher",
-        toRole: owner,
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
         stage: params.autoIteratorResult.stageAfter ?? null,
         summary:
           params.discussionAttempt.summary ??
@@ -2543,14 +2986,12 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           actionItems: params.discussionAttempt.actionItems,
           blockers: params.discussionAttempt.blockers,
         }),
-        waitTimeoutMs: 5000,
-        retryOnTimeout: true,
-        enableSpawnFallback: true,
         autoModeActive:
-          (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !== "off",
+          (params.autoIteratorResult.effectiveAutoMode ??
+            params.workflowPolicy.autoMode) !== "off",
         logger: params.logger,
       });
-      if (!dispatch.dispatched) {
+      if (!dispatchLaunch.launched) {
         return {
           launched: false,
           reason: "dispatch_failed",
@@ -2559,10 +3000,10 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           fingerprint: params.discussionAttempt.fingerprint,
           stage: params.discussionAttempt.stage,
           owner,
-          sessionKey: dispatch.sessionKey,
-          runId: dispatch.runId,
-          dispatchStrategy: dispatch.strategy,
-          error: dispatch.error,
+          sessionKey: dispatchLaunch.sessionKey,
+          runId: dispatchLaunch.runId,
+          dispatchStrategy: dispatchLaunch.strategy,
+          error: dispatchLaunch.error,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
@@ -2572,20 +3013,21 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
       if (
         owner === "researcher" &&
         researcherSessionLease?.channelKey &&
-        dispatch.runId &&
-        dispatch.sessionKey
+        dispatchLaunch.runId &&
+        dispatchLaunch.sessionKey
       ) {
         await recordBackgroundWorkflowRun({
           ownerAgent: "researcher",
           channelKey: researcherSessionLease.channelKey,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
-          backgroundSessionKey: dispatch.sessionKey,
-          runId: dispatch.runId,
+          backgroundSessionKey: dispatchLaunch.sessionKey,
+          runId: dispatchLaunch.runId,
           queueKey: launchKey,
           kind: "workflow_mitigation_dispatch",
           family: "research",
           projectId: params.projectId ?? undefined,
           projectRoot: params.projectRoot,
+          projectsRoot: params.workflowPolicy.projectsRoot,
         });
       }
 
@@ -2597,7 +3039,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         projectRoot: params.projectRoot,
         fromAgent: "researcher",
         toAgent: owner,
-        channel: dispatch.channel ?? "sessions_send",
+        channel: "sessions_spawn",
       });
       return {
         launched: true,
@@ -2607,9 +3049,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         fingerprint: params.discussionAttempt.fingerprint,
         stage: params.discussionAttempt.stage,
         owner,
-        sessionKey: dispatch.sessionKey,
-        runId: dispatch.runId,
-        dispatchStrategy: dispatch.strategy,
+        sessionKey: dispatchLaunch.sessionKey,
+        runId: dispatchLaunch.runId,
+        dispatchStrategy: dispatchLaunch.strategy,
         error: null,
         reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
@@ -2658,6 +3100,7 @@ export function createWorkflowCoordinatorService(
         const drainedQueue = await drainQueuedBackgroundWorkflowRuns({
           runtimeSubagent: plugin.api.runtime?.subagent,
           workflowPolicy,
+          projectsRoot: workflowPolicy.projectsRoot,
         });
         const results = await runWorkflowCoordinatorPass({
           projectsRoot: workflowPolicy.projectsRoot,
@@ -2668,6 +3111,37 @@ export function createWorkflowCoordinatorService(
           logger,
           deps,
         });
+        await Promise.all(
+          results.map((entry) =>
+            recoverWorkflowRuntimeState({
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              staleSessionAgeMs: 15 * 60 * 1000,
+              sendBroadcast: async (broadcastEntry) => {
+                const result = await maybeBroadcastWorkflowStatusUpdate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  sessionKey: broadcastEntry.sessionKey,
+                  projectId: broadcastEntry.projectId,
+                  projectRoot: broadcastEntry.projectRoot,
+                  status: broadcastEntry.status,
+                  stage: broadcastEntry.stage,
+                  summary: broadcastEntry.summary,
+                  idempotencyKeySuffix: broadcastEntry.broadcastId,
+                });
+                if (!result.broadcasted || !result.runId) {
+                  throw new Error(
+                    result.reasonSkipped ??
+                      "Workflow runtime recovery broadcast could not be delivered."
+                  );
+                }
+                return {
+                  runId: result.runId,
+                  sessionKey: result.sessionKey,
+                };
+              },
+            })
+          )
+        );
         const autoGateReviews = await Promise.all(
           results.map((entry) =>
             maybeAdvanceAutoGateReviewForProject({

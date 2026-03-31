@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import {
+  buildWorkflowRuntimeSessionBinding,
+  type WorkflowRuntimeSessionBinding,
+} from "./workflow-subagent-sessions";
 
 export interface ChannelProjectBindingPolicy {
   enableChannelProjectBindings?: boolean;
@@ -15,6 +19,10 @@ export interface ChannelProjectBindingContext {
   messageChannel?: string;
   channelKey?: string;
   projectRoot?: string;
+  role?: string;
+  parentSessionKey?: string;
+  threadBindingKey?: string;
+  depth?: number;
 }
 
 export interface ChannelProjectBindingRecord {
@@ -28,6 +36,14 @@ export interface ChannelProjectBindingRecord {
   updatedAt: string;
   boundByAgent: string | null;
   notes: string | null;
+  workflowRole: string | null;
+  workflowSessionKey: string | null;
+  workflowSessionId: string | null;
+  parentWorkflowSessionKey: string | null;
+  threadBindingKey: string | null;
+  depth: number | null;
+  lineageKey: string | null;
+  workflowBindingMode: "explicit_thread" | "derived_thread" | "channel_only";
 }
 
 type ChannelProjectBindingsStore = {
@@ -161,6 +177,21 @@ function normalizeRecord(record: Partial<ChannelProjectBindingRecord>): ChannelP
     updatedAt: asString(record.updatedAt) ?? new Date(0).toISOString(),
     boundByAgent: normalizeChannelKey(asString(record.boundByAgent) ?? null),
     notes: asString(record.notes),
+    workflowRole: asString(record.workflowRole) ?? null,
+    workflowSessionKey: asString(record.workflowSessionKey) ?? null,
+    workflowSessionId: asString(record.workflowSessionId) ?? null,
+    parentWorkflowSessionKey: asString(record.parentWorkflowSessionKey) ?? null,
+    threadBindingKey: asString(record.threadBindingKey) ?? null,
+    depth:
+      typeof record.depth === "number" && Number.isFinite(record.depth)
+        ? Math.max(0, Math.floor(record.depth))
+        : null,
+    lineageKey: asString(record.lineageKey) ?? null,
+    workflowBindingMode:
+      record.workflowBindingMode === "explicit_thread" ||
+      record.workflowBindingMode === "derived_thread"
+        ? record.workflowBindingMode
+        : "channel_only",
   };
 }
 
@@ -458,6 +489,7 @@ export async function setChannelProjectBinding(params: {
   messageChannel?: string | null;
   boundByAgent?: string | null;
   notes?: string | null;
+  runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }): Promise<{
   enabled: boolean;
   storePath: string;
@@ -483,6 +515,18 @@ export async function setChannelProjectBinding(params: {
   const store = readStore(storePath);
   const now = new Date().toISOString();
   const existing = store.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
+  const runtimeSession =
+    params.runtimeSession ??
+    buildWorkflowRuntimeSessionBinding({
+      projectRoot,
+      projectId: params.projectId,
+      role: asString(context.role) ?? asString(params.boundByAgent) ?? null,
+      sessionKey: context.sessionKey,
+      sessionId: context.sessionId,
+      parentSessionKey: context.parentSessionKey,
+      threadBindingKey: context.threadBindingKey,
+      depth: context.depth,
+    });
   const binding: ChannelProjectBindingRecord = {
     channelKey,
     projectRoot,
@@ -499,6 +543,14 @@ export async function setChannelProjectBinding(params: {
       existing?.boundByAgent ??
       null,
     notes: asString(params.notes) ?? existing?.notes ?? null,
+    workflowRole: runtimeSession.role,
+    workflowSessionKey: runtimeSession.sessionKey,
+    workflowSessionId: runtimeSession.sessionId,
+    parentWorkflowSessionKey: runtimeSession.parentSessionKey,
+    threadBindingKey: runtimeSession.threadBindingKey,
+    depth: runtimeSession.depth,
+    lineageKey: runtimeSession.lineageKey,
+    workflowBindingMode: runtimeSession.bindingMode,
   };
   store.bindings = [
     ...store.bindings.filter((entry) => entry.channelKey !== channelKey),

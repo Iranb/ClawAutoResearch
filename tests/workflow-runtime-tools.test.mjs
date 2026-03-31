@@ -10,6 +10,11 @@ import {
   recordBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
+import {
+  getWorkflowRuntimeQueuePath,
+  readWorkflowRuntimeEvents,
+  getWorkflowRuntimeSessionsPath,
+} from "../tools/workflow-runtime-state.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
 
 async function makeProjectRoot() {
@@ -1214,5 +1219,53 @@ test("research_workflow runtime-state actions persist manifest state and append 
         event.functionName === "runWorkflowAutoIterator" &&
         event.details?.stageBefore
     )
+  );
+  const runtimeEvents = await readWorkflowRuntimeEvents(projectRoot);
+  assert.ok(
+    runtimeEvents.some(
+      (event) =>
+        event.kind === "trace_tool_action" &&
+        event.details?.functionName === "setWritingSessionState" &&
+        event.details?.action === "set_writing_session"
+    )
+  );
+});
+
+test("research_workflow migrate_runtime_state initializes project-local runtime files and manifest audit metadata", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const migrated = await executeWorkflowTool(tool, {
+    action: "migrate_runtime_state",
+    runtimeState: {
+      compatibilityMode: "sessions_spawn_runtime",
+      reason: "tool-test",
+      notes: ["initialize runtime outboxes"],
+    },
+  });
+
+  assert.equal(migrated.compatibilityMode, "sessions_spawn_runtime");
+  await fs.access(getWorkflowRuntimeQueuePath(projectRoot));
+  await fs.access(getWorkflowRuntimeSessionsPath(projectRoot));
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.audit.runtime_framework, "sessions_spawn_v1");
+  assert.equal(
+    manifest.audit.runtime_migration.compatibility_mode,
+    "sessions_spawn_runtime"
   );
 });

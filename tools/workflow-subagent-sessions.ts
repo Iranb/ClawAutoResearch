@@ -2,6 +2,10 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 const PAPERNEXUS_CLI_LABELS = [
   "research-brief",
   "brainstorm-brief",
@@ -201,6 +205,61 @@ export function normalizeWorkflowSubagentParentSessionKey(
     return raw.slice(0, subagentMarker);
   }
   return raw;
+}
+
+export type WorkflowRuntimeSessionBinding = {
+  projectRoot: string;
+  projectId: string | null;
+  role: string | null;
+  sessionKey: string | null;
+  sessionId: string | null;
+  parentSessionKey: string | null;
+  threadBindingKey: string | null;
+  depth: number | null;
+  lineageKey: string | null;
+  bindingMode: "explicit_thread" | "derived_thread" | "channel_only";
+};
+
+export function buildWorkflowRuntimeSessionBinding(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  role?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  parentSessionKey?: string | null;
+  threadBindingKey?: string | null;
+  depth?: number | null;
+}): WorkflowRuntimeSessionBinding {
+  const sessionKey = readString(params.sessionKey);
+  const parentSessionKey =
+    readString(params.parentSessionKey) ?? normalizeWorkflowSubagentParentSessionKey(sessionKey);
+  const explicitThreadBindingKey = readString(params.threadBindingKey);
+  const derivedThreadBindingKey = explicitThreadBindingKey ?? parentSessionKey ?? sessionKey;
+  const normalizedDepth =
+    readNumber(params.depth) !== null
+      ? Math.max(0, Math.floor(readNumber(params.depth) ?? 0))
+      : sessionKey && sessionKey.includes(":subagent:")
+        ? 1
+        : null;
+
+  return {
+    projectRoot: params.projectRoot,
+    projectId: readString(params.projectId) ?? null,
+    role: readString(params.role),
+    sessionKey,
+    sessionId: readString(params.sessionId),
+    parentSessionKey,
+    threadBindingKey: derivedThreadBindingKey,
+    depth: normalizedDepth,
+    lineageKey: [readString(params.projectId) ?? null, readString(params.role) ?? null, parentSessionKey, sessionKey]
+      .filter((value): value is string => Boolean(value))
+      .join(":"),
+    bindingMode: explicitThreadBindingKey
+      ? "explicit_thread"
+      : derivedThreadBindingKey
+        ? "derived_thread"
+        : "channel_only",
+  };
 }
 
 export function isWorkflowSubagentSessionKey(

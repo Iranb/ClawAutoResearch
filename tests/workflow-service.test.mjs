@@ -19,6 +19,10 @@ import {
   drainQueuedBackgroundWorkflowRuns,
 } from "../tools/workflow-fast-paths.ts";
 import {
+  readWorkflowRuntimeQueueStore,
+  readWorkflowRuntimeSessionsStore,
+} from "../tools/workflow-runtime-state.ts";
+import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
   listWorkflowCoordinatorProjects,
@@ -29,6 +33,7 @@ import {
   maybeLaunchIdleResearchForProject,
   runWorkflowCoordinatorPass,
 } from "../tools/register-workflow-service.ts";
+import { recordWorkflowAnnounceEvent } from "../tools/workflow-session-orchestrator.ts";
 import { readGateReviewStore } from "../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.ts";
@@ -161,9 +166,15 @@ test("runWorkflowCoordinatorPass invokes auto iterator in service mode", async (
   assert.equal(results[0].projectId, "alpha");
 });
 
-test("maybeLaunchIdleResearchForProject starts one bounded researcher background run for a due idle topic", async () => {
+test("maybeLaunchIdleResearchForProject starts one bounded researcher background run for a due idle topic", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = path.join(projectsRoot, "alpha");
   const runs = [];
   const launchedDueKeys = new Map();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
 
   const launch = await maybeLaunchIdleResearchForProject({
     runtimeSubagent: {
@@ -174,12 +185,12 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
     },
     workflowPolicy: {
       enableChannelProjectBindings: true,
-      projectsRoot: "/tmp/projects",
+      projectsRoot,
       heartbeatBackgroundChecks: true,
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
     },
-    projectRoot: "/tmp/projects/alpha",
+    projectRoot: alphaRoot,
     projectId: "alpha",
     autoIteratorResult: {
       recommendedActions: [
@@ -206,11 +217,11 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
       listChannelProjectBindingsForWorkflow() {
         return {
           enabled: true,
-          storePath: "/tmp/projects",
+          storePath: projectsRoot,
           bindings: [
             {
               channelKey: "discord:group:paper-lab",
-              projectRoot: "/tmp/projects/alpha",
+              projectRoot: alphaRoot,
               projectId: "alpha",
               messageChannel: "discord",
               sessionKeySample: "agent:coder:discord:group:paper-lab",
@@ -249,12 +260,12 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
     },
     workflowPolicy: {
       enableChannelProjectBindings: true,
-      projectsRoot: "/tmp/projects",
+      projectsRoot,
       heartbeatBackgroundChecks: true,
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
     },
-    projectRoot: "/tmp/projects/alpha",
+    projectRoot: alphaRoot,
     projectId: "alpha",
     autoIteratorResult: {
       recommendedActions: [
@@ -281,7 +292,7 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
       listChannelProjectBindingsForWorkflow() {
         return {
           enabled: true,
-          storePath: "/tmp/projects",
+          storePath: projectsRoot,
           bindings: [],
         };
       },
@@ -295,6 +306,9 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
 
 test("maybeLaunchIdleResearchForProject reports channel capacity pressure instead of masking it as runtime failure", async (t) => {
   const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = path.join(projectsRoot, "alpha");
+  const betaRoot = path.join(projectsRoot, "beta");
+  const gammaRoot = path.join(projectsRoot, "gamma");
   const runCalls = [];
   t.after(async () => {
     await fs.rm(projectsRoot, { recursive: true, force: true });
@@ -315,7 +329,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
     },
-    projectRoot: "/tmp/projects/alpha",
+    projectRoot: alphaRoot,
     projectId: "alpha",
     autoIteratorResult: {
       recommendedActions: [
@@ -346,7 +360,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
           bindings: [
             {
               channelKey: "discord:group:paper-lab",
-              projectRoot: "/tmp/projects/alpha",
+              projectRoot: alphaRoot,
               projectId: "alpha",
               messageChannel: "discord",
               sessionKeySample: "agent:researcher:discord:group:paper-lab",
@@ -369,7 +383,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
     },
-    projectRoot: "/tmp/projects/beta",
+    projectRoot: betaRoot,
     projectId: "beta",
     autoIteratorResult: {
       recommendedActions: [
@@ -400,7 +414,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
           bindings: [
             {
               channelKey: "discord:group:paper-lab",
-              projectRoot: "/tmp/projects/beta",
+              projectRoot: betaRoot,
               projectId: "beta",
               messageChannel: "discord",
               sessionKeySample: "agent:researcher:discord:group:paper-lab",
@@ -424,7 +438,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
     },
-    projectRoot: "/tmp/projects/gamma",
+    projectRoot: gammaRoot,
     projectId: "gamma",
     autoIteratorResult: {
       recommendedActions: [
@@ -455,7 +469,7 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
           bindings: [
             {
               channelKey: "discord:group:paper-lab",
-              projectRoot: "/tmp/projects/gamma",
+              projectRoot: gammaRoot,
               projectId: "gamma",
               messageChannel: "discord",
               sessionKeySample: "agent:researcher:discord:group:paper-lab",
@@ -546,7 +560,7 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   assert.equal(launch.launched, true);
   assert.equal(launch.owner, "coder");
   assert.equal(launch.sessionKey, "agent:coder:discord:group:paper-lab");
-  assert.equal(launch.dispatchStrategy, "direct_session");
+  assert.equal(launch.dispatchStrategy, "sessions_spawn");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/implement-experiment/);
 });
@@ -836,6 +850,17 @@ test("queued aggressive auto-stage handoffs replay through workflow handoff rout
   assert.equal(queued.launched, false);
   assert.equal(queued.reason, "session_pool_full");
 
+  const alphaSessions = await readWorkflowRuntimeSessionsStore(alphaRoot);
+  const alphaQueue = await readWorkflowRuntimeQueueStore(alphaRoot);
+  const gammaQueue = await readWorkflowRuntimeQueueStore(gammaRoot);
+  assert.equal(alphaSessions.entries.length, 1);
+  assert.equal(alphaSessions.entries[0].status, "active");
+  assert.equal(alphaQueue.entries.length, 1);
+  assert.equal(alphaQueue.entries[0].status, "running");
+  assert.equal(alphaQueue.entries[0].entryType, "dispatch_task");
+  assert.equal(gammaQueue.entries.length, 1);
+  assert.equal(gammaQueue.entries[0].status, "queued");
+
   allowDrain = true;
   const drained = await drainQueuedBackgroundWorkflowRuns({
     runtimeSubagent,
@@ -1079,6 +1104,138 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
   assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
 });
 
+test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over transcript polling", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "write");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "write",
+    citation_integrity: {
+      verification_status: "needs_revision",
+      hallucinated_citation_count: 1,
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [],
+      };
+    },
+  };
+  const autoIteratorResult = {
+    configuredAutoMode: "aggressive",
+    autoModeRiskLevel: "severe",
+    autoModeRiskFingerprint: "risk-fingerprint-announce",
+    autoModeReasons: ["Citation integrity reports hallucinated citations."],
+    stageAfter: "write",
+    ownerAfter: "academic_writer",
+    nextAction: "/write-paper",
+    blockingReason: "Citation verification is not complete.",
+    missingStageSignals: ["citation_integrity.verification_status must be verified"],
+  };
+
+  const start = await maybeAdvanceAutoModeDiscussionForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `discussion-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+    deps,
+  });
+
+  assert.equal(start.launched, true);
+  const startedStore = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(startedStore.currentRound?.attempts.length, 3);
+
+  for (const attempt of startedStore.currentRound?.attempts ?? []) {
+    await recordWorkflowAnnounceEvent({
+      projectRoot,
+      projectId: "alpha",
+      announceId: `auto-discussion:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Auto discussion reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        result: {
+          reviewerRole: attempt.reviewerRole,
+          riskAssessment: "resolved",
+          confidence: 8.5,
+          recommendedOwner: "academic_writer",
+          actionItems: [
+            "Tighten the citation verification summary in reviewer/CITATION_VERIFICATION.md",
+          ],
+          blockers: [],
+          summary: `Resolved by ${attempt.reviewerRole}.`,
+          createdAt: "2026-03-31T00:00:00.000Z",
+          runId: attempt.runId,
+          rawText: JSON.stringify({ source: "announce" }),
+        },
+      },
+    });
+  }
+
+  const updated = await maybeAdvanceAutoModeDiscussionForProject({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not relaunch a new discussion round");
+      },
+      async waitForRun() {
+        throw new Error("waitForRun should not be called when announce payloads are present");
+      },
+      async getSessionMessages() {
+        throw new Error(
+          "getSessionMessages should not be called when announce payloads are present"
+        );
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+    deps,
+  });
+
+  assert.equal(updated.resolved, true);
+  const resolvedStore = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(resolvedStore.currentRound?.status, "resolved");
+  assert.equal(resolvedStore.currentRound?.aggregate?.reviewCount, 3);
+});
+
 test("maybeAdvanceAutoModeDiscussionForProject queues and replays the researcher reviewer when the shared service pool is full", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
@@ -1249,6 +1406,7 @@ test("maybeAdvanceAutoModeDiscussionForProject queues and replays the researcher
   allowQueueDrain = true;
   const drained = await drainQueuedBackgroundWorkflowRuns({
     runtimeSubagent: discussionRuntimeSubagent,
+    projectsRoot,
   });
   assert.equal(drained.started.length, 1);
   assert.equal(drained.remaining.length, 0);
@@ -2152,4 +2310,153 @@ test("maybeAdvanceAutoGateReviewForProject creates and advances a submit gate re
   const store = await readGateReviewStore(projectRoot);
   assert.equal(store.currentRound?.status, "approved");
   assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+});
+
+test("maybeAdvanceAutoGateReviewForProject prefers announce payloads over transcript polling", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "submit");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "submit",
+    citation_integrity: {
+      verification_status: "verified",
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf", "utf8");
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [
+          {
+            channelKey: "discord:group:paper-lab",
+            projectRoot,
+            projectId: "alpha",
+            messageChannel: "discord",
+            sessionKeySample: "agent:researcher:discord:group:paper-lab",
+            sessionId: null,
+            boundAt: "2026-03-25T00:00:00.000Z",
+            updatedAt: "2026-03-25T00:05:00.000Z",
+            boundByAgent: "researcher",
+            notes: null,
+          },
+        ],
+      };
+    },
+  };
+
+  const start = await maybeAdvanceAutoGateReviewForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `gate-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      stageAfter: "submit",
+      recommendedActions: [],
+    },
+    deps,
+  });
+
+  assert.equal(start.launched, true);
+  const startedStore = await readGateReviewStore(projectRoot);
+  assert.equal(startedStore.currentRound?.attempts.length, 3);
+
+  for (const attempt of startedStore.currentRound?.attempts ?? []) {
+    await recordWorkflowAnnounceEvent({
+      projectRoot,
+      projectId: "alpha",
+      announceId: `gate-review:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Gate reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        result: {
+          reviewerRole: attempt.reviewerRole,
+          verdict: "pass",
+          overallScore: 9,
+          dimensionScores: {
+            quality: 9,
+            evidence: 9,
+            clarity: 9,
+            citation: 9,
+            publishability: 9,
+          },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["academic_writer/paper/main.pdf"],
+          summary: `Approved by ${attempt.reviewerRole}.`,
+          createdAt: "2026-03-31T00:00:00.000Z",
+          runId: attempt.runId,
+          rawText: JSON.stringify({ source: "announce" }),
+        },
+      },
+    });
+  }
+
+  const updated = await maybeAdvanceAutoGateReviewForProject({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not relaunch a new round");
+      },
+      async waitForRun() {
+        throw new Error("waitForRun should not be called when announce payloads are present");
+      },
+      async getSessionMessages() {
+        throw new Error(
+          "getSessionMessages should not be called when announce payloads are present"
+        );
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      stageAfter: "submit",
+      recommendedActions: [],
+    },
+    deps,
+  });
+
+  assert.equal(updated.approved, true);
+  const approvedStore = await readGateReviewStore(projectRoot);
+  assert.equal(approvedStore.currentRound?.status, "approved");
+  assert.equal(approvedStore.currentRound?.aggregate?.reviewCount, 3);
 });

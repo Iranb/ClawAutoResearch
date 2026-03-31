@@ -1,3 +1,8 @@
+import {
+  markWorkflowBroadcastEvent,
+  recordWorkflowBroadcastEvent,
+} from "./workflow-session-orchestrator.js";
+
 export type StageBroadcastRuntime = {
   run: (params: {
     sessionKey: string;
@@ -44,7 +49,12 @@ export type WorkflowStatusBroadcastStatus =
   | "queued"
   | "blocked"
   | "waiting"
-  | "handed_off";
+  | "handed_off"
+  | "waiting_on_children"
+  | "child_completed"
+  | "handoff_ready"
+  | "timed_out"
+  | "recovered_after_restart";
 
 export type WorkflowStatusBroadcastResult = {
   broadcasted: boolean;
@@ -376,26 +386,73 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
     recommendedActions: params.recommendedActions,
     agentTaskDispatch: params.agentTaskDispatch,
   });
-  const runId = (
-    await params.runtimeSubagent.run({
-      sessionKey: params.sessionKey,
-      message,
-      lane: "nested",
-      deliver: true,
+  if (params.projectRoot) {
+    await recordWorkflowBroadcastEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      broadcastId: idempotencyKey,
       idempotencyKey,
-      extraSystemPrompt:
-        "WORKFLOW_STAGE_BROADCAST=1\n" +
-        "This is a synthetic workflow stage-change broadcast. Post exactly one concise channel update, preserve raw @Agent mentions from the prepared update, do not call tools, do not advance the workflow, and stop immediately after the update.",
-    })
-  ).runId;
+      sessionKey: params.sessionKey,
+      status:
+        params.agentTaskDispatch?.dispatched === true ? "handed_off" : "continued",
+      stage: params.stageAfter,
+      summary:
+        params.nextAction ??
+        `Workflow stage changed from ${params.stageBefore ?? "unknown"} to ${params.stageAfter ?? "unknown"}.`,
+      deliveryStatus: "pending",
+    });
+  }
+  try {
+    const runId = (
+      await params.runtimeSubagent.run({
+        sessionKey: params.sessionKey,
+        message,
+        lane: "nested",
+        deliver: true,
+        idempotencyKey,
+        extraSystemPrompt:
+          "WORKFLOW_STAGE_BROADCAST=1\n" +
+          "This is a synthetic workflow stage-change broadcast. Post exactly one concise channel update, preserve raw @Agent mentions from the prepared update, do not call tools, do not advance the workflow, and stop immediately after the update.",
+      })
+    ).runId;
 
-  return {
-    broadcasted: true,
-    reasonSkipped: null,
-    runId,
-    sessionKey: params.sessionKey,
-    idempotencyKey,
-  };
+    if (params.projectRoot) {
+      await markWorkflowBroadcastEvent({
+        projectRoot: params.projectRoot,
+        idempotencyKey,
+        deliveryStatus: "delivered",
+        deliveredAt: new Date().toISOString(),
+        lastAttemptedAt: new Date().toISOString(),
+        attemptsIncrement: 1,
+      });
+    }
+
+    return {
+      broadcasted: true,
+      reasonSkipped: null,
+      runId,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  } catch (error) {
+    if (params.projectRoot) {
+      await markWorkflowBroadcastEvent({
+        projectRoot: params.projectRoot,
+        idempotencyKey,
+        deliveryStatus: "failed",
+        runError: error instanceof Error ? error.message : String(error),
+        lastAttemptedAt: new Date().toISOString(),
+        attemptsIncrement: 1,
+      });
+    }
+    return {
+      broadcasted: false,
+      reasonSkipped: "runtime_error",
+      runId: null,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  }
 }
 
 export async function maybeBroadcastWorkflowStatusUpdate(params: {
@@ -444,29 +501,72 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
     params.stage ?? "unknown-stage",
     params.idempotencyKeySuffix ?? params.summary.trim().slice(0, 80),
   ].join(":");
-  const runId = (
-    await params.runtimeSubagent.run({
-      sessionKey: params.sessionKey,
-      message: buildWorkflowStatusBroadcastMessage({
-        projectId: params.projectId,
-        projectRoot: params.projectRoot,
-        status: params.status,
-        stage: params.stage,
-        summary: params.summary,
-      }),
-      lane: "nested",
-      deliver: true,
+  if (params.projectRoot) {
+    await recordWorkflowBroadcastEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      broadcastId: idempotencyKey,
       idempotencyKey,
-      extraSystemPrompt:
-        "WORKFLOW_STATUS_BROADCAST=1\n" +
-        "This is a synthetic workflow status broadcast. Post exactly one concise channel update, do not call tools, do not advance the workflow, and stop immediately after the update.",
-    })
-  ).runId;
-  return {
-    broadcasted: true,
-    reasonSkipped: null,
-    runId,
-    sessionKey: params.sessionKey,
-    idempotencyKey,
-  };
+      sessionKey: params.sessionKey,
+      status: params.status,
+      stage: params.stage,
+      summary: params.summary,
+      deliveryStatus: "pending",
+    });
+  }
+  try {
+    const runId = (
+      await params.runtimeSubagent.run({
+        sessionKey: params.sessionKey,
+        message: buildWorkflowStatusBroadcastMessage({
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          status: params.status,
+          stage: params.stage,
+          summary: params.summary,
+        }),
+        lane: "nested",
+        deliver: true,
+        idempotencyKey,
+        extraSystemPrompt:
+          "WORKFLOW_STATUS_BROADCAST=1\n" +
+          "This is a synthetic workflow status broadcast. Post exactly one concise channel update, do not call tools, do not advance the workflow, and stop immediately after the update.",
+      })
+    ).runId;
+    if (params.projectRoot) {
+      await markWorkflowBroadcastEvent({
+        projectRoot: params.projectRoot,
+        idempotencyKey,
+        deliveryStatus: "delivered",
+        deliveredAt: new Date().toISOString(),
+        lastAttemptedAt: new Date().toISOString(),
+        attemptsIncrement: 1,
+      });
+    }
+    return {
+      broadcasted: true,
+      reasonSkipped: null,
+      runId,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  } catch (error) {
+    if (params.projectRoot) {
+      await markWorkflowBroadcastEvent({
+        projectRoot: params.projectRoot,
+        idempotencyKey,
+        deliveryStatus: "failed",
+        runError: error instanceof Error ? error.message : String(error),
+        lastAttemptedAt: new Date().toISOString(),
+        attemptsIncrement: 1,
+      });
+    }
+    return {
+      broadcasted: false,
+      reasonSkipped: "runtime_error",
+      runId: null,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  }
 }

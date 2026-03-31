@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
+import { appendWorkflowRuntimeEvent } from "./workflow-runtime-state.js";
 
 export type WorkflowTraceEventKind =
   | "tool_action"
@@ -83,5 +84,21 @@ export async function appendWorkflowTraceEvent(params: {
   };
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, "utf8");
+  await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId: params.projectId ?? null,
+    kind: `trace_${params.kind}`,
+    summary: params.summary ?? `${params.functionName}:${params.action}`,
+    details: {
+      action: params.action,
+      functionName: params.functionName,
+      stage: params.stage ?? null,
+      owner: params.owner ?? null,
+      agentId: params.agentId ?? null,
+      sessionKey: params.sessionKey ?? null,
+      traceMirrorPath: logPath,
+      ...(params.details ?? {}),
+    },
+  });
   return { logPath, event };
 }

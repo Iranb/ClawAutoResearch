@@ -77,6 +77,7 @@ import {
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
 } from "./workflow-fast-paths";
+import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import {
   asObject,
   maybeAutoBindChannelProject,
@@ -111,6 +112,7 @@ type AutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
+  "migrate_runtime_state",
   "set_gate_state",
   "set_paper_ingestion",
   "prune_background_sessions",
@@ -128,6 +130,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   check_graph_presence: "checkGraphPresenceForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
+  migrate_runtime_state: "migrateWorkflowRuntimeState",
   get_idle_research: "getIdleResearchStateSummary",
   set_idle_research: "setIdleResearchState",
   record_idle_research_run: "recordIdleResearchRun",
@@ -410,6 +413,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "check_graph_presence",
               "auto_iterator_tick",
               "start_background_run",
+              "migrate_runtime_state",
               "get_idle_research",
               "set_idle_research",
               "record_idle_research_run",
@@ -479,6 +483,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           backgroundRun: {
+            type: "object",
+            additionalProperties: true,
+          },
+          runtimeState: {
             type: "object",
             additionalProperties: true,
           },
@@ -954,6 +962,33 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 )
               );
             }
+            case "migrate_runtime_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const runtimeState = asObject(params.runtimeState);
+              const result = await migrateWorkflowRuntimeState({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                compatibilityMode:
+                  readString(runtimeState?.compatibilityMode) === "legacy_dispatch" ||
+                  readString(runtimeState?.compatibilityMode) === "hybrid_runtime" ||
+                  readString(runtimeState?.compatibilityMode) ===
+                    "sessions_spawn_runtime"
+                    ? (readString(runtimeState?.compatibilityMode) as
+                        | "legacy_dispatch"
+                        | "hybrid_runtime"
+                        | "sessions_spawn_runtime")
+                    : "sessions_spawn_runtime",
+                reason:
+                  readString(runtimeState?.reason) ??
+                  "research_workflow.migrate_runtime_state",
+                notes: Array.isArray(runtimeState?.notes)
+                  ? runtimeState?.notes
+                      .map((value) => readString(value))
+                      .filter((value): value is string => Boolean(value))
+                  : undefined,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "list_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await listBackgroundWorkflowRuns({
@@ -966,6 +1001,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 family: readString(backgroundSessions?.family),
                 projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
                 projectRoot: readString(backgroundSessions?.projectRoot) ?? projectRoot,
+                projectsRoot: workflowPolicy.projectsRoot,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -981,6 +1017,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 family: readString(backgroundSessions?.family),
                 projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
                 projectRoot: readString(backgroundSessions?.projectRoot) ?? projectRoot,
+                projectsRoot: workflowPolicy.projectsRoot,
                 idleOlderThanMs: readNumber(backgroundSessions?.idleOlderThanMs),
                 deleteSessions: backgroundSessions?.deleteSessions === true,
               });

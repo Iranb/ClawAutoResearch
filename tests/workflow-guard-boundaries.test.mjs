@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildFocusedPromptAssembly,
   canRoleContactInWorkflow,
   canRoleSpawnInWorkflow,
   normalizeWorkflowChannelMentions,
@@ -262,6 +263,25 @@ test("workflow contact rules allow direct forward handoff to the next stage owne
     }),
     true
   );
+});
+
+test("focused workflow prompt prefers runtime orchestrator handoff guidance for non-owners", () => {
+  const prompt = buildFocusedPromptAssembly({
+    snapshot: {
+      role: "researcher",
+      recommendedOwner: "coder",
+      currentStage: "implementation",
+      currentMicroStage: "implementation",
+      nextAction: "Continue the runtime handoff.",
+    },
+  });
+
+  assert.match(
+    prompt.text,
+    /workflow runtime\/orchestrator path|runtime orchestrator|workflow orchestrator/i
+  );
+  assert.match(prompt.text, /compatibility fallback/i);
+  assert.doesNotMatch(prompt.text, /research_workflow\.dispatch_task/i);
 });
 
 test("papernexus import guard blocks multi-paper queued imports in one request", () => {

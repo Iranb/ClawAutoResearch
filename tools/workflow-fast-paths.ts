@@ -21,6 +21,23 @@ import {
   looksLikePapernexusHeavyCommand,
   normalizeWorkflowSubagentParentSessionKey,
 } from "./workflow-subagent-sessions";
+import {
+  appendWorkflowRuntimeEvent,
+  listWorkflowRuntimeProjectRoots,
+  migrateWorkflowRuntimeState,
+  readWorkflowRuntimeQueueStore,
+  readWorkflowRuntimeSessionsStore,
+  writeWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeSessionsStore,
+} from "./workflow-runtime-state.js";
+import {
+  orchestrateWorkflowTransition,
+  resumeWorkflowTransition,
+} from "./workflow-session-orchestrator.js";
+import type {
+  WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
+  WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
+} from "./workflow-runtime-state";
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -91,7 +108,7 @@ type BackgroundRunRegistryEntry = {
   queueKey: string | null;
   kind: string;
   family: string;
-  status: "active" | "idle";
+  status: "active" | "idle" | "needs_repair";
   projectId: string | null;
   projectRoot: string | null;
   startedAt: string;
@@ -149,6 +166,20 @@ type BackgroundWorkflowQueueEntry = {
   lastAttemptedAt: string | null;
   attemptCount: number;
   summary: string | null;
+  status:
+    | "queued"
+    | "launching"
+    | "running"
+    | "completed"
+    | "degraded"
+    | "needs_repair"
+    | "failed";
+  fallbackMode:
+    | "legacy_dispatch"
+    | "hybrid_runtime"
+    | "sessions_spawn_runtime"
+    | null;
+  lastError: string | null;
   runPayload: BackgroundWorkflowQueueRunPayload | null;
   dispatchPayload: BackgroundWorkflowQueueDispatchPayload | null;
 };
@@ -174,6 +205,12 @@ const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json
 const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
 const BACKGROUND_QUEUE_FILENAME = "openclaw-research-background-queue.json";
+
+type BackgroundRuntimeScope = {
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+};
 
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {
@@ -205,6 +242,10 @@ function backgroundRunRegistryEntryMatchesProject(
   return normalizedProjectId == null && normalizedProjectRoot == null;
 }
 
+function isBackgroundQueueEntryPending(entry: BackgroundWorkflowQueueEntry): boolean {
+  return ["queued", "launching", "degraded", "needs_repair"].includes(entry.status);
+}
+
 function getBackgroundRunRegistryPath(): string {
   const override = readString(
     process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH
@@ -223,6 +264,219 @@ function getBackgroundQueuePath(): string {
     return path.resolve(override);
   }
   return path.join(os.tmpdir(), BACKGROUND_QUEUE_FILENAME);
+}
+
+function resolveBackgroundRuntimeScope(
+  scope: BackgroundRuntimeScope | undefined
+): Required<BackgroundRuntimeScope> {
+  const projectRoot = readString(scope?.projectRoot)
+    ? path.resolve(String(scope?.projectRoot))
+    : null;
+  const projectsRoot = readString(scope?.projectsRoot)
+    ? path.resolve(String(scope?.projectsRoot))
+    : null;
+  return {
+    projectId: readString(scope?.projectId) ?? null,
+    projectRoot,
+    projectsRoot,
+  };
+}
+
+function shouldUseProjectRuntimeState(scope: BackgroundRuntimeScope | undefined): boolean {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  return Boolean(resolved.projectRoot || resolved.projectsRoot);
+}
+
+async function appendBackgroundWorkflowRuntimeEvent(params: {
+  projectRoot?: string | null;
+  projectId?: string | null;
+  kind: string;
+  summary: string;
+  details?: Record<string, unknown> | null;
+}): Promise<void> {
+  const projectRoot = readString(params.projectRoot);
+  if (!projectRoot) {
+    return;
+  }
+  await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId: readString(params.projectId) ?? null,
+    kind: params.kind,
+    summary: params.summary,
+    details: params.details ?? null,
+  });
+}
+
+function toPersistedSessionEntry(
+  entry: BackgroundRunRegistryEntry
+): PersistedWorkflowRuntimeSessionEntry {
+  return {
+    sessionKey: entry.backgroundSessionKey,
+    sessionId: null,
+    runtime: "subagent",
+    role: entry.ownerAgent,
+    agentId: entry.ownerAgent,
+    ownerAgent: entry.ownerAgent,
+    family: entry.family,
+    kind: entry.kind,
+    channelKey: entry.channelKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+    parentSessionKey: entry.requesterSessionKey,
+    threadBindingKey: null,
+    depth: 0,
+    status: entry.status,
+    runId: entry.runId,
+    queueKey: entry.queueKey,
+    startedAt: entry.startedAt,
+    lastHeartbeatAt: entry.lastCheckedAt,
+    lastAnnounceAt: null,
+    lastCheckedAt: entry.lastCheckedAt,
+    lastFinishedAt: entry.lastFinishedAt,
+    lastError:
+      entry.status === "needs_repair"
+        ? "Background workflow session needs repair after runtime recovery."
+        : null,
+  };
+}
+
+function fromPersistedSessionEntry(
+  entry: PersistedWorkflowRuntimeSessionEntry
+): BackgroundRunRegistryEntry | null {
+  const ownerAgent = normalizeAgentId(entry.ownerAgent ?? entry.agentId);
+  const channelKey = readString(entry.channelKey);
+  const requesterSessionKey =
+    readString(entry.requesterSessionKey) ??
+    readString(entry.parentSessionKey) ??
+    null;
+  const backgroundSessionKey = readString(entry.sessionKey);
+  const runId = readString(entry.runId);
+  const startedAt = readString(entry.startedAt);
+  if (
+    !ownerAgent ||
+    !channelKey ||
+    !requesterSessionKey ||
+    !backgroundSessionKey ||
+    !runId ||
+    !startedAt
+  ) {
+    return null;
+  }
+  return {
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    backgroundSessionKey,
+    runId,
+    queueKey: readString(entry.queueKey) ?? null,
+    kind: readString(entry.kind) ?? "generic",
+    family: readString(entry.family) ?? "generic",
+    status:
+      entry.status === "idle" || entry.status === "needs_repair"
+        ? entry.status
+        : "active",
+    projectId: readString(entry.projectId) ?? null,
+    projectRoot: readString(entry.projectRoot) ?? null,
+    startedAt,
+    lastCheckedAt: readString(entry.lastCheckedAt ?? entry.lastHeartbeatAt) ?? null,
+    lastFinishedAt: readString(entry.lastFinishedAt) ?? null,
+  };
+}
+
+function toPersistedQueueEntry(
+  entry: BackgroundWorkflowQueueEntry
+): PersistedWorkflowRuntimeQueueEntry {
+  return {
+    transitionId: entry.queueId,
+    queueId: entry.queueId,
+    queueKey: entry.queueKey,
+    source: entry.source,
+    entryType: entry.entryType,
+    ownerAgent: entry.ownerAgent,
+    channelKey: entry.channelKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    messageChannel: entry.messageChannel,
+    preferredSessionKey: entry.preferredSessionKey,
+    family: entry.family,
+    kind: entry.kind,
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+    queuedAt: entry.queuedAt,
+    lastAttemptedAt: entry.lastAttemptedAt,
+    attemptCount: entry.attemptCount,
+    summary: entry.summary,
+    status: entry.status,
+    fallbackMode: entry.fallbackMode,
+    lastError: entry.lastError,
+    parentSessionKey: null,
+    threadBindingKey: null,
+    depth: 0,
+    runPayload: entry.runPayload,
+    dispatchPayload: entry.dispatchPayload,
+  };
+}
+
+function fromPersistedQueueEntry(
+  entry: PersistedWorkflowRuntimeQueueEntry
+): BackgroundWorkflowQueueEntry | null {
+  const ownerAgent = normalizeAgentId(entry.ownerAgent);
+  const channelKey = readString(entry.channelKey);
+  const requesterSessionKey = readString(entry.requesterSessionKey);
+  const family = readString(entry.family);
+  const kind = readString(entry.kind);
+  const queuedAt = readString(entry.queuedAt);
+  if (
+    !ownerAgent ||
+    !channelKey ||
+    !requesterSessionKey ||
+    !family ||
+    !kind ||
+    !queuedAt
+  ) {
+    return null;
+  }
+  return {
+    queueId: readString(entry.queueId) ?? readString(entry.transitionId) ?? randomUUID(),
+    queueKey: readString(entry.queueKey) ?? "",
+    source:
+      (readString(entry.source) as BackgroundWorkflowQueueEntry["source"] | null) ??
+      "start_background_run",
+    entryType: entry.entryType,
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    messageChannel: readString(entry.messageChannel) ?? null,
+    preferredSessionKey: readString(entry.preferredSessionKey) ?? null,
+    family,
+    kind,
+    projectId: readString(entry.projectId) ?? null,
+    projectRoot: readString(entry.projectRoot) ?? null,
+    queuedAt,
+    lastAttemptedAt: readString(entry.lastAttemptedAt) ?? null,
+    attemptCount: Math.max(0, Math.floor(Number(entry.attemptCount ?? 0))),
+    summary: readString(entry.summary) ?? null,
+    status: entry.status,
+    fallbackMode: entry.fallbackMode ?? null,
+    lastError: readString(entry.lastError) ?? null,
+    runPayload: entry.runPayload,
+    dispatchPayload: entry.dispatchPayload
+      ? {
+          ...entry.dispatchPayload,
+          toRole: entry.dispatchPayload.toRole as DispatchableWorkflowRole,
+        }
+      : null,
+  };
+}
+
+async function listProjectScopedRuntimeProjectRoots(
+  scope: BackgroundRuntimeScope | undefined
+): Promise<string[]> {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  return listWorkflowRuntimeProjectRoots({
+    projectRoot: resolved.projectRoot,
+    projectsRoot: resolved.projectsRoot,
+  });
 }
 
 export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void> {
@@ -251,7 +505,19 @@ function deriveBackgroundRunChannelKey(params: {
   return readString(params.messageChannel) ?? null;
 }
 
-async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]> {
+async function readBackgroundRunRegistry(
+  scope?: BackgroundRuntimeScope
+): Promise<BackgroundRunRegistryEntry[]> {
+  if (shouldUseProjectRuntimeState(scope)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(scope);
+    const stores = await Promise.all(
+      projectRoots.map((projectRoot) => readWorkflowRuntimeSessionsStore(projectRoot))
+    );
+    return stores
+      .flatMap((store) => store.entries)
+      .map((entry) => fromPersistedSessionEntry(entry))
+      .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
+  }
   try {
     const raw = await fs.readFile(getBackgroundRunRegistryPath(), "utf8");
     const parsed = JSON.parse(raw);
@@ -272,7 +538,12 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
         const queueKey = readString(record.queueKey) ?? null;
         const kind = readString(record.kind) ?? "generic";
         const family = readString(record.family) ?? deriveBackgroundRunFamily(kind);
-        const status = readString(record.status) === "idle" ? "idle" : "active";
+        const status =
+          readString(record.status) === "idle"
+            ? "idle"
+            : readString(record.status) === "needs_repair"
+              ? "needs_repair"
+              : "active";
         const projectId = readString(record.projectId) ?? null;
         const projectRoot = readString(record.projectRoot) ?? null;
         const startedAt = readString(record.startedAt);
@@ -318,7 +589,19 @@ async function readBackgroundRunRegistry(): Promise<BackgroundRunRegistryEntry[]
   }
 }
 
-async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEntry[]> {
+async function readBackgroundWorkflowQueue(
+  scope?: BackgroundRuntimeScope
+): Promise<BackgroundWorkflowQueueEntry[]> {
+  if (shouldUseProjectRuntimeState(scope)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(scope);
+    const stores = await Promise.all(
+      projectRoots.map((projectRoot) => readWorkflowRuntimeQueueStore(projectRoot))
+    );
+    return stores
+      .flatMap((store) => store.entries)
+      .map((entry) => fromPersistedQueueEntry(entry))
+      .filter((entry): entry is BackgroundWorkflowQueueEntry => Boolean(entry));
+  }
   try {
     const raw = await fs.readFile(getBackgroundQueuePath(), "utf8");
     const parsed = JSON.parse(raw);
@@ -350,6 +633,14 @@ async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEnt
           ? Math.max(0, Math.floor(Number(record.attemptCount)))
           : 0;
         const summary = readString(record.summary) ?? null;
+        const status =
+          (readString(record.status) as BackgroundWorkflowQueueEntry["status"] | null) ??
+          "queued";
+        const fallbackMode =
+          (readString(record.fallbackMode ?? record.fallback_mode) as
+            | BackgroundWorkflowQueueEntry["fallbackMode"]
+            | null) ?? null;
+        const lastError = readString(record.lastError ?? record.last_error) ?? null;
         const runPayload =
           record.runPayload && typeof record.runPayload === "object"
             ? {
@@ -481,6 +772,9 @@ async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEnt
           lastAttemptedAt,
           attemptCount,
           summary,
+          status,
+          fallbackMode,
+          lastError,
           runPayload,
           dispatchPayload,
         } satisfies BackgroundWorkflowQueueEntry;
@@ -498,39 +792,118 @@ async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEnt
   }
 }
 
-async function writeBackgroundRunRegistry(entries: BackgroundRunRegistryEntry[]): Promise<void> {
+async function writeBackgroundRunRegistry(
+  entries: BackgroundRunRegistryEntry[],
+  scope?: BackgroundRuntimeScope
+): Promise<void> {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  const projectRoot = resolved.projectRoot;
+  if (projectRoot) {
+    const filteredEntries = entries.filter(
+      (entry) =>
+        readString(entry.projectRoot) &&
+        path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+    );
+    await migrateWorkflowRuntimeState({
+      projectRoot,
+      projectId: resolved.projectId,
+      compatibilityMode: "sessions_spawn_runtime",
+      reason: "write_background_run_registry",
+    });
+    await writeWorkflowRuntimeSessionsStore({
+      projectRoot,
+      projectId: resolved.projectId,
+      entries: filteredEntries.map((entry) => toPersistedSessionEntry(entry)),
+    });
+    return;
+  }
   const registryPath = getBackgroundRunRegistryPath();
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
   await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
 }
 
 async function writeBackgroundWorkflowQueue(
-  entries: BackgroundWorkflowQueueEntry[]
+  entries: BackgroundWorkflowQueueEntry[],
+  scope?: BackgroundRuntimeScope
 ): Promise<void> {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  const projectRoot = resolved.projectRoot;
+  if (projectRoot) {
+    const filteredEntries = entries.filter(
+      (entry) =>
+        readString(entry.projectRoot) &&
+        path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+    );
+    await migrateWorkflowRuntimeState({
+      projectRoot,
+      projectId: resolved.projectId,
+      compatibilityMode: "sessions_spawn_runtime",
+      reason: "write_background_queue",
+    });
+    await writeWorkflowRuntimeQueueStore({
+      projectRoot,
+      projectId: resolved.projectId,
+      entries: filteredEntries.map((entry) => toPersistedQueueEntry(entry)),
+    });
+    return;
+  }
   const queuePath = getBackgroundQueuePath();
   await fs.mkdir(path.dirname(queuePath), { recursive: true });
   await fs.writeFile(queuePath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
 }
 
-async function pruneBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEntry[]> {
+async function pruneBackgroundWorkflowQueue(
+  scope?: BackgroundRuntimeScope
+): Promise<BackgroundWorkflowQueueEntry[]> {
   const now = Date.now();
-  const current = await readBackgroundWorkflowQueue();
+  const current = await readBackgroundWorkflowQueue(scope);
   const kept = current.filter((entry) => {
     const freshnessReference = entry.lastAttemptedAt ?? entry.queuedAt;
     const freshnessMs = Date.parse(freshnessReference);
     return Number.isFinite(freshnessMs) && now - freshnessMs <= BACKGROUND_QUEUE_STALE_MS;
   });
-  await writeBackgroundWorkflowQueue(kept);
+  if (shouldUseProjectRuntimeState(scope)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(scope);
+    const grouped = new Map<string, BackgroundWorkflowQueueEntry[]>();
+    for (const entry of kept) {
+      const projectRoot = readString(entry.projectRoot);
+      if (!projectRoot) {
+        continue;
+      }
+      const bucket = grouped.get(projectRoot) ?? [];
+      bucket.push(entry);
+      grouped.set(projectRoot, bucket);
+    }
+    for (const projectRoot of projectRoots) {
+      const entries = grouped.get(projectRoot) ?? [];
+      await writeBackgroundWorkflowQueue(entries, {
+        ...scope,
+        projectRoot,
+        projectId:
+          entries.find((entry) => readString(entry.projectId))?.projectId ??
+          resolveBackgroundRuntimeScope(scope).projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundWorkflowQueue(kept);
+  }
   return kept;
 }
 
 async function upsertBackgroundWorkflowQueueEntry(
-  entry: BackgroundWorkflowQueueEntry
+  entry: BackgroundWorkflowQueueEntry,
+  scope?: BackgroundRuntimeScope
 ): Promise<{
   entry: BackgroundWorkflowQueueEntry;
   queuePosition: number;
+  created: boolean;
 }> {
-  const current = await pruneBackgroundWorkflowQueue();
+  const entryScope = {
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+  };
+  const current = await pruneBackgroundWorkflowQueue(entryScope);
   const existing = current.find((candidate) => candidate.queueKey === entry.queueKey) ?? null;
   if (existing) {
     return {
@@ -539,49 +912,122 @@ async function upsertBackgroundWorkflowQueueEntry(
         current
           .sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt))
           .findIndex((candidate) => candidate.queueKey === existing.queueKey) + 1,
+      created: false,
     };
   }
   const next = [...current, entry];
   next.sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt));
-  await writeBackgroundWorkflowQueue(next);
+  await writeBackgroundWorkflowQueue(next, entryScope);
   return {
     entry,
     queuePosition: next.findIndex((candidate) => candidate.queueKey === entry.queueKey) + 1,
+    created: true,
   };
 }
 
-async function removeBackgroundWorkflowQueueEntries(queueKeys: string[]): Promise<void> {
-  if (queueKeys.length === 0) {
+async function removeBackgroundWorkflowQueueEntries(
+  entries: BackgroundWorkflowQueueEntry[]
+): Promise<void> {
+  if (entries.length === 0) {
     return;
   }
-  const current = await pruneBackgroundWorkflowQueue();
-  const blocked = new Set(queueKeys);
-  const next = current.filter((entry) => !blocked.has(entry.queueKey));
-  await writeBackgroundWorkflowQueue(next);
+  const byProjectRoot = new Map<string, BackgroundWorkflowQueueEntry[]>();
+  for (const entry of entries) {
+    const projectRoot = readString(entry.projectRoot);
+    if (!projectRoot) {
+      continue;
+    }
+    const bucket = byProjectRoot.get(projectRoot) ?? [];
+    bucket.push(entry);
+    byProjectRoot.set(projectRoot, bucket);
+  }
+  if (byProjectRoot.size === 0) {
+    const current = await pruneBackgroundWorkflowQueue();
+    const blocked = new Set(entries.map((entry) => entry.queueKey));
+    const next = current.map((entry) =>
+      blocked.has(entry.queueKey)
+        ? {
+            ...entry,
+            status: "running" as const,
+            lastAttemptedAt: new Date().toISOString(),
+          }
+        : entry
+    );
+    await writeBackgroundWorkflowQueue(next);
+    return;
+  }
+  for (const [projectRoot, projectEntries] of byProjectRoot.entries()) {
+    const current = await pruneBackgroundWorkflowQueue({ projectRoot });
+    const blocked = new Set(projectEntries.map((entry) => entry.queueKey));
+    const next = current.map((entry) =>
+      blocked.has(entry.queueKey)
+        ? {
+            ...entry,
+            status: "running" as const,
+            lastAttemptedAt: new Date().toISOString(),
+          }
+        : entry
+    );
+    await writeBackgroundWorkflowQueue(next, {
+      projectRoot,
+      projectId: projectEntries.find((entry) => readString(entry.projectId))?.projectId ?? null,
+    });
+  }
 }
 
 async function touchBackgroundWorkflowQueueEntry(params: {
-  queueKey: string;
+  entry: BackgroundWorkflowQueueEntry;
   error?: string | null;
+  status?: BackgroundWorkflowQueueEntry["status"];
 }): Promise<void> {
-  const current = await pruneBackgroundWorkflowQueue();
+  const current = await pruneBackgroundWorkflowQueue({
+    projectRoot: params.entry.projectRoot,
+    projectId: params.entry.projectId,
+  });
   const next = current.map((entry) =>
-    entry.queueKey === params.queueKey
-      ? {
-          ...entry,
-          lastAttemptedAt: new Date().toISOString(),
-          attemptCount: entry.attemptCount + 1,
-          summary: params.error ? params.error : entry.summary,
-        }
-      : entry
+    entry.queueKey === params.entry.queueKey
+        ? {
+            ...entry,
+            lastAttemptedAt: new Date().toISOString(),
+            attemptCount: entry.attemptCount + 1,
+            summary: params.error ? params.error : entry.summary,
+            lastError: params.error ? params.error : entry.lastError,
+            status:
+              params.status ??
+              (params.error ? "degraded" : entry.status),
+          }
+        : entry
   );
-  await writeBackgroundWorkflowQueue(next);
+  await writeBackgroundWorkflowQueue(next, {
+    projectRoot: params.entry.projectRoot,
+    projectId: params.entry.projectId,
+  });
+  await appendBackgroundWorkflowRuntimeEvent({
+    projectRoot: params.entry.projectRoot,
+    projectId: params.entry.projectId,
+    kind:
+      params.status === "needs_repair"
+        ? "background_queue_needs_repair"
+        : params.error
+          ? "background_queue_degraded"
+          : "background_queue_touched",
+    summary:
+      params.error ??
+      `Background workflow queue entry ${params.entry.queueKey} updated.`,
+    details: {
+      queueKey: params.entry.queueKey,
+      status:
+        params.status ??
+        (params.error ? "degraded" : params.entry.status),
+    },
+  });
 }
 
 export async function hasPendingBackgroundWorkflowQueueKey(params: {
   queueKey?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
 }): Promise<{
   queued: boolean;
   active: boolean;
@@ -590,9 +1036,14 @@ export async function hasPendingBackgroundWorkflowQueueKey(params: {
   if (!queueKey) {
     return { queued: false, active: false };
   }
-  const queueEntries = await pruneBackgroundWorkflowQueue();
+  const queueEntries = await pruneBackgroundWorkflowQueue({
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
   const queued = queueEntries.some(
     (entry) =>
+      isBackgroundQueueEntryPending(entry) &&
       entry.queueKey === queueKey &&
       backgroundRunRegistryEntryMatchesProject(
         {
@@ -615,7 +1066,11 @@ export async function hasPendingBackgroundWorkflowQueueKey(params: {
         readString(params.projectRoot) ?? null
       )
   );
-  const activeEntries = await pruneBackgroundRunRegistry({});
+  const activeEntries = await pruneBackgroundRunRegistry({
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
   const active = activeEntries.some(
     (entry) =>
       entry.status === "active" &&
@@ -633,6 +1088,7 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
   queueKey?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
   runtimeSubagent?: {
     waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
       status: "ok" | "error" | "timeout";
@@ -646,6 +1102,9 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
   }
   const refreshed = await pruneBackgroundRunRegistry({
     runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
   });
   return (
     refreshed.find(
@@ -667,15 +1126,29 @@ async function pruneBackgroundRunRegistry(params: {
       error?: string;
     }>;
   };
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
 }): Promise<BackgroundRunRegistryEntry[]> {
   const now = Date.now();
-  const current = await readBackgroundRunRegistry();
+  const current = await readBackgroundRunRegistry({
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
   const kept: BackgroundRunRegistryEntry[] = [];
   for (const entry of current) {
     const freshnessReference =
       entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
     const freshnessMs = Date.parse(freshnessReference);
     if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
+      if (entry.status === "active") {
+        kept.push({
+          ...entry,
+          status: "needs_repair",
+          lastCheckedAt: new Date(now).toISOString(),
+        });
+      }
       continue;
     }
     let nextEntry: BackgroundRunRegistryEntry = {
@@ -696,12 +1169,34 @@ async function pruneBackgroundRunRegistry(params: {
           };
         }
       } catch {
+        kept.push({
+          ...nextEntry,
+          status: "needs_repair",
+        });
         continue;
       }
     }
     kept.push(nextEntry);
   }
-  await writeBackgroundRunRegistry(kept);
+  if (shouldUseProjectRuntimeState(params)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
+    for (const projectRoot of projectRoots) {
+      const projectEntries = kept.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+      );
+      await writeBackgroundRunRegistry(projectEntries, {
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          params.projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundRunRegistry(kept);
+  }
   return kept;
 }
 
@@ -764,11 +1259,15 @@ export async function listBackgroundWorkflowRuns(params: {
   family?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
 }): Promise<{
   entries: BackgroundRunRegistryViewEntry[];
 }> {
   const refreshed = await pruneBackgroundRunRegistry({
     runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
   });
   const nowMs = Date.now();
   return {
@@ -794,6 +1293,7 @@ export async function pruneBackgroundWorkflowRuns(params: {
   family?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
   idleOlderThanMs?: number;
   deleteSessions?: boolean;
 }): Promise<{
@@ -802,6 +1302,9 @@ export async function pruneBackgroundWorkflowRuns(params: {
 }> {
   const refreshed = await pruneBackgroundRunRegistry({
     runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
   });
   const nowMs = Date.now();
   const idleOlderThanMs =
@@ -828,7 +1331,25 @@ export async function pruneBackgroundWorkflowRuns(params: {
     }
     kept.push(entry);
   }
-  await writeBackgroundRunRegistry(kept);
+  if (shouldUseProjectRuntimeState(params)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
+    for (const projectRoot of projectRoots) {
+      const projectEntries = kept.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+      );
+      await writeBackgroundRunRegistry(projectEntries, {
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          params.projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundRunRegistry(kept);
+  }
   if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
     for (const entry of removed) {
       await params.runtimeSubagent.deleteSession({
@@ -844,14 +1365,19 @@ export async function pruneBackgroundWorkflowRuns(params: {
 }
 
 async function upsertBackgroundRunRegistryEntry(
-  entry: BackgroundRunRegistryEntry
+  entry: BackgroundRunRegistryEntry,
+  scope?: BackgroundRuntimeScope
 ): Promise<void> {
-  const current = await readBackgroundRunRegistry();
+  const targetScope = {
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+  };
+  const current = await readBackgroundRunRegistry(targetScope);
   const next = current.filter(
     (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
   );
   next.push(entry);
-  await writeBackgroundRunRegistry(next);
+  await writeBackgroundRunRegistry(next, targetScope);
 }
 
 export async function acquireBackgroundWorkflowSession(params: {
@@ -869,6 +1395,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   kind?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
 }): Promise<BackgroundWorkflowSessionLease> {
   const ownerAgent = normalizeAgentId(params.ownerAgent);
   const family =
@@ -901,6 +1428,9 @@ export async function acquireBackgroundWorkflowSession(params: {
 
   const registryEntries = await pruneBackgroundRunRegistry({
     runtimeSubagent: params.runtimeSubagent,
+    projectId,
+    projectRoot,
+    projectsRoot: params.projectsRoot,
   });
   const reusableBackgroundSessionKey =
     registryEntries.find(
@@ -966,6 +1496,7 @@ export async function recordBackgroundWorkflowRun(params: {
   family?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
 }): Promise<void> {
   const ownerAgent = normalizeAgentId(params.ownerAgent);
   const channelKey = readString(params.channelKey);
@@ -998,6 +1529,28 @@ export async function recordBackgroundWorkflowRun(params: {
     startedAt: new Date().toISOString(),
     lastCheckedAt: null,
     lastFinishedAt: null,
+  }, {
+    projectId: readString(params.projectId) ?? null,
+    projectRoot: readString(params.projectRoot) ?? null,
+    projectsRoot: readString(params.projectsRoot) ?? null,
+  });
+  await appendBackgroundWorkflowRuntimeEvent({
+    projectRoot: readString(params.projectRoot) ?? null,
+    projectId: readString(params.projectId) ?? null,
+    kind: "background_session_recorded",
+    summary: `Recorded background workflow session ${backgroundSessionKey}.`,
+    details: {
+      ownerAgent,
+      channelKey,
+      requesterSessionKey,
+      backgroundSessionKey,
+      runId,
+      queueKey: readString(params.queueKey) ?? null,
+      family:
+        readString(params.family) ??
+        deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
+      kind: readString(params.kind) ?? "generic",
+    },
   });
 }
 
@@ -1031,6 +1584,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
   kind?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
+  projectsRoot?: string | null;
   queueKey?: string | null;
   summary?: string | null;
   runPayload?: BackgroundWorkflowQueueRunPayload | null;
@@ -1082,10 +1636,37 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
     lastAttemptedAt: null,
     attemptCount: 0,
     summary: readString(params.summary) ?? null,
+    status: "queued",
+    fallbackMode: null,
+    lastError: null,
     runPayload: params.runPayload ?? null,
     dispatchPayload: params.dispatchPayload ?? null,
   };
-  return upsertBackgroundWorkflowQueueEntry(entry);
+  const queued = await upsertBackgroundWorkflowQueueEntry(entry, {
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+    projectsRoot: readString(params.projectsRoot) ?? null,
+  });
+  if (queued.created) {
+    await appendBackgroundWorkflowRuntimeEvent({
+      projectRoot: entry.projectRoot,
+      projectId: entry.projectId,
+      kind: "background_queue_enqueued",
+      summary:
+        entry.summary ??
+        `Queued background workflow ${entry.queueKey} for replay.`,
+      details: {
+        queueKey: entry.queueKey,
+        entryType: entry.entryType,
+        source: entry.source,
+        ownerAgent: entry.ownerAgent,
+        family: entry.family,
+        kind: entry.kind,
+        queuePosition: queued.queuePosition,
+      },
+    });
+  }
+  return queued;
 }
 
 export async function drainQueuedBackgroundWorkflowRuns(params: {
@@ -1109,20 +1690,32 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
   };
   workflowPolicy?: {
     lobsterHandoff?: WorkflowLobsterHandoffConfig;
+    projectsRoot?: string;
   } | null;
+  projectsRoot?: string | null;
   handoffWorkflowTaskToAgent?: typeof handoffWorkflowTaskToAgent;
 }): Promise<QueuedBackgroundWorkflowDrainResult> {
   const runtimeSubagent = params.runtimeSubagent;
   if (!runtimeSubagent) {
     return {
       started: [],
-      remaining: await pruneBackgroundWorkflowQueue(),
+      remaining: await pruneBackgroundWorkflowQueue({
+        projectsRoot:
+          readString(params.projectsRoot) ??
+          readString(params.workflowPolicy?.projectsRoot) ??
+          null,
+      }),
     };
   }
 
-  const queue = await pruneBackgroundWorkflowQueue();
+  const queue = await pruneBackgroundWorkflowQueue({
+    projectsRoot:
+      readString(params.projectsRoot) ??
+      readString(params.workflowPolicy?.projectsRoot) ??
+      null,
+  });
   const started: BackgroundRunStartResult[] = [];
-  const processedQueueKeys = new Set<string>();
+  const processedEntries: BackgroundWorkflowQueueEntry[] = [];
 
   for (const entry of queue) {
     const lastAttemptedAtMs = entry.lastAttemptedAt
@@ -1144,87 +1737,237 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       preferredSessionKey: entry.preferredSessionKey,
       family: entry.family,
       kind: entry.kind,
-      projectId: entry.projectId,
-      projectRoot: entry.projectRoot,
-    });
+        projectId: entry.projectId,
+        projectRoot: entry.projectRoot,
+        projectsRoot:
+          readString(params.projectsRoot) ??
+          readString(params.workflowPolicy?.projectsRoot) ??
+          null,
+      });
     if (!sessionLease.acquired || !sessionLease.sessionKey) {
       continue;
     }
 
     try {
       if (entry.entryType === "dispatch_task" && entry.dispatchPayload) {
+        if (!readString(entry.projectRoot)) {
+          await touchBackgroundWorkflowQueueEntry({
+            entry,
+            error:
+              "Queued workflow dispatch is missing a durable projectRoot and cannot use legacy inline fallback.",
+            status: "needs_repair",
+          });
+          continue;
+        }
+        const dispatchPayload = entry.dispatchPayload;
         const preferredSessionKeys = [
           sessionLease.sessionKey,
-          ...entry.dispatchPayload.preferredSessionKeys.filter(
+          ...dispatchPayload.preferredSessionKeys.filter(
             (candidate) => candidate !== sessionLease.sessionKey
           ),
         ];
-        const dispatch = entry.dispatchPayload.useWorkflowHandoff
-          ? await (params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent)({
-              runtimeSubagent,
-              workflowPolicy: params.workflowPolicy ?? undefined,
-              requesterSessionKey: entry.requesterSessionKey,
-              requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
-              requesterAccountId:
-                entry.dispatchPayload.requesterAccountId ?? undefined,
-              preferredSessionKeys,
-              fromRole: entry.dispatchPayload.fromRole,
-              toRole: entry.dispatchPayload.toRole,
-              projectRoot: entry.dispatchPayload.projectRoot,
-              projectId: entry.dispatchPayload.projectId,
-              stage: entry.dispatchPayload.stage,
-              summary: entry.dispatchPayload.summary,
-              command: entry.dispatchPayload.command,
-              mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
-              extraBody: entry.dispatchPayload.extraBody,
-              waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
-              retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
-              enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
-              autoModeActive: entry.dispatchPayload.autoModeActive,
+        const dispatchLaunch = readString(entry.projectRoot)
+          ? await resumeWorkflowTransition({
+              projectRoot: String(entry.projectRoot),
+              projectId: entry.projectId,
+              queueKey: entry.queueKey,
+              spawn: async () => {
+                const dispatch = dispatchPayload.useWorkflowHandoff
+                  ? await (
+                      params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent
+                    )({
+                      runtimeSubagent,
+                      workflowPolicy: params.workflowPolicy ?? undefined,
+                      requesterSessionKey: entry.requesterSessionKey,
+                      requesterChannel:
+                        dispatchPayload.requesterChannel ?? undefined,
+                      requesterAccountId:
+                        dispatchPayload.requesterAccountId ?? undefined,
+                      preferredSessionKeys,
+                      fromRole: dispatchPayload.fromRole,
+                      toRole: dispatchPayload.toRole,
+                      projectRoot: dispatchPayload.projectRoot,
+                      projectId: dispatchPayload.projectId,
+                      stage: dispatchPayload.stage,
+                      summary: dispatchPayload.summary,
+                      command: dispatchPayload.command,
+                      mailboxMessageId: dispatchPayload.mailboxMessageId,
+                      extraBody: dispatchPayload.extraBody,
+                      waitTimeoutMs:
+                        dispatchPayload.waitTimeoutMs ?? undefined,
+                      retryOnTimeout: dispatchPayload.retryOnTimeout,
+                      enableSpawnFallback:
+                        dispatchPayload.enableSpawnFallback,
+                      autoModeActive: dispatchPayload.autoModeActive,
+                    })
+                  : await dispatchWorkflowTaskToAgent({
+                      runtimeSubagent,
+                      requesterSessionKey: entry.requesterSessionKey,
+                      requesterChannel:
+                        dispatchPayload.requesterChannel ?? undefined,
+                      preferredSessionKeys,
+                      fromRole: dispatchPayload.fromRole,
+                      toRole: dispatchPayload.toRole,
+                      projectRoot: dispatchPayload.projectRoot,
+                      projectId: dispatchPayload.projectId,
+                      stage: dispatchPayload.stage,
+                      summary: dispatchPayload.summary,
+                      command: dispatchPayload.command,
+                      mailboxMessageId: dispatchPayload.mailboxMessageId,
+                      extraBody: dispatchPayload.extraBody,
+                      waitTimeoutMs:
+                        dispatchPayload.waitTimeoutMs ?? undefined,
+                      retryOnTimeout: dispatchPayload.retryOnTimeout,
+                      enableSpawnFallback:
+                        dispatchPayload.enableSpawnFallback,
+                    });
+                if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+                  throw new Error(
+                    dispatch.error ?? "Queued workflow dispatch did not start."
+                  );
+                }
+                return {
+                  runId: dispatch.runId,
+                  sessionKey: dispatch.sessionKey ?? sessionLease.sessionKey,
+                  runtime:
+                    dispatch.channel === "sessions_spawn"
+                      ? "subagent"
+                      : "legacy_dispatch",
+                  role: dispatchPayload.toRole,
+                  agentId: dispatchPayload.toRole,
+                  ownerAgent: entry.ownerAgent,
+                  strategy: dispatch.strategy ?? "workflow_dispatch",
+                  parentSessionKey: entry.requesterSessionKey,
+                  depth: 1,
+                };
+              },
             })
-          : await dispatchWorkflowTaskToAgent({
-              runtimeSubagent,
-              requesterSessionKey: entry.requesterSessionKey,
-              requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
-              preferredSessionKeys,
-              fromRole: entry.dispatchPayload.fromRole,
-              toRole: entry.dispatchPayload.toRole,
-              projectRoot: entry.dispatchPayload.projectRoot,
-              projectId: entry.dispatchPayload.projectId,
-              stage: entry.dispatchPayload.stage,
-              summary: entry.dispatchPayload.summary,
-              command: entry.dispatchPayload.command,
-              mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
-              extraBody: entry.dispatchPayload.extraBody,
-              waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
-              retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
-              enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
-            });
-        if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
-          await touchBackgroundWorkflowQueueEntry({
-            queueKey: entry.queueKey,
-            error: dispatch.error ?? "Queued workflow dispatch did not start.",
-          });
+          : null;
+        if (
+          dispatchLaunch &&
+          (!dispatchLaunch.launched ||
+            !dispatchLaunch.runId ||
+            !dispatchLaunch.sessionKey)
+        ) {
           continue;
+        }
+        let dispatchResult: {
+          dispatched: boolean;
+          runId: string | null;
+          sessionKey: string | null;
+          strategy: string | null;
+          error: string | null;
+        };
+        if (dispatchLaunch == null) {
+          const legacyDispatch = entry.dispatchPayload.useWorkflowHandoff
+            ? await (params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent)({
+                runtimeSubagent,
+                workflowPolicy: params.workflowPolicy ?? undefined,
+                requesterSessionKey: entry.requesterSessionKey,
+                requesterChannel:
+                  entry.dispatchPayload.requesterChannel ?? undefined,
+                requesterAccountId:
+                  entry.dispatchPayload.requesterAccountId ?? undefined,
+                preferredSessionKeys,
+                fromRole: entry.dispatchPayload.fromRole,
+                toRole: entry.dispatchPayload.toRole,
+                projectRoot: entry.dispatchPayload.projectRoot,
+                projectId: entry.dispatchPayload.projectId,
+                stage: entry.dispatchPayload.stage,
+                summary: entry.dispatchPayload.summary,
+                command: entry.dispatchPayload.command,
+                mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+                extraBody: entry.dispatchPayload.extraBody,
+                waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
+                retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
+                enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
+                autoModeActive: entry.dispatchPayload.autoModeActive,
+              })
+            : await dispatchWorkflowTaskToAgent({
+                runtimeSubagent,
+                requesterSessionKey: entry.requesterSessionKey,
+                requesterChannel:
+                  entry.dispatchPayload.requesterChannel ?? undefined,
+                preferredSessionKeys,
+                fromRole: entry.dispatchPayload.fromRole,
+                toRole: entry.dispatchPayload.toRole,
+                projectRoot: entry.dispatchPayload.projectRoot,
+                projectId: entry.dispatchPayload.projectId,
+                stage: entry.dispatchPayload.stage,
+                summary: entry.dispatchPayload.summary,
+                command: entry.dispatchPayload.command,
+                mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+                extraBody: entry.dispatchPayload.extraBody,
+                waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
+                retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
+                enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
+              });
+          if (
+            !legacyDispatch.dispatched ||
+            !legacyDispatch.runId ||
+            !legacyDispatch.sessionKey
+          ) {
+            await touchBackgroundWorkflowQueueEntry({
+              entry,
+              error:
+                legacyDispatch.error ??
+                "Queued workflow dispatch did not start.",
+            });
+            continue;
+          }
+          dispatchResult = {
+            dispatched: legacyDispatch.dispatched,
+            runId: legacyDispatch.runId,
+            sessionKey: legacyDispatch.sessionKey,
+            strategy: legacyDispatch.strategy,
+            error: legacyDispatch.error,
+          };
+        } else {
+          dispatchResult = {
+            dispatched: dispatchLaunch.launched,
+            runId: dispatchLaunch.runId,
+            sessionKey: dispatchLaunch.sessionKey,
+            strategy: dispatchLaunch.strategy,
+            error: dispatchLaunch.error,
+          };
         }
         await recordBackgroundWorkflowRun({
           ownerAgent: entry.ownerAgent,
           channelKey: entry.channelKey,
           requesterSessionKey: entry.requesterSessionKey,
-          backgroundSessionKey: dispatch.sessionKey,
-          runId: dispatch.runId,
+          backgroundSessionKey: dispatchResult.sessionKey,
+          runId: dispatchResult.runId,
           queueKey: entry.queueKey,
           kind: entry.kind,
           family: entry.family,
           projectId: entry.projectId,
           projectRoot: entry.projectRoot,
+          projectsRoot:
+            readString(params.projectsRoot) ??
+            readString(params.workflowPolicy?.projectsRoot) ??
+            null,
         });
-        processedQueueKeys.add(entry.queueKey);
+        await appendBackgroundWorkflowRuntimeEvent({
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+          kind: "background_queue_replayed",
+          summary:
+            entry.summary ??
+            `Queued workflow dispatch ${entry.queueKey} resumed through the runtime.`,
+          details: {
+            queueKey: entry.queueKey,
+            entryType: entry.entryType,
+            strategy: dispatchResult.strategy,
+            sessionKey: dispatchResult.sessionKey,
+            runId: dispatchResult.runId,
+          },
+        });
+        processedEntries.push(entry);
         started.push({
           started: true,
           reason: "started",
-          runId: dispatch.runId,
-          sessionKey: dispatch.sessionKey,
+          runId: dispatchResult.runId,
+          sessionKey: dispatchResult.sessionKey,
           projectRoot: entry.projectRoot,
           projectId: entry.projectId,
           summary:
@@ -1240,27 +1983,92 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       }
 
       if (entry.runPayload) {
-        const startedRun = await runtimeSubagent.run({
-          sessionKey: sessionLease.sessionKey,
-          message: entry.runPayload.message,
-          lane: entry.runPayload.lane,
-          deliver: entry.runPayload.deliver,
-          idempotencyKey: entry.runPayload.idempotencyKey ?? undefined,
-          extraSystemPrompt: entry.runPayload.extraSystemPrompt ?? undefined,
-        });
+        const runPayload = entry.runPayload;
+        const backgroundSessionKey = sessionLease.sessionKey;
+        if (!backgroundSessionKey) {
+          throw new Error("Unable to resume background workflow without a session key.");
+        }
+        const runLaunch = readString(entry.projectRoot)
+          ? await resumeWorkflowTransition({
+              projectRoot: String(entry.projectRoot),
+              projectId: entry.projectId,
+              queueKey: entry.queueKey,
+              spawn: async () => {
+                const startedRun = await runtimeSubagent.run({
+                  sessionKey: backgroundSessionKey,
+                  message: runPayload.message,
+                  lane: runPayload.lane,
+                  deliver: runPayload.deliver,
+                  idempotencyKey:
+                    runPayload.idempotencyKey ?? undefined,
+                  extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+                });
+                return {
+                  runId: startedRun.runId,
+                  sessionKey: backgroundSessionKey,
+                  runtime: "subagent",
+                  role: entry.ownerAgent,
+                  agentId: entry.ownerAgent,
+                  ownerAgent: entry.ownerAgent,
+                  parentSessionKey: entry.requesterSessionKey,
+                  depth: 1,
+                };
+              },
+            })
+          : null;
+        if (
+          runLaunch &&
+          (!runLaunch.launched || !runLaunch.runId || !runLaunch.sessionKey)
+        ) {
+          continue;
+        }
+        const startedRun =
+          runLaunch != null
+            ? {
+                runId: runLaunch.runId,
+                sessionKey: runLaunch.sessionKey ?? backgroundSessionKey,
+              }
+            : await runtimeSubagent.run({
+                sessionKey: backgroundSessionKey,
+                message: runPayload.message,
+                lane: runPayload.lane,
+                deliver: runPayload.deliver,
+                idempotencyKey: runPayload.idempotencyKey ?? undefined,
+                extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+              });
+        const effectiveBackgroundSessionKey =
+          runLaunch?.sessionKey ?? backgroundSessionKey;
         await recordBackgroundWorkflowRun({
           ownerAgent: entry.ownerAgent,
           channelKey: entry.channelKey,
           requesterSessionKey: entry.requesterSessionKey,
-          backgroundSessionKey: sessionLease.sessionKey,
+          backgroundSessionKey: effectiveBackgroundSessionKey,
           runId: startedRun.runId,
           queueKey: entry.queueKey,
           kind: entry.kind,
           family: entry.family,
           projectId: entry.projectId,
           projectRoot: entry.projectRoot,
+          projectsRoot:
+            readString(params.projectsRoot) ??
+            readString(params.workflowPolicy?.projectsRoot) ??
+            null,
         });
-        processedQueueKeys.add(entry.queueKey);
+        await appendBackgroundWorkflowRuntimeEvent({
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+          kind: "background_queue_replayed",
+          summary:
+            entry.summary ??
+            `Queued background workflow ${entry.queueKey} resumed through the runtime.`,
+          details: {
+            queueKey: entry.queueKey,
+            entryType: entry.entryType,
+            sessionKey: effectiveBackgroundSessionKey,
+            runId: startedRun.runId,
+          },
+        });
+        processedEntries.push(entry);
         started.push({
           started: true,
           reason: "started",
@@ -1280,16 +2088,23 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       }
     } catch (error) {
       await touchBackgroundWorkflowQueueEntry({
-        queueKey: entry.queueKey,
+        entry,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
-  await removeBackgroundWorkflowQueueEntries(Array.from(processedQueueKeys));
+  await removeBackgroundWorkflowQueueEntries(processedEntries);
   return {
     started,
-    remaining: await pruneBackgroundWorkflowQueue(),
+    remaining: (
+      await pruneBackgroundWorkflowQueue({
+        projectsRoot:
+          readString(params.projectsRoot) ??
+          readString(params.workflowPolicy?.projectsRoot) ??
+          null,
+      })
+    ).filter((entry) => isBackgroundQueueEntryPending(entry)),
   };
 }
 
@@ -1499,6 +2314,7 @@ export async function startBackgroundWorkflowRun(params: {
     kind: normalizedKind,
     projectId: resolvedProjectId,
     projectRoot: resolvedProjectRoot,
+    projectsRoot: params.workflowPolicy.projectsRoot,
   });
   reusableBackgroundSessionKey = sessionLease.reusedIdleSession
     ? sessionLease.sessionKey
@@ -1516,6 +2332,7 @@ export async function startBackgroundWorkflowRun(params: {
       kind: normalizedKind,
       projectId: resolvedProjectId,
       projectRoot: resolvedProjectRoot,
+      projectsRoot: params.workflowPolicy.projectsRoot,
       queueKey,
       summary:
         readString(params.backgroundRun.summary) ??
@@ -1551,42 +2368,120 @@ export async function startBackgroundWorkflowRun(params: {
     };
   }
   const backgroundSessionKey = sessionLease.sessionKey;
-
-  const runId = (
-    await params.runtimeSubagent.run({
-      sessionKey: backgroundSessionKey,
-      message: commandText,
-      lane: "nested",
-      deliver: false,
-      idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
-      extraSystemPrompt:
-        "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-        "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
-        "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
-        "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
-    })
-  ).runId;
+  const directLaunch = resolvedProjectRoot
+    ? await orchestrateWorkflowTransition({
+        transition: {
+          projectRoot: resolvedProjectRoot,
+          projectId: resolvedProjectId,
+          queueKey,
+          source: "start_background_run",
+          entryType: "background_run",
+          ownerAgent: ownerAgent ?? "researcher",
+          channelKey: channelKey ?? backgroundSessionKey,
+          requesterSessionKey: params.agentCtx.sessionKey,
+          messageChannel: params.agentCtx.messageChannel ?? null,
+          preferredSessionKey: preferredBackgroundSessionKey,
+          family: normalizedFamily,
+          kind: normalizedKind,
+          summary:
+            readString(params.backgroundRun.summary) ??
+            `Start background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+          parentSessionKey: params.agentCtx.sessionKey,
+          depth: 1,
+          runPayload: {
+            message: commandText,
+            lane: "nested",
+            deliver: false,
+            idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
+            extraSystemPrompt:
+              "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
+              "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
+              "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
+              "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+          },
+        },
+        spawn: async () => {
+          const started = await params.runtimeSubagent!.run({
+            sessionKey: backgroundSessionKey,
+            message: commandText,
+            lane: "nested",
+            deliver: false,
+            idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
+            extraSystemPrompt:
+              "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
+              "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
+              "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
+              "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+          });
+          return {
+            runId: started.runId,
+            sessionKey: backgroundSessionKey,
+            runtime: "subagent",
+            role: ownerAgent,
+            agentId: ownerAgent,
+            ownerAgent,
+            parentSessionKey: params.agentCtx.sessionKey,
+            depth: 1,
+          };
+        },
+      })
+    : null;
+  if (directLaunch && (!directLaunch.launched || !directLaunch.runId || !directLaunch.sessionKey)) {
+    return {
+      started: false,
+      reason: "runtime_unavailable",
+      runId: null,
+      sessionKey: null,
+      projectRoot:
+        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      summary:
+        directLaunch.error ??
+        "Background workflow transition failed before the runtime could start it.",
+      reusedIdleSession: Boolean(reusableBackgroundSessionKey),
+      activeResearcherSessionsInChannel,
+      queued: false,
+      queueKey,
+    };
+  }
+  const runId =
+    directLaunch?.runId ??
+    (
+      await params.runtimeSubagent.run({
+        sessionKey: backgroundSessionKey,
+        message: commandText,
+        lane: "nested",
+        deliver: false,
+        idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
+        extraSystemPrompt:
+          "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
+          "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
+          "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
+          "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+      })
+    ).runId;
 
   if (ownerAgent === "researcher" && channelKey) {
-    await recordBackgroundWorkflowRun({
+      await recordBackgroundWorkflowRun({
       ownerAgent,
       channelKey,
       requesterSessionKey: params.agentCtx.sessionKey,
-      backgroundSessionKey,
+      backgroundSessionKey: directLaunch?.sessionKey ?? backgroundSessionKey,
       runId,
       queueKey,
       kind: normalizedKind,
-      family: normalizedFamily,
-      projectId: resolvedProjectId,
-      projectRoot: resolvedProjectRoot,
-    });
+        family: normalizedFamily,
+        projectId: resolvedProjectId,
+        projectRoot: resolvedProjectRoot,
+        projectsRoot: params.workflowPolicy.projectsRoot,
+      });
   }
 
   return {
     started: true,
     reason: "started",
     runId,
-    sessionKey: backgroundSessionKey,
+    sessionKey: directLaunch?.sessionKey ?? backgroundSessionKey,
     projectRoot:
       ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
     projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,

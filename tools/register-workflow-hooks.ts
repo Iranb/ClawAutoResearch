@@ -350,7 +350,7 @@ async function runBeforeToolCallHook(params: {
         return {
           block: true,
           blockReason:
-            "Cannot determine requester role for sessions_spawn. Retry after workflow context is restored.",
+            "Cannot determine requester role for sessions_spawn. Retry after workflow runtime context is restored.",
         };
       }
       if (
@@ -403,7 +403,7 @@ async function runBeforeToolCallHook(params: {
         return {
           block: true,
           blockReason:
-            "Cannot determine requester role for sessions_send. Use research_workflow.send_mailbox after workflow context is restored.",
+            "Cannot determine requester role for sessions_send. Retry after workflow runtime context is restored.",
         };
       }
       if (
@@ -416,7 +416,7 @@ async function runBeforeToolCallHook(params: {
       ) {
         return {
           block: true,
-          blockReason: `${snapshot.role} should not send ad hoc internal messages to ${targetRole ?? "that target"}. Use research_workflow.send_mailbox or the approved workflow path.`,
+          blockReason: `${snapshot.role} should not send ad hoc internal messages to ${targetRole ?? "that target"}. Prefer the workflow runtime/orchestrator handoff path; use research_workflow.send_mailbox only as a compatibility fallback.`,
         };
       }
       if (snapshot.projectRoot) {

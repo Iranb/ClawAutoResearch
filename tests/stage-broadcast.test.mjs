@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   buildAutoIteratorStageBroadcastMessage,
   isWorkflowStageBroadcastMessage,
   maybeBroadcastAutoIteratorStageChange,
+  maybeBroadcastWorkflowStatusUpdate,
 } from "../tools/stage-broadcast.ts";
+import { readWorkflowBroadcastOutboxStore } from "../tools/workflow-runtime-state.ts";
 
 test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dispatch context", () => {
   const message = buildAutoIteratorStageBroadcastMessage({
@@ -129,4 +134,46 @@ test("maybeBroadcastAutoIteratorStageChange posts a deliverable nested run when 
   assert.equal(calls[0].deliver, true);
   assert.match(calls[0].message, /WORKFLOW_STAGE_BROADCAST=1/);
   assert.match(calls[0].extraSystemPrompt, /synthetic workflow stage-change broadcast/i);
+});
+
+test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local broadcast outbox", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "demo-project", current_stage: "idea" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const result = await maybeBroadcastWorkflowStatusUpdate({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "status-run-1" };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    status: "recovered_after_restart",
+    stage: "idea",
+    summary: "Recovered the workflow runtime after restart.",
+    idempotencyKeySuffix: "recovery",
+  });
+
+  assert.equal(result.broadcasted, true);
+  assert.equal(result.runId, "status-run-1");
+  assert.equal(calls.length, 1);
+
+  const outbox = await readWorkflowBroadcastOutboxStore(projectRoot);
+  assert.equal(outbox.entries.length, 1);
+  assert.equal(outbox.entries[0].status, "recovered_after_restart");
+  assert.equal(outbox.entries[0].deliveryStatus, "delivered");
 });

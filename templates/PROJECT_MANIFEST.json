@@ -369,7 +369,18 @@
     "plan_audit_path": null,
     "quality_audit_path": null,
     "writing_audit_path": null,
-    "last_audit_at": null
+    "last_audit_at": null,
+    "runtime_framework": null,
+    "runtime_framework_version": null,
+    "runtime_migration": {
+      "version": null,
+      "status": null,
+      "compatibility_mode": null,
+      "migrated_at": null,
+      "reason": null,
+      "preserved_files": [],
+      "notes": []
+    }
   },
   "handoff": {
     "from_agent": null,

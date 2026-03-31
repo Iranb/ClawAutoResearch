@@ -19,12 +19,18 @@ import {
   getChannelProjectBindingForWorkflow,
 } from "../tools/workflow-guard.ts";
 import {
+  readWorkflowRuntimeEvents,
+  readWorkflowRuntimeQueueStore,
+  readWorkflowRuntimeSessionsStore,
+} from "../tools/workflow-runtime-state.ts";
+import {
   buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   clearBackgroundWorkflowQueueForTests,
   drainQueuedBackgroundWorkflowRuns,
   clearBackgroundWorkflowRunRegistryForTests,
+  enqueueQueuedBackgroundWorkflowRun,
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
@@ -285,6 +291,11 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   await fs.access(
     path.join(result.projectRoot, ".openclaw-research", "channel-project-bindings.json")
   );
+  const runtimeQueue = await readWorkflowRuntimeQueueStore(result.projectRoot);
+  assert.equal(runtimeQueue.entries.length, 1);
+  assert.equal(runtimeQueue.entries[0].status, "running");
+  assert.equal(runtimeQueue.entries[0].entryType, "background_run");
+  assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
 });
 
 test("startBackgroundWorkflowRun can bootstrap a research-queue continuation", async (t) => {
@@ -480,6 +491,7 @@ test("queued researcher background runs persist and auto-replay when a pooled se
   completedRunIds.add(first.runId);
   const drain = await drainQueuedBackgroundWorkflowRuns({
     runtimeSubagent,
+    projectsRoot,
   });
 
   assert.equal(drain.started.length, 1);
@@ -488,6 +500,173 @@ test("queued researcher background runs persist and auto-replay when a pooled se
   assert.equal(drain.started[0].queued, false);
   assert.equal(typeof drain.started[0].sessionKey, "string");
   assert.equal(runCalls.length, 3);
+
+  const firstSessions = await readWorkflowRuntimeSessionsStore(first.projectRoot);
+  const queuedQueue = await readWorkflowRuntimeQueueStore(queued.projectRoot);
+  assert.equal(firstSessions.entries.length, 1);
+  assert.equal(firstSessions.entries[0].status, "idle");
+  assert.equal(queuedQueue.entries.length, 1);
+  assert.equal(queuedQueue.entries[0].status, "running");
+});
+
+test("queued background workflow lifecycle is recorded in workflow-events.jsonl", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const completedRunIds = new Set();
+  const runtimeSubagent = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `bg-run-${runCalls.length}` };
+    },
+    async waitForRun(params) {
+      return completedRunIds.has(params.runId)
+        ? { status: "ok" }
+        : { status: "timeout" };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const baseParams = {
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:audit-room",
+      sessionId: "session-bg-audit-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+  };
+
+  const first = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery",
+    },
+  });
+  await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "avian migration drift",
+    },
+  });
+  const queued = await startBackgroundWorkflowRun({
+    ...baseParams,
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "wetland morphology signals",
+    },
+  });
+
+  assert.equal(queued.started, false);
+  const queuedEvents = await readWorkflowRuntimeEvents(queued.projectRoot);
+  assert.ok(
+    queuedEvents.some((event) => event.kind === "background_queue_enqueued"),
+    "expected queue enqueue event in workflow-events.jsonl"
+  );
+
+  completedRunIds.add(first.runId);
+  await drainQueuedBackgroundWorkflowRuns({
+    runtimeSubagent,
+    projectsRoot,
+  });
+
+  const replayedEvents = await readWorkflowRuntimeEvents(queued.projectRoot);
+  assert.ok(
+    replayedEvents.some((event) => event.kind === "background_queue_replayed"),
+    "expected queue replay event in workflow-events.jsonl"
+  );
+  assert.ok(
+    replayedEvents.some((event) => event.kind === "background_session_recorded"),
+    "expected background session record event in workflow-events.jsonl"
+  );
+});
+
+test("drainQueuedBackgroundWorkflowRuns marks projectless workflow dispatch entries as needs_repair instead of legacy fallback", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const handoffCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "workflow_auto_stage",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:discord:group:legacy-room",
+    messageChannel: "discord",
+    preferredSessionKey: "agent:researcher:discord:group:legacy-room:subagent:alpha",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    projectId: "alpha",
+    queueKey: "legacy-missing-project",
+    summary: "Legacy queued workflow dispatch",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: ["agent:researcher:discord:group:legacy-room:subagent:alpha"],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot: "/tmp/projects/alpha",
+      projectId: "alpha",
+      stage: "experiment",
+      summary: "Run one bounded experiment pass.",
+      command: "/run-experiments",
+      mailboxMessageId: null,
+      extraBody: null,
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "should-not-run" };
+      },
+    },
+    handoffWorkflowTaskToAgent: async (params) => {
+      handoffCalls.push(params);
+      return {
+        dispatched: true,
+        sessionKey: "agent:researcher:discord:group:legacy-room:subagent:alpha",
+        runId: "legacy-handoff-run",
+        waitStatus: "ok",
+        channel: "sessions_send",
+        strategy: "direct_session",
+        attempts: [],
+        fallbackSpawned: false,
+        error: null,
+        backend: "native",
+        lobsterStatus: null,
+        fallbackReason: null,
+      };
+    },
+  });
+
+  assert.equal(handoffCalls.length, 0);
+  assert.equal(drained.started.length, 0);
+  assert.equal(drained.remaining.length, 1);
+  assert.equal(drained.remaining[0].queueKey, "legacy-missing-project");
+  assert.equal(drained.remaining[0].status, "needs_repair");
 });
 
 test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel", async (t) => {
@@ -706,6 +885,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   const activeInventory = await listBackgroundWorkflowRuns({
     runtimeSubagent,
     ownerAgent: "researcher",
+    projectsRoot,
   });
   assert.equal(activeInventory.entries.length, 1);
   assert.equal(activeInventory.entries[0].status, "active");
@@ -716,6 +896,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   const idleInventory = await listBackgroundWorkflowRuns({
     runtimeSubagent,
     ownerAgent: "researcher",
+    projectsRoot,
   });
   assert.equal(idleInventory.entries.length, 1);
   assert.equal(idleInventory.entries[0].status, "idle");
@@ -724,6 +905,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   const pruned = await pruneBackgroundWorkflowRuns({
     runtimeSubagent,
     ownerAgent: "researcher",
+    projectsRoot,
     idleOlderThanMs: 0,
     deleteSessions: true,
   });
@@ -734,6 +916,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   const afterPrune = await listBackgroundWorkflowRuns({
     runtimeSubagent,
     ownerAgent: "researcher",
+    projectsRoot,
   });
   assert.equal(afterPrune.entries.length, 0);
 });

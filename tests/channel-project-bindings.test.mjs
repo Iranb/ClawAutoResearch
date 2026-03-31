@@ -12,6 +12,10 @@ import {
   getChannelProjectBindingForWorkflow,
   unbindChannelProjectForWorkflow,
 } from "../tools/workflow-guard.ts";
+import {
+  buildWorkflowRuntimeSessionBinding,
+  normalizeWorkflowSubagentParentSessionKey,
+} from "../tools/workflow-subagent-sessions.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-channel-bindings-"));
@@ -296,4 +300,66 @@ test("automatic channel binding creates the project-local file once a project is
     messageChannel: "discord",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
+});
+
+test("workflow bindings persist runtime session lineage metadata without breaking project binding lookup", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "runtime-track");
+  const sessionKey =
+    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage";
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const runtimeBinding = buildWorkflowRuntimeSessionBinding({
+    projectRoot,
+    projectId: "runtime-track",
+    role: "researcher",
+    sessionKey,
+    sessionId: "session-runtime-track",
+    parentSessionKey: normalizeWorkflowSubagentParentSessionKey(sessionKey),
+    depth: 1,
+  });
+
+  const result = await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    sessionId: "session-runtime-track",
+    messageChannel: "discord",
+    projectRoot,
+    projectId: "runtime-track",
+    boundByAgent: "researcher",
+    notes: "runtime binding regression test",
+    runtimeSession: runtimeBinding,
+  });
+
+  assert.equal(result.binding.workflowRole, "researcher");
+  assert.equal(result.binding.workflowSessionKey, sessionKey);
+  assert.equal(result.binding.workflowSessionId, "session-runtime-track");
+  assert.equal(
+    result.binding.parentWorkflowSessionKey,
+    "agent:researcher:discord:group:runtime-room"
+  );
+  assert.equal(result.binding.threadBindingKey, runtimeBinding.threadBindingKey);
+  assert.equal(result.binding.depth, 1);
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(lookup.binding?.projectRoot, projectRoot);
+  assert.equal(lookup.binding?.workflowSessionKey, sessionKey);
 });

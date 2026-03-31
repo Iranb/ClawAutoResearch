@@ -37,6 +37,8 @@ import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
   looksLikePapernexusLiveGraphCliReadCommand,
+  buildWorkflowRuntimeSessionBinding,
+  type WorkflowRuntimeSessionBinding,
 } from "./workflow-subagent-sessions";
 import {
   normalizePapernexusApiTokenSource,
@@ -736,6 +738,14 @@ export type WorkflowSnapshot = {
   channelProjectBindingsEnabled: boolean;
   channelProjectBindingKey: string | null;
   channelProjectBindingStorePath: string | null;
+  channelProjectBindingWorkflowRole: string | null;
+  channelProjectBindingWorkflowSessionKey: string | null;
+  channelProjectBindingWorkflowSessionId: string | null;
+  channelProjectBindingParentSessionKey: string | null;
+  channelProjectBindingThreadBindingKey: string | null;
+  channelProjectBindingDepth: number | null;
+  channelProjectBindingLineageKey: string | null;
+  channelProjectBindingMode: "explicit_thread" | "derived_thread" | "channel_only";
   role: WorkflowRole | null;
   currentStage: string | null;
   currentMicroStage: string | null;
@@ -8712,6 +8722,18 @@ export async function buildWorkflowSnapshot(params: {
   const remoteOnlyPapernexus = isRemoteOnlyPapernexusWorkflow(
     papernexusAccess?.apiBaseUrl ?? null
   );
+  const runtimeBinding = projectState.channelBinding
+    ? buildWorkflowRuntimeSessionBinding({
+        projectRoot: projectState.channelBinding.projectRoot,
+        projectId: projectState.channelBinding.projectId,
+        role: projectState.channelBinding.workflowRole,
+        sessionKey: projectState.channelBinding.workflowSessionKey,
+        sessionId: projectState.channelBinding.workflowSessionId,
+        parentSessionKey: projectState.channelBinding.parentWorkflowSessionKey,
+        threadBindingKey: projectState.channelBinding.threadBindingKey,
+        depth: projectState.channelBinding.depth,
+      })
+    : null;
   const defaultPapernexusSourceDir = remoteOnlyPapernexus
     ? null
     : getDefaultPapernexusSourceDir(projectState.projectId);
@@ -8740,6 +8762,14 @@ export async function buildWorkflowSnapshot(params: {
     channelProjectBindingsEnabled: policy.enableChannelProjectBindings,
     channelProjectBindingKey: projectState.channelBindingKey,
     channelProjectBindingStorePath: projectState.channelBindingStorePath,
+    channelProjectBindingWorkflowRole: runtimeBinding?.role ?? null,
+    channelProjectBindingWorkflowSessionKey: runtimeBinding?.sessionKey ?? null,
+    channelProjectBindingWorkflowSessionId: runtimeBinding?.sessionId ?? null,
+    channelProjectBindingParentSessionKey: runtimeBinding?.parentSessionKey ?? null,
+    channelProjectBindingThreadBindingKey: runtimeBinding?.threadBindingKey ?? null,
+    channelProjectBindingDepth: runtimeBinding?.depth ?? null,
+    channelProjectBindingLineageKey: runtimeBinding?.lineageKey ?? null,
+    channelProjectBindingMode: runtimeBinding?.bindingMode ?? "channel_only",
     role,
     currentStage,
     currentMicroStage: normalizeStage(projectState.manifest?.current_micro_stage),
@@ -9045,19 +9075,15 @@ export function buildFocusedPromptAssembly(params: {
     "Layer 2: Stage-Local Control State",
     `Stage=${snapshot.currentStage ?? "unknown"}/${snapshot.currentMicroStage ?? "unknown"}`,
   ];
-  if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
-    layer2Lines.push(
-      `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
-    );
-    layer2Lines.push(
-      `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route or hand off the task to ${snapshot.recommendedOwner} via research_workflow.dispatch_task, sessions_send, or workflow mailbox.`
-    );
-    layer2Lines.push(
-      "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase."
-    );
-  } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
+  layer2Lines.push(...buildNonOwnerRoutingAdvice(snapshot));
+  if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
     layer2Lines.push(
       `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
+    );
+  }
+  if (snapshot.channelProjectBindingWorkflowSessionKey) {
+    layer2Lines.push(
+      `Runtime binding: role=${snapshot.channelProjectBindingWorkflowRole ?? "unset"}, session=${snapshot.channelProjectBindingWorkflowSessionKey ?? "unset"}, parent=${snapshot.channelProjectBindingParentSessionKey ?? "unset"}, thread=${snapshot.channelProjectBindingThreadBindingKey ?? "unset"}, depth=${snapshot.channelProjectBindingDepth ?? "unset"}, mode=${snapshot.channelProjectBindingMode}.`
     );
   }
   if (snapshot.nextAction) {
@@ -9268,6 +9294,25 @@ function shouldApplySharedWritingConstitution(snapshot: Partial<WorkflowSnapshot
   );
 }
 
+function buildNonOwnerRoutingAdvice(snapshot: Partial<WorkflowSnapshot>): string[] {
+  if (!snapshot.role || !snapshot.recommendedOwner || snapshot.role === snapshot.recommendedOwner) {
+    return [];
+  }
+  const depthLabel =
+    typeof snapshot.channelProjectBindingDepth === "number"
+      ? ` (depth ${snapshot.channelProjectBindingDepth})`
+      : "";
+  const runtimePathHint = snapshot.channelProjectBindingWorkflowSessionKey
+    ? `Persistent runtime session: ${snapshot.channelProjectBindingWorkflowSessionKey}${depthLabel}.`
+    : "Persistent runtime session: not yet bound; establish or recover the workflow runtime session before continuing.";
+  return [
+    `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`,
+    `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route through the workflow runtime/orchestrator path first; use ${snapshot.recommendedOwner} handoff only as a compatibility fallback when runtime context is unavailable.`,
+    runtimePathHint,
+    "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase.",
+  ];
+}
+
 function getSharedWritingConstitutionLines(role: string | null): string[] {
   const lines = [
     "Shared writing constitution: final paper prose must read as a cohesive academic narrative, not as a pile of isolated facts or bullet dumps.",
@@ -9310,19 +9355,15 @@ export function formatWorkflowSnapshotForPrompt(params: {
   if (snapshot.recommendedOwner) {
     lines.push(`Expected owner for this stage: ${snapshot.recommendedOwner}`);
   }
-  if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
-    lines.push(
-      `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
-    );
-    lines.push(
-      `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route or hand off the task to ${snapshot.recommendedOwner} via research_workflow.dispatch_task, sessions_send, or workflow mailbox.`
-    );
-    lines.push(
-      "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase."
-    );
-  } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
+  lines.push(...buildNonOwnerRoutingAdvice(snapshot));
+  if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
     lines.push(
       `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
+    );
+  }
+  if (snapshot.channelProjectBindingWorkflowSessionKey) {
+    lines.push(
+      `Runtime binding: role=${snapshot.channelProjectBindingWorkflowRole ?? "unset"}, session=${snapshot.channelProjectBindingWorkflowSessionKey ?? "unset"}, parent=${snapshot.channelProjectBindingParentSessionKey ?? "unset"}, thread=${snapshot.channelProjectBindingThreadBindingKey ?? "unset"}, depth=${snapshot.channelProjectBindingDepth ?? "unset"}, mode=${snapshot.channelProjectBindingMode}.`
     );
   }
   if (snapshot.nextAction) {
@@ -14223,6 +14264,7 @@ export async function bindChannelProjectForWorkflow(params: {
   boundByAgent?: string | null;
   notes?: string | null;
   createIfMissing?: boolean;
+  runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }) {
   const ensuredProject = await ensureWorkflowProjectRoot({
     policy: params.policy,
@@ -14250,6 +14292,7 @@ export async function bindChannelProjectForWorkflow(params: {
     messageChannel: params.messageChannel,
     boundByAgent: params.boundByAgent,
     notes: params.notes,
+    runtimeSession: params.runtimeSession ?? null,
   });
 }
 
@@ -14264,6 +14307,7 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
   projectId?: string | null;
   boundByAgent?: string | null;
   notes?: string | null;
+  runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }) {
   const existing = getChannelProjectBinding({
     policy: params.policy,
@@ -14319,6 +14363,7 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
     messageChannel: params.messageChannel,
     boundByAgent: params.boundByAgent,
     notes: params.notes,
+    runtimeSession: params.runtimeSession ?? null,
   });
   return {
     autoBound: true,

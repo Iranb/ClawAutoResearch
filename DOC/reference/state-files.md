@@ -5,6 +5,11 @@
 当前 workflow 的核心设计之一是：  
 “让关键事实存到文件里，而不是留在对话记忆里。”
 
+从 `sessions_spawn` runtime 重写开始，状态又分成两层：
+
+- `PROJECT_MANIFEST.json` / mailbox / ledger 这类文件继续保存“workflow 事实”
+- `.openclaw-research/workflow-runtime-*.json` 这类文件保存“执行与恢复事实”
+
 ## 2. 顶层状态文件
 
 ### `PROJECT_MANIFEST.json`
@@ -148,6 +153,71 @@ idea 阶段的审计材料。
 如果当前 turn 还没有解析出项目，才会暂时回退到 workspace 下的 `.openclaw-research/channel-project-bindings.json`。  
 它保存 Discord / session channel 到项目目录的绑定关系。
 
+### `.openclaw-research/workflow-runtime-queue.json`
+
+新的 runtime transition intent 队列。
+
+它记录：
+
+- auto-stage handoff intent
+- discussion reviewer queue entry
+- mitigation retry / degraded fallback 状态
+- 每个 transition 的 `queued / launching / running / degraded / needs_repair`
+
+### `.openclaw-research/workflow-runtime-sessions.json`
+
+新的 runtime session registry。
+
+它记录：
+
+- 当前 workflow session / subagent session
+- runtime / role / lineage / thread binding
+- `active / idle / needs_repair`
+- runId、queueKey、heartbeat、finish 时间
+
+### `.openclaw-research/workflow-announce-outbox.json`
+
+记录子代理完成后尚未被父协调器消费的 announce 事件。
+
+默认用于：
+
+- nested child completion
+- 后续恢复时 replay announce
+
+### `.openclaw-research/workflow-broadcast-outbox.json`
+
+记录待发、已发、失败可重试的 channel workflow 广播。
+
+当前主要覆盖：
+
+- workflow status update
+- stage-change / handoff broadcast
+- restart recovery broadcast
+
+### `.openclaw-research/workflow-events.jsonl`
+
+追加式 runtime 事件日志。
+
+它用于：
+
+- transition intent 创建
+- degraded fallback
+- recovery repair
+- announce / broadcast 生命周期
+
+注意：
+
+- `/tmp/openclaw-research-workflow-trace/...jsonl` 仍保留为临时 trace
+- 但恢复运行所需的关键记录现在应优先依赖项目内 runtime state
+
+### `tools/workflow-announce-runtime.ts` / `tools/workflow-runtime-recovery.ts`
+
+这两个 helper 不属于状态文件，但它们是 runtime state 的标准消费入口。
+
+- `workflow-announce-runtime.ts` 负责消费 announce outbox 和重放 broadcast outbox
+- `workflow-runtime-recovery.ts` 负责按顺序执行 announce replay、broadcast replay、queue repair 和 session repair
+- 后续 service 接入应该优先调用这两个 helper，而不是直接手工遍历 outbox 文件
+
 ## 7. 哪些文件不建议手改
 
 以下文件尤其不建议在活跃 workflow 中直接手工编辑：
@@ -157,6 +227,10 @@ idea 阶段的审计材料。
 - `.openclaw-research/workflow-mailbox.json`
 - `.openclaw-research/workflow-contact-log.json`
 - `.openclaw-research/channel-project-bindings.json`
+- `.openclaw-research/workflow-runtime-queue.json`
+- `.openclaw-research/workflow-runtime-sessions.json`
+- `.openclaw-research/workflow-announce-outbox.json`
+- `.openclaw-research/workflow-broadcast-outbox.json`
 
 更推荐用这些工具动作：
 
@@ -169,3 +243,4 @@ idea 阶段的审计材料。
 - `research_workflow.unbind_channel_project`
 - `research_workflow.send_mailbox`
 - `research_workflow.ack_mailbox`
+- `research_workflow.migrate_runtime_state`

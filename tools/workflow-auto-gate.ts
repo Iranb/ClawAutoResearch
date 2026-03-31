@@ -339,8 +339,14 @@ export async function saveGateReviewStore(
 }
 
 export function buildGateReviewFingerprint(packet: GateReviewPacket): string {
+  const normalizedPacket: GateReviewPacket = {
+    ...packet,
+    // Runtime migration touches manifest.updated_at; gate rounds should stay stable
+    // unless the gate-relevant packet contents actually changed.
+    manifestUpdatedAt: null,
+  };
   return createHash("sha1")
-    .update(JSON.stringify(packet))
+    .update(JSON.stringify(normalizedPacket))
     .digest("hex");
 }
 
