@@ -113,7 +113,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 - project-local paper staging root = `{PROJ}/researcher/paper-staging`
-- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus authenticated `/api/imports` and `/api/*`
+- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`)
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 
@@ -146,7 +146,7 @@ When starting a **new workflow run** for a project (i.e., when `{PROJ}/` is crea
 
 ### Stage 0.5: Graph Foundation (Mandatory for new projects)
 
-Before graph build, the Researcher must first gather papers and full text into project-local staging under `{PROJ}/researcher/paper-staging/`, record the selected canonical papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, upload/import them through the configured remote PaperNexus API, then reconcile that selection against the shared global graph:
+Before graph build, the Researcher must first gather papers and full text into project-local staging under `{PROJ}/researcher/paper-staging/`, record the selected canonical papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, upload/import them through the configured remote PaperNexus wrapper flow, then reconcile that selection against the shared global graph:
 
 ```
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + {PROJ}/researcher/PAPER_SOURCE_INDEX.json
@@ -160,9 +160,9 @@ Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
 - after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request a shared-graph refresh before innovation analysis
-- if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task path (`POST /api/imports`) and task logs instead of touching any home-directory shared PaperNexus storage directly
-- if the workflow calls PaperNexus `/api/*`, resolve `Authorization: Bearer <token>` from the configured token source instead of assuming anonymous access
-- workflow-owned automation must not depend on home-directory shared PaperNexus storage; use project-local staging plus authenticated remote API calls instead
+- if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task wrappers and task logs instead of touching any home-directory shared PaperNexus storage directly
+- if workflow touches remote PaperNexus, go through the wrappers so auth and request shape stay consistent; do not write hand-rolled REST calls
+- workflow-owned automation must not depend on home-directory shared PaperNexus storage; use project-local staging plus authenticated remote wrapper calls instead
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
 - Do **not** enter idea selection without `{PROJ}/researcher/RESEARCH_BRAINSTORM.md`
 - Do **not** enter idea selection until `{PROJ}/graph/LIMITATION_FRONTIER.md`, `CONTRADICTION_FRONTIER.md`, `TRANSFER_FRONTIER.md`, `COMPOSITION_FRONTIER.md`, and `ANCHOR_INDEX.md` exist

@@ -716,6 +716,156 @@ test("maybeLaunchAutoStageForProject shares the researcher service session pool 
   assert.equal(runs.length, 2);
 });
 
+test("queued aggressive auto-stage handoffs replay through workflow handoff routing with the bound channel", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = path.join(projectsRoot, "alpha");
+  const betaRoot = path.join(projectsRoot, "beta");
+  const gammaRoot = path.join(projectsRoot, "gamma");
+  const runtimeRuns = [];
+  const handoffCalls = [];
+  const completedRunIds = new Set();
+  const sessionMessageCounts = new Map();
+  let allowDrain = false;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(alphaRoot, { recursive: true });
+  await fs.mkdir(betaRoot, { recursive: true });
+  await fs.mkdir(gammaRoot, { recursive: true });
+
+  const bindings = [alphaRoot, betaRoot, gammaRoot].map((projectRoot, index) => ({
+    channelKey: "telegram:topic:paper-lab",
+    projectRoot,
+    projectId: ["alpha", "beta", "gamma"][index],
+    messageChannel: "telegram",
+    sessionKeySample: "agent:researcher:telegram:topic:paper-lab",
+    sessionId: null,
+    boundAt: "2026-03-25T00:00:00.000Z",
+    updatedAt: "2026-03-25T00:05:00.000Z",
+    boundByAgent: "researcher",
+    notes: null,
+  }));
+
+  const runtimeSubagent = {
+    async run(params) {
+      runtimeRuns.push(params);
+      sessionMessageCounts.set(
+        params.sessionKey,
+        (sessionMessageCounts.get(params.sessionKey) ?? 0) + 1
+      );
+      return { runId: `seed-run-${runtimeRuns.length}` };
+    },
+    async waitForRun({ runId }) {
+      if (!allowDrain) {
+        return { status: "timeout" };
+      }
+      if (runId === "seed-run-1" && !completedRunIds.has(runId)) {
+        completedRunIds.add(runId);
+        return { status: "ok" };
+      }
+      return { status: "timeout" };
+    },
+    async getSessionMessages({ sessionKey }) {
+      const count = sessionMessageCounts.get(sessionKey) ?? 0;
+      return {
+        messages: Array.from({ length: count }, (_, index) => ({ id: `${sessionKey}:${index}` })),
+      };
+    },
+  };
+
+  const makeStageParams = (projectRoot, projectId) => ({
+    runtimeSubagent,
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+      lobsterHandoff: {
+        enabled: true,
+        autoModeOnly: true,
+        gatewayUrl: "http://127.0.0.1:18789",
+        pipelinePath: "",
+        timeoutMs: 30000,
+        maxStdoutBytes: 512000,
+        fallbackToNative: true,
+      },
+    },
+    projectRoot,
+    projectId,
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      effectiveAutoMode: "aggressive",
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings,
+        };
+      },
+    },
+  });
+
+  const first = await maybeLaunchAutoStageForProject(makeStageParams(alphaRoot, "alpha"));
+  const second = await maybeLaunchAutoStageForProject(makeStageParams(betaRoot, "beta"));
+  const queued = await maybeLaunchAutoStageForProject(makeStageParams(gammaRoot, "gamma"));
+
+  assert.equal(first.launched, true);
+  assert.equal(second.launched, true);
+  assert.equal(queued.launched, false);
+  assert.equal(queued.reason, "session_pool_full");
+
+  allowDrain = true;
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    runtimeSubagent,
+    workflowPolicy: makeStageParams(gammaRoot, "gamma").workflowPolicy,
+    handoffWorkflowTaskToAgent: async (params) => {
+      handoffCalls.push(params);
+      return {
+        dispatched: true,
+        sessionKey:
+          "agent:researcher:telegram:topic:paper-lab:subagent:workflow-stage:gamma:experiment",
+        runId: "handoff-run-1",
+        waitStatus: "ok",
+        channel: "sessions_send",
+        strategy: "direct_session",
+        attempts: [],
+        fallbackSpawned: false,
+        error: null,
+        backend: "native",
+        lobsterStatus: null,
+        fallbackReason: null,
+      };
+    },
+  });
+
+  assert.equal(drained.started.length, 1);
+  assert.equal(handoffCalls.length, 1);
+  assert.equal(handoffCalls[0].requesterChannel, "telegram");
+  assert.equal(handoffCalls[0].autoModeActive, true);
+});
+
 test("maybeLaunchAutoStageForProject waits for risk discussion before generic stage dispatch", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");

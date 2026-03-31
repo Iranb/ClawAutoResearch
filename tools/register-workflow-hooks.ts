@@ -1,14 +1,15 @@
 import {
   buildFocusedPromptAssembly,
   buildWorkflowSnapshot,
-  canRoleContact,
-  canRoleSpawn,
+  canRoleContactInWorkflow,
+  canRoleSpawnInWorkflow,
   formatWorkflowSnapshotForPrompt,
   getWorkflowContactCooldown,
   inferTargetRoleFromToolParams,
+  normalizeWorkflowChannelMentions,
   recordWorkflowContactEvent,
-  sanitizeAgentMentions,
   sanitizeMessageToolParams,
+  shouldUseFocusedWorkflowPrompt,
   shouldBlockCoderDatasetMutation,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockPapernexusInlineExecution,
@@ -17,6 +18,7 @@ import {
   shouldBlockPapernexusLocalStorageUsage,
   shouldBlockPapernexusLiveGraphCliRead,
   shouldBlockPapernexusMultiPaperImport,
+  shouldBlockPapernexusRawHttpUsage,
   shouldBlockResearchGraphForce,
   shouldBlockInnovationWrite,
   shouldBlockProjectWrite,
@@ -274,6 +276,18 @@ async function runBeforeToolCallHook(params: {
       };
     }
 
+    const papernexusRawHttpCheck = shouldBlockPapernexusRawHttpUsage({
+      role: snapshot.role,
+      toolName,
+      toolParams,
+    });
+    if (papernexusRawHttpCheck.block) {
+      return {
+        block: true,
+        blockReason: papernexusRawHttpCheck.reason,
+      };
+    }
+
     const papernexusInlineCheck = shouldBlockPapernexusInlineExecution({
       role: snapshot.role,
       toolName,
@@ -339,7 +353,14 @@ async function runBeforeToolCallHook(params: {
             "Cannot determine requester role for sessions_spawn. Retry after workflow context is restored.",
         };
       }
-      if (!targetRole || !canRoleSpawn(snapshot.role, targetRole)) {
+      if (
+        !targetRole ||
+        !canRoleSpawnInWorkflow({
+          fromRole: snapshot.role,
+          toRole: targetRole,
+          currentStage: snapshot.currentStage,
+        })
+      ) {
         return {
           block: true,
           blockReason: `${snapshot.role} cannot spawn ${targetRole ?? "that target"} in this workflow.`,
@@ -385,7 +406,14 @@ async function runBeforeToolCallHook(params: {
             "Cannot determine requester role for sessions_send. Use research_workflow.send_mailbox after workflow context is restored.",
         };
       }
-      if (!targetRole || !canRoleContact(snapshot.role, targetRole)) {
+      if (
+        !targetRole ||
+        !canRoleContactInWorkflow({
+          fromRole: snapshot.role,
+          toRole: targetRole,
+          currentStage: snapshot.currentStage,
+        })
+      ) {
         return {
           block: true,
           blockReason: `${snapshot.role} should not send ad hoc internal messages to ${targetRole ?? "that target"}. Use research_workflow.send_mailbox or the approved workflow path.`,
@@ -552,22 +580,19 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           "[/Slash Fast Path]"
         );
       }
-      const detailLevel =
-        snapshot.role === "academic_writer" ||
-        snapshot.role === "reviewer" ||
-        snapshot.role === "cross-reviewer"
-          ? "focused"
-          : "full";
-      const workflowPrompt =
+      const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
+      const focusedAssembly =
         detailLevel === "focused"
-          ? buildFocusedPromptAssembly({ snapshot }).text
-          : formatWorkflowSnapshotForPrompt({
-              snapshot,
-              trigger,
-              detailLevel,
-            });
+          ? buildFocusedPromptAssembly({ snapshot, trigger })
+          : null;
+      const workflowPrompt =
+        focusedAssembly?.text ??
+        formatWorkflowSnapshotForPrompt({
+          snapshot,
+          trigger,
+          detailLevel,
+        });
       if (detailLevel === "focused" && snapshot.projectRoot) {
-        const assembly = buildFocusedPromptAssembly({ snapshot });
         await appendWorkflowTraceEvent({
           projectRoot: snapshot.projectRoot,
           projectId: snapshot.projectId,
@@ -581,11 +606,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           summary: `Focused prompt assembled for ${snapshot.role ?? "agent"}`,
           details: {
             trigger,
-            promptLayerProfile: assembly.metadata.promptLayerProfile,
-            promptPayloadSizes: assembly.metadata.promptPayloadSizes,
-            sectionContextId: assembly.metadata.sectionContextId,
-            reviewLane: assembly.metadata.reviewLane,
-            roundId: assembly.metadata.roundId,
+            promptLayerProfile: focusedAssembly?.metadata.promptLayerProfile,
+            promptPayloadSizes: focusedAssembly?.metadata.promptPayloadSizes,
+            sectionContextId: focusedAssembly?.metadata.sectionContextId,
+            reviewLane: focusedAssembly?.metadata.reviewLane,
+            roundId: focusedAssembly?.metadata.roundId,
           },
         });
       }
@@ -641,7 +666,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       if (isWorkflowStageBroadcastMessage(content)) {
         return;
       }
-      const sanitized = sanitizeAgentMentions(content);
+      const sanitized = normalizeWorkflowChannelMentions(content);
       if (sanitized === content) {
         return;
       }
@@ -668,18 +693,24 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       if (!requesterRole || !childRole) {
         return;
       }
-      if (!canRoleSpawn(requesterRole, childRole)) {
-        return {
-          status: "error",
-          error: `${requesterRole} cannot spawn ${childRole} in this workflow.`,
-        };
-      }
       const requesterCtx = buildRequesterToolContext(hookCtx, requesterRole);
       const { snapshot } = await resolveWorkflowSnapshotForAgentContext({
         plugin,
         agentCtx: requesterCtx,
         autoBind: false,
       });
+      if (
+        !canRoleSpawnInWorkflow({
+          fromRole: requesterRole,
+          toRole: childRole,
+          currentStage: snapshot.currentStage,
+        })
+      ) {
+        return {
+          status: "error",
+          error: `${requesterRole} cannot spawn ${childRole} in this workflow.`,
+        };
+      }
       return enqueueWorkflowTask({
         queueContext: resolveWorkflowHookQueueContext(requesterCtx, snapshot),
         label: `hook:subagent_spawning:${requesterRole}->${childRole}`,

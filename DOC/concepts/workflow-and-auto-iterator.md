@@ -42,6 +42,19 @@ workflow guard 在运行时做四类事情：
 - 注入后台任务：在 heartbeat / idle turn 上提供 bounded task，而不是让 Agent 自由漂移
 - 驱动自动迭代器：在恢复或空闲轮次上优先做 deterministic reconciliation
 
+从 2026-03-31 起，snapshot prompt 的组装策略也专门做了“减载”：
+
+- 先给稳定策略层：当前角色、当前 owner、不要扩 scope
+- 再给阶段局部控制层：`next_action`、`blocking_reason`、`missing_signals`、owner gate
+- 最后才给主载荷和补充证据，而且只在当前角色 / 当前 stage 真正相关时才注入
+
+这里有两个提醒被刻意保留为高优先级、不会因为 prompt 精简而消失：
+
+- handoff / owner gate 提醒
+- `research_workflow.auto_iterator_tick` 边界提醒
+
+原因很简单：很多“忘记当前该谁做”“上一阶段刚做完就直接跳到下一阶段”“心跳轮次一上来就手写计划”的问题，本质都不是能力不足，而是 prompt 里真正关键的 workflow 边界被无关状态淹没了。
+
 ## 4. 自动迭代器是什么
 
 自动迭代器对应 `research_workflow.auto_iterator_tick`。  
@@ -67,6 +80,8 @@ workflow guard 在运行时做四类事情：
 - recovery / resume turn
 
 Researcher 的 heartbeat 和 bootstrap 文档都已经要求优先调用 auto iterator。
+
+因此现在的 prompt 也会把这条规则放在靠前位置，而不是藏在一大段 PaperNexus / writing / review 状态后面。
 
 ## 6. auto iterator 输出什么
 
@@ -100,6 +115,13 @@ Researcher 的 heartbeat 和 bootstrap 文档都已经要求优先调用 auto it
 4. 如果下一阶段 owner 不是当前 Agent，就进行 handoff
 5. 如果存在 idle_research 或 PaperNexus refresh 等后台任务，就给出 bounded work
 6. 如果遇到必须人工决策的 gate，就停下
+
+所以实际执行顺序应该理解成：
+
+1. 先 `auto_iterator_tick`
+2. 再看当前 owner 是不是自己
+3. 是自己就做当前 stage 的局部任务
+4. 不是自己就 handoff，而不是“顺手继续干一点”
 
 所以它的价值在于：
 

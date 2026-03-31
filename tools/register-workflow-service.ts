@@ -243,6 +243,17 @@ function resolveWorkflowRequesterSessionKey(params: {
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   deps: WorkflowCoordinatorDependencies;
 }): string | null {
+  return resolveWorkflowRequesterBinding(params).sessionKey;
+}
+
+function resolveWorkflowRequesterBinding(params: {
+  projectRoot: string;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps: WorkflowCoordinatorDependencies;
+}): {
+  sessionKey: string | null;
+  messageChannel: string | null;
+} {
   const bindings = params.deps.listChannelProjectBindingsForWorkflow({
     policy: params.workflowPolicy,
   });
@@ -254,7 +265,10 @@ function resolveWorkflowRequesterSessionKey(params: {
       (left, right) =>
         new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
     )[0];
-  return binding?.sessionKeySample ?? null;
+  return {
+    sessionKey: binding?.sessionKeySample ?? null,
+    messageChannel: binding?.messageChannel ?? null,
+  };
 }
 
 async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
@@ -1200,11 +1214,12 @@ export async function maybeLaunchAutoStageForProject(params: {
         };
       }
 
-      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+      const requesterBinding = resolveWorkflowRequesterBinding({
         projectRoot: params.projectRoot,
         workflowPolicy: params.workflowPolicy,
         deps,
       });
+      const requesterSessionKey = requesterBinding.sessionKey;
       const defaultResearcherRequesterSessionKey =
         requesterSessionKey ?? "agent:researcher:main";
       const preferredResearcherSessionKeys = buildWorkflowCoordinatorDispatchSessionKeys({
@@ -1245,7 +1260,8 @@ export async function maybeLaunchAutoStageForProject(params: {
             summary:
               `Queued the ${action.stage ?? params.autoIteratorResult.stageAfter ?? "current"} stage handoff until an idle Researcher service session becomes available.`,
             dispatchPayload: {
-              requesterChannel: null,
+              requesterChannel: requesterBinding.messageChannel,
+              requesterAccountId: null,
               preferredSessionKeys: preferredResearcherSessionKeys ?? [],
               fromRole: "researcher",
               toRole: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
@@ -1260,6 +1276,10 @@ export async function maybeLaunchAutoStageForProject(params: {
               waitTimeoutMs: 5000,
               retryOnTimeout: true,
               enableSpawnFallback: true,
+              useWorkflowHandoff: true,
+              autoModeActive:
+                (params.autoIteratorResult.effectiveAutoMode ??
+                  params.workflowPolicy.autoMode) !== "off",
             },
           });
           return {
@@ -1284,6 +1304,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
+        requesterChannel: requesterBinding.messageChannel ?? undefined,
         preferredSessionKeys:
           action.owner === "researcher"
             ? [researcherSessionLease?.sessionKey ?? preferredResearcherSessionKeys?.[0] ?? defaultResearcherRequesterSessionKey]
@@ -2398,11 +2419,12 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         };
       }
 
-      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+      const requesterBinding = resolveWorkflowRequesterBinding({
         projectRoot: params.projectRoot,
         workflowPolicy: params.workflowPolicy,
         deps,
       });
+      const requesterSessionKey = requesterBinding.sessionKey;
       const defaultResearcherRequesterSessionKey =
         requesterSessionKey ?? "agent:researcher:main";
       const preferredResearcherSessionKeys = buildWorkflowCoordinatorDispatchSessionKeys({
@@ -2443,7 +2465,8 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             summary:
               "Queued the mitigation pass until an idle Researcher service session becomes available.",
             dispatchPayload: {
-              requesterChannel: null,
+              requesterChannel: requesterBinding.messageChannel,
+              requesterAccountId: null,
               preferredSessionKeys: preferredResearcherSessionKeys ?? [],
               fromRole: "researcher",
               toRole: owner,
@@ -2466,6 +2489,10 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
               waitTimeoutMs: 5000,
               retryOnTimeout: true,
               enableSpawnFallback: true,
+              useWorkflowHandoff: true,
+              autoModeActive:
+                (params.autoIteratorResult.effectiveAutoMode ??
+                  params.workflowPolicy.autoMode) !== "off",
             },
           });
           return {
@@ -2490,6 +2517,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         runtimeSubagent: params.runtimeSubagent,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: requesterSessionKey ?? undefined,
+        requesterChannel: requesterBinding.messageChannel ?? undefined,
         preferredSessionKeys:
           owner === "researcher"
             ? [
@@ -2629,6 +2657,7 @@ export function createWorkflowCoordinatorService(
         const workflowPolicy = plugin.getWorkflowPolicy();
         const drainedQueue = await drainQueuedBackgroundWorkflowRuns({
           runtimeSubagent: plugin.api.runtime?.subagent,
+          workflowPolicy,
         });
         const results = await runWorkflowCoordinatorPass({
           projectsRoot: workflowPolicy.projectsRoot,

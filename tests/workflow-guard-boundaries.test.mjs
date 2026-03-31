@@ -2,11 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  canRoleContactInWorkflow,
+  canRoleSpawnInWorkflow,
+  normalizeWorkflowChannelMentions,
   shouldBlockPapernexusLiveGraphCliRead,
   shouldBlockPapernexusLocalStorageUsage,
   shouldBlockPapernexusLongWaitImportCommand,
   shouldBlockPapernexusLocalGraphProcessing,
   shouldBlockPapernexusMultiPaperImport,
+  shouldBlockPapernexusRawHttpUsage,
   shouldBlockPapernexusInlineExecution,
   shouldBlockPapernexusDestructiveOperation,
   shouldBlockCoderDatasetMutation,
@@ -124,6 +128,33 @@ test("foreground papernexus inline guard allows authenticated PaperNexus API exe
   assert.equal(result.block, false);
 });
 
+test("papernexus raw-http guard blocks handwritten curl requests to typed PaperNexus endpoints", () => {
+  const result = shouldBlockPapernexusRawHttpUsage({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        "curl -sS -X POST https://papernexus.example/api/query -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN' --data '{\"name\":\"demo\",\"query\":\"topic\"}'",
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /python wrappers|route-shape/i);
+});
+
+test("papernexus raw-http guard allows wrapper-based graph commands", () => {
+  const result = shouldBlockPapernexusRawHttpUsage({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        'python3 scripts/pn_graph_query.py --api-base "https://papernexus.example" --corpus "demo" query "topic" --limit 8',
+    },
+  });
+
+  assert.equal(result.block, false);
+});
+
 test("papernexus live-graph cli read guard blocks local query commands even inside subagent sessions", () => {
   for (const command of [
     'papernexus query "multimodal adaptation"',
@@ -140,7 +171,7 @@ test("papernexus live-graph cli read guard blocks local query commands even insi
     });
 
     assert.equal(result.block, true);
-    assert.match(result.reason ?? "", /authenticated http api|live graph/i);
+    assert.match(result.reason ?? "", /python wrappers|live shared graph/i);
   }
 });
 
@@ -205,6 +236,34 @@ test("papernexus local storage guard allows project-local staging files in remot
   assert.equal(result.block, false);
 });
 
+test("workflow channel mention normalization preserves one raw handoff mention and sanitizes duplicates", () => {
+  const normalized = normalizeWorkflowChannelMentions(
+    "[STATUS] review complete\n[HANDOFF] next owner: @Reviewer\n[ARTIFACTS] REVIEW_PACKET.md\n[NEXT] /write-paper\n@Reviewer please take it from here."
+  );
+
+  assert.match(normalized, /\[HANDOFF\] next owner: @Reviewer/);
+  assert.match(normalized, /\n\[reviewer\] please take it from here\./i);
+});
+
+test("workflow contact rules allow direct forward handoff to the next stage owner", () => {
+  assert.equal(
+    canRoleContactInWorkflow({
+      fromRole: "orchestrator",
+      toRole: "coder",
+      currentStage: "plan",
+    }),
+    true
+  );
+  assert.equal(
+    canRoleSpawnInWorkflow({
+      fromRole: "reviewer",
+      toRole: "academic_writer",
+      currentStage: "review",
+    }),
+    true
+  );
+});
+
 test("papernexus import guard blocks multi-paper queued imports in one request", () => {
   const result = shouldBlockPapernexusMultiPaperImport({
     role: "researcher",
@@ -244,6 +303,20 @@ test("papernexus import wait guard allows a single-paper bounded remote import r
   });
 
   assert.equal(result.block, false);
+});
+
+test("papernexus import wait guard blocks wrapper queue waits above 60 seconds", () => {
+  const result = shouldBlockPapernexusLongWaitImportCommand({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        'python3 scripts/pn_import_queue.py --api-base "https://papernexus.example" --corpus "demo" wait "imp-42" --timeout 1800 --interval 2',
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /60s|60s or less|60s budget|60s or less/i);
 });
 
 test("papernexus destructive guard blocks backup and restore commands during normal agent operation", () => {

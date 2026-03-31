@@ -42,6 +42,9 @@ test("buildWorkflowDispatchMessage includes project and mailbox context", () => 
   assert.match(message, /Project ID: demo-project/);
   assert.match(message, /Mailbox message id: msg-123/);
   assert.match(message, /Immediate command: \/review-phase/);
+  assert.match(message, /\[STATUS\] review complete/);
+  assert.match(message, /\[HANDOFF\] next owner: reviewer/);
+  assert.match(message, /@reviewer only if an immediate wake-up is required/i);
 });
 
 test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the target session", async () => {
@@ -254,4 +257,33 @@ test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as 
     calls[0].sessionKey,
     /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:brainstorm-brief/
   );
+});
+
+test("dispatchWorkflowTaskToAgent treats wrapper-based PaperNexus chains as heavy work", async () => {
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-papernexus-wrapper-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "researcher",
+    projectRoot: "/tmp/demo-project",
+    projectId: "demo-project",
+    stage: "frontier_mapping",
+    summary: "Run wrapper-based evidence chain against the shared graph.",
+    command:
+      'python3 scripts/pn_research_chains.py --api-base "https://papernexus.example/api" --corpus "demo" evidence-chain "topic" --limit 5',
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.match(
+    result.sessionKey ?? "",
+    /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:evidence-chain/
+  );
+  assert.equal(calls.length, 1);
 });

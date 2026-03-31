@@ -121,6 +121,8 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
 - Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- When a code bundle is ready, post a single wake-up mention to `@researcher` only if you need an immediate reconcile or launch; otherwise use a plain status update with the artifact path.
+- If Researcher or another agent replies, confirm with plain text and avoid echoing the same raw mention back into the thread.
 - If you are not assigned a concrete execution bundle, stay silent or return `HEARTBEAT_OK`.
 
 ## Tools and Heartbeats

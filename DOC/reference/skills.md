@@ -8,13 +8,13 @@
 ## 2. Researcher
 
 - `research-pipeline`  
-  Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环。
+  Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus wrapper-based graph control。
 
 - `graph-build`  
-  基于论文源和 PaperNexus 刷新图谱与 graph readiness。
+  基于论文源和 PaperNexus Python wrappers 刷新图谱与 graph readiness。
 
 - `frontier-mapping`  
-  生成 graph-grounded frontier report、子图和方向包。
+  生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus wrappers。
 
 - `idea-phase`  
   主 ideation 阶段，负责创新点形成与 active track 选择。
@@ -47,7 +47,7 @@
   在新实验结果出现后，对创新方向进行基于 PaperNexus 的反思。
 
 - `research-lit`  
-  常规文献调研与文献池维护。
+  常规文献调研与文献池维护，并通过 PaperNexus wrappers 做 remote import / graph reconciliation。
 
 - `idle-research`  
   在空闲时围绕 `idle_research.topic` 做 bounded literature round。
@@ -68,10 +68,10 @@
   当 direct raw markdown API 不可用时，用 arxiv2md 页面端作为下一层 Markdown fallback。
 
 - `papernexus`  
-  调用或接入 PaperNexus 功能做图谱构建与操作。
+  调用或接入 PaperNexus 功能做图谱构建与操作，默认走 Python wrappers 和 typed graph APIs。
 
 - `papernexus-agentic-reasoning`  
-  用 PaperNexus 图谱做更强的 trace、synthesis、brainstorm。
+  用 PaperNexus 图谱做更强的 trace、synthesis、brainstorm，默认走 wrappers 而不是手写 REST。
 
 - `crawl4ai-search`  
   通用网络检索和补充信息抓取。

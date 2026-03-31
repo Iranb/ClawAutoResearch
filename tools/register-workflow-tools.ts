@@ -3,7 +3,7 @@ import {
   acknowledgeWorkflowMailboxMessage,
   bindChannelProjectForWorkflow,
   buildWorkflowSnapshot,
-  canRoleContact,
+  canRoleContactInWorkflow,
   getBrainstormCycleStateSummary,
   checkGraphPresenceForWorkflow,
   getCitationCollectionStateSummary,
@@ -1016,7 +1016,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               if (!toAgent) {
                 throw new Error("toAgent must be one of the known workflow agents.");
               }
-              if (!canRoleContact(snapshot.role, toAgent)) {
+              if (
+                !canRoleContactInWorkflow({
+                  fromRole: snapshot.role,
+                  toRole: toAgent,
+                  currentStage: snapshot.currentStage,
+                })
+              ) {
                 throw new Error(`${snapshot.role} cannot dispatch work to ${toAgent}.`);
               }
               const cooldown = await getWorkflowContactCooldown({
@@ -1615,7 +1621,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               if (!toAgent) {
                 throw new Error("toAgent must be one of the known workflow agents.");
               }
-              if (!canRoleContact(snapshot.role, toAgent)) {
+              if (
+                !canRoleContactInWorkflow({
+                  fromRole: snapshot.role,
+                  toRole: toAgent,
+                  currentStage: snapshot.currentStage,
+                })
+              ) {
                 throw new Error(
                   `${snapshot.role} is not allowed to contact ${toAgent}; use the bounded workflow path instead.`
                 );

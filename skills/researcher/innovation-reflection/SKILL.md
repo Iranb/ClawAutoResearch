@@ -119,7 +119,7 @@ Use this section order:
 - Use the reflection to tighten the next brainstorm, not to retroactively justify a weak idea.
 - If reflection support is thin, say so explicitly and keep the next idea scope narrow.
 - If a previous reflection already covers the newest experiments, reuse it instead of rewriting it without new evidence.
-- If a remote PaperNexus `/api/*` path is used, resolve `Authorization: Bearer <token>` from the configured token source.
+- If remote PaperNexus evidence is needed, go through `pn_graph_query.py` or `pn_research_chains.py` so auth and request shape are resolved consistently.
 - Do not delete shared graph data or run `backup-export`, `backup-unpack`, or `backup-load` during normal reflection work.
 
 ## Completion

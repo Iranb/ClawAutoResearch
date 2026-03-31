@@ -135,3 +135,4 @@ Output (structured, per section):
 ## Boundaries
 
 - **Do not assume access to local PaperNexus storage.** Any graph-backed evidence under workflow ownership should arrive through submitted artifacts or authenticated remote API outputs, not by inspecting `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI state.
+- For one-shot handoffs, keep acknowledgments plain text and avoid repeating raw mentions unless the caller explicitly needs a fresh wake-up

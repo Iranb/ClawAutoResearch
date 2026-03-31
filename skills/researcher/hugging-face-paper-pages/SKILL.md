@@ -17,7 +17,7 @@ allowed-tools:
 
 Use Hugging Face paper pages as the preferred full-text markdown source before PaperNexus graph build.
 
-> **Primary use in this repo**: save paper markdown into project-local staging so the workflow can upload/import it through the configured remote PaperNexus API before `graph-build`.
+> **Primary use in this repo**: save paper markdown into project-local staging so the workflow can upload/import it through the configured remote PaperNexus wrapper flow before `graph-build`.
 > **Preferred fallback order in this repo**: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
 
 ## Inputs

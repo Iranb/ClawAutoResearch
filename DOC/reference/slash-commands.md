@@ -8,7 +8,7 @@
 ## 2. 主流程命令
 
 - `/research-pipeline`  
-  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进。
+  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus Python wrappers 控制图谱流。
 
 - `/resume-pipeline`  
   恢复中断项目。通常先读 manifest、gate、ledger，再继续 auto iterator。
@@ -19,7 +19,7 @@
 ## 3. 文献与图谱
 
 - `/research-lit`  
-  主题调研与持续文献跟踪。
+  主题调研与持续文献跟踪，包含 project-local staging 和 wrapper-based PaperNexus import / reconciliation。
 
 - `/papers-cool`  
   粗粒度检索论文入口。
@@ -37,13 +37,13 @@
   当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
-  构建或刷新项目图谱。
+  构建或刷新项目图谱，走 PaperNexus Python wrappers 而不是手写 REST。
 
 - `/papernexus`  
-  直接调用 PaperNexus 能力。
+  直接调用 PaperNexus 能力，默认通过 wrappers 和 typed graph APIs。
 
 - `/frontier-mapping`  
-  基于图谱做研究前沿与空白映射。
+  基于图谱做研究前沿与空白映射，默认 wrapper-first。
 
 ## 4. 创新与反思
 

@@ -159,6 +159,7 @@ If no request is active, the correct behavior is no-op.
 ## Group Chats and Mentions
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- If you are returning a one-shot review result to the caller, do not repeat raw mentions in the body of the response; the caller decides whether to route or repost the result.
 - Do not join unrelated project chatter; respond only to explicit cross-review packets.
 - If there is no explicit request, stay silent or return `HEARTBEAT_OK`.
 

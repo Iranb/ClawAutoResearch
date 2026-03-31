@@ -105,14 +105,41 @@ test("workflow-owned researcher skills describe remote-only staging instead of l
     path.join(repoRoot, "skills", "researcher", "research-lit", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "frontier-mapping", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "hugging-face-paper-pages", "SKILL.md"),
   ];
 
   for (const filePath of docsThatMustTeachRemoteOnly) {
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /project-local staging|POST \/api\/imports|\/api\/query|\/api\/brainstorm|remote PaperNexus/i,
-      `Expected ${filePath} to teach remote-only PaperNexus workflow usage.`
+      /project-local staging|pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_graph_query\.py|pn_research_chains\.py|remote PaperNexus/i,
+      `Expected ${filePath} to teach wrapper-first remote PaperNexus workflow usage.`
+    );
+  }
+});
+
+test("researcher-facing PaperNexus skills and persona docs stay wrapper-first instead of teaching raw typed REST calls", async () => {
+  const repoRoot = process.cwd();
+  const files = [
+    path.join(repoRoot, "skills", "researcher", "papernexus", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "papernexus-agentic-reasoning", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "innovation-reflection", "SKILL.md"),
+    path.join(repoRoot, "agents", "researcher", "AGENTS.md"),
+    path.join(repoRoot, "agents", "researcher", "TOOLS.md"),
+    path.join(repoRoot, "agents", "researcher", "SOUL.md"),
+  ];
+
+  for (const filePath of files) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.match(
+      content,
+      /pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_graph_query\.py|pn_research_chains\.py/i,
+      `Expected ${filePath} to teach the Python wrapper control plane.`
+    );
+    assert.doesNotMatch(
+      content,
+      /POST \/api\/(?:query|context|impact|ideas|brainstorm|path-trace|evidence-chain|reflection-chain|research-brief|brainstorm-brief|theory-brief|storyline-brief)|GET \/api\/(?:imports|corpus|corpus-meta|enhancements|paper-enhancement)/i,
+      `Expected ${filePath} to avoid teaching raw typed REST calls as the primary agent interface.`
     );
   }
 });

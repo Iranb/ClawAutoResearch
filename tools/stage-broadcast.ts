@@ -165,22 +165,9 @@ function collectMentionTargets(params: {
   recommendedActions?: StageBroadcastAction[];
   agentTaskDispatch?: StageBroadcastDispatch | null;
 }): string[] {
-  const targets = new Set<string>();
-  const ownerMention = roleToMention(params.ownerAfter);
-  if (ownerMention) {
-    targets.add(ownerMention);
-  }
-  const dispatchMention = roleToMention(params.agentTaskDispatch?.owner);
-  if (dispatchMention) {
-    targets.add(dispatchMention);
-  }
-  for (const action of params.recommendedActions ?? []) {
-    const mention = roleToMention(action.owner);
-    if (mention) {
-      targets.add(mention);
-    }
-  }
-  return Array.from(targets);
+  const primaryMention =
+    roleToMention(params.agentTaskDispatch?.owner) ?? roleToMention(params.ownerAfter);
+  return primaryMention ? [primaryMention] : [];
 }
 
 export function isWorkflowStageBroadcastMessage(text: string | null | undefined): boolean {
@@ -198,6 +185,10 @@ export function buildWorkflowStatusBroadcastMessage(params: {
     "WORKFLOW_STATUS_BROADCAST=1",
     "BEGIN_UPDATE",
     "[Workflow Status]",
+    `[STATUS] ${params.status.replace(/_/g, " ")}${params.stage ? ` (${formatStageLabel(params.stage)})` : ""}`,
+    "[HANDOFF] next owner: none",
+    `[ARTIFACTS] ${params.summary.trim()}`,
+    "[NEXT] none",
     `Project: ${params.projectId ?? "unknown"}`,
     `Project Root: ${params.projectRoot ?? "unknown"}`,
     `Status: ${params.status.replace(/_/g, " ")}`,
@@ -247,6 +238,17 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
   if (mentionTargets.length > 0) {
     lines.push(`Notify: ${mentionTargets.join(" ")}`);
   }
+  lines.push(
+    `[STATUS] ${transitionVerb}: ${formatStageLabel(params.stageBefore)} -> ${formatStageLabel(
+      params.stageAfter
+    )}`,
+    `[HANDOFF] next owner: ${mentionTargets[0] ?? params.ownerAfter ?? "none"}`,
+    `[ARTIFACTS] ${
+      recommendedAction ??
+      "Workflow state reconciled, ownership updated, and durable routing artifacts refreshed."
+    }`,
+    `[NEXT] ${params.nextAction ?? "none"}`
+  );
   lines.push(
     `${transitionVerb}: ${formatStageLabel(params.stageBefore)} -> ${formatStageLabel(
       params.stageAfter
@@ -302,7 +304,7 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
   lines.push(
     "END_UPDATE",
     "Post the exact update between BEGIN_UPDATE and END_UPDATE to the current channel.",
-    "Preserve any raw @Agent mentions in the Notify or Responsible agent lines.",
+    "Preserve any raw @Agent mention in the Notify, [HANDOFF], or Responsible agent lines.",
     "If other agents are participating, keep them named with their responsibilities.",
     "Do not call tools, do not continue the workflow, and stop after posting the update."
   );

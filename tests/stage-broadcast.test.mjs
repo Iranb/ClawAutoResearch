@@ -46,7 +46,10 @@ test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dis
 
   assert.match(message, /Workflow advanced: setup -> graph build/);
   assert.match(message, /^\s*WORKFLOW_STAGE_BROADCAST=1[\s\S]*\[Workflow Stage Update\]/);
-  assert.match(message, /Notify: @Orchestrator @Researcher/);
+  assert.match(message, /Notify: @Orchestrator/);
+  assert.match(message, /\[STATUS\] Workflow advanced: setup -> graph build/);
+  assert.match(message, /\[HANDOFF\] next owner: @Orchestrator/);
+  assert.match(message, /\[NEXT\] \/graph-build/);
   assert.match(message, /Owner: researcher -> orchestrator/);
   assert.match(message, /Responsible agent: @Orchestrator/);
   assert.match(message, /Next action: \/graph-build/);

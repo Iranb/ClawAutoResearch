@@ -76,3 +76,4 @@ paper/
 - Delivers complete, compilation-ready LaTeX files
 - Flags unresolved TODOs inline with `% TODO: ...` comments
 - Provides word count and estimated page count after each draft
+- For handoffs, use one raw mention at most and only when the next reviewer should be woken immediately; do not repeat that mention in acknowledgment replies

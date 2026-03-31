@@ -8350,13 +8350,13 @@ function buildDynamicTasks(params: {
       params.papernexusMineruHttpUrl)
   ) {
     tasks.unshift(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`) and resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
     );
     tasks.unshift(
-      "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus authenticated `/api/imports` / `/api/*` calls instead."
+      "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
     );
     tasks.unshift(
-      "Do not read the live shared graph through local `papernexus query/context/impact/ideas/brainstorm/...` CLI commands. In workflow mode, live-graph reads must use authenticated `/api/*` endpoints."
+      "Do not read the live shared graph through local `papernexus query/context/impact/ideas/brainstorm/...` CLI commands or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
     );
   }
 
@@ -8365,16 +8365,16 @@ function buildDynamicTasks(params: {
     ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
   ) {
     tasks.unshift(
-      "For each novelty-sensitive topic, summarize the topic, call PaperNexus typed endpoints such as `research-brief`, `brainstorm-brief`, `ideas`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+      "For each novelty-sensitive topic, summarize the topic, call PaperNexus typed wrapper commands through `pn_graph_query.py` and `pn_research_chains.py`, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
     );
     tasks.unshift(
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     tasks.unshift(
-      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import-task path (`/api/imports`) from project-local staging instead of reading or writing `~/.papernexus/papers` directly."
+      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers (`pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`) from project-local staging instead of reading or writing `~/.papernexus/papers` directly."
     );
     tasks.unshift(
-      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed API briefs/chains over raw full-graph inspection. Use `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
+      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
     );
   }
 
@@ -8749,8 +8749,30 @@ export async function buildWorkflowSnapshot(params: {
     resumeAction: asString(projectState.manifest?.resume_action),
     blockingReason: asString(projectState.manifest?.blocking_reason),
     allowedWriteScopes: role ? ROLE_POLICIES[role].writeScopeLabels : [],
-    allowedContacts: role ? ROLE_POLICIES[role].allowedContacts : [],
-    allowedSpawns: role ? ROLE_POLICIES[role].allowedSpawns : [],
+    allowedContacts: role
+      ? Array.from(
+          new Set(
+            [
+              ...ROLE_POLICIES[role].allowedContacts,
+              ...(role === recommendedOwner
+                ? [getForwardStageHandoffTargetRole(currentStage)]
+                : []),
+            ].filter((value): value is WorkflowRole => Boolean(value))
+          )
+        )
+      : [],
+    allowedSpawns: role
+      ? Array.from(
+          new Set(
+            [
+              ...ROLE_POLICIES[role].allowedSpawns,
+              ...(role === recommendedOwner
+                ? [getForwardStageHandoffTargetRole(currentStage)]
+                : []),
+            ].filter((value): value is WorkflowRole => Boolean(value))
+          )
+        )
+      : [],
     missingStageSignals,
     graphRefreshRequired: paperIngestion?.refresh_required === true,
     graphRefreshReason: asString(paperIngestion?.refresh_reason),
@@ -8989,6 +9011,7 @@ export async function buildWorkflowSnapshot(params: {
 
 export function buildFocusedPromptAssembly(params: {
   snapshot: Partial<WorkflowSnapshot>;
+  trigger?: string;
 }): FocusedPromptAssembly {
   const snapshot = params.snapshot;
   const sectionContextId =
@@ -9017,37 +9040,176 @@ export function buildFocusedPromptAssembly(params: {
     layer1Lines.push(...getSharedWritingConstitutionLines(snapshot.role ?? null));
   }
   const layer1 = layer1Lines.join("\n");
-  const layer2 = [
+
+  const layer2Lines = [
     "Layer 2: Stage-Local Control State",
     `Stage=${snapshot.currentStage ?? "unknown"}/${snapshot.currentMicroStage ?? "unknown"}`,
-    `next_action=${snapshot.nextAction ?? "unset"}`,
-    `blocking_reason=${snapshot.blockingReason ?? "none"}`,
-    `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ") || "none"}`,
-    `orchestration=${snapshot.orchestrationStatus ?? "unknown"} -> ${snapshot.orchestrationNextTransitionCandidate ?? "unset"}`,
-  ].join("\n");
-  const layer3 = [
-    "Layer 3: Primary Payload",
-    `section_context=${sectionContextId ?? "unset"}`,
-    `writing_status=${snapshot.writingSessionStatus ?? "unknown"}`,
-    `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
-    `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
-    `section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`,
-    `write_package=${snapshot.writePackageStatus ?? "unknown"}/${snapshot.writePackageAssemblyStatus ?? "unknown"} mode=${snapshot.writePackageAssemblyMode ?? "unset"} derived=${snapshot.writePackageDerivedArtifactCount ?? 0}`,
-    `review_lane=${reviewLane ?? "unset"}`,
-  ].join("\n");
-  const layer4 = [
-    "Layer 4: Supporting Evidence",
-    `graph_coverage=${snapshot.writingGraphEvidenceCoverageStatus ?? snapshot.graphGuidedWritingEvidenceCoverageStatus ?? "unknown"}`,
-    `review_issues=critical:${snapshot.reviewIssueCriticalCount ?? 0}, high:${snapshot.reviewIssueHighCount ?? 0}, medium:${snapshot.reviewIssueMediumCount ?? 0}`,
-    `paper_qc=${snapshot.paperQcStatus ?? "unknown"} compile:${snapshot.paperQcCompileStatus ?? "unknown"} page:${snapshot.paperQcPageBudgetStatus ?? "unknown"}`,
-    `figure_qc=caption:${snapshot.figureQcCaptionAlignmentStatus ?? "unknown"} text:${snapshot.figureQcTextAlignmentStatus ?? "unknown"}`,
-  ].join("\n");
-  const layer5 = [
-    "Layer 5: Reflection Delta",
-    `round_id=${roundId ?? "none"}`,
-    `review_verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`,
-    `review_summary=${snapshot.reviewSessionSummary ?? "none"}`,
-  ].join("\n");
+  ];
+  if (snapshot.role && snapshot.recommendedOwner && snapshot.role !== snapshot.recommendedOwner) {
+    layer2Lines.push(
+      `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`
+    );
+    layer2Lines.push(
+      `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route or hand off the task to ${snapshot.recommendedOwner} via research_workflow.dispatch_task, sessions_send, or workflow mailbox.`
+    );
+    layer2Lines.push(
+      "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase."
+    );
+  } else if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
+    layer2Lines.push(
+      `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
+    );
+  }
+  if (snapshot.nextAction) {
+    layer2Lines.push(`next_action=${snapshot.nextAction}`);
+  }
+  if (snapshot.resumeAction) {
+    layer2Lines.push(`resume_action=${snapshot.resumeAction}`);
+  }
+  if (snapshot.blockingReason) {
+    layer2Lines.push(`blocking_reason=${snapshot.blockingReason}`);
+  }
+  if ((snapshot.missingStageSignals ?? []).length > 0) {
+    layer2Lines.push(
+      `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ")}`
+    );
+  }
+  if (
+    snapshot.orchestrationStatus ||
+    snapshot.orchestrationNextTransitionCandidate ||
+    snapshot.role === "orchestrator" ||
+    snapshot.currentStage === "plan"
+  ) {
+    layer2Lines.push(
+      `orchestration=${snapshot.orchestrationStatus ?? "unknown"} -> ${snapshot.orchestrationNextTransitionCandidate ?? "unset"}`
+    );
+  }
+  layer2Lines.push(
+    "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
+  );
+  layer2Lines.push(
+    "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
+  );
+  layer2Lines.push(
+    "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
+  );
+  layer2Lines.push(
+    "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
+  );
+  if (snapshot.role === "researcher") {
+    layer2Lines.push(
+      'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
+    );
+    if (params.trigger === "heartbeat") {
+      layer2Lines.push(
+        'Heartbeat first step: call research_workflow {"action":"auto_iterator_tick","iterator":{"mode":"heartbeat"}} before any manual planning or ad hoc spawning.'
+      );
+    }
+  }
+  const layer2 = layer2Lines.join("\n");
+
+  const layer3Lines = ["Layer 3: Primary Payload", `section_context=${sectionContextId ?? "unset"}`];
+  const writingContextActive =
+    snapshot.role === "academic_writer" ||
+    snapshot.currentStage === "write" ||
+    snapshot.currentStage === "review" ||
+    snapshot.currentStage === "submit";
+  const brainstormContextActive =
+    snapshot.role === "researcher" ||
+    snapshot.currentStage === "frontier_mapping" ||
+    snapshot.currentStage === "idea" ||
+    snapshot.currentStage === "revise";
+  const paperIngestionContextActive =
+    snapshot.role === "researcher" ||
+    snapshot.currentStage === "setup" ||
+    snapshot.currentStage === "graph_build" ||
+    snapshot.currentStage === "frontier_mapping";
+  if (
+    writingContextActive ||
+    (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing")
+  ) {
+    layer3Lines.push(`writing_status=${snapshot.writingSessionStatus ?? "unknown"}`);
+  }
+  if (
+    brainstormContextActive &&
+    (snapshot.brainstormCycleStatus ||
+      snapshot.brainstormCycleTopic ||
+      snapshot.brainstormCycleChainBundleReady)
+  ) {
+    layer3Lines.push(
+      `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
+    );
+  }
+  if (
+    paperIngestionContextActive &&
+    (snapshot.paperIngestionRuntimeStatus ||
+      (snapshot.paperIngestionImportTaskCount ?? 0) > 0 ||
+      snapshot.paperIngestionReconcileRequired)
+  ) {
+    layer3Lines.push(
+      `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
+    );
+  }
+  if (snapshot.writingCurrentSectionReviewVerdict) {
+    layer3Lines.push(`section_review=${snapshot.writingCurrentSectionReviewVerdict}`);
+  }
+  if (
+    snapshot.writePackageStatus ||
+    snapshot.writePackageAssemblyStatus ||
+    snapshot.writePackageDerivedArtifactCount
+  ) {
+    layer3Lines.push(
+      `write_package=${snapshot.writePackageStatus ?? "unknown"}/${snapshot.writePackageAssemblyStatus ?? "unknown"} mode=${snapshot.writePackageAssemblyMode ?? "unset"} derived=${snapshot.writePackageDerivedArtifactCount ?? 0}`
+    );
+  }
+  if (reviewLane) {
+    layer3Lines.push(`review_lane=${reviewLane}`);
+  }
+  const layer3 = layer3Lines.join("\n");
+
+  const layer4Lines = ["Layer 4: Supporting Evidence"];
+  const graphCoverage =
+    snapshot.writingGraphEvidenceCoverageStatus ??
+    snapshot.graphGuidedWritingEvidenceCoverageStatus;
+  if (graphCoverage) {
+    layer4Lines.push(`graph_coverage=${graphCoverage}`);
+  }
+  if (
+    (snapshot.reviewIssueCriticalCount ?? 0) > 0 ||
+    (snapshot.reviewIssueHighCount ?? 0) > 0 ||
+    (snapshot.reviewIssueMediumCount ?? 0) > 0
+  ) {
+    layer4Lines.push(
+      `review_issues=critical:${snapshot.reviewIssueCriticalCount ?? 0}, high:${snapshot.reviewIssueHighCount ?? 0}, medium:${snapshot.reviewIssueMediumCount ?? 0}`
+    );
+  }
+  if (
+    snapshot.paperQcStatus ||
+    snapshot.paperQcCompileStatus ||
+    snapshot.paperQcPageBudgetStatus
+  ) {
+    layer4Lines.push(
+      `paper_qc=${snapshot.paperQcStatus ?? "unknown"} compile:${snapshot.paperQcCompileStatus ?? "unknown"} page:${snapshot.paperQcPageBudgetStatus ?? "unknown"}`
+    );
+  }
+  if (snapshot.figureQcCaptionAlignmentStatus || snapshot.figureQcTextAlignmentStatus) {
+    layer4Lines.push(
+      `figure_qc=caption:${snapshot.figureQcCaptionAlignmentStatus ?? "unknown"} text:${snapshot.figureQcTextAlignmentStatus ?? "unknown"}`
+    );
+  }
+  const layer4 = layer4Lines.length > 1 ? layer4Lines.join("\n") : null;
+
+  const layer5Lines = ["Layer 5: Reflection Delta"];
+  if (roundId) {
+    layer5Lines.push(`round_id=${roundId}`);
+  }
+  if (snapshot.reviewSessionVerdict) {
+    layer5Lines.push(`review_verdict=${snapshot.reviewSessionVerdict}`);
+  }
+  if (snapshot.reviewSessionSummary) {
+    layer5Lines.push(`review_summary=${snapshot.reviewSessionSummary}`);
+  }
+  const layer5 = layer5Lines.length > 1 ? layer5Lines.join("\n") : null;
   const text = [
     "[Workflow Guard]",
     layer1,
@@ -9056,7 +9218,9 @@ export function buildFocusedPromptAssembly(params: {
     layer4,
     layer5,
     "[/Workflow Guard]",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     text,
     metadata: {
@@ -9067,18 +9231,29 @@ export function buildFocusedPromptAssembly(params: {
         stable_policy: true,
         stage_local_state: true,
         primary_payload: true,
-        supporting_evidence: true,
-        reflection_delta: true,
+        supporting_evidence: Boolean(layer4),
+        reflection_delta: Boolean(layer5),
       },
       promptPayloadSizes: {
         stable_policy: layer1.length,
         stage_local_state: layer2.length,
         primary_payload: layer3.length,
-        supporting_evidence: layer4.length,
-        reflection_delta: layer5.length,
+        supporting_evidence: layer4?.length ?? 0,
+        reflection_delta: layer5?.length ?? 0,
       },
     },
   };
+}
+
+export function shouldUseFocusedWorkflowPrompt(snapshot: Partial<WorkflowSnapshot>): boolean {
+  return (
+    snapshot.role === "orchestrator" ||
+    snapshot.role === "coder" ||
+    snapshot.role === "analyzer" ||
+    snapshot.role === "academic_writer" ||
+    snapshot.role === "reviewer" ||
+    snapshot.role === "cross-reviewer"
+  );
 }
 
 function shouldApplySharedWritingConstitution(snapshot: Partial<WorkflowSnapshot>): boolean {
@@ -9121,7 +9296,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
 }): string {
   const { snapshot, trigger } = params;
   if ((params.detailLevel ?? "full") === "focused") {
-    return buildFocusedPromptAssembly({ snapshot }).text;
+    return buildFocusedPromptAssembly({ snapshot, trigger }).text;
   }
   const lines: string[] = [];
   lines.push("[Workflow Guard]");
@@ -9191,7 +9366,10 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Communication rule: do not use raw @agent mentions in Discord/chat. Status reports must use plain labels like [coder] / [researcher] / [writer]. Use sessions_send or research_workflow mailbox for real routing."
+    "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
+  );
+  lines.push(
+    "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
   );
   lines.push(
     "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
@@ -9263,7 +9441,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
         `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
       );
       lines.push(
-        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus authenticated `/api/imports` and `/api/*` requests instead."
+        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead."
       );
       if (
         snapshot.papernexusApiBaseUrl &&
@@ -9288,7 +9466,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
           `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
       );
       lines.push(
-        "Live graph rule: never use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads against the running shared graph; use authenticated `/api/*` endpoints instead."
+        "Live graph rule: never use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."
       );
       } else if (snapshot.papernexusApiBaseUrl) {
         lines.push(
@@ -9339,7 +9517,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
       lines.push(`Brainstorm cycle pending_reason: ${snapshot.brainstormCyclePendingReason}`);
     }
     lines.push(
-      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed endpoints such as `research-brief`, `brainstorm-brief`, `ideas`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`, and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
+      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed wrapper commands through `pn_graph_query.py` and `pn_research_chains.py`, and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
     );
     lines.push(
       "Brainstorm selection rule: multiple brainstorm rounds may coexist, but aggressive auto mode should keep all candidates and promote the highest-scoring option to the selected durable bundle."
@@ -9515,16 +9693,16 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus import tasks when material enters through UI/API upload -> /graph-build shared-graph reconciliation."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) when material enters through UI/API upload -> /graph-build shared-graph reconciliation."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued import-task path (`POST /api/imports`) and its import-task logs. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, and `pn_import_queue.py`) and its task logs. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
-    "PaperNexus bounded-ingestion rule: use one paper per `/api/imports` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
+    "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
   );
   lines.push(
-    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed endpoints like `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief` before trusting raw full-graph prominence."
+    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `pn_graph_query.py` / `pn_research_chains.py` before trusting raw full-graph prominence."
   );
   lines.push(
     "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
@@ -9696,6 +9874,56 @@ export function canRoleSpawn(
     return false;
   }
   return ROLE_POLICIES[fromRole].allowedSpawns.includes(toRole);
+}
+
+function getForwardStageHandoffTargetRole(
+  currentStage: string | null | undefined
+): WorkflowRole | null {
+  const normalizedStage = normalizeStage(currentStage ?? null);
+  if (!normalizedStage) {
+    return null;
+  }
+  const currentRequirement = STAGE_REQUIREMENTS[normalizedStage];
+  const nextStage = currentRequirement?.nextStage ?? null;
+  if (!nextStage || nextStage === normalizedStage) {
+    return null;
+  }
+  return STAGE_REQUIREMENTS[nextStage]?.owner ?? null;
+}
+
+function canRoleUseForwardStageHandoff(params: {
+  fromRole: WorkflowRole | null;
+  toRole: WorkflowRole | null;
+  currentStage: string | null | undefined;
+}): boolean {
+  const normalizedStage = normalizeStage(params.currentStage ?? null);
+  if (!normalizedStage || !params.fromRole || !params.toRole) {
+    return false;
+  }
+  const currentRequirement = STAGE_REQUIREMENTS[normalizedStage];
+  if (!currentRequirement || currentRequirement.owner !== params.fromRole) {
+    return false;
+  }
+  return getForwardStageHandoffTargetRole(normalizedStage) === params.toRole;
+}
+
+export function canRoleContactInWorkflow(params: {
+  fromRole: WorkflowRole | null;
+  toRole: WorkflowRole | null;
+  currentStage: string | null | undefined;
+}): boolean {
+  return (
+    canRoleContact(params.fromRole, params.toRole) ||
+    canRoleUseForwardStageHandoff(params)
+  );
+}
+
+export function canRoleSpawnInWorkflow(params: {
+  fromRole: WorkflowRole | null;
+  toRole: WorkflowRole | null;
+  currentStage: string | null | undefined;
+}): boolean {
+  return canRoleSpawn(params.fromRole, params.toRole) || canRoleUseForwardStageHandoff(params);
 }
 
 export function inferTargetRoleFromToolParams(
@@ -9892,6 +10120,31 @@ export function shouldBlockPapernexusInlineExecution(params: {
   };
 }
 
+const PAPERNEXUS_RAW_HTTP_COMMAND_RE =
+  /\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:imports|query|context|impact|ideas|brainstorm|path-trace|evidence-chain|reflection-chain|research-brief|brainstorm-brief|theory-brief|storyline-brief|corpus(?:-meta)?|corpora|enhancements|paper-enhancement)(?:\b|\/|\?)/i;
+
+export function shouldBlockPapernexusRawHttpUsage(params: {
+  role: WorkflowRole | null;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}): { block: boolean; reason?: string } {
+  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
+    return { block: false };
+  }
+  if (!["bash", "sessions_send"].includes(params.toolName)) {
+    return { block: false };
+  }
+  const payloadText = getToolPayloadText(params.toolParams);
+  if (!payloadText || !PAPERNEXUS_RAW_HTTP_COMMAND_RE.test(payloadText)) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason:
+      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. This avoids route-shape drift and keeps token handling consistent.",
+  };
+}
+
 export function shouldBlockPapernexusLiveGraphCliRead(params: {
   role: WorkflowRole | null;
   toolName: string;
@@ -9910,7 +10163,7 @@ export function shouldBlockPapernexusLiveGraphCliRead(params: {
   return {
     block: true,
     reason:
-      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use authenticated HTTP API endpoints instead (`/api/query`, `/api/context`, `/api/impact`, `/api/ideas`, `/api/brainstorm`, `/api/research-brief`, `/api/brainstorm-brief`, `/api/path-trace`, `/api/evidence-chain`, `/api/reflection-chain`, `/api/theory-brief`, `/api/storyline-brief`, or related typed endpoints).",
+      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use the Python wrappers instead (`pn_graph_query.py` and `pn_research_chains.py`), which call the authenticated typed APIs safely.",
   };
 }
 
@@ -9944,7 +10197,7 @@ export function shouldBlockPapernexusLocalGraphProcessing(params: {
     block: true,
     reason:
       `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl}). ` +
-      "Use the configured authenticated remote API and remote graph workflow instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
+      "Use the configured authenticated remote API through the Python wrappers instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
   };
 }
 
@@ -9969,7 +10222,7 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
       return {
         block: true,
         reason:
-          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and authenticated remote API calls instead.`,
+          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and the Python wrappers instead.`,
       };
     }
     return { block: false };
@@ -9985,7 +10238,7 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
   return {
     block: true,
     reason:
-      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus authenticated /api/imports and /api/* requests instead.`,
+      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus the Python wrappers instead.`,
   };
 }
 
@@ -10013,7 +10266,7 @@ export function shouldBlockPapernexusMultiPaperImport(params: {
   return {
     block: true,
     reason:
-      "Queued PaperNexus imports must be single-paper only. Submit one paper per `/api/imports` call so each paper can time out independently, continue to the next item, and emit its own progress update.",
+      "Queued PaperNexus imports must be single-paper only. Submit one paper per import task so each paper can time out independently, continue to the next item, and emit its own progress update.",
   };
 }
 
@@ -10029,7 +10282,12 @@ export function shouldBlockPapernexusLongWaitImportCommand(params: {
     return { block: false };
   }
   const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText || !/\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText)) {
+  const usesRawImportApi = /\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText ?? "");
+  const usesImportQueueWrapper =
+    /\bpython\d?\b[\s\S]*\bscripts\/pn_import_queue\.py\b[\s\S]*\bwait\b/i.test(
+      payloadText ?? ""
+    );
+  if (!payloadText || (!usesRawImportApi && !usesImportQueueWrapper)) {
     return { block: false };
   }
   const usesLoopWithSleep =
@@ -10044,7 +10302,27 @@ export function shouldBlockPapernexusLongWaitImportCommand(params: {
         "Do not long-poll PaperNexus import tasks in a shell loop. Bound each paper to at most 60s total wait, record timeout state, report it, and move on to the next paper instead of waiting indefinitely.",
     };
   }
-  if (/\bcurl\b/i.test(payloadText)) {
+  if (usesImportQueueWrapper) {
+    const timeoutMatch = payloadText.match(/--timeout(?:=|\s+)(\d+)/i);
+    const timeoutSeconds = timeoutMatch
+      ? Number.parseInt(timeoutMatch[1] ?? "", 10)
+      : Number.NaN;
+    if (!Number.isFinite(timeoutSeconds)) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus queue waits must set `pn_import_queue.py wait --timeout` and keep each paper within a 60s budget.",
+      };
+    }
+    if (timeoutSeconds > 60) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus queue waits must cap each paper at 60s or less. Record timeout state and continue with the next paper instead of waiting longer.",
+      };
+    }
+  }
+  if (usesRawImportApi && /\bcurl\b/i.test(payloadText)) {
     const maxTimeMatch = payloadText.match(/--max-time(?:=|\s+)(\d+)/i);
     const maxTimeSeconds = maxTimeMatch
       ? Number.parseInt(maxTimeMatch[1] ?? "", 10)
@@ -10214,6 +10492,45 @@ export function hasAgentMention(text: string): boolean {
   return AGENT_MENTION_REGEX.test(text);
 }
 
+export function isWorkflowChannelHandoffMessage(text: string | null | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return (
+    /\[STATUS\]/i.test(text) &&
+    /\[HANDOFF\]/i.test(text) &&
+    /\[ARTIFACTS\]/i.test(text) &&
+    /\[NEXT\]/i.test(text)
+  );
+}
+
+export function normalizeWorkflowChannelMentions(text: string): string {
+  if (!hasAgentMention(text)) {
+    return text;
+  }
+  if (!isWorkflowChannelHandoffMessage(text)) {
+    return sanitizeAgentMentions(text);
+  }
+  let preservedRawMention = false;
+  return text.replace(
+    AGENT_MENTION_REGEX,
+    (match, prefix: string, roleName: string) => {
+      if (!preservedRawMention) {
+        preservedRawMention = true;
+        return match;
+      }
+      const raw = String(roleName || "").trim().toLowerCase().replace(/_/g, "-");
+      const label =
+        raw === "academic-writer" || raw === "writer"
+          ? "writer"
+          : raw === "cross-reviewer"
+            ? "cross-reviewer"
+            : raw;
+      return `${prefix}[${label}]`;
+    }
+  );
+}
+
 export function sanitizeMessageToolParams(
   params: Record<string, unknown>
 ): Record<string, unknown> | null {
@@ -10227,7 +10544,7 @@ export function sanitizeMessageToolParams(
     if (!hasAgentMention(rawText)) {
       continue;
     }
-    nextParams[key] = sanitizeAgentMentions(rawText);
+    nextParams[key] = normalizeWorkflowChannelMentions(rawText);
     changed = true;
   }
   return changed ? nextParams : null;

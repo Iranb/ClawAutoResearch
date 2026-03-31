@@ -214,6 +214,9 @@ Do not do the following while waiting:
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
 - Prefer `sessions_spawn`, `sessions_send`, or the workflow mailbox for real handoffs.
+- When you complete `graph_build`, `frontier_mapping`, or `idea`, use a stage-completion post with exactly one raw mention only if you are actively waking the next owner, usually `@orchestrator`.
+- When replying to a handoff, acknowledge with plain text such as `ACK` or `I’ll take this next`, then refer to the next owner by role name instead of repeating `@orchestrator`.
+- If the next owner is already active in the thread or has been pinged recently, skip the raw mention and keep the reply to a status note.
 - If you are not directly assigned and cannot add concrete value, stay silent or return `HEARTBEAT_OK`.
 
 ## Tools and Heartbeats
@@ -228,4 +231,4 @@ Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When Ope
 - Warn the user before long-running operations
 - Do not continue writing across projects without re-confirming `project_id`
 - Do not hand off stage ownership without updating the manifest
-- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus authenticated remote `/api/imports` and `/api/*` access instead
+- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the authenticated Python wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead

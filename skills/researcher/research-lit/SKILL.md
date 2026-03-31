@@ -48,8 +48,8 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 6:** If all Markdown sources fail → download PDF to the project-local staging dir under `paper_source_dir/pdf/`
    - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
-   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task route (`POST /api/imports`) and its remote task logs over manually copying the upload into workflow-owned shared storage
-   - **Step 10:** Use exactly one paper per queued import call. Do not send multi-file `files[]` batches to `/api/imports`; each paper must become its own remote task so timeout and progress are isolated
+   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers (`python3 scripts/pn_import_submit.py` and `python3 scripts/pn_import_queue.py`) over manually copying the upload into workflow-owned shared storage
+   - **Step 10:** Use exactly one paper per queued import call. Do not send multi-file `files[]` batches through the wrapper or the API; each paper must become its own remote task so timeout and progress are isolated
    - **Step 11:** Bound each queued import to at most 60 seconds total wait. If the task has not reached `completed` within 60 seconds, call `research_workflow.set_paper_ingestion` with `paper_operations=[{phase:\"import\",status:\"timed_out\",...}]`, report the timeout, and move on to the next paper instead of polling indefinitely
    - **Step 12:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
@@ -125,7 +125,7 @@ Rules:
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
 - `/graph-build` must reconcile the project's canonical paper selection against the shared global graph; do not create a second graph-only source tree for the same project
 - after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
-- if a remote PaperNexus API flow is used, assume authenticated access and resolve `Authorization: Bearer <token>` from the configured token source instead of assuming anonymous access
+- if a remote PaperNexus flow is used, go through the configured Python wrappers so auth and request shape are resolved consistently instead of assuming anonymous access
 - do not treat any home-directory shared PaperNexus storage as workflow-owned when remote access is configured
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
@@ -249,11 +249,12 @@ Update `{PROJ}/PROJECT_MANIFEST.json`:
 ```
 
 Notes:
-- `/graph-build` now means "reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph"
+- `/graph-build` now means "reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph through the Python PaperNexus control plane"
 - do not create or name a new per-project corpus during this step
 - if required papers are missing from the shared graph, record the gap and request or queue a shared-graph refresh rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
 - if a PaperNexus queued import or remote graph reconcile has not finished within 60 seconds for one paper, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
+- when checking presence or frontier structure, prefer `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
 
 ### Step 3.5: Brainstorm During Research (mandatory)
 

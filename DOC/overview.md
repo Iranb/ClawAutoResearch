@@ -188,6 +188,32 @@ The plugin adds communication controls on top:
 - mailbox remains durable
 - agent-to-agent dispatch can actively wake the correct next owner
 - cooldown prevents repeated spam to the same target
+- stage-completion handoffs use a one-mention template: at most one raw `@agent`, and only when waking the next owner immediately
+- replies to a handoff should acknowledge by role name or plain text, not by repeating the raw mention
+
+#### Handoff template
+
+When a role finishes a stage or bounded subtask, use this shape in the channel:
+
+```text
+[STATUS] <stage-or-task> complete
+[HANDOFF] next owner: <role>
+[ARTIFACTS] <what was produced or where it lives>
+[NEXT] <what the next agent should do immediately>
+[@<role>] only if immediate wake-up is required
+```
+
+Use the raw mention only when all of the following are true:
+
+- the next owner needs an immediate wake-up
+- that role has not already been pinged in the current thread
+- the message is a real handoff, not a generic progress update
+
+When replying to a handoff, keep it short and avoid duplicate mention spam:
+
+- say `ACK`, `收到`, or a similar plain-text acknowledgment first
+- refer to the next owner by role name, not by repeating `@agent`
+- if you need to wake the same role again, wait for the normal cooldown path rather than echoing the mention in every reply
 
 ### 7. Discord Channel To Project Isolation
 

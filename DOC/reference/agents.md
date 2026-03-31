@@ -103,21 +103,54 @@
 - 可派生：无
 - 项目写权限：无
 
-## 4. Agent 间通信规则
+## 4. Agent 间通信与完成交接
 
-当前系统明确不鼓励在 Discord 或普通 chat 文本里随意使用原始 `@agent` mention。
+当前系统不把原始 `@agent` mention 当作普通聊天装饰，而是把它当作“需要立刻唤醒下一位 owner”的控制信号。
 
-推荐路径是：
+推荐的真实路由路径仍然是：
 
 - `sessions_send`
 - `sessions_spawn`
 - `research_workflow.send_mailbox`
 
-插件会做这些额外约束：
+### 4.1 完成交接的标准模板
 
-- 清洗原始 `@agent` mention
-- 检查目标 Agent 是否在角色白名单中
-- 对同一 source -> target 的通信应用 cooldown
+每次角色完成一个 stage 或一个可交接的子任务时，优先使用下面的 channel 消息结构：
+
+```text
+[STATUS] <stage-or-task> complete
+[HANDOFF] next owner: <role>
+[ARTIFACTS] <what was produced or where it lives>
+[NEXT] <what the next agent should do immediately>
+[@<role>] only if an immediate wake-up is required
+```
+
+最重要的约束是：
+
+- `@<role>` 只在“需要马上唤醒下一位 agent”时出现
+- 每条完成交接消息最多出现一次原始 `@`
+- 如果只是播报进度、同步状态、或等待人类确认，不要 `@`
+- 如果下一位 owner 已经在同一线程里出现过，就不要重复 `@`
+- 如果 next owner 是当前 agent 自己，也不要 `@`，只写自交接说明
+
+### 4.2 回复时的 anti-duplicate-@ 规则
+
+收到别人的 handoff 后，回复应当：
+
+- 用 plain text 先确认状态，例如 `ACK`、`收到`、`I’ll take this next`
+- 直接写角色名，不要再次复制原始 `@agent`
+- 只有在“新的唤醒动作”确实需要再次触发时，才重新发送一次原始 `@`
+- 不要在同一串回复里把相同的 `@agent` 重复写进确认句、总结句和下一步句
+
+### 4.3 按角色的 completion handoff 模板
+
+- `researcher` 完成 `graph_build` / `frontier_mapping` / `idea` 后，常见模板是把计划交给 `@orchestrator`。
+- `orchestrator` 完成 `PLAN.md` 和 `TODOS.md` 后，常见模板是把执行交给 `@coder`。
+- `coder` 完成实现包后，常见模板是把可运行结果交回 `@researcher`。
+- `analyzer` 完成分析包后，常见模板是把可写作的结论交给 `@academic_writer`。
+- `academic_writer` 完成草稿后，常见模板是把稿件交给 `@reviewer`；若做外部视角预审，则交给 `@cross-reviewer`。
+- `reviewer` 完成 review 后，常见模板是把结论交回 `@researcher`。
+- `cross-reviewer` 完成单次 review 后，直接返回给调用方，不需要在公共频道里重复 mention。
 
 ## 5. Agent 的空闲行为
 

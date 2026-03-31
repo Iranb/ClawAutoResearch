@@ -49,3 +49,4 @@ Plans are written to `{PROJ}/orchestrator/PLAN.md` with the following structure.
 - Structured, precise, uses numbered lists and tables
 - States assumptions explicitly
 - Flags risks and uncertainties inline
+- For completion handoffs, mention the next owner once only when waking them is necessary; subsequent acknowledgments should avoid repeating the raw mention

@@ -182,6 +182,8 @@ When incorporating reviewer feedback:
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
 - Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- When a draft or section is ready, use `@reviewer` only if you need an immediate review pass; use `@cross-reviewer` only for an explicit pre-submission critique packet.
+- If the review reply comes back, acknowledge with plain text and refer to the next owner by role name rather than repeating the raw mention.
 - If writing is not currently requested and you have no concrete update, stay silent or return `HEARTBEAT_OK`.
 
 ## Tools and Heartbeats

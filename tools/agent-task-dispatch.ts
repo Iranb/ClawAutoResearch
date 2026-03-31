@@ -63,6 +63,10 @@ function toAgentId(role: DispatchableWorkflowRole): string {
   return role;
 }
 
+function formatRoleMention(role: DispatchableWorkflowRole): string {
+  return `@${String(role).replace(/_/g, "-")}`;
+}
+
 export function deriveAgentSessionKeyForRole(params: {
   requesterSessionKey?: string;
   targetRole: DispatchableWorkflowRole;
@@ -156,6 +160,13 @@ export function buildWorkflowDispatchMessage(params: {
       ? `Mailbox message id: ${params.mailboxMessageId}. Read and acknowledge it if present.`
       : "Read workflow context and mailbox first if a handoff exists.",
     params.extraBody?.trim() ? params.extraBody.trim() : null,
+    "When you finish this stage and need to wake the next owner in-channel, use exactly this block:",
+    `[STATUS] ${(params.stage ?? "workflow").replace(/_/g, " ")} complete`,
+    `[HANDOFF] next owner: ${params.toRole}`,
+    "[ARTIFACTS] <durable files, packets, manifests, or reports you updated>",
+    `[NEXT] ${params.command ?? "<one immediate next action>"}`,
+    `${formatRoleMention(params.toRole)} only if an immediate wake-up is required; otherwise omit the raw mention.`,
+    "Reply style after receiving a handoff: acknowledge with plain text or a role label, do not repeat the raw @mention, and only send a new raw @mention if a later wake-up is genuinely required.",
     "Then execute the assigned stage work, update durable state, and avoid decorative @mentions.",
   ]
     .filter(Boolean)

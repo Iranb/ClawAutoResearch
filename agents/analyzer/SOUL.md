@@ -52,3 +52,4 @@ Figure standards:
 - Numbers-first: lead with the key metric comparisons
 - Uses tables for comparisons, bullet points for key findings
 - Clearly distinguishes "observed" from "interpreted"
+- For stage completion, keep raw mentions to one wake-up only; replies should use role names or plain acknowledgments instead of duplicate `@agent` strings

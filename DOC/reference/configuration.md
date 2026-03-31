@@ -37,7 +37,7 @@
   项目总根目录。应配置在 `plugins.entries.ClawAutoResearch.config.projectsRoot`，不要放在顶层 `openclaw.json`，否则会触发 `unrecognizedKeys`。
 
 - `injectWorkflowContext`  
-  是否在每轮 prompt 中注入 workflow snapshot。
+  是否在每轮 prompt 中注入 workflow snapshot。当前注入策略会优先压缩成“稳定策略 -> 阶段局部控制 -> 主载荷”的分层 prompt，优先保留 owner gate、handoff 与 `research_workflow.auto_iterator_tick` 边界提醒，再按角色补充必要状态，避免把远端子系统和历史背景整包塞进每轮上下文。
 
 - `enforceWorkflowBoundaries`  
   是否启用越界写入、非法 spawn/send 等运行时拦截。
@@ -52,7 +52,7 @@
   heartbeat turn 中是否注入 bounded background task 指导。
 
 - `maxWorkflowInboxMessages`  
-  默认最多向 prompt 或 mailbox 读取中暴露多少未处理消息。
+  默认最多向 prompt 或 mailbox 读取中暴露多少未处理消息。这个值越大，Agent 越容易被 mailbox 历史和旁支状态淹没；如果你发现 workflow prompt 太吵，优先调小它，而不是继续往 prompt 里叠更多 reminder。
 
 - `agentContactCooldownSeconds`  
   同一个 source -> target 的最小通信冷却时间。
@@ -178,6 +178,12 @@
 调小：
 
 - `maxWorkflowInboxMessages`
+
+并确认：
+
+- `injectWorkflowContext`
+
+保持开启。现在的 workflow context 已经改成优先注入 owner / stage / next_action / blocking / missing_signals 等高优先级信号；关掉它通常会让 Agent 更容易忘记 handoff 和 auto iterator 边界。
 
 ### 想让心跳更积极
 

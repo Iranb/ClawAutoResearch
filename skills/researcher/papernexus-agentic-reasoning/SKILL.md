@@ -1,6 +1,6 @@
 ---
 name: papernexus-agentic-reasoning
-description: Use this skill when an agent needs to perform stepwise reasoning for automated research tasks on top of an existing PaperNexus graph while keeping live-graph reads and imports on authenticated HTTP API endpoints.
+description: Use this skill when an agent needs to perform stepwise reasoning for automated research tasks on top of an existing PaperNexus graph while keeping live-graph reads and imports on authenticated HTTP API endpoints through the Python wrappers.
 ---
 
 # PaperNexus Agentic Reasoning
@@ -9,43 +9,30 @@ Use this skill when the goal is not just to retrieve graph facts, but to reason 
 
 ## Live Graph Access Policy
 
-For a running user graph, use authenticated HTTP API requests only.
+For a running user graph, prefer the local Python wrappers in `scripts/` as the default interface. They still use the authenticated HTTP API underneath, but they are safer for agents than raw `curl`.
 
+If both a remote server API and a local checkout are available, use the remote API path first.
 Do not call local CLI helpers such as `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, `papernexus brainstorm`, or local staged build commands against the live graph.
+If a PDF exists only on the local agent machine, stage it onto the API server first with `python3 scripts/pn_stage_sync.py`, then import it with `python3 scripts/pn_import_submit.py`. Do not default to inline request-body uploads for large local PDFs.
 
-Allowed live-graph entrypoints:
+Default live-graph wrapper set:
 
-- `GET /api/corpora`
-- `GET /api/corpus?name=<corpus>`
-- `GET /api/corpus-meta?name=<corpus>`
-- `GET /api/enhancements?name=<corpus>`
-- `GET /api/paper-enhancement?name=<corpus>&paperId=<paperId>`
-- `GET /api/imports?name=<corpus>`
-- `GET /api/imports/:taskId`
-- `GET /api/imports/:taskId/log`
-- `POST /api/imports?name=<corpus>`
-- `POST /api/query`
-- `POST /api/context`
-- `POST /api/impact`
-- `POST /api/ideas`
-- `POST /api/brainstorm`
-- `POST /api/path-trace`
-- `POST /api/evidence-chain`
-- `POST /api/reflection-chain`
-- `POST /api/research-brief`
-- `POST /api/brainstorm-brief`
-- `POST /api/theory-brief`
-- `POST /api/storyline-brief`
+- `pn_stage_sync.py` for local-to-remote staging
+- `pn_import_submit.py` for one-paper queued imports
+- `pn_import_queue.py list|status|log|wait` for task visibility and bounded waits
+- `pn_graph_query.py` for `query`, `context`, `impact`, `ideas`, and `brainstorm`
+- `pn_research_chains.py` for `path-trace`, `evidence-chain`, `reflection-chain`, `research-brief`, `brainstorm-brief`, `theory-brief`, `storyline-brief`, and `paper-enhancement`
 
-Every API request must include:
+Wrapper auth rule:
 
-- `Authorization: Bearer <token>`
+- resolve API base URL, corpus, and token source from workflow/runtime config
+- let the wrappers attach auth; do not hand-write `Authorization` headers or raw REST payloads unless the task is explicitly about debugging wrapper coverage
 
 Important query policy:
 
-- prefer typed query APIs over pulling the full graph whenever they can answer the task
-- use `/api/corpus` only when you need raw graph inspection that the typed endpoints do not provide
-- if the available API response is too limited for the requested reasoning task, report the missing server capability instead of falling back to local CLI
+- prefer typed wrapper commands over pulling the full graph whenever they can answer the task
+- only ask for raw corpus or overlay payloads when wrapper coverage explicitly exposes them and the typed commands are insufficient
+- if the available wrapper coverage is too limited for the requested reasoning task, report the missing server capability instead of falling back to local CLI
 
 ## What This Skill Is For
 
@@ -110,19 +97,19 @@ Do not start with broad web search if the graph already has enough structure to 
 
 In PaperNexus, the default live-graph reasoning inputs are:
 
-- `POST /api/query`
-- `POST /api/context`
-- `POST /api/impact`
-- `POST /api/ideas`
-- `POST /api/brainstorm`
-- `POST /api/path-trace`
-- `POST /api/evidence-chain`
-- `POST /api/reflection-chain`
-- `POST /api/research-brief`
-- `POST /api/brainstorm-brief`
-- `POST /api/theory-brief`
-- `POST /api/storyline-brief`
-- `GET /api/paper-enhancement` when paper-local overlay detail is still needed
+- `python3 scripts/pn_graph_query.py query`
+- `python3 scripts/pn_graph_query.py context`
+- `python3 scripts/pn_graph_query.py impact`
+- `python3 scripts/pn_graph_query.py ideas`
+- `python3 scripts/pn_graph_query.py brainstorm`
+- `python3 scripts/pn_research_chains.py path-trace`
+- `python3 scripts/pn_research_chains.py evidence-chain`
+- `python3 scripts/pn_research_chains.py reflection-chain`
+- `python3 scripts/pn_research_chains.py research-brief`
+- `python3 scripts/pn_research_chains.py brainstorm-brief`
+- `python3 scripts/pn_research_chains.py theory-brief`
+- `python3 scripts/pn_research_chains.py storyline-brief`
+- `python3 scripts/pn_research_chains.py paper-enhancement` when paper-local overlay detail is still needed
 
 For ideation, prefer the brainstorm-quality node view over the raw full graph. The full graph can still contain supporting nodes that are useful for provenance but too noisy to use as primary anchors.
 
@@ -131,11 +118,11 @@ For ideation, prefer the brainstorm-quality node view over the raw full graph. T
 For any non-trivial research task, use this loop:
 
 1. Define the current research objective in one sentence.
-2. Start with the narrowest typed API that matches the task.
+2. Start with the narrowest typed wrapper action that matches the task.
 3. Resolve anchors with `query`, `context`, `impact`, or `path-trace`.
 4. If validating a claim, inspect `evidence-chain`, `theory-brief`, and `reflection-chain`.
 5. If designing new ideas, inspect `ideas`, `brainstorm`, and `brainstorm-brief`.
-6. Only fetch `/api/corpus` when the typed APIs still leave a structural gap.
+6. Only ask for a raw corpus or overlay payload through wrapper coverage when the typed commands still leave a structural gap.
 7. Write a short structured state update before moving to the next step.
 
 Each step should end with one of:
@@ -165,9 +152,9 @@ Do not let the reasoning jump ahead without filling these fields.
 ### A. Understand a topic
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/query" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":8}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/context" --data '{"name":"<corpus>","query":"<topic>","options":{"nodeView":"brainstorm"}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/evidence-chain" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":5}}'
+python3 scripts/pn_graph_query.py --api-base "http://<host>:4821" --corpus "<corpus>" query "<topic>" --limit 8
+python3 scripts/pn_graph_query.py --api-base "http://<host>:4821" --corpus "<corpus>" context "<topic>" --node-view brainstorm
+python3 scripts/pn_research_chains.py --api-base "http://<host>:4821" --corpus "<corpus>" evidence-chain "<topic>" --limit 5
 ```
 
 Use this to answer:
@@ -180,9 +167,9 @@ Use this to answer:
 ### B. Generate a new research direction
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/ideas" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":6}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/brainstorm" --data '{"name":"<corpus>","query":"<topic>","options":{"mode":"converge","limit":6}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "http://<host>:4821/api/brainstorm-brief" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":6}}'
+python3 scripts/pn_graph_query.py --api-base "http://<host>:4821" --corpus "<corpus>" ideas "<topic>" --limit 6
+python3 scripts/pn_graph_query.py --api-base "http://<host>:4821" --corpus "<corpus>" brainstorm "<topic>" --mode converge --limit 6
+python3 scripts/pn_research_chains.py --api-base "http://<host>:4821" --corpus "<corpus>" brainstorm-brief "<topic>" --limit 6
 ```
 
 Use this to produce:
@@ -200,11 +187,11 @@ Important:
 
 Use:
 
-- `/api/evidence-chain` for `Problem -> Method -> Claim -> Evidence -> Limitation`
-- `/api/reflection-chain` for `Innovation -> Experiment -> Outcome -> Reflection`
-- `/api/theory-brief` for assumptions, mechanisms, proof ideas, and failure modes
-- `/api/storyline-brief` for narrative beats and argument gaps
-- `GET /api/paper-enhancement` when you need the raw overlay card inventory
+- `python3 scripts/pn_research_chains.py evidence-chain` for `Problem -> Method -> Claim -> Evidence -> Limitation`
+- `python3 scripts/pn_research_chains.py reflection-chain` for `Innovation -> Experiment -> Outcome -> Reflection`
+- `python3 scripts/pn_research_chains.py theory-brief` for assumptions, mechanisms, proof ideas, and failure modes
+- `python3 scripts/pn_research_chains.py storyline-brief` for narrative beats and argument gaps
+- `python3 scripts/pn_research_chains.py paper-enhancement` when you need the raw overlay card inventory
 
 ## How To Think With The Graph
 
@@ -214,7 +201,7 @@ Use this chain:
 
 `Problem -> Method -> Claim -> Evidence -> Limitation`
 
-Prefer `POST /api/evidence-chain` before reconstructing this chain yourself.
+Prefer `python3 scripts/pn_research_chains.py evidence-chain` before reconstructing this chain yourself.
 
 Prefer `Problem` and `Method` nodes whose names are multi-word research objects rather than single generic nouns.
 
@@ -224,7 +211,7 @@ Use this chain:
 
 `Claim -> Assumption / Mechanism / Proof idea -> Failure mode`
 
-Prefer `POST /api/theory-brief`.
+Prefer `python3 scripts/pn_research_chains.py theory-brief`.
 
 ### For experiment reflection
 
@@ -232,7 +219,7 @@ Use this chain:
 
 `Innovation -> Experiment -> Outcome -> Reflection`
 
-Prefer `POST /api/reflection-chain`.
+Prefer `python3 scripts/pn_research_chains.py reflection-chain`.
 
 ### For future work
 
@@ -240,7 +227,7 @@ Use this chain:
 
 `Problem -> Limitation -> FutureDirection -> transferable Method`
 
-Start with `POST /api/impact`, then refine with `POST /api/path-trace` if you need a concrete typed path.
+Start with `python3 scripts/pn_graph_query.py impact`, then refine with `python3 scripts/pn_research_chains.py path-trace` if you need a concrete typed path.
 
 ## When To Use Enhancement Overlays
 
@@ -298,11 +285,11 @@ Next best action:
 
 If source papers changed, refresh the live graph through the import API before trusting the reasoning state:
 
-1. `POST /api/imports?name=<corpus>`
-2. `GET /api/imports/:taskId`
-3. `GET /api/imports/:taskId/log`
-4. `GET /api/corpus?name=<corpus>`
-5. `GET /api/enhancements?name=<corpus>`
+1. `python3 scripts/pn_stage_sync.py` if the new file lives only on the local agent machine
+2. `python3 scripts/pn_import_submit.py`
+3. `python3 scripts/pn_import_queue.py status|log|wait`
+4. `python3 scripts/pn_graph_query.py query|context`
+5. `python3 scripts/pn_research_chains.py paper-enhancement` when overlay details are needed
 
 Agent rule:
 
@@ -318,7 +305,7 @@ For ongoing live usage:
 
 - assume the remote `serve` process is already the system entrypoint
 - do not start `watch` or `service install` as part of a reasoning workflow
-- remote dashboard/API access requires the configured PaperNexus token, so agent workflows that call `/api/*` must include `Authorization: Bearer <token>`
+- remote dashboard/API access still requires the configured PaperNexus token, but wrapper-driven workflows should let the wrappers resolve and attach that auth instead of hand-writing headers
 
 Important Stage 4 boundary:
 

@@ -7,6 +7,10 @@ import {
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
+  handoffWorkflowTaskToAgent,
+  type WorkflowLobsterHandoffConfig,
+} from "./lobster-handoff";
+import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
   type WorkflowGuardPolicy,
@@ -105,6 +109,7 @@ type BackgroundWorkflowQueueRunPayload = {
 
 type BackgroundWorkflowQueueDispatchPayload = {
   requesterChannel: string | null;
+  requesterAccountId: string | null;
   preferredSessionKeys: string[];
   fromRole: string | null;
   toRole: DispatchableWorkflowRole;
@@ -118,6 +123,8 @@ type BackgroundWorkflowQueueDispatchPayload = {
   waitTimeoutMs: number | null;
   retryOnTimeout: boolean;
   enableSpawnFallback: boolean;
+  useWorkflowHandoff: boolean;
+  autoModeActive: boolean;
 };
 
 type BackgroundWorkflowQueueEntry = {
@@ -369,6 +376,10 @@ async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEnt
                   readString(
                     (record.dispatchPayload as Record<string, unknown>).requesterChannel
                   ) ?? null,
+                requesterAccountId:
+                  readString(
+                    (record.dispatchPayload as Record<string, unknown>).requesterAccountId
+                  ) ?? null,
                 preferredSessionKeys: Array.isArray(
                   (record.dispatchPayload as Record<string, unknown>).preferredSessionKeys
                 )
@@ -425,6 +436,11 @@ async function readBackgroundWorkflowQueue(): Promise<BackgroundWorkflowQueueEnt
                 enableSpawnFallback:
                   (record.dispatchPayload as Record<string, unknown>).enableSpawnFallback !==
                   false,
+                useWorkflowHandoff:
+                  (record.dispatchPayload as Record<string, unknown>).useWorkflowHandoff ===
+                  true,
+                autoModeActive:
+                  (record.dispatchPayload as Record<string, unknown>).autoModeActive === true,
               }
             : null;
         if (
@@ -1091,6 +1107,10 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       limit?: number;
     }) => Promise<{ messages: unknown[] }>;
   };
+  workflowPolicy?: {
+    lobsterHandoff?: WorkflowLobsterHandoffConfig;
+  } | null;
+  handoffWorkflowTaskToAgent?: typeof handoffWorkflowTaskToAgent;
 }): Promise<QueuedBackgroundWorkflowDrainResult> {
   const runtimeSubagent = params.runtimeSubagent;
   if (!runtimeSubagent) {
@@ -1133,29 +1153,53 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
 
     try {
       if (entry.entryType === "dispatch_task" && entry.dispatchPayload) {
-        const dispatch = await dispatchWorkflowTaskToAgent({
-          runtimeSubagent,
-          requesterSessionKey: entry.requesterSessionKey,
-          requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
-          preferredSessionKeys: [
-            sessionLease.sessionKey,
-            ...entry.dispatchPayload.preferredSessionKeys.filter(
-              (candidate) => candidate !== sessionLease.sessionKey
-            ),
-          ],
-          fromRole: entry.dispatchPayload.fromRole,
-          toRole: entry.dispatchPayload.toRole,
-          projectRoot: entry.dispatchPayload.projectRoot,
-          projectId: entry.dispatchPayload.projectId,
-          stage: entry.dispatchPayload.stage,
-          summary: entry.dispatchPayload.summary,
-          command: entry.dispatchPayload.command,
-          mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
-          extraBody: entry.dispatchPayload.extraBody,
-          waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
-          retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
-          enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
-        });
+        const preferredSessionKeys = [
+          sessionLease.sessionKey,
+          ...entry.dispatchPayload.preferredSessionKeys.filter(
+            (candidate) => candidate !== sessionLease.sessionKey
+          ),
+        ];
+        const dispatch = entry.dispatchPayload.useWorkflowHandoff
+          ? await (params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent)({
+              runtimeSubagent,
+              workflowPolicy: params.workflowPolicy ?? undefined,
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
+              requesterAccountId:
+                entry.dispatchPayload.requesterAccountId ?? undefined,
+              preferredSessionKeys,
+              fromRole: entry.dispatchPayload.fromRole,
+              toRole: entry.dispatchPayload.toRole,
+              projectRoot: entry.dispatchPayload.projectRoot,
+              projectId: entry.dispatchPayload.projectId,
+              stage: entry.dispatchPayload.stage,
+              summary: entry.dispatchPayload.summary,
+              command: entry.dispatchPayload.command,
+              mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+              extraBody: entry.dispatchPayload.extraBody,
+              waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
+              retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
+              enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
+              autoModeActive: entry.dispatchPayload.autoModeActive,
+            })
+          : await dispatchWorkflowTaskToAgent({
+              runtimeSubagent,
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterChannel: entry.dispatchPayload.requesterChannel ?? undefined,
+              preferredSessionKeys,
+              fromRole: entry.dispatchPayload.fromRole,
+              toRole: entry.dispatchPayload.toRole,
+              projectRoot: entry.dispatchPayload.projectRoot,
+              projectId: entry.dispatchPayload.projectId,
+              stage: entry.dispatchPayload.stage,
+              summary: entry.dispatchPayload.summary,
+              command: entry.dispatchPayload.command,
+              mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+              extraBody: entry.dispatchPayload.extraBody,
+              waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
+              retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
+              enableSpawnFallback: entry.dispatchPayload.enableSpawnFallback,
+            });
         if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
           await touchBackgroundWorkflowQueueEntry({
             queueKey: entry.queueKey,

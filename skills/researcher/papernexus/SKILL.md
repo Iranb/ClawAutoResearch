@@ -1,6 +1,6 @@
 ---
 name: papernexus
-description: Use this skill when working inside the PaperNexus repository to understand its API-first graph workflow, remote service model, staging conventions, enhancement worker, and authenticated HTTP endpoints without depending on home-directory shared paper/index storage.
+description: Use this skill when working inside the PaperNexus repository to understand its API-first graph workflow, wrapper-first remote control plane, staging conventions, enhancement worker, and authenticated HTTP endpoints without depending on home-directory shared paper/index storage.
 ---
 
 # PaperNexus
@@ -25,7 +25,7 @@ Key capabilities:
 
 ## Live Graph Access Policy
 
-When touching a running user graph, use the authenticated HTTP API only.
+When touching a running user graph, use the authenticated HTTP API through the local Python wrappers in `scripts/` as the default control plane.
 
 This applies to:
 
@@ -35,42 +35,43 @@ This applies to:
 - reading enhancement overlays for a paper or corpus
 - performing graph-backed query or reasoning requests
 
-Do not use local CLI commands such as `papernexus analyze`, `papernexus materialize`, `papernexus stage1-4`, `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, or `papernexus brainstorm` against a live user graph.
+Do not use raw `curl`, local CLI commands such as `papernexus analyze`, `papernexus materialize`, `papernexus stage1-4`, `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, or `papernexus brainstorm`, or hand-written REST calls against a live user graph.
 
-Allowed live-graph entrypoints:
+## Default Script Entry Points
 
-- `GET /api/health`
-- `GET /api/corpora`
-- `GET /api/corpus?name=<corpus>`
-- `GET /api/corpus-meta?name=<corpus>`
-- `GET /api/enhancements?name=<corpus>`
-- `GET /api/paper-enhancement?name=<corpus>&paperId=<paperId>`
-- `GET /api/imports?name=<corpus>`
-- `POST /api/imports?name=<corpus>`
-- `GET /api/imports/:taskId`
-- `GET /api/imports/:taskId/log`
-- `POST /api/query`
-- `POST /api/context`
-- `POST /api/impact`
-- `POST /api/ideas`
-- `POST /api/brainstorm`
-- `POST /api/path-trace`
-- `POST /api/evidence-chain`
-- `POST /api/reflection-chain`
-- `POST /api/research-brief`
-- `POST /api/brainstorm-brief`
-- `POST /api/theory-brief`
-- `POST /api/storyline-brief`
+For live remote work, prefer these wrappers first:
 
-Every `/api/*` request must include:
+- `python3 scripts/pn_stage_sync.py`
+- `python3 scripts/pn_import_submit.py`
+- `python3 scripts/pn_import_queue.py`
+- `python3 scripts/pn_graph_query.py`
+- `python3 scripts/pn_research_chains.py`
 
-- `Authorization: Bearer <token>`
+Why:
+
+- they hide token handling and request shape details
+- they reduce route-shape mistakes
+- they make `rsync + --server-file-path + queue polling` the default import path
+- they are easier for agents to call consistently than raw REST
+
+Default live-graph wrapper coverage:
+
+- `pn_stage_sync.py` stages local files onto the API server machine
+- `pn_import_submit.py` submits one staged file at a time and returns the queued import task id
+- `pn_import_queue.py list|status|log|wait` is the supported status/log surface for agents
+- `pn_graph_query.py` handles typed graph reads such as `query`, `context`, `impact`, `ideas`, and `brainstorm`
+- `pn_research_chains.py` handles `path-trace`, `evidence-chain`, `reflection-chain`, `research-brief`, `brainstorm-brief`, `theory-brief`, `storyline-brief`, and `paper-enhancement`
+
+Wrapper auth rule:
+
+- resolve API base URL, corpus, and token source from workflow/runtime config
+- let the wrappers attach auth; do not hand-write `Authorization` headers or raw REST payloads unless the task is explicitly about debugging wrapper coverage
 
 Important query policy:
 
-- prefer the typed HTTP query APIs over raw graph downloads whenever they fit the task
-- use `GET /api/corpus` only when you truly need raw graph inspection beyond what the typed APIs expose
-- if the available API payload is insufficient for the requested reasoning task, report that the server lacks the needed query endpoint; do not fall back to local CLI against the live graph
+- prefer the typed wrapper commands over raw graph downloads whenever they fit the task
+- use wrapper-exposed raw payload helpers only when you truly need structural inspection beyond the typed commands
+- if the available wrapper coverage is insufficient for the requested reasoning task, report the missing wrapper/API capability; do not fall back to local CLI against the live graph
 
 ## Important Paths
 
@@ -78,8 +79,8 @@ For workflow and operator usage, prefer these locations:
 
 - project-local staging root: `{PROJ}/researcher/paper-staging`
 - remote service base URL: configured `papernexusApiBaseUrl`
-- remote import queue: `POST /api/imports?name=<corpus>`
-- remote import logs: `GET /api/imports/:taskId/log`
+- remote import queue: `python3 scripts/pn_import_queue.py --api-base <url> --corpus <corpus> list|status|log|wait ...`
+- remote graph reads: `python3 scripts/pn_graph_query.py ...` and `python3 scripts/pn_research_chains.py ...`
 - runtime config / service logs: only inspect local service files when the task is explicitly about PaperNexus deployment debugging
 
 Do not assume home-directory shared paper storage or home-directory index roots as the source of truth for workflow tasks. For live systems, the source of truth is the authenticated remote API plus project-local staging inputs.
@@ -177,17 +178,18 @@ Guidelines:
 - `papernexus optimize` is still available as a convenience path for stages 2-5 together.
 - Ad hoc PDF/Markdown uploads should normally enter through queued import tasks under `.papernexus/imports/`, not by moving files directly into the main paper source tree during automation.
 - Import tasks keep per-task `events.log` files and stay in a separate directory even after their parsed content is merged into the main graph.
-- `POST /api/imports` supports two input styles:
-  - client-uploaded file content through `files[].contentBase64`
-  - server-side single-file collection through `serverFilePath`
-- `serverFilePath` is resolved on the API server machine, must be an absolute single-file path, and does not support directory recursion.
-- `POST /api/imports` now content-dedupes identical uploads. When the same file content is uploaded again for the same corpus, the API can return the existing task with `deduped: true` instead of creating a new task.
+- Wrapper-first import behavior:
+  - use `pn_stage_sync.py` when a paper exists only on the local agent machine
+  - use `pn_import_submit.py --server-file-path <remote-file>` for one-paper queued imports
+  - use `pn_import_queue.py` for `list`, `status`, `log`, and bounded `wait`
+  - if the same staged content is submitted again, expect the service to reuse or dedupe the existing task instead of forcing a brand-new import
+  - avoid inline request-body uploads unless a human explicitly approves a small-file wrapper-debugging exception
 - Completed import task directories should not be treated as long-lived active scan roots. Completed imported sources are preserved through manifest-backed reuse instead of repeated directory rescans.
 - Agent live-graph policy:
-  - ingest new papers through `POST /api/imports`
-  - read graph state through the typed query APIs first
-  - use `/api/corpus`, `/api/corpus-meta`, `/api/enhancements`, and `/api/paper-enhancement` as supporting raw/overlay reads
-  - if an operation exists only in CLI and not in the HTTP API, report the limitation instead of using local CLI against the live graph
+  - ingest new papers through `pn_import_submit.py`
+  - inspect queue state through `pn_import_queue.py`
+  - read graph state through `pn_graph_query.py` and `pn_research_chains.py` first
+  - if an operation exists only in raw HTTP and not in the wrappers, report the limitation instead of inventing requests or using local CLI against the live graph
 - Import-task execution should rebuild against the current committed corpus manifest and merge the task's `sourcesDir` on top of that base graph. Do not trust stored `task.inputPaths` as the authoritative rebuild root if they look stale or cross-machine.
 - Single-graph safety:
   - Once a corpus already exists at an index root, Stage 1-4 commands must keep using that same configured input scope.
@@ -304,9 +306,9 @@ Read these first when you need orientation:
 - Treat local Docling and Marker as fallback or special-case tools, not the default recommendation, unless the user explicitly asks for local parsing.
 - If a task involves ad hoc uploaded PDFs or Markdown from a UI/API flow, prefer the queued import-task path over manually copying those files into the main paper source directory.
 - If an import, stage, or worker run appears stuck, report the exact stage, latest task log lines, elapsed time, and the most likely blocker or stale-path cause. Do not keep retrying the same command in a loop without new evidence.
-- If a task involves the live graph, assume the authenticated HTTP API is the only allowed interface unless the user explicitly asks for isolated local repo testing.
-- If a task involves the Web API, do not assume anonymous access. Use the configured PaperNexus API token and include it as `Authorization: Bearer <token>` unless the user explicitly says another auth path is in place.
-- Do not fall back from a missing API feature to local CLI graph operations. Report the missing endpoint or unsupported workflow clearly.
+- If a task involves the live graph, assume the Python wrappers are the only allowed control plane unless the user explicitly asks for isolated local repo testing.
+- If a task needs remote auth, let the wrappers resolve the configured token source; do not hand-write `Authorization` headers unless the task is explicitly about debugging the wrapper or HTTP layer.
+- Do not fall back from a missing wrapper/API feature to local CLI graph operations. Report the missing endpoint or unsupported workflow clearly.
 - When an ingestion run failed only because LLM requests were unavailable, prefer rerunning `papernexus llm-optimize`, `papernexus optimize`, or `papernexus analyze` before reaching for `--force`.
 - Prefer `papernexus materialize` first when debugging PDF parsing or markdown cache issues, `papernexus llm-optimize` when debugging LLM extraction, `papernexus build-graph` when debugging graph projection, `papernexus merge-graph` when debugging duplicate or low-quality evaluation nodes, and `papernexus write-index` when debugging final persistence.
 - If Stage 3 already succeeded and you specifically need to inspect or fix duplicate `Dataset` / `Benchmark` nodes before commit, run `papernexus merge-graph --continue`.

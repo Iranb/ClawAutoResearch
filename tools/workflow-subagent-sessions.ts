@@ -59,6 +59,27 @@ const PAPERNEXUS_API_LABELS = [
   "logs",
 ] as const;
 
+const PAPERNEXUS_WRAPPER_LABELS = [
+  "stage-sync",
+  "imports",
+  "status",
+  "log",
+  "wait",
+  "query",
+  "context",
+  "impact",
+  "ideas",
+  "brainstorm",
+  "path-trace",
+  "evidence-chain",
+  "reflection-chain",
+  "research-brief",
+  "brainstorm-brief",
+  "theory-brief",
+  "storyline-brief",
+  "paper-enhancement",
+] as const;
+
 const PAPERNEXUS_LIVE_GRAPH_CLI_READ_LABELS = [
   "research-brief",
   "brainstorm-brief",
@@ -86,6 +107,8 @@ function escapeRegex(value: string): string {
 
 const PAPERNEXUS_CLI_LABEL_PATTERN = PAPERNEXUS_CLI_LABELS.map(escapeRegex).join("|");
 const PAPERNEXUS_API_LABEL_PATTERN = PAPERNEXUS_API_LABELS.map(escapeRegex).join("|");
+const PAPERNEXUS_WRAPPER_LABEL_PATTERN =
+  PAPERNEXUS_WRAPPER_LABELS.map(escapeRegex).join("|");
 
 const PAPERNEXUS_SLASH_COMMAND_RE =
   /^\s*\/(?:graph-build|frontier-mapping|papernexus(?:-agentic-reasoning)?|papernexus-reflection)\b/i;
@@ -98,6 +121,11 @@ const PAPERNEXUS_CLI_COMMAND_RE =
 const PAPERNEXUS_API_COMMAND_RE =
   new RegExp(
     String.raw`\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:${PAPERNEXUS_API_LABEL_PATTERN})(?:\b|\/|\?)`,
+    "i"
+  );
+const PAPERNEXUS_WRAPPER_COMMAND_RE =
+  new RegExp(
+    String.raw`\bpython\d?\b[\s\S]*\bscripts\/pn_(?:stage_sync|import_submit|import_queue|graph_query|research_chains)\.py\b(?:[\s\S]*\b(?:${PAPERNEXUS_WRAPPER_LABEL_PATTERN})\b)?`,
     "i"
   );
 const PAPERNEXUS_LIVE_GRAPH_CLI_READ_RE = new RegExp(
@@ -119,6 +147,29 @@ function extractPapernexusCliLabel(text: string): string | null {
   for (const label of PAPERNEXUS_CLI_LABELS) {
     const re = new RegExp(`\\b${escapeRegex(label)}\\b`, "i");
     if (re.test(text)) {
+      return label;
+    }
+  }
+  return null;
+}
+
+function extractPapernexusWrapperLabel(text: string): string | null {
+  const normalized = text.toLowerCase();
+  const queueMatch = normalized.match(
+    /\bscripts\/pn_import_queue\.py\b[\s\S]*\b(list|status|log|wait)\b/i
+  );
+  if (queueMatch?.[1]) {
+    return queueMatch[1].toLowerCase();
+  }
+  if (/\bscripts\/pn_stage_sync\.py\b/i.test(normalized)) {
+    return "stage-sync";
+  }
+  if (/\bscripts\/pn_import_submit\.py\b/i.test(normalized)) {
+    return "imports";
+  }
+  for (const label of PAPERNEXUS_WRAPPER_LABELS) {
+    const re = new RegExp(`\\b${escapeRegex(label)}\\b`, "i");
+    if (re.test(normalized)) {
       return label;
     }
   }
@@ -169,7 +220,8 @@ export function looksLikePapernexusHeavyCommand(
   return (
     PAPERNEXUS_SLASH_COMMAND_RE.test(raw) ||
     PAPERNEXUS_CLI_COMMAND_RE.test(raw) ||
-    PAPERNEXUS_API_COMMAND_RE.test(raw)
+    PAPERNEXUS_API_COMMAND_RE.test(raw) ||
+    PAPERNEXUS_WRAPPER_COMMAND_RE.test(raw)
   );
 }
 
@@ -199,6 +251,10 @@ export function derivePapernexusTaskLabel(
   const apiLabel = extractPapernexusApiLabel(raw);
   if (apiLabel) {
     return apiLabel;
+  }
+  const wrapperLabel = extractPapernexusWrapperLabel(raw);
+  if (wrapperLabel) {
+    return wrapperLabel;
   }
   const cliLabel = extractPapernexusCliLabel(raw);
   if (cliLabel) {

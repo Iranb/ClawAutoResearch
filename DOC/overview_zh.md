@@ -230,6 +230,32 @@ Researcher 在 `research-lit` 过程中必须维护：
 - mailbox 可持久化
 - agent-to-agent dispatch 可以主动唤醒下一位 owner
 - cooldown 防止重复唤醒
+- 阶段完成交接使用“单次 mention”模板：每条 handoff 消息最多出现一次原始 `@agent`
+- 回复 handoff 时要用角色名或纯文本确认，不要把同一个原始 `@agent` 反复复制进后续回复里
+
+#### 交接模板
+
+当某个角色完成一个 stage 或一个可交接的子任务时，频道消息建议写成：
+
+```text
+[STATUS] <stage-or-task> complete
+[HANDOFF] next owner: <role>
+[ARTIFACTS] <产物或位置>
+[NEXT] <下一位 agent 立刻要做什么>
+[@<role>] 仅在需要立刻唤醒下一位 owner 时使用
+```
+
+只有同时满足下面三点时，才使用原始 `@`：
+
+- 下一位 owner 需要立即被唤醒
+- 该 role 在当前线程里还没有被 ping 过
+- 这条消息是正式交接，不只是普通进度播报
+
+回复 handoff 时保持简短，避免重复 mention：
+
+- 先用 `ACK`、`收到`、`I’ll take this next` 之类的纯文本确认
+- 之后用角色名描述下一步，不要再复制原始 `@agent`
+- 如果同一个 role 需要再次被唤醒，优先走正常 cooldown，不要在每条回复里都重复 mention
 
 ### 7. Discord 频道绑定项目
 

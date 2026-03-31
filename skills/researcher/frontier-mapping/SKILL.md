@@ -29,19 +29,19 @@ Use PaperNexus graph traversal over the shared global graph, constrained by this
 
 ## Query Passes
 
-For the current topic, run a minimum of these PaperNexus passes against the shared global graph:
+For the current topic, run a minimum of these PaperNexus passes against the shared global graph through the Python wrappers:
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "https://<host>/api/query" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":8}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "https://<host>/api/brainstorm" --data '{"name":"<corpus>","query":"<topic>","options":{"mode":"diverge","limit":8}}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "https://<host>/api/ideas" --data '{"name":"<corpus>","query":"<topic>","options":{"limit":8}}'
+python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" query "<topic>" --limit 8
+python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" brainstorm "<topic>" --mode diverge --limit 8
+python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" ideas "<topic>" --limit 8
 ```
 
 Then inspect at least one neighborhood for each promising anchor:
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "https://<host>/api/context" --data '{"name":"<corpus>","query":"<anchor>"}'
-curl -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" "https://<host>/api/impact" --data '{"name":"<corpus>","query":"<anchor>"}'
+python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" context "<anchor>"
+python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" impact "<anchor>"
 ```
 
 Use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` and `{PROJ}/graph/PAPERNEXUS_STATUS.json` to constrain which anchors and papers are treated as in-scope for this project.
@@ -50,7 +50,7 @@ Prefer the brainstorm-quality node layer when selecting primary anchors:
 
 - trust `brainstormEligible`, `brainstormScore`, and `brainstormTier` over raw visual prominence on the full graph
 - use the full graph for provenance and neighborhood inspection, but use the brainstorm-quality view for ideation-first anchoring
-- if a remote PaperNexus `/api/*` call is needed, resolve `Authorization: Bearer <token>` from the configured token source
+- if remote PaperNexus auth is needed, let the Python wrappers resolve it from the configured token source; do not hand-write REST requests or auth headers
 - do not inspect home-directory shared PaperNexus storage or local PaperNexus CLI helpers in workflow-owned frontier mapping
 
 ## Required Frontier Lenses

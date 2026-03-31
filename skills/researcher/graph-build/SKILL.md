@@ -20,7 +20,7 @@ Reconcile the current project's selected literature against the shared global Pa
 
 ## Remote Access Requirement
 
-Workflow-owned graph work must use the configured remote PaperNexus Web/API. Do not resolve or use local PaperNexus runtime roots or shared-disk graph storage for graph reconciliation when remote access is configured.
+Workflow-owned graph work must use the configured remote PaperNexus control plane exposed through the Python wrappers in `scripts/`. Do not resolve or use local PaperNexus runtime roots, shared-disk graph storage, or hand-written REST calls for graph reconciliation when remote access is configured.
 
 Read the remote access settings from the plugin-level workflow config:
 
@@ -33,7 +33,7 @@ Read the remote access settings from the plugin-level workflow config:
 
 Rules:
 
-- when using the PaperNexus Web/API, resolve `Authorization: Bearer <token>` from the configured token source
+- when using remote PaperNexus, let the Python wrappers resolve auth from the configured token source
 - `auto` means: env first, then native OS keychain
 - native keychain means:
   - macOS Keychain on `darwin`
@@ -42,7 +42,8 @@ Rules:
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
 - do not fall back to local `papernexus` CLI graph-processing commands for workflow-owned graph reconciliation
-- if the remote API is unavailable or unauthenticated, stop and report that remote PaperNexus access must be fixed before graph work can continue
+- prefer `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` over hand-written REST for remote graph reads and imports
+- if the wrapper-resolved remote PaperNexus session is unavailable or unauthenticated, stop and report that remote access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
 

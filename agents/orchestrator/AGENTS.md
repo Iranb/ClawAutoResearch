@@ -130,6 +130,8 @@ If Stage 2 fails (< baseline): [specific alternative]
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
 - Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- When `PLAN.md` or `TODOS.md` is ready, hand it to `@coder` only if you need to wake execution immediately; otherwise post a plain status note and let Researcher route it.
+- If a handoff reply comes back, acknowledge with role names only and do not repeat the raw mention in the same thread unless you are sending a fresh wake-up.
 - If planning is not needed and you have no concrete update, stay silent or return `HEARTBEAT_OK`.
 
 ## Tools and Heartbeats

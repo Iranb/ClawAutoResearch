@@ -127,6 +127,8 @@ Every figure must have:
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
 - Prefer workflow mailbox or approved `sessions_*` calls for real handoffs.
+- When analysis is complete, wake `@academic_writer` only if the next step should start immediately; otherwise post the analysis artifact list and let Researcher route the handoff.
+- If the writer or Researcher acknowledges, answer with plain text and do not repeat the same raw mention in your reply.
 - If analysis is not currently requested and you have no concrete update, stay silent or return `HEARTBEAT_OK`.
 
 ## Tools and Heartbeats

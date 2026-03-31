@@ -201,8 +201,43 @@ test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without f
   assert.match(prompt, /Layer 2: Stage-Local Control State/i);
   assert.match(prompt, /Layer 3: Primary Payload/i);
   assert.match(prompt, /section_context=results/i);
+  assert.match(
+    prompt,
+    /Stage completion rule: when your stage outputs are ready, call research_workflow\.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically\./
+  );
   assert.doesNotMatch(prompt, /Idle research:/);
   assert.doesNotMatch(prompt, /PaperNexus:/);
+});
+
+test("formatWorkflowSnapshotForPrompt keeps exact handoff and auto-iterator reminders in focused mode", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "coder",
+      currentStage: "plan",
+      currentMicroStage: "approved",
+      ownerAgent: "orchestrator",
+      recommendedOwner: "orchestrator",
+      nextAction: "/plan-research",
+      blockingReason: "waiting for orchestrator handoff",
+      missingStageSignals: ["plan packet not handed off to coder yet"],
+    },
+    trigger: "heartbeat",
+    detailLevel: "focused",
+  });
+
+  assert.match(prompt, /Owner gate: you are not the stage owner\./);
+  assert.match(
+    prompt,
+    /Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself\./
+  );
+  assert.match(
+    prompt,
+    /Stage completion rule: when your stage outputs are ready, call research_workflow\.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically\./
+  );
+  assert.doesNotMatch(prompt, /Idle research:/);
+  assert.doesNotMatch(prompt, /Writing contract:/);
+  assert.doesNotMatch(prompt, /PaperNexus local defaults:/);
 });
 
 test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainstorm-quality PaperNexus rules", () => {
@@ -225,11 +260,11 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
     },
   });
 
-  assert.match(prompt, /queued import-task path/i);
+  assert.match(prompt, /queued wrapper path|queued PaperNexus wrapper tasks/i);
   assert.match(prompt, /brainstorm-quality node view/i);
-  assert.match(prompt, /research-brief/i);
-  assert.match(prompt, /brainstorm-brief/i);
-  assert.match(prompt, /evidence-chain/i);
+  assert.match(prompt, /pn_graph_query\.py/i);
+  assert.match(prompt, /pn_research_chains\.py/i);
+  assert.match(prompt, /pn_import_submit\.py/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
 });
 

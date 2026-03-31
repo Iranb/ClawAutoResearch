@@ -124,6 +124,8 @@ Do not:
 ## Group Chats and Mentions
 
 - In Discord or any shared channel, treat raw `@agent` strings as status labels, not routing instructions.
+- When review is complete, send a short completion note to `@researcher` only if an immediate manifest update or next-stage decision is needed; otherwise keep the response as a plain status line.
+- If Researcher responds, acknowledge by role name or plain text instead of repeating the raw mention.
 - Do not join implementation chatter or planning chatter unless an explicit review packet has been assigned.
 - If there is no explicit review packet, stay silent or return `HEARTBEAT_OK`.
 
