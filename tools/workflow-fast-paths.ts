@@ -58,6 +58,24 @@ export type BackgroundRunRequest = {
   ensureProjectBinding?: boolean;
 };
 
+export type PapernexusWrapperScript =
+  | "pn_stage_sync.py"
+  | "pn_import_submit.py"
+  | "pn_import_queue.py"
+  | "pn_graph_query.py"
+  | "pn_research_chains.py";
+
+export type PapernexusWrapperRunRequest = {
+  wrapper?: string;
+  args?: unknown[];
+  summary?: string;
+  topic?: string;
+  title?: string;
+  projectId?: string;
+  projectRoot?: string;
+  ensureProjectBinding?: boolean;
+};
+
 export type BackgroundRunRegistryViewEntry = BackgroundRunRegistryEntry & {
   deleteEligible: boolean;
   idleForMs: number | null;
@@ -212,6 +230,120 @@ type BackgroundRuntimeScope = {
   projectsRoot?: string | null;
 };
 
+const PAPERNEXUS_WRAPPER_SCRIPT_MAP: Record<string, PapernexusWrapperScript> = {
+  "pn_stage_sync": "pn_stage_sync.py",
+  "pn_stage_sync.py": "pn_stage_sync.py",
+  "pn_import_submit": "pn_import_submit.py",
+  "pn_import_submit.py": "pn_import_submit.py",
+  "pn_import_queue": "pn_import_queue.py",
+  "pn_import_queue.py": "pn_import_queue.py",
+  "pn_graph_query": "pn_graph_query.py",
+  "pn_graph_query.py": "pn_graph_query.py",
+  "pn_research_chains": "pn_research_chains.py",
+  "pn_research_chains.py": "pn_research_chains.py",
+};
+
+const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
+  "query",
+  "context",
+  "impact",
+  "ideas",
+  "brainstorm",
+  "path-trace",
+  "evidence-chain",
+  "reflection-chain",
+  "research-brief",
+  "brainstorm-brief",
+  "theory-brief",
+  "storyline-brief",
+  "paper-enhancement",
+  "list",
+  "status",
+  "log",
+  "wait",
+]);
+
+function isPapernexusBackgroundKind(kind: string): boolean {
+  return kind === "papernexus_skill" || kind === "papernexus_wrapper";
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function stringifyPapernexusWrapperArg(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  return null;
+}
+
+export function resolvePapernexusWrapperScript(
+  value: string | null | undefined
+): PapernexusWrapperScript {
+  const normalized = readString(value)?.toLowerCase();
+  const resolved = normalized ? PAPERNEXUS_WRAPPER_SCRIPT_MAP[normalized] : null;
+  if (!resolved) {
+    throw new Error(
+      "Unsupported PaperNexus wrapper. Use one of pn_stage_sync.py, pn_import_submit.py, pn_import_queue.py, pn_graph_query.py, or pn_research_chains.py."
+    );
+  }
+  return resolved;
+}
+
+export function buildPapernexusWrapperCommand(params: {
+  wrapper?: string | null;
+  args?: unknown[];
+}): string {
+  const script = resolvePapernexusWrapperScript(params.wrapper ?? null);
+  const args = Array.isArray(params.args)
+    ? params.args
+        .map((value) => stringifyPapernexusWrapperArg(value))
+        .filter((value): value is string => Boolean(value))
+    : [];
+  const parts = [
+    "python3",
+    `scripts/${script}`,
+    ...args.map((value) =>
+      value.startsWith("-") || PAPERNEXUS_WRAPPER_SUBCOMMANDS.has(value.toLowerCase())
+        ? value
+        : shellQuote(value)
+    ),
+  ];
+  return parts.join(" ");
+}
+
+export function buildPapernexusWrapperBackgroundRunRequest(
+  params: PapernexusWrapperRunRequest
+): BackgroundRunRequest & { wrapper: PapernexusWrapperScript } {
+  const wrapper = resolvePapernexusWrapperScript(params.wrapper ?? null);
+  const commandText = buildPapernexusSkillBackgroundCommand(
+    buildPapernexusWrapperCommand({
+      wrapper,
+      args: params.args,
+    })
+  );
+  return {
+    kind: "papernexus_wrapper",
+    commandText,
+    summary:
+      readString(params.summary) ??
+      `Queued ${wrapper} in a dedicated PaperNexus workflow subagent.`,
+    topic: readString(params.topic),
+    title: readString(params.title),
+    projectId: readString(params.projectId),
+    projectRoot: readString(params.projectRoot),
+    ensureProjectBinding: params.ensureProjectBinding,
+    wrapper,
+  };
+}
+
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {
     case "research_pipeline":
@@ -220,6 +352,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "idle_research":
       return "research";
     case "papernexus_skill":
+    case "papernexus_wrapper":
       return "papernexus";
     default:
       return kind || "generic";
@@ -2155,11 +2288,11 @@ export function buildResumePipelineBackgroundCommand(commandText: string): strin
 
 export function buildPapernexusSkillBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
-  if (!trimmed) {
-    return "/graph-build -- __BACKGROUND_CONTINUATION__: true";
-  }
   if (hasBackgroundContinuationMarker(trimmed)) {
     return trimmed;
+  }
+  if (!trimmed) {
+    return "__PAPERNEXUS_WRAPPER_REQUIRED__ -- __BACKGROUND_CONTINUATION__: true";
   }
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
@@ -2252,14 +2385,22 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildResearchQueueBackgroundCommand(
             `/research-queue "${topic ?? ensuredProject?.title ?? "status"}"`
           )
-      : normalizedKind === "papernexus_skill"
-        ? buildPapernexusSkillBackgroundCommand("/graph-build")
       : normalizedKind === "idle_research"
         ? requestedCommandText ?? null
       : null);
   if (!commandText) {
     throw new Error(
-      "backgroundRun.commandText is required unless kind=research_pipeline."
+      isPapernexusBackgroundKind(normalizedKind)
+        ? "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
+        : "backgroundRun.commandText is required unless kind=research_pipeline."
+    );
+  }
+  if (
+    isPapernexusBackgroundKind(normalizedKind) &&
+    /__PAPERNEXUS_WRAPPER_REQUIRED__/i.test(commandText)
+  ) {
+    throw new Error(
+      "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
     );
   }
 
@@ -2295,11 +2436,13 @@ export async function startBackgroundWorkflowRun(params: {
     buildWorkflowSubagentSessionKey({
       parentSessionKey: params.agentCtx.sessionKey,
       purpose:
-        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+        isPapernexusBackgroundKind(normalizedKind) &&
+        looksLikePapernexusHeavyCommand(commandText)
           ? "papernexus-skill"
           : `workflow-${normalizedKind}`,
       segments:
-        normalizedKind === "papernexus_skill" && looksLikePapernexusHeavyCommand(commandText)
+        isPapernexusBackgroundKind(normalizedKind) &&
+        looksLikePapernexusHeavyCommand(commandText)
           ? [derivePapernexusTaskLabel(commandText), resolvedProjectId]
           : [resolvedProjectId, topic],
     }) ?? params.agentCtx.sessionKey;
@@ -2493,8 +2636,8 @@ export async function startBackgroundWorkflowRun(params: {
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "idle_research"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Idle research started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current project"}.`
-        : normalizedKind === "papernexus_skill"
-          ? `${reusableBackgroundSessionKey ? "Reused an idle dedicated PaperNexus subagent and started" : "PaperNexus-heavy workflow task started in a dedicated subagent for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
+        : isPapernexusBackgroundKind(normalizedKind)
+          ? `${reusableBackgroundSessionKey ? "Reused an idle dedicated PaperNexus subagent and started" : "PaperNexus wrapper-first workflow task started in a dedicated subagent for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? "the current project"}.`
         : "Background workflow run started."),
     reusedIdleSession: Boolean(reusableBackgroundSessionKey),
     activeResearcherSessionsInChannel,

@@ -24,6 +24,7 @@ import {
   readWorkflowRuntimeSessionsStore,
 } from "../tools/workflow-runtime-state.ts";
 import {
+  buildPapernexusWrapperCommand,
   buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
@@ -228,9 +229,75 @@ test("buildResearchQueueBackgroundCommand appends the continuation marker once",
 });
 
 test("buildPapernexusSkillBackgroundCommand appends the continuation marker once", () => {
-  const command = buildPapernexusSkillBackgroundCommand("/graph-build");
+  const command = buildPapernexusSkillBackgroundCommand(
+    'python3 scripts/pn_graph_query.py --api-base "https://papernexus.example/api" --corpus "demo" query "topic" --limit 8'
+  );
   assert.match(command, /__BACKGROUND_CONTINUATION__:\s*true/i);
   assert.equal(buildPapernexusSkillBackgroundCommand(command), command);
+});
+
+test("buildPapernexusWrapperCommand renders a wrapper-first python command", () => {
+  const command = buildPapernexusWrapperCommand({
+    wrapper: "pn_graph_query",
+    args: [
+      "--api-base",
+      "https://papernexus.example/api",
+      "--corpus",
+      "demo",
+      "query",
+      "graph topic",
+      "--limit",
+      8,
+    ],
+  });
+
+  assert.match(command, /^python3 scripts\/pn_graph_query\.py\b/);
+  assert.match(command, /--api-base 'https:\/\/papernexus\.example\/api'/);
+  assert.match(command, /--corpus 'demo'/);
+  assert.match(command, /query 'graph topic'/);
+  assert.match(command, /--limit '8'/);
+});
+
+test("startBackgroundWorkflowRun requires an explicit wrapper command for legacy papernexus_skill runs", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await assert.rejects(
+    () =>
+      startBackgroundWorkflowRun({
+        runtimeSubagent: {
+          async run() {
+            throw new Error("should not launch");
+          },
+        },
+        workflowPolicy: {
+          projectsRoot,
+          enableChannelProjectBindings: true,
+        },
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: workspaceRoot,
+          sessionKey: "agent:researcher:discord:group:birds-room",
+          sessionId: "session-bg-legacy",
+          messageChannel: "discord",
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: null,
+          projectId: null,
+          channelProjectBindingsEnabled: true,
+        },
+        backgroundRun: {
+          kind: "papernexus_skill",
+          topic: "legacy graph run",
+        },
+      }),
+    /run_papernexus_wrapper|explicit wrapper command/i
+  );
 });
 
 test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {

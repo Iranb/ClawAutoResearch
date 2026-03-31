@@ -8360,13 +8360,13 @@ function buildDynamicTasks(params: {
       params.papernexusMineruHttpUrl)
   ) {
     tasks.unshift(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`) and resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); for workflow-owned background graph work, prefer \`research_workflow.run_papernexus_wrapper\`; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
     );
     tasks.unshift(
       "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
     );
     tasks.unshift(
-      "Do not read the live shared graph through local `papernexus query/context/impact/ideas/brainstorm/...` CLI commands or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
+      "Do not read the live shared graph through local PaperNexus live-graph CLI reads or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
     );
   }
 
@@ -8375,16 +8375,16 @@ function buildDynamicTasks(params: {
     ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
   ) {
     tasks.unshift(
-      "For each novelty-sensitive topic, summarize the topic, call PaperNexus typed wrapper commands through `pn_graph_query.py` and `pn_research_chains.py`, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+      "For each novelty-sensitive topic, summarize the topic, launch the typed PaperNexus wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
     );
     tasks.unshift(
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     tasks.unshift(
-      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers (`pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`) from project-local staging instead of reading or writing `~/.papernexus/papers` directly."
+      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers (`pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`) from project-local staging, preferably through `research_workflow.run_papernexus_wrapper`, instead of reading or writing `~/.papernexus/papers` directly."
     );
     tasks.unshift(
-      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
+      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
     );
   }
 
@@ -9482,7 +9482,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
         `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
       );
       lines.push(
-        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead."
+        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead, and prefer `research_workflow.run_papernexus_wrapper` for workflow-owned background graph work."
       );
       if (
         snapshot.papernexusApiBaseUrl &&
@@ -9507,7 +9507,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
           `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
       );
       lines.push(
-        "Live graph rule: never use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."
+        "Live graph rule: never use local PaperNexus live-graph CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."
       );
       } else if (snapshot.papernexusApiBaseUrl) {
         lines.push(
@@ -9558,7 +9558,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
       lines.push(`Brainstorm cycle pending_reason: ${snapshot.brainstormCyclePendingReason}`);
     }
     lines.push(
-      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed wrapper commands through `pn_graph_query.py` and `pn_research_chains.py`, and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
+      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
     );
     lines.push(
       "Brainstorm selection rule: multiple brainstorm rounds may coexist, but aggressive auto mode should keep all candidates and promote the highest-scoring option to the selected durable bundle."
@@ -9734,16 +9734,16 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) when material enters through UI/API upload -> /graph-build shared-graph reconciliation."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) when material enters through UI/API upload, preferably through `research_workflow.run_papernexus_wrapper` -> /graph-build shared-graph reconciliation."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, and `pn_import_queue.py`) and its task logs. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, and `pn_import_queue.py`) and its task logs, ideally by launching them through `research_workflow.run_papernexus_wrapper`. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
   );
   lines.push(
-    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `pn_graph_query.py` / `pn_research_chains.py` before trusting raw full-graph prominence."
+    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`) before trusting raw full-graph prominence."
   );
   lines.push(
     "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
@@ -10157,7 +10157,7 @@ export function shouldBlockPapernexusInlineExecution(params: {
   return {
     block: true,
     reason:
-      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Start a background run first, then let that subagent execute remote typed PaperNexus calls, /graph-build, /frontier-mapping, /papernexus, or related PaperNexus commands.",
+      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Prefer `research_workflow.run_papernexus_wrapper` for the wrapper launch, then let that subagent execute the remote typed PaperNexus work.",
   };
 }
 
@@ -10182,7 +10182,7 @@ export function shouldBlockPapernexusRawHttpUsage(params: {
   return {
     block: true,
     reason:
-      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. This avoids route-shape drift and keeps token handling consistent.",
+      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. Prefer `research_workflow.run_papernexus_wrapper` so the wrapper executes inside the dedicated workflow runtime session; this avoids route-shape drift and keeps token handling consistent.",
   };
 }
 

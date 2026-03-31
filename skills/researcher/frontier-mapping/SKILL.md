@@ -29,7 +29,7 @@ Use PaperNexus graph traversal over the shared global graph, constrained by this
 
 ## Query Passes
 
-For the current topic, run a minimum of these PaperNexus passes against the shared global graph through the Python wrappers:
+For the current topic, run a minimum of these PaperNexus passes against the shared global graph through the Python wrappers, preferably launched via `research_workflow.run_papernexus_wrapper`:
 
 ```bash
 python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" query "<topic>" --limit 8
@@ -51,7 +51,7 @@ Prefer the brainstorm-quality node layer when selecting primary anchors:
 - trust `brainstormEligible`, `brainstormScore`, and `brainstormTier` over raw visual prominence on the full graph
 - use the full graph for provenance and neighborhood inspection, but use the brainstorm-quality view for ideation-first anchoring
 - if remote PaperNexus auth is needed, let the Python wrappers resolve it from the configured token source; do not hand-write REST requests or auth headers
-- do not inspect home-directory shared PaperNexus storage or local PaperNexus CLI helpers in workflow-owned frontier mapping
+- do not inspect home-directory shared PaperNexus storage or local PaperNexus CLI helpers in workflow-owned frontier mapping; use `research_workflow.run_papernexus_wrapper` for the actual live-graph calls
 
 ## Required Frontier Lenses
 

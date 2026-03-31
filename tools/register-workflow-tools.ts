@@ -72,10 +72,12 @@ import {
 } from "./stage-broadcast";
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
+  buildPapernexusWrapperBackgroundRunRequest,
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
+  type PapernexusWrapperRunRequest,
 } from "./workflow-fast-paths";
 import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import {
@@ -112,6 +114,7 @@ type AutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
+  "run_papernexus_wrapper",
   "migrate_runtime_state",
   "set_gate_state",
   "set_paper_ingestion",
@@ -130,6 +133,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   check_graph_presence: "checkGraphPresenceForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
+  run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
   migrate_runtime_state: "migrateWorkflowRuntimeState",
   get_idle_research: "getIdleResearchStateSummary",
   set_idle_research: "setIdleResearchState",
@@ -413,6 +417,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "check_graph_presence",
               "auto_iterator_tick",
               "start_background_run",
+              "run_papernexus_wrapper",
               "migrate_runtime_state",
               "get_idle_research",
               "set_idle_research",
@@ -483,6 +488,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           backgroundRun: {
+            type: "object",
+            additionalProperties: true,
+          },
+          papernexusWrapper: {
             type: "object",
             additionalProperties: true,
           },
@@ -955,6 +964,65 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 JSON.stringify(
                   {
                     ...result,
+                    statusBroadcast,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "run_papernexus_wrapper": {
+              const papernexusWrapper = requireObject<PapernexusWrapperRunRequest>(
+                params.papernexusWrapper,
+                "papernexusWrapper"
+              );
+              const backgroundRun =
+                buildPapernexusWrapperBackgroundRunRequest(papernexusWrapper);
+              const result = await startBackgroundWorkflowRun({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                workflowPolicy,
+                agentCtx: ctx,
+                snapshot,
+                backgroundRun,
+              });
+              const resolvedProjectId = result.projectId ?? snapshot.projectId;
+              const resolvedProjectRoot = result.projectRoot ?? projectRoot;
+              const statusBroadcast =
+                resolvedProjectRoot && ctx.sessionKey
+                  ? await maybeBroadcastWorkflowStatusUpdate({
+                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      sessionKey: ctx.sessionKey,
+                      projectId: resolvedProjectId,
+                      projectRoot: resolvedProjectRoot,
+                      status: result.started
+                        ? "started"
+                        : result.reason === "channel_capacity_reached"
+                          ? "queued"
+                          : "waiting",
+                      stage: snapshot.currentStage,
+                      summary: backgroundRun.summary ?? result.summary,
+                      idempotencyKeySuffix: [
+                        "run-papernexus-wrapper",
+                        backgroundRun.wrapper,
+                        result.reason,
+                        result.reusedIdleSession ? "reused" : "fresh",
+                      ].join(":"),
+                    })
+                  : {
+                      broadcasted: false,
+                      reasonSkipped: resolvedProjectRoot
+                        ? "session_unavailable"
+                        : "project_unavailable",
+                      runId: null,
+                      sessionKey: ctx.sessionKey ?? null,
+                      idempotencyKey: null,
+                    };
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...result,
+                    wrapper: backgroundRun.wrapper,
+                    commandText: backgroundRun.commandText,
                     statusBroadcast,
                   },
                   null,

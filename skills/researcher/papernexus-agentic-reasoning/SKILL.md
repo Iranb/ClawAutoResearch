@@ -12,8 +12,9 @@ Use this skill when the goal is not just to retrieve graph facts, but to reason 
 For a running user graph, prefer the local Python wrappers in `scripts/` as the default interface. They still use the authenticated HTTP API underneath, but they are safer for agents than raw `curl`.
 
 If both a remote server API and a local checkout are available, use the remote API path first.
-Do not call local CLI helpers such as `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, `papernexus brainstorm`, or local staged build commands against the live graph.
+Do not call local live-graph CLI helpers or local staged build commands against the live graph.
 If a PDF exists only on the local agent machine, stage it onto the API server first with `python3 scripts/pn_stage_sync.py`, then import it with `python3 scripts/pn_import_submit.py`. Do not default to inline request-body uploads for large local PDFs.
+In `openclaw-research` workflow mode, prefer launching these wrappers through `research_workflow.run_papernexus_wrapper`.
 
 Default live-graph wrapper set:
 
@@ -309,14 +310,14 @@ For ongoing live usage:
 
 Important Stage 4 boundary:
 
-- `merge-graph` canonicalizes near-duplicate `Dataset` / `Benchmark` nodes inside the staged graph before final commit
+- the canonical merge cleanup step canonicalizes near-duplicate `Dataset` / `Benchmark` nodes inside the staged graph before final commit
 - merge-time LLM node deletion is currently disabled; do not rely on `--node-llm-check` for staged graph cleanup
-- `write-index` commits the staged graph that Stage 3 and `merge-graph` prepared
-- `write-index` creates a backup under `<rootPath>/.papernexus-backups/` before overwriting the committed graph
+- the final commit step writes the staged graph prepared by Stage 3 plus canonical merge cleanup
+- that commit step creates a backup under `<rootPath>/.papernexus-backups/` before overwriting the committed graph
 - if raw paper files changed after Stage 3 and those new files must be included in reasoning, rerun Stage 1-3 before Stage 4
-- if you want to inspect or clean duplicate evaluation nodes before final commit, run `papernexus merge-graph --continue`
+- if you want to inspect or clean duplicate evaluation nodes before final commit, debug the canonical merge cleanup stage rather than bypassing the wrapper/runtime contract in workflow-owned work
 - if the staged graph still contains low-value generic evaluation nodes, handle them through merge heuristics or later manual review; do not rely on `--node-llm-check` right now
-- if you only need to finish committing an already-built staged graph, `papernexus write-index --continue` is the right recovery path; it will auto-run merge if needed
+- if you only need to finish committing an already-built staged graph, reuse the final commit stage; it will auto-run merge cleanup if needed
 
 ## Mutation Decision Policy
 

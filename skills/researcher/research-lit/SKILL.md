@@ -254,7 +254,7 @@ Notes:
 - if required papers are missing from the shared graph, record the gap and request or queue a shared-graph refresh rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
 - if a PaperNexus queued import or remote graph reconcile has not finished within 60 seconds for one paper, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
-- when checking presence or frontier structure, prefer `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
+- when checking presence or frontier structure, prefer `research_workflow.run_papernexus_wrapper` with `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
 
 ### Step 3.5: Brainstorm During Research (mandatory)
 

@@ -130,6 +130,8 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/paper-phase` — Stage 7 (WRITE, via Writer)
 - `/research-pipeline` — full pipeline from Stage 1
 
+For workflow-owned live graph work, launch the actual Python wrappers through `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations.
+
 ## Responsiveness and Delegation Policy
 
 - Main session stays interruptible: never block the user behind long-running work.

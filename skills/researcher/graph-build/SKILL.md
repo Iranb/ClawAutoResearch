@@ -34,6 +34,7 @@ Read the remote access settings from the plugin-level workflow config:
 Rules:
 
 - when using remote PaperNexus, let the Python wrappers resolve auth from the configured token source
+- for workflow-owned background graph work, prefer `research_workflow.run_papernexus_wrapper` to launch the wrappers in a durable dedicated subagent session
 - `auto` means: env first, then native OS keychain
 - native keychain means:
   - macOS Keychain on `darwin`

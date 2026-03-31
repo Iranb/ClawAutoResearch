@@ -155,7 +155,7 @@ test("formatWorkflowSnapshotForPrompt tells non-owner agents to hand off instead
   assert.match(prompt, /Owner gate: you are not the stage owner\./);
   assert.match(prompt, /orchestrator must lead substantive plan work/i);
   assert.match(prompt, /do not perform the stage work yourself/i);
-  assert.match(prompt, /route or hand off the task to orchestrator/i);
+  assert.match(prompt, /route through the workflow runtime\/orchestrator path first/i);
   assert.match(prompt, /Stage completion rule:/);
 });
 
@@ -265,6 +265,7 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
   assert.match(prompt, /pn_graph_query\.py/i);
   assert.match(prompt, /pn_research_chains\.py/i);
   assert.match(prompt, /pn_import_submit\.py/i);
+  assert.match(prompt, /run_papernexus_wrapper/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
 });
 
@@ -318,7 +319,7 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
   );
   assert.match(
     prompt,
-    /never use local `papernexus query\/context\/impact\/ideas\/brainstorm\/\.\.\.` CLI reads/i
+    /never use local PaperNexus live-graph CLI reads/i
   );
   assert.match(
     prompt,

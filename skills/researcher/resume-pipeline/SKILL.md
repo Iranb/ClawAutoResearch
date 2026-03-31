@@ -55,7 +55,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - read `paper_source_dir`, `graph_last_built_at`, and `paper_ingestion.*` from `PROJECT_MANIFEST.json`
    - inspect `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if present
    - count canonical papers added or changed since `paper_ingestion.last_graph_sync_at` or `graph_last_built_at`
-   - if the project uses frequent paper ingestion, verify whether `papernexus watch` is active for this corpus; if not, restart or recommend restarting it
+   - if the project uses frequent paper ingestion, verify whether the remote import queue is moving and whether the latest per-paper wrapper tasks (`pn_import_queue.py status/log/wait`) completed; if not, relaunch the bounded wrapper work through `research_workflow.run_papernexus_wrapper` or report that the remote worker is stalled
    - if `paper_ingestion.refresh_required = true`, schedule `/graph-build` before the next ideation / novelty / revision decision
    - do not add `--force`; if graph build keeps failing, surface the exact cache-first command for the user to run manually
 5. Reconcile idle-research state:
@@ -86,7 +86,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 - Do not resume or rewrite ideation outputs when `innovation_reflection` is due; refresh `/innovation-reflection` first.
 - If gate status is `waiting` and `AUTO_PROCEED=false`, re-post the gate and stop.
 - Do not trigger a graph refresh from duplicate-only paper downloads; use canonical paper counts and refresh rules, not raw file counts.
-- If `papernexus watch` is enabled, prefer resuming the watcher instead of repeatedly forcing full rebuilds.
+- If PaperNexus import/reconcile work is already in flight, prefer resuming or reattaching to the bounded wrapper task state instead of repeatedly forcing fresh graph work.
 
 ## Output
 

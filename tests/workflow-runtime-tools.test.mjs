@@ -789,6 +789,82 @@ test("research_workflow start_background_run broadcasts reused status context wh
   );
 });
 
+test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first graph run", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+        async waitForRun() {
+          return { status: "ok" };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_papernexus_wrapper",
+    papernexusWrapper: {
+      wrapper: "pn_graph_query",
+      args: [
+        "--api-base",
+        "https://papernexus.example/api",
+        "--corpus",
+        "demo",
+        "query",
+        "causal abstraction",
+        "--limit",
+        "8",
+      ],
+      summary: "Queued a typed PaperNexus graph query in a dedicated subagent.",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.reason, "started");
+  assert.equal(result.wrapper, "pn_graph_query.py");
+  assert.match(result.commandText, /^python3 scripts\/pn_graph_query\.py\b/);
+  assert.match(result.commandText, /query 'causal abstraction'/);
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === false &&
+        /^python3 scripts\/pn_graph_query\.py\b/.test(entry.message) &&
+        /__BACKGROUND_CONTINUATION__:\s*true/i.test(entry.message)
+    )
+  );
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /typed PaperNexus graph query/i.test(entry.message)
+    )
+  );
+});
+
 test("research_workflow runtime-state actions persist manifest state and append temp traces", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

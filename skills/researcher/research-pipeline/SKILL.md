@@ -113,7 +113,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 - project-local paper staging root = `{PROJ}/researcher/paper-staging`
-- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`)
+- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`), normally launched through `research_workflow.run_papernexus_wrapper`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 

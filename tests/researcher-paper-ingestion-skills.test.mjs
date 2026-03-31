@@ -124,6 +124,7 @@ test("researcher-facing PaperNexus skills and persona docs stay wrapper-first in
     path.join(repoRoot, "skills", "researcher", "papernexus", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "papernexus-agentic-reasoning", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "innovation-reflection", "SKILL.md"),
+    path.join(repoRoot, "skills", "analyzer", "papernexus-reflection", "SKILL.md"),
     path.join(repoRoot, "agents", "researcher", "AGENTS.md"),
     path.join(repoRoot, "agents", "researcher", "TOOLS.md"),
     path.join(repoRoot, "agents", "researcher", "SOUL.md"),
@@ -142,4 +143,41 @@ test("researcher-facing PaperNexus skills and persona docs stay wrapper-first in
       `Expected ${filePath} to avoid teaching raw typed REST calls as the primary agent interface.`
     );
   }
+});
+
+test("workflow-owned PaperNexus docs teach the workflow wrapper action and avoid legacy live-graph CLI guidance", async () => {
+  const repoRoot = process.cwd();
+  const files = [
+    path.join(repoRoot, "skills", "researcher", "papernexus", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "papernexus-agentic-reasoning", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "innovation-reflection", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "resume-pipeline", "SKILL.md"),
+    path.join(repoRoot, "skills", "analyzer", "papernexus-reflection", "SKILL.md"),
+    path.join(repoRoot, "agents", "researcher", "AGENTS.md"),
+    path.join(repoRoot, "agents", "researcher", "TOOLS.md"),
+    path.join(repoRoot, "agents", "researcher", "SOUL.md"),
+  ];
+
+  for (const filePath of files) {
+    const content = await fs.readFile(filePath, "utf8");
+    assert.match(
+      content,
+      /run_papernexus_wrapper/i,
+      `Expected ${filePath} to teach the workflow-owned PaperNexus wrapper action.`
+    );
+    assert.doesNotMatch(
+      content,
+      /papernexus query|papernexus context|papernexus impact|papernexus ideas|papernexus brainstorm|papernexus watch|papernexus materialize|papernexus build-graph|papernexus merge-graph|papernexus write-index/i,
+      `Expected ${filePath} to avoid legacy live-graph PaperNexus CLI guidance.`
+    );
+  }
+
+  const workflowGuardPath = path.join(repoRoot, "tools", "workflow-guard.ts");
+  const workflowGuard = await fs.readFile(workflowGuardPath, "utf8");
+  assert.match(
+    workflowGuard,
+    /run_papernexus_wrapper/i,
+    `Expected ${workflowGuardPath} to teach the workflow-owned PaperNexus wrapper action.`
+  );
 });

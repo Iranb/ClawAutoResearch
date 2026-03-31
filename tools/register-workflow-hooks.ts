@@ -557,11 +557,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         extraContext.push(
           "[Slash Fast Path]",
           "This turn appears to invoke authenticated PaperNexus live-graph work.",
-          "Before calling remote typed PaperNexus APIs or other heavy graph work, call research_workflow with action start_background_run and backgroundRun.kind=papernexus_skill.",
+          "Before calling remote typed PaperNexus APIs or other heavy graph work, prefer research_workflow with action run_papernexus_wrapper when you know the wrapper and args. Legacy compatibility fallback: call start_background_run with backgroundRun.kind=papernexus_wrapper and an explicit wrapper commandText.",
           `Pass backgroundRun.commandText as: ${JSON.stringify(
             buildPapernexusSkillBackgroundCommand(latestPromptLikeText ?? "")
           )}`,
-          "After the tool returns, reply briefly that the PaperNexus task has started in a dedicated subagent and stop. The background continuation will perform the real typed brief / brainstorm / evidence / graph work.",
+          "After the tool returns, reply briefly that the PaperNexus wrapper task has started in a dedicated subagent and stop. The background continuation will perform the real typed brief / brainstorm / evidence / graph work.",
           "[/Slash Fast Path]"
         );
       } else if (
