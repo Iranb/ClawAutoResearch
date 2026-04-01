@@ -73,6 +73,12 @@
 - `papernexus-agentic-reasoning`  
   用 PaperNexus 图谱做更强的 trace、synthesis、brainstorm，默认走 wrappers 而不是手写 REST。
 
+- `papernexus-batch-import`  
+  用固定 manifest 和 Python wrappers 稳定上传、排队、跟踪多篇论文的导入状态。
+
+- `papernexus-research-chains`  
+  用 typed multi-hop research chains、evidence bundles 和 brief-style 输出做 graph-grounded synthesis。
+
 - `crawl4ai-search`  
   通用网络检索和补充信息抓取。
 

@@ -118,6 +118,8 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/hugging-face-paper-pages` — preferred full-paper Markdown retrieval for key papers
 - `/papernexus` — remote PaperNexus service / import-task / status inspection operations
 - `/papernexus-agentic-reasoning` — structured graph-grounded innovation analysis
+- `/papernexus-batch-import` — manifest-based multi-paper import, queue tracking, and durable batch status handling
+- `/papernexus-research-chains` — typed research chains, evidence bundles, and brief-style graph synthesis
 - `/graph-build` — new-project graph initialization and remote shared-graph reconciliation
 - `/frontier-mapping` — graph frontier extraction (limitations, contradictions, transfer, composition)
 - `/idea-phase` — Stage 1 (IDEA)

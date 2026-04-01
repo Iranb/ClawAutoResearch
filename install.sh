@@ -6,7 +6,7 @@
 # 功能：
 #   1. 可选地添加或检查研究工作流所需的 agents
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
-#   3. 若本机存在 PaperNexus 仓库，则自动把相关 Skills 同步到本仓库后再安装
+#   3. 若本机存在 PaperNexus 仓库，则自动发现并同步 SKILL/ 下全部 Skills 到本仓库后再安装
 #   4. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
 #   5. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
 #   6. 不修改用户 openclaw.json
@@ -30,6 +30,7 @@ RUN_PLUGIN_LINK_PHASE=true
 RUN_WORKSPACE_PHASE=true
 FORCE_MENU_INPUT="${OPENCLAW_INSTALL_FORCE_MENU:-}"
 ORIGINAL_ARG_COUNT=$#
+PAPERNEXUS_SYNCED_SKILL_ENTRIES=()
 
 usage() {
   cat <<'EOF'
@@ -323,8 +324,169 @@ sync_skill_dir() {
   echo "  -> COPY $label"
 }
 
+papernexus_skill_name_from_frontmatter() {
+  local skill_md="$1"
+  local name
+
+  [[ -f "$skill_md" ]] || return 0
+
+  name=$(awk '
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { exit }
+    in_frontmatter && $0 ~ /^name:[[:space:]]*/ {
+      sub(/^name:[[:space:]]*/, "", $0)
+      print
+      exit
+    }
+  ' "$skill_md")
+
+  name="${name%\"}"
+  name="${name#\"}"
+  name="${name%\'}"
+  name="${name#\'}"
+  printf '%s\n' "$name"
+}
+
+papernexus_skill_slug_from_dirname() {
+  local raw="$1"
+
+  case "$raw" in
+    PaperNexus)
+      printf 'papernexus\n'
+      return 0
+      ;;
+    PaperNexus*)
+      raw="papernexus-${raw#PaperNexus}"
+      ;;
+  esac
+
+  printf '%s\n' "$raw" | sed -E 's/([A-Z]+)([A-Z][a-z])/\1-\2/g; s/([a-z0-9])([A-Z])/\1-\2/g' | tr '[:upper:]' '[:lower:]'
+}
+
+papernexus_skill_slug() {
+  local skill_dir="$1"
+  local skill_md="$skill_dir/SKILL.md"
+  local slug
+
+  slug=$(papernexus_skill_name_from_frontmatter "$skill_md")
+  if [[ -n "$slug" ]]; then
+    printf '%s\n' "$slug"
+    return 0
+  fi
+
+  papernexus_skill_slug_from_dirname "$(basename "$skill_dir")"
+}
+
+find_existing_skill_agent_for_slug() {
+  local slug="$1"
+  local agent
+
+  for agent in researcher analyzer orchestrator coder reviewer academic_writer cross-reviewer; do
+    if [[ -d "$PLUGIN_DIR/skills/$agent/$slug" || -L "$PLUGIN_DIR/skills/$agent/$slug" ]]; then
+      printf '%s\n' "$agent"
+      return 0
+    fi
+  done
+
+  return 0
+}
+
+papernexus_skill_target_agent() {
+  local slug="$1"
+  local existing_agent
+
+  existing_agent=$(find_existing_skill_agent_for_slug "$slug")
+  if [[ -n "$existing_agent" ]]; then
+    printf '%s\n' "$existing_agent"
+    return 0
+  fi
+
+  case "$slug" in
+    papernexus-reflection)
+      printf 'analyzer\n'
+      ;;
+    *)
+      printf 'researcher\n'
+      ;;
+  esac
+}
+
+update_skills_index_for_papernexus_skills() {
+  local skills_index_path="$PLUGIN_DIR/skills/index.json"
+  local entry
+
+  [[ ${#PAPERNEXUS_SYNCED_SKILL_ENTRIES[@]} -gt 0 ]] || return 0
+
+  if [[ ! -f "$skills_index_path" ]]; then
+    echo "  WARN: 未找到 $skills_index_path，跳过 PaperNexus skill 注册更新"
+    return 0
+  fi
+
+  if $DRY_RUN; then
+    echo "  [dry-run] 将更新 skills/index.json 中的 PaperNexus skill 注册："
+    for entry in "${PAPERNEXUS_SYNCED_SKILL_ENTRIES[@]}"; do
+      IFS='|' read -r agent slug <<< "$entry"
+      echo "    - ./$agent/$slug"
+    done
+    return 0
+  fi
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  WARN: 未找到 node，跳过 skills/index.json 自动更新；请手动注册新增 PaperNexus skills"
+    return 0
+  fi
+
+  local entries_tmp
+  local next_index_tmp
+  entries_tmp=$(mktemp)
+  next_index_tmp=$(mktemp)
+  printf '%s\n' "${PAPERNEXUS_SYNCED_SKILL_ENTRIES[@]}" > "$entries_tmp"
+
+  if node - "$skills_index_path" "$entries_tmp" "$next_index_tmp" <<'NODE'
+const fs = require("fs");
+
+const [indexPath, entriesPath, outputPath] = process.argv.slice(2);
+const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+const entries = fs
+  .readFileSync(entriesPath, "utf8")
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter(Boolean);
+
+for (const entry of entries) {
+  const [agent, slug] = entry.split("|");
+  if (!agent || !slug) {
+    continue;
+  }
+  const relPath = `./${agent}/${slug}`;
+  if (!Array.isArray(index[agent])) {
+    index[agent] = [];
+  }
+  if (!index[agent].includes(relPath)) {
+    index[agent].push(relPath);
+  }
+}
+
+fs.writeFileSync(outputPath, `${JSON.stringify(index, null, 2)}\n`);
+NODE
+  then
+    if cmp -s "$skills_index_path" "$next_index_tmp"; then
+      echo "  -> KEEP skills/index.json (PaperNexus skill 注册已最新)"
+    else
+      cp "$next_index_tmp" "$skills_index_path"
+      echo "  -> UPDATE skills/index.json (PaperNexus skill 注册)"
+    fi
+  else
+    echo "  WARN: 自动更新 skills/index.json 失败；请手动检查 PaperNexus skill 注册"
+  fi
+
+  rm -f "$entries_tmp" "$next_index_tmp"
+}
+
 sync_papernexus_skills() {
   local papernexus_skill_root="$PAPERNEXUS_DIR/SKILL"
+  local skill_md
+  local found_any=false
   if [[ ! -d "$PAPERNEXUS_DIR" || ! -d "$papernexus_skill_root" ]]; then
     echo "  -> SKIP PaperNexus skills (未检测到 $papernexus_skill_root)"
     return 0
@@ -334,18 +496,37 @@ sync_papernexus_skills() {
   ensure_dir "$PLUGIN_DIR/skills/researcher"
   ensure_dir "$PLUGIN_DIR/skills/analyzer"
 
-  sync_skill_dir \
-    "$papernexus_skill_root/PaperNexus" \
-    "$PLUGIN_DIR/skills/researcher/papernexus" \
-    "researcher/papernexus"
-  sync_skill_dir \
-    "$papernexus_skill_root/PaperNexusAgenticReasoning" \
-    "$PLUGIN_DIR/skills/researcher/papernexus-agentic-reasoning" \
-    "researcher/papernexus-agentic-reasoning"
-  sync_skill_dir \
-    "$papernexus_skill_root/PaperNexusReflection" \
-    "$PLUGIN_DIR/skills/analyzer/papernexus-reflection" \
-    "analyzer/papernexus-reflection"
+  PAPERNEXUS_SYNCED_SKILL_ENTRIES=()
+
+  for skill_md in "$papernexus_skill_root"/*/SKILL.md; do
+    local skill_dir
+    local slug
+    local target_agent
+    local target_dir
+
+    [[ -f "$skill_md" ]] || continue
+    found_any=true
+    skill_dir=$(dirname "$skill_md")
+    slug=$(papernexus_skill_slug "$skill_dir")
+
+    if [[ -z "$slug" ]]; then
+      echo "  WARN: SKIP $(basename "$skill_dir") (未能解析 skill slug)"
+      continue
+    fi
+
+    target_agent=$(papernexus_skill_target_agent "$slug")
+    target_dir="$PLUGIN_DIR/skills/$target_agent/$slug"
+    ensure_dir "$PLUGIN_DIR/skills/$target_agent"
+    sync_skill_dir "$skill_dir" "$target_dir" "$target_agent/$slug"
+    PAPERNEXUS_SYNCED_SKILL_ENTRIES+=("$target_agent|$slug")
+  done
+
+  if ! $found_any; then
+    echo "  -> SKIP PaperNexus skills (未在 $papernexus_skill_root 下找到 SKILL.md)"
+    return 0
+  fi
+
+  update_skills_index_for_papernexus_skills
 }
 
 get_existing_agent_ids() {
@@ -816,7 +997,7 @@ else
   echo "  1. Agents: 已添加或检查研究工作流所需 agents"
 fi
 if $RUN_PAPERNEXUS_PHASE; then
-  echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则相关 skills 已先同步到插件仓库"
+  echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则会自动发现并同步全部 skills，并补齐 skills/index.json 注册"
 else
   echo "  2. PaperNexus: 当前模式未包含"
 fi

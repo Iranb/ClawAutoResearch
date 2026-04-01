@@ -66,9 +66,9 @@ bash install.sh --skip-agent-create
 - 检查或创建研究工作流需要的 agents
 - 同步各角色 skills
 - 如果本机存在 `PaperNexus` 仓库：
-  - 自动同步 `papernexus`
-  - 自动同步 `papernexus-agentic-reasoning`
-  - 自动同步 `papernexus-reflection`
+  - 自动发现 `SKILL/` 下所有带 `SKILL.md` 的 PaperNexus skills
+  - 默认同步到 `researcher`，其中 `papernexus-reflection` 保持同步到 `analyzer`
+  - 安装时自动补齐 `skills/index.json` 注册，这样后续新增 PaperNexus skill 也能被找到
 - 同步模板和 researcher/reviewer/cross-reviewer 根配置
 - 创建 `~/.openclaw/plugins/openclaw-research` 插件链接
 - 安装完成后告诉你怎么验证 `Auto mode` 和 `/workflow-status`

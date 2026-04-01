@@ -22,6 +22,8 @@
     "./researcher/arxiv2md",
     "./researcher/papernexus",
     "./researcher/papernexus-agentic-reasoning",
+    "./researcher/papernexus-batch-import",
+    "./researcher/papernexus-research-chains",
     "./researcher/crawl4ai-search",
     "./researcher/theory-phase",
     "./researcher/research-queue"

@@ -50,6 +50,7 @@ Prefer the brainstorm-quality node layer when selecting primary anchors:
 
 - trust `brainstormEligible`, `brainstormScore`, and `brainstormTier` over raw visual prominence on the full graph
 - use the full graph for provenance and neighborhood inspection, but use the brainstorm-quality view for ideation-first anchoring
+- when you need typed multi-hop chains, evidence bundles, or brief-style synthesis, prefer the dedicated `/papernexus-research-chains` skill rather than hand-assembling long raw query sequences
 - if remote PaperNexus auth is needed, let the Python wrappers resolve it from the configured token source; do not hand-write REST requests or auth headers
 - do not inspect home-directory shared PaperNexus storage or local PaperNexus CLI helpers in workflow-owned frontier mapping; use `research_workflow.run_papernexus_wrapper` for the actual live-graph calls
 

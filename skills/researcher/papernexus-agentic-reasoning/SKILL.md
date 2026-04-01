@@ -1,6 +1,6 @@
 ---
 name: papernexus-agentic-reasoning
-description: Use this skill when an agent needs to perform stepwise reasoning for automated research tasks on top of an existing PaperNexus graph while keeping live-graph reads and imports on authenticated HTTP API endpoints through the Python wrappers.
+description: Use this skill when an agent needs to perform stepwise reasoning for automated research tasks on top of an existing PaperNexus graph while keeping live-graph reads and imports on authenticated HTTP API endpoints.
 ---
 
 # PaperNexus Agentic Reasoning
@@ -12,30 +12,46 @@ Use this skill when the goal is not just to retrieve graph facts, but to reason 
 For a running user graph, prefer the local Python wrappers in `scripts/` as the default interface. They still use the authenticated HTTP API underneath, but they are safer for agents than raw `curl`.
 
 If both a remote server API and a local checkout are available, use the remote API path first.
-Do not call local live-graph CLI helpers or local staged build commands against the live graph.
-If a PDF exists only on the local agent machine, stage it onto the API server first with `python3 scripts/pn_stage_sync.py`, then import it with `python3 scripts/pn_import_submit.py`. Do not default to inline request-body uploads for large local PDFs.
-If 2 or more staged papers must enter the graph before reasoning, prefer one `python3 scripts/pn_batch_import.py --manifest <json> submit` flow over repeated one-paper submit loops.
-In `openclaw-research` workflow mode, prefer launching these wrappers through `research_workflow.run_papernexus_wrapper`.
+Do not call local CLI helpers such as `papernexus query`, `papernexus context`, `papernexus impact`, `papernexus ideas`, `papernexus brainstorm`, or local staged build commands against the live graph.
+If a single PDF or Markdown file exists only on the local agent machine, prefer `python3 scripts/pn_import_submit.py --source <local-file> --ssh-target <ssh-target>`. That wrapper stages the file and submits the import in one step.
+If you need to ingest multiple local files before reasoning, prefer `python3 scripts/pn_batch_import.py --manifest <json> submit` and then `status` or `wait` with that same manifest.
+If you need explicit staging control for a directory, use `python3 scripts/pn_stage_sync.py` first and then import the chosen remote file with `python3 scripts/pn_import_submit.py --server-file-path <remote-file>`.
+Do not write ad-hoc shell loops for batch imports.
+Do not default to `files[].contentBase64` for large local PDFs.
 
-Default live-graph wrapper set:
+Allowed live-graph entrypoints:
 
-- `pn_stage_sync.py` for local-to-remote staging
-- `pn_import_submit.py` for one-paper queued imports
-- `pn_batch_import.py` for manifest-driven multi-paper imports
-- `pn_import_queue.py list|status|log|wait` for task visibility and bounded waits
-- `pn_graph_query.py` for `query`, `context`, `impact`, `ideas`, and `brainstorm`
-- `pn_research_chains.py` for `path-trace`, `evidence-chain`, `reflection-chain`, `research-brief`, `brainstorm-brief`, `theory-brief`, `storyline-brief`, and `paper-enhancement`
+- `GET /api/corpora`
+- `GET /api/corpus?name=<corpus>`
+- `GET /api/corpus-meta?name=<corpus>`
+- `GET /api/enhancements?name=<corpus>`
+- `GET /api/paper-enhancement?name=<corpus>&paperId=<paperId>`
+- `GET /api/imports?name=<corpus>`
+- `GET /api/imports/:taskId`
+- `GET /api/imports/:taskId/log`
+- `POST /api/imports?name=<corpus>`
+- `POST /api/query`
+- `POST /api/context`
+- `POST /api/impact`
+- `POST /api/ideas`
+- `POST /api/brainstorm`
+- `POST /api/path-trace`
+- `POST /api/evidence-chain`
+- `POST /api/reflection-chain`
+- `POST /api/research-brief`
+- `POST /api/brainstorm-brief`
+- `POST /api/theory-brief`
+- `POST /api/storyline-brief`
 
-Wrapper auth rule:
+Every API request must include:
 
-- resolve API base URL, corpus, and token source from workflow/runtime config
-- let the wrappers attach auth; do not hand-write `Authorization` headers or raw REST payloads unless the task is explicitly about debugging wrapper coverage
+- `Authorization: Bearer <token>`
 
 Important query policy:
 
-- prefer typed wrapper commands over pulling the full graph whenever they can answer the task
-- only ask for raw corpus or overlay payloads when wrapper coverage explicitly exposes them and the typed commands are insufficient
-- if the available wrapper coverage is too limited for the requested reasoning task, report the missing server capability instead of falling back to local CLI
+- prefer typed query APIs over pulling the full graph whenever they can answer the task
+- use `/api/corpus` only when you need raw graph inspection that the typed endpoints do not provide
+- if the available API response is too limited for the requested reasoning task, report the missing server capability instead of falling back to local CLI
 
 ## What This Skill Is For
 
@@ -121,11 +137,11 @@ For ideation, prefer the brainstorm-quality node view over the raw full graph. T
 For any non-trivial research task, use this loop:
 
 1. Define the current research objective in one sentence.
-2. Start with the narrowest typed wrapper action that matches the task.
+2. Start with the narrowest typed API that matches the task.
 3. Resolve anchors with `query`, `context`, `impact`, or `path-trace`.
 4. If validating a claim, inspect `evidence-chain`, `theory-brief`, and `reflection-chain`.
 5. If designing new ideas, inspect `ideas`, `brainstorm`, and `brainstorm-brief`.
-6. Only ask for a raw corpus or overlay payload through wrapper coverage when the typed commands still leave a structural gap.
+6. Only fetch `/api/corpus` when the typed APIs still leave a structural gap.
 7. Write a short structured state update before moving to the next step.
 
 Each step should end with one of:
@@ -190,11 +206,11 @@ Important:
 
 Use:
 
-- `python3 scripts/pn_research_chains.py evidence-chain` for `Problem -> Method -> Claim -> Evidence -> Limitation`
-- `python3 scripts/pn_research_chains.py reflection-chain` for `Innovation -> Experiment -> Outcome -> Reflection`
-- `python3 scripts/pn_research_chains.py theory-brief` for assumptions, mechanisms, proof ideas, and failure modes
-- `python3 scripts/pn_research_chains.py storyline-brief` for narrative beats and argument gaps
-- `python3 scripts/pn_research_chains.py paper-enhancement` when you need the raw overlay card inventory
+- `/api/evidence-chain` for `Problem -> Method -> Claim -> Evidence -> Limitation`
+- `/api/reflection-chain` for `Innovation -> Experiment -> Outcome -> Reflection`
+- `/api/theory-brief` for assumptions, mechanisms, proof ideas, and failure modes
+- `/api/storyline-brief` for narrative beats and argument gaps
+- `GET /api/paper-enhancement` when you need the raw overlay card inventory
 
 ## How To Think With The Graph
 
@@ -204,7 +220,7 @@ Use this chain:
 
 `Problem -> Method -> Claim -> Evidence -> Limitation`
 
-Prefer `python3 scripts/pn_research_chains.py evidence-chain` before reconstructing this chain yourself.
+Prefer `POST /api/evidence-chain` before reconstructing this chain yourself.
 
 Prefer `Problem` and `Method` nodes whose names are multi-word research objects rather than single generic nouns.
 
@@ -214,7 +230,7 @@ Use this chain:
 
 `Claim -> Assumption / Mechanism / Proof idea -> Failure mode`
 
-Prefer `python3 scripts/pn_research_chains.py theory-brief`.
+Prefer `POST /api/theory-brief`.
 
 ### For experiment reflection
 
@@ -222,7 +238,7 @@ Use this chain:
 
 `Innovation -> Experiment -> Outcome -> Reflection`
 
-Prefer `python3 scripts/pn_research_chains.py reflection-chain`.
+Prefer `POST /api/reflection-chain`.
 
 ### For future work
 
@@ -230,7 +246,7 @@ Use this chain:
 
 `Problem -> Limitation -> FutureDirection -> transferable Method`
 
-Start with `python3 scripts/pn_graph_query.py impact`, then refine with `python3 scripts/pn_research_chains.py path-trace` if you need a concrete typed path.
+Start with `POST /api/impact`, then refine with `POST /api/path-trace` if you need a concrete typed path.
 
 ## When To Use Enhancement Overlays
 
@@ -288,15 +304,24 @@ Next best action:
 
 If source papers changed, refresh the live graph through the import API before trusting the reasoning state:
 
-1. `python3 scripts/pn_stage_sync.py` if the new file lives only on the local agent machine
-2. `python3 scripts/pn_import_submit.py`
-3. `python3 scripts/pn_import_queue.py status|log|wait`
-4. `python3 scripts/pn_graph_query.py query|context`
-5. `python3 scripts/pn_research_chains.py paper-enhancement` when overlay details are needed
+1. `POST /api/imports?name=<corpus>`
+2. `GET /api/imports/:taskId`
+3. `GET /api/imports/:taskId/log`
+4. `GET /api/corpus?name=<corpus>`
+5. `GET /api/enhancements?name=<corpus>`
+
+Read import state like this:
+
+- `pending` + `queued`: waiting for the worker
+- `running` + `materialize|llm-optimize|fast-commit`: import is active; use `/log` for the freshest evidence
+- `completed` + `completed`: import finished; then inspect graph state
+- `failed`: read `error.message` and the newest log lines before taking any next step
 
 Agent rule:
 
 - prefer the existing remote `serve` + import workflow for PDF ingestion
+- if a single PDF exists only on the local agent machine, prefer `pn_import_submit.py --source <local-file> --ssh-target <ssh-target>` so staging and `serverFilePath` submission stay coupled
+- do not default to `files[].contentBase64` for large local PDFs; prefer stable remote staging such as `rsync`
 - do not replace live-graph import or query requests with local CLI fallback
 - if import or enhancement is blocked by missing API capability, lock contention, or missing data, report the blocker directly
 - do not keep retrying the same live-graph path without new evidence
@@ -308,18 +333,18 @@ For ongoing live usage:
 
 - assume the remote `serve` process is already the system entrypoint
 - do not start `watch` or `service install` as part of a reasoning workflow
-- remote dashboard/API access still requires the configured PaperNexus token, but wrapper-driven workflows should let the wrappers resolve and attach that auth instead of hand-writing headers
+- remote dashboard/API access requires the configured PaperNexus token, so agent workflows that call `/api/*` must include `Authorization: Bearer <token>`
 
 Important Stage 4 boundary:
 
-- the canonical merge cleanup step canonicalizes near-duplicate `Dataset` / `Benchmark` nodes inside the staged graph before final commit
+- `merge-graph` canonicalizes near-duplicate `Dataset` / `Benchmark` nodes inside the staged graph before final commit
 - merge-time LLM node deletion is currently disabled; do not rely on `--node-llm-check` for staged graph cleanup
-- the final commit step writes the staged graph prepared by Stage 3 plus canonical merge cleanup
-- that commit step creates a backup under `<rootPath>/.papernexus-backups/` before overwriting the committed graph
+- `write-index` commits the staged graph that Stage 3 and `merge-graph` prepared
+- `write-index` creates a backup under `<rootPath>/.papernexus-backups/` before overwriting the committed graph
 - if raw paper files changed after Stage 3 and those new files must be included in reasoning, rerun Stage 1-3 before Stage 4
-- if you want to inspect or clean duplicate evaluation nodes before final commit, debug the canonical merge cleanup stage rather than bypassing the wrapper/runtime contract in workflow-owned work
+- if you want to inspect or clean duplicate evaluation nodes before final commit, run `papernexus merge-graph --continue`
 - if the staged graph still contains low-value generic evaluation nodes, handle them through merge heuristics or later manual review; do not rely on `--node-llm-check` right now
-- if you only need to finish committing an already-built staged graph, reuse the final commit stage; it will auto-run merge cleanup if needed
+- if you only need to finish committing an already-built staged graph, `papernexus write-index --continue` is the right recovery path; it will auto-run merge if needed
 
 ## Mutation Decision Policy
 
