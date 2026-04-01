@@ -55,8 +55,8 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - read `paper_source_dir`, `graph_last_built_at`, and `paper_ingestion.*` from `PROJECT_MANIFEST.json`
    - inspect `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if present
    - count canonical papers added or changed since `paper_ingestion.last_graph_sync_at` or `graph_last_built_at`
-   - inspect `paper_ingestion.runtime_status`, `paper_ingestion.import_task_ids`, `paper_ingestion.completed_papers`, and `paper_ingestion.paper_operations` before trusting one stale graph-presence verdict
-   - if the project uses frequent paper ingestion, verify whether the remote import queue is moving and whether the latest per-paper wrapper tasks (`pn_import_queue.py status/log/wait`) completed; if not, relaunch the bounded wrapper work through `research_workflow.run_papernexus_wrapper` or report that the remote worker is stalled
+   - inspect `paper_ingestion.runtime_status`, `paper_ingestion.import_task_ids`, `paper_ingestion.completed_papers`, `paper_ingestion.paper_operations`, `paper_ingestion.active_batches`, and `paper_ingestion.batch_items` before trusting one stale graph-presence verdict
+   - if the project uses frequent paper ingestion, verify whether the remote import queue is moving and whether the latest per-paper wrapper tasks or batch manifest tasks (`pn_import_queue.py status/log/wait` or `pn_batch_import.py status/wait`) completed; if not, relaunch the bounded wrapper work through `research_workflow.run_papernexus_wrapper` or report that the remote worker is stalled
    - if `paper_ingestion.runtime_status` is `waiting_import`, `waiting_graph`, or `reconciling`, treat stale `PAPERNEXUS_STATUS.json` or graph-presence snapshots as possibly in-flight; prefer the wrapper task state and then rerun `/graph-build`
    - if `paper_ingestion.refresh_required = true`, schedule `/graph-build` before the next ideation / novelty / revision decision
    - do not add `--force`; if graph build keeps failing, surface the exact cache-first command for the user to run manually
@@ -88,7 +88,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 - Do not resume or rewrite ideation outputs when `innovation_reflection` is due; refresh `/innovation-reflection` first.
 - If gate status is `waiting` and `AUTO_PROCEED=false`, re-post the gate and stop.
 - Do not trigger a graph refresh from duplicate-only paper downloads; use canonical paper counts and refresh rules, not raw file counts.
-- If PaperNexus import/reconcile work is already in flight, prefer resuming or reattaching to the bounded wrapper task state instead of repeatedly forcing fresh graph work.
+- If PaperNexus import/reconcile work is already in flight, prefer resuming or reattaching to the bounded wrapper task state or batch manifest state instead of repeatedly forcing fresh graph work.
 - If a wrapper-driven paper import already reported completion or timeout through `research_workflow.set_paper_ingestion`, trust that durable state over waiting for a missing chat reply from the delegated sub-agent.
 
 ## Output

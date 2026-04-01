@@ -235,4 +235,5 @@ Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When Ope
 - Warn the user before long-running operations
 - Do not continue writing across projects without re-confirming `project_id`
 - Do not hand off stage ownership without updating the manifest
-- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the authenticated Python wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead
+- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the authenticated Python wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead
+- For 2 or more staged papers, default to one `pn_batch_import.py` manifest and bounded status passes instead of repeated one-paper submit loops.

@@ -43,7 +43,7 @@ Rules:
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
 - do not fall back to local `papernexus` CLI graph-processing commands for workflow-owned graph reconciliation
-- prefer `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` over hand-written REST for remote graph reads and imports
+- prefer `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_batch_import.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` over hand-written REST for remote graph reads and imports
 - if the wrapper-resolved remote PaperNexus session is unavailable or unauthenticated, stop and report that remote access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
@@ -112,18 +112,18 @@ This should:
 - update project-local readiness metadata
 - record whether a shared-graph refresh is required
 - avoid rebuilding a project-specific corpus
-- treat remote graph advancement as incremental per-paper reconciliation, not one giant all-papers wait
-- after each completed paper import, run a short reconciliation/status pass and report progress before moving to the next paper
+- treat remote graph advancement as bounded import/reconcile passes, not one giant all-papers wait
+- after each completed paper import or each batch status pass, run a short reconciliation/status pass and report progress before the next workflow tick
 
 Hard rule:
 
 - do **not** use `--force` during literature research graph builds
 - do **not** use `--rebuild-pdf-markdown` during workflow-owned graph refreshes
 - if a shared-graph refresh is needed and the automated path fails, report the exact non-force command to the user and let the user run it manually instead of escalating to a forced rebuild
-- do **not** wait indefinitely for one remote paper import or one graph-reconcile attempt; cap each paper at 60 seconds, record timeout state, and continue with the next paper
-- do **not** bundle multiple papers into one remote queued import just to reduce API calls; the workflow needs one-paper progress and timeout isolation
+- do **not** wait indefinitely for one remote paper import, one batch wait, or one graph-reconcile attempt; cap each workflow wait pass at 60 seconds, record durable progress, and continue on the next pass
+- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; the workflow needs manifest-level progress plus per-item visibility
 - when remote PaperNexus status looks stale, cross-check `PROJECT_MANIFEST.json.paper_ingestion` before declaring a hard missing-corpus failure; `waiting_import`, `waiting_graph`, or `reconciling` means the wrapper-driven refresh is still in flight
-- every per-paper terminal state must be reflected through `research_workflow.set_paper_ingestion`, because that is what feeds `/workflow-status` and the Discord-visible completion/timeout updates
+- every per-paper terminal state and every batch summary/item refresh must be reflected through `research_workflow.set_paper_ingestion`, because that is what feeds `/workflow-status` and the Discord-visible completion/progress updates
 
 Use these refresh triggers:
 - 1 newly ingested paper that changes the novelty baseline or closest prior work

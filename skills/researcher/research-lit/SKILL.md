@@ -48,11 +48,13 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 6:** If all Markdown sources fail → download PDF to the project-local staging dir under `paper_source_dir/pdf/`
    - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
-   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers (`python3 scripts/pn_import_submit.py` and `python3 scripts/pn_import_queue.py`) over manually copying the upload into workflow-owned shared storage
-   - **Step 10:** Use exactly one paper per queued import call. Do not send multi-file `files[]` batches through the wrapper or the API; each paper must become its own remote task so timeout and progress are isolated
-   - **Step 11:** Bound each queued import to at most 60 seconds total wait. If the task has not reached `completed` within 60 seconds, call `research_workflow.set_paper_ingestion` with `paper_operations=[{phase:\"import\",status:\"timed_out\",...}]`, report the timeout, and move on to the next paper instead of polling indefinitely
-   - **Step 12:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
-   - **Step 13:** If this wrapper flow is running inside a delegated sub-agent or dedicated workflow session, do not rely on a free-form chat reply as the progress signal; `research_workflow.set_paper_ingestion` is the required feedback path for per-paper completion, timeout, or failure
+   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers over manually copying the upload into workflow-owned shared storage
+   - **Step 10:** For one staged paper, use `python3 scripts/pn_import_submit.py` plus `python3 scripts/pn_import_queue.py`; for 2 or more staged papers, create one manifest and use `python3 scripts/pn_batch_import.py`
+   - **Step 11:** Do not hand-roll shell loops or one-paper submit loops for multi-paper sync. Reuse the same batch manifest for `submit`, `status`, and bounded `wait`
+   - **Step 12:** Keep each workflow wait pass to at most 60 seconds. If a single-paper task or a batch status pass has not reached a terminal state within that window, call `research_workflow.set_paper_ingestion`, report the partial progress, and continue on the next workflow pass instead of polling indefinitely
+   - **Step 13:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
+   - **Step 14:** For batch imports, also write `active_batches`, `batch_items`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
+   - **Step 15:** If this wrapper flow is running inside a delegated sub-agent or dedicated workflow session, do not rely on a free-form chat reply as the progress signal; `research_workflow.set_paper_ingestion` is the required feedback path for per-paper or per-batch progress
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -328,9 +330,9 @@ for arxiv_id in arxiv_batch:
 Important:
 
 - do not upload those 10 papers to `/api/imports` in one request
-- instead, enqueue one paper per `/api/imports` call
-- wait at most 60 seconds for that paper's remote task
-- after completion or timeout, send a visible workflow update and continue with the next paper
+- instead, create one manifest for those staged papers and use `pn_batch_import.py submit|status|wait`
+- keep each workflow wait pass to 60 seconds or less, then persist batch progress and continue on the next pass
+- after each batch status refresh, send a visible workflow update through `research_workflow.set_paper_ingestion`
 
 ---
 

@@ -416,6 +416,12 @@ test("workflow-status command returns a readable workflow summary", async () => 
         paperIngestionActiveOperationCount: 2,
         paperIngestionTimedOutOperationCount: 1,
         paperIngestionFailedOperationCount: 0,
+        paperIngestionBatchCount: 1,
+        paperIngestionActiveBatchCount: 1,
+        paperIngestionPendingBatchItemCount: 9,
+        paperIngestionSyncedBatchItemCount: 4,
+        paperIngestionFailedBatchItemCount: 1,
+        paperIngestionLastBatchManifestPath: "/tmp/demo/batch-import.json",
         paperIngestionReconcileRequired: true,
         innovationReflectionStatus: "stale",
         innovationReflectionDue: true,
@@ -523,7 +529,8 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Mailbox: 2 unread/);
   assert.match(result.text ?? "", /Idle research: enabled=true, due=true, topic=spectral clustering under drift/);
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
-  assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, reconcile_required=true/);
+  assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, reconcile_required=true/);
+  assert.match(result.text ?? "", /PaperNexus batch manifest: \/tmp\/demo\/batch-import\.json/);
   assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);

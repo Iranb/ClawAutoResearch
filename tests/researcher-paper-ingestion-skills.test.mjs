@@ -112,7 +112,7 @@ test("workflow-owned researcher skills describe remote-only staging instead of l
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /project-local staging|pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_graph_query\.py|pn_research_chains\.py|remote PaperNexus/i,
+      /project-local staging|pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py|pn_graph_query\.py|pn_research_chains\.py|remote PaperNexus/i,
       `Expected ${filePath} to teach wrapper-first remote PaperNexus workflow usage.`
     );
   }
@@ -134,7 +134,7 @@ test("researcher-facing PaperNexus skills and persona docs stay wrapper-first in
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_graph_query\.py|pn_research_chains\.py/i,
+      /pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py|pn_graph_query\.py|pn_research_chains\.py/i,
       `Expected ${filePath} to teach the Python wrapper control plane.`
     );
     assert.doesNotMatch(

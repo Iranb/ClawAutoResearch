@@ -66,6 +66,10 @@ const PAPERNEXUS_API_LABELS = [
 const PAPERNEXUS_WRAPPER_LABELS = [
   "stage-sync",
   "imports",
+  "batch-template",
+  "batch-submit",
+  "batch-status",
+  "batch-wait",
   "status",
   "log",
   "wait",
@@ -129,7 +133,7 @@ const PAPERNEXUS_API_COMMAND_RE =
   );
 const PAPERNEXUS_WRAPPER_COMMAND_RE =
   new RegExp(
-    String.raw`\bpython\d?\b[\s\S]*\bscripts\/pn_(?:stage_sync|import_submit|import_queue|graph_query|research_chains)\.py\b(?:[\s\S]*\b(?:${PAPERNEXUS_WRAPPER_LABEL_PATTERN})\b)?`,
+    String.raw`\bpython\d?\b[\s\S]*\bscripts\/pn_(?:stage_sync|import_submit|import_queue|batch_import|graph_query|research_chains)\.py\b(?:[\s\S]*\b(?:${PAPERNEXUS_WRAPPER_LABEL_PATTERN})\b)?`,
     "i"
   );
 const PAPERNEXUS_LIVE_GRAPH_CLI_READ_RE = new RegExp(
@@ -159,6 +163,12 @@ function extractPapernexusCliLabel(text: string): string | null {
 
 function extractPapernexusWrapperLabel(text: string): string | null {
   const normalized = text.toLowerCase();
+  const batchMatch = normalized.match(
+    /\bscripts\/pn_batch_import\.py\b[\s\S]*\b(template|submit|status|wait)\b/i
+  );
+  if (batchMatch?.[1]) {
+    return `batch-${batchMatch[1].toLowerCase()}`;
+  }
   const queueMatch = normalized.match(
     /\bscripts\/pn_import_queue\.py\b[\s\S]*\b(list|status|log|wait)\b/i
   );

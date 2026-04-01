@@ -1416,6 +1416,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const paperOperationBroadcasts: Array<
                 Awaited<ReturnType<typeof maybeBroadcastWorkflowStatusUpdate>>
               > = [];
+              const batchStatusBroadcasts: Array<
+                Awaited<ReturnType<typeof maybeBroadcastWorkflowStatusUpdate>>
+              > = [];
               for (const completedPaper of result.newlyCompletedPapers) {
                 const paperLabel =
                   completedPaper.title ??
@@ -1500,12 +1503,52 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 });
                 paperOperationBroadcasts.push(broadcastResult);
               }
+              for (const batch of result.newlyTerminalBatches) {
+                const manifestLabel = batch.manifestPath ?? "unknown manifest";
+                const summaryParts = [
+                  `Batch import ${
+                    batch.status === "completed"
+                      ? "completed"
+                      : batch.status === "timed_out"
+                        ? "timed out"
+                        : "failed"
+                  }: ${manifestLabel}`,
+                ];
+                if (typeof batch.completed === "number" && typeof batch.total === "number") {
+                  summaryParts.push(`(${batch.completed}/${batch.total} synced)`);
+                }
+                if (batch.detail) {
+                  summaryParts.push(batch.detail);
+                }
+                const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  sessionKey: ctx.sessionKey,
+                  projectId: snapshot.projectId,
+                  projectRoot: resolvedProjectRoot,
+                  status:
+                    batch.status === "completed"
+                      ? "completed"
+                      : batch.status === "failed"
+                        ? "blocked"
+                        : "waiting",
+                  stage: snapshot.currentStage,
+                  summary: summaryParts.join(" "),
+                  idempotencyKeySuffix: [
+                    "set-paper-ingestion",
+                    "batch-status",
+                    batch.status,
+                    batch.manifestPath ?? "unknown-manifest",
+                  ].join(":"),
+                });
+                batchStatusBroadcasts.push(broadcastResult);
+              }
               return textResponse(
                 JSON.stringify(
                   {
                     ...result,
                     completedPaperBroadcasts,
                     paperOperationBroadcasts,
+                    batchStatusBroadcasts,
                   },
                   null,
                   2

@@ -71,6 +71,7 @@ export type PapernexusWrapperScript =
   | "pn_stage_sync.py"
   | "pn_import_submit.py"
   | "pn_import_queue.py"
+  | "pn_batch_import.py"
   | "pn_graph_query.py"
   | "pn_research_chains.py";
 
@@ -246,6 +247,8 @@ const PAPERNEXUS_WRAPPER_SCRIPT_MAP: Record<string, PapernexusWrapperScript> = {
   "pn_import_submit.py": "pn_import_submit.py",
   "pn_import_queue": "pn_import_queue.py",
   "pn_import_queue.py": "pn_import_queue.py",
+  "pn_batch_import": "pn_batch_import.py",
+  "pn_batch_import.py": "pn_batch_import.py",
   "pn_graph_query": "pn_graph_query.py",
   "pn_graph_query.py": "pn_graph_query.py",
   "pn_research_chains": "pn_research_chains.py",
@@ -270,6 +273,8 @@ const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
   "status",
   "log",
   "wait",
+  "submit",
+  "template",
 ]);
 
 function isPapernexusBackgroundKind(kind: string): boolean {
@@ -300,7 +305,7 @@ export function resolvePapernexusWrapperScript(
   const resolved = normalized ? PAPERNEXUS_WRAPPER_SCRIPT_MAP[normalized] : null;
   if (!resolved) {
     throw new Error(
-      "Unsupported PaperNexus wrapper. Use one of pn_stage_sync.py, pn_import_submit.py, pn_import_queue.py, pn_graph_query.py, or pn_research_chains.py."
+      "Unsupported PaperNexus wrapper. Use one of pn_stage_sync.py, pn_import_submit.py, pn_import_queue.py, pn_batch_import.py, pn_graph_query.py, or pn_research_chains.py."
     );
   }
   return resolved;
@@ -2311,8 +2316,18 @@ function isPapernexusImportLifecycleCommand(text: string | null | undefined): bo
   return (
     /\bscripts\/pn_stage_sync\.py\b/.test(normalized) ||
     /\bscripts\/pn_import_submit\.py\b/.test(normalized) ||
+    (/\bscripts\/pn_batch_import\.py\b/.test(normalized) &&
+      /\b(submit|status|wait)\b/.test(normalized)) ||
     (/\bscripts\/pn_import_queue\.py\b/.test(normalized) &&
       /\b(status|log|wait)\b/.test(normalized))
+  );
+}
+
+function isPapernexusBatchImportCommand(text: string | null | undefined): boolean {
+  const normalized = (text ?? "").toLowerCase();
+  return (
+    /\bscripts\/pn_batch_import\.py\b/.test(normalized) &&
+    /\b(submit|status|wait)\b/.test(normalized)
   );
 }
 
@@ -2326,6 +2341,7 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     isPapernexusBackgroundKind(normalizedKind ?? "") ||
     looksLikePapernexusHeavyCommand(commandText ?? "");
   const importLifecycleCommand = isPapernexusImportLifecycleCommand(commandText);
+  const batchImportCommand = isPapernexusBatchImportCommand(commandText);
   const lines = [
     "BACKGROUND_WORKFLOW_CONTINUATION=1",
     "This run was launched from a slash-command fast path into a dedicated workflow subagent session.",
@@ -2338,18 +2354,39 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     );
   }
   if (importLifecycleCommand) {
-    lines.push(
-      "PaperNexus import rule: process one paper per import task, keep each paper within a 60 seconds total wait budget, and do not poll indefinitely."
-    );
-    lines.push(
-      "Before and after each paper import or graph reconcile step, call research_workflow.set_paper_ingestion so runtime_status, import_task_ids, paper_operations, and completed_papers stay durable."
-    );
-    lines.push(
-      "When a paper completes, write completed_papers with canonical_id, title, and import_task_id. When a paper times out or fails, write paper_operations with the terminal status and move on to the next paper."
-    );
-    lines.push(
-      "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will broadcast the per-paper completion or timeout update for you."
-    );
+    if (batchImportCommand) {
+      lines.push(
+        "PaperNexus batch-import rule: when 2 or more staged papers are being synchronized, use one manifest file with pn_batch_import.py submit/status/wait instead of hand-rolled shell loops or repeated one-paper submit commands."
+      );
+      lines.push(
+        "Reuse the same manifest for submit, status, and wait. Keep each workflow wait pass bounded to 60 seconds or less, then persist progress and let the workflow continue on the next status pass instead of blocking indefinitely."
+      );
+      lines.push(
+        "After each batch status or wait result, call research_workflow.set_paper_ingestion so runtime_status, active_batches, batch_items, completed_papers, and paper_operations stay durable."
+      );
+      lines.push(
+        "Translate the wrapper summary/items view into durable workflow state: active_batches should mirror the batch summary, batch_items should mirror per-paper items, and any synced item should also write completed_papers or terminal paper_operations when appropriate."
+      );
+      lines.push(
+        "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will keep batch progress visible even if the delegated subagent never sends a free-form chat reply."
+      );
+    } else {
+      lines.push(
+        "PaperNexus import rule: process one paper per import task when using pn_import_submit.py, keep each paper within a 60 seconds total wait budget, and do not poll indefinitely."
+      );
+      lines.push(
+        "Before and after each paper import or graph reconcile step, call research_workflow.set_paper_ingestion so runtime_status, import_task_ids, paper_operations, and completed_papers stay durable."
+      );
+      lines.push(
+        "When a paper completes, write completed_papers with canonical_id, title, and import_task_id. When a paper times out or fails, write paper_operations with the terminal status and move on to the next paper."
+      );
+      lines.push(
+        "If more than one staged paper needs syncing, stop using repeated one-paper submits and switch to pn_batch_import.py with one manifest."
+      );
+      lines.push(
+        "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will broadcast the per-paper completion or timeout update for you."
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 }

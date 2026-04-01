@@ -341,6 +341,121 @@ test("research_workflow set_paper_ingestion broadcasts each newly completed Pape
   );
 });
 
+test("research_workflow set_paper_ingestion persists batch manifest progress and batch status broadcasts", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const firstResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Batch import is still syncing remote tasks.",
+      last_batch_manifest_path: "/tmp/demo/batch-import.json",
+      active_batches: [
+        {
+          manifest_path: "/tmp/demo/batch-import.json",
+          status: "running",
+          total: 4,
+          submitted: 4,
+          completed: 1,
+          running: 2,
+          pending: 1,
+          failed: 0,
+          submit_failed: 0,
+          updated_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+      batch_items: [
+        {
+          manifest_path: "/tmp/demo/batch-import.json",
+          paper_id: "paper-1",
+          canonical_id: "arxiv:2501.00031",
+          title: "First Batch Paper",
+          import_task_id: "imp-1",
+          status: "completed",
+          synced: true,
+          submitted: true,
+          updated_at: "2026-04-01T00:00:00Z",
+        },
+        {
+          manifest_path: "/tmp/demo/batch-import.json",
+          paper_id: "paper-2",
+          canonical_id: "arxiv:2501.00032",
+          title: "Second Batch Paper",
+          import_task_id: "imp-2",
+          status: "running",
+          synced: false,
+          submitted: true,
+          updated_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+    },
+  });
+
+  assert.equal(firstResult.state.activeBatches.length, 1);
+  assert.equal(firstResult.state.batchItems.length, 2);
+  assert.equal(firstResult.state.lastBatchManifestPath, "/tmp/demo/batch-import.json");
+
+  const secondResult = await executeWorkflowTool(tool, {
+    action: "set_paper_ingestion",
+    paperIngestion: {
+      runtime_status: "reconciling",
+      active_batches: [
+        {
+          manifest_path: "/tmp/demo/batch-import.json",
+          status: "completed",
+          total: 4,
+          submitted: 4,
+          completed: 4,
+          running: 0,
+          pending: 0,
+          failed: 0,
+          submit_failed: 0,
+          updated_at: "2026-04-01T00:01:00Z",
+          finished_at: "2026-04-01T00:01:00Z",
+        },
+      ],
+    },
+  });
+
+  assert.equal(secondResult.state.activeBatches[0].status, "completed");
+  assert.equal(secondResult.batchStatusBroadcasts.length, 1);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Batch import completed/i.test(entry.message) &&
+        /batch-import\.json/.test(entry.message)
+    )
+  );
+});
+
 test("research_workflow set_paper_ingestion merges enriched completion metadata without rebroadcasting", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

@@ -258,6 +258,25 @@ test("buildPapernexusWrapperCommand renders a wrapper-first python command", () 
   assert.match(command, /--limit '8'/);
 });
 
+test("buildPapernexusWrapperCommand renders a batch-import wrapper command", () => {
+  const command = buildPapernexusWrapperCommand({
+    wrapper: "pn_batch_import",
+    args: [
+      "--api-base",
+      "https://papernexus.example/api",
+      "--corpus",
+      "demo",
+      "--manifest",
+      "/tmp/demo/batch-import.json",
+      "submit",
+    ],
+  });
+
+  assert.match(command, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(command, /--manifest '\/tmp\/demo\/batch-import\.json'/);
+  assert.match(command, /\bsubmit\b/);
+});
+
 test("startBackgroundWorkflowRun requires an explicit wrapper command for legacy papernexus_skill runs", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
@@ -350,6 +369,59 @@ test("startBackgroundWorkflowRun gives PaperNexus import continuations explicit 
   assert.match(runCalls[0].extraSystemPrompt ?? "", /60s|60 seconds/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /completed_papers/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /paper_operations/i);
+});
+
+test("startBackgroundWorkflowRun gives PaperNexus batch continuations explicit manifest-driven state-feedback instructions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-batch-import-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:imports-room",
+      sessionId: "session-bg-batch-import-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      title: "batch import papers",
+      commandText:
+        "python3 scripts/pn_batch_import.py --api-base 'https://papernexus.example/api' --corpus 'demo' --manifest '/tmp/demo/batch-import.json' submit",
+      summary: "Queued wrapper-driven PaperNexus batch import",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /same manifest/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /active_batches/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /batch_items/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /summary\/items|summary and items/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /completed_papers/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /60s|60 seconds/i);
 });
 
 test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {

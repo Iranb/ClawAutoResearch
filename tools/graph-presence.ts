@@ -876,6 +876,10 @@ function summarizePaperIngestionProgress(
   activeOperationCount: number;
   timedOutCount: number;
   failedCount: number;
+  activeBatchCount: number;
+  pendingBatchItemCount: number;
+  syncedBatchItemCount: number;
+  failedBatchItemCount: number;
   waitingReason: string | null;
   inFlight: boolean;
 } {
@@ -898,9 +902,23 @@ function summarizePaperIngestionProgress(
     : Array.isArray(paperIngestion?.paperOperations)
       ? paperIngestion.paperOperations
       : [];
+  const activeBatches = Array.isArray(paperIngestion?.active_batches)
+    ? paperIngestion.active_batches
+    : Array.isArray(paperIngestion?.activeBatches)
+      ? paperIngestion.activeBatches
+      : [];
+  const batchItems = Array.isArray(paperIngestion?.batch_items)
+    ? paperIngestion.batch_items
+    : Array.isArray(paperIngestion?.batchItems)
+      ? paperIngestion.batchItems
+      : [];
   let activeOperationCount = 0;
   let timedOutCount = 0;
   let failedCount = 0;
+  let activeBatchCount = 0;
+  let pendingBatchItemCount = 0;
+  let syncedBatchItemCount = 0;
+  let failedBatchItemCount = 0;
   for (const item of paperOperations) {
     const record = asRecord(item);
     const status = pickString(record, ["status"])?.toLowerCase() ?? null;
@@ -910,6 +928,27 @@ function summarizePaperIngestionProgress(
       timedOutCount += 1;
     } else if (status === "failed") {
       failedCount += 1;
+    }
+  }
+  for (const item of activeBatches) {
+    const record = asRecord(item);
+    const status = pickString(record, ["status"])?.toLowerCase() ?? null;
+    if (status === "queued" || status === "running") {
+      activeBatchCount += 1;
+    }
+  }
+  for (const item of batchItems) {
+    const record = asRecord(item);
+    const status = pickString(record, ["status"])?.toLowerCase() ?? null;
+    const synced = record?.synced === true;
+    if (status === "pending" || status === "running") {
+      pendingBatchItemCount += 1;
+    }
+    if (synced || status === "completed") {
+      syncedBatchItemCount += 1;
+    }
+    if (status === "failed" || status === "submit_failed") {
+      failedBatchItemCount += 1;
     }
   }
   const importTaskCount = importTaskIds
@@ -922,6 +961,8 @@ function summarizePaperIngestionProgress(
     runtimeStatus === "waiting_import" ||
     runtimeStatus === "waiting_graph" ||
     runtimeStatus === "reconciling" ||
+    activeBatchCount > 0 ||
+    pendingBatchItemCount > 0 ||
     activeOperationCount > 0 ||
     (importTaskCount > 0 && completedCount === 0);
   return {
@@ -931,6 +972,10 @@ function summarizePaperIngestionProgress(
     activeOperationCount,
     timedOutCount,
     failedCount,
+    activeBatchCount,
+    pendingBatchItemCount,
+    syncedBatchItemCount,
+    failedBatchItemCount,
     waitingReason,
     inFlight,
   };
@@ -949,6 +994,10 @@ function buildInFlightRemoteRefreshReason(params: {
     `active_operations=${params.paperIngestion.activeOperationCount}`,
     `timed_out=${params.paperIngestion.timedOutCount}`,
     `failed=${params.paperIngestion.failedCount}`,
+    `active_batches=${params.paperIngestion.activeBatchCount}`,
+    `batch_pending_items=${params.paperIngestion.pendingBatchItemCount}`,
+    `batch_synced_items=${params.paperIngestion.syncedBatchItemCount}`,
+    `batch_failed_items=${params.paperIngestion.failedBatchItemCount}`,
   ];
   return (
     `PaperNexus graph refresh is still reconciling through the remote wrapper flow${params.remoteApiBaseUrl ? ` at ${params.remoteApiBaseUrl}` : ""}: ` +

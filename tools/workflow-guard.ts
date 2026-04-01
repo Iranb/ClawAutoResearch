@@ -632,6 +632,9 @@ type PaperIngestionState = {
   lastImportStatus: string | null;
   completedPapers: PaperIngestionCompletedPaper[];
   paperOperations: PaperIngestionPaperOperation[];
+  activeBatches: PaperIngestionBatchRun[];
+  batchItems: PaperIngestionBatchItem[];
+  lastBatchManifestPath: string | null;
   graphVersionSeen: string | null;
   reconcileRequired: boolean;
   lastUpdatedAt: string | null;
@@ -654,6 +657,37 @@ type PaperIngestionPaperOperation = {
   deadlineAt: string | null;
   finishedAt: string | null;
   detail: string | null;
+};
+
+type PaperIngestionBatchRun = {
+  manifestPath: string | null;
+  status: "queued" | "running" | "completed" | "timed_out" | "failed";
+  total: number | null;
+  submitted: number | null;
+  completed: number | null;
+  running: number | null;
+  pending: number | null;
+  failed: number | null;
+  submitFailed: number | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  finishedAt: string | null;
+  detail: string | null;
+};
+
+type PaperIngestionBatchItem = {
+  manifestPath: string | null;
+  paperId: string | null;
+  canonicalId: string | null;
+  title: string | null;
+  importTaskId: string | null;
+  status: "pending" | "running" | "completed" | "failed" | "submit_failed" | null;
+  stage: string | null;
+  submitted: boolean;
+  synced: boolean;
+  matchedBy: string | null;
+  error: string | null;
+  updatedAt: string | null;
 };
 
 type PaperQcState = {
@@ -774,6 +808,12 @@ export type WorkflowSnapshot = {
   paperIngestionActiveOperationCount: number | null;
   paperIngestionTimedOutOperationCount: number | null;
   paperIngestionFailedOperationCount: number | null;
+  paperIngestionBatchCount: number | null;
+  paperIngestionActiveBatchCount: number | null;
+  paperIngestionPendingBatchItemCount: number | null;
+  paperIngestionSyncedBatchItemCount: number | null;
+  paperIngestionFailedBatchItemCount: number | null;
+  paperIngestionLastBatchManifestPath: string | null;
   paperIngestionLastImportStatus: string | null;
   paperIngestionGraphVersionSeen: string | null;
   paperIngestionReconcileRequired: boolean;
@@ -4951,6 +4991,10 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
   const importTaskIdsRaw = record.import_task_ids ?? record.importTaskIds;
   const completedPapersRaw = record.completed_papers ?? record.completedPapers;
   const paperOperationsRaw = record.paper_operations ?? record.paperOperations;
+  const activeBatchesRaw = record.active_batches ?? record.activeBatches;
+  const batchItemsRaw = record.batch_items ?? record.batchItems;
+  const activeBatches = normalizePaperIngestionBatchRuns(activeBatchesRaw);
+  const batchItems = normalizePaperIngestionBatchItems(batchItemsRaw);
   return {
     runtimeStatus: normalizePaperIngestionRuntimeStatus(
       record.runtimeStatus ?? record.runtime_status
@@ -4966,6 +5010,13 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
       normalizeStage(record.lastImportStatus ?? record.last_import_status) ?? null,
     completedPapers: normalizeCompletedPaperEntries(completedPapersRaw),
     paperOperations: normalizePaperIngestionPaperOperations(paperOperationsRaw),
+    activeBatches,
+    batchItems,
+    lastBatchManifestPath:
+      pickString(record, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
+      activeBatches[activeBatches.length - 1]?.manifestPath ??
+      batchItems[batchItems.length - 1]?.manifestPath ??
+      null,
     graphVersionSeen: pickString(record, ["graphVersionSeen", "graph_version_seen"]),
     reconcileRequired:
       record.reconcileRequired === true || record.reconcile_required === true,
@@ -4984,6 +5035,9 @@ function serializePaperIngestionState(
     last_import_status: value.lastImportStatus,
     completed_papers: value.completedPapers.map(serializeCompletedPaperEntry),
     paper_operations: value.paperOperations.map(serializePaperIngestionPaperOperation),
+    active_batches: value.activeBatches.map(serializePaperIngestionBatchRun),
+    batch_items: value.batchItems.map(serializePaperIngestionBatchItem),
+    last_batch_manifest_path: value.lastBatchManifestPath,
     graph_version_seen: value.graphVersionSeen,
     reconcile_required: value.reconcileRequired,
     last_updated_at: value.lastUpdatedAt,
@@ -5193,6 +5247,372 @@ function isPaperIngestionOperationTerminal(
   value: PaperIngestionPaperOperation["status"]
 ): boolean {
   return value === "completed" || value === "timed_out" || value === "failed";
+}
+
+function normalizePaperIngestionBatchStatus(
+  value: unknown
+): PaperIngestionBatchRun["status"] {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "queued":
+    case "running":
+    case "completed":
+    case "timed_out":
+    case "failed":
+      return normalized;
+    default:
+      return "queued";
+  }
+}
+
+function normalizePaperIngestionBatchRun(
+  value: unknown
+): PaperIngestionBatchRun | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const manifestPath = pickString(record, ["manifestPath", "manifest_path"]);
+  const detail = pickString(record, ["detail", "reason", "message"]);
+  const total = pickNumber(record, ["total"]);
+  const submitted = pickNumber(record, ["submitted"]);
+  const completed = pickNumber(record, ["completed"]);
+  const running = pickNumber(record, ["running"]);
+  const pending = pickNumber(record, ["pending"]);
+  const failed = pickNumber(record, ["failed"]);
+  const submitFailed = pickNumber(record, ["submitFailed", "submit_failed"]);
+  if (
+    !manifestPath &&
+    !detail &&
+    total == null &&
+    submitted == null &&
+    completed == null &&
+    running == null &&
+    pending == null &&
+    failed == null &&
+    submitFailed == null
+  ) {
+    return null;
+  }
+  const normalizeCount = (count: number | null) =>
+    typeof count === "number" && Number.isFinite(count)
+      ? Math.max(0, Math.floor(count))
+      : null;
+  return {
+    manifestPath,
+    status: normalizePaperIngestionBatchStatus(record.status),
+    total: normalizeCount(total),
+    submitted: normalizeCount(submitted),
+    completed: normalizeCount(completed),
+    running: normalizeCount(running),
+    pending: normalizeCount(pending),
+    failed: normalizeCount(failed),
+    submitFailed: normalizeCount(submitFailed),
+    startedAt: pickString(record, ["startedAt", "started_at"]),
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+    finishedAt: pickString(record, ["finishedAt", "finished_at"]),
+    detail,
+  };
+}
+
+function normalizePaperIngestionBatchRuns(
+  value: unknown
+): PaperIngestionBatchRun[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionBatchRun[] = [];
+  for (const item of value) {
+    const normalized = normalizePaperIngestionBatchRun(item);
+    if (!normalized) {
+      continue;
+    }
+    const existingIndex = entries.findIndex((entry) =>
+      arePaperIngestionBatchRunsEquivalent(entry, normalized)
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = mergePaperIngestionBatchRunValues(
+        entries[existingIndex],
+        normalized
+      );
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializePaperIngestionBatchRun(
+  value: PaperIngestionBatchRun
+): Record<string, unknown> {
+  return {
+    manifest_path: value.manifestPath,
+    status: value.status,
+    total: value.total,
+    submitted: value.submitted,
+    completed: value.completed,
+    running: value.running,
+    pending: value.pending,
+    failed: value.failed,
+    submit_failed: value.submitFailed,
+    started_at: value.startedAt,
+    updated_at: value.updatedAt,
+    finished_at: value.finishedAt,
+    detail: value.detail,
+  };
+}
+
+function normalizePaperIngestionBatchItemStatus(
+  value: unknown
+): PaperIngestionBatchItem["status"] {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "pending":
+    case "running":
+    case "completed":
+    case "failed":
+      return normalized;
+    default:
+      break;
+  }
+  return asString(value)?.toLowerCase() === "submit_failed" ? "submit_failed" : null;
+}
+
+function normalizePaperIngestionBatchItem(
+  value: unknown
+): PaperIngestionBatchItem | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const manifestPath = pickString(record, ["manifestPath", "manifest_path"]);
+  const paperId = pickString(record, ["paperId", "paper_id"]);
+  const canonicalId = pickString(record, ["canonicalId", "canonical_id"]);
+  const title = pickString(record, ["title"]);
+  const importTaskId = pickString(record, ["importTaskId", "import_task_id", "taskId", "task_id"]);
+  if (!manifestPath && !paperId && !canonicalId && !title && !importTaskId) {
+    return null;
+  }
+  return {
+    manifestPath,
+    paperId,
+    canonicalId,
+    title,
+    importTaskId,
+    status: normalizePaperIngestionBatchItemStatus(record.status),
+    stage: normalizeStage(record.stage) ?? pickString(record, ["stage"]),
+    submitted: record.submitted === true,
+    synced: record.synced === true,
+    matchedBy: pickString(record, ["matchedBy", "matched_by"]),
+    error: pickString(record, ["error", "detail", "reason", "message"]),
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function normalizePaperIngestionBatchItems(
+  value: unknown
+): PaperIngestionBatchItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionBatchItem[] = [];
+  for (const item of value) {
+    const normalized = normalizePaperIngestionBatchItem(item);
+    if (!normalized) {
+      continue;
+    }
+    const existingIndex = entries.findIndex((entry) =>
+      arePaperIngestionBatchItemsEquivalent(entry, normalized)
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = mergePaperIngestionBatchItemValues(
+        entries[existingIndex],
+        normalized
+      );
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializePaperIngestionBatchItem(
+  value: PaperIngestionBatchItem
+): Record<string, unknown> {
+  return {
+    manifest_path: value.manifestPath,
+    paper_id: value.paperId,
+    canonical_id: value.canonicalId,
+    title: value.title,
+    import_task_id: value.importTaskId,
+    status: value.status,
+    stage: value.stage,
+    submitted: value.submitted,
+    synced: value.synced,
+    matched_by: value.matchedBy,
+    error: value.error,
+    updated_at: value.updatedAt,
+  };
+}
+
+function arePaperIngestionBatchRunsEquivalent(
+  left: PaperIngestionBatchRun,
+  right: PaperIngestionBatchRun
+): boolean {
+  if (left.manifestPath && right.manifestPath && left.manifestPath === right.manifestPath) {
+    return true;
+  }
+  return false;
+}
+
+function mergePaperIngestionBatchRunValues(
+  current: PaperIngestionBatchRun,
+  patch: PaperIngestionBatchRun
+): PaperIngestionBatchRun {
+  return {
+    manifestPath: current.manifestPath ?? patch.manifestPath,
+    status: patch.status,
+    total: patch.total ?? current.total,
+    submitted: patch.submitted ?? current.submitted,
+    completed: patch.completed ?? current.completed,
+    running: patch.running ?? current.running,
+    pending: patch.pending ?? current.pending,
+    failed: patch.failed ?? current.failed,
+    submitFailed: patch.submitFailed ?? current.submitFailed,
+    startedAt: current.startedAt ?? patch.startedAt,
+    updatedAt: patch.updatedAt ?? current.updatedAt,
+    finishedAt: patch.finishedAt ?? current.finishedAt,
+    detail: patch.detail ?? current.detail,
+  };
+}
+
+function arePaperIngestionBatchItemsEquivalent(
+  left: PaperIngestionBatchItem,
+  right: PaperIngestionBatchItem
+): boolean {
+  if (
+    left.manifestPath &&
+    right.manifestPath &&
+    left.paperId &&
+    right.paperId &&
+    left.manifestPath === right.manifestPath &&
+    left.paperId === right.paperId
+  ) {
+    return true;
+  }
+  if (left.importTaskId && right.importTaskId && left.importTaskId === right.importTaskId) {
+    return true;
+  }
+  if (
+    left.manifestPath &&
+    right.manifestPath &&
+    left.canonicalId &&
+    right.canonicalId &&
+    left.manifestPath === right.manifestPath &&
+    left.canonicalId === right.canonicalId
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function mergePaperIngestionBatchItemValues(
+  current: PaperIngestionBatchItem,
+  patch: PaperIngestionBatchItem
+): PaperIngestionBatchItem {
+  return {
+    manifestPath: current.manifestPath ?? patch.manifestPath,
+    paperId: current.paperId ?? patch.paperId,
+    canonicalId: current.canonicalId ?? patch.canonicalId,
+    title: current.title ?? patch.title,
+    importTaskId: current.importTaskId ?? patch.importTaskId,
+    status: patch.status ?? current.status,
+    stage: patch.stage ?? current.stage,
+    submitted: current.submitted || patch.submitted,
+    synced: current.synced || patch.synced,
+    matchedBy: patch.matchedBy ?? current.matchedBy,
+    error: patch.error ?? current.error,
+    updatedAt: patch.updatedAt ?? current.updatedAt,
+  };
+}
+
+function isPaperIngestionBatchTerminal(
+  value: PaperIngestionBatchRun["status"]
+): boolean {
+  return value === "completed" || value === "timed_out" || value === "failed";
+}
+
+function mergePaperIngestionBatchRuns(params: {
+  current: PaperIngestionBatchRun[];
+  patch: unknown;
+}): {
+  activeBatches: PaperIngestionBatchRun[];
+  newlyTerminalBatches: PaperIngestionBatchRun[];
+} {
+  const currentEntries = normalizePaperIngestionBatchRuns(params.current);
+  const patchEntries = normalizePaperIngestionBatchRuns(params.patch);
+  if (patchEntries.length === 0) {
+    return {
+      activeBatches: currentEntries,
+      newlyTerminalBatches: [],
+    };
+  }
+  const merged = [...currentEntries];
+  const newlyTerminalBatches: PaperIngestionBatchRun[] = [];
+  for (const entry of patchEntries) {
+    const existingIndex = merged.findIndex((currentEntry) =>
+      arePaperIngestionBatchRunsEquivalent(currentEntry, entry)
+    );
+    if (existingIndex >= 0) {
+      const previous = merged[existingIndex];
+      const next = mergePaperIngestionBatchRunValues(previous, entry);
+      merged[existingIndex] = next;
+      if (isPaperIngestionBatchTerminal(next.status) && previous.status !== next.status) {
+        newlyTerminalBatches.push(next);
+      }
+      continue;
+    }
+    merged.push(entry);
+    if (isPaperIngestionBatchTerminal(entry.status)) {
+      newlyTerminalBatches.push(entry);
+    }
+  }
+  return {
+    activeBatches: merged,
+    newlyTerminalBatches,
+  };
+}
+
+function mergePaperIngestionBatchItems(params: {
+  current: PaperIngestionBatchItem[];
+  patch: unknown;
+}): {
+  batchItems: PaperIngestionBatchItem[];
+} {
+  const currentEntries = normalizePaperIngestionBatchItems(params.current);
+  const patchEntries = normalizePaperIngestionBatchItems(params.patch);
+  if (patchEntries.length === 0) {
+    return {
+      batchItems: currentEntries,
+    };
+  }
+  const merged = [...currentEntries];
+  for (const entry of patchEntries) {
+    const existingIndex = merged.findIndex((currentEntry) =>
+      arePaperIngestionBatchItemsEquivalent(currentEntry, entry)
+    );
+    if (existingIndex >= 0) {
+      merged[existingIndex] = mergePaperIngestionBatchItemValues(
+        merged[existingIndex],
+        entry
+      );
+      continue;
+    }
+    merged.push(entry);
+  }
+  return {
+    batchItems: merged,
+  };
 }
 
 function mergePaperIngestionOperations(params: {
@@ -8364,7 +8784,7 @@ function buildDynamicTasks(params: {
       params.papernexusMineruHttpUrl)
   ) {
     tasks.unshift(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); for workflow-owned background graph work, prefer \`research_workflow.run_papernexus_wrapper\`; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); for workflow-owned background graph work, prefer \`research_workflow.run_papernexus_wrapper\`; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
     );
     tasks.unshift(
       "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
@@ -8385,7 +8805,7 @@ function buildDynamicTasks(params: {
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     tasks.unshift(
-      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers (`pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`) from project-local staging, preferably through `research_workflow.run_papernexus_wrapper`, instead of reading or writing `~/.papernexus/papers` directly."
+      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers from project-local staging, preferably through `research_workflow.run_papernexus_wrapper`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest."
     );
     tasks.unshift(
       "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
@@ -8621,6 +9041,19 @@ export async function buildWorkflowSnapshot(params: {
   const paperIngestionFailedOperationCount = paperIngestionState.paperOperations.filter(
     (entry) => entry.status === "failed"
   ).length;
+  const paperIngestionBatchCount = paperIngestionState.activeBatches.length;
+  const paperIngestionActiveBatchCount = paperIngestionState.activeBatches.filter(
+    (entry) => entry.status === "queued" || entry.status === "running"
+  ).length;
+  const paperIngestionPendingBatchItemCount = paperIngestionState.batchItems.filter(
+    (entry) => entry.status === "pending" || entry.status === "running"
+  ).length;
+  const paperIngestionSyncedBatchItemCount = paperIngestionState.batchItems.filter(
+    (entry) => entry.synced === true || entry.status === "completed"
+  ).length;
+  const paperIngestionFailedBatchItemCount = paperIngestionState.batchItems.filter(
+    (entry) => entry.status === "failed" || entry.status === "submit_failed"
+  ).length;
   const experimentMemory = asRecord(projectState.manifest?.experiment_memory);
   const idleResearch = normalizeIdleResearchState(
     asRecord(projectState.manifest?.idle_research)
@@ -8848,6 +9281,12 @@ export async function buildWorkflowSnapshot(params: {
     paperIngestionActiveOperationCount,
     paperIngestionTimedOutOperationCount,
     paperIngestionFailedOperationCount,
+    paperIngestionBatchCount,
+    paperIngestionActiveBatchCount,
+    paperIngestionPendingBatchItemCount,
+    paperIngestionSyncedBatchItemCount,
+    paperIngestionFailedBatchItemCount,
+    paperIngestionLastBatchManifestPath: paperIngestionState.lastBatchManifestPath,
     paperIngestionLastImportStatus: paperIngestionState.lastImportStatus,
     paperIngestionGraphVersionSeen: paperIngestionState.graphVersionSeen,
     paperIngestionReconcileRequired: paperIngestionState.reconcileRequired,
@@ -9187,10 +9626,12 @@ export function buildFocusedPromptAssembly(params: {
     paperIngestionContextActive &&
     (snapshot.paperIngestionRuntimeStatus ||
       (snapshot.paperIngestionImportTaskCount ?? 0) > 0 ||
+      (snapshot.paperIngestionBatchCount ?? 0) > 0 ||
+      (snapshot.paperIngestionPendingBatchItemCount ?? 0) > 0 ||
       snapshot.paperIngestionReconcileRequired)
   ) {
     layer3Lines.push(
-      `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
+      `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} batches=${snapshot.paperIngestionBatchCount ?? 0} active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
     );
   }
   if (snapshot.writingCurrentSectionReviewVerdict) {
@@ -9478,10 +9919,15 @@ export function formatWorkflowSnapshotForPrompt(params: {
       snapshot.paperIngestionRuntimeStatus !== "idle"
     ) {
       lines.push(
-        `Paper ingestion runtime: status=${snapshot.paperIngestionRuntimeStatus}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, last_import_status=${snapshot.paperIngestionLastImportStatus ?? "unknown"}, graph_version_seen=${snapshot.paperIngestionGraphVersionSeen ?? "unknown"}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
+        `Paper ingestion runtime: status=${snapshot.paperIngestionRuntimeStatus}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, batches=${snapshot.paperIngestionBatchCount ?? 0}, active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0}, batch_pending_items=${snapshot.paperIngestionPendingBatchItemCount ?? 0}, batch_synced_items=${snapshot.paperIngestionSyncedBatchItemCount ?? 0}, last_import_status=${snapshot.paperIngestionLastImportStatus ?? "unknown"}, graph_version_seen=${snapshot.paperIngestionGraphVersionSeen ?? "unknown"}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
       );
       if (snapshot.paperIngestionWaitingReason) {
         lines.push(`Paper ingestion waiting reason: ${snapshot.paperIngestionWaitingReason}`);
+      }
+      if (snapshot.paperIngestionLastBatchManifestPath) {
+        lines.push(
+          `Paper ingestion last batch manifest: ${snapshot.paperIngestionLastBatchManifestPath}`
+        );
       }
     }
     if (snapshot.graphPresenceReportPath) {
@@ -9499,7 +9945,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
         `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
       );
       lines.push(
-        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead, and prefer `research_workflow.run_papernexus_wrapper` for workflow-owned background graph work."
+        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead, and prefer `research_workflow.run_papernexus_wrapper` for workflow-owned background graph work."
       );
       if (
         snapshot.papernexusApiBaseUrl &&
@@ -9751,13 +10197,13 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) when material enters through UI/API upload, preferably through `research_workflow.run_papernexus_wrapper` -> /graph-build shared-graph reconciliation."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) for one-paper uploads and `pn_batch_import.py` with one manifest for 2+ staged papers, preferably through `research_workflow.run_papernexus_wrapper` -> /graph-build shared-graph reconciliation."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, and `pn_import_queue.py`) and its task logs, ideally by launching them through `research_workflow.run_papernexus_wrapper`. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) and its task logs, ideally by launching them through `research_workflow.run_papernexus_wrapper`. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
-    "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, bound each paper to 60s total wait, record timeout state through research_workflow.set_paper_ingestion if it does not finish in time, and move on to the next paper instead of long-polling indefinitely."
+    "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
   );
   lines.push(
     "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`) before trusting raw full-graph prominence."
@@ -10199,7 +10645,7 @@ export function shouldBlockPapernexusRawHttpUsage(params: {
   return {
     block: true,
     reason:
-      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. Prefer `research_workflow.run_papernexus_wrapper` so the wrapper executes inside the dedicated workflow runtime session; this avoids route-shape drift and keeps token handling consistent.",
+      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. Prefer `research_workflow.run_papernexus_wrapper` so the wrapper executes inside the dedicated workflow runtime session; this avoids route-shape drift and keeps token handling consistent.",
   };
 }
 
@@ -10324,7 +10770,7 @@ export function shouldBlockPapernexusMultiPaperImport(params: {
   return {
     block: true,
     reason:
-      "Queued PaperNexus imports must be single-paper only. Submit one paper per import task so each paper can time out independently, continue to the next item, and emit its own progress update.",
+      "Raw `/api/imports` multi-file bodies are not allowed in workflow mode. Submit one paper per raw import task, or switch to `pn_batch_import.py` with one manifest for multi-paper sync so progress stays durable and visible.",
   };
 }
 
@@ -10345,7 +10791,11 @@ export function shouldBlockPapernexusLongWaitImportCommand(params: {
     /\bpython\d?\b[\s\S]*\bscripts\/pn_import_queue\.py\b[\s\S]*\bwait\b/i.test(
       payloadText ?? ""
     );
-  if (!payloadText || (!usesRawImportApi && !usesImportQueueWrapper)) {
+  const usesBatchImportWrapper =
+    /\bpython\d?\b[\s\S]*\bscripts\/pn_batch_import\.py\b[\s\S]*\bwait\b/i.test(
+      payloadText ?? ""
+    );
+  if (!payloadText || (!usesRawImportApi && !usesImportQueueWrapper && !usesBatchImportWrapper)) {
     return { block: false };
   }
   const usesLoopWithSleep =
@@ -10377,6 +10827,26 @@ export function shouldBlockPapernexusLongWaitImportCommand(params: {
         block: true,
         reason:
           "PaperNexus queue waits must cap each paper at 60s or less. Record timeout state and continue with the next paper instead of waiting longer.",
+      };
+    }
+  }
+  if (usesBatchImportWrapper) {
+    const timeoutMatch = payloadText.match(/--timeout(?:=|\s+)(\d+)/i);
+    const timeoutSeconds = timeoutMatch
+      ? Number.parseInt(timeoutMatch[1] ?? "", 10)
+      : Number.NaN;
+    if (!Number.isFinite(timeoutSeconds)) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus batch waits must set `pn_batch_import.py wait --timeout`, keep each workflow wait pass within 60s, and persist batch summary/items before the next pass.",
+      };
+    }
+    if (timeoutSeconds > 60) {
+      return {
+        block: true,
+        reason:
+          "PaperNexus batch waits must cap each workflow pass at 60s or less. Persist batch summary/items, report progress, and continue on the next status pass instead of waiting longer.",
       };
     }
   }
@@ -13160,6 +13630,7 @@ export async function setPaperIngestionState(params: {
   state: PaperIngestionState;
   newlyCompletedPapers: PaperIngestionCompletedPaper[];
   newlyTerminalPaperOperations: PaperIngestionPaperOperation[];
+  newlyTerminalBatches: PaperIngestionBatchRun[];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizePaperIngestionState(manifest.paper_ingestion);
@@ -13167,6 +13638,8 @@ export async function setPaperIngestionState(params: {
   const importTaskIdsRaw = patch.import_task_ids ?? patch.importTaskIds;
   const completedPapersRaw = patch.completed_papers ?? patch.completedPapers;
   const paperOperationsRaw = patch.paper_operations ?? patch.paperOperations;
+  const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
+  const batchItemsRaw = patch.batch_items ?? patch.batchItems;
   const completedPaperUpdate = mergeCompletedPaperEntries({
     current: current.completedPapers,
     patch: completedPapersRaw,
@@ -13174,6 +13647,14 @@ export async function setPaperIngestionState(params: {
   const paperOperationUpdate = mergePaperIngestionOperations({
     current: current.paperOperations,
     patch: paperOperationsRaw,
+  });
+  const batchRunUpdate = mergePaperIngestionBatchRuns({
+    current: current.activeBatches,
+    patch: activeBatchesRaw,
+  });
+  const batchItemUpdate = mergePaperIngestionBatchItems({
+    current: current.batchItems,
+    patch: batchItemsRaw,
   });
   const next: PaperIngestionState = {
     ...current,
@@ -13195,6 +13676,13 @@ export async function setPaperIngestionState(params: {
       current.lastImportStatus,
     completedPapers: completedPaperUpdate.completedPapers,
     paperOperations: paperOperationUpdate.paperOperations,
+    activeBatches: batchRunUpdate.activeBatches,
+    batchItems: batchItemUpdate.batchItems,
+    lastBatchManifestPath:
+      pickString(patch, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
+      batchRunUpdate.activeBatches[batchRunUpdate.activeBatches.length - 1]?.manifestPath ??
+      batchItemUpdate.batchItems[batchItemUpdate.batchItems.length - 1]?.manifestPath ??
+      current.lastBatchManifestPath,
     graphVersionSeen:
       pickString(patch, ["graphVersionSeen", "graph_version_seen"]) ??
       current.graphVersionSeen,
@@ -13219,6 +13707,7 @@ export async function setPaperIngestionState(params: {
     state: next,
     newlyCompletedPapers: completedPaperUpdate.newlyCompletedPapers,
     newlyTerminalPaperOperations: paperOperationUpdate.newlyTerminalPaperOperations,
+    newlyTerminalBatches: batchRunUpdate.newlyTerminalBatches,
   };
 }
 

@@ -14,12 +14,14 @@ For a running user graph, prefer the local Python wrappers in `scripts/` as the 
 If both a remote server API and a local checkout are available, use the remote API path first.
 Do not call local live-graph CLI helpers or local staged build commands against the live graph.
 If a PDF exists only on the local agent machine, stage it onto the API server first with `python3 scripts/pn_stage_sync.py`, then import it with `python3 scripts/pn_import_submit.py`. Do not default to inline request-body uploads for large local PDFs.
+If 2 or more staged papers must enter the graph before reasoning, prefer one `python3 scripts/pn_batch_import.py --manifest <json> submit` flow over repeated one-paper submit loops.
 In `openclaw-research` workflow mode, prefer launching these wrappers through `research_workflow.run_papernexus_wrapper`.
 
 Default live-graph wrapper set:
 
 - `pn_stage_sync.py` for local-to-remote staging
 - `pn_import_submit.py` for one-paper queued imports
+- `pn_batch_import.py` for manifest-driven multi-paper imports
 - `pn_import_queue.py list|status|log|wait` for task visibility and bounded waits
 - `pn_graph_query.py` for `query`, `context`, `impact`, `ideas`, and `brainstorm`
 - `pn_research_chains.py` for `path-trace`, `evidence-chain`, `reflection-chain`, `research-brief`, `brainstorm-brief`, `theory-brief`, `storyline-brief`, and `paper-enhancement`

@@ -295,7 +295,7 @@ test("papernexus import guard blocks multi-paper queued imports in one request",
   });
 
   assert.equal(result.block, true);
-  assert.match(result.reason ?? "", /one paper per import|single-paper/i);
+  assert.match(result.reason ?? "", /one paper per raw import task|single-paper|pn_batch_import/i);
 });
 
 test("papernexus import wait guard blocks long polling loops around remote imports", () => {
@@ -337,6 +337,20 @@ test("papernexus import wait guard blocks wrapper queue waits above 60 seconds",
 
   assert.equal(result.block, true);
   assert.match(result.reason ?? "", /60s|60s or less|60s budget|60s or less/i);
+});
+
+test("papernexus import wait guard blocks batch wrapper waits above 60 seconds per workflow pass", () => {
+  const result = shouldBlockPapernexusLongWaitImportCommand({
+    role: "researcher",
+    toolName: "bash",
+    toolParams: {
+      command:
+        'python3 scripts/pn_batch_import.py --api-base "https://papernexus.example" --corpus "demo" --manifest "/tmp/demo/batch-import.json" wait --timeout 300 --interval 15',
+    },
+  });
+
+  assert.equal(result.block, true);
+  assert.match(result.reason ?? "", /60s|batch|status|summary\/items|summary and items/i);
 });
 
 test("papernexus destructive guard blocks backup and restore commands during normal agent operation", () => {

@@ -114,7 +114,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 - project-local paper staging root = `{PROJ}/researcher/paper-staging`
-- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`), normally launched through `research_workflow.run_papernexus_wrapper`
+- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`), normally launched through `research_workflow.run_papernexus_wrapper`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 
@@ -162,6 +162,7 @@ Rules:
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
 - after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request a shared-graph refresh before innovation analysis
 - if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task wrappers and task logs instead of touching any home-directory shared PaperNexus storage directly
+- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; `/graph-build` should track manifest progress and then run short reconciliation passes
 - if workflow touches remote PaperNexus, go through the wrappers so auth and request shape stay consistent; do not write hand-rolled REST calls
 - workflow-owned automation must not depend on home-directory shared PaperNexus storage; use project-local staging plus authenticated remote wrapper calls instead
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
@@ -177,7 +178,7 @@ Rules:
 - Do not delete shared PaperNexus storage or run `backup-export`, `backup-unpack`, or `backup-load` during normal workflow operation
 - After Stage 0.5, ensure `{PROJ}/PROJECT_MANIFEST.json` points to the latest shared-graph readiness state and frontier report
 - treat `PROJECT_MANIFEST.json.paper_ingestion` as the durable PaperNexus progress ledger; if `runtime_status` is `waiting_import`, `waiting_graph`, or `reconciling`, do not interpret one stale `PAPERNEXUS_STATUS.json` snapshot as final failure
-- every wrapper-driven paper upload / parse / queue wait must update `research_workflow.set_paper_ingestion`; that is the approved way to get per-paper progress back into `/workflow-status` and the channel status stream
+- every wrapper-driven paper upload / parse / queue wait must update `research_workflow.set_paper_ingestion`; for batch imports that includes `active_batches`, `batch_items`, and `last_batch_manifest_path`, not only per-paper terminal states
 
 Graph refresh trigger:
 - refresh immediately if 1 new paper changes the closest-prior-work or novelty picture

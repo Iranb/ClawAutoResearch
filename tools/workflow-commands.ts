@@ -527,6 +527,11 @@ function formatWorkflowStatusText(params: {
     (snapshot.paperIngestionActiveOperationCount ?? 0) > 0 ||
     (snapshot.paperIngestionTimedOutOperationCount ?? 0) > 0 ||
     (snapshot.paperIngestionFailedOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionBatchCount ?? 0) > 0 ||
+    (snapshot.paperIngestionActiveBatchCount ?? 0) > 0 ||
+    (snapshot.paperIngestionPendingBatchItemCount ?? 0) > 0 ||
+    (snapshot.paperIngestionSyncedBatchItemCount ?? 0) > 0 ||
+    (snapshot.paperIngestionFailedBatchItemCount ?? 0) > 0 ||
     snapshot.paperIngestionReconcileRequired;
   const lines = [
     "Workflow Status",
@@ -543,7 +548,12 @@ function formatWorkflowStatusText(params: {
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
     ...(hasPaperIngestionSummary
       ? [
-          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, batches=${snapshot.paperIngestionBatchCount ?? 0}, active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0}, batch_pending_items=${snapshot.paperIngestionPendingBatchItemCount ?? 0}, batch_synced_items=${snapshot.paperIngestionSyncedBatchItemCount ?? 0}, batch_failed_items=${snapshot.paperIngestionFailedBatchItemCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+          ...(snapshot.paperIngestionLastBatchManifestPath
+            ? [
+                `PaperNexus batch manifest: ${snapshot.paperIngestionLastBatchManifestPath}`,
+              ]
+            : []),
         ]
       : []),
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,

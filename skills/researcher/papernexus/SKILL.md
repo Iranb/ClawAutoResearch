@@ -44,6 +44,7 @@ For live remote work, prefer these wrappers first:
 - `python3 scripts/pn_stage_sync.py`
 - `python3 scripts/pn_import_submit.py`
 - `python3 scripts/pn_import_queue.py`
+- `python3 scripts/pn_batch_import.py`
 - `python3 scripts/pn_graph_query.py`
 - `python3 scripts/pn_research_chains.py`
 
@@ -59,6 +60,7 @@ Default live-graph wrapper coverage:
 - `pn_stage_sync.py` stages local files onto the API server machine
 - `pn_import_submit.py` submits one staged file at a time and returns the queued import task id
 - `pn_import_queue.py list|status|log|wait` is the supported status/log surface for agents
+- `pn_batch_import.py template|submit|status|wait` is the default manifest-driven path for 2 or more staged papers
 - `pn_graph_query.py` handles typed graph reads such as `query`, `context`, `impact`, `ideas`, and `brainstorm`
 - `pn_research_chains.py` handles `path-trace`, `evidence-chain`, `reflection-chain`, `research-brief`, `brainstorm-brief`, `theory-brief`, `storyline-brief`, and `paper-enhancement`
 
@@ -176,13 +178,14 @@ Guidelines:
 - Wrapper-first import behavior:
   - use `pn_stage_sync.py` when a paper exists only on the local agent machine
   - use `pn_import_submit.py --server-file-path <remote-file>` for one-paper queued imports
-  - use `pn_import_queue.py` for `list`, `status`, `log`, and bounded `wait`
+  - use `pn_batch_import.py --manifest <json> submit|status|wait` for 2 or more staged papers
+  - use `pn_import_queue.py` for one-paper `list`, `status`, `log`, and bounded `wait`
   - if the same staged content is submitted again, expect the service to reuse or dedupe the existing task instead of forcing a brand-new import
   - avoid inline request-body uploads unless a human explicitly approves a small-file wrapper-debugging exception
 - Completed import task directories should not be treated as long-lived active scan roots. Completed imported sources are preserved through manifest-backed reuse instead of repeated directory rescans.
 - Agent live-graph policy:
-  - ingest new papers through `pn_import_submit.py`
-  - inspect queue state through `pn_import_queue.py`
+  - ingest one paper through `pn_import_submit.py` or many papers through `pn_batch_import.py`
+  - inspect queue state through `pn_import_queue.py` or `pn_batch_import.py status|wait`
   - read graph state through `pn_graph_query.py` and `pn_research_chains.py` first
   - if an operation exists only in raw HTTP and not in the wrappers, report the limitation instead of inventing requests or using local CLI against the live graph
 - Import-task execution should rebuild against the current committed corpus manifest and merge the task's `sourcesDir` on top of that base graph. Do not trust stored `task.inputPaths` as the authoritative rebuild root if they look stale or cross-machine.
@@ -231,6 +234,7 @@ For live or workflow-owned graph work, prefer the wrapper-first path:
 research_workflow.run_papernexus_wrapper -> python3 scripts/pn_stage_sync.py ...
 research_workflow.run_papernexus_wrapper -> python3 scripts/pn_import_submit.py ...
 research_workflow.run_papernexus_wrapper -> python3 scripts/pn_import_queue.py ...
+research_workflow.run_papernexus_wrapper -> python3 scripts/pn_batch_import.py ...
 research_workflow.run_papernexus_wrapper -> python3 scripts/pn_graph_query.py ...
 research_workflow.run_papernexus_wrapper -> python3 scripts/pn_research_chains.py ...
 ```
