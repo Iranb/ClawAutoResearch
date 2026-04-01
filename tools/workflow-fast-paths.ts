@@ -47,6 +47,15 @@ function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
 }
 
+function isGatewaySubagentUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /gateway request/i.test(message) ||
+    /runtime\.subagent/i.test(message) ||
+    /plugin runtime subagent methods are only available/i.test(message)
+  );
+}
+
 export type BackgroundRunRequest = {
   kind?: string;
   commandText?: string;
@@ -2297,6 +2306,118 @@ export function buildPapernexusSkillBackgroundCommand(commandText: string): stri
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+function isPapernexusImportLifecycleCommand(text: string | null | undefined): boolean {
+  const normalized = (text ?? "").toLowerCase();
+  return (
+    /\bscripts\/pn_stage_sync\.py\b/.test(normalized) ||
+    /\bscripts\/pn_import_submit\.py\b/.test(normalized) ||
+    (/\bscripts\/pn_import_queue\.py\b/.test(normalized) &&
+      /\b(status|log|wait)\b/.test(normalized))
+  );
+}
+
+function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
+  kind?: string | null;
+  commandText?: string | null;
+}): string {
+  const normalizedKind = readString(params?.kind)?.toLowerCase() ?? null;
+  const commandText = readString(params?.commandText) ?? null;
+  const papernexusBackground =
+    isPapernexusBackgroundKind(normalizedKind ?? "") ||
+    looksLikePapernexusHeavyCommand(commandText ?? "");
+  const importLifecycleCommand = isPapernexusImportLifecycleCommand(commandText);
+  const lines = [
+    "BACKGROUND_WORKFLOW_CONTINUATION=1",
+    "This run was launched from a slash-command fast path into a dedicated workflow subagent session.",
+    "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.",
+    "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+  ];
+  if (papernexusBackground) {
+    lines.push(
+      "PaperNexus workflow rule: stay wrapper-first. Use the authenticated Python wrappers and do not fall back to local PaperNexus live-graph CLI work or hand-written REST calls."
+    );
+  }
+  if (importLifecycleCommand) {
+    lines.push(
+      "PaperNexus import rule: process one paper per import task, keep each paper within a 60 seconds total wait budget, and do not poll indefinitely."
+    );
+    lines.push(
+      "Before and after each paper import or graph reconcile step, call research_workflow.set_paper_ingestion so runtime_status, import_task_ids, paper_operations, and completed_papers stay durable."
+    );
+    lines.push(
+      "When a paper completes, write completed_papers with canonical_id, title, and import_task_id. When a paper times out or fails, write paper_operations with the terminal status and move on to the next paper."
+    );
+    lines.push(
+      "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will broadcast the per-paper completion or timeout update for you."
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
+  workflowPolicy: WorkflowGuardPolicy;
+  agentCtx: BackgroundRunAgentContext;
+  ownerAgent: string | null;
+  queueKey: string;
+  preferredSessionKey: string;
+  family: string;
+  kind: string;
+  projectId: string | null;
+  projectRoot: string | null;
+  summary: string | null;
+  commandText: string;
+  reusableBackgroundSessionKey?: string | null;
+  activeResearcherSessionsInChannel?: number | null;
+  unavailableReason?: string | null;
+}): Promise<BackgroundRunStartResult> {
+  const queued = await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: params.ownerAgent,
+    requesterSessionKey: params.agentCtx.sessionKey,
+    messageChannel: params.agentCtx.messageChannel,
+    preferredSessionKey: params.preferredSessionKey,
+    family: params.family,
+    kind: params.kind,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.workflowPolicy.projectsRoot,
+    queueKey: params.queueKey,
+    summary: params.summary,
+    runPayload: {
+      message: params.commandText,
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: `openclaw-research:bg:${params.preferredSessionKey}:${params.queueKey}`,
+      extraSystemPrompt: buildBackgroundWorkflowContinuationSystemPrompt({
+        kind: params.kind,
+        commandText: params.commandText,
+      }),
+    },
+  });
+  const targetLabel =
+    params.projectId ?? params.projectRoot ?? "the current project";
+  const recoveryNote = readString(params.unavailableReason);
+  return {
+    started: false,
+    reason: "runtime_unavailable",
+    runId: null,
+    sessionKey: null,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    summary:
+      `Queued background workflow for ${targetLabel} because the command runtime ` +
+      `could not access a gateway-bound subagent session. It will auto-start when the ` +
+      `workflow coordinator regains runtime access` +
+      `${queued.queuePosition > 0 ? ` (queue position ${queued.queuePosition})` : ""}.` +
+      `${recoveryNote ? ` Cause: ${recoveryNote}` : ""}`,
+    reusedIdleSession: Boolean(params.reusableBackgroundSessionKey),
+    activeResearcherSessionsInChannel:
+      params.activeResearcherSessionsInChannel ?? null,
+    queued: true,
+    queueKey: queued.entry.queueKey,
+  };
+}
+
 export async function startBackgroundWorkflowRun(params: {
   runtimeSubagent?: {
     run: (params: {
@@ -2321,11 +2442,6 @@ export async function startBackgroundWorkflowRun(params: {
   snapshot: BackgroundRunSnapshot;
   backgroundRun: BackgroundRunRequest;
 }): Promise<BackgroundRunStartResult> {
-  if (!params.runtimeSubagent) {
-    throw new Error(
-      "Background workflow execution requires gateway runtime.subagent access."
-    );
-  }
   if (!params.agentCtx.sessionKey) {
     throw new Error(
       "Background workflow execution requires a resolved sessionKey for this channel."
@@ -2446,6 +2562,33 @@ export async function startBackgroundWorkflowRun(params: {
           ? [derivePapernexusTaskLabel(commandText), resolvedProjectId]
           : [resolvedProjectId, topic],
     }) ?? params.agentCtx.sessionKey;
+  const continuationSystemPrompt = buildBackgroundWorkflowContinuationSystemPrompt({
+    kind: normalizedKind,
+    commandText,
+  });
+  const queueIfRuntimeUnavailable = async (reason?: string | null) =>
+    queueBackgroundWorkflowUntilRuntimeRecovers({
+      workflowPolicy: params.workflowPolicy,
+      agentCtx: params.agentCtx,
+      ownerAgent,
+      queueKey,
+      preferredSessionKey: preferredBackgroundSessionKey,
+      family: normalizedFamily,
+      kind: normalizedKind,
+      projectId: resolvedProjectId,
+      projectRoot: resolvedProjectRoot,
+      summary:
+        readString(params.backgroundRun.summary) ??
+        `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+      commandText,
+      unavailableReason: reason,
+    });
+
+  if (!params.runtimeSubagent) {
+    return queueIfRuntimeUnavailable(
+      "Background workflow execution requires gateway runtime.subagent access."
+    );
+  }
 
   const sessionLease = await acquireBackgroundWorkflowSession({
     runtimeSubagent: params.runtimeSubagent,
@@ -2485,11 +2628,7 @@ export async function startBackgroundWorkflowRun(params: {
         lane: "nested",
         deliver: false,
         idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
-        extraSystemPrompt:
-          "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-          "This queued run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
-          "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
-          "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+        extraSystemPrompt: continuationSystemPrompt,
       },
     });
     return {
@@ -2536,11 +2675,7 @@ export async function startBackgroundWorkflowRun(params: {
             lane: "nested",
             deliver: false,
             idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
-            extraSystemPrompt:
-              "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-              "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
-              "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
-              "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+            extraSystemPrompt: continuationSystemPrompt,
           },
         },
         spawn: async () => {
@@ -2550,11 +2685,7 @@ export async function startBackgroundWorkflowRun(params: {
             lane: "nested",
             deliver: false,
             idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
-            extraSystemPrompt:
-              "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-              "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
-              "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
-              "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+            extraSystemPrompt: continuationSystemPrompt,
           });
           return {
             runId: started.runId,
@@ -2570,6 +2701,28 @@ export async function startBackgroundWorkflowRun(params: {
       })
     : null;
   if (directLaunch && (!directLaunch.launched || !directLaunch.runId || !directLaunch.sessionKey)) {
+    if (isGatewaySubagentUnavailableError(directLaunch.error)) {
+      return queueBackgroundWorkflowUntilRuntimeRecovers({
+        workflowPolicy: params.workflowPolicy,
+        agentCtx: params.agentCtx,
+        ownerAgent,
+        queueKey,
+        preferredSessionKey: preferredBackgroundSessionKey,
+        family: normalizedFamily,
+        kind: normalizedKind,
+        projectId:
+          ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+        projectRoot:
+          ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+        summary:
+          readString(params.backgroundRun.summary) ??
+          `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+        commandText,
+        reusableBackgroundSessionKey,
+        activeResearcherSessionsInChannel,
+        unavailableReason: directLaunch.error,
+      });
+    }
     return {
       started: false,
       reason: "runtime_unavailable",
@@ -2587,22 +2740,45 @@ export async function startBackgroundWorkflowRun(params: {
       queueKey,
     };
   }
-  const runId =
-    directLaunch?.runId ??
-    (
-      await params.runtimeSubagent.run({
-        sessionKey: backgroundSessionKey,
-        message: commandText,
-        lane: "nested",
-        deliver: false,
-        idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
-        extraSystemPrompt:
-          "BACKGROUND_WORKFLOW_CONTINUATION=1\n" +
-          "This run was launched from a slash-command fast path into a dedicated workflow subagent session.\n" +
-          "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.\n" +
-          "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
-      })
-    ).runId;
+  let runId: string;
+  try {
+    runId =
+      directLaunch?.runId ??
+      (
+        await params.runtimeSubagent.run({
+          sessionKey: backgroundSessionKey,
+          message: commandText,
+          lane: "nested",
+          deliver: false,
+          idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
+          extraSystemPrompt: continuationSystemPrompt,
+        })
+      ).runId;
+  } catch (error) {
+    if (!isGatewaySubagentUnavailableError(error)) {
+      throw error;
+    }
+    return queueBackgroundWorkflowUntilRuntimeRecovers({
+      workflowPolicy: params.workflowPolicy,
+      agentCtx: params.agentCtx,
+      ownerAgent,
+      queueKey,
+      preferredSessionKey: preferredBackgroundSessionKey,
+      family: normalizedFamily,
+      kind: normalizedKind,
+      projectId:
+        ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      projectRoot:
+        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      summary:
+        readString(params.backgroundRun.summary) ??
+        `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+      commandText,
+      reusableBackgroundSessionKey,
+      activeResearcherSessionsInChannel,
+      unavailableReason: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   if (ownerAgent === "researcher" && channelKey) {
       await recordBackgroundWorkflowRun({

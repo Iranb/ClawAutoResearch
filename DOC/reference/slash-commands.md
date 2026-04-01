@@ -16,6 +16,9 @@
 - `/research-queue`  
   多项目队列与切换入口。适合维护多个并行研究项目。
 
+- `/workflow-status`  
+  当前 workflow 快照入口。除了 stage / owner / gate，也会显示 PaperNexus 的 graph refresh 与 paper ingestion 摘要；看到 `graph refresh required` 时，要结合 `PaperNexus ingestion` 一行判断是“真的缺论文”还是“wrapper 驱动的导入/重算仍在进行中”。
+
 ## 3. 文献与图谱
 
 - `/research-lit`  

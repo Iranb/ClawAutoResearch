@@ -52,6 +52,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 10:** Use exactly one paper per queued import call. Do not send multi-file `files[]` batches through the wrapper or the API; each paper must become its own remote task so timeout and progress are isolated
    - **Step 11:** Bound each queued import to at most 60 seconds total wait. If the task has not reached `completed` within 60 seconds, call `research_workflow.set_paper_ingestion` with `paper_operations=[{phase:\"import\",status:\"timed_out\",...}]`, report the timeout, and move on to the next paper instead of polling indefinitely
    - **Step 12:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
+   - **Step 13:** If this wrapper flow is running inside a delegated sub-agent or dedicated workflow session, do not rely on a free-form chat reply as the progress signal; `research_workflow.set_paper_ingestion` is the required feedback path for per-paper completion, timeout, or failure
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -254,6 +255,7 @@ Notes:
 - if required papers are missing from the shared graph, record the gap and request or queue a shared-graph refresh rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
 - if a PaperNexus queued import or remote graph reconcile has not finished within 60 seconds for one paper, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
+- if `PAPERNEXUS_STATUS.json` still looks stale but `paper_ingestion.runtime_status` says `waiting_import`, `waiting_graph`, or `reconciling`, treat the graph refresh as in-flight rather than silently claiming the corpus is permanently missing
 - when checking presence or frontier structure, prefer `research_workflow.run_papernexus_wrapper` with `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
 
 ### Step 3.5: Brainstorm During Research (mandatory)

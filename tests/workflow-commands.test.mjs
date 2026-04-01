@@ -9,6 +9,8 @@ import {
   resolveBindingConversationFromCommandContext,
   resolveWorkflowCommandSessionTarget,
 } from "../tools/workflow-commands.ts";
+import { drainQueuedBackgroundWorkflowRuns } from "../tools/workflow-fast-paths.ts";
+import { readWorkflowRuntimeQueueStore } from "../tools/workflow-runtime-state.ts";
 import {
   createAutoModeDiscussionRound,
   saveAutoModeDiscussionStore,
@@ -286,6 +288,101 @@ test("resume-pipeline command starts a background continuation for an explicit e
   assert.equal(captured.backgroundRun.kind, "resume_pipeline");
 });
 
+test("resume-pipeline command queues the continuation instead of failing when runtime subagent access is unavailable", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "paper-lab", current_stage: "graph_build" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return `/tmp/workspace-${agentId}`;
+        },
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute() {
+            return {
+              agentId: "main",
+              sessionKey: "agent:main:discord:channel:paper-lab",
+            };
+          },
+        },
+      },
+      subagent: {
+        async run() {
+          throw new Error(
+            "Plugin runtime subagent methods are only available during a gateway request."
+          );
+        },
+      },
+    },
+  });
+  const resumeCommand = getCommand(createResearchWorkflowCommands(api, {
+    resolveConversationBindingRecord() {
+      return {
+        targetSessionKey: "agent:coder:discord:group:paper-lab",
+      };
+    },
+    async buildWorkflowSnapshot() {
+      return {
+        role: "coder",
+        projectRoot: null,
+        projectId: null,
+        projectResolutionSource: "none",
+        channelProjectBindingsEnabled: true,
+        unreadMailbox: [],
+        idleResearchEnabled: false,
+        idleResearchDue: false,
+        idleResearchTopic: null,
+      };
+    },
+  }), "resume-pipeline");
+
+  const result = await resumeCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/resume-pipeline paper-lab",
+    args: "paper-lab",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text ?? "", /queued background workflow/i);
+  assert.match(result.text ?? "", /gateway-bound subagent/i);
+
+  const runtimeQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(runtimeQueue.entries.length, 1);
+  assert.equal(runtimeQueue.entries[0].status, "degraded");
+  assert.equal(runtimeQueue.entries[0].kind, "resume_pipeline");
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    projectsRoot,
+  });
+  assert.equal(drained.remaining.length, 1);
+  assert.ok(["queued", "degraded"].includes(drained.remaining[0].status));
+  assert.equal(drained.remaining[0].kind, "resume_pipeline");
+});
+
 test("workflow-status command returns a readable workflow summary", async () => {
   const api = makeApi();
   const statusCommand = getCommand(createResearchWorkflowCommands(api, {
@@ -313,6 +410,13 @@ test("workflow-status command returns a readable workflow summary", async () => 
         idleResearchTopic: "spectral clustering under drift",
         graphRefreshRequired: true,
         graphRefreshReason: "new core papers found",
+        paperIngestionRuntimeStatus: "waiting_graph",
+        paperIngestionImportTaskCount: 3,
+        paperIngestionCompletedPaperCount: 11,
+        paperIngestionActiveOperationCount: 2,
+        paperIngestionTimedOutOperationCount: 1,
+        paperIngestionFailedOperationCount: 0,
+        paperIngestionReconcileRequired: true,
         innovationReflectionStatus: "stale",
         innovationReflectionDue: true,
         experimentSyncRequired: false,
@@ -419,6 +523,7 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Mailbox: 2 unread/);
   assert.match(result.text ?? "", /Idle research: enabled=true, due=true, topic=spectral clustering under drift/);
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
+  assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, reconcile_required=true/);
   assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);

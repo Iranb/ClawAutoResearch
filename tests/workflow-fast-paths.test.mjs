@@ -300,6 +300,58 @@ test("startBackgroundWorkflowRun requires an explicit wrapper command for legacy
   );
 });
 
+test("startBackgroundWorkflowRun gives PaperNexus import continuations explicit per-paper state-feedback instructions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-import-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:imports-room",
+      sessionId: "session-bg-import-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      title: "import one paper",
+      commandText:
+        "python3 scripts/pn_import_submit.py --api-base 'https://papernexus.example/api' --corpus 'demo' --paper-id 'arxiv:2501.00031' --server-file-path '/tmp/demo/2501.00031.pdf'",
+      summary: "Queued wrapper-driven PaperNexus import",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^python3 scripts\/pn_import_submit\.py\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /research_workflow\.set_paper_ingestion/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /one paper per import/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /60s|60 seconds/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /completed_papers/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /paper_operations/i);
+});
+
 test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
@@ -363,6 +415,68 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   assert.equal(runtimeQueue.entries[0].status, "running");
   assert.equal(runtimeQueue.entries[0].entryType, "background_run");
   assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
+});
+
+test("startBackgroundWorkflowRun queues the continuation when runtime subagent access is unavailable", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run() {
+        throw new Error(
+          "Plugin runtime subagent methods are only available during a gateway request."
+        );
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-unavailable-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "resume_pipeline",
+      projectId: "bird-graph",
+      topic: "bird species discovery",
+      commandText: '/resume-pipeline "bird-graph" -- __BACKGROUND_CONTINUATION__: true',
+    },
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(result.reason, "runtime_unavailable");
+  assert.equal(result.queued, true);
+  assert.match(result.summary, /queued background workflow/i);
+  assert.match(result.summary, /gateway-bound subagent/i);
+  assert.equal(typeof result.projectRoot, "string");
+  assert.equal(result.projectId, "bird-graph");
+
+  const runtimeQueue = await readWorkflowRuntimeQueueStore(result.projectRoot);
+  assert.equal(runtimeQueue.entries.length, 1);
+  assert.equal(runtimeQueue.entries[0].status, "degraded");
+  assert.equal(runtimeQueue.entries[0].entryType, "background_run");
+  assert.equal(runtimeQueue.entries[0].kind, "resume_pipeline");
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    projectsRoot,
+  });
+  assert.equal(drained.remaining.length, 1);
+  assert.ok(["queued", "degraded"].includes(drained.remaining[0].status));
+  assert.equal(drained.remaining[0].kind, "resume_pipeline");
 });
 
 test("startBackgroundWorkflowRun can bootstrap a research-queue continuation", async (t) => {

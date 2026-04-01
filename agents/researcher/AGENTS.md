@@ -187,6 +187,8 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, remote import-task progress checks, shared-graph reconciliation, and innovation analysis with the relevant agents. If `idle_research.enabled = true` and the round is due, Researcher must prioritize `/idle-research` on that topic before generic literature drift. If new papers may change the frontier, refresh the graph before the next critical decision.
 
+**PaperNexus feedback is durable, not conversational:** when you delegate wrapper-driven upload / parse / queue work into a dedicated subagent session, do not wait for a free-form chat reply before updating workflow state. Use `research_workflow.set_paper_ingestion` for every per-paper queued / running / completed / timed_out / failed milestone so `/workflow-status` and channel broadcasts stay current.
+
 **Experiment memory is mandatory:** do not trust chat history for what was already run. Before launching, resuming, or interpreting experiments, read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` or `research_workflow.get_experiment_memory`. After any queue / launch / result / decision milestone, upsert the ledger and mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`.
 
 **Tracks must be explicitly managed:** after idea discovery, candidate directions must be written into `{PROJ}/TRACK_REGISTRY.json`, with clear `active`, `parked`, and `killed` states. Do not rely on vague prose inside `IDEA_REPORT.md`.

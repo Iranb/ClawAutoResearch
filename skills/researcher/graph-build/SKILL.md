@@ -122,6 +122,8 @@ Hard rule:
 - if a shared-graph refresh is needed and the automated path fails, report the exact non-force command to the user and let the user run it manually instead of escalating to a forced rebuild
 - do **not** wait indefinitely for one remote paper import or one graph-reconcile attempt; cap each paper at 60 seconds, record timeout state, and continue with the next paper
 - do **not** bundle multiple papers into one remote queued import just to reduce API calls; the workflow needs one-paper progress and timeout isolation
+- when remote PaperNexus status looks stale, cross-check `PROJECT_MANIFEST.json.paper_ingestion` before declaring a hard missing-corpus failure; `waiting_import`, `waiting_graph`, or `reconciling` means the wrapper-driven refresh is still in flight
+- every per-paper terminal state must be reflected through `research_workflow.set_paper_ingestion`, because that is what feeds `/workflow-status` and the Discord-visible completion/timeout updates
 
 Use these refresh triggers:
 - 1 newly ingested paper that changes the novelty baseline or closest prior work
@@ -130,6 +132,10 @@ Use these refresh triggers:
 - when running a multi-paper batch, reconcile after each completed paper and keep the final `/graph-build` pass short; it should summarize readiness, not become an unbounded wait loop
 
 If remote ingestion keeps falling behind, stop and report that the configured remote PaperNexus service or import worker needs attention. Do not fall back to local watch/analyze commands.
+
+Feedback rule:
+- if graph build delegated wrapper work into a background subagent, require progress to come back through `research_workflow.set_paper_ingestion` and the workflow status broadcast path
+- do not wait for a free-form subagent reply before updating channel-visible status
 
 ## Output Files
 

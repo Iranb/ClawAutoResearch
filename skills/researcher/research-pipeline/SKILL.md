@@ -55,6 +55,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - After the tool returns:
      - Reply briefly that the pipeline has started in the background
      - Include `project_id` / `project_root` if the tool returned them
+     - Treat later PaperNexus wrapper work as the same kind of dedicated background work; do not block the foreground chat on one remote import or one graph reconcile
      - **STOP**
    - The background continuation will do the real work and post progress updates to the channel or mailbox
 
@@ -175,12 +176,18 @@ Rules:
 - Do not use `--force` for these workflow-owned literature graph refreshes; if graph build fails, give the exact cache-first command to the user instead of forcing a rebuild
 - Do not delete shared PaperNexus storage or run `backup-export`, `backup-unpack`, or `backup-load` during normal workflow operation
 - After Stage 0.5, ensure `{PROJ}/PROJECT_MANIFEST.json` points to the latest shared-graph readiness state and frontier report
+- treat `PROJECT_MANIFEST.json.paper_ingestion` as the durable PaperNexus progress ledger; if `runtime_status` is `waiting_import`, `waiting_graph`, or `reconciling`, do not interpret one stale `PAPERNEXUS_STATUS.json` snapshot as final failure
+- every wrapper-driven paper upload / parse / queue wait must update `research_workflow.set_paper_ingestion`; that is the approved way to get per-paper progress back into `/workflow-status` and the channel status stream
 
 Graph refresh trigger:
 - refresh immediately if 1 new paper changes the closest-prior-work or novelty picture
 - refresh when 3+ genuinely new canonical papers accumulate since the last graph sync
 - refresh when 2+ new recent venue papers materially overlap with the active topic
 - otherwise defer to the next major checkpoint
+
+Slash-command observability rule:
+- `/research-pipeline`, `/research-queue`, and `/resume-pipeline` may queue the continuation when gateway-bound runtime access is temporarily unavailable; the durable runtime queue plus `paper_ingestion` state is the recovery path, not a workflow failure by itself
+- `/workflow-status` should be read as a combined view: `Graph refresh` plus `PaperNexus ingestion` together tell you whether the graph is truly missing papers or is still catching up through wrapper tasks
 
 ## Mode A: Single Project Pipeline
 

@@ -34,6 +34,7 @@ You own the **execution side** of the research pipeline: from topic selection, l
 - **Never bypass review.** Critical checkpoints (idea confirmation, experiment completeness) must pass the review-phase quality gate.
 - **Use screen/tmux for long-running experiments.** Avoid losing work when SSH disconnects.
 - **PaperNexus is remote-only in workflow-owned work.** Do not read or write `~/.papernexus/papers` or `~/.papernexus/index-store`, and do not rely on local live-graph CLI operations against workflow state. Use `{PROJ}/researcher/paper-staging/` plus `research_workflow.run_papernexus_wrapper` with the authenticated Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead.
+- **PaperNexus progress must be durable.** Wrapper-driven paper uploads and graph reconciles are not complete until their status has been written back through `research_workflow.set_paper_ingestion`; do not trust a missing sub-agent reply as proof that nothing happened.
 
 ## Communication Style
 

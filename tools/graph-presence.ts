@@ -867,6 +867,97 @@ function buildBlockingReason(
   return `PaperNexus corpus is missing ${missingPapers.length}/${expectedPaperCount} expected paper(s): ${preview}${missingPapers.length > 3 ? "; ..." : ""}. Refresh the graph before frontier mapping or ideation.`;
 }
 
+function summarizePaperIngestionProgress(
+  manifest: ManifestLike
+): {
+  runtimeStatus: string | null;
+  importTaskCount: number;
+  completedCount: number;
+  activeOperationCount: number;
+  timedOutCount: number;
+  failedCount: number;
+  waitingReason: string | null;
+  inFlight: boolean;
+} {
+  const paperIngestion = asRecord(manifest.paper_ingestion);
+  const runtimeStatus =
+    pickString(paperIngestion, ["runtime_status", "runtimeStatus"])?.toLowerCase() ?? null;
+  const waitingReason = pickString(paperIngestion, ["waiting_reason", "waitingReason"]);
+  const importTaskIds = Array.isArray(paperIngestion?.import_task_ids)
+    ? paperIngestion.import_task_ids
+    : Array.isArray(paperIngestion?.importTaskIds)
+      ? paperIngestion.importTaskIds
+      : [];
+  const completedPapers = Array.isArray(paperIngestion?.completed_papers)
+    ? paperIngestion.completed_papers
+    : Array.isArray(paperIngestion?.completedPapers)
+      ? paperIngestion.completedPapers
+      : [];
+  const paperOperations = Array.isArray(paperIngestion?.paper_operations)
+    ? paperIngestion.paper_operations
+    : Array.isArray(paperIngestion?.paperOperations)
+      ? paperIngestion.paperOperations
+      : [];
+  let activeOperationCount = 0;
+  let timedOutCount = 0;
+  let failedCount = 0;
+  for (const item of paperOperations) {
+    const record = asRecord(item);
+    const status = pickString(record, ["status"])?.toLowerCase() ?? null;
+    if (status === "queued" || status === "running") {
+      activeOperationCount += 1;
+    } else if (status === "timed_out") {
+      timedOutCount += 1;
+    } else if (status === "failed") {
+      failedCount += 1;
+    }
+  }
+  const importTaskCount = importTaskIds
+    .map((value) => asString(value))
+    .filter((value): value is string => Boolean(value)).length;
+  const completedCount = completedPapers
+    .map((value) => asRecord(value))
+    .filter((value): value is Record<string, unknown> => Boolean(value)).length;
+  const inFlight =
+    runtimeStatus === "waiting_import" ||
+    runtimeStatus === "waiting_graph" ||
+    runtimeStatus === "reconciling" ||
+    activeOperationCount > 0 ||
+    (importTaskCount > 0 && completedCount === 0);
+  return {
+    runtimeStatus,
+    importTaskCount,
+    completedCount,
+    activeOperationCount,
+    timedOutCount,
+    failedCount,
+    waitingReason,
+    inFlight,
+  };
+}
+
+function buildInFlightRemoteRefreshReason(params: {
+  remoteApiBaseUrl: string | null;
+  expectedPaperCount: number;
+  presentPaperCount: number;
+  paperIngestion: ReturnType<typeof summarizePaperIngestionProgress>;
+}): string {
+  const details = [
+    `paper_ingestion reports status=${params.paperIngestion.runtimeStatus ?? "unknown"}`,
+    `import_tasks=${params.paperIngestion.importTaskCount}`,
+    `completed=${params.paperIngestion.completedCount}`,
+    `active_operations=${params.paperIngestion.activeOperationCount}`,
+    `timed_out=${params.paperIngestion.timedOutCount}`,
+    `failed=${params.paperIngestion.failedCount}`,
+  ];
+  return (
+    `PaperNexus graph refresh is still reconciling through the remote wrapper flow${params.remoteApiBaseUrl ? ` at ${params.remoteApiBaseUrl}` : ""}: ` +
+    `remote status currently covers ${params.presentPaperCount}/${params.expectedPaperCount} expected paper(s), and ${details.join(", ")}.` +
+    `${params.paperIngestion.waitingReason ? ` Waiting reason: ${params.paperIngestion.waitingReason}.` : ""} ` +
+    "Continue /graph-build or wait for the next wrapper status update before frontier mapping or ideation."
+  );
+}
+
 function serializeMissingPapers(missingPapers: GraphPresenceMissingPaper[]) {
   return missingPapers.map((paper) => ({
     canonical_id: paper.canonicalId,
@@ -1002,6 +1093,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
   const statusRecord = await readJsonIfExists<Record<string, unknown>>(statusPath);
   const remoteApiBaseUrl = remoteInspection.summary.apiBaseUrl;
+  const paperIngestionProgress = summarizePaperIngestionProgress(params.manifest);
 
   let status: GraphPresenceStatus = "ready";
   let refreshReason: string | null = null;
@@ -1019,9 +1111,15 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     presentPaperCount = 0;
   } else if (!statusRecord) {
     status = "missing_corpus";
-    refreshReason =
-      `No remote PaperNexus graph status is recorded yet for ${remoteApiBaseUrl ?? "the configured API"}. ` +
-      "Run /graph-build with the configured remote PaperNexus endpoint before frontier mapping or ideation.";
+    refreshReason = paperIngestionProgress.inFlight
+      ? buildInFlightRemoteRefreshReason({
+          remoteApiBaseUrl,
+          expectedPaperCount: params.expected.papers.length,
+          presentPaperCount: 0,
+          paperIngestion: paperIngestionProgress,
+        })
+      : `No remote PaperNexus graph status is recorded yet for ${remoteApiBaseUrl ?? "the configured API"}. ` +
+        "Run /graph-build with the configured remote PaperNexus endpoint before frontier mapping or ideation.";
     presentPaperCount = 0;
   } else {
     const statusExpectedCount =
@@ -1042,10 +1140,16 @@ async function checkGraphPresenceViaRemoteStatus(params: {
 
     if (statusExpectedCount !== params.expected.papers.length) {
       status = "missing_corpus";
-      refreshReason =
-        `Remote PaperNexus graph status is stale for ${remoteApiBaseUrl ?? "the configured API"}: ` +
-        `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
-        "Rerun /graph-build before frontier mapping or ideation.";
+      refreshReason = paperIngestionProgress.inFlight
+        ? buildInFlightRemoteRefreshReason({
+            remoteApiBaseUrl,
+            expectedPaperCount: params.expected.papers.length,
+            presentPaperCount,
+            paperIngestion: paperIngestionProgress,
+          })
+        : `Remote PaperNexus graph status is stale for ${remoteApiBaseUrl ?? "the configured API"}: ` +
+          `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
+          "Rerun /graph-build before frontier mapping or ideation.";
       presentPaperCount = Math.min(presentPaperCount, params.expected.papers.length);
     } else if (normalizedStatus === "missing_corpus") {
       status = "missing_corpus";
@@ -1063,14 +1167,20 @@ async function checkGraphPresenceViaRemoteStatus(params: {
       presentPaperCount < params.expected.papers.length
     ) {
       status = "missing_papers";
-      refreshReason =
-        statusRefreshReason ??
-        buildBlockingReason(
-          "missing_papers",
-          missingPapers,
-          params.expected.papers.length,
-          remoteApiBaseUrl
-        );
+      refreshReason = paperIngestionProgress.inFlight
+        ? buildInFlightRemoteRefreshReason({
+            remoteApiBaseUrl,
+            expectedPaperCount: params.expected.papers.length,
+            presentPaperCount,
+            paperIngestion: paperIngestionProgress,
+          })
+        : statusRefreshReason ??
+          buildBlockingReason(
+            "missing_papers",
+            missingPapers,
+            params.expected.papers.length,
+            remoteApiBaseUrl
+          );
     } else {
       status = "ready";
       presentPaperCount = params.expected.papers.length;

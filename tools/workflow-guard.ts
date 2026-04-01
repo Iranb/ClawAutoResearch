@@ -770,6 +770,10 @@ export type WorkflowSnapshot = {
   paperIngestionRuntimeStatus: string | null;
   paperIngestionWaitingReason: string | null;
   paperIngestionImportTaskCount: number | null;
+  paperIngestionCompletedPaperCount: number | null;
+  paperIngestionActiveOperationCount: number | null;
+  paperIngestionTimedOutOperationCount: number | null;
+  paperIngestionFailedOperationCount: number | null;
   paperIngestionLastImportStatus: string | null;
   paperIngestionGraphVersionSeen: string | null;
   paperIngestionReconcileRequired: boolean;
@@ -8608,6 +8612,15 @@ export async function buildWorkflowSnapshot(params: {
   });
   const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
   const paperIngestionState = normalizePaperIngestionState(paperIngestion);
+  const paperIngestionActiveOperationCount = paperIngestionState.paperOperations.filter(
+    (entry) => entry.status === "queued" || entry.status === "running"
+  ).length;
+  const paperIngestionTimedOutOperationCount = paperIngestionState.paperOperations.filter(
+    (entry) => entry.status === "timed_out"
+  ).length;
+  const paperIngestionFailedOperationCount = paperIngestionState.paperOperations.filter(
+    (entry) => entry.status === "failed"
+  ).length;
   const experimentMemory = asRecord(projectState.manifest?.experiment_memory);
   const idleResearch = normalizeIdleResearchState(
     asRecord(projectState.manifest?.idle_research)
@@ -8831,6 +8844,10 @@ export async function buildWorkflowSnapshot(params: {
     paperIngestionRuntimeStatus: paperIngestionState.runtimeStatus,
     paperIngestionWaitingReason: paperIngestionState.waitingReason,
     paperIngestionImportTaskCount: paperIngestionState.importTaskIds.length,
+    paperIngestionCompletedPaperCount: paperIngestionState.completedPapers.length,
+    paperIngestionActiveOperationCount,
+    paperIngestionTimedOutOperationCount,
+    paperIngestionFailedOperationCount,
     paperIngestionLastImportStatus: paperIngestionState.lastImportStatus,
     paperIngestionGraphVersionSeen: paperIngestionState.graphVersionSeen,
     paperIngestionReconcileRequired: paperIngestionState.reconcileRequired,

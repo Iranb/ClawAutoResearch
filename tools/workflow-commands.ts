@@ -520,6 +520,14 @@ function formatWorkflowStatusText(params: {
   const unreadMailboxCount = Array.isArray(snapshot.unreadMailbox)
     ? snapshot.unreadMailbox.length
     : 0;
+  const hasPaperIngestionSummary =
+    Boolean(snapshot.paperIngestionRuntimeStatus) ||
+    (snapshot.paperIngestionImportTaskCount ?? 0) > 0 ||
+    (snapshot.paperIngestionCompletedPaperCount ?? 0) > 0 ||
+    (snapshot.paperIngestionActiveOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionTimedOutOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionFailedOperationCount ?? 0) > 0 ||
+    snapshot.paperIngestionReconcileRequired;
   const lines = [
     "Workflow Status",
     `Session: ${params.targetSessionKey}`,
@@ -533,6 +541,11 @@ function formatWorkflowStatusText(params: {
     `Mailbox: ${unreadMailboxCount} unread`,
     `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
+    ...(hasPaperIngestionSummary
+      ? [
+          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+        ]
+      : []),
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
     `Experiment sync: ${snapshot.experimentSyncRequired ? `required (${snapshot.experimentPapernexusSyncStatus ?? "pending"})` : "not required"}`,
   ];

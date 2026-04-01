@@ -1140,6 +1140,96 @@ test("graph presence check does not fall back to local corpus files when remote 
   assert.equal(result.missingPaperCount, 1);
 });
 
+test("graph presence check reports remote PaperNexus reconciliation in progress when wrapper-driven ingestion is active", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2305.18909",
+      arxiv_id: "2305.18909",
+      title: "First Missing Paper",
+      source_provider: "hugging-face-paper-pages",
+      retrieval_providers: ["papers-cool"],
+    },
+    {
+      canonical_id: "arxiv:2602.19872",
+      arxiv_id: "2602.19872",
+      title: "Second Missing Paper",
+      source_provider: "arxiv2md-api",
+      retrieval_providers: ["papers-cool"],
+    },
+    {
+      canonical_id: "arxiv:2603.15263",
+      arxiv_id: "2603.15263",
+      title: "Third Missing Paper",
+      source_provider: "pdf",
+      retrieval_providers: ["papers-cool"],
+    },
+  ]);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    title: "Demo Project",
+    current_stage: "graph_build",
+    paper_ingestion: {
+      runtime_status: "waiting_graph",
+      waiting_reason: "wrapper queue is still importing and reconciling newly staged papers",
+      import_task_ids: ["imp:1", "imp:2"],
+      completed_papers: [
+        {
+          canonical_id: "arxiv:2305.18909",
+          title: "First Missing Paper",
+          import_task_id: "imp:1",
+        },
+      ],
+      paper_operations: [
+        {
+          canonical_id: "arxiv:2602.19872",
+          title: "Second Missing Paper",
+          import_task_id: "imp:2",
+          phase: "import",
+          status: "running",
+          timeout_seconds: 60,
+        },
+      ],
+      reconcile_required: true,
+    },
+    idle_research: { enabled: false },
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    status: "missing_papers",
+    expectedPaperCount: 0,
+    presentPaperCount: 0,
+    missingPapers: [],
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: "https://papernexus.example/api",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "missing_corpus");
+  assert.match(result.blockingReason ?? "", /still reconciling/i);
+  assert.match(result.blockingReason ?? "", /paper_ingestion reports status=waiting_graph/i);
+  assert.match(result.blockingReason ?? "", /import_tasks=2/i);
+  assert.match(result.blockingReason ?? "", /completed=1/i);
+  assert.match(result.blockingReason ?? "", /active_operations=1/i);
+});
+
 test("auto iterator uses remote graph status for graph_build when remote PaperNexus access is configured", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
