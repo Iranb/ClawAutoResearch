@@ -370,6 +370,7 @@ test("resume-pipeline command queues the continuation instead of failing when ru
 
   assert.match(result.text ?? "", /queued background workflow/i);
   assert.match(result.text ?? "", /gateway-bound subagent/i);
+  assert.match(result.text ?? "", /later workflow command|workflow coordinator/i);
 
   const runtimeQueue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(runtimeQueue.entries.length, 1);
@@ -381,6 +382,179 @@ test("resume-pipeline command queues the continuation instead of failing when ru
   assert.equal(drained.remaining.length, 1);
   assert.ok(["queued", "degraded"].includes(drained.remaining[0].status));
   assert.equal(drained.remaining[0].kind, "resume_pipeline");
+});
+
+test("workflow commands opportunistically replay queued background runs when runtime access returns", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "paper-lab", current_stage: "graph_build" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const unavailableApi = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return `/tmp/workspace-${agentId}`;
+        },
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute() {
+            return {
+              agentId: "main",
+              sessionKey: "agent:main:discord:channel:paper-lab",
+            };
+          },
+        },
+      },
+      subagent: {
+        async run() {
+          throw new Error(
+            "Plugin runtime subagent methods are only available during a gateway request."
+          );
+        },
+      },
+    },
+  });
+
+  const resumeCommand = getCommand(
+    createResearchWorkflowCommands(unavailableApi, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot,
+          projectId: "paper-lab",
+          projectResolutionSource: "channel_binding",
+          channelProjectBindingsEnabled: true,
+          unreadMailbox: [],
+          idleResearchEnabled: false,
+          idleResearchDue: false,
+          idleResearchTopic: null,
+        };
+      },
+    }),
+    "resume-pipeline"
+  );
+
+  await resumeCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/resume-pipeline paper-lab",
+    args: "paper-lab",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const queuedBefore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queuedBefore.entries.length, 1);
+
+  const recoveredApi = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return `/tmp/workspace-${agentId}`;
+        },
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute() {
+            return {
+              agentId: "main",
+              sessionKey: "agent:main:discord:channel:paper-lab",
+            };
+          },
+        },
+      },
+      subagent: {
+        async run(params) {
+          runCalls.push(params);
+          return { runId: `bg-run-${runCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const statusCommand = getCommand(
+    createResearchWorkflowCommands(recoveredApi, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot,
+          projectId: "paper-lab",
+          projectResolutionSource: "channel_binding",
+          currentStage: "graph_build",
+          currentMicroStage: "graph_refresh_requested",
+          ownerAgent: "researcher",
+          recommendedOwner: "researcher",
+          nextAction: "/graph-build",
+          resumeAction: "/resume-pipeline paper-lab",
+          blockingReason: null,
+          unreadMailbox: [],
+          idleResearchEnabled: false,
+          idleResearchDue: false,
+          idleResearchTopic: null,
+        };
+      },
+      async runWorkflowAutoIterator() {
+        return null;
+      },
+    }),
+    "workflow-status"
+  );
+
+  await statusCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/workflow-status",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.ok(runCalls.length >= 1);
+  assert.match(runCalls[0].message ?? "", /\/resume-pipeline\b/i);
+
+  const queuedAfter = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queuedAfter.entries.length, 1);
+  assert.equal(queuedAfter.entries[0].status, "running");
 });
 
 test("workflow-status command returns a readable workflow summary", async () => {

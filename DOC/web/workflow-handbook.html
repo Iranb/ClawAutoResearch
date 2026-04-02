@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Research Workflow Handbook</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f4ee;
+        --bg-accent: #efe8d8;
+        --panel: rgba(255, 252, 246, 0.92);
+        --panel-strong: #fffaf0;
+        --text: #1f1a14;
+        --muted: #655a4c;
+        --line: rgba(111, 94, 65, 0.18);
+        --brand: #8e4b21;
+        --brand-soft: #c9833a;
+        --green: #295d3a;
+        --amber: #9a6811;
+        --red: #8d2f2f;
+        --shadow: 0 18px 48px rgba(78, 56, 25, 0.12);
+        --radius: 22px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        background:
+          radial-gradient(circle at top left, rgba(201, 131, 58, 0.16), transparent 34%),
+          radial-gradient(circle at top right, rgba(41, 93, 58, 0.12), transparent 28%),
+          linear-gradient(180deg, #f8f3e8 0%, #f3efe6 48%, #efebe0 100%);
+        color: var(--text);
+      }
+
+      a {
+        color: var(--brand);
+      }
+
+      .page {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px 20px 56px;
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(135deg, rgba(255, 250, 240, 0.94), rgba(247, 238, 221, 0.95));
+        border: 1px solid rgba(142, 75, 33, 0.14);
+        border-radius: 30px;
+        padding: 28px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: auto -60px -80px auto;
+        width: 320px;
+        height: 320px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(201, 131, 58, 0.26), transparent 70%);
+        pointer-events: none;
+      }
+
+      .hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 24px;
+        flex-wrap: wrap;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(142, 75, 33, 0.08);
+        color: var(--brand);
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .title {
+        margin: 16px 0 12px;
+        font-size: clamp(2rem, 4vw, 3.9rem);
+        line-height: 0.98;
+        max-width: 760px;
+      }
+
+      .subtitle {
+        max-width: 740px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 1.02rem;
+        line-height: 1.65;
+      }
+
+      .lang-toggle {
+        display: inline-flex;
+        gap: 8px;
+        padding: 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.75);
+        border: 1px solid rgba(142, 75, 33, 0.14);
+      }
+
+      .lang-toggle button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .lang-toggle button.active {
+        background: var(--brand);
+        color: #fff9f2;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 24px;
+      }
+
+      .hero-stat {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(142, 75, 33, 0.1);
+        border-radius: 18px;
+        padding: 16px;
+      }
+
+      .hero-stat strong {
+        display: block;
+        font-size: 1.7rem;
+        line-height: 1;
+        margin-bottom: 8px;
+      }
+
+      .hero-stat span {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 290px minmax(0, 1fr);
+        gap: 22px;
+        margin-top: 24px;
+      }
+
+      .sidebar,
+      .section,
+      .timeline-card,
+      .info-card,
+      .agent-card,
+      .command-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 20px;
+        align-self: start;
+        padding: 18px;
+      }
+
+      .sidebar h2 {
+        font-size: 0.98rem;
+        margin: 0 0 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--brand);
+      }
+
+      .sidebar nav {
+        display: grid;
+        gap: 10px;
+      }
+
+      .sidebar a {
+        text-decoration: none;
+        color: var(--text);
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.55);
+        border: 1px solid transparent;
+      }
+
+      .sidebar a:hover {
+        border-color: rgba(142, 75, 33, 0.18);
+        background: #fffdf7;
+      }
+
+      .content {
+        display: grid;
+        gap: 20px;
+      }
+
+      .section {
+        padding: 22px;
+      }
+
+      .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 16px;
+        margin-bottom: 18px;
+        flex-wrap: wrap;
+      }
+
+      .section-header h2 {
+        margin: 0;
+        font-size: 1.45rem;
+      }
+
+      .section-header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        max-width: 760px;
+        line-height: 1.6;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(142, 75, 33, 0.08);
+        color: var(--brand);
+        font-size: 0.92rem;
+      }
+
+      .cards-2,
+      .cards-3,
+      .cards-4 {
+        display: grid;
+        gap: 14px;
+      }
+
+      .cards-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .cards-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .cards-4 {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .info-card,
+      .agent-card,
+      .command-card,
+      .timeline-card {
+        padding: 18px;
+      }
+
+      .info-card h3,
+      .agent-card h3,
+      .command-card h3,
+      .timeline-card h3 {
+        margin: 0 0 10px;
+        font-size: 1.05rem;
+      }
+
+      .info-card p,
+      .agent-card p,
+      .command-card p,
+      .timeline-card p,
+      .timeline-card li,
+      .info-card li {
+        color: var(--muted);
+        line-height: 1.62;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 14px;
+      }
+
+      .timeline-card {
+        position: relative;
+        background: linear-gradient(180deg, rgba(255, 252, 247, 0.96), rgba(250, 246, 238, 0.95));
+      }
+
+      .timeline-card::before {
+        content: attr(data-step);
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(142, 75, 33, 0.46);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 0.8rem;
+        margin-bottom: 12px;
+      }
+
+      .badge.auto {
+        background: rgba(41, 93, 58, 0.1);
+        color: var(--green);
+      }
+
+      .badge.manual {
+        background: rgba(141, 47, 47, 0.1);
+        color: var(--red);
+      }
+
+      .badge.mixed {
+        background: rgba(154, 104, 17, 0.12);
+        color: var(--amber);
+      }
+
+      .list {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .matrix {
+        width: 100%;
+        border-collapse: collapse;
+        overflow: hidden;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+      }
+
+      .matrix th,
+      .matrix td {
+        padding: 14px 12px;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .matrix th {
+        background: rgba(142, 75, 33, 0.08);
+        color: var(--brand);
+        font-size: 0.92rem;
+      }
+
+      .matrix tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .footer-note {
+        margin-top: 18px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(142, 75, 33, 0.06);
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .links a {
+        text-decoration: none;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: var(--panel-strong);
+        border: 1px solid var(--line);
+      }
+
+      @media (max-width: 1080px) {
+        .hero-grid,
+        .cards-4 {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .cards-3 {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .page {
+          padding: 16px 14px 42px;
+        }
+
+        .hero,
+        .section {
+          padding: 18px;
+        }
+
+        .hero-grid,
+        .cards-2,
+        .cards-3,
+        .cards-4 {
+          grid-template-columns: 1fr;
+        }
+
+        .title {
+          font-size: 2.2rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-top">
+          <div>
+            <div class="eyebrow" data-i18n="hero.eyebrow"></div>
+            <h1 class="title" data-i18n="hero.title"></h1>
+            <p class="subtitle" data-i18n="hero.subtitle"></p>
+          </div>
+          <div class="lang-toggle" aria-label="Language switch">
+            <button type="button" class="active" data-lang-btn="en">English</button>
+            <button type="button" data-lang-btn="zh">中文</button>
+          </div>
+        </div>
+        <div class="hero-grid">
+          <div class="hero-stat">
+            <strong data-i18n="hero.stats.stages.value"></strong>
+            <span data-i18n="hero.stats.stages.label"></span>
+          </div>
+          <div class="hero-stat">
+            <strong data-i18n="hero.stats.roles.value"></strong>
+            <span data-i18n="hero.stats.roles.label"></span>
+          </div>
+          <div class="hero-stat">
+            <strong data-i18n="hero.stats.gates.value"></strong>
+            <span data-i18n="hero.stats.gates.label"></span>
+          </div>
+          <div class="hero-stat">
+            <strong data-i18n="hero.stats.runtime.value"></strong>
+            <span data-i18n="hero.stats.runtime.label"></span>
+          </div>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="sidebar">
+          <h2 data-i18n="nav.title"></h2>
+          <nav>
+            <a href="#overview" data-i18n="nav.overview"></a>
+            <a href="#stages" data-i18n="nav.stages"></a>
+            <a href="#automation" data-i18n="nav.automation"></a>
+            <a href="#agents" data-i18n="nav.agents"></a>
+            <a href="#commands" data-i18n="nav.commands"></a>
+            <a href="#state" data-i18n="nav.state"></a>
+            <a href="#limits" data-i18n="nav.limits"></a>
+            <a href="#links" data-i18n="nav.links"></a>
+          </nav>
+        </aside>
+
+        <main class="content">
+          <section class="section" id="overview">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="overview.title"></h2>
+                <p data-i18n="overview.subtitle"></p>
+              </div>
+            </div>
+            <div class="cards-3">
+              <div class="info-card">
+                <h3 data-i18n="overview.cards.workflow.title"></h3>
+                <p data-i18n="overview.cards.workflow.body"></p>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="overview.cards.papernexus.title"></h3>
+                <p data-i18n="overview.cards.papernexus.body"></p>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="overview.cards.runtime.title"></h3>
+                <p data-i18n="overview.cards.runtime.body"></p>
+              </div>
+            </div>
+            <div class="footer-note" data-i18n="overview.note"></div>
+          </section>
+
+          <section class="section" id="stages">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="stages.title"></h2>
+                <p data-i18n="stages.subtitle"></p>
+              </div>
+              <div class="pill-row">
+                <span class="pill" data-i18n="stages.pills.main"></span>
+                <span class="pill" data-i18n="stages.pills.revise"></span>
+                <span class="pill" data-i18n="stages.pills.manual"></span>
+              </div>
+            </div>
+            <div class="timeline" id="timeline"></div>
+          </section>
+
+          <section class="section" id="automation">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="automation.title"></h2>
+                <p data-i18n="automation.subtitle"></p>
+              </div>
+            </div>
+            <div class="cards-2">
+              <div class="info-card">
+                <h3 data-i18n="automation.autoMode.title"></h3>
+                <ul class="list">
+                  <li data-i18n="automation.autoMode.items.0"></li>
+                  <li data-i18n="automation.autoMode.items.1"></li>
+                  <li data-i18n="automation.autoMode.items.2"></li>
+                </ul>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="automation.risk.title"></h3>
+                <ul class="list">
+                  <li data-i18n="automation.risk.items.0"></li>
+                  <li data-i18n="automation.risk.items.1"></li>
+                  <li data-i18n="automation.risk.items.2"></li>
+                </ul>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="automation.codeReview.title"></h3>
+                <ul class="list">
+                  <li data-i18n="automation.codeReview.items.0"></li>
+                  <li data-i18n="automation.codeReview.items.1"></li>
+                  <li data-i18n="automation.codeReview.items.2"></li>
+                </ul>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="automation.monitor.title"></h3>
+                <ul class="list">
+                  <li data-i18n="automation.monitor.items.0"></li>
+                  <li data-i18n="automation.monitor.items.1"></li>
+                  <li data-i18n="automation.monitor.items.2"></li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="agents">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="agents.title"></h2>
+                <p data-i18n="agents.subtitle"></p>
+              </div>
+            </div>
+            <div class="cards-4" id="agents-grid"></div>
+          </section>
+
+          <section class="section" id="commands">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="commands.title"></h2>
+                <p data-i18n="commands.subtitle"></p>
+              </div>
+            </div>
+            <div class="cards-2" id="commands-grid"></div>
+          </section>
+
+          <section class="section" id="state">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="state.title"></h2>
+                <p data-i18n="state.subtitle"></p>
+              </div>
+            </div>
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th data-i18n="state.table.file"></th>
+                  <th data-i18n="state.table.role"></th>
+                  <th data-i18n="state.table.purpose"></th>
+                </tr>
+              </thead>
+              <tbody id="state-table"></tbody>
+            </table>
+            <div class="footer-note" data-i18n="state.note"></div>
+          </section>
+
+          <section class="section" id="limits">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="limits.title"></h2>
+                <p data-i18n="limits.subtitle"></p>
+              </div>
+            </div>
+            <div class="cards-3">
+              <div class="info-card">
+                <h3 data-i18n="limits.cards.manual.title"></h3>
+                <p data-i18n="limits.cards.manual.body"></p>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="limits.cards.repair.title"></h3>
+                <p data-i18n="limits.cards.repair.body"></p>
+              </div>
+              <div class="info-card">
+                <h3 data-i18n="limits.cards.audit.title"></h3>
+                <p data-i18n="limits.cards.audit.body"></p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="links">
+            <div class="section-header">
+              <div>
+                <h2 data-i18n="links.title"></h2>
+                <p data-i18n="links.subtitle"></p>
+              </div>
+            </div>
+            <div class="links">
+              <a href="../../WORKFLOW.md" data-i18n="links.items.workflow"></a>
+              <a href="../overview_zh.md" data-i18n="links.items.overviewZh"></a>
+              <a href="../overview.md" data-i18n="links.items.overviewEn"></a>
+              <a href="../concepts/workflow-and-auto-iterator.md" data-i18n="links.items.iterator"></a>
+              <a href="../reference/agents.md" data-i18n="links.items.agents"></a>
+              <a href="../reference/slash-commands.md" data-i18n="links.items.commands"></a>
+              <a href="../reference/state-files.md" data-i18n="links.items.state"></a>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const dictionary = {
+        en: {
+          hero: {
+            eyebrow: "OpenClaw Research Runtime",
+            title: "A bilingual handbook for the real workflow, not the aspirational one.",
+            subtitle:
+              "This page summarizes the current code-backed behavior of openclaw-research: what is automated, what is durable, where the human gates still live, and how PaperNexus, Zotero, agents, reviews, and experiment monitoring fit together.",
+            stats: {
+              stages: { value: "11 + revise", label: "Main workflow stages with a dedicated revision loop" },
+              roles: { value: "7 roles", label: "Researcher, Orchestrator, Coder, Analyzer, Writer, Reviewer, Cross-Reviewer" },
+              gates: { value: "Auto + human", label: "Auto discussion, auto code review, and one required final human gate" },
+              runtime: { value: "Durable", label: "Project-local runtime queue, sessions, announce outbox, and audit trail" }
+            }
+          },
+          nav: {
+            title: "Contents",
+            overview: "Overview",
+            stages: "Stage Flow",
+            automation: "Automation",
+            agents: "Agents",
+            commands: "Commands",
+            state: "State Files",
+            limits: "Boundaries",
+            links: "Deep Links"
+          },
+          overview: {
+            title: "What This System Actually Is",
+            subtitle:
+              "The current repository is a deterministic research workflow engine on top of OpenClaw. It is stage-driven, state-file-driven, and restart-aware.",
+            cards: {
+              workflow: {
+                title: "Workflow First",
+                body:
+                  "The real source of truth is not a chat transcript. It is the combination of PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, experiment memory, gate state, and the auto iterator."
+              },
+              papernexus: {
+                title: "PaperNexus + Zotero",
+                body:
+                  "PaperNexus drives literature ingestion, graph grounding, and brainstorm chains through Python wrappers. Zotero manages the local project bibliography tree under bot/<project-id>."
+              },
+              runtime: {
+                title: "Durable Runtime",
+                body:
+                  "The execution layer persists transition intents, sessions, announce events, broadcast outboxes, and workflow-events.jsonl so the system can resume or at least surface repairable failures."
+              }
+            },
+            note:
+              "Practical summary: the workflow is closed-loop through research, planning, coding, experiments, analysis, review, and writing, but the final OpenReview-facing decision remains deliberately human-gated."
+          },
+          stages: {
+            title: "Stage Flow",
+            subtitle:
+              "These cards reflect the current stage machine in code and WORKFLOW.md. Each stage has an owner, a dominant command family, and a concrete handoff condition.",
+            pills: {
+              main: "Main line: setup → submit → done",
+              revise: "Revision loop: submit → revise → experiment/write",
+              manual: "Final gate: GATE-5 is always manual"
+            }
+          },
+          automation: {
+            title: "Automation and Handoff Logic",
+            subtitle:
+              "Auto mode does not blindly move forward. It evaluates risk, gates, stage evidence, and runtime health, then either advances, discusses, mitigates, monitors, or blocks.",
+            autoMode: {
+              title: "Auto Mode",
+              items: [
+                "Conservative and aggressive are both supported by the current service loop.",
+                "Auto stage launch is blocked when stage evidence is missing or a gate is active.",
+                "workflow-status exposes effective mode, discussion summaries, and visible next actions."
+              ]
+            },
+            risk: {
+              title: "Risk Discussion",
+              items: [
+                "Risk does not immediately downgrade auto mode.",
+                "The service starts a multi-agent risk discussion first, then may dispatch mitigation.",
+                "Discussion state is persisted and visible instead of being a hidden advisory note."
+              ]
+            },
+            codeReview: {
+              title: "Code Innovation Review",
+              items: [
+                "Aggressive mode blocks CODE until the code-innovation review round approves.",
+                "The review checks baseline fidelity, innovation-point coverage, and incremental validation.",
+                "This gate is meant to stop runnable but scientifically misaligned code bundles."
+              ]
+            },
+            monitor: {
+              title: "Experiment Monitoring",
+              items: [
+                "Once remote runs exist, experiment should point to /monitor-experiment instead of stalling.",
+                "The monitor path reconciles EXPERIMENT_LEDGER.json, EXPERIMENT_REGISTRY.md, and analysis readiness.",
+                "Completion is not just “training ended”; it is “results, evaluation, and plot pack are ready for analysis”."
+              ]
+            }
+          },
+          agents: {
+            title: "Agent Responsibilities",
+            subtitle:
+              "Roles are explicit, and the workflow guard keeps write scopes and next-owner transitions structured."
+          },
+          commands: {
+            title: "Workflow Entry Commands",
+            subtitle:
+              "These are the main user-facing slash command entry points and the most important stage-specific actions behind them."
+          },
+          state: {
+            title: "Key Durable Files",
+            subtitle:
+              "The workflow is recoverable because the project stores facts, runtime control data, and stage evidence in explicit files.",
+            table: {
+              file: "File",
+              role: "Why it matters",
+              purpose: "Current use in the loop"
+            },
+            note:
+              "Important distinction: PROJECT_MANIFEST.json stores workflow facts such as stage and owner, while runtime queue/session/outbox files store execution and recovery state."
+          },
+          limits: {
+            title: "What Is Still Not Fully Automatic",
+            subtitle:
+              "The system is intentionally conservative in a few places. Those are design choices or explicit runtime repair boundaries, not hidden failures.",
+            cards: {
+              manual: {
+                title: "Manual GATE-5",
+                body:
+                  "The external-review revision decision stays human-owned. Auto mode can prepare the packet and stop, but it does not auto-complete the OpenReview-facing final submission decision."
+              },
+              repair: {
+                title: "needs_repair Exists",
+                body:
+                  "If sessions or queue entries go stale, recovery marks them as needs_repair. The system records and surfaces the issue, but not every runtime failure is self-healing yet."
+              },
+              audit: {
+                title: "workflow-events.jsonl",
+                body:
+                  "The durable audit stream is now the right first stop for workflow-owned transitions, broadcasts, and recovery sweeps, even though some disposable /tmp diagnostics still remain."
+              }
+            }
+          },
+          links: {
+            title: "Deep Links",
+            subtitle:
+              "Use these source documents when you need the full contract, exact file paths, or the implementation-facing reference.",
+            items: {
+              workflow: "Open WORKFLOW.md",
+              overviewZh: "Read Chinese overview",
+              overviewEn: "Read English overview",
+              iterator: "Workflow + auto iterator concepts",
+              agents: "Agent reference",
+              commands: "Slash command reference",
+              state: "State file reference"
+            }
+          },
+          stagesData: [
+            {
+              step: "Stage 0",
+              badge: "auto",
+              badgeText: "Researcher-owned",
+              title: "SETUP",
+              body:
+                "Reconcile project state, track registry, claim policy, experiment memory, and queue bindings. This is where resume-pipeline rebuilds a project’s working context."
+            },
+            {
+              step: "Stage 0A",
+              badge: "mixed",
+              badgeText: "Graph readiness",
+              title: "GRAPH_BUILD",
+              body:
+                "Verify PaperNexus grounding, graph presence, and brainstorm bundle freshness. In the current design this is a bounded readiness pass, not a manual shared-graph rebuild."
+            },
+            {
+              step: "Stage 0B",
+              badge: "auto",
+              badgeText: "Graph-grounded",
+              title: "FRONTIER_MAPPING",
+              body:
+                "Package frontier files and the graph-backed brainstorm pack so idea generation starts from durable anchors instead of raw chat memory."
+            },
+            {
+              step: "Stage 1",
+              badge: "auto",
+              badgeText: "Researcher-owned",
+              title: "IDEA",
+              body:
+                "Run idea selection using brainstorm cycles, innovation reflection, novelty checks, and tournament logic. The active portfolio should stay small and explicit."
+            },
+            {
+              step: "Stage 2",
+              badge: "auto",
+              badgeText: "Orchestrator-owned",
+              title: "PLAN",
+              body:
+                "Produce PLAN.md, TODOS.md, and PLAN_AUDIT.md. CODE should not start until these artifacts exist and agree with the active track contract."
+            },
+            {
+              step: "Stage 3",
+              badge: "mixed",
+              badgeText: "Auto review gate",
+              title: "CODE",
+              body:
+                "Coder creates structured experiment bundles and must keep baseline contracts, innovation points, validation steps, and ablation plans explicit. Aggressive mode can block here for code innovation review."
+            },
+            {
+              step: "Stage 4",
+              badge: "auto",
+              badgeText: "Monitor loop",
+              title: "EXPERIMENT",
+              body:
+                "Researcher coordinates launches, then re-enters /monitor-experiment until remote runs are terminal and the result package is ready for analysis."
+            },
+            {
+              step: "Stage 5-7",
+              badge: "auto",
+              badgeText: "Analysis to draft",
+              title: "ANALYZE → REVIEW → WRITE",
+              body:
+                "Analyzer creates claim-evidence packets, Reviewer stress-tests scientific validity, and Academic Writer drafts the paper under the active writing contract and citation integrity rules."
+            },
+            {
+              step: "Stage 8",
+              badge: "manual",
+              badgeText: "Human gate",
+              title: "SUBMIT",
+              body:
+                "Reviewer prepares citation verification, external review, and rebuttal materials. The final GATE-5 revision decision stays manual even in aggressive auto mode."
+            },
+            {
+              step: "Stage 9-10",
+              badge: "mixed",
+              badgeText: "Loop or archive",
+              title: "REVISE → DONE",
+              body:
+                "Major revision routes back to EXPERIMENT, minor revision routes back to WRITE, and accepted work moves to DONE for archive and queue handoff."
+            }
+          ],
+          agentsData: [
+            {
+              title: "Researcher",
+              body:
+                "Owns project state, literature, PaperNexus wrappers, Zotero project library sync, ideation, experiment coordination, monitor passes, and recovery-oriented resume logic."
+            },
+            {
+              title: "Orchestrator",
+              body:
+                "Turns the winning tracks into executable plans, budgets, TODOs, and plan-audit artifacts."
+            },
+            {
+              title: "Coder",
+              body:
+                "Builds runnable experiment bundles, preserves baseline protocol fidelity, and can generate implementation-phase scientific figures before Analyzer takes over."
+            },
+            {
+              title: "Analyzer",
+              body:
+                "Transforms experiment outputs into claims, metrics, figures, theory packets, and narrative-ready evidence structures."
+            },
+            {
+              title: "Academic Writer",
+              body:
+                "Maps the template, manages the writing shortlist, drafts sections, compiles the paper, and keeps paragraph logic and citation hygiene consistent."
+            },
+            {
+              title: "Reviewer",
+              body:
+                "Runs internal scientific review, citation integrity review, external review packaging, and the final human-facing revision packet."
+            },
+            {
+              title: "Cross-Reviewer",
+              body:
+                "Provides isolated prose and outline review without becoming a workflow owner or broad project writer."
+            }
+          ],
+          commandsData: [
+            {
+              title: "/research-pipeline",
+              body:
+                "Start a project-level workflow from a research topic. This is the main entry point for automatic progression."
+            },
+            {
+              title: "/resume-pipeline",
+              body:
+                "Reconcile the current project and restart bounded workflow execution after a pause, restart, or handoff."
+            },
+            {
+              title: "/workflow-status",
+              body:
+                "Show stage, owner, auto mode, risk discussion, paper ingestion, graph refresh, and other visible state needed to understand what the system is doing."
+            },
+            {
+              title: "/graph-build",
+              body:
+                "Run a bounded graph readiness and brainstorm refresh pass instead of trying to manually rebuild a shared graph."
+            },
+            {
+              title: "/monitor-experiment",
+              body:
+                "The default follow-up once remote runs exist. It reconciles experiment memory until analysis can begin."
+            },
+            {
+              title: "/paper-phase",
+              body:
+                "Writer-side drafting path that combines paper-plan, venue constraints, citation preparation, and compile checks."
+            }
+          ],
+          stateData: [
+            {
+              file: "PROJECT_MANIFEST.json",
+              role: "Workflow fact state",
+              purpose:
+                "Stores current stage, owner, next action, blocking reason, graph readiness, brainstorm state, experiment memory, writing contract, and other durable workflow facts."
+            },
+            {
+              file: "TRACK_REGISTRY.json",
+              role: "Innovation portfolio",
+              purpose:
+                "Tracks candidate, active, parked, merged, and killed tracks so the system can reason about what is actually in play."
+            },
+            {
+              file: "researcher/EXPERIMENT_LEDGER.json",
+              role: "Experiment memory",
+              purpose:
+                "Records queued, running, completed, failed, and synced experiments and feeds monitoring, reflection, and downstream analysis gates."
+            },
+            {
+              file: ".openclaw-research/workflow-runtime-*.json",
+              role: "Runtime control state",
+              purpose:
+                "Persists queue entries, sessions, announce outbox, and broadcast outbox for recovery-aware orchestration."
+            },
+            {
+              file: ".openclaw-research/workflow-events.jsonl",
+              role: "Audit trail",
+              purpose:
+                "Captures workflow-owned runtime transitions, recovery events, queue lifecycle, and other control-plane events in append-only form."
+            },
+            {
+              file: "researcher/GATE_STATE.json",
+              role: "Human/auto gate memory",
+              purpose:
+                "Keeps gate status, last gate, timestamps, and waiting/default-decision context across restarts."
+            }
+          ]
+        },
+        zh: {
+          hero: {
+            eyebrow: "OpenClaw Research Runtime",
+            title: "一份基于当前真实实现的中英双语 Workflow 手册。",
+            subtitle:
+              "这份页面不讲理想化蓝图，而是总结 openclaw-research 当前代码里真正已经实现的行为：哪些环节自动推进，哪些状态可恢复，哪些节点仍保留人工 gate，以及 PaperNexus、Zotero、Agents、审查与实验监控如何拼成完整流程。",
+            stats: {
+              stages: { value: "11 个阶段 + revise", label: "主流程阶段机，外加独立修订回环" },
+              roles: { value: "7 个角色", label: "Researcher、Orchestrator、Coder、Analyzer、Writer、Reviewer、Cross-Reviewer" },
+              gates: { value: "自动 + 人工", label: "支持自动讨论、自动代码审查，并保留一个必须人工确认的最终 gate" },
+              runtime: { value: "可持久恢复", label: "项目内持久化 queue、session、announce outbox 和审计流" }
+            }
+          },
+          nav: {
+            title: "目录",
+            overview: "总览",
+            stages: "阶段流",
+            automation: "自动化",
+            agents: "角色",
+            commands: "命令",
+            state: "状态文件",
+            limits: "边界",
+            links: "深链"
+          },
+          overview: {
+            title: "这个系统现在到底是什么",
+            subtitle:
+              "当前仓库本质上是一个跑在 OpenClaw 上的确定性科研工作流引擎：它依赖阶段机、状态文件、重启恢复和角色约束，而不是只靠聊天上下文推进。",
+            cards: {
+              workflow: {
+                title: "Workflow First",
+                body:
+                  "真正的事实源不是聊天记录，而是 PROJECT_MANIFEST.json、TRACK_REGISTRY.json、CLAIM_POLICY.md、实验记忆、gate state 和 auto iterator 的组合。"
+              },
+              papernexus: {
+                title: "PaperNexus + Zotero",
+                body:
+                  "PaperNexus 通过 Python wrappers 负责文献摄取、图谱 grounding 和 brainstorm chains；Zotero 则负责本地 `bot/<project-id>` 下的项目文献管理。"
+              },
+              runtime: {
+                title: "Durable Runtime",
+                body:
+                  "执行层会持久化 transition intent、sessions、announce events、broadcast outbox 和 workflow-events.jsonl，所以系统既能恢复，也能明确把故障暴露成可修复状态。"
+              }
+            },
+            note:
+              "一句话总结：当前 workflow 已经能在 setup、调研、计划、编码、实验、分析、审稿、写作之间形成闭环，但 OpenReview-facing 的最终提交决策仍然刻意保留人工 gate。"
+          },
+          stages: {
+            title: "阶段流",
+            subtitle:
+              "下面这些卡片对应当前代码和 WORKFLOW.md 里的真实阶段机。每个阶段都绑定了 owner、主命令族和明确的交接条件。",
+            pills: {
+              main: "主线：setup → submit → done",
+              revise: "修订回路：submit → revise → experiment/write",
+              manual: "最终 gate：GATE-5 永远人工确认"
+            }
+          },
+          automation: {
+            title: "自动推进与交接逻辑",
+            subtitle:
+              "Auto mode 不是无脑向前推。它会综合风险、gates、阶段证据和 runtime 健康度，然后选择推进、讨论、补救、监控，或者阻塞。",
+            autoMode: {
+              title: "Auto Mode",
+              items: [
+                "当前服务循环同时支持 conservative 和 aggressive。",
+                "只要阶段证据缺失或 gate 正在生效，auto stage launch 就不会强行推进。",
+                "workflow-status 能看到 effective mode、讨论摘要和下一步建议动作。"
+              ]
+            },
+            risk: {
+              title: "风险讨论",
+              items: [
+                "高风险不会立刻导致 auto mode 降档。",
+                "系统会先发起多 Agent 风险讨论，然后才可能自动派发补救任务。",
+                "讨论状态会持久化并可见，而不是隐藏在系统内部。"
+              ]
+            },
+            codeReview: {
+              title: "代码创新点审查",
+              items: [
+                "在 aggressive 模式下，CODE 会被 code-innovation review gate 卡住，直到审查通过。",
+                "审查会检查 baseline fidelity、创新点覆盖和增量验证设计。",
+                "它的目标是拦住“能跑，但科学上没对齐创新点”的实验代码包。"
+              ]
+            },
+            monitor: {
+              title: "实验监控",
+              items: [
+                "远程实验一旦启动，experiment 阶段就应转向 /monitor-experiment，而不是停在笼统 waiting。",
+                "监控链会回写 EXPERIMENT_LEDGER.json、EXPERIMENT_REGISTRY.md 和 analysis readiness。",
+                "“训练结束”不等于可前进，只有结果、评估和 plot pack 都齐了，才算 ready_for_analysis。"
+              ]
+            }
+          },
+          agents: {
+            title: "Agent 职责映射",
+            subtitle:
+              "角色是显式的，workflow guard 也会把写入范围、交接 ownership 和下一步执行者约束清楚。"
+          },
+          commands: {
+            title: "Workflow 入口命令",
+            subtitle:
+              "这里列的是最关键的用户侧 slash command 和它们背后的阶段性动作。"
+          },
+          state: {
+            title: "关键持久化文件",
+            subtitle:
+              "之所以能恢复，是因为项目把 workflow 事实、runtime 控制数据和阶段证据都写进了显式文件，而不是只留在上下文里。",
+            table: {
+              file: "文件",
+              role: "作用定位",
+              purpose: "在当前闭环里的用途"
+            },
+            note:
+              "最重要的区分是：PROJECT_MANIFEST.json 保存阶段事实，runtime queue/session/outbox 文件保存执行态和恢复态。"
+          },
+          limits: {
+            title: "仍然不是完全自动的地方",
+            subtitle:
+              "下面这些不是隐藏 bug，而是当前设计故意保留的边界，或者 runtime 尚未完全自愈的部分。",
+            cards: {
+              manual: {
+                title: "人工 GATE-5",
+                body:
+                  "外部审稿后的 revision decision 仍然是人工拥有。Auto mode 可以准备好 packet 并停住，但不会替你完成最终 OpenReview-facing 决策。"
+              },
+              repair: {
+                title: "needs_repair 仍然存在",
+                body:
+                  "如果 session 或 queue entry 变 stale，恢复逻辑会把它标成 needs_repair。系统会记录并提醒，但并不是所有 runtime 故障都已经做到了自动自愈。"
+              },
+              audit: {
+                title: "workflow-events.jsonl",
+                body:
+                  "项目内 append-only 审计流已经是 workflow runtime 的第一观察面，虽然仍保留了一些可丢弃的 /tmp 调试镜像。"
+              }
+            }
+          },
+          links: {
+            title: "深链入口",
+            subtitle:
+              "如果你需要完整契约、精确文件路径或更偏实现侧的解释，就从这些原始文档继续往下看。",
+            items: {
+              workflow: "打开 WORKFLOW.md",
+              overviewZh: "阅读中文概览",
+              overviewEn: "阅读英文概览",
+              iterator: "Workflow 与 auto iterator 概念",
+              agents: "Agent 参考",
+              commands: "Slash Command 参考",
+              state: "状态文件参考"
+            }
+          },
+          stagesData: [
+            {
+              step: "阶段 0",
+              badge: "auto",
+              badgeText: "Researcher 负责",
+              title: "SETUP",
+              body:
+                "对齐项目状态、track registry、claim policy、experiment memory 和队列绑定。`resume-pipeline` 主要就是在这里重建项目上下文。"
+            },
+            {
+              step: "阶段 0A",
+              badge: "mixed",
+              badgeText: "图谱 readiness",
+              title: "GRAPH_BUILD",
+              body:
+                "验证 PaperNexus grounding、graph presence 和 brainstorm bundle freshness。当前它是一个 bounded readiness pass，而不是手动重建共享图谱。"
+            },
+            {
+              step: "阶段 0B",
+              badge: "auto",
+              badgeText: "图谱驱动",
+              title: "FRONTIER_MAPPING",
+              body:
+                "把 frontier files 和 graph-backed brainstorm pack 打包好，让 idea 阶段基于持久化锚点开始，而不是靠聊天上下文即兴发挥。"
+            },
+            {
+              step: "阶段 1",
+              badge: "auto",
+              badgeText: "Researcher 负责",
+              title: "IDEA",
+              body:
+                "通过 brainstorm cycles、innovation reflection、novelty checks 和 tournament 选择创新方向，active portfolio 必须保持小而清晰。"
+            },
+            {
+              step: "阶段 2",
+              badge: "auto",
+              badgeText: "Orchestrator 负责",
+              title: "PLAN",
+              body:
+                "生成 PLAN.md、TODOS.md 和 PLAN_AUDIT.md。只有这些契约文件存在并与 active track 对齐后，CODE 才能真正开始。"
+            },
+            {
+              step: "阶段 3",
+              badge: "mixed",
+              badgeText: "自动代码审查",
+              title: "CODE",
+              body:
+                "Coder 生成结构化实验包，并且必须显式保留 baseline contract、innovation points、validation steps 和 ablation plan。Aggressive 模式下，这里可能被自动代码审查 gate 卡住。"
+            },
+            {
+              step: "阶段 4",
+              badge: "auto",
+              badgeText: "监控回环",
+              title: "EXPERIMENT",
+              body:
+                "Researcher 负责发射实验，远程 run 启动后就持续重进 /monitor-experiment，直到结果包真正达到可分析状态。"
+            },
+            {
+              step: "阶段 5-7",
+              badge: "auto",
+              badgeText: "分析到写作",
+              title: "ANALYZE → REVIEW → WRITE",
+              body:
+                "Analyzer 生成 claim-evidence 包，Reviewer 做科学性压力测试，Academic Writer 在写作契约与 citation integrity 约束下生成论文草稿。"
+            },
+            {
+              step: "阶段 8",
+              badge: "manual",
+              badgeText: "人工 gate",
+              title: "SUBMIT",
+              body:
+                "Reviewer 准备 citation verification、external review 和 rebuttal materials。最终 GATE-5 决策即便在 aggressive auto mode 下也保持人工确认。"
+            },
+            {
+              step: "阶段 9-10",
+              badge: "mixed",
+              badgeText: "回环或归档",
+              title: "REVISE → DONE",
+              body:
+                "大修回到 EXPERIMENT，小修回到 WRITE，接受后进入 DONE 做归档和队列切换。"
+            }
+          ],
+          agentsData: [
+            {
+              title: "Researcher",
+              body:
+                "负责项目状态、文献、PaperNexus wrappers、Zotero 项目文献管理、创新方向、实验协调、监控与恢复入口。"
+            },
+            {
+              title: "Orchestrator",
+              body:
+                "把 winning tracks 变成可执行的计划、预算和 TODO 契约。"
+            },
+            {
+              title: "Coder",
+              body:
+                "实现可运行的实验包，保持 baseline protocol fidelity，并在 Analyzer 接手前生成实现期科研图表。"
+            },
+            {
+              title: "Analyzer",
+              body:
+                "把实验输出转成 claims、metrics、figures、theory packets 和 narrative-ready evidence。"
+            },
+            {
+              title: "Academic Writer",
+              body:
+                "负责 template mapping、writing shortlist、章节草稿、编译以及段落逻辑与引用卫生。"
+            },
+            {
+              title: "Reviewer",
+              body:
+                "负责内部科学审稿、citation integrity、external review 打包和最终 revision packet。"
+            },
+            {
+              title: "Cross-Reviewer",
+              body:
+                "提供隔离的 outline/prose 审阅，但不是 workflow owner，也不会大范围写项目内容。"
+            }
+          ],
+          commandsData: [
+            {
+              title: "/research-pipeline",
+              body:
+                "从研究主题启动项目级 workflow，是自动推进的主入口。"
+            },
+            {
+              title: "/resume-pipeline",
+              body:
+                "在暂停、重启或交接后重新对齐项目状态，并继续 bounded workflow 执行。"
+            },
+            {
+              title: "/workflow-status",
+              body:
+                "查看阶段、owner、auto mode、风险讨论、paper ingestion、graph refresh 等关键可见状态。"
+            },
+            {
+              title: "/graph-build",
+              body:
+                "执行 bounded 的图谱 readiness 与 brainstorm bundle refresh，而不是手动重建共享图。"
+            },
+            {
+              title: "/monitor-experiment",
+              body:
+                "远程实验启动后的默认跟进动作，会持续 reconcile 实验记忆直到能进入分析。"
+            },
+            {
+              title: "/paper-phase",
+              body:
+                "Writer 侧的写作主流程，结合 paper-plan、venue 约束、citation 准备和 compile checks。"
+            }
+          ],
+          stateData: [
+            {
+              file: "PROJECT_MANIFEST.json",
+              role: "Workflow 事实源",
+              purpose:
+                "保存 current stage、owner、next action、blocking reason、graph readiness、brainstorm state、experiment memory、writing contract 等核心 workflow 状态。"
+            },
+            {
+              file: "TRACK_REGISTRY.json",
+              role: "创新组合管理",
+              purpose:
+                "记录 candidate、active、parked、merged、killed 的创新 track，保证系统知道现在到底在推进什么。"
+            },
+            {
+              file: "researcher/EXPERIMENT_LEDGER.json",
+              role: "实验记忆",
+              purpose:
+                "记录 queued、running、completed、failed、synced 的实验状态，并驱动监控、反思和下游分析 gate。"
+            },
+            {
+              file: ".openclaw-research/workflow-runtime-*.json",
+              role: "Runtime 控制态",
+              purpose:
+                "持久化 queue entries、sessions、announce outbox 和 broadcast outbox，支持恢复感知的 orchestration。"
+            },
+            {
+              file: ".openclaw-research/workflow-events.jsonl",
+              role: "审计流",
+              purpose:
+                "append-only 记录 workflow runtime 的 transitions、recovery、queue lifecycle 和控制面事件。"
+            },
+            {
+              file: "researcher/GATE_STATE.json",
+              role: "Gate 记忆",
+              purpose:
+                "跨重启保存 gate status、last gate、timestamps 以及 waiting/default-decision 相关上下文。"
+            }
+          ]
+        }
+      };
+
+      let currentLang = "en";
+
+      function getValue(path, lang = currentLang) {
+        return path.split(".").reduce((acc, part) => acc?.[part], dictionary[lang]);
+      }
+
+      function applyText() {
+        document.documentElement.lang = currentLang === "zh" ? "zh-CN" : "en";
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          const value = getValue(node.dataset.i18n);
+          if (typeof value === "string") {
+            node.textContent = value;
+          }
+        });
+      }
+
+      function renderStages() {
+        const root = document.getElementById("timeline");
+        root.innerHTML = "";
+        getValue("stagesData").forEach((item) => {
+          const card = document.createElement("article");
+          card.className = "timeline-card";
+          card.dataset.step = item.step;
+          card.innerHTML = `
+            <span class="badge ${item.badge}">${item.badgeText}</span>
+            <h3>${item.title}</h3>
+            <p>${item.body}</p>
+          `;
+          root.appendChild(card);
+        });
+      }
+
+      function renderAgents() {
+        const root = document.getElementById("agents-grid");
+        root.innerHTML = "";
+        getValue("agentsData").forEach((item) => {
+          const card = document.createElement("article");
+          card.className = "agent-card";
+          card.innerHTML = `<h3>${item.title}</h3><p>${item.body}</p>`;
+          root.appendChild(card);
+        });
+      }
+
+      function renderCommands() {
+        const root = document.getElementById("commands-grid");
+        root.innerHTML = "";
+        getValue("commandsData").forEach((item) => {
+          const card = document.createElement("article");
+          card.className = "command-card";
+          card.innerHTML = `<h3>${item.title}</h3><p>${item.body}</p>`;
+          root.appendChild(card);
+        });
+      }
+
+      function renderStateTable() {
+        const root = document.getElementById("state-table");
+        root.innerHTML = "";
+        getValue("stateData").forEach((item) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td><strong>${item.file}</strong></td>
+            <td>${item.role}</td>
+            <td>${item.purpose}</td>
+          `;
+          root.appendChild(row);
+        });
+      }
+
+      function setLanguage(lang) {
+        currentLang = lang;
+        document.querySelectorAll("[data-lang-btn]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.langBtn === lang);
+        });
+        applyText();
+        renderStages();
+        renderAgents();
+        renderCommands();
+        renderStateTable();
+      }
+
+      document.querySelectorAll("[data-lang-btn]").forEach((button) => {
+        button.addEventListener("click", () => setLanguage(button.dataset.langBtn));
+      });
+
+      setLanguage("en");
+    </script>
+  </body>
+</html>

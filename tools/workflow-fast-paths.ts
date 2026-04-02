@@ -1840,6 +1840,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
     projectsRoot?: string;
   } | null;
   projectsRoot?: string | null;
+  ignoreRetryBackoff?: boolean;
   handoffWorkflowTaskToAgent?: typeof handoffWorkflowTaskToAgent;
 }): Promise<QueuedBackgroundWorkflowDrainResult> {
   const runtimeSubagent = params.runtimeSubagent;
@@ -1869,6 +1870,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       ? Date.parse(entry.lastAttemptedAt)
       : null;
     if (
+      params.ignoreRetryBackoff !== true &&
       lastAttemptedAtMs &&
       Number.isFinite(lastAttemptedAtMs) &&
       Date.now() - lastAttemptedAtMs < BACKGROUND_QUEUE_RETRY_BACKOFF_MS
@@ -2443,8 +2445,8 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
     projectId: params.projectId,
     summary:
       `Queued background workflow for ${targetLabel} because the command runtime ` +
-      `could not access a gateway-bound subagent session. It will auto-start when the ` +
-      `workflow coordinator regains runtime access` +
+      `could not access a gateway-bound subagent session. It will auto-start when a ` +
+      `later workflow command or the workflow coordinator regains runtime access` +
       `${queued.queuePosition > 0 ? ` (queue position ${queued.queuePosition})` : ""}.` +
       `${recoveryNote ? ` Cause: ${recoveryNote}` : ""}`,
     reusedIdleSession: Boolean(params.reusableBackgroundSessionKey),

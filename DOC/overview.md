@@ -11,6 +11,10 @@
 
 This repository is designed for long-running research projects that must survive restarts, agent switches, Discord routing, and repeated revision loops.
 
+If you want a browser-friendly overview instead of reading Markdown linearly, open the bilingual handbook:
+
+- [Workflow Web Handbook](./web/workflow-handbook.html)
+
 ## Auto Mode Overview
 
 The current system now includes a practical Auto mode instead of a purely advisory one.

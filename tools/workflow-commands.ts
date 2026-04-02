@@ -20,6 +20,7 @@ import {
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
+  drainQueuedBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
 } from "./workflow-fast-paths";
@@ -760,6 +761,7 @@ function createBackgroundWorkflowCommandHandler(
     const commandLabel = COMMAND_LABELS[kind];
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -889,6 +891,7 @@ function createWorkflowStatusCommandHandler(
     const commandLabel = COMMAND_LABELS.workflow_status;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -979,6 +982,27 @@ function createWorkflowStatusCommandHandler(
       };
     }
   };
+}
+
+async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
+  api: WorkflowCommandApi,
+  workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>
+): Promise<void> {
+  if (!workflowPolicy.projectsRoot) {
+    return;
+  }
+  try {
+    await drainQueuedBackgroundWorkflowRuns({
+      runtimeSubagent: api.runtime?.subagent,
+      workflowPolicy,
+      projectsRoot: workflowPolicy.projectsRoot,
+      ignoreRetryBackoff: true,
+    });
+  } catch (error) {
+    api.logger?.debug?.("Failed opportunistic workflow queue replay from command runtime.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export function createResearchWorkflowCommands(

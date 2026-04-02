@@ -9,11 +9,12 @@
 1. [新手快速开始（中文）](./beginner_zh.md)
 2. [系统概览（中文）](./overview_zh.md)
 3. [Overview (English)](./overview.md)
-4. [快速上手](./guides/getting-started.md)
-5. [系统架构](./concepts/architecture.md)
-6. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
-7. [安装与启用](./guides/install-and-enable.md)
-8. [配置项参考](./reference/configuration.md)
+4. [Workflow Web Handbook / 中英双语网页手册](./web/workflow-handbook.html)
+5. [快速上手](./guides/getting-started.md)
+6. [系统架构](./concepts/architecture.md)
+7. [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
+8. [安装与启用](./guides/install-and-enable.md)
+9. [配置项参考](./reference/configuration.md)
 
 ## 按任务导航
 
@@ -21,6 +22,7 @@
 
 - [新手快速开始（中文）](./beginner_zh.md)
 - [系统概览（中文）](./overview_zh.md)
+- [Workflow Web Handbook / 中英双语网页手册](./web/workflow-handbook.html)
 - [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
 - [配置项参考](./reference/configuration.md)
@@ -29,6 +31,7 @@
 
 - [Overview (English)](./overview.md)
 - [系统概览（中文）](./overview_zh.md)
+- [Workflow Web Handbook / 中英双语网页手册](./web/workflow-handbook.html)
 - [系统架构](./concepts/architecture.md)
 - [科研工作流与自动迭代器](./concepts/workflow-and-auto-iterator.md)
 - [PaperNexus、实验记忆与反思机制](./concepts/papernexus-memory-and-reflection.md)
@@ -40,6 +43,7 @@
 - [插件工具接口](./reference/plugin-tools.md)
 - [状态文件与项目产物](./reference/state-files.md)
 - [斜杠命令与技能入口](./reference/slash-commands.md)
+- [Workflow Web Handbook / 中英双语网页手册](./web/workflow-handbook.html)
 
 ### 我想排查运行问题
 
@@ -55,6 +59,8 @@
   中文系统总览，包含 Auto mode 和自动讨论能力概览。
 - [overview.md](./overview.md)
   英文系统总览。
+- [web/workflow-handbook.html](./web/workflow-handbook.html)
+  面向浏览器的中英双语 Workflow 手册，适合快速理解当前真实实现与阶段闭环。
 - [WORKFLOW.md](./../WORKFLOW.md)
   人类可读的 workflow 契约与阶段规则。
 - [WORKSPACE.md](./../WORKSPACE.md)
@@ -88,6 +94,7 @@
 - [新手快速开始（中文）](./beginner_zh.md)
 - [系统概览（中文）](./overview_zh.md)
 - [Overview (English)](./overview.md)
+- [Workflow Web Handbook / 中英双语网页手册](./web/workflow-handbook.html)
 - [快速上手](./guides/getting-started.md)
 - [安装与启用](./guides/install-and-enable.md)
 - [Lobster Handoff Quickstart](./../lobster/QUICKSTART.md)
