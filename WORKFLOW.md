@@ -141,6 +141,27 @@ Minimum structure:
 
 Flat, ambiguous experiment dumping under `coder/` is not allowed for new work.
 
+### Workflow Guard Code Map
+
+The workflow runtime is implemented as a facade plus focused submodules, rather than a single unreadable file.
+
+- `tools/workflow-guard.ts`
+  Public facade and compatibility layer. It should keep exports, dependency wiring, and limited glue logic only.
+- `tools/workflow-guard-core/`
+  Shared coercion, fs, path, and weak-business helpers.
+- `tools/workflow-guard-state/`
+  Durable workflow contracts such as `research_program`, `paper_ingestion`, `ideation_contract`, `paper_story_state`, `review_pressure_packet`, and `writing_contract`.
+- `tools/workflow-guard-stages/`
+  Stage-specific missing-signal gates for `setup`, `graph_build`, `frontier_mapping`, `idea`, `plan`, `code`, `experiment`, `analyze`, `review`, `write`, and `submit`.
+- `tools/workflow-guard-materializers/`
+  Workflow-owned contract generation for ideation, paper story, and review pressure packets.
+- `tools/workflow-guard-summaries/`
+  Status and summary helpers used by `/workflow-status` and related runtime views.
+- `tools/workflow-guard-guidance/`
+  Dynamic task generation and concern-specific guidance such as PaperNexus and writing prompts.
+
+`tools/workflow-commands/` is also now a formal submodule for parser / formatter / type extraction from `workflow-commands.ts`; command registration and runtime dispatch still remain in the parent file.
+
 ### Track Lifecycle
 
 Each track in `{PROJ}/TRACK_REGISTRY.json` must be in exactly one of:
@@ -537,7 +558,7 @@ Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only 
 
 ### Stage 1 · IDEA
 **Owner:** Researcher  
-**Skills:** `/idea-phase` → `/scientific-brainstorming` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
+**Skills:** `/idea-phase` → `/research-ideation` → `/scientific-brainstorming` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
 **Inputs:** Research domain or topic (from user, or from memory), `{PROJ}/researcher/FRONTIER_REPORT.md`
 **Outputs:**
 - `{PROJ}/researcher/IDEA_REPORT.md` — top-ranked idea with novelty assessment
@@ -545,6 +566,9 @@ Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only 
 - `{PROJ}/researcher/INNOVATION_REFLECTION.md` — refreshed experiment-informed ideation constraints when prior experiments exist
 - `{PROJ}/researcher/LITERATURE.md` — supporting literature
 - `{PROJ}/researcher/IDEA_TOURNAMENT_STATE.json` — pilot scores (if tournament ran)
+- `{PROJ}/researcher/ideation/GRAPH_IDEATION_PACKET.json` — graph-first ideation basis packet
+- `{PROJ}/researcher/ideation/NOVELTY_TREE.md`, `CHALLENGE_INSIGHT_TREE.md`, `WELL_ESTABLISHED_SOLUTION_CHECK.md`
+- `{PROJ}/researcher/ideation/CANDIDATE_POOL.json`, `TOURNAMENT_SCOREBOARD.json`, `TOP3_DIRECTION_SUMMARY.md`, `RESEARCH_PROPOSAL.md`
 - `{PROJ}/TRACK_REGISTRY.json` — track portfolio with candidate / active / parked / killed decisions
 
 ```
@@ -561,7 +585,7 @@ Procedure:
      - one falsifier pilot
   7. Run attacker / novelty pass on each track
   8. Use a converge pass on the shortlist before locking the portfolio
-  9. If ≥2 tracks survive: run /idea-tournament or equivalent pilot pass
+  9. If ≥2 tracks survive: run `/idea-tournament` with tree expansion, propose/review/refine, equal-weight Elo-style ranking, and top-3 summary
   10. Select the portfolio:
      - max 2 active tracks
      - max 1 parked track
@@ -570,8 +594,10 @@ Procedure:
   12. Write IDEA_AUDIT.md covering duplicate risk, closest prior work, evidence pointers, failure signatures, retry conditions, and experiment-informed reflection takeaways for each surviving track
   13. Update {PROJ}/PROJECT_MANIFEST.json with `active_track_ids`, `parked_track_ids`, `audit.idea_audit_path`, and `current_micro_stage: "portfolio_selected"`
   14. Select the current leading track → write IDEA_REPORT.md
-  15. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
-  16. → POST GATE-1
+  15. Run `research_workflow.materialize_ideation_contract` so workflow-owned code scaffolds GRAPH_IDEATION_PACKET, novelty tree, challenge-insight tree, solution check, scoreboard, top-3 summary, and research proposal from the current graph + brainstorm bundle
+  16. Sync `ideation_contract` in PROJECT_MANIFEST.json through workflow tools so IDEA becomes a durable contract, not just a report
+  17. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
+  18. → POST GATE-1
 ```
 
 Before leaving IDEA, Researcher should trigger Lobster handoff only if `IDEA_REPORT.md`, `IDEA_AUDIT.md`, the required reasoning packets, and the narrowed active portfolio already exist, and there is no pending novelty / attacker / reflection retry.
@@ -885,7 +911,8 @@ Procedure:
   6. Analyzer writes QUALITY_AUDIT.md covering seed count, CI/error bars, baseline coverage, anomalies, artifact completeness, and residual risks
   7. Analyzer writes THEORY_SUPPORT_NOTE.md with a rough `green` / `red` theory signal
   8. Analyzer runs /theory-phase so theory candidates become THEORY_STATE.json + proof-packets/ + THEORY_APPENDIX_PLAN.md + appendix_theory.tex
-  9. → proceed to REVIEW (no gate — analysis is internal)
+  9. Analyzer calls `research_workflow.materialize_paper_story_state` so claim support counts, track verdict hooks, and unsupported-claim hooks are mirrored into the durable story contract
+  10. → proceed to REVIEW (no gate — analysis is internal)
 ```
 
 When ANALYZE artifacts are complete and the current decision is to move into REVIEW, Analyzer should trigger Lobster handoff. If analysis uncovered unsupported central claims that require more experiments or a return to EXPERIMENT, do not hand off forward.
@@ -898,6 +925,7 @@ When ANALYZE artifacts are complete and the current decision is to move into REV
 **Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/artifacts/`
 **Outputs:**
 - `{PROJ}/reviewer/REVIEW_REPORT.md` — structured review
+- `{PROJ}/reviewer/story-pressure/REJECT_FIRST_REVIEW.md`, `NOVELTY_ATTACK.md`, `UNSUPPORTED_CLAIM_AUDIT.md`, `REVERSE_OUTLINE.md`, `FIGURE_TABLE_QC.md`, `LIMITATION_AUDIT.md`
 - `{PROJ}/researcher/REVIEW_STATE.json` — review loop state
 
 ```
@@ -911,8 +939,9 @@ Procedure:
   7. If theory signal is `red`, carry it forward to WRITE; do not block draft generation
   8. Researcher addresses weak points (re-experiment, downgrade claims, clarify, or stop a weak track)
   9. Loop max 3 rounds
-  10. This is not the final publication-facing review. A compiled PDF must still go through Stage 8 external AI review via `/paperreview-submit`.
-  11. → proceed to WRITE
+  10. Reviewer first calls `research_workflow.materialize_review_pressure_packet`, then persists any bounded follow-up edits through workflow tools so WRITE can treat the packet as a hard gate
+  11. This is not the final publication-facing review. A compiled PDF must still go through Stage 8 external AI review via `/paperreview-submit`.
+  12. → proceed to WRITE
 ```
 
 Reviewer should trigger Lobster handoff only when the internal review loop is actually complete and the project is ready to enter WRITE. If review requests more experiments, narrower scope, or additional fixes, remain in REVIEW or send the project backward according to the gate result.
@@ -927,6 +956,7 @@ Reviewer should trigger Lobster handoff only when the internal review loop is ac
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — paper outline
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough paper thesis and evidence spine
 - `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md` — proof / derivation plan for appendix-only detail
+- `{PROJ}/academic_writer/story/` — durable story contract (`TASK_SUMMARY.md`, `CHALLENGE_STATEMENT.md`, `INSIGHT_SUMMARY.md`, `CONTRIBUTION_MAP.md`, `ADVANTAGE_MAP.md`, `STORY_SPINE.md`, `PIPELINE_FIGURE_SKETCH.md`, `MODULE_MOTIVATION_MAP.md`, `CLAIM_TO_EXPERIMENT_MAP.md`, `FALLBACK_NARRATIVE.md`, `REJECTION_RISK_TABLE.md`)
 - `{PROJ}/academic_writer/paper/sections/appendix_theory.tex` — appendix derivation draft generated from proof packets
 - `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` — how the user template maps onto this paper's outline and section order
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — `green` / `red` writing advisory for theory, storyline, paragraph logic
@@ -938,8 +968,10 @@ Procedure:
   1. Researcher spawns Academic Writer with narrative report + claim matrix + track verdicts + theory support note + figures path
   2. Writer reads `PROJECT_MANIFEST.json.writing_contract`; if a user template is configured, Writer must read the project-local copied template before any outline or prose drafting
   3. Writer runs /paper-plan and `/venue-templates` to lock template / section / page-budget constraints, then updates PAPER_PLAN.md + STORYLINE_SKETCH.md + THEORY_APPENDIX_PLAN.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
+  3a. Writer calls `research_workflow.materialize_paper_story_state` so the durable story packet is scaffolded from ideation / graph-backed evidence before large drafting passes
   4. Writer limits the paper to active / winning tracks only
   5. Writer removes or downgrades unsupported primary claims before prose drafting
+  5a. Writer reads the durable story packet under `academic_writer/story/` and the reviewer story-pressure packet under `reviewer/story-pressure/` before drafting core sections
   6. If theory or storyline signal is `red`, Writer still continues but marks the risky sections for human review
   7. Cross-Reviewer checks outline (sessions_send, Outline Mode)
      → saved to {PROJ}/cross-reviewer/outline/{date}.md
@@ -948,8 +980,9 @@ Procedure:
   10. Writer uses `/citation-management` to pull the paper queue from Zotero `bot/<project-id>/writing-shortlist`, then runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
   11. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
   12. Cross-Reviewer checks each section (Prose Mode)
-  13. Writer runs /paper-compile → main.pdf
-  14. → POST GATE-4
+  13. Sync `paper_story_state` in PROJECT_MANIFEST.json through workflow tools before draft completion; use `materialize_paper_story_state` for scaffold and `set_paper_story_state` only for bounded patches
+  14. Writer runs /paper-compile → main.pdf
+  15. → POST GATE-4
 ```
 
 Academic Writer should trigger Lobster handoff only when WRITE is complete and the recommendation is to move into SUBMIT. If Cross-Reviewer, Reviewer, or the user requests another writing revision pass, remain in WRITE and do not hand off forward.
@@ -1152,7 +1185,7 @@ LOOP FOREVER (when AUTO_PROCEED=true):
 | SETUP | Researcher | BOOTSTRAP.md |
 | GRAPH_BUILD | Researcher | graph-build, zotero-project-library |
 | FRONTIER_MAPPING | Researcher | frontier-mapping |
-| IDEA | Researcher | idea-phase, scientific-brainstorming, idea-generator, novelty-check, idea-tournament, resume-pipeline |
+| IDEA | Researcher | idea-phase, research-ideation, scientific-brainstorming, idea-generator, novelty-check, idea-tournament, resume-pipeline |
 | PLAN | Orchestrator | plan-research |
 | CODE | Coder | implement-experiment, scientific-visualization, github-download, run-experiment, resume-pipeline |
 | EXPERIMENT | Researcher | experiment-phase, parallel-experiments, monitor-experiment, resume-pipeline |

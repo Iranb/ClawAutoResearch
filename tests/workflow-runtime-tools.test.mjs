@@ -267,6 +267,616 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
 });
 
+test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  for (const [filePath, content] of [
+    ["researcher/ideation/NOVELTY_TREE.md", "# Novelty\n"],
+    ["researcher/ideation/CHALLENGE_INSIGHT_TREE.md", "# Challenge Insight\n"],
+    [
+      "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+      "# Solution Check\n",
+    ],
+    ["researcher/ideation/CROSS_DOMAIN_TRANSFER.md", "# Transfer\n"],
+    ["researcher/ideation/PROBLEM_DECOMPOSITION.md", "# Decomposition\n"],
+    ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md", "# Top 3\n"],
+    ["researcher/ideation/RESEARCH_PROPOSAL.md", "# Proposal\n"],
+    ["academic_writer/story/STORY_SPINE.md", "# Story Spine\n"],
+    [
+      "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      "# Claim Map\n",
+    ],
+    ["academic_writer/story/FALLBACK_NARRATIVE.md", "# Fallback\n"],
+    ["reviewer/story-pressure/REJECT_FIRST_REVIEW.md", "# Reject First\n"],
+    [
+      "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+      "# Claim Audit\n",
+    ],
+  ]) {
+    const resolved = path.join(projectRoot, filePath);
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+    await fs.writeFile(resolved, content, "utf8");
+  }
+
+  for (const [filePath, value] of [
+    [
+      "researcher/ideation/CANDIDATE_POOL.json",
+      { candidates: [{ id: "dir-1", status: "surviving" }] },
+    ],
+    [
+      "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+      { status: "completed", selected_direction_id: "dir-1" },
+    ],
+    [
+      "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+      { novelty_zones: ["zone:1"], challenge_clusters: ["challenge:1"] },
+    ],
+  ]) {
+    const resolved = path.join(projectRoot, filePath);
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+    await fs.writeFile(resolved, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  }
+
+  const ideationResult = await executeWorkflowTool(tool, {
+    action: "set_ideation_contract",
+    ideationContract: {
+      status: "ready",
+      contract_version: 1,
+      long_term_goal: "Find a robust, graph-grounded story direction.",
+      problem_scope: "Scientific storytelling",
+      basis_stage: "frontier_mapping",
+      graph_ideation_indices: {
+        status: "ready",
+        novelty_candidate_clusters: ["zone:1"],
+        challenge_clusters: ["challenge:1"],
+        insight_clusters: ["insight:1"],
+        occupied_solution_zones: [],
+        transfer_bridges: ["bridge:1"],
+      },
+      novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
+      challenge_insight_tree_path:
+        "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
+      solution_check_path:
+        "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+      cross_domain_transfer_path:
+        "researcher/ideation/CROSS_DOMAIN_TRANSFER.md",
+      problem_decomposition_path:
+        "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+      candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+      tournament_scoreboard_path:
+        "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+      top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+      research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
+      graph_ideation_packet_path:
+        "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+      selected_direction_id: "dir-1",
+      selected_track_id: "track-main",
+    },
+  });
+  assert.equal(ideationResult.state.status, "ready");
+  assert.equal(ideationResult.graphIdeationPacketExists, true);
+  assert.equal(ideationResult.researchProposalExists, true);
+
+  const paperStoryResult = await executeWorkflowTool(tool, {
+    action: "set_paper_story_state",
+    paperStoryState: {
+      status: "ready",
+      story_spine_path: "academic_writer/story/STORY_SPINE.md",
+      claim_to_experiment_map_path:
+        "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+    },
+  });
+  assert.equal(paperStoryResult.state.status, "ready");
+  assert.equal(paperStoryResult.storySpineExists, true);
+  assert.equal(paperStoryResult.claimToExperimentMapExists, true);
+
+  const reviewPressureResult = await executeWorkflowTool(tool, {
+    action: "set_review_pressure_packet",
+    reviewPressurePacket: {
+      status: "ready",
+      reject_first_review_path:
+        "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+      unsupported_claim_audit_path:
+        "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+    },
+  });
+  assert.equal(reviewPressureResult.state.status, "ready");
+  assert.equal(reviewPressureResult.rejectFirstReviewExists, true);
+  assert.equal(reviewPressureResult.unsupportedClaimAuditExists, true);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.ideationContractStatus, "ready");
+  assert.equal(snapshot.ideationContractSelectedTrackId, "track-main");
+  assert.equal(
+    snapshot.ideationContractResearchProposalPath,
+    "researcher/ideation/RESEARCH_PROPOSAL.md"
+  );
+  assert.equal(snapshot.paperStoryStatus, "ready");
+  assert.equal(
+    snapshot.paperStoryClaimToExperimentMapPath,
+    "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md"
+  );
+  assert.equal(snapshot.reviewPressureStatus, "ready");
+  assert.equal(
+    snapshot.reviewPressureUnsupportedClaimAuditPath,
+    "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md"
+  );
+});
+
+test("research_workflow materialize_ideation_contract scaffolds graph-first ideation artifacts from brainstorm and track memory", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "# Anchor Index\n- anchor: compositional-router\n- anchor: support-gap\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+    "# Limitation Frontier\n- baseline methods do not preserve compositional support links\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+    "# Transfer Frontier\n- reuse retrieval planning from theorem proving\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "# Frontier Report\n\n## Challenge clusters\n- support attribution drift\n\n## Insight clusters\n- graph-grounded routing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "INNOVATION_REFLECTION.md"),
+    "# Innovation Reflection\nKeep graph-backed support routing as a surviving direction.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic Chain\n1. Challenge: attribution drift\n2. Insight: graph-grounded routing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence Chain\n- frontier packets show missing support links\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n- how to preserve support precision?\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "TRACK_REGISTRY.json"),
+    `${JSON.stringify(
+      {
+        tracks: [
+          {
+            track_id: "track-main",
+            status: "active",
+            question: "How do we preserve support precision in scientific storytelling?",
+            hypothesis: "Graph-grounded routing improves support precision without weakening clarity.",
+            novelty_basis:
+              "It turns graph evidence into a routing signal for claim construction.",
+            linked_graph_nodes: ["paper:router", "concept:support-precision"],
+            relation_patterns: ["extends->paper:router", "bridges->concept:support-precision"],
+            evidence_pointers: ["graph/LIMITATION_FRONTIER.md#support-gap"],
+            reasoning_packet_dir: "researcher/reasoning/track-main",
+            working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+            synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Produce graph-grounded scientific narratives with stronger support precision.",
+    problem_statement: "Current drafts lose fine-grained claim support when the story widens.",
+    baseline_reference: "baseline-router",
+    primary_metric: "support_precision",
+    datasets: ["demo-dataset"],
+    success_criteria: ["support_precision improves over baseline-router"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+        hypothesis:
+          "Graph-grounded routing improves support precision without weakening clarity.",
+        novelty_basis:
+          "It turns graph evidence into a routing signal for claim construction.",
+        required_baselines: ["baseline-router"],
+      },
+    ],
+  };
+  manifest.innovation_reflection = {
+    status: "fresh",
+    last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      topic: "Graph-grounded support routing",
+      basis_stage: "frontier_mapping",
+      track_id: "track-main",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      graph_version_seen: "global-v1",
+      contract_version: 1,
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "diverge",
+          status: "completed",
+          options: [
+            {
+              option_id: "dir-main",
+              title: "Graph-grounded support router",
+              score: 0.91,
+              summary: "Use graph evidence to route claims to supporting packets.",
+              logic_chain: "# Logic Main\nChallenge -> router -> evidence\n",
+              evidence_chain: "# Evidence Main\nSupport gaps from frontier packets\n",
+              reasoning_trace: [
+                {
+                  step: "inspect-support-gap",
+                  conclusion: "routing should use graph evidence",
+                },
+              ],
+              question_packet: "# Questions Main\n",
+              working_memory: {
+                surviving_direction: "graph-grounded support router",
+              },
+              synthesis_packet: "# Synthesis Main\n",
+              reflection_chain: {
+                keep: ["graph-grounded support router"],
+              },
+              theory_brief: {
+                theorem_seed: "support_precision_monotonicity",
+              },
+              storyline_brief: {
+                thesis: "Challenge -> graph router -> evidence-backed clarity",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_ideation_contract",
+    ideationMaterialization: {
+      basis_stage: "frontier_mapping",
+    },
+  });
+
+  assert.equal(result.state.status, "ready");
+  assert.equal(result.state.selectedDirectionId, "dir-main");
+  assert.equal(result.state.selectedTrackId, "track-main");
+  assert.equal(result.state.graphIdeationIndices.status, "ready");
+  assert.equal(result.state.ideaTreePath, "researcher/ideation/IDEA_TREE.md");
+  assert.equal(
+    result.state.rankingHistoryPath,
+    "researcher/ideation/RANKING_HISTORY.json"
+  );
+  assert.ok(
+    result.state.graphIdeationIndices.challengeClusters.includes(
+      "support attribution drift"
+    )
+  );
+  assert.equal(result.graphIdeationPacketExists, true);
+  assert.equal(result.researchProposalExists, true);
+
+  const packet = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "ideation", "GRAPH_IDEATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(packet.selected_direction_id, "dir-main");
+  assert.equal(packet.selected_track_id, "track-main");
+  assert.ok(Array.isArray(packet.transfer_bridges));
+  assert.ok(packet.transfer_bridges.length >= 1);
+
+  const proposal = await fs.readFile(
+    path.join(projectRoot, "researcher", "ideation", "RESEARCH_PROPOSAL.md"),
+    "utf8"
+  );
+  assert.match(proposal, /route claims to supporting packets/i);
+  assert.match(proposal, /Expected Results/i);
+
+  const ideaTree = await fs.readFile(
+    path.join(projectRoot, "researcher", "ideation", "IDEA_TREE.md"),
+    "utf8"
+  );
+  assert.match(ideaTree, /Technique Variants/i);
+  assert.match(ideaTree, /Domain Adaptations/i);
+  assert.match(ideaTree, /Formulation Variants/i);
+
+  const rankingHistory = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "ideation", "RANKING_HISTORY.json"),
+      "utf8"
+    )
+  );
+  assert.equal(rankingHistory.status, "completed");
+  assert.match(rankingHistory.method ?? "", /elo|equivalent/i);
+  assert.ok(Array.isArray(rankingHistory.rounds));
+  assert.ok(rankingHistory.rounds.length >= 1);
+
+  const candidatePool = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"),
+      "utf8"
+    )
+  );
+  assert.equal(candidatePool.status, "ready");
+  assert.equal(candidatePool.tree_expansion?.max_candidates, 21);
+  assert.ok(Array.isArray(candidatePool.tree_expansion?.technique_candidates));
+  assert.ok(Array.isArray(candidatePool.tree_expansion?.domain_candidates));
+  assert.ok(Array.isArray(candidatePool.tree_expansion?.formulation_candidates));
+  assert.ok((candidatePool.tree_expansion?.technique_candidates?.length ?? 0) >= 1);
+  assert.ok((candidatePool.tree_expansion?.formulation_candidates?.length ?? 1) >= 1);
+  assert.ok(Array.isArray(candidatePool.candidates));
+  assert.ok(candidatePool.candidates.length >= 1);
+  assert.ok(candidatePool.candidates[0].phase_trace?.propose);
+  assert.ok(candidatePool.candidates[0].phase_trace?.review);
+  assert.ok(candidatePool.candidates[0].phase_trace?.refine);
+  assert.ok(candidatePool.candidates[0].baseline_relation);
+
+  const top3Summary = await fs.readFile(
+    path.join(projectRoot, "researcher", "ideation", "TOP3_DIRECTION_SUMMARY.md"),
+    "utf8"
+  );
+  assert.match(top3Summary, /Action:\s+advance/i);
+  assert.match(top3Summary, /Primary risk:/i);
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const workingMemoryRelativePath =
+    refreshedManifest.brainstorm_cycle?.working_memory_path ??
+    "researcher/brainstorm-cycle/WORKING_MEMORY.json";
+  const workingMemory = JSON.parse(
+    await fs.readFile(path.join(projectRoot, workingMemoryRelativePath), "utf8")
+  );
+  assert.equal(workingMemory.ideation_contract?.selected_direction_id, "dir-main");
+
+  const updatedTrackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  assert.equal(updatedTrackRegistry.tracks[0].research_proposal_path, "researcher/ideation/RESEARCH_PROPOSAL.md");
+});
+
+test("research_workflow materializes paper story and review pressure contracts from ideation outputs", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await fs.mkdir(path.join(projectRoot, "researcher", "ideation"), {
+    recursive: true,
+  });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "ideation", "RESEARCH_PROPOSAL.md"),
+    "# Research Proposal\n\n## Background\nClaim support drifts as drafts widen.\n\n## Method\nUse graph-grounded routing to keep each claim aligned with support packets.\n\n## Experiment Plan\n- Reproduce baseline-router.\n- Enable graph-grounded routing.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "ideation", "PROBLEM_DECOMPOSITION.md"),
+    "# Problem Decomposition\n\n## Sub-problems\n- preserve support precision\n- avoid clarity collapse\n\n## Validation Ladder\n- reproduce baseline\n- enable routing delta\n- add writing integration\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "STORYLINE_BRIEF.json"),
+    `${JSON.stringify(
+      {
+        thesis: "Challenge -> graph router -> evidence-backed clarity",
+        arc: "Task -> challenge -> insight -> contribution -> advantage",
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.mkdir(path.join(projectRoot, "analyzer"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"),
+    `# Claim Evidence Matrix
+
+| Claim ID | Claim | Support |
+| --- | --- | --- |
+| claim-1 | Graph-grounded routing improves support precision over baseline-router. | SUPPORTED |
+| claim-2 | The router is the causal source of the gain. | PARTIAL |
+| claim-3 | The method preserves clarity while improving support precision. | UNSUPPORTED |
+`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "analyzer", "UNSUPPORTED_CLAIMS.md"),
+    `# Unsupported Claims
+
+- Primary claim unsupported in write scope: claim-3
+`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "analyzer", "TRACK_VERDICTS.md"),
+    `# Track Verdicts
+
+- track-main: foreground
+`,
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Improve support precision in scientific storytelling.",
+    problem_statement: "Drafts lose fine-grained support when the narrative expands.",
+    baseline_reference: "baseline-router",
+    primary_metric: "support_precision",
+    datasets: ["demo-set"],
+    success_criteria: ["support_precision improves over baseline-router"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+        hypothesis:
+          "Graph-grounded routing improves support precision without weakening clarity.",
+        novelty_basis:
+          "Use graph evidence as a routing signal for claim construction.",
+        required_baselines: ["baseline-router"],
+      },
+    ],
+  };
+  manifest.ideation_contract = {
+    status: "ready",
+    contract_version: 1,
+    basis_stage: "frontier_mapping",
+    long_term_goal: "Produce reviewer-defensible, graph-grounded research narratives.",
+    problem_scope: "Support precision under widening narrative scope.",
+    research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
+    problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    selected_direction_id: "dir-main",
+    selected_track_id: "track-main",
+  };
+  manifest.brainstorm_cycle = {
+    status: "ready",
+    provider: "workflow_core_brainstorm",
+    selected_option_id: "dir-main",
+    selected_option_title: "Graph-grounded support router",
+    selected_option_score: 0.91,
+    track_id: "track-main",
+    storyline_brief_path: "researcher/brainstorm-cycle/STORYLINE_BRIEF.json",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  const storyResult = await executeWorkflowTool(tool, {
+    action: "materialize_paper_story_state",
+    paperStoryMaterialization: {
+      basis_stage: "plan",
+    },
+  });
+
+  assert.equal(storyResult.state.status, "ready");
+  assert.equal(storyResult.state.storylineSourceTrackId, "track-main");
+  assert.equal(storyResult.state.claimSupportStatus, "unsupported");
+  assert.equal(storyResult.state.supportedClaimCount, 1);
+  assert.equal(storyResult.state.partialClaimCount, 1);
+  assert.equal(storyResult.state.unsupportedClaimCount, 1);
+  assert.equal(storyResult.storySpineExists, true);
+  assert.equal(storyResult.claimToExperimentMapExists, true);
+
+  const storySpine = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"),
+    "utf8"
+  );
+  assert.match(storySpine, /Task -> challenge -> insight -> contribution -> advantage/i);
+  assert.match(storySpine, /support precision/i);
+  assert.match(storySpine, /track-main/i);
+  assert.match(storySpine, /claim-3/i);
+
+  const claimMap = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "story", "CLAIM_TO_EXPERIMENT_MAP.md"),
+    "utf8"
+  );
+  assert.match(claimMap, /baseline-router/i);
+  assert.match(claimMap, /support_precision/i);
+
+  const fallbackNarrative = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "story", "FALLBACK_NARRATIVE.md"),
+    "utf8"
+  );
+  assert.match(fallbackNarrative, /claim-3/i);
+
+  const reviewResult = await executeWorkflowTool(tool, {
+    action: "materialize_review_pressure_packet",
+    reviewPressureMaterialization: {
+      basis_stage: "review",
+    },
+  });
+
+  assert.equal(reviewResult.state.status, "ready");
+  assert.equal(reviewResult.rejectFirstReviewExists, true);
+  assert.equal(reviewResult.unsupportedClaimAuditExists, true);
+
+  const rejectFirst = await fs.readFile(
+    path.join(projectRoot, "reviewer", "story-pressure", "REJECT_FIRST_REVIEW.md"),
+    "utf8"
+  );
+  assert.match(rejectFirst, /baseline-router/i);
+  assert.match(rejectFirst, /support precision/i);
+
+  const unsupportedClaims = await fs.readFile(
+    path.join(projectRoot, "reviewer", "story-pressure", "UNSUPPORTED_CLAIM_AUDIT.md"),
+    "utf8"
+  );
+  assert.match(unsupportedClaims, /claim-1/i);
+  assert.match(unsupportedClaims, /graph-grounded routing/i);
+});
+
 test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

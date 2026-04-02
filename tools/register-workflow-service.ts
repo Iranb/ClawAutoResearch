@@ -11,14 +11,16 @@ import {
   resolveWorkflowProjectQueueKey,
 } from "./workflow-coordination";
 import {
-  acquireBackgroundWorkflowSession,
   drainQueuedBackgroundWorkflowRuns,
   enqueueQueuedBackgroundWorkflowRun,
-  getBackgroundWorkflowRunByQueueKey,
   hasPendingBackgroundWorkflowQueueKey,
-  recordBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
 } from "./workflow-fast-paths";
+import {
+  acquireBackgroundWorkflowSession,
+  getBackgroundWorkflowRunByQueueKey,
+  recordBackgroundWorkflowRun,
+} from "./workflow-background-pool";
 import { readWorkflowAnnounceOutboxStore } from "./workflow-runtime-state.js";
 import {
   orchestrateWorkflowTransition,

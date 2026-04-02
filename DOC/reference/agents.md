@@ -6,12 +6,12 @@
 
 | Role | 主要职责 |
 | --- | --- |
-| `researcher` | 项目 owner、阶段协调、文献、Zotero 文献管理、图谱、创新、实验总账、恢复与自动迭代 |
+| `researcher` | 项目 owner、阶段协调、文献、Zotero 文献管理、图谱、创新、graph-first ideation contract、`research-ideation` / `idea-tournament` 收敛、实验总账、恢复与自动迭代 |
 | `orchestrator` | 研究计划、实验排期、风险、预算和 TODO 编排 |
-| `coder` | 实验代码实现、运行脚本、复现实验、工程侧 smoke test、实现阶段科研绘图 |
-| `analyzer` | 结果解释、图表、claim-evidence、PaperNexus 反思 |
-| `academic_writer` | 论文大纲、模版映射、Zotero 引用队列、段落逻辑、正文写作与编译 |
-| `reviewer` | review phase、critical thinking、scholar evaluation、submission packet、review response |
+| `coder` | 实验代码实现、运行脚本、复现实验、工程侧 smoke test、实现阶段科研绘图，并对齐 proposal / claim-to-experiment contract |
+| `analyzer` | 结果解释、图表、claim-evidence、PaperNexus 反思，并把 claim support / track verdict / unsupported-claim hooks 回写到 durable `paper_story_state` |
+| `academic_writer` | 论文大纲、模版映射、Zotero 引用队列、workflow-owned durable paper story contract、段落逻辑、正文写作与编译 |
+| `reviewer` | review phase、`paper-review` 对抗式自审、critical thinking、scholar evaluation、workflow-owned durable review pressure packet、submission packet、review response |
 | `cross-reviewer` | 隔离式外部视角审阅，不持有主动项目写权限 |
 
 ## 2. 每个 Agent 目录中的配置文件
@@ -184,3 +184,27 @@
 - 让 boot / bootstrap / heartbeat 三类时机有不同规则
 - 让角色身份、工具边界、流程规范分离
 - 降低单一超长 prompt 的耦合度
+
+## 7. workflow guard 代码结构
+
+为了让这些 Agent 规则和阶段 gate 可维护，workflow guard 现在采用 facade + 子模块结构：
+
+- [workflow-guard.ts](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+  对外公共入口、兼容层和有限 glue。
+- [workflow-guard-core/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-core/)
+  通用 helper。
+- [workflow-guard-state/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/)
+  durable state contract。
+- [workflow-guard-stages/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/)
+  stage-specific gate 判定。
+- [workflow-guard-materializers/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-materializers/)
+  ideation / story / review pressure 合同生成。
+- [workflow-guard-summaries/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-summaries/)
+  `/workflow-status` 等摘要逻辑。
+- [workflow-guard-guidance/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-guidance/)
+  dynamic task 与 concern-specific guidance。
+
+命令侧也有对应的正式子模块：
+
+- [workflow-commands/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands/)
+  负责 `types / parsers / formatters`，主命令注册和 dispatch 仍在父文件 [workflow-commands.ts](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands.ts)。

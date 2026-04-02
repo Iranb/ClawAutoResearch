@@ -1,0 +1,405 @@
+/**
+ * Formatters for workflow status output.
+ */
+
+import {
+  getGateReviewStorePath,
+} from "../workflow-auto-gate.js";
+import {
+  getCodeReviewStorePath,
+} from "../workflow-code-review.js";
+import {
+  getAutoModeDiscussionStorePath,
+} from "../workflow-auto-discussion.js";
+import type {
+  WorkflowSnapshot,
+  WorkflowAutoIteratorResult,
+  WorkflowGateReviewStore,
+  WorkflowCodeReviewStore,
+  WorkflowAutoDiscussionStore,
+} from "./types.js";
+
+export function compactStatusText(
+  value: string | null | undefined,
+  maxLength = 240
+): string {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "none";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+export function joinStatusList(values: string[]): string {
+  return values.length > 0 ? values.join("; ") : "none";
+}
+
+export function formatAutoModeSection(params: {
+  autoIteratorResult: WorkflowAutoIteratorResult | null;
+}): string[] {
+  const result = params.autoIteratorResult;
+  if (!result) {
+    return ["Auto mode: unavailable (no active project root resolved)."];
+  }
+  const totalMitigationRounds =
+    result.autoModeMitigationRoundsStarted + result.autoModeMitigationRoundsRemaining;
+  const lines = [
+    `Auto mode: configured=${result.configuredAutoMode}, effective=${result.effectiveAutoMode}, risk=${result.autoModeRiskLevel}`,
+    `Auto mitigation: status=${result.autoModeMitigationStatus ?? "none"}, rounds=${result.autoModeMitigationRoundsStarted}/${totalMitigationRounds}, remaining=${result.autoModeMitigationRoundsRemaining}, fingerprint=${result.autoModeRiskFingerprint ?? "none"}`,
+  ];
+  if (result.autoModeReasons.length > 0) {
+    lines.push("Auto mode reasons:");
+    for (const reason of result.autoModeReasons) {
+      lines.push(`  - ${reason}`);
+    }
+  }
+  return lines;
+}
+
+export function formatAutoDiscussionSection(params: {
+  projectRoot: string | null;
+  discussionStore: WorkflowAutoDiscussionStore | null;
+}): string[] {
+  if (!params.projectRoot || !params.discussionStore?.currentRound) {
+    return ["Auto discussion: no persisted discussion round for the current project."];
+  }
+  const round = params.discussionStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto discussion: status=${round.status}, stage=${round.stage ?? "unknown"}, risk=${round.riskLevel}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto discussion store: ${getAutoModeDiscussionStorePath(params.projectRoot)}`,
+    `Auto discussion packet: ${round.packetPath}`,
+    `Auto discussion summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+    `Auto discussion recommended owner: ${aggregate?.recommendedOwner ?? "none"}`,
+  ];
+  if ((aggregate?.actionItems?.length ?? 0) > 0) {
+    lines.push(`Auto discussion action items: ${joinStatusList(aggregate?.actionItems ?? [])}`);
+  }
+  if ((aggregate?.blockers?.length ?? 0) > 0) {
+    lines.push(`Auto discussion blockers: ${joinStatusList(aggregate?.blockers ?? [])}`);
+  }
+  lines.push("Auto discussion content:");
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - ${attempt.reviewerRole}: status=${attempt.status}${
+        result
+          ? `, assessment=${result.riskAssessment}, confidence=${result.confidence.toFixed(1)}`
+          : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.actionItems?.length ?? 0) > 0) {
+      lines.push(`    action items: ${joinStatusList(result?.actionItems ?? [])}`);
+    }
+    if ((result?.blockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.blockers ?? [])}`);
+    }
+    if (result?.rawText) {
+      lines.push(`    response: ${compactStatusText(result.rawText, 320)}`);
+    }
+  }
+  return lines;
+}
+
+export function formatGateReviewSection(params: {
+  projectRoot: string | null;
+  gateReviewStore: WorkflowGateReviewStore | null;
+}): string[] {
+  if (!params.projectRoot || !params.gateReviewStore?.currentRound) {
+    return ["Auto gate review: no persisted gate review round for the current project."];
+  }
+  const round = params.gateReviewStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto gate review: status=${round.status}, gate=${round.gateId}, stage=${round.stage ?? "unknown"}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto gate review store: ${getGateReviewStorePath(params.projectRoot)}`,
+    `Auto gate review packet: ${round.packetPath}`,
+    `Auto gate review summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+  ];
+  if (aggregate) {
+    lines.push(
+      `Auto gate review scores: avg=${aggregate.averageScore?.toFixed(2) ?? "n/a"}, min=${aggregate.minScore?.toFixed(2) ?? "n/a"}, blockers=${aggregate.blockerCount}`
+    );
+  }
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - gate reviewer ${attempt.reviewerRole}: status=${attempt.status}${
+        result ? `, verdict=${result.verdict}, score=${result.overallScore.toFixed(1)}` : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.majorIssues?.length ?? 0) > 0) {
+      lines.push(`    major issues: ${joinStatusList(result?.majorIssues ?? [])}`);
+    }
+    if ((result?.criticalBlockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.criticalBlockers ?? [])}`);
+    }
+  }
+  return lines;
+}
+
+export function formatCodeReviewSection(params: {
+  projectRoot: string | null;
+  codeReviewStore: WorkflowCodeReviewStore | null;
+}): string[] {
+  if (!params.projectRoot || !params.codeReviewStore?.currentRound) {
+    return ["Auto code review: no persisted code review round for the current project."];
+  }
+  const round = params.codeReviewStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto code review: status=${round.status}, gate=${round.gateId}, stage=${round.stage ?? "unknown"}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto code review store: ${getCodeReviewStorePath(params.projectRoot)}`,
+    `Auto code review packet: ${round.packetPath}`,
+    `Auto code review summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+  ];
+  if (aggregate) {
+    lines.push(
+      `Auto code review scores: avg=${aggregate.averageScore?.toFixed(2) ?? "n/a"}, min=${aggregate.minScore?.toFixed(2) ?? "n/a"}, blockers=${aggregate.blockerCount}`
+    );
+  }
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - code reviewer ${attempt.reviewerRole}: status=${attempt.status}${
+        result ? `, verdict=${result.verdict}, score=${result.overallScore.toFixed(1)}` : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.majorIssues?.length ?? 0) > 0) {
+      lines.push(`    major issues: ${joinStatusList(result?.majorIssues ?? [])}`);
+    }
+    if ((result?.criticalBlockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.criticalBlockers ?? [])}`);
+    }
+  }
+  return lines;
+}
+
+export function formatWorkflowStatusText(params: {
+  snapshot: WorkflowSnapshot;
+  commandLabel: string;
+  targetSessionKey: string;
+  autoIteratorResult: WorkflowAutoIteratorResult | null;
+  discussionStore: WorkflowAutoDiscussionStore | null;
+  gateReviewStore: WorkflowGateReviewStore | null;
+  codeReviewStore: WorkflowCodeReviewStore | null;
+}): string {
+  const { snapshot } = params;
+  const unreadMailboxCount = Array.isArray(snapshot.unreadMailbox)
+    ? snapshot.unreadMailbox.length
+    : 0;
+  const hasPaperIngestionSummary =
+    Boolean(snapshot.paperIngestionRuntimeStatus) ||
+    (snapshot.paperIngestionImportTaskCount ?? 0) > 0 ||
+    (snapshot.paperIngestionCompletedPaperCount ?? 0) > 0 ||
+    (snapshot.paperIngestionActiveOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionTimedOutOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionFailedOperationCount ?? 0) > 0 ||
+    (snapshot.paperIngestionBatchCount ?? 0) > 0 ||
+    (snapshot.paperIngestionActiveBatchCount ?? 0) > 0 ||
+    (snapshot.paperIngestionPendingBatchItemCount ?? 0) > 0 ||
+    (snapshot.paperIngestionSyncedBatchItemCount ?? 0) > 0 ||
+    (snapshot.paperIngestionFailedBatchItemCount ?? 0) > 0 ||
+    snapshot.paperIngestionReconcileRequired ||
+    snapshot.paperIngestionRepairRequired;
+  const lines = [
+    "Workflow Status",
+    `Session: ${params.targetSessionKey}`,
+    `Role: ${snapshot.role ?? "unknown"}`,
+    `Project: ${snapshot.projectId ?? "unset"} (${snapshot.projectResolutionSource})`,
+    `Stage: ${snapshot.currentStage ?? "unknown"} / ${snapshot.currentMicroStage ?? "unknown"}`,
+    `Owner: ${snapshot.ownerAgent ?? "unset"}${snapshot.recommendedOwner ? `, expected=${snapshot.recommendedOwner}` : ""}`,
+    `Next action: ${snapshot.nextAction ?? "none"}`,
+    `Resume action: ${snapshot.resumeAction ?? params.commandLabel}`,
+    `Blocking reason: ${snapshot.blockingReason ?? "none"}`,
+    `Mailbox: ${unreadMailboxCount} unread`,
+    `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,
+    `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
+    ...(hasPaperIngestionSummary
+      ? [
+          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, batches=${snapshot.paperIngestionBatchCount ?? 0}, active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0}, batch_pending_items=${snapshot.paperIngestionPendingBatchItemCount ?? 0}, batch_synced_items=${snapshot.paperIngestionSyncedBatchItemCount ?? 0}, batch_failed_items=${snapshot.paperIngestionFailedBatchItemCount ?? 0}, queued_requests=${snapshot.paperIngestionQueuedRequestCount ?? 0}, running_requests=${snapshot.paperIngestionRunningRequestCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+          ...(snapshot.paperIngestionRepairRequired
+            ? [
+                `PaperNexus repair: required=true, target_corpus=${snapshot.paperIngestionRepairTargetCorpus ?? "unset"}, reason=${snapshot.paperIngestionRepairReason ?? "pending"}`,
+              ]
+            : []),
+          ...(snapshot.paperIngestionLastBatchManifestPath
+            ? [
+                `PaperNexus batch manifest: ${snapshot.paperIngestionLastBatchManifestPath}`,
+            ]
+          : []),
+        ]
+      : []),
+    ...(snapshot.brainstormCycleStatus || snapshot.brainstormCycleProvider
+      ? [
+          `Brainstorm contract: provider=${snapshot.brainstormCycleProvider ?? "unset"}, provider_mode=${snapshot.brainstormCycleProviderMode ?? "unset"}, provider_status=${snapshot.brainstormCycleProviderStatus ?? "unset"}, contract_version=${snapshot.brainstormCycleContractVersion ?? "unset"}, bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
+        ]
+      : []),
+    ...(snapshot.ideationContractStatus
+      ? [
+          `Ideation contract: status=${snapshot.ideationContractStatus}, track=${snapshot.ideationContractSelectedTrackId ?? "unset"}, direction=${snapshot.ideationContractSelectedDirectionId ?? "unset"}, idea_tree=${snapshot.ideationContractIdeaTreePath ?? "unset"}, proposal=${snapshot.ideationContractResearchProposalPath ?? "unset"}, ranking=${snapshot.ideationContractRankingHistoryPath ?? "unset"}, scoreboard=${snapshot.ideationContractTournamentScoreboardPath ?? "unset"}, top3=${snapshot.ideationContractTop3SummaryPath ?? "unset"}, graph_packet=${snapshot.ideationContractGraphPacketPath ?? "unset"}`,
+        ]
+      : []),
+    `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
+    `Experiment sync: ${snapshot.experimentSyncRequired ? `required (${snapshot.experimentPapernexusSyncStatus ?? "pending"})` : "not required"}`,
+  ];
+  if (snapshot.experimentSearchStatus && snapshot.experimentSearchStatus !== "missing") {
+    lines.push(
+      `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
+    );
+  }
+  if (
+    snapshot.researchProgramStatus ||
+    (snapshot.researchProgramOnboardingMissing ?? []).length > 0
+  ) {
+    lines.push(
+      `Research program: status=${snapshot.researchProgramStatus ?? "missing"}, onboarding=${snapshot.researchProgramOnboardingStatus ?? "unknown"}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, baseline=${snapshot.researchProgramBaselineReference ?? "unset"}, primary_metric=${snapshot.researchProgramPrimaryMetricName ?? "unset"}, datasets=${snapshot.researchProgramDatasetCount ?? 0}, success_criteria=${snapshot.researchProgramSuccessCriteriaCount ?? 0}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
+    );
+    if (snapshot.researchProgramZoteroProjectPath) {
+      lines.push(
+        `Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`
+      );
+    }
+    if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
+      lines.push(
+        `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`
+      );
+    }
+  }
+  if (snapshot.paperStoryStatus) {
+    lines.push(
+      `Paper story: status=${snapshot.paperStoryStatus}, track=${snapshot.paperStoryTrackId ?? "unset"}, story_spine=${snapshot.paperStoryStorySpinePath ?? "unset"}, claim_map=${snapshot.paperStoryClaimToExperimentMapPath ?? "unset"}, fallback=${snapshot.paperStoryFallbackNarrativePath ?? "unset"}`
+    );
+    if (snapshot.paperStoryClaimSupportStatus) {
+      lines.push(
+        `Paper story support: status=${snapshot.paperStoryClaimSupportStatus}, supported=${snapshot.paperStorySupportedClaimCount ?? 0}, partial=${snapshot.paperStoryPartialClaimCount ?? 0}, unsupported=${snapshot.paperStoryUnsupportedClaimCount ?? 0}`
+      );
+    }
+  }
+  if (snapshot.reviewPressureStatus) {
+    lines.push(
+      `Review pressure: status=${snapshot.reviewPressureStatus}, reject_first=${snapshot.reviewPressureRejectFirstReviewPath ?? "unset"}, unsupported_claim_audit=${snapshot.reviewPressureUnsupportedClaimAuditPath ?? "unset"}`
+    );
+  }
+  if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {
+    lines.push(
+      `Writing session: status=${snapshot.writingSessionStatus}, current_section=${snapshot.writingCurrentSection ?? "unset"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`
+    );
+    lines.push(
+      `Writing evidence coverage: status=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}, packets_ready=${snapshot.writingSectionPacketsReady ? "true" : "false"}`
+    );
+  }
+  if (snapshot.reviewSessionStatus && snapshot.reviewSessionStatus !== "missing") {
+    lines.push(
+      `Review session: status=${snapshot.reviewSessionStatus}, scope=${snapshot.reviewSessionStageScope ?? "unset"}, round=${snapshot.reviewSessionRound ?? 0}, verdict=${snapshot.reviewSessionVerdict ?? "unknown"}`
+    );
+    const reviewRubric = snapshot.reviewRubricSummary ?? {};
+    const rubricPairs = [
+      ["originality", reviewRubric.originality],
+      ["quality", reviewRubric.quality],
+      ["clarity", reviewRubric.clarity],
+      ["significance", reviewRubric.significance],
+      ["soundness", reviewRubric.soundness],
+      ["citation_integrity", reviewRubric.citationIntegrity],
+      ["graph_evidence", reviewRubric.graphGroundedEvidenceSufficiency],
+    ].filter(([, value]) => typeof value === "number");
+    if (rubricPairs.length > 0) {
+      lines.push(
+        `Reviewer rubric: ${rubricPairs
+          .map(([key, value]) => `${key}=${value}`)
+          .join(", ")}`
+      );
+    }
+  }
+  if (
+    snapshot.reviewIssueTrackerStatus &&
+    snapshot.reviewIssueTrackerStatus !== "missing"
+  ) {
+    lines.push(
+      `Review issues: status=${snapshot.reviewIssueTrackerStatus}, critical=${snapshot.reviewIssueCriticalCount ?? 0}, high=${snapshot.reviewIssueHighCount ?? 0}, medium=${snapshot.reviewIssueMediumCount ?? 0}, low=${snapshot.reviewIssueLowCount ?? 0}`
+    );
+  }
+  if (
+    snapshot.graphGuidedWritingStatus &&
+    snapshot.graphGuidedWritingStatus !== "missing"
+  ) {
+    const missingClaims = Array.isArray(snapshot.graphGuidedWritingMissingEvidenceClaims)
+      ? snapshot.graphGuidedWritingMissingEvidenceClaims
+      : [];
+    lines.push(
+      `Graph-guided writing: status=${snapshot.graphGuidedWritingStatus}, evidence_coverage=${snapshot.graphGuidedWritingEvidenceCoverageStatus ?? "unknown"}, missing_claims=${missingClaims.join(",") || "none"}`
+    );
+    if (snapshot.graphGuidedWritingScholarReserved) {
+      lines.push(
+        `Scholar fallback slot: reserved=${snapshot.graphGuidedWritingScholarSkillSlot ?? "true"}`
+      );
+    } else {
+      lines.push("Scholar fallback slot: reserved=false");
+    }
+  }
+  if (
+    snapshot.citationCollectionStatus &&
+    snapshot.citationCollectionStatus !== "missing"
+  ) {
+    lines.push(
+      `Citation collection: status=${snapshot.citationCollectionStatus}, verified=${snapshot.citationCollectionVerifiedCount ?? 0}/${snapshot.citationCollectionCandidateCount ?? 0}, suspicious=${snapshot.citationCollectionSuspiciousCount ?? 0}, hallucinated=${snapshot.citationCollectionHallucinatedCount ?? 0}`
+    );
+  }
+  if (snapshot.paperQcStatus && snapshot.paperQcStatus !== "missing") {
+    lines.push(
+      `Paper QC: status=${snapshot.paperQcStatus}, compile=${snapshot.paperQcCompileStatus ?? "unset"}, chktex=${snapshot.paperQcChktexStatus ?? "unset"}, page_budget=${snapshot.paperQcPageBudgetStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.figureQcStatus && snapshot.figureQcStatus !== "missing") {
+    lines.push(
+      `Figure QC: status=${snapshot.figureQcStatus}, duplicate_figures=${snapshot.figureQcDuplicateFigureStatus ?? "unset"}, caption_alignment=${snapshot.figureQcCaptionAlignmentStatus ?? "unset"}, text_alignment=${snapshot.figureQcTextAlignmentStatus ?? "unset"}, selection=${snapshot.figureQcSelectionStatus ?? "unset"}`
+    );
+  }
+  if (
+    snapshot.externalReviewStatus &&
+    snapshot.externalReviewStatus !== "missing"
+  ) {
+    lines.push(
+      `External review: status=${snapshot.externalReviewStatus}, recommendation=${snapshot.externalReviewRecommendation ?? "unset"}, required_action=${snapshot.externalReviewRequiredAction ?? "unset"}`
+    );
+  }
+  if (!snapshot.projectRoot) {
+    lines.push(
+      "Project binding: no active project is currently bound to this conversation or workflow session."
+    );
+  }
+  lines.push("");
+  lines.push(...formatAutoModeSection({ autoIteratorResult: params.autoIteratorResult }));
+  lines.push("");
+  lines.push(...formatAutoDiscussionSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    discussionStore: params.discussionStore,
+  }));
+  lines.push("");
+  lines.push(...formatGateReviewSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    gateReviewStore: params.gateReviewStore,
+  }));
+  lines.push("");
+  lines.push(...formatCodeReviewSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    codeReviewStore: params.codeReviewStore,
+  }));
+  return lines.join("\n");
+}
+
+export function formatResearchProgramOnboardingGapLabels(gaps: string[]): string {
+  return gaps
+    .map((gap) =>
+      gap
+        .replace(/^PROJECT_MANIFEST\.json\.research_program\./, "")
+        .replace(/\s+\(recommended:.*\)$/, "")
+    )
+    .join(", ");
+}

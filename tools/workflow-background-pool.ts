@@ -1,0 +1,910 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { normalizeWorkflowSubagentParentSessionKey } from "./workflow-subagent-sessions";
+import {
+  appendWorkflowRuntimeEvent,
+  listWorkflowRuntimeProjectRoots,
+  migrateWorkflowRuntimeState,
+  readWorkflowRuntimeSessionsStore,
+  writeWorkflowRuntimeSessionsStore,
+} from "./workflow-runtime-state.js";
+import type {
+  WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
+} from "./workflow-runtime-state";
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeAgentId(value: unknown): string | null {
+  return readString(value)?.toLowerCase() ?? null;
+}
+
+const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
+const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
+
+export type BackgroundRuntimeScope = {
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+};
+
+export type BackgroundRunRegistryEntry = {
+  ownerAgent: string;
+  channelKey: string;
+  requesterSessionKey: string;
+  backgroundSessionKey: string;
+  runId: string;
+  queueKey: string | null;
+  kind: string;
+  family: string;
+  status: "active" | "idle" | "needs_repair";
+  projectId: string | null;
+  projectRoot: string | null;
+  startedAt: string;
+  lastCheckedAt: string | null;
+  lastFinishedAt: string | null;
+};
+
+export type BackgroundRunRegistryViewEntry = BackgroundRunRegistryEntry & {
+  deleteEligible: boolean;
+  idleForMs: number | null;
+};
+
+export type BackgroundWorkflowSessionLease = {
+  acquired: boolean;
+  reason: "acquired" | "channel_capacity_reached";
+  sessionKey: string | null;
+  reusedIdleSession: boolean;
+  activeResearcherSessionsInChannel: number | null;
+  channelKey: string | null;
+  ownerAgent: string | null;
+  family: string;
+  projectId: string | null;
+  projectRoot: string | null;
+};
+
+type RuntimeSubagentWaitApi = {
+  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+    status: "ok" | "error" | "timeout";
+    error?: string;
+  }>;
+  deleteSession?: (params: {
+    sessionKey: string;
+    deleteTranscript?: boolean;
+  }) => Promise<void>;
+};
+
+function deriveBackgroundRunFamily(kind: string): string {
+  switch (kind) {
+    case "research_pipeline":
+    case "research_queue":
+    case "resume_pipeline":
+    case "graph_build":
+    case "idle_research":
+      return "research";
+    case "papernexus_skill":
+    case "papernexus_wrapper":
+      return "papernexus";
+    default:
+      return kind || "generic";
+  }
+}
+
+function backgroundRunRegistryEntryMatchesProject(
+  entry: BackgroundRunRegistryEntry,
+  projectId: string | null,
+  projectRoot: string | null
+): boolean {
+  const normalizedProjectId = readString(projectId) ?? null;
+  const normalizedProjectRoot = readString(projectRoot) ?? null;
+  if (normalizedProjectId && entry.projectId) {
+    return normalizedProjectId === entry.projectId;
+  }
+  if (normalizedProjectRoot && entry.projectRoot) {
+    return path.normalize(normalizedProjectRoot) === path.normalize(entry.projectRoot);
+  }
+  return normalizedProjectId == null && normalizedProjectRoot == null;
+}
+
+function getBackgroundRunRegistryPath(): string {
+  const override = readString(
+    process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH
+  );
+  if (override) {
+    return path.resolve(override);
+  }
+  return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
+}
+
+function resolveBackgroundRuntimeScope(
+  scope: BackgroundRuntimeScope | undefined
+): Required<BackgroundRuntimeScope> {
+  const projectRoot = readString(scope?.projectRoot)
+    ? path.resolve(String(scope?.projectRoot))
+    : null;
+  const projectsRoot = readString(scope?.projectsRoot)
+    ? path.resolve(String(scope?.projectsRoot))
+    : null;
+  return {
+    projectId: readString(scope?.projectId) ?? null,
+    projectRoot,
+    projectsRoot,
+  };
+}
+
+function shouldUseProjectRuntimeState(scope: BackgroundRuntimeScope | undefined): boolean {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  return Boolean(resolved.projectRoot || resolved.projectsRoot);
+}
+
+async function appendBackgroundWorkflowRuntimeEvent(params: {
+  projectRoot?: string | null;
+  projectId?: string | null;
+  kind: string;
+  summary: string;
+  details?: Record<string, unknown> | null;
+}): Promise<void> {
+  const projectRoot = readString(params.projectRoot);
+  if (!projectRoot) {
+    return;
+  }
+  await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId: readString(params.projectId) ?? null,
+    kind: params.kind,
+    summary: params.summary,
+    details: params.details ?? null,
+  });
+}
+
+function toPersistedSessionEntry(
+  entry: BackgroundRunRegistryEntry
+): PersistedWorkflowRuntimeSessionEntry {
+  return {
+    sessionKey: entry.backgroundSessionKey,
+    sessionId: null,
+    runtime: "subagent",
+    role: entry.ownerAgent,
+    agentId: entry.ownerAgent,
+    ownerAgent: entry.ownerAgent,
+    family: entry.family,
+    kind: entry.kind,
+    channelKey: entry.channelKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+    parentSessionKey: entry.requesterSessionKey,
+    threadBindingKey: null,
+    depth: 0,
+    status: entry.status,
+    runId: entry.runId,
+    queueKey: entry.queueKey,
+    startedAt: entry.startedAt,
+    lastHeartbeatAt: entry.lastCheckedAt,
+    lastAnnounceAt: null,
+    lastCheckedAt: entry.lastCheckedAt,
+    lastFinishedAt: entry.lastFinishedAt,
+    lastError:
+      entry.status === "needs_repair"
+        ? "Background workflow session needs repair after runtime recovery."
+        : null,
+  };
+}
+
+function fromPersistedSessionEntry(
+  entry: PersistedWorkflowRuntimeSessionEntry
+): BackgroundRunRegistryEntry | null {
+  const ownerAgent = normalizeAgentId(entry.ownerAgent ?? entry.agentId);
+  const channelKey = readString(entry.channelKey);
+  const requesterSessionKey =
+    readString(entry.requesterSessionKey) ??
+    readString(entry.parentSessionKey) ??
+    null;
+  const backgroundSessionKey = readString(entry.sessionKey);
+  const runId = readString(entry.runId);
+  const startedAt = readString(entry.startedAt);
+  if (
+    !ownerAgent ||
+    !channelKey ||
+    !requesterSessionKey ||
+    !backgroundSessionKey ||
+    !runId ||
+    !startedAt
+  ) {
+    return null;
+  }
+  return {
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    backgroundSessionKey,
+    runId,
+    queueKey: readString(entry.queueKey) ?? null,
+    kind: readString(entry.kind) ?? "generic",
+    family: readString(entry.family) ?? "generic",
+    status:
+      entry.status === "idle" || entry.status === "needs_repair"
+        ? entry.status
+        : "active",
+    projectId: readString(entry.projectId) ?? null,
+    projectRoot: readString(entry.projectRoot) ?? null,
+    startedAt,
+    lastCheckedAt: readString(entry.lastCheckedAt ?? entry.lastHeartbeatAt) ?? null,
+    lastFinishedAt: readString(entry.lastFinishedAt) ?? null,
+  };
+}
+
+async function listProjectScopedRuntimeProjectRoots(
+  scope: BackgroundRuntimeScope | undefined
+): Promise<string[]> {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  return listWorkflowRuntimeProjectRoots({
+    projectRoot: resolved.projectRoot,
+    projectsRoot: resolved.projectsRoot,
+  });
+}
+
+export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void> {
+  await fs.rm(getBackgroundRunRegistryPath(), { force: true });
+}
+
+export function deriveBackgroundRunChannelKey(params: {
+  sessionKey?: string;
+  messageChannel?: string;
+}): string | null {
+  const normalizedParent = normalizeWorkflowSubagentParentSessionKey(params.sessionKey);
+  const sessionKey = readString(normalizedParent ?? params.sessionKey);
+  if (sessionKey?.startsWith("agent:")) {
+    const parts = sessionKey.split(":");
+    if (parts.length > 2) {
+      const suffix = parts.slice(2).join(":").trim();
+      if (suffix) {
+        return suffix;
+      }
+    }
+  }
+  return readString(params.messageChannel) ?? null;
+}
+
+async function readBackgroundRunRegistry(
+  scope?: BackgroundRuntimeScope
+): Promise<BackgroundRunRegistryEntry[]> {
+  if (shouldUseProjectRuntimeState(scope)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(scope);
+    const stores = await Promise.all(
+      projectRoots.map((projectRoot) => readWorkflowRuntimeSessionsStore(projectRoot))
+    );
+    return stores
+      .flatMap((store) => store.entries)
+      .map((entry) => fromPersistedSessionEntry(entry))
+      .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
+  }
+  try {
+    const raw = await fs.readFile(getBackgroundRunRegistryPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const record = entry as Record<string, unknown>;
+        const ownerAgent = normalizeAgentId(record.ownerAgent);
+        const channelKey = readString(record.channelKey);
+        const requesterSessionKey = readString(record.requesterSessionKey);
+        const backgroundSessionKey = readString(record.backgroundSessionKey);
+        const runId = readString(record.runId);
+        const queueKey = readString(record.queueKey) ?? null;
+        const kind = readString(record.kind) ?? "generic";
+        const family = readString(record.family) ?? deriveBackgroundRunFamily(kind);
+        const status =
+          readString(record.status) === "idle"
+            ? "idle"
+            : readString(record.status) === "needs_repair"
+              ? "needs_repair"
+              : "active";
+        const projectId = readString(record.projectId) ?? null;
+        const projectRoot = readString(record.projectRoot) ?? null;
+        const startedAt = readString(record.startedAt);
+        const lastCheckedAt = readString(record.lastCheckedAt) ?? null;
+        const lastFinishedAt = readString(record.lastFinishedAt) ?? null;
+        if (
+          !ownerAgent ||
+          !channelKey ||
+          !requesterSessionKey ||
+          !backgroundSessionKey ||
+          !runId ||
+          !startedAt
+        ) {
+          return null;
+        }
+        return {
+          ownerAgent,
+          channelKey,
+          requesterSessionKey,
+          backgroundSessionKey,
+          runId,
+          queueKey,
+          kind,
+          family,
+          status,
+          projectId,
+          projectRoot,
+          startedAt,
+          lastCheckedAt,
+          lastFinishedAt,
+        } satisfies BackgroundRunRegistryEntry;
+      })
+      .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeBackgroundRunRegistry(
+  entries: BackgroundRunRegistryEntry[],
+  scope?: BackgroundRuntimeScope
+): Promise<void> {
+  const resolved = resolveBackgroundRuntimeScope(scope);
+  const projectRoot = resolved.projectRoot;
+  if (projectRoot) {
+    const filteredEntries = entries.filter(
+      (entry) =>
+        readString(entry.projectRoot) &&
+        path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+    );
+    await migrateWorkflowRuntimeState({
+      projectRoot,
+      projectId: resolved.projectId,
+      compatibilityMode: "sessions_spawn_runtime",
+      reason: "write_background_run_registry",
+    });
+    await writeWorkflowRuntimeSessionsStore({
+      projectRoot,
+      projectId: resolved.projectId,
+      entries: filteredEntries.map((entry) => toPersistedSessionEntry(entry)),
+    });
+    return;
+  }
+  const registryPath = getBackgroundRunRegistryPath();
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+}
+
+async function pruneBackgroundRunRegistry(params: {
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+}): Promise<BackgroundRunRegistryEntry[]> {
+  const now = Date.now();
+  const current = await readBackgroundRunRegistry({
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  const kept: BackgroundRunRegistryEntry[] = [];
+  for (const entry of current) {
+    const freshnessReference =
+      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+    const freshnessMs = Date.parse(freshnessReference);
+    if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
+      if (entry.status === "active") {
+        kept.push({
+          ...entry,
+          status: "needs_repair",
+          lastCheckedAt: new Date(now).toISOString(),
+        });
+      }
+      continue;
+    }
+    let nextEntry: BackgroundRunRegistryEntry = {
+      ...entry,
+      lastCheckedAt: new Date(now).toISOString(),
+    };
+    if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
+      try {
+        const waited = await params.runtimeSubagent.waitForRun({
+          runId: entry.runId,
+          timeoutMs: 1,
+        });
+        if (waited.status === "ok" || waited.status === "error") {
+          nextEntry = {
+            ...nextEntry,
+            status: "idle",
+            lastFinishedAt: new Date(now).toISOString(),
+          };
+        }
+      } catch {
+        kept.push({
+          ...nextEntry,
+          status: "needs_repair",
+        });
+        continue;
+      }
+    }
+    kept.push(nextEntry);
+  }
+  if (shouldUseProjectRuntimeState(params)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
+    for (const projectRoot of projectRoots) {
+      const projectEntries = kept.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+      );
+      await writeBackgroundRunRegistry(projectEntries, {
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          params.projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundRunRegistry(kept);
+  }
+  return kept;
+}
+
+function toBackgroundRunRegistryViewEntry(
+  entry: BackgroundRunRegistryEntry,
+  nowMs: number
+): BackgroundRunRegistryViewEntry {
+  const idleReference =
+    entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+  const idleReferenceMs = Date.parse(idleReference);
+  const idleForMs =
+    entry.status === "idle" && Number.isFinite(idleReferenceMs)
+      ? Math.max(0, nowMs - idleReferenceMs)
+      : null;
+  return {
+    ...entry,
+    deleteEligible: entry.status === "idle",
+    idleForMs,
+  };
+}
+
+function matchesBackgroundRunRegistryFilters(
+  entry: BackgroundRunRegistryEntry,
+  filters: {
+    ownerAgent?: string | null;
+    channelKey?: string | null;
+    family?: string | null;
+    projectId?: string | null;
+    projectRoot?: string | null;
+  }
+): boolean {
+  const ownerAgent = normalizeAgentId(filters.ownerAgent);
+  if (ownerAgent && entry.ownerAgent !== ownerAgent) {
+    return false;
+  }
+  const channelKey = readString(filters.channelKey) ?? null;
+  if (channelKey && entry.channelKey !== channelKey) {
+    return false;
+  }
+  const family = readString(filters.family) ?? null;
+  if (family && entry.family !== family) {
+    return false;
+  }
+  return backgroundRunRegistryEntryMatchesProject(
+    entry,
+    readString(filters.projectId) ?? null,
+    readString(filters.projectRoot) ?? null
+  );
+}
+
+function normalizeBackgroundRunRegistryStatuses(
+  value: unknown
+): Array<BackgroundRunRegistryEntry["status"]> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeStageLike(entry))
+    .filter(
+      (
+        entry
+      ): entry is BackgroundRunRegistryEntry["status"] =>
+        entry === "active" || entry === "idle" || entry === "needs_repair"
+    );
+}
+
+function normalizeStageLike(value: unknown): string | null {
+  return typeof value === "string" && value.trim()
+    ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
+    : null;
+}
+
+async function upsertBackgroundRunRegistryEntry(
+  entry: BackgroundRunRegistryEntry
+): Promise<void> {
+  const targetScope = {
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+  };
+  const current = await readBackgroundRunRegistry(targetScope);
+  const next = current.filter(
+    (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
+  );
+  next.push(entry);
+  await writeBackgroundRunRegistry(next, targetScope);
+}
+
+export async function getBackgroundWorkflowRunByQueueKey(params: {
+  queueKey?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+}): Promise<BackgroundRunRegistryEntry | null> {
+  const queueKey = readString(params.queueKey);
+  if (!queueKey) {
+    return null;
+  }
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  return (
+    refreshed.find(
+      (entry) =>
+        entry.queueKey === queueKey &&
+        backgroundRunRegistryEntryMatchesProject(
+          entry,
+          readString(params.projectId) ?? null,
+          readString(params.projectRoot) ?? null
+        )
+    ) ?? null
+  );
+}
+
+export async function listBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+}): Promise<{
+  entries: BackgroundRunRegistryViewEntry[];
+}> {
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  const nowMs = Date.now();
+  return {
+    entries: refreshed
+      .filter((entry) => matchesBackgroundRunRegistryFilters(entry, params))
+      .map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  };
+}
+
+export async function pruneBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+  idleOlderThanMs?: number;
+  deleteSessions?: boolean;
+}): Promise<{
+  kept: BackgroundRunRegistryViewEntry[];
+  removed: BackgroundRunRegistryViewEntry[];
+}> {
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  const nowMs = Date.now();
+  const idleOlderThanMs =
+    typeof params.idleOlderThanMs === "number" && Number.isFinite(params.idleOlderThanMs)
+      ? Math.max(0, Math.floor(params.idleOlderThanMs))
+      : BACKGROUND_RUN_STALE_MS;
+  const kept: BackgroundRunRegistryEntry[] = [];
+  const removed: BackgroundRunRegistryEntry[] = [];
+  for (const entry of refreshed) {
+    if (!matchesBackgroundRunRegistryFilters(entry, params)) {
+      kept.push(entry);
+      continue;
+    }
+    const idleReference =
+      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
+    const idleReferenceMs = Date.parse(idleReference);
+    const idleForMs =
+      entry.status === "idle" && Number.isFinite(idleReferenceMs)
+        ? Math.max(0, nowMs - idleReferenceMs)
+        : 0;
+    if (entry.status === "idle" && idleForMs >= idleOlderThanMs) {
+      removed.push(entry);
+      continue;
+    }
+    kept.push(entry);
+  }
+  if (shouldUseProjectRuntimeState(params)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
+    for (const projectRoot of projectRoots) {
+      const projectEntries = kept.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+      );
+      await writeBackgroundRunRegistry(projectEntries, {
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          params.projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundRunRegistry(kept);
+  }
+  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
+    for (const entry of removed) {
+      await params.runtimeSubagent.deleteSession({
+        sessionKey: entry.backgroundSessionKey,
+        deleteTranscript: false,
+      });
+    }
+  }
+  return {
+    kept: kept.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+    removed: removed.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  };
+}
+
+export async function retireBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+  statuses?: unknown;
+  deleteSessions?: boolean;
+}): Promise<{
+  kept: BackgroundRunRegistryViewEntry[];
+  removed: BackgroundRunRegistryViewEntry[];
+}> {
+  const refreshed = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  const statuses = normalizeBackgroundRunRegistryStatuses(params.statuses);
+  const nowMs = Date.now();
+  const kept: BackgroundRunRegistryEntry[] = [];
+  const removed: BackgroundRunRegistryEntry[] = [];
+  for (const entry of refreshed) {
+    if (!matchesBackgroundRunRegistryFilters(entry, params)) {
+      kept.push(entry);
+      continue;
+    }
+    if (statuses.length > 0 && !statuses.includes(entry.status)) {
+      kept.push(entry);
+      continue;
+    }
+    removed.push(entry);
+  }
+  if (shouldUseProjectRuntimeState(params)) {
+    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
+    for (const projectRoot of projectRoots) {
+      const projectEntries = kept.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
+      );
+      await writeBackgroundRunRegistry(projectEntries, {
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          params.projectId ??
+          null,
+      });
+    }
+  } else {
+    await writeBackgroundRunRegistry(kept);
+  }
+  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
+    for (const entry of removed) {
+      await params.runtimeSubagent.deleteSession({
+        sessionKey: entry.backgroundSessionKey,
+        deleteTranscript: false,
+      });
+    }
+  }
+  return {
+    kept: kept.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+    removed: removed.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  };
+}
+
+export async function acquireBackgroundWorkflowSession(params: {
+  runtimeSubagent?: RuntimeSubagentWaitApi;
+  ownerAgent?: string | null;
+  requesterSessionKey?: string | null;
+  messageChannel?: string | null;
+  preferredSessionKey?: string | null;
+  family?: string | null;
+  kind?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+}): Promise<BackgroundWorkflowSessionLease> {
+  const ownerAgent = normalizeAgentId(params.ownerAgent);
+  const family =
+    readString(params.family) ??
+    deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic");
+  const projectId = readString(params.projectId) ?? null;
+  const projectRoot = readString(params.projectRoot) ?? null;
+  const channelKey = deriveBackgroundRunChannelKey({
+    sessionKey: params.requesterSessionKey ?? undefined,
+    messageChannel: params.messageChannel ?? undefined,
+  });
+
+  if (ownerAgent !== "researcher" || !channelKey) {
+    return {
+      acquired: true,
+      reason: "acquired",
+      sessionKey:
+        readString(params.preferredSessionKey) ??
+        readString(params.requesterSessionKey) ??
+        null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+      channelKey,
+      ownerAgent,
+      family,
+      projectId,
+      projectRoot,
+    };
+  }
+
+  const registryEntries = await pruneBackgroundRunRegistry({
+    runtimeSubagent: params.runtimeSubagent,
+    projectId,
+    projectRoot,
+    projectsRoot: params.projectsRoot,
+  });
+  const reusableBackgroundSessionKey =
+    registryEntries.find(
+      (entry) =>
+        entry.ownerAgent === "researcher" &&
+        entry.channelKey === channelKey &&
+        entry.status === "idle" &&
+        entry.family === family &&
+        backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot)
+    )?.backgroundSessionKey ?? null;
+  const activeChannelEntries = registryEntries.filter(
+    (entry) =>
+      entry.ownerAgent === "researcher" &&
+      entry.channelKey === channelKey &&
+      entry.status === "active" &&
+      entry.backgroundSessionKey !== reusableBackgroundSessionKey
+  );
+  const activeResearcherSessionsInChannel = activeChannelEntries.length;
+  if (
+    !reusableBackgroundSessionKey &&
+    activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL
+  ) {
+    return {
+      acquired: false,
+      reason: "channel_capacity_reached",
+      sessionKey: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel,
+      channelKey,
+      ownerAgent,
+      family,
+      projectId,
+      projectRoot,
+    };
+  }
+
+  return {
+    acquired: true,
+    reason: "acquired",
+    sessionKey:
+      reusableBackgroundSessionKey ??
+      readString(params.preferredSessionKey) ??
+      readString(params.requesterSessionKey) ??
+      null,
+    reusedIdleSession: Boolean(reusableBackgroundSessionKey),
+    activeResearcherSessionsInChannel,
+    channelKey,
+    ownerAgent,
+    family,
+    projectId,
+    projectRoot,
+  };
+}
+
+export async function recordBackgroundWorkflowRun(params: {
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  requesterSessionKey?: string | null;
+  backgroundSessionKey?: string | null;
+  runId?: string | null;
+  queueKey?: string | null;
+  kind?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+}): Promise<void> {
+  const ownerAgent = normalizeAgentId(params.ownerAgent);
+  const channelKey = readString(params.channelKey);
+  const requesterSessionKey = readString(params.requesterSessionKey);
+  const backgroundSessionKey = readString(params.backgroundSessionKey);
+  const runId = readString(params.runId);
+  if (
+    ownerAgent !== "researcher" ||
+    !channelKey ||
+    !requesterSessionKey ||
+    !backgroundSessionKey ||
+    !runId
+  ) {
+    return;
+  }
+  await upsertBackgroundRunRegistryEntry({
+    ownerAgent,
+    channelKey,
+    requesterSessionKey,
+    backgroundSessionKey,
+    runId,
+    queueKey: readString(params.queueKey) ?? null,
+    kind: readString(params.kind) ?? "generic",
+    family:
+      readString(params.family) ??
+      deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
+    status: "active",
+    projectId: readString(params.projectId) ?? null,
+    projectRoot: readString(params.projectRoot) ?? null,
+    startedAt: new Date().toISOString(),
+    lastCheckedAt: null,
+    lastFinishedAt: null,
+  });
+  await appendBackgroundWorkflowRuntimeEvent({
+    projectRoot: readString(params.projectRoot) ?? null,
+    projectId: readString(params.projectId) ?? null,
+    kind: "background_session_recorded",
+    summary: `Recorded background workflow session ${backgroundSessionKey}.`,
+    details: {
+      ownerAgent,
+      channelKey,
+      requesterSessionKey,
+      backgroundSessionKey,
+      runId,
+      queueKey: readString(params.queueKey) ?? null,
+      family:
+        readString(params.family) ??
+        deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
+      kind: readString(params.kind) ?? "generic",
+    },
+  });
+}

@@ -35,6 +35,7 @@ import {
   enqueueQueuedBackgroundWorkflowRun,
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
+  retireBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
 
@@ -1469,4 +1470,71 @@ test("background workflow run inventory reports active then idle sessions and pr
     projectsRoot,
   });
   assert.equal(afterPrune.entries.length, 0);
+});
+
+test("retireBackgroundWorkflowRuns force-removes matching pooled sessions by status", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const deletedSessions = [];
+  const runtimeSubagent = {
+    async run() {
+      return { runId: "bg-run-retire-1" };
+    },
+    async waitForRun() {
+      return { status: "timeout" };
+    },
+    async deleteSession(params) {
+      deletedSessions.push(params);
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:retire-room",
+      sessionId: "session-bg-retire-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      projectId: "retire-project",
+      topic: "retire topic",
+    },
+  });
+
+  const retired = await retireBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+    projectId: "retire-project",
+    projectsRoot,
+    statuses: ["active"],
+    deleteSessions: true,
+  });
+  assert.equal(retired.removed.length, 1);
+  assert.equal(retired.removed[0].status, "active");
+  assert.equal(deletedSessions.length, 1);
+
+  const afterRetire = await listBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+    projectId: "retire-project",
+    projectsRoot,
+  });
+  assert.equal(afterRetire.entries.length, 0);
 });

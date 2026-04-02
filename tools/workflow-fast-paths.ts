@@ -33,6 +33,15 @@ import {
   writeWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
 import {
+  acquireBackgroundWorkflowSession as acquireBackgroundWorkflowSessionFromPool,
+  clearBackgroundWorkflowRunRegistryForTests as clearBackgroundWorkflowRunRegistryForTestsFromPool,
+  getBackgroundWorkflowRunByQueueKey as getBackgroundWorkflowRunByQueueKeyFromPool,
+  listBackgroundWorkflowRuns as listBackgroundWorkflowRunsFromPool,
+  pruneBackgroundWorkflowRuns as pruneBackgroundWorkflowRunsFromPool,
+  recordBackgroundWorkflowRun as recordBackgroundWorkflowRunFromPool,
+  retireBackgroundWorkflowRuns as retireBackgroundWorkflowRunsFromPool,
+} from "./workflow-background-pool";
+import {
   orchestrateWorkflowTransition,
   resumeWorkflowTransition,
 } from "./workflow-session-orchestrator.js";
@@ -631,7 +640,7 @@ async function listProjectScopedRuntimeProjectRoots(
 }
 
 export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void> {
-  await fs.rm(getBackgroundRunRegistryPath(), { force: true });
+  await clearBackgroundWorkflowRunRegistryForTestsFromPool();
 }
 
 export async function clearBackgroundWorkflowQueueForTests(): Promise<void> {
@@ -1247,27 +1256,7 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
     }>;
   };
 }): Promise<BackgroundRunRegistryEntry | null> {
-  const queueKey = readString(params.queueKey);
-  if (!queueKey) {
-    return null;
-  }
-  const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
-    projectId: params.projectId,
-    projectRoot: params.projectRoot,
-    projectsRoot: params.projectsRoot,
-  });
-  return (
-    refreshed.find(
-      (entry) =>
-        entry.queueKey === queueKey &&
-        backgroundRunRegistryEntryMatchesProject(
-          entry,
-          readString(params.projectId) ?? null,
-          readString(params.projectRoot) ?? null
-        )
-    ) ?? null
-  );
+  return getBackgroundWorkflowRunByQueueKeyFromPool(params);
 }
 
 async function pruneBackgroundRunRegistry(params: {
@@ -1414,18 +1403,7 @@ export async function listBackgroundWorkflowRuns(params: {
 }): Promise<{
   entries: BackgroundRunRegistryViewEntry[];
 }> {
-  const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
-    projectId: params.projectId,
-    projectRoot: params.projectRoot,
-    projectsRoot: params.projectsRoot,
-  });
-  const nowMs = Date.now();
-  return {
-    entries: refreshed
-      .filter((entry) => matchesBackgroundRunRegistryFilters(entry, params))
-      .map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
-  };
+  return listBackgroundWorkflowRunsFromPool(params);
 }
 
 export async function pruneBackgroundWorkflowRuns(params: {
@@ -1451,68 +1429,55 @@ export async function pruneBackgroundWorkflowRuns(params: {
   kept: BackgroundRunRegistryViewEntry[];
   removed: BackgroundRunRegistryViewEntry[];
 }> {
-  const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
-    projectId: params.projectId,
-    projectRoot: params.projectRoot,
-    projectsRoot: params.projectsRoot,
-  });
-  const nowMs = Date.now();
-  const idleOlderThanMs =
-    typeof params.idleOlderThanMs === "number" && Number.isFinite(params.idleOlderThanMs)
-      ? Math.max(0, Math.floor(params.idleOlderThanMs))
-      : BACKGROUND_RUN_STALE_MS;
-  const kept: BackgroundRunRegistryEntry[] = [];
-  const removed: BackgroundRunRegistryEntry[] = [];
-  for (const entry of refreshed) {
-    if (!matchesBackgroundRunRegistryFilters(entry, params)) {
-      kept.push(entry);
-      continue;
-    }
-    const idleReference =
-      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
-    const idleReferenceMs = Date.parse(idleReference);
-    const idleForMs =
-      entry.status === "idle" && Number.isFinite(idleReferenceMs)
-        ? Math.max(0, nowMs - idleReferenceMs)
-        : 0;
-    if (entry.status === "idle" && idleForMs >= idleOlderThanMs) {
-      removed.push(entry);
-      continue;
-    }
-    kept.push(entry);
+  return pruneBackgroundWorkflowRunsFromPool(params);
+}
+
+function normalizeBackgroundRunRegistryStatuses(
+  value: unknown
+): Array<BackgroundRunRegistryEntry["status"]> {
+  if (!Array.isArray(value)) {
+    return [];
   }
-  if (shouldUseProjectRuntimeState(params)) {
-    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
-    for (const projectRoot of projectRoots) {
-      const projectEntries = kept.filter(
-        (entry) =>
-          readString(entry.projectRoot) &&
-          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
-      );
-      await writeBackgroundRunRegistry(projectEntries, {
-        projectRoot,
-        projectId:
-          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
-          params.projectId ??
-          null,
-      });
-    }
-  } else {
-    await writeBackgroundRunRegistry(kept);
-  }
-  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
-    for (const entry of removed) {
-      await params.runtimeSubagent.deleteSession({
-        sessionKey: entry.backgroundSessionKey,
-        deleteTranscript: false,
-      });
-    }
-  }
-  return {
-    kept: kept.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
-    removed: removed.map((entry) => toBackgroundRunRegistryViewEntry(entry, nowMs)),
+  return value
+    .map((entry) => normalizeStageLike(entry))
+    .filter(
+      (
+        entry
+      ): entry is BackgroundRunRegistryEntry["status"] =>
+        entry === "active" || entry === "idle" || entry === "needs_repair"
+    );
+}
+
+function normalizeStageLike(value: unknown): string | null {
+  return typeof value === "string" && value.trim()
+    ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
+    : null;
+}
+
+export async function retireBackgroundWorkflowRuns(params: {
+  runtimeSubagent?: {
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+    deleteSession?: (params: {
+      sessionKey: string;
+      deleteTranscript?: boolean;
+    }) => Promise<void>;
   };
+  ownerAgent?: string | null;
+  channelKey?: string | null;
+  family?: string | null;
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+  statuses?: unknown;
+  deleteSessions?: boolean;
+}): Promise<{
+  kept: BackgroundRunRegistryViewEntry[];
+  removed: BackgroundRunRegistryViewEntry[];
+}> {
+  return retireBackgroundWorkflowRunsFromPool(params);
 }
 
 async function upsertBackgroundRunRegistryEntry(
@@ -1548,92 +1513,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   projectRoot?: string | null;
   projectsRoot?: string | null;
 }): Promise<BackgroundWorkflowSessionLease> {
-  const ownerAgent = normalizeAgentId(params.ownerAgent);
-  const family =
-    readString(params.family) ??
-    deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic");
-  const projectId = readString(params.projectId) ?? null;
-  const projectRoot = readString(params.projectRoot) ?? null;
-  const channelKey = deriveBackgroundRunChannelKey({
-    sessionKey: params.requesterSessionKey ?? undefined,
-    messageChannel: params.messageChannel ?? undefined,
-  });
-
-  if (ownerAgent !== "researcher" || !channelKey) {
-    return {
-      acquired: true,
-      reason: "acquired",
-      sessionKey:
-        readString(params.preferredSessionKey) ??
-        readString(params.requesterSessionKey) ??
-        null,
-      reusedIdleSession: false,
-      activeResearcherSessionsInChannel: null,
-      channelKey,
-      ownerAgent,
-      family,
-      projectId,
-      projectRoot,
-    };
-  }
-
-  const registryEntries = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
-    projectId,
-    projectRoot,
-    projectsRoot: params.projectsRoot,
-  });
-  const reusableBackgroundSessionKey =
-    registryEntries.find(
-      (entry) =>
-        entry.ownerAgent === "researcher" &&
-        entry.channelKey === channelKey &&
-        entry.status === "idle" &&
-        entry.family === family &&
-        backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot)
-    )?.backgroundSessionKey ?? null;
-  const activeChannelEntries = registryEntries.filter(
-    (entry) =>
-      entry.ownerAgent === "researcher" &&
-      entry.channelKey === channelKey &&
-      entry.status === "active" &&
-      entry.backgroundSessionKey !== reusableBackgroundSessionKey
-  );
-  const activeResearcherSessionsInChannel = activeChannelEntries.length;
-  if (
-    !reusableBackgroundSessionKey &&
-    activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL
-  ) {
-    return {
-      acquired: false,
-      reason: "channel_capacity_reached",
-      sessionKey: null,
-      reusedIdleSession: false,
-      activeResearcherSessionsInChannel,
-      channelKey,
-      ownerAgent,
-      family,
-      projectId,
-      projectRoot,
-    };
-  }
-
-  return {
-    acquired: true,
-    reason: "acquired",
-    sessionKey:
-      reusableBackgroundSessionKey ??
-      readString(params.preferredSessionKey) ??
-      readString(params.requesterSessionKey) ??
-      null,
-    reusedIdleSession: Boolean(reusableBackgroundSessionKey),
-    activeResearcherSessionsInChannel,
-    channelKey,
-    ownerAgent,
-    family,
-    projectId,
-    projectRoot,
-  };
+  return acquireBackgroundWorkflowSessionFromPool(params);
 }
 
 export async function recordBackgroundWorkflowRun(params: {
@@ -1649,60 +1529,7 @@ export async function recordBackgroundWorkflowRun(params: {
   projectRoot?: string | null;
   projectsRoot?: string | null;
 }): Promise<void> {
-  const ownerAgent = normalizeAgentId(params.ownerAgent);
-  const channelKey = readString(params.channelKey);
-  const requesterSessionKey = readString(params.requesterSessionKey);
-  const backgroundSessionKey = readString(params.backgroundSessionKey);
-  const runId = readString(params.runId);
-  if (
-    ownerAgent !== "researcher" ||
-    !channelKey ||
-    !requesterSessionKey ||
-    !backgroundSessionKey ||
-    !runId
-  ) {
-    return;
-  }
-  await upsertBackgroundRunRegistryEntry({
-    ownerAgent,
-    channelKey,
-    requesterSessionKey,
-    backgroundSessionKey,
-    runId,
-    queueKey: readString(params.queueKey) ?? null,
-    kind: readString(params.kind) ?? "generic",
-    family:
-      readString(params.family) ??
-      deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
-    status: "active",
-    projectId: readString(params.projectId) ?? null,
-    projectRoot: readString(params.projectRoot) ?? null,
-    startedAt: new Date().toISOString(),
-    lastCheckedAt: null,
-    lastFinishedAt: null,
-  }, {
-    projectId: readString(params.projectId) ?? null,
-    projectRoot: readString(params.projectRoot) ?? null,
-    projectsRoot: readString(params.projectsRoot) ?? null,
-  });
-  await appendBackgroundWorkflowRuntimeEvent({
-    projectRoot: readString(params.projectRoot) ?? null,
-    projectId: readString(params.projectId) ?? null,
-    kind: "background_session_recorded",
-    summary: `Recorded background workflow session ${backgroundSessionKey}.`,
-    details: {
-      ownerAgent,
-      channelKey,
-      requesterSessionKey,
-      backgroundSessionKey,
-      runId,
-      queueKey: readString(params.queueKey) ?? null,
-      family:
-        readString(params.family) ??
-        deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),
-      kind: readString(params.kind) ?? "generic",
-    },
-  });
+  await recordBackgroundWorkflowRunFromPool(params);
 }
 
 function buildBackgroundRunQueueKey(params: {

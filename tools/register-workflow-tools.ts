@@ -9,6 +9,7 @@ import {
   getCitationCollectionStateSummary,
   getChannelProjectBindingForWorkflow,
   getCitationIntegrityStateSummary,
+  getIdeationContractStateSummary,
   getExperimentSearchStateSummary,
   getExternalReviewStateSummary,
   getExperimentMemorySummary,
@@ -19,9 +20,13 @@ import {
   getInnovationReflectionStateSummary,
   getOrchestrationStateSummary,
   getPaperIngestionStateSummary,
+  getPaperStoryStateSummary,
+  materializeIdeationContract,
+  materializePaperStoryState,
   queuePaperIngestionRequest,
   getPaperQcStateSummary,
   getResearchProgramStateSummary,
+  getReviewPressurePacketStateSummary,
   getProjectRootForWorkflow,
   getReviewIssueTrackerStateSummary,
   getReviewSessionStateSummary,
@@ -32,6 +37,7 @@ import {
   getWritingSessionStateSummary,
   inferTargetRoleFromToolParams,
   listChannelProjectBindingsForWorkflow,
+  materializeReviewPressurePacket,
   materializeTheoryAppendix,
   queueWorkflowMailboxMessage,
   readWorkflowMailboxForAgent,
@@ -49,11 +55,14 @@ import {
   setFigureQcState,
   setGateStateForWorkflow,
   setGraphGuidedWritingState,
+  setIdeationContractState,
   setIdleResearchState,
   setOrchestrationState,
   setPaperIngestionState,
   setPaperQcState,
+  setPaperStoryState,
   setResearchProgramState,
+  setReviewPressurePacketState,
   setReviewIssueTrackerState,
   setReviewSessionState,
   setWritePackageState,
@@ -74,12 +83,15 @@ import {
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
   buildPapernexusWrapperBackgroundRunRequest,
-  listBackgroundWorkflowRuns,
-  pruneBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
   type PapernexusWrapperRunRequest,
 } from "./workflow-fast-paths";
+import {
+  listBackgroundWorkflowRuns,
+  pruneBackgroundWorkflowRuns,
+  retireBackgroundWorkflowRuns,
+} from "./workflow-background-pool";
 import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import {
   asObject,
@@ -120,7 +132,14 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "migrate_runtime_state",
   "set_gate_state",
   "set_paper_ingestion",
+  "materialize_ideation_contract",
+  "materialize_paper_story_state",
+  "set_ideation_contract",
+  "set_paper_story_state",
+  "materialize_review_pressure_packet",
+  "set_review_pressure_packet",
   "prune_background_sessions",
+  "retire_background_sessions",
   "bind_channel_project",
   "unbind_channel_project",
   "dispatch_task",
@@ -146,6 +165,10 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_brainstorm_cycle: "getBrainstormCycleStateSummary",
   set_brainstorm_cycle: "setBrainstormCycleState",
   run_brainstorm_cycle: "runBrainstormCycle",
+  materialize_ideation_contract: "materializeIdeationContract",
+  materialize_paper_story_state: "materializePaperStoryState",
+  get_ideation_contract: "getIdeationContractStateSummary",
+  set_ideation_contract: "setIdeationContractState",
   get_research_program: "getResearchProgramStateSummary",
   set_research_program: "setResearchProgramState",
   get_orchestration_state: "getOrchestrationStateSummary",
@@ -154,6 +177,9 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_paper_ingestion: "setPaperIngestionState",
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
+  get_paper_story_state: "getPaperStoryStateSummary",
+  set_paper_story_state: "setPaperStoryState",
+  materialize_review_pressure_packet: "materializeReviewPressurePacket",
   get_write_package: "getWritePackageStateSummary",
   set_write_package: "setWritePackageState",
   assemble_write_package: "assembleWritePackage",
@@ -161,6 +187,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_writing_session: "setWritingSessionState",
   get_review_session: "getReviewSessionStateSummary",
   set_review_session: "setReviewSessionState",
+  get_review_pressure_packet: "getReviewPressurePacketStateSummary",
+  set_review_pressure_packet: "setReviewPressurePacketState",
   get_graph_guided_writing: "getGraphGuidedWritingStateSummary",
   set_graph_guided_writing: "setGraphGuidedWritingState",
   get_citation_integrity: "getCitationIntegrityStateSummary",
@@ -180,6 +208,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_gate_state: "setGateStateForWorkflow",
   list_background_sessions: "listBackgroundWorkflowRuns",
   prune_background_sessions: "pruneBackgroundWorkflowRuns",
+  retire_background_sessions: "retireBackgroundWorkflowRuns",
   get_gate_review_state: "readGateReviewStore",
   upsert_experiment: "upsertExperimentLedgerEntry",
   record_theory_state: "recordTheoryState",
@@ -431,6 +460,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_brainstorm_cycle",
               "set_brainstorm_cycle",
               "run_brainstorm_cycle",
+              "materialize_ideation_contract",
+              "materialize_paper_story_state",
               "get_research_program",
               "set_research_program",
               "get_orchestration_state",
@@ -439,6 +470,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_paper_ingestion",
               "get_theory_state",
               "get_writing_contract",
+              "get_paper_story_state",
+              "set_paper_story_state",
               "get_write_package",
               "set_write_package",
               "assemble_write_package",
@@ -446,6 +479,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_writing_session",
               "get_review_session",
               "set_review_session",
+              "get_review_pressure_packet",
+              "materialize_review_pressure_packet",
+              "set_review_pressure_packet",
               "get_graph_guided_writing",
               "set_graph_guided_writing",
               "get_citation_integrity",
@@ -527,6 +563,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          ideationMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          paperStoryMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
           researchProgram: {
             type: "object",
             additionalProperties: true,
@@ -568,6 +612,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           reviewSession: {
+            type: "object",
+            additionalProperties: true,
+          },
+          reviewPressureMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -1142,6 +1190,26 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "retire_background_sessions": {
+              const backgroundSessions = asObject(params.backgroundSessions);
+              const result = await retireBackgroundWorkflowRuns({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
+                channelKey:
+                  readString(backgroundSessions?.channelKey) ??
+                  readString(channelBinding?.channelKey) ??
+                  snapshot.channelProjectBindingKey,
+                family: readString(backgroundSessions?.family),
+                projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
+                projectRoot: readString(backgroundSessions?.projectRoot) ?? projectRoot,
+                projectsRoot: workflowPolicy.projectsRoot,
+                statuses: Array.isArray(backgroundSessions?.statuses)
+                  ? backgroundSessions?.statuses
+                  : undefined,
+                deleteSessions: backgroundSessions?.deleteSessions === true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_gate_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await getGateStateSummary({
@@ -1315,6 +1383,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "get_ideation_contract": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getIdeationContractStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "materialize_ideation_contract": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeIdeationContract({
+                projectRoot: resolvedProjectRoot,
+                ideationMaterialization: requireObject(
+                  params.ideationMaterialization ?? {},
+                  "ideationMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_ideation_contract": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setIdeationContractState({
+                projectRoot: resolvedProjectRoot,
+                ideationContract: requireObject(
+                  params.ideationContract,
+                  "ideationContract"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getResearchProgramStateSummary({
@@ -1365,6 +1464,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 policy: workflowPolicy,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_paper_story_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getPaperStoryStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "materialize_paper_story_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializePaperStoryState({
+                projectRoot: resolvedProjectRoot,
+                paperStoryMaterialization: requireObject(
+                  params.paperStoryMaterialization ?? {},
+                  "paperStoryMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_paper_story_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setPaperStoryState({
+                projectRoot: resolvedProjectRoot,
+                paperStoryState: requireObject(
+                  params.paperStoryState,
+                  "paperStoryState"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_write_package": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -1420,6 +1550,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const result = await setReviewSessionState({
                 projectRoot: resolvedProjectRoot,
                 reviewSession: requireObject(params.reviewSession, "reviewSession"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_review_pressure_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getReviewPressurePacketStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "materialize_review_pressure_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeReviewPressurePacket({
+                projectRoot: resolvedProjectRoot,
+                reviewPressureMaterialization: requireObject(
+                  params.reviewPressureMaterialization ?? {},
+                  "reviewPressureMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_review_pressure_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setReviewPressurePacketState({
+                projectRoot: resolvedProjectRoot,
+                reviewPressurePacket: requireObject(
+                  params.reviewPressurePacket,
+                  "reviewPressurePacket"
+                ),
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

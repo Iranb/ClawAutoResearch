@@ -780,6 +780,20 @@ test("workflow-status command returns a readable workflow summary", async () => 
         paperIngestionFailedBatchItemCount: 1,
         paperIngestionLastBatchManifestPath: "/tmp/demo/batch-import.json",
         paperIngestionReconcileRequired: true,
+        ideationContractStatus: "ready",
+        ideationContractSelectedDirectionId: "dir-2",
+        ideationContractSelectedTrackId: "track-idea-1",
+        ideationContractIdeaTreePath: "researcher/ideation/IDEA_TREE.md",
+        ideationContractResearchProposalPath:
+          "researcher/ideation/RESEARCH_PROPOSAL.md",
+        ideationContractRankingHistoryPath:
+          "researcher/ideation/RANKING_HISTORY.json",
+        ideationContractTournamentScoreboardPath:
+          "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+        ideationContractTop3SummaryPath:
+          "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+        ideationContractGraphPacketPath:
+          "researcher/ideation/GRAPH_IDEATION_PACKET.json",
         innovationReflectionStatus: "stale",
         innovationReflectionDue: true,
         researchProgramStatus: "draft",
@@ -806,6 +820,17 @@ test("workflow-status command returns a readable workflow summary", async () => 
         experimentSearchBestNodeId: "node-7",
         experimentSearchMultiSeedStatus: "running",
         experimentSearchPlotPackStatus: "pending",
+        paperStoryStatus: "ready",
+        paperStoryTrackId: "track-idea-1",
+        paperStoryStorySpinePath: "academic_writer/story/STORY_SPINE.md",
+        paperStoryClaimToExperimentMapPath:
+          "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+        paperStoryFallbackNarrativePath:
+          "academic_writer/story/FALLBACK_NARRATIVE.md",
+        paperStoryClaimSupportStatus: "partial",
+        paperStorySupportedClaimCount: 2,
+        paperStoryPartialClaimCount: 1,
+        paperStoryUnsupportedClaimCount: 1,
         writingSessionStatus: "writing",
         writingCurrentSection: "results",
         writingDraftOrder: [
@@ -839,6 +864,11 @@ test("workflow-status command returns a readable workflow summary", async () => 
           citationIntegrity: 8,
           graphGroundedEvidenceSufficiency: 5,
         },
+        reviewPressureStatus: "ready",
+        reviewPressureRejectFirstReviewPath:
+          "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+        reviewPressureUnsupportedClaimAuditPath:
+          "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
         graphGuidedWritingStatus: "partial",
         graphGuidedWritingEvidenceCoverageStatus: "partial",
         graphGuidedWritingMissingEvidenceClaims: ["claim-results-1"],
@@ -904,16 +934,20 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
   assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, queued_requests=0, running_requests=0, reconcile_required=true/);
   assert.match(result.text ?? "", /PaperNexus batch manifest: \/tmp\/demo\/batch-import\.json/);
+  assert.match(result.text ?? "", /Ideation contract: status=ready, track=track-idea-1, direction=dir-2, idea_tree=researcher\/ideation\/IDEA_TREE\.md, proposal=researcher\/ideation\/RESEARCH_PROPOSAL\.md, ranking=researcher\/ideation\/RANKING_HISTORY\.json, scoreboard=researcher\/ideation\/TOURNAMENT_SCOREBOARD\.json, top3=researcher\/ideation\/TOP3_DIRECTION_SUMMARY\.md, graph_packet=researcher\/ideation\/GRAPH_IDEATION_PACKET\.json/);
   assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
   assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
+  assert.match(result.text ?? "", /Paper story: status=ready, track=track-idea-1, story_spine=academic_writer\/story\/STORY_SPINE\.md, claim_map=academic_writer\/story\/CLAIM_TO_EXPERIMENT_MAP\.md, fallback=academic_writer\/story\/FALLBACK_NARRATIVE\.md/);
+  assert.match(result.text ?? "", /Paper story support: status=partial, supported=2, partial=1, unsupported=1/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);
   assert.match(result.text ?? "", /Writing session: status=writing, current_section=results, section_review=needs_revision/);
   assert.match(result.text ?? "", /Writing evidence coverage: status=partial, packets_ready=false/);
   assert.match(result.text ?? "", /Review session: status=needs_revision, scope=review, round=2, verdict=not_ready/);
   assert.match(result.text ?? "", /Reviewer rubric: originality=7, quality=6, clarity=7, significance=6, soundness=5, citation_integrity=8, graph_evidence=5/);
+  assert.match(result.text ?? "", /Review pressure: status=ready, reject_first=reviewer\/story-pressure\/REJECT_FIRST_REVIEW\.md, unsupported_claim_audit=reviewer\/story-pressure\/UNSUPPORTED_CLAIM_AUDIT\.md/);
   assert.match(result.text ?? "", /Review issues: status=open, critical=0, high=1, medium=2, low=1/);
   assert.match(result.text ?? "", /Graph-guided writing: status=partial, evidence_coverage=partial, missing_claims=claim-results-1/);
   assert.match(result.text ?? "", /Citation collection: status=running, verified=8\/24, suspicious=1, hallucinated=0/);
