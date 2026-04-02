@@ -52,6 +52,18 @@ import {
   type GateReviewResult,
 } from "./workflow-auto-gate";
 import {
+  aggregateCodeReviewRound,
+  buildCodeReviewPrompt,
+  createCodeReviewRound,
+  defaultCodeReviewPanel,
+  materializeCodeReviewPacket,
+  parseCodeReviewResult,
+  readCodeReviewStore,
+  saveCodeReviewStore,
+  type CodeReviewAttempt,
+  type CodeReviewResult,
+} from "./workflow-code-review.js";
+import {
   aggregateAutoModeDiscussionRound,
   buildAutoModeDiscussionPrompt,
   createAutoModeDiscussionRound,
@@ -85,6 +97,8 @@ type WorkflowCoordinatorDependencies = {
   getIdleResearchStateSummary: typeof getIdleResearchStateSummary;
   listChannelProjectBindingsForWorkflow: typeof listChannelProjectBindingsForWorkflow;
 };
+
+const EXPERIMENT_MONITOR_STAGE_COOLDOWN_MS = 60 * 1000;
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -158,6 +172,29 @@ type AutoGateReviewAttempt = {
   reason:
     | "disabled"
     | "not_submit_gate"
+    | "manual_confirmation_required"
+    | "no_runtime_subagent"
+    | "already_approved"
+    | "already_rejected"
+    | "reviewing"
+    | "started"
+    | "updated"
+    | "launch_failed";
+  projectId: string | null;
+  projectRoot: string;
+  gateId: string | null;
+  stage: string | null;
+  status: string | null;
+  reviewCount: number;
+  approved: boolean;
+};
+
+type AutoCodeReviewAttempt = {
+  launched: boolean;
+  reason:
+    | "disabled"
+    | "not_code_gate"
+    | "bundle_incomplete"
     | "no_runtime_subagent"
     | "already_approved"
     | "already_rejected"
@@ -280,6 +317,40 @@ function readGateReviewAnnounceResult(params: {
     return null;
   }
   const parsed = parseGateReviewResult(rawText, params.attempt.reviewerRole);
+  return {
+    ...parsed,
+    runId: readString(payload?.runId) ?? parsed.runId ?? params.attempt.runId,
+  };
+}
+
+function readCodeReviewAnnounceResult(params: {
+  entries: Array<{ announceId: string; payload: Record<string, unknown> | null }>;
+  attempt: CodeReviewAttempt;
+}): CodeReviewResult | null {
+  if (!params.attempt.runId) {
+    return null;
+  }
+  const targetAnnounceId = `code-review:${params.attempt.runId}:${params.attempt.reviewerRole}`;
+  const match = params.entries.find((entry) => entry.announceId === targetAnnounceId);
+  const payload = asRecord(match?.payload);
+  const result = asRecord(payload?.result);
+  if (result) {
+    const parsed = parseCodeReviewResult(
+      JSON.stringify(result),
+      params.attempt.reviewerRole
+    );
+    return {
+      ...parsed,
+      createdAt: readString(result.createdAt) ?? parsed.createdAt,
+      runId: readString(result.runId) ?? params.attempt.runId,
+      rawText: readString(result.rawText) ?? parsed.rawText,
+    };
+  }
+  const rawText = readString(payload?.rawText ?? payload?.text);
+  if (!rawText) {
+    return null;
+  }
+  const parsed = parseCodeReviewResult(rawText, params.attempt.reviewerRole);
   return {
     ...parsed,
     runId: readString(payload?.runId) ?? parsed.runId ?? params.attempt.runId,
@@ -676,12 +747,26 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   stageAfter: string | null;
   timedDefaultTriggered?: boolean;
   timedDefaultSummary?: string | null;
+  autoCodeReview?: AutoCodeReviewAttempt;
   autoGateReview: AutoGateReviewAttempt;
   autoModeDiscussion: AutoModeDiscussionAttempt;
   autoMitigationDispatch: AutoModeMitigationDispatchAttempt;
   autoStageLaunch: AutoStageLaunchAttempt;
   idleResearchLaunch: IdleResearchLaunchAttempt;
 }): WorkflowCoordinatorVisibleStatusUpdate | null {
+  const autoCodeReview =
+    params.autoCodeReview ??
+    ({
+      launched: false,
+      reason: "disabled",
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      gateId: null,
+      stage: params.stageAfter ?? null,
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    } satisfies AutoCodeReviewAttempt);
   if (params.autoStageLaunch.launched && params.autoStageLaunch.owner) {
     return {
       status: "handed_off",
@@ -762,6 +847,37 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     };
   }
   if (
+    autoCodeReview.reason === "started" ||
+    autoCodeReview.reason === "reviewing"
+  ) {
+    return {
+      status: "waiting",
+      stage: autoCodeReview.stage ?? params.stageAfter ?? null,
+      summary:
+        "Waiting for code innovation reviewer quorum before progressing from CODE to EXPERIMENT.",
+      dedupeKey: [
+        "auto-code-review",
+        autoCodeReview.stage ?? params.stageAfter ?? "code",
+        autoCodeReview.status ?? autoCodeReview.reason,
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoGateReview.reason === "manual_confirmation_required"
+  ) {
+    return {
+      status: "waiting",
+      stage: params.autoGateReview.stage ?? params.stageAfter ?? null,
+      summary:
+        "OpenReview-facing submission and the final GATE-5 revision decision require explicit human confirmation; auto mode will stop here.",
+      dedupeKey: [
+        "auto-gate",
+        "manual",
+        params.autoGateReview.stage ?? params.stageAfter ?? "submit",
+      ].join(":"),
+    };
+  }
+  if (
     params.autoGateReview.reason === "started" ||
     params.autoGateReview.reason === "reviewing"
   ) {
@@ -835,10 +951,13 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   if (
     params.autoStageLaunch.reason === "gate_blocked" ||
     params.autoStageLaunch.reason === "dispatch_failed" ||
+    autoCodeReview.reason === "already_rejected" ||
     params.autoGateReview.reason === "already_rejected"
   ) {
     const summary =
-      params.autoGateReview.reason === "already_rejected"
+      autoCodeReview.reason === "already_rejected"
+        ? "Blocked because the code innovation review rejected the current implementation packet."
+        : params.autoGateReview.reason === "already_rejected"
         ? "Blocked because the submit auto gate review rejected the packet."
         : params.autoStageLaunch.reason === "gate_blocked"
           ? `Blocked by the current ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} gate.`
@@ -1079,6 +1198,10 @@ function buildAutoStageLaunchKey(params: {
     params.owner ?? "unknown-owner",
     params.command ?? "no-command",
   ].join("::");
+}
+
+function isExperimentMonitorCommand(command: string | null | undefined): boolean {
+  return /\/monitor-experiment\b/i.test(command ?? "");
 }
 
 async function launchWorkflowDispatchTransition(params: {
@@ -1418,7 +1541,9 @@ export async function maybeLaunchAutoStageForProject(params: {
       const lastLaunch = params.launchedStageKeys.get(params.projectRoot);
       const cooldownMs = Math.max(
         1,
-        params.workflowPolicy.agentContactCooldownSeconds
+        isExperimentMonitorCommand(action.command)
+          ? Math.floor(EXPERIMENT_MONITOR_STAGE_COOLDOWN_MS / 1000)
+          : params.workflowPolicy.agentContactCooldownSeconds
       ) * 1000;
       if (
         lastLaunch?.key === launchKey &&
@@ -1786,6 +1911,139 @@ async function pollGateReviewAttempts(params: {
   return nextAttempts;
 }
 
+async function pollCodeReviewAttempts(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  attempts: CodeReviewAttempt[];
+  projectRoot: string;
+  projectId: string | null;
+}) {
+  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
+  const nextAttempts: CodeReviewAttempt[] = [];
+
+  for (const attempt of params.attempts) {
+    if (attempt.status !== "pending") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+
+    const announcedResult = readCodeReviewAnnounceResult({
+      entries: announceStore.entries,
+      attempt,
+    });
+    if (announcedResult) {
+      nextAttempts.push({
+        ...attempt,
+        status: "completed",
+        completedAt: attempt.completedAt ?? nowIso(),
+        error: null,
+        result: {
+          ...announcedResult,
+          runId: announcedResult.runId ?? attempt.runId,
+        },
+      });
+      continue;
+    }
+
+    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+      nextAttempts.push(attempt);
+      continue;
+    }
+
+    const waited = await params.runtimeSubagent.waitForRun({
+      runId: attempt.runId,
+      timeoutMs: 1,
+    });
+    if (waited.status === "timeout") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (waited.status === "error") {
+      const failedAttempt = {
+        ...attempt,
+        status: "error" as const,
+        completedAt: nowIso(),
+        error: waited.error ?? "code innovation review run failed",
+        result: parseCodeReviewResult(
+          JSON.stringify({
+            verdict: "block",
+            overallScore: 0,
+            criticalBlockers: [waited.error ?? "code innovation review run failed"],
+            summary:
+              "Code innovation reviewer run failed before returning a valid response.",
+          }),
+          attempt.reviewerRole
+        ),
+      };
+      await recordWorkflowAnnounceEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        announceId: `code-review:${attempt.runId}:${attempt.reviewerRole}`,
+        parentSessionKey: null,
+        childSessionKey: attempt.sessionKey,
+        deliveryMode: "internal",
+        summary: `Code reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+        payload: {
+          reviewerRole: attempt.reviewerRole,
+          runId: attempt.runId,
+          status: "error",
+          error: failedAttempt.error,
+          completedAt: failedAttempt.completedAt,
+          result: failedAttempt.result,
+        },
+      });
+      nextAttempts.push(failedAttempt);
+      continue;
+    }
+
+    const messages = params.runtimeSubagent.getSessionMessages
+      ? await params.runtimeSubagent.getSessionMessages({
+          sessionKey: attempt.sessionKey,
+          limit: 20,
+        })
+      : { messages: [] };
+    const latestText = extractLatestAssistantText(messages.messages);
+    const completedAttempt = {
+      ...attempt,
+      status: "completed" as const,
+      completedAt: nowIso(),
+      error: null,
+      result: {
+        ...parseCodeReviewResult(
+          latestText ??
+            JSON.stringify({
+              verdict: "block",
+              overallScore: 0,
+              criticalBlockers: ["Reviewer returned no readable response."],
+              summary:
+                "No readable code innovation review response was found in the session transcript.",
+            }),
+          attempt.reviewerRole
+        ),
+        runId: attempt.runId,
+      },
+    };
+    await recordWorkflowAnnounceEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      announceId: `code-review:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Code reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        completedAt: completedAttempt.completedAt,
+        result: completedAttempt.result,
+      },
+    });
+    nextAttempts.push(completedAttempt);
+  }
+
+  return nextAttempts;
+}
+
 async function pollAutoModeDiscussionAttempts(params: {
   runtimeSubagent: RuntimeSubagentApi;
   attempts: AutoModeDiscussionReviewAttempt[];
@@ -1998,6 +2256,304 @@ function buildAutoMitigationExtraBody(params: {
     .join("\n");
 }
 
+export async function maybeAdvanceAutoCodeReviewForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    effectiveAutoMode?: string | null;
+    gateBlocking?: boolean;
+    gateReason?: string | null;
+    stageAfter?: string | null;
+    missingStageSignals?: string[];
+    recommendedActions?: Array<{ kind: string; summary: string; command: string | null }>;
+  };
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_code_review",
+    logger: params.logger,
+    task: async (): Promise<AutoCodeReviewAttempt> => {
+      if (
+        !params.workflowPolicy.autoGate.enabled ||
+        (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !==
+          "aggressive"
+      ) {
+        return {
+          launched: false,
+          reason: "disabled",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: null,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: null,
+          reviewCount: 0,
+          approved: false,
+        };
+      }
+      if (
+        params.autoIteratorResult.stageAfter !== "code" ||
+        params.autoIteratorResult.gateBlocking !== true
+      ) {
+        return {
+          launched: false,
+          reason: "not_code_gate",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: null,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: null,
+          reviewCount: 0,
+          approved: false,
+        };
+      }
+
+      const missingStageSignals = Array.isArray(params.autoIteratorResult.missingStageSignals)
+        ? params.autoIteratorResult.missingStageSignals.filter(
+            (item): item is string => typeof item === "string" && item.trim().length > 0
+          )
+        : [];
+      if (missingStageSignals.length > 0) {
+        return {
+          launched: false,
+          reason: "bundle_incomplete",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: null,
+          reviewCount: 0,
+          approved: false,
+        };
+      }
+
+      const packet = await materializeCodeReviewPacket({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+      });
+      const store = await readCodeReviewStore(params.projectRoot);
+      const currentRound = store.currentRound;
+      if (
+        currentRound?.gateId === "CODE-REVIEW" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "approved"
+      ) {
+        return {
+          launched: false,
+          reason: "already_approved",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          approved: true,
+        };
+      }
+      if (
+        currentRound?.gateId === "CODE-REVIEW" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "rejected"
+      ) {
+        return {
+          launched: false,
+          reason: "already_rejected",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: currentRound?.status ?? null,
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+
+      if (
+        currentRound?.gateId === "CODE-REVIEW" &&
+        currentRound.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status === "reviewing"
+      ) {
+        const attempts = await pollCodeReviewAttempts({
+          runtimeSubagent: params.runtimeSubagent,
+          attempts: currentRound.attempts,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+        });
+        const nextRound = {
+          ...currentRound,
+          attempts,
+          updatedAt: nowIso(),
+        };
+        nextRound.aggregate = aggregateCodeReviewRound(
+          nextRound,
+          params.workflowPolicy.autoGate
+        );
+        nextRound.status = nextRound.aggregate.status;
+        const nextStore = {
+          ...store,
+          updatedAt: nowIso(),
+          currentRound: nextRound,
+        };
+        await saveCodeReviewStore(params.projectRoot, nextStore);
+        return {
+          launched: false,
+          reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: nextRound.status,
+          reviewCount: nextRound.aggregate?.reviewCount ?? 0,
+          approved: nextRound.aggregate?.approved === true,
+        };
+      }
+
+      if (store.roundsStarted >= params.workflowPolicy.autoGate.maxReviewRounds) {
+        return {
+          launched: false,
+          reason: "already_rejected",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: "rejected",
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          approved: false,
+        };
+      }
+
+      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const attempts: CodeReviewAttempt[] = [];
+      for (const reviewerRole of defaultCodeReviewPanel()) {
+        const sessionKey = deriveAgentSessionKeyForRole({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          targetRole: reviewerRole,
+        });
+        const queueKey = slugifyForIdempotency(
+          `openclaw-research:auto-code-review:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
+        );
+        try {
+          const started = await launchWorkflowNestedRunTransition({
+            runtimeSubagent: params.runtimeSubagent,
+            source: "workflow_auto_code_review",
+            queueKey,
+            ownerAgent: reviewerRole,
+            sessionKey,
+            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            family: "review",
+            kind: "workflow_auto_code_review",
+            summary: `Run code innovation review for ${reviewerRole}.`,
+            message: buildCodeReviewPrompt({
+              projectRoot: params.projectRoot,
+              projectId: params.projectId,
+              reviewerRole,
+              packetPath: packet.packetPath,
+              packetJsonPath: packet.packetJsonPath,
+            }),
+            idempotencyKey: queueKey,
+            extraSystemPrompt:
+              "Workflow code innovation reviewer.\n" +
+              "Review only the supplied code review packet and return the required JSON schema.",
+          });
+          if (!started.launched || !started.runId) {
+            throw new Error(
+              started.error ??
+                "Code innovation reviewer run failed to launch through the workflow runtime."
+            );
+          }
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: started.runId,
+            status: "pending",
+            launchedAt: nowIso(),
+            completedAt: null,
+            error: null,
+            result: null,
+          });
+        } catch (error) {
+          attempts.push({
+            reviewerRole,
+            sessionKey,
+            runId: null,
+            status: "error",
+            launchedAt: nowIso(),
+            completedAt: nowIso(),
+            error: error instanceof Error ? error.message : String(error),
+            result: parseCodeReviewResult(
+              JSON.stringify({
+                verdict: "block",
+                overallScore: 0,
+                criticalBlockers: [
+                  error instanceof Error ? error.message : String(error),
+                ],
+                summary: "Code reviewer run failed to start.",
+              }),
+              reviewerRole
+            ),
+          });
+        }
+      }
+
+      const round = createCodeReviewRound({
+        stage: "code",
+        packetPath: packet.packetPath,
+        packetJsonPath: packet.packetJsonPath,
+        packetFingerprint: packet.packetFingerprint,
+        attempts,
+      });
+      const nextStore = {
+        schemaVersion: 1 as const,
+        updatedAt: nowIso(),
+        roundsStarted: store.roundsStarted + 1,
+        currentRound: round,
+      };
+      await saveCodeReviewStore(params.projectRoot, nextStore);
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        gateId: "CODE-REVIEW",
+        stage: "code",
+        status: round.status,
+        reviewCount: 0,
+        approved: false,
+      };
+    },
+  });
+}
+
 export async function maybeAdvanceAutoGateReviewForProject(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -2058,219 +2614,14 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           approved: false,
         };
       }
-
-      const packet = await materializeGateReviewPacket({
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
-        stage: "submit",
-        gateId: "GATE-5",
-      });
-      const store = await readGateReviewStore(params.projectRoot);
-      const currentRound = store.currentRound;
-      if (
-        currentRound?.gateId === "GATE-5" &&
-        currentRound.packetFingerprint === packet.packetFingerprint &&
-        currentRound.status === "approved"
-      ) {
-        return {
-          launched: false,
-          reason: "already_approved",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
-          status: currentRound.status,
-          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
-          approved: true,
-        };
-      }
-      if (
-        currentRound?.gateId === "GATE-5" &&
-        currentRound.packetFingerprint === packet.packetFingerprint &&
-        currentRound.status === "rejected"
-      ) {
-        return {
-          launched: false,
-          reason: "already_rejected",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
-          status: currentRound.status,
-          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
-          approved: false,
-        };
-      }
-      if (!params.runtimeSubagent) {
-        return {
-          launched: false,
-          reason: "no_runtime_subagent",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
-          status: currentRound?.status ?? null,
-          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
-          approved: false,
-        };
-      }
-
-      if (
-        currentRound?.gateId === "GATE-5" &&
-        currentRound.packetFingerprint === packet.packetFingerprint &&
-        currentRound.status === "reviewing"
-      ) {
-        const attempts = await pollGateReviewAttempts({
-          runtimeSubagent: params.runtimeSubagent,
-          attempts: currentRound.attempts,
-          projectRoot: params.projectRoot,
-          projectId: params.projectId,
-        });
-        const nextRound = {
-          ...currentRound,
-          attempts,
-          updatedAt: nowIso(),
-        };
-        nextRound.aggregate = aggregateGateReviewRound(
-          nextRound,
-          params.workflowPolicy.autoGate
-        );
-        nextRound.status = nextRound.aggregate.status;
-        const nextStore = {
-          ...store,
-          updatedAt: nowIso(),
-          currentRound: nextRound,
-        };
-        await saveGateReviewStore(params.projectRoot, nextStore);
-        return {
-          launched: false,
-          reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
-          status: nextRound.status,
-          reviewCount: nextRound.aggregate?.reviewCount ?? 0,
-          approved: nextRound.aggregate?.approved === true,
-        };
-      }
-
-      if (store.roundsStarted >= params.workflowPolicy.autoGate.maxReviewRounds) {
-        return {
-          launched: false,
-          reason: "already_rejected",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
-          status: "rejected",
-          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
-          approved: false,
-        };
-      }
-
-      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
-        projectRoot: params.projectRoot,
-        workflowPolicy: params.workflowPolicy,
-        deps,
-      });
-      const attempts: GateReviewAttempt[] = [];
-      for (const reviewerRole of defaultGateReviewPanel()) {
-        const sessionKey = deriveAgentSessionKeyForRole({
-          requesterSessionKey: requesterSessionKey ?? undefined,
-          targetRole: reviewerRole,
-        });
-        const queueKey = slugifyForIdempotency(
-          `openclaw-research:auto-gate:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
-        );
-        try {
-          const started = await launchWorkflowNestedRunTransition({
-            runtimeSubagent: params.runtimeSubagent,
-            source: "workflow_auto_gate_review",
-            queueKey,
-            ownerAgent: reviewerRole,
-            sessionKey,
-            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
-            projectRoot: params.projectRoot,
-            projectId: params.projectId,
-            family: "review",
-            kind: "workflow_auto_gate_review",
-            summary: `Run auto gate review for ${reviewerRole}.`,
-            message: buildAutoGateReviewPrompt({
-              projectRoot: params.projectRoot,
-              projectId: params.projectId,
-              stage: "submit",
-              gateId: "GATE-5",
-              reviewerRole,
-              packetPath: packet.packetPath,
-              packetJsonPath: packet.packetJsonPath,
-            }),
-            idempotencyKey: queueKey,
-            extraSystemPrompt:
-              "Workflow auto gate reviewer.\n" +
-              "Review only the supplied gate packet and return the required JSON schema.",
-          });
-          if (!started.launched || !started.runId) {
-            throw new Error(
-              started.error ?? "Gate reviewer run failed to launch through the workflow runtime."
-            );
-          }
-          attempts.push({
-            reviewerRole,
-            sessionKey,
-            runId: started.runId,
-            status: "pending",
-            launchedAt: nowIso(),
-            completedAt: null,
-            error: null,
-            result: null,
-          });
-        } catch (error) {
-          attempts.push({
-            reviewerRole,
-            sessionKey,
-            runId: null,
-            status: "error",
-            launchedAt: nowIso(),
-            completedAt: nowIso(),
-            error: error instanceof Error ? error.message : String(error),
-            result: parseGateReviewResult(
-              JSON.stringify({
-                verdict: "block",
-                overallScore: 0,
-                criticalBlockers: [
-                  error instanceof Error ? error.message : String(error),
-                ],
-                summary: "Reviewer run failed to start.",
-              }),
-              reviewerRole
-            ),
-          });
-        }
-      }
-      const round = createGateReviewRound({
-        gateId: "GATE-5",
-        stage: "submit",
-        packetPath: packet.packetPath,
-        packetJsonPath: packet.packetJsonPath,
-        packetFingerprint: packet.packetFingerprint,
-        attempts,
-      });
-      const nextStore = {
-        schemaVersion: 1 as const,
-        updatedAt: nowIso(),
-        roundsStarted: store.roundsStarted + 1,
-        currentRound: round,
-      };
-      await saveGateReviewStore(params.projectRoot, nextStore);
       return {
-        launched: true,
-        reason: "started",
+        launched: false,
+        reason: "manual_confirmation_required",
         projectId: params.projectId,
         projectRoot: params.projectRoot,
         gateId: "GATE-5",
         stage: "submit",
-        status: round.status,
+        status: null,
         reviewCount: 0,
         approved: false,
       };
@@ -3142,8 +3493,46 @@ export function createWorkflowCoordinatorService(
             })
           )
         );
-        const autoGateReviews = await Promise.all(
+        const autoCodeReviews = await Promise.all(
           results.map((entry) =>
+            maybeAdvanceAutoCodeReviewForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              logger,
+              deps,
+            })
+          )
+        );
+        const codeReviewRefreshedResults = await Promise.all(
+          results.map(async (entry, index) => {
+            if (autoCodeReviews[index]?.approved !== true) {
+              return entry;
+            }
+            const refreshed = await enqueueWorkflowTask({
+              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              label: "workflow_post_code_review_reconcile",
+              logger,
+              task: () =>
+                (deps.runWorkflowAutoIterator ?? runWorkflowAutoIterator)({
+                  projectRoot: entry.projectRoot,
+                  policy: workflowPolicy,
+                  agentId: "researcher",
+                  mode: "service-post-code-review",
+                  queueMailbox: workflowPolicy.enableWorkflowMailbox,
+                  cooldownSeconds: workflowPolicy.agentContactCooldownSeconds,
+                }),
+            });
+            return {
+              ...entry,
+              result: refreshed,
+            };
+          })
+        );
+        const autoGateReviews = await Promise.all(
+          codeReviewRefreshedResults.map((entry) =>
             maybeAdvanceAutoGateReviewForProject({
               runtimeSubagent: plugin.api.runtime?.subagent,
               workflowPolicy,
@@ -3156,7 +3545,7 @@ export function createWorkflowCoordinatorService(
           )
         );
         const refreshedResults = await Promise.all(
-          results.map(async (entry, index) => {
+          codeReviewRefreshedResults.map(async (entry, index) => {
             if (autoGateReviews[index]?.approved !== true) {
               return entry;
             }
@@ -3272,6 +3661,7 @@ export function createWorkflowCoordinatorService(
               stageAfter: entry.result.stageAfter ?? null,
               timedDefaultTriggered: entry.result.timedDefaultTriggered === true,
               timedDefaultSummary: entry.result.gateReason,
+              autoCodeReview: autoCodeReviews[index],
               autoGateReview: autoGateReviews[index],
               autoModeDiscussion: autoModeDiscussions[index],
               autoMitigationDispatch: autoMitigationAttempts[index],
@@ -3310,6 +3700,7 @@ export function createWorkflowCoordinatorService(
           queuedBackgroundRunsRemaining: drainedQueue.remaining.length,
           projectCount: discussionRefreshedResults.length,
           results: summarizeCoordinatorPass(discussionRefreshedResults),
+          autoCodeReviews,
           autoGateReviews,
           autoModeDiscussions,
           autoMitigationDispatches,

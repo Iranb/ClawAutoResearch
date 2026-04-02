@@ -14,7 +14,7 @@ allowed-tools:
 
 # Frontier Mapping
 
-Use PaperNexus graph traversal over the shared global graph, constrained by this project's selected papers, to produce a compact, reusable frontier report for brainstorming.
+Use PaperNexus graph traversal over the shared global graph, constrained by this project's selected papers, to produce a compact, reusable frontier report for brainstorming. If the project already ran `/literature-review`, treat that systematic review packet as upstream scope control instead of brainstorming from a blank slate.
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/` and `{PROJ}/graph/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -25,6 +25,7 @@ Use PaperNexus graph traversal over the shared global graph, constrained by this
 - `{PROJ}/PROJECT_MANIFEST.json` if present
 - project topic / user direction
 - optional `{PROJ}/researcher/LITERATURE.md` if it already exists
+- optional `{PROJ}/researcher/LITERATURE_REVIEW.md`, `{PROJ}/researcher/SOTA_MATRIX.md`, and `{PROJ}/researcher/GAP_SYNTHESIS.md` if a systematic review packet already exists
 - optional `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` if it already exists
 
 ## Query Passes
@@ -134,6 +135,12 @@ If `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` exists, treat it as mandatory upst
 - convert the best hooks into graph-backed frontier items
 
 Do not ignore earlier research-stage brainstorming and restart from a blank slate.
+If `{PROJ}/researcher/LITERATURE_REVIEW.md` or `{PROJ}/researcher/GAP_SYNTHESIS.md` exists, treat it as mandatory upstream context as well:
+
+- preserve its included-paper boundaries
+- use `SOTA_MATRIX.md` to keep frontier claims anchored to the true baseline family
+- turn gap statements into graph-backed frontier items instead of re-inventing generic hooks
+
 Do not delete shared graph data or run PaperNexus backup / restore commands during frontier work.
 
 After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:

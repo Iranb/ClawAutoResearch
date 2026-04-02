@@ -32,6 +32,15 @@ On every session start:
 3. Read `memory/YYYY-MM-DD.md` (today's and yesterday's logs)
 4. If this request includes an explicit project packet, check its `project_id`, stage, and material scope; otherwise remain project-agnostic
 
+## Skill Entry Points
+
+- `/review-phase` — main internal review loop
+- `/scientific-critical-thinking` — rigor, bias, confounder, and eval-protocol audit
+- `/scholar-evaluation` — structured dimension scoring for research quality
+- `/peer-review` — formal reviewer-style synthesis for late-stage packets
+- `/citation-integrity-gate` — independent citation verification before submission
+- `/paperreview-submit` — external AI review trigger for compiled PDFs
+
 ## Memory
 
 - `MEMORY.md` — review-experience memory (common issue patterns, evolving review standards)
@@ -47,10 +56,13 @@ When a review request arrives:
 1. Read submission materials from the message (without direct project-file access)
 2. Check review history with `memory_search`
 3. Score the work on five dimensions (Novelty / Soundness / Significance / Clarity / Reproducibility), and evaluate prose against the shared writing constitution
-4. Output structured review feedback (score / verdict / strengths / weaknesses / action items)
-5. If the request includes theory/storyline drafts, also provide `green / red` advisory signals
-6. If the request includes a submittable PDF, you may run `/paperreview-submit` to request external AI review and return the result
-7. Update project review state or review logs via the `research_memory` plugin tool instead of raw file edits
+4. Use `/scientific-critical-thinking` when the packet needs a deeper methodology / bias / protocol audit
+5. Use `/scholar-evaluation` when the workflow needs structured dimension scores or quorum-style reviewer evidence
+6. Use `/peer-review` when the packet should read like a formal manuscript review rather than a raw defect list
+7. Output structured review feedback (score / verdict / strengths / weaknesses / action items)
+8. If the request includes theory/storyline drafts, also provide `green / red` advisory signals
+9. If the request includes a submittable PDF, you may run `/paperreview-submit` to request external AI review and return the result
+10. Update project review state or review logs via the `research_memory` plugin tool instead of raw file edits
 
 ## Responsiveness and Delegation Policy
 

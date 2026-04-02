@@ -39,7 +39,8 @@ On every session start:
 10. Read `{PROJ}/reviewer/AUTO_REVIEW.md` if exists — incorporate reviewer feedback
 11. Read relevant `{PROJ}/cross-reviewer/` files if revision mode
 12. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm current stage, active tracks, next writing handoff, and `writing_contract`
-13. If `writing_contract.template_required = true`, make sure the template file is readable before planning or drafting prose
+13. Read `{PROJ}/researcher/ZOTERO_PACKET.md` if exists — use the Zotero `bot/<project-id>` writing shortlist and baseline folders as bibliography-organizing context
+14. If `writing_contract.template_required = true`, make sure the template file is readable before planning or drafting prose
 
 ## Core Responsibilities
 
@@ -50,6 +51,8 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Maintain the paper directory structure
 - Keep `WRITING_SIGNALS.md` current as the writing-side audit artifact
 - Respect the configured writing template and keep `TEMPLATE_MAPPING.md` aligned with the actual draft structure
+- Use `/citation-management` to turn the Zotero `bot/<project-id>/writing-shortlist` into a verified bibliography queue
+- Use `/venue-templates` to keep section order, page budget, and venue constraints aligned with the writing contract
 
 ## Responsiveness and Delegation Policy
 
@@ -96,6 +99,7 @@ For any long drafting or revision packet, use this milestone format:
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — advisory `green / red` theory signal
 - `{PROJ}/CLAIM_POLICY.md` — support label → wording / placement constraints
 - `{PROJ}/researcher/IDEA_REPORT.md` — original idea and novelty claims
+- `{PROJ}/researcher/ZOTERO_PACKET.md` — Zotero `bot/<project-id>` collection summary and writing shortlist context
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — section outline (if prepared by paper-plan skill)
 - `{PROJ}/PROJECT_MANIFEST.json.writing_contract` — user template path, section order, and paragraph-logic contract
 - `{PROJ}/reviewer/AUTO_REVIEW.md` — reviewer feedback (if available)
@@ -115,6 +119,7 @@ For any long drafting or revision packet, use this milestone format:
 When you are blocked on review comments, compile results, or revision decisions, you may still do bounded writing-side preparation inside `{PROJ}/academic_writer/`:
 
 - build citation / related-work queues from approved literature packets
+- refresh Zotero-driven writing-shortlist notes and bibliography cleanup tasks
 - tighten outline structure and contribution phrasing
 - prepare rebuttal notes or revision checklists
 - downgrade risky wording for weakly supported claims

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ClawAutoResearch Plugin Installer
 # Usage:
-#   bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create]
+#   bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create] [--yes]
 #
 # 功能：
 #   1. 可选地添加或检查研究工作流所需的 agents
@@ -21,6 +21,7 @@ PAPERNEXUS_DIR="${PAPERNEXUS_DIR:-/Users/iranb/Library/Mobile Documents/com~appl
 DRY_RUN=false
 FORCE_ROLE_FILES=false
 SKIP_AGENT_CREATE=false
+ASSUME_YES=false
 INSTALL_MODE="full"
 INSTALL_MODE_LABEL="FULL INSTALL"
 RUN_AGENT_PHASE=true
@@ -34,18 +35,20 @@ PAPERNEXUS_SYNCED_SKILL_ENTRIES=()
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create]
+Usage: bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create] [--yes]
 
 Options:
   --dry-run           只预览，不实际写入
   --force-role-files  覆盖 workspace root 中已存在的 researcher/reviewer/cross-reviewer 角色配置文件
   --skip-agent-create 跳过 `openclaw agents add` / `set-identity`，只同步插件、skills、模板和角色配置
+  --yes               非交互模式下默认回答 yes，并采用完整安装流程
   -h, --help          显示帮助
 
 Environment:
   OPENCLAW_HOME       默认是 ~/.openclaw
   OPENCLAW_CONFIG_PATH 默认是 $OPENCLAW_HOME/openclaw.json
   PAPERNEXUS_DIR      默认是 /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus
+  OPENCLAW_INSTALL_ASSUME_YES=1 可在非交互环境默认回答 yes
   OPENCLAW_INSTALL_FORCE_MENU=1 可在非 TTY 环境强制显示快捷菜单
 EOF
 }
@@ -60,6 +63,9 @@ for arg in "$@"; do
       ;;
     --skip-agent-create)
       SKIP_AGENT_CREATE=true
+      ;;
+    --yes)
+      ASSUME_YES=true
       ;;
     -h|--help)
       usage
@@ -87,6 +93,10 @@ is_truthy() {
       ;;
   esac
 }
+
+if is_truthy "${OPENCLAW_INSTALL_ASSUME_YES:-}"; then
+  ASSUME_YES=true
+fi
 
 run() {
   if $DRY_RUN; then
@@ -158,6 +168,10 @@ prompt_yes_no() {
     suffix="[Y/n]"
   else
     suffix="[y/N]"
+  fi
+
+  if $ASSUME_YES; then
+    return 0
   fi
 
   while true; do
@@ -689,9 +703,9 @@ sync_plugin_link() {
   fi
 }
 
-if is_truthy "$FORCE_MENU_INPUT"; then
+if is_truthy "$FORCE_MENU_INPUT" && ! $ASSUME_YES; then
   prompt_install_mode
-elif (( ORIGINAL_ARG_COUNT == 0 )) && [[ -t 0 ]]; then
+elif (( ORIGINAL_ARG_COUNT == 0 )) && [[ -t 0 ]] && ! $ASSUME_YES; then
   prompt_install_mode
 fi
 
@@ -843,8 +857,7 @@ if $RUN_SKILL_PHASE; then
     if $DRY_RUN; then
       echo "  [dry-run] 实际执行时会先询问你是否删除这些重复 skills。"
     else
-      read -r -p "  确认删除上述重复 skills 并用插件版本覆盖吗？[y/N] " confirm_delete
-      if [[ "$confirm_delete" =~ ^[Yy]$ ]]; then
+      if prompt_yes_no "确认删除上述重复 skills 并用插件版本覆盖吗？" "n"; then
         DELETE_DUPLICATES=true
       fi
     fi

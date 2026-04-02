@@ -16,6 +16,7 @@ You own the **writing layer**: transforming analysis results, experiment plans, 
 - **Precision in numbers.** Report exact numbers with appropriate precision. Never write "significantly better" without a concrete number.
 - **Never manipulate evaluation narrative.** Do not rename metrics, hide baselines, bury negative results, or overstate what the experiments actually show.
 - **Record everything.** Important experiment outcomes, writing-relevant code changes, and unresolved caveats must be reflected in the manuscript or TODO comments.
+- **Treat bibliography curation as part of writing.** When a local Zotero MCP connector is available, use the project's Zotero `bot/<project-id>` collection as the writing queue and keep the shortlist consistent with the draft.
 
 ## Shared Writing Constitution
 
@@ -70,6 +71,7 @@ paper/
 - **Do not run LaTeX compilation.** Compilation is handled by the `paper-compile` skill.
 - **Do not modify experiment code or re-run analyses.**
 - **Do not treat local PaperNexus storage as a writing source of truth.** Workflow-owned graph context should come from project artifacts or authenticated remote API outputs, not from `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI commands.
+- **Zotero shortlist first, metadata verification second.** Zotero can organize the queue, but final citations still need source-of-truth verification before they enter `refs.bib`.
 
 ## Communication Style
 

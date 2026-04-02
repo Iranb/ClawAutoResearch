@@ -25,6 +25,7 @@ import {
 import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
+  maybeAdvanceAutoCodeReviewForProject,
   listWorkflowCoordinatorProjects,
   maybeAdvanceAutoModeDiscussionForProject,
   maybeAdvanceAutoGateReviewForProject,
@@ -36,6 +37,7 @@ import {
 import { recordWorkflowAnnounceEvent } from "../tools/workflow-session-orchestrator.ts";
 import { readGateReviewStore } from "../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
+import { readCodeReviewStore } from "../tools/workflow-code-review.ts";
 import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.ts";
 
 async function makeProjectsRoot() {
@@ -644,6 +646,94 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
     /^agent:researcher:discord:group:paper-lab:subagent:/
   );
   assert.match(runs[0].message, /Immediate command: \/run-experiments/);
+});
+
+test("maybeLaunchAutoStageForProject uses a short cooldown for experiment monitor dispatches", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const monitorCommand =
+    "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis.";
+  const launchedStageKeys = new Map([
+    [
+      projectRoot,
+      {
+        key: `${projectRoot}::experiment::researcher::${monitorCommand}`,
+        launchedAt: Date.now() - 61_000,
+      },
+    ],
+  ]);
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `monitor-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Monitor active remote experiments and reconcile finished runs.",
+          command: monitorCommand,
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys,
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(launch.stage, "experiment");
+  assert.equal(launch.owner, "researcher");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message ?? "", /\/monitor-experiment/i);
 });
 
 test("maybeLaunchAutoStageForProject shares the researcher service session pool across projects", async (t) => {
@@ -1767,13 +1857,13 @@ test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states"
     projectRoot: "/tmp/projects/alpha",
     stageAfter: "submit",
     autoGateReview: {
-      launched: true,
-      reason: "started",
+      launched: false,
+      reason: "manual_confirmation_required",
       projectId: "alpha",
       projectRoot: "/tmp/projects/alpha",
       gateId: "GATE-5",
       stage: "submit",
-      status: "reviewing",
+      status: null,
       reviewCount: 0,
       approved: false,
     },
@@ -1834,7 +1924,7 @@ test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states"
     },
   });
   assert.equal(waiting?.status, "waiting");
-  assert.match(waiting?.summary ?? "", /waiting/i);
+  assert.match(waiting?.summary ?? "", /human confirmation|OpenReview/i);
 
   const timedDefault = deriveWorkflowCoordinatorStatusUpdate({
     projectId: "alpha",
@@ -2099,7 +2189,21 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
       warn() {},
     },
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (
+      runs.some(
+        (entry) =>
+          entry.deliver === false &&
+          /Immediate command: \/implement-experiment/.test(entry.message)
+      ) &&
+      runs.some(
+        (entry) => entry.deliver === true && /\[Workflow Status\]/.test(entry.message)
+      )
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   await service.stop({
     logger: {
       debug() {},
@@ -2113,9 +2217,8 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
   assert.ok(runs.some((entry) => entry.deliver === true && /handed off/i.test(entry.message)));
 });
 
-test("maybeAdvanceAutoGateReviewForProject creates and advances a submit gate review round", async (t) => {
+test("maybeAdvanceAutoGateReviewForProject leaves submit under manual confirmation and does not launch reviewers", async (t) => {
   const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "submit");
-  const runtimeCalls = [];
 
   t.after(async () => {
     await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
@@ -2140,8 +2243,7 @@ test("maybeAdvanceAutoGateReviewForProject creates and advances a submit gate re
   const start = await maybeAdvanceAutoGateReviewForProject({
     runtimeSubagent: {
       async run(params) {
-        runtimeCalls.push(params);
-        return { runId: `gate-run-${runtimeCalls.length}` };
+        throw new Error(`should not launch submit auto review: ${params.sessionKey}`);
       },
       async waitForRun() {
         return { status: "ok" };
@@ -2220,101 +2322,14 @@ test("maybeAdvanceAutoGateReviewForProject creates and advances a submit gate re
     },
   });
 
-  assert.equal(start.launched, true);
-  assert.equal(start.reason, "started");
-  assert.equal(runtimeCalls.length, 3);
-
-  const updated = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
-      async run() {
-        throw new Error("should not relaunch a new round");
-      },
-      async waitForRun() {
-        return { status: "ok" };
-      },
-      async getSessionMessages() {
-        return {
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    verdict: "pass",
-                    overallScore: 9,
-                    dimensionScores: {
-                      quality: 9,
-                      evidence: 9,
-                      clarity: 9,
-                      citation: 9,
-                      publishability: 9,
-                    },
-                    criticalBlockers: [],
-                    majorIssues: [],
-                    suggestedRollbackStage: null,
-                    reviewedArtifacts: ["academic_writer/paper/main.pdf"],
-                    summary: "Approved.",
-                  }),
-                },
-              ],
-            },
-          ],
-        };
-      },
-    },
-    workflowPolicy: {
-      autoMode: "aggressive",
-      autoGate: {
-        ...defaultAutoGateConfig(),
-        enabled: true,
-      },
-      enableChannelProjectBindings: true,
-      projectsRoot: path.dirname(projectRoot),
-      heartbeatBackgroundChecks: true,
-      agentContactCooldownSeconds: 300,
-      enableWorkflowMailbox: true,
-    },
-    projectRoot,
-    projectId: "alpha",
-    autoIteratorResult: {
-      gateBlocking: true,
-      stageAfter: "submit",
-      recommendedActions: [],
-    },
-    deps: {
-      listChannelProjectBindingsForWorkflow() {
-        return {
-          enabled: true,
-          storePath: path.dirname(projectRoot),
-          bindings: [
-            {
-              channelKey: "discord:group:paper-lab",
-              projectRoot,
-              projectId: "alpha",
-              messageChannel: "discord",
-              sessionKeySample: "agent:researcher:discord:group:paper-lab",
-              sessionId: null,
-              boundAt: "2026-03-25T00:00:00.000Z",
-              updatedAt: "2026-03-25T00:05:00.000Z",
-              boundByAgent: "researcher",
-              notes: null,
-            },
-          ],
-        };
-      },
-    },
-  });
-
-  assert.equal(updated.approved, true);
+  assert.equal(start.launched, false);
+  assert.equal(start.reason, "manual_confirmation_required");
   const store = await readGateReviewStore(projectRoot);
-  assert.equal(store.currentRound?.status, "approved");
-  assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+  assert.equal(store.currentRound, null);
 });
 
-test("maybeAdvanceAutoGateReviewForProject prefers announce payloads over transcript polling", async (t) => {
+test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data because final confirmation is manual", async (t) => {
   const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "submit");
-  const runtimeCalls = [];
 
   t.after(async () => {
     await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
@@ -2374,8 +2389,7 @@ test("maybeAdvanceAutoGateReviewForProject prefers announce payloads over transc
   const start = await maybeAdvanceAutoGateReviewForProject({
     runtimeSubagent: {
       async run(params) {
-        runtimeCalls.push(params);
-        return { runId: `gate-run-${runtimeCalls.length}` };
+        throw new Error(`should not launch submit auto review: ${params.sessionKey}`);
       },
     },
     workflowPolicy: policy,
@@ -2389,46 +2403,43 @@ test("maybeAdvanceAutoGateReviewForProject prefers announce payloads over transc
     deps,
   });
 
-  assert.equal(start.launched, true);
-  const startedStore = await readGateReviewStore(projectRoot);
-  assert.equal(startedStore.currentRound?.attempts.length, 3);
+  assert.equal(start.launched, false);
+  assert.equal(start.reason, "manual_confirmation_required");
 
-  for (const attempt of startedStore.currentRound?.attempts ?? []) {
-    await recordWorkflowAnnounceEvent({
-      projectRoot,
-      projectId: "alpha",
-      announceId: `gate-review:${attempt.runId}:${attempt.reviewerRole}`,
-      parentSessionKey: null,
-      childSessionKey: attempt.sessionKey,
-      deliveryMode: "internal",
-      summary: `Gate reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
-      payload: {
-        reviewerRole: attempt.reviewerRole,
-        runId: attempt.runId,
-        status: "completed",
-        result: {
-          reviewerRole: attempt.reviewerRole,
-          verdict: "pass",
-          overallScore: 9,
-          dimensionScores: {
-            quality: 9,
-            evidence: 9,
-            clarity: 9,
-            citation: 9,
-            publishability: 9,
-          },
-          criticalBlockers: [],
-          majorIssues: [],
-          suggestedRollbackStage: null,
-          reviewedArtifacts: ["academic_writer/paper/main.pdf"],
-          summary: `Approved by ${attempt.reviewerRole}.`,
-          createdAt: "2026-03-31T00:00:00.000Z",
-          runId: attempt.runId,
-          rawText: JSON.stringify({ source: "announce" }),
+  await recordWorkflowAnnounceEvent({
+    projectRoot,
+    projectId: "alpha",
+    announceId: "gate-review:legacy-run:reviewer",
+    parentSessionKey: null,
+    childSessionKey: "agent:reviewer:main",
+    deliveryMode: "internal",
+    summary: "Legacy gate reviewer announce should be ignored for manual submit confirmation.",
+    payload: {
+      reviewerRole: "reviewer",
+      runId: "legacy-run",
+      status: "completed",
+      result: {
+        reviewerRole: "reviewer",
+        verdict: "pass",
+        overallScore: 9,
+        dimensionScores: {
+          quality: 9,
+          evidence: 9,
+          clarity: 9,
+          citation: 9,
+          publishability: 9,
         },
+        criticalBlockers: [],
+        majorIssues: [],
+        suggestedRollbackStage: null,
+        reviewedArtifacts: ["academic_writer/paper/main.pdf"],
+        summary: "Approved by reviewer.",
+        createdAt: "2026-03-31T00:00:00.000Z",
+        runId: "legacy-run",
+        rawText: JSON.stringify({ source: "announce" }),
       },
-    });
-  }
+    },
+  });
 
   const updated = await maybeAdvanceAutoGateReviewForProject({
     runtimeSubagent: {
@@ -2455,8 +2466,232 @@ test("maybeAdvanceAutoGateReviewForProject prefers announce payloads over transc
     deps,
   });
 
-  assert.equal(updated.approved, true);
+  assert.equal(updated.launched, false);
+  assert.equal(updated.reason, "manual_confirmation_required");
   const approvedStore = await readGateReviewStore(projectRoot);
+  assert.equal(approvedStore.currentRound, null);
+});
+
+test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovation review round", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    research_program: {
+      tracks: [
+        {
+          track_id: "track-1",
+          status: "active",
+          hypothesis: "Graph grounding improves support precision.",
+          novelty_basis: "It couples frontier packets with section drafting.",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: "track-1",
+        status: "active",
+      },
+    ],
+  });
+  await fs.mkdir(path.join(projectRoot, "coder", "experiments", "track-1", "exp-1__baseline"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"),
+    "# experiment index\n",
+    "utf8"
+  );
+  await fs.mkdir(path.join(projectRoot, "orchestrator"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "coder", "experiments", "track-1", "exp-1__baseline", "train.py"),
+    "print('ok')\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "coder", "experiments", "track-1", "exp-1__baseline", "README.md"),
+    "# readme\n",
+    "utf8"
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      "track-1",
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    {
+      experiment_id: "exp-1",
+      project_id: "alpha",
+      track_id: "track-1",
+      question: "Does graph grounding improve support precision?",
+      hypothesis: "Graph grounding improves support precision.",
+      novelty_basis: "It couples frontier packets with section drafting.",
+      baseline_reference: "baseline-a",
+      primary_baseline_metric: "acc",
+      target_improvement: "Improve acc by >= 2 points over baseline-a.",
+      baseline_training_protocol: "Reuse baseline-a training settings.",
+      baseline_eval_protocol: "Reuse baseline-a evaluation protocol.",
+      innovation_points: ["Graph-grounded support routing"],
+      validation_steps: [
+        {
+          step_id: "step-1",
+          objective: "Enable graph-grounded support routing only.",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      ablation_plan: [
+        {
+          ablation_id: "minus-routing",
+          objective: "Disable graph routing.",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+    }
+  );
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "# plan\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "TODOS.md"), "# todos\n", "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "# audit\n",
+    "utf8"
+  );
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [
+          {
+            channelKey: "discord:group:paper-lab",
+            projectRoot,
+            projectId: "alpha",
+            messageChannel: "discord",
+            sessionKeySample: "agent:researcher:discord:group:paper-lab",
+            sessionId: null,
+            boundAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:05:00.000Z",
+            boundByAgent: "researcher",
+            notes: null,
+          },
+        ],
+      };
+    },
+  };
+
+  const start = await maybeAdvanceAutoCodeReviewForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `code-review-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      gateReason: "CODE innovation review is pending; wait for the reviewer panel to validate baseline alignment, execution viability, and innovation-step coverage.",
+      stageAfter: "code",
+      missingStageSignals: [],
+      recommendedActions: [],
+    },
+    deps,
+  });
+
+  assert.equal(start.launched, true);
+  assert.equal(start.reason, "started");
+  assert.equal(runtimeCalls.length, 3);
+
+  const startedStore = await readCodeReviewStore(projectRoot);
+  for (const attempt of startedStore.currentRound?.attempts ?? []) {
+    await recordWorkflowAnnounceEvent({
+      projectRoot,
+      projectId: "alpha",
+      announceId: `code-review:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: `Code reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+      payload: {
+        reviewerRole: attempt.reviewerRole,
+        runId: attempt.runId,
+        status: "completed",
+        result: {
+          reviewerRole: attempt.reviewerRole,
+          verdict: "pass",
+          overallScore: 9,
+          dimensionScores: {
+            innovation_alignment: 9,
+            baseline_fidelity: 9,
+            validation_plan: 9,
+            execution_readiness: 9,
+          },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["coder/EXPERIMENT_INDEX.md"],
+          summary: `Approved by ${attempt.reviewerRole}.`,
+          createdAt: "2026-04-01T00:00:00.000Z",
+          runId: attempt.runId,
+          rawText: JSON.stringify({ source: "announce" }),
+        },
+      },
+    });
+  }
+
+  const updated = await maybeAdvanceAutoCodeReviewForProject({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not relaunch a new code review round");
+      },
+      async waitForRun() {
+        throw new Error("waitForRun should not be called when announce payloads are present");
+      },
+      async getSessionMessages() {
+        throw new Error(
+          "getSessionMessages should not be called when announce payloads are present"
+        );
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      gateReason: "CODE innovation review is pending; wait for the reviewer panel to validate baseline alignment, execution viability, and innovation-step coverage.",
+      stageAfter: "code",
+      missingStageSignals: [],
+      recommendedActions: [],
+    },
+    deps,
+  });
+
+  assert.equal(updated.approved, true);
+  const approvedStore = await readCodeReviewStore(projectRoot);
   assert.equal(approvedStore.currentRound?.status, "approved");
   assert.equal(approvedStore.currentRound?.aggregate?.reviewCount, 3);
 });

@@ -6,12 +6,12 @@
 
 | Role | 主要职责 |
 | --- | --- |
-| `researcher` | 项目 owner、阶段协调、文献、图谱、创新、实验总账、恢复与自动迭代 |
+| `researcher` | 项目 owner、阶段协调、文献、Zotero 文献管理、图谱、创新、实验总账、恢复与自动迭代 |
 | `orchestrator` | 研究计划、实验排期、风险、预算和 TODO 编排 |
-| `coder` | 实验代码实现、运行脚本、复现实验、工程侧 smoke test |
+| `coder` | 实验代码实现、运行脚本、复现实验、工程侧 smoke test、实现阶段科研绘图 |
 | `analyzer` | 结果解释、图表、claim-evidence、PaperNexus 反思 |
-| `academic_writer` | 论文大纲、模版映射、段落逻辑、正文写作与编译 |
-| `reviewer` | review phase、evidence grading、submission packet、review response |
+| `academic_writer` | 论文大纲、模版映射、Zotero 引用队列、段落逻辑、正文写作与编译 |
+| `reviewer` | review phase、critical thinking、scholar evaluation、submission packet、review response |
 | `cross-reviewer` | 隔离式外部视角审阅，不持有主动项目写权限 |
 
 ## 2. 每个 Agent 目录中的配置文件
@@ -159,22 +159,22 @@
 例如：
 
 - `researcher`  
-  文献跟踪、PaperNexus 刷新、reasoning packet 对齐、实验账本对齐
+  文献跟踪、Zotero `bot/<project-id>` 文献集合维护、PaperNexus 刷新、reasoning packet 对齐、实验账本对齐
 
 - `orchestrator`  
   风险、预算、计划清理，不改 active track
 
 - `coder`  
-  强化复现说明、smoke test、脚本维护，不擅自发起新实验
+  强化复现说明、smoke test、脚本维护、实现阶段科研绘图，不擅自发起新实验
 
 - `analyzer`  
   figure/table skeleton、claim-evidence 提取准备
 
 - `academic_writer`  
-  大纲与 paragraph logic 检查，维持保守措辞和模版一致性
+  大纲与 paragraph logic 检查、Zotero writing-shortlist 整理、维持保守措辞和模版一致性
 
 - `reviewer`  
-  review rubric 和评审结构维护
+  review rubric、critical-thinking 清单和 scholar-eval 结构维护
 
 ## 6. 角色配置为什么这么拆
 

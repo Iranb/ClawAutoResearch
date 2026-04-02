@@ -28,6 +28,10 @@ import {
   readGateReviewStore,
 } from "./workflow-auto-gate";
 import {
+  getCodeReviewStorePath,
+  readCodeReviewStore,
+} from "./workflow-code-review.js";
+import {
   getAutoModeDiscussionStorePath,
   readAutoModeDiscussionStore,
 } from "./workflow-auto-discussion";
@@ -69,6 +73,7 @@ type ResolvedWorkflowCommandTarget = {
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 type WorkflowAutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 type WorkflowGateReviewStore = Awaited<ReturnType<typeof readGateReviewStore>>;
+type WorkflowCodeReviewStore = Awaited<ReturnType<typeof readCodeReviewStore>>;
 type WorkflowAutoDiscussionStore = Awaited<ReturnType<typeof readAutoModeDiscussionStore>>;
 
 type ExistingWorkflowProjectSelection = {
@@ -508,6 +513,44 @@ function formatGateReviewSection(params: {
   return lines;
 }
 
+function formatCodeReviewSection(params: {
+  projectRoot: string | null;
+  codeReviewStore: WorkflowCodeReviewStore | null;
+}) {
+  if (!params.projectRoot || !params.codeReviewStore?.currentRound) {
+    return ["Auto code review: no persisted code review round for the current project."];
+  }
+  const round = params.codeReviewStore.currentRound;
+  const aggregate = round.aggregate;
+  const lines = [
+    `Auto code review: status=${round.status}, gate=${round.gateId}, stage=${round.stage ?? "unknown"}, reviews=${aggregate?.reviewCount ?? 0}`,
+    `Auto code review store: ${getCodeReviewStorePath(params.projectRoot)}`,
+    `Auto code review packet: ${round.packetPath}`,
+    `Auto code review summary: ${aggregate?.summary ?? "pending reviewer quorum"}`,
+  ];
+  if (aggregate) {
+    lines.push(
+      `Auto code review scores: avg=${aggregate.averageScore?.toFixed(2) ?? "n/a"}, min=${aggregate.minScore?.toFixed(2) ?? "n/a"}, blockers=${aggregate.blockerCount}`
+    );
+  }
+  for (const attempt of round.attempts) {
+    const result = attempt.result;
+    lines.push(
+      `  - code reviewer ${attempt.reviewerRole}: status=${attempt.status}${
+        result ? `, verdict=${result.verdict}, score=${result.overallScore.toFixed(1)}` : ""
+      }`
+    );
+    lines.push(`    summary: ${compactStatusText(result?.summary ?? attempt.error)}`);
+    if ((result?.majorIssues?.length ?? 0) > 0) {
+      lines.push(`    major issues: ${joinStatusList(result?.majorIssues ?? [])}`);
+    }
+    if ((result?.criticalBlockers?.length ?? 0) > 0) {
+      lines.push(`    blockers: ${joinStatusList(result?.criticalBlockers ?? [])}`);
+    }
+  }
+  return lines;
+}
+
 function formatWorkflowStatusText(params: {
   snapshot: WorkflowSnapshot;
   commandLabel: string;
@@ -515,6 +558,7 @@ function formatWorkflowStatusText(params: {
   autoIteratorResult: WorkflowAutoIteratorResult | null;
   discussionStore: WorkflowAutoDiscussionStore | null;
   gateReviewStore: WorkflowGateReviewStore | null;
+  codeReviewStore: WorkflowCodeReviewStore | null;
 }) {
   const { snapshot } = params;
   const unreadMailboxCount = Array.isArray(snapshot.unreadMailbox)
@@ -662,6 +706,11 @@ function formatWorkflowStatusText(params: {
   lines.push(...formatGateReviewSection({
     projectRoot: snapshot.projectRoot ?? null,
     gateReviewStore: params.gateReviewStore,
+  }));
+  lines.push("");
+  lines.push(...formatCodeReviewSection({
+    projectRoot: snapshot.projectRoot ?? null,
+    codeReviewStore: params.codeReviewStore,
   }));
   return lines.join("\n");
 }
@@ -891,17 +940,19 @@ function createWorkflowStatusCommandHandler(
                 queueMailbox: false,
               })
             : null;
-          const [discussionStore, gateReviewStore] = resolvedProjectRoot
+          const [discussionStore, gateReviewStore, codeReviewStore] = resolvedProjectRoot
             ? await Promise.all([
                 readAutoModeDiscussionStore(resolvedProjectRoot),
                 readGateReviewStore(resolvedProjectRoot),
+                readCodeReviewStore(resolvedProjectRoot),
               ])
-            : [null, null];
+            : [null, null, null];
           return {
             snapshot,
             autoIteratorResult,
             discussionStore,
             gateReviewStore,
+            codeReviewStore,
           };
         },
       });
@@ -914,6 +965,7 @@ function createWorkflowStatusCommandHandler(
           autoIteratorResult: statusState.autoIteratorResult,
           discussionStore: statusState.discussionStore,
           gateReviewStore: statusState.gateReviewStore,
+          codeReviewStore: statusState.codeReviewStore,
         }),
       };
     } catch (error) {

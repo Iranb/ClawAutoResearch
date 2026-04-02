@@ -28,6 +28,7 @@ import {
   type WorkflowAutoMode,
 } from "./workflow-auto-mode";
 import { evaluateSubmitAutoGate } from "./workflow-auto-gate";
+import { evaluateCodeAutoReview } from "./workflow-code-review.js";
 import { readAutoModeDiscussionStore } from "./workflow-auto-discussion";
 import {
   normalizeWorkflowLobsterHandoffConfig,
@@ -1443,9 +1444,9 @@ const STAGE_EXECUTION_HINTS: Record<
   },
   graph_build: {
     owner: "researcher",
-    summary: "Refresh PaperNexus grounding before downstream reasoning.",
+    summary: "Validate PaperNexus grounding and refresh brainstorm artifacts before downstream reasoning.",
     command:
-      "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph and update graph readiness metadata before frontier mapping.",
+      "Run /graph-build to verify PAPER_SOURCE_INDEX.json is already reflected in the shared global graph, update graph readiness metadata, and refresh the brainstorm bundle before frontier mapping.",
   },
   frontier_mapping: {
     owner: "researcher",
@@ -1475,7 +1476,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Launch, monitor, and reconcile the approved experiments.",
     command:
-      "Run /experiment-phase or wake Coder /run-experiment for approved launches, then reconcile EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json before analysis.",
+      "If launches are still pending, run /experiment-phase or wake Coder /run-experiment. Once remote runs exist, switch to /monitor-experiment, reconcile EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json, and mark experiment_search ready_for_analysis only when evaluation and plot-pack artifacts are complete.",
   },
   analyze: {
     owner: "analyzer",
@@ -1499,7 +1500,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "reviewer",
     summary: "Prepare the external review packet and wait for the revision decision.",
     command:
-      "Complete external review packaging and rebuttal materials, then stop for the mandatory GATE-5 human decision.",
+      "Complete external review packaging and rebuttal materials, then stop for the mandatory GATE-5 human decision; the OpenReview-facing final submission path must be explicitly confirmed by a human and is never auto-completed.",
   },
   revise: {
     owner: "researcher",
@@ -3052,6 +3053,18 @@ async function evaluateGateBlocking(params: {
   const stage = params.stage;
   const gateStatus = params.gateState.gateStatus;
   const lastGate = params.gateState.lastGate?.trim().toUpperCase() ?? null;
+  if (stage === "code" && params.hasStageWorkRemaining !== true) {
+    const codeResult = await evaluateCodeAutoReview({
+      projectRoot: params.projectRoot,
+      autoMode: params.effectiveAutoMode,
+      autoGate: params.autoGate,
+      hasStageWorkRemaining: false,
+    });
+    return {
+      ...codeResult,
+      timedDefaultTriggered: false,
+    };
+  }
   if (stage === "submit" && params.hasStageWorkRemaining !== true) {
     const submitResult = await evaluateSubmitAutoGate({
       projectRoot: params.projectRoot,
@@ -6321,6 +6334,40 @@ function isExperimentSearchReadyForAnalysis(
   );
 }
 
+function hasActiveExperimentRuns(ledger: ExperimentLedger | null): boolean {
+  if (!ledger) {
+    return false;
+  }
+  if (ledger.summary.activeExperimentIds.length > 0) {
+    return true;
+  }
+  return ledger.experiments.some((entry) => !isTerminalExperimentStatus(entry.status));
+}
+
+function hasFinishedExperimentWorkAwaitingReconciliation(params: {
+  ledger: ExperimentLedger | null;
+  experimentSearch: ExperimentSearchState;
+}): boolean {
+  if (!params.ledger || isExperimentSearchReadyForAnalysis(params.experimentSearch)) {
+    return false;
+  }
+  return params.ledger.experiments.some(
+    (entry) =>
+      isTerminalExperimentStatus(entry.status) &&
+      Boolean(
+        entry.completedAt ||
+          entry.resultPaths.length > 0 ||
+          entry.evidencePointers.length > 0 ||
+          entry.keyMetric ||
+          entry.metrics
+      )
+  );
+}
+
+function buildExperimentMonitorCommand(): string {
+  return "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis.";
+}
+
 function isPaperQcHardFailure(state: PaperQcState): boolean {
   if (normalizeStage(state.status) === "missing") {
     return false;
@@ -7881,6 +7928,314 @@ async function hasExperimentBundle(projectRoot: string): Promise<boolean> {
   return false;
 }
 
+type ExperimentBundleSummary = {
+  dir: string;
+  manifestPath: string;
+  manifest: Record<string, unknown> | null;
+};
+
+async function listExperimentBundles(
+  projectRoot: string
+): Promise<ExperimentBundleSummary[]> {
+  const coderRoot = path.join(projectRoot, "coder");
+  const bundles: ExperimentBundleSummary[] = [];
+  try {
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: coderRoot, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+      const entries = await fs.readdir(current.dir, { withFileTypes: true });
+      const trainPy = path.join(current.dir, "train.py");
+      const readme = path.join(current.dir, "README.md");
+      const manifestPath = path.join(current.dir, "EXPERIMENT_MANIFEST.json");
+      if (
+        (await pathExists(trainPy)) &&
+        (await pathExists(readme)) &&
+        (await pathExists(manifestPath))
+      ) {
+        bundles.push({
+          dir: current.dir,
+          manifestPath,
+          manifest: await readJsonIfExists<Record<string, unknown>>(manifestPath),
+        });
+        continue;
+      }
+      if (current.depth >= 3) {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (entry.name.startsWith(".") || entry.name === "__pycache__") {
+          continue;
+        }
+        queue.push({
+          dir: path.join(current.dir, entry.name),
+          depth: current.depth + 1,
+        });
+      }
+    }
+  } catch {
+    return [];
+  }
+  return bundles;
+}
+
+function normalizeAlignmentText(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function listStructuredAlignmentStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [entry.trim()];
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const primary =
+      pickString(record, [
+        "id",
+        "step_id",
+        "ablation_id",
+        "title",
+        "label",
+        "objective",
+        "summary",
+      ]) ?? null;
+    const coversSource =
+      record.covers ??
+      record.cover ??
+      record.innovation_point ??
+      record.innovationPoint ??
+      record.innovation_point_id ??
+      record.innovationPointId ??
+      record.targets;
+    const covers = Array.isArray(coversSource)
+      ? coversSource.flatMap((item) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : typeof coversSource === "string" && coversSource.trim()
+        ? [coversSource.trim()]
+        : [];
+    return [primary, ...covers].filter((item): item is string => Boolean(item));
+  });
+}
+
+async function getCodeStageBundleMissingSignals(params: {
+  projectRoot: string;
+  manifest: ManifestLike | null;
+}): Promise<string[]> {
+  const missing: string[] = [];
+  const bundles = await listExperimentBundles(params.projectRoot);
+  if (bundles.length === 0) {
+    missing.push(
+      "{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/train.py + README.md + EXPERIMENT_MANIFEST.json"
+    );
+    return missing;
+  }
+
+  const researchProgram = normalizeResearchProgramState(
+    params.manifest?.research_program
+  );
+  const activeTracks = researchProgram.tracks.filter(
+    (track) => normalizeStage(track.status) === "active"
+  );
+  const activeTracksById = new Map(activeTracks.map((track) => [track.trackId, track]));
+  let hasAlignedBundle = activeTracks.length === 0;
+
+  for (const bundle of bundles) {
+    const relativeDir = path.relative(params.projectRoot, bundle.dir) || bundle.dir;
+    const record = bundle.manifest;
+    if (!record) {
+      missing.push(`${relativeDir} has an unreadable EXPERIMENT_MANIFEST.json`);
+      continue;
+    }
+
+    const trackId = pickString(record, ["track_id", "trackId"]);
+    if (!trackId) {
+      missing.push(`${relativeDir} missing track_id in EXPERIMENT_MANIFEST.json`);
+      continue;
+    }
+
+    const parentTrackId = path.basename(path.dirname(bundle.dir));
+    if (parentTrackId !== trackId) {
+      missing.push(
+        `${relativeDir} must live under coder/experiments/${trackId}/ so bundle path and EXPERIMENT_MANIFEST.json track_id stay aligned`
+      );
+    }
+
+    const question =
+      pickString(record, ["question", "experiment_question", "objective"]) ?? null;
+    if (!question) {
+      missing.push(`${relativeDir} missing question in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const baselineReference =
+      pickString(record, ["baseline_reference", "baselineReference", "baseline"]) ?? null;
+    if (!baselineReference) {
+      missing.push(`${relativeDir} missing baseline_reference in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const primaryBaselineMetric =
+      pickString(record, [
+        "primary_baseline_metric",
+        "primaryBaselineMetric",
+        "main_metric",
+      ]) ?? null;
+    if (!primaryBaselineMetric) {
+      missing.push(
+        `${relativeDir} missing primary_baseline_metric in EXPERIMENT_MANIFEST.json`
+      );
+    }
+
+    const targetImprovement =
+      pickString(record, [
+        "target_improvement",
+        "targetImprovement",
+        "success_threshold",
+      ]) ?? null;
+    if (!targetImprovement) {
+      missing.push(`${relativeDir} missing target_improvement in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const baselineTrainingProtocol =
+      pickString(record, [
+        "baseline_training_protocol",
+        "baselineTrainingProtocol",
+        "baseline_training_setup",
+        "baselineTrainingSetup",
+      ]) ?? null;
+    if (!baselineTrainingProtocol) {
+      missing.push(
+        `${relativeDir} missing baseline_training_protocol in EXPERIMENT_MANIFEST.json`
+      );
+    }
+
+    const baselineEvalProtocol =
+      pickString(record, [
+        "baseline_eval_protocol",
+        "baselineEvalProtocol",
+        "eval_protocol",
+        "evalProtocol",
+      ]) ?? null;
+    if (!baselineEvalProtocol) {
+      missing.push(
+        `${relativeDir} missing baseline_eval_protocol in EXPERIMENT_MANIFEST.json`
+      );
+    }
+
+    const innovationPoints = listStructuredAlignmentStrings(
+      record.innovation_points ?? record.innovationPoints
+    );
+    if (innovationPoints.length === 0) {
+      missing.push(`${relativeDir} missing innovation_points in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const validationSteps = listStructuredAlignmentStrings(
+      record.validation_steps ?? record.validationSteps
+    );
+    if (validationSteps.length === 0) {
+      missing.push(`${relativeDir} missing validation_steps in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const ablationPlan = listStructuredAlignmentStrings(
+      record.ablation_plan ?? record.ablationPlan
+    );
+    if (ablationPlan.length === 0) {
+      missing.push(`${relativeDir} missing ablation_plan in EXPERIMENT_MANIFEST.json`);
+    }
+
+    const validationCoverageText = normalizeAlignmentText(
+      [...validationSteps, ...ablationPlan].join(" ")
+    );
+    for (const innovationPoint of innovationPoints) {
+      const normalizedPoint = normalizeAlignmentText(innovationPoint);
+      if (!normalizedPoint) {
+        continue;
+      }
+      if (!validationCoverageText?.includes(normalizedPoint)) {
+        missing.push(
+          `${relativeDir} must cover innovation point "${innovationPoint}" inside validation_steps or ablation_plan`
+        );
+      }
+    }
+
+    const activeTrack = activeTracksById.get(trackId);
+    if (!activeTrack) {
+      if (activeTracks.length > 0) {
+        missing.push(
+          `${relativeDir} targets inactive or unknown track ${trackId}; code-stage bundles must map to an active innovation track`
+        );
+      }
+      continue;
+    }
+
+    const bundleHypothesis =
+      pickString(record, [
+        "hypothesis",
+        "track_hypothesis",
+        "trackHypothesis",
+      ]) ?? null;
+    const bundleNoveltyBasis =
+      pickString(record, ["novelty_basis", "noveltyBasis"]) ?? null;
+    const expectedHypothesis = normalizeAlignmentText(activeTrack.hypothesis);
+    const expectedNoveltyBasis = normalizeAlignmentText(activeTrack.noveltyBasis);
+
+    if (!bundleHypothesis) {
+      missing.push(`${relativeDir} missing hypothesis in EXPERIMENT_MANIFEST.json`);
+      continue;
+    }
+    if (!bundleNoveltyBasis) {
+      missing.push(`${relativeDir} missing novelty_basis in EXPERIMENT_MANIFEST.json`);
+      continue;
+    }
+    if (
+      expectedHypothesis &&
+      normalizeAlignmentText(bundleHypothesis) !== expectedHypothesis
+    ) {
+      missing.push(
+        `${relativeDir} must align its hypothesis to active track ${trackId}`
+      );
+      continue;
+    }
+    if (
+      expectedNoveltyBasis &&
+      normalizeAlignmentText(bundleNoveltyBasis) !== expectedNoveltyBasis
+    ) {
+      missing.push(
+        `${relativeDir} must align its novelty_basis to active track ${trackId}`
+      );
+      continue;
+    }
+
+    hasAlignedBundle = true;
+  }
+
+  if (!hasAlignedBundle && activeTracks.length > 0) {
+    missing.push(
+      "At least one coder experiment bundle must align to an active innovation track contract (track_id + question + hypothesis + novelty_basis)."
+    );
+  }
+
+  return missing;
+}
+
 async function hasPrefixedFile(dir: string, prefix: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(dir);
@@ -8276,11 +8631,12 @@ async function getMissingStageSignals(params: {
       }
       break;
     case "code":
-      if (!(await hasExperimentBundle(projectRoot))) {
-        missing.push(
-          "{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/train.py + README.md + EXPERIMENT_MANIFEST.json"
-        );
-      }
+      missing.push(
+        ...(await getCodeStageBundleMissingSignals({
+          projectRoot,
+          manifest,
+        }))
+      );
       if (!(await pathExists(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md")))) {
         missing.push("{PROJ}/coder/EXPERIMENT_INDEX.md");
       }
@@ -8740,7 +9096,7 @@ function buildDynamicTasks(params: {
         paperIngestion.new_files_since_graph > 0))
   ) {
     tasks.unshift(
-      "Shared PaperNexus graph reconciliation is pending; run /graph-build or /papernexus before the next novelty or planning decision."
+      "PaperNexus automatic graph catch-up is pending; run /graph-build or /papernexus to refresh readiness status and the brainstorm bundle before the next novelty or planning decision."
     );
   }
 
@@ -8751,12 +9107,12 @@ function buildDynamicTasks(params: {
   }
   if (params.role === "researcher" && paperIngestionState.runtimeStatus === "waiting_graph") {
     tasks.unshift(
-      `Paper ingestion is waiting on shared-graph refresh${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Do not finalize novelty-sensitive reasoning until graph refresh completes.`
+      `Paper ingestion is waiting on automatic graph catch-up${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Do not finalize novelty-sensitive reasoning until the shared graph reflects the new papers and the brainstorm bundle is refreshed.`
     );
   }
   if (params.role === "researcher" && paperIngestionState.runtimeStatus === "reconciling") {
     tasks.unshift(
-      `Paper ingestion is reconciling against a newer shared graph version${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Refresh the affected topic packets before advancing novelty-sensitive work.`
+      `Paper ingestion is catching up to a newer shared graph version${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Refresh the affected brainstorm/topic packets before advancing novelty-sensitive work.`
     );
   }
 
@@ -8771,7 +9127,7 @@ function buildDynamicTasks(params: {
   ) {
     const missingSummary = summarizeGraphPresenceMissing(paperIngestion);
     tasks.unshift(
-      `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and reconcile the shared global graph via /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
+      `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and refresh graph readiness plus the brainstorm bundle via /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
     );
   }
 
@@ -10197,7 +10553,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) for one-paper uploads and `pn_batch_import.py` with one manifest for 2+ staged papers, preferably through `research_workflow.run_papernexus_wrapper` or the dedicated /papernexus-batch-import skill -> /graph-build shared-graph reconciliation."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) for one-paper uploads and `pn_batch_import.py` with one manifest for 2+ staged papers, preferably through `research_workflow.run_papernexus_wrapper` or the dedicated /papernexus-batch-import skill -> /graph-build readiness + brainstorm bundle refresh."
   );
   lines.push(
     "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) and its task logs, ideally by launching them through `research_workflow.run_papernexus_wrapper`. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
@@ -14441,12 +14797,23 @@ export async function runWorkflowAutoIterator(params: {
 
   const ownerBefore = asString(manifest.owner_agent);
   const ownerAfter = stageOwner(stageAfter);
+  const experimentSearchState = normalizeExperimentSearchState(manifest.experiment_search);
+  const shouldMonitorExperiments =
+    stageAfter === "experiment" &&
+    (hasActiveExperimentRuns(experimentLedger) ||
+      hasFinishedExperimentWorkAwaitingReconciliation({
+        ledger: experimentLedger,
+        experimentSearch: experimentSearchState,
+      }));
+  const experimentMonitorCommand = shouldMonitorExperiments
+    ? buildExperimentMonitorCommand()
+    : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : formatStageCommand(stageAfter);
+    : experimentMonitorCommand ?? formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : formatStageCommand(stageAfter);
+    : experimentMonitorCommand ?? formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
     : activeStageSignals.length > 0
@@ -14570,9 +14937,9 @@ export async function runWorkflowAutoIterator(params: {
       kind: "background",
       stage: stageAfter,
       owner: "researcher",
-      summary: "PaperNexus graph refresh is pending and should run before novelty-sensitive work.",
+      summary: "PaperNexus graph catch-up is pending and should refresh brainstorm grounding before novelty-sensitive work.",
       command:
-        "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph (cache-first, without --force) before continuing frontier mapping or ideation. If shared-graph tooling is unavailable or reconciliation still fails, hand the exact non-force command to the user to run manually.",
+        "Run /graph-build to verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, refresh graph readiness metadata, and update the brainstorm bundle (cache-first, without --force) before continuing frontier mapping or ideation. If wrapper-driven graph catch-up still fails, hand the exact non-force command to the user to run manually.",
       mailboxQueued: false,
       mailboxMessageId: null,
       cooldownRemainingSeconds: null,

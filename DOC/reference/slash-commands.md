@@ -22,7 +22,10 @@
 ## 3. 文献与图谱
 
 - `/research-lit`  
-  主题调研与持续文献跟踪，包含 project-local staging 和 wrapper-based PaperNexus import / reconciliation。
+  主题调研与持续文献跟踪，包含 project-local staging、wrapper-based PaperNexus import，以及自动图谱 catch-up / brainstorm scaffold 刷新；如果配置了本地 Zotero MCP server，则直接使用本地 Zotero 并同步维护 `bot/<project-id>` 文献集合。
+
+- `/literature-review`  
+  当项目需要更严谨的文献综述包时使用，生成 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合接在 `/research-lit` 后面，再进入 `/graph-build` 与 `/frontier-mapping`；完成后应把 included/excluded/baseline 清单同步到 Zotero `bot/<project-id>`。
 
 - `/papers-cool`  
   粗粒度检索论文入口。
@@ -40,7 +43,10 @@
   当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
-  构建或刷新项目图谱，走 PaperNexus Python wrappers 而不是手写 REST。
+  检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，走 PaperNexus Python wrappers 而不是手写 REST。
+
+- `/zotero-project-library`  
+  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到 `bot/<project-id>` 目录，维护 selected / included / excluded / baselines / writing-shortlist。
 
 - `/papernexus`  
   直接调用 PaperNexus 能力，默认通过 wrappers 和 typed graph APIs。
@@ -52,6 +58,9 @@
 
 - `/idea-phase`  
   生成、筛选、收敛创新方向。
+
+- `/scientific-brainstorming`  
+  在 graph-grounded brainstorm bundle 已经准备好的前提下，做 bounded 的科研发散和假设压力测试。
 
 - `/innovation-reflection`  
   基于实验账本和 PaperNexus 刷新创新反思。
@@ -70,6 +79,9 @@
 - `/implement-experiment`  
   Coder 实现实验代码与复现结构。
 
+- `/scientific-visualization`  
+  Coder 在实现与 dry-run 阶段生成 sanity-check 图、baseline/proposed 对比图和 ablation 预览图。
+
 - `/run-experiment`  
   启动和管理实验执行。
 
@@ -77,7 +89,7 @@
   并行实验批次调度。
 
 - `/monitor-experiment`  
-  监控远程实验、结果目录和 screen 状态。
+  监控远程实验、结果目录和 screen 状态，并把完成的 run 回写到实验账本与分析就绪状态；在自动模式里，这是远程训练开始后的默认跟进动作。
 
 ## 6. 分析、评审、写作
 
@@ -86,6 +98,12 @@
 
 - `/paper-plan`  
   Writer 建立论文结构与 template mapping。
+
+- `/citation-management`  
+  Writer 基于 Zotero writing-shortlist 和外部 metadata source-of-truth 清洗引用候选。
+
+- `/venue-templates`  
+  Writer 锁定目标 venue 的模板、页数预算和章节约束。
 
 - `/paper-write`  
   Writer 按 writing contract 写作。
@@ -98,6 +116,15 @@
 
 - `/review-phase`  
   Reviewer 做内部评审与证据分级。
+
+- `/scientific-critical-thinking`  
+  Reviewer 做方法学、偏差、统计与证据质量深审。
+
+- `/scholar-evaluation`  
+  Reviewer 做结构化维度评分。
+
+- `/peer-review`  
+  Reviewer 输出更接近正式审稿风格的整合 review。
 
 - `/citation-integrity-gate`  
   Reviewer 独立核验引用，写 `CITATION_VERIFICATION.md`，并更新 citation gate 状态。

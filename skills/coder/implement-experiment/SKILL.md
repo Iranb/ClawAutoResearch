@@ -27,13 +27,16 @@ Write reproducible, self-contained experiment code from a research plan specific
 - **Verify before claiming** readiness: dry-run, shape checks, and minimal validation come before "implementation complete".
 - **Never manipulate evaluation** by quietly changing metrics, splits, baselines, or fixed settings in code.
 - **Never fabricate citations** in experiment docs or comments; if prior work is mentioned, verify it first or leave a TODO.
+- **Plot when it reduces ambiguity**: if a quick baseline-vs-proposed curve, loss plot, or ablation preview would catch a contract drift early, use `/scientific-visualization` under `{PROJ}/coder/.../figures/`.
 
 ## Input
 
 Read in order:
 1. `{PROJ}/orchestrator/PLAN.md` — full experiment specification
-2. `{PROJ}/researcher/IDEA_REPORT.md` — method details and novelty claims
-3. `{PROJ}/orchestrator/TODOS.md` — identify the specific stage(s) to implement
+2. `{PROJ}/TRACK_REGISTRY.json` — active track ids plus the durable `hypothesis` / `novelty_basis` contract
+3. `{PROJ}/PROJECT_MANIFEST.json` — confirm CODE ownership and any mirrored research-program contract
+4. `{PROJ}/researcher/IDEA_REPORT.md` — method details and novelty claims
+5. `{PROJ}/orchestrator/TODOS.md` — identify the specific stage(s) to implement
 
 ## Steps
 
@@ -43,6 +46,22 @@ Before writing any code:
 - State the method in one paragraph
 - List all required components: model, loss, optimizer, data pipeline
 - Identify any unclear requirements and resolve via `{PROJ}/researcher/IDEA_REPORT.md`
+- Resolve the active track contract:
+  - `track_id`
+  - `question`
+  - `hypothesis`
+  - `novelty_basis`
+- Resolve the baseline contract:
+  - `baseline_reference`
+  - `primary_baseline_metric`
+  - `target_improvement`
+  - `baseline_training_protocol`
+  - `baseline_eval_protocol`
+  - `innovation_points`
+  - `validation_steps`
+  - `ablation_plan`
+- If PLAN.md or the current task conflicts with the active track contract, stop and ask Researcher / Orchestrator to reconcile it before implementing
+- If the requested code change would alter the baseline training setup or eval method without an explicit allowed deviation, stop and force a plan update before implementing
 
 ### 2. Determine Dataset Configuration
 
@@ -188,6 +207,8 @@ uv run python train.py --config configs/proposed.yaml --seed 42 \
 
 Expected: no crash, loss printed, no NaN.
 
+If the dry-run or mini-ablation is hard to interpret from logs alone, generate one bounded diagnostic plot with `/scientific-visualization` and store it in the experiment bundle so Analyzer can later reuse or re-render it.
+
 If dry-run fails:
 - ImportError → `uv pip install <package> --index-url https://pypi.tuna.tsinghua.edu.cn/simple`, then update `requirements.txt`
 - CUDA OOM → halve `batch_size` in config
@@ -233,17 +254,31 @@ Every bundle must include `EXPERIMENT_MANIFEST.json` with:
 - `project_id`
 - `track_id`
 - `question`
+- `hypothesis`
+- `novelty_basis`
 - `entry_point`
 - `config_paths`
 - `results_dir`
 - `log_dir`
 - `dataset_path`
 - `status`
+- `baseline_reference`
+- `primary_baseline_metric`
+- `target_improvement`
+- `baseline_training_protocol`
+- `baseline_eval_protocol`
+- `innovation_points`
+- `validation_steps`
+- `ablation_plan`
+- `allowed_deviations`
 
 Update `{PROJ}/coder/EXPERIMENT_INDEX.md` so Coder can later recover:
 
 - what the bundle tests
 - which track it belongs to
+- which hypothesis / novelty basis it implements
+- which baseline and primary metric it is trying to improve
+- how each innovation point is validated step by step
 - where results live
 - whether it was launched remotely
 
@@ -275,6 +310,7 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - Never modify files under shared `datasets/` roots; keep dataset-derived outputs in `{PROJ}/coder/` or remote scratch/results
 - Remote deployment is handled separately by `/run-experiment` on the Coder agent when Researcher / `experiment-phase` explicitly assigns it
 - Never modify baseline code from other papers without flagging it
+- Never change the baseline experiment setting or eval method unless the manifest records an explicit allowed deviation and the plan approved it
 - If a specification is ambiguous, use the most conservative interpretation and flag it
 
 ## Stage Closeout

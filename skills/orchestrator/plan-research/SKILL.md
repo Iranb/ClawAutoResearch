@@ -22,6 +22,7 @@ Produce a concrete, sequenced, track-aware experiment plan from a confirmed idea
 
 - Enforce **one variable per experiment** in the plan. If two ideas both matter, split them into separate stages, ablations, or tracks.
 - **Record everything** in `PLAN.md`, `TODOS.md`, and `PLAN_AUDIT.md`, including expected code touchpoints, baselines, rollback rules, and decision gates.
+- Every active track must stay **baseline-grounded**: the plan must name the baseline reference, primary baseline metric, target improvement, preserved training protocol, preserved eval protocol, innovation points, validation ladder, and ablation ladder.
 - Keep the **experiment change and code change linked**: each planned experiment should map to a concrete bundle, config family, or implementation delta.
 - **Verify before claiming**: do not mark a plan ready unless the required evidence, audit, and completion signals are named explicitly.
 - **Never manipulate evaluation**: metrics, datasets, baselines, and minimum decision scale are protected constraints unless a documented override is approved.
@@ -89,6 +90,8 @@ Additional required sections:
 - Per-track plan section (`track_id`, hypothesis, baselines, pilot/full path)
 - Per-track graph evidence section (`anchor nodes`, `relation patterns`, `closest prior work`, `innovation delta`)
 - Per-track stop / rollback / kill rules
+- Per-track baseline contract section (`baseline_reference`, `primary_baseline_metric`, `target_improvement`, `baseline_training_protocol`, `baseline_eval_protocol`)
+- Per-track innovation validation ladder (`innovation_points`, `validation_steps`, `ablation_plan`, `allowed_deviations`)
 - Scope narrowing rule if multiple tracks survive but budget is tight
 
 Add one explicit **Theory / Proof Appendix Plan** section:
@@ -120,6 +123,7 @@ Write `{PROJ}/orchestrator/PLAN_AUDIT.md` using `PLAN_AUDIT_TEMPLATE.md` in this
 
 The audit must explicitly answer:
 - whether every active track has required baselines, datasets, metrics, and ablations
+- whether every active track has a baseline-preserving training/eval contract and an incremental validation ladder for each innovation point
 - whether seed policy, compute budget, and rollback / kill rules are actually documented
 - whether leakage / contamination risks were checked
 - whether theory / appendix expectations are reflected conservatively

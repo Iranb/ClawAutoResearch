@@ -1000,10 +1000,10 @@ function buildInFlightRemoteRefreshReason(params: {
     `batch_failed_items=${params.paperIngestion.failedBatchItemCount}`,
   ];
   return (
-    `PaperNexus graph refresh is still reconciling through the remote wrapper flow${params.remoteApiBaseUrl ? ` at ${params.remoteApiBaseUrl}` : ""}: ` +
+    `PaperNexus automatic graph catch-up is still running through the remote wrapper flow${params.remoteApiBaseUrl ? ` at ${params.remoteApiBaseUrl}` : ""}: ` +
     `remote status currently covers ${params.presentPaperCount}/${params.expectedPaperCount} expected paper(s), and ${details.join(", ")}.` +
     `${params.paperIngestion.waitingReason ? ` Waiting reason: ${params.paperIngestion.waitingReason}.` : ""} ` +
-    "Continue /graph-build or wait for the next wrapper status update before frontier mapping or ideation."
+    "Continue /graph-build for a bounded status/brainstorm pass or wait for the next wrapper status update before frontier mapping or ideation."
   );
 }
 
@@ -1168,7 +1168,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
           paperIngestion: paperIngestionProgress,
         })
       : `No remote PaperNexus graph status is recorded yet for ${remoteApiBaseUrl ?? "the configured API"}. ` +
-        "Run /graph-build with the configured remote PaperNexus endpoint before frontier mapping or ideation.";
+        "Run /graph-build with the configured remote PaperNexus endpoint to refresh graph readiness metadata and the brainstorm bundle before frontier mapping or ideation.";
     presentPaperCount = 0;
   } else {
     const statusExpectedCount =
@@ -1198,7 +1198,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
           })
         : `Remote PaperNexus graph status is stale for ${remoteApiBaseUrl ?? "the configured API"}: ` +
           `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
-          "Rerun /graph-build before frontier mapping or ideation.";
+          "Rerun /graph-build to refresh readiness metadata and brainstorm grounding before frontier mapping or ideation.";
       presentPaperCount = Math.min(presentPaperCount, params.expected.papers.length);
     } else if (normalizedStatus === "missing_corpus") {
       status = "missing_corpus";

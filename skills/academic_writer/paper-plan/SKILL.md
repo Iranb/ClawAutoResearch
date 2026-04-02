@@ -41,6 +41,7 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/reviewer/REVIEW_REPORT.md` — canonical reviewer feedback from experiment review cycle
 - `{PROJ}/analyzer/figures/` — available figures
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
+- `{PROJ}/researcher/ZOTERO_PACKET.md` — Zotero `bot/<project-id>` writing-shortlist / baseline summary when available
 - `research_workflow.get_writing_contract` — user-provided template path, section order, and paragraph-logic contract
 - `research_workflow.get_citation_integrity` — source-of-truth citation policy and placeholder budget
 
@@ -66,6 +67,12 @@ Also inspect:
 ```json
 {"action":"get_citation_integrity"}
 ```
+
+If `{PROJ}/researcher/ZOTERO_PACKET.md` exists, use it together with `/citation-management` and `/venue-templates` to lock:
+
+- which papers belong in the writing shortlist
+- which baseline papers must appear in related work or setup
+- which venue structure and page budget should constrain the outline
 
 If a template path is configured:
 

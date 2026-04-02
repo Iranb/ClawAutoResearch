@@ -22,6 +22,7 @@ Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-sea
 
 - When literature turns into candidate experiments, preserve **one variable per experiment** by keeping mechanism ideas isolated instead of merging several deltas at once.
 - **Record everything**: queries, canonical paper ids, ingestion decisions, rejected papers, and emerging baseline hypotheses belong in durable project files.
+- **Keep bibliography state durable too**: if local Zotero MCP is available, keep the project collection under `bot/<project-id>/` synchronized with selected, included, excluded, baseline, and writing-shortlist sets.
 - Keep the **experiment and code change linked** by noting which papers justify which future experiment deltas or baseline requirements.
 - **Verify before claiming** novelty, contradiction, or support; abstracts and memory alone are not enough.
 - **Never manipulate evaluation** by selecting only flattering baselines or citations from the literature sweep.
@@ -55,13 +56,16 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 13:** When a queued PaperNexus import task truly reaches `completed`, call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
    - **Step 14:** For batch imports, also write `active_batches`, `batch_items`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
    - **Step 15:** If this wrapper flow is running inside a delegated sub-agent or dedicated workflow session, do not rely on a free-form chat reply as the progress signal; `research_workflow.set_paper_ingestion` is the required feedback path for per-paper or per-batch progress
+   - **Step 16:** If local Zotero MCP is available, sync verified paper identities into `bot/<project-id>/selected` and put baseline-defining papers into `bot/<project-id>/baselines`; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
-   - Trigger `/graph-build` if ≥3 new papers ingested
+   - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
    - Run one bounded brainstorm synthesis pass over the currently ingested papers; this is mandatory during research, not postponed to IDEA
 4. **After ALL searches complete**:
    - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
-   - Run `/graph-build` for final shared-graph reconciliation
+   - If the project needs a durable systematic survey packet, run `/literature-review` now to produce `REVIEW_PROTOCOL.md`, `INCLUDED_PAPERS.json`, `SOTA_MATRIX.md`, and `GAP_SYNTHESIS.md` before final frontier or ideation work
+   - Run `/graph-build` for the final graph-readiness and brainstorm bundle refresh
+   - Refresh the Zotero `bot/<project-id>` collections and `writing-shortlist` before handing off to writing-heavy or review-heavy stages
    - Do not use `--force`; if graph build fails, hand the exact non-force graph-build command to the user
    - Run `/frontier-mapping` to extract research frontiers
    - Write `{PROJ}/researcher/LITERATURE.md` with full survey
@@ -69,11 +73,12 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 **Do NOT:**
 - Skip HuggingFace check
 - Only process 1-2 papers from search results
-- Delay shared-graph reconciliation until all searches complete (build incrementally)
-- Write LITERATURE.md before graph reconciliation
+- Delay graph-readiness / brainstorm refresh until all searches complete
+- Write LITERATURE.md before graph readiness and brainstorm artifacts are refreshed
 - Keep invalid HTML / error-page downloads under `paper_source_dir`
 - Manually move UI/API-uploaded papers into the shared source tree when the queued PaperNexus import-task path is available
 - Call destructive PaperNexus backup / restore commands as part of normal literature work
+- Treat Zotero as a substitute for PaperNexus graph readiness or source-of-truth citation verification
 
 ---
 
@@ -210,7 +215,7 @@ Rules:
    - Saved to the project-local staging dir `paper_source_dir/md/`
    - Save or rename it to the canonical filename immediately: arXiv ID first, otherwise normalized title
    - Must pass format validation before being counted as ingested
-   - Add to graph reconciliation queue
+   - Add to the automatic graph catch-up queue
    - Continue to next paper
 
 3. **If HuggingFace NO valid markdown and the paper has an arXiv ID:**
@@ -231,7 +236,7 @@ Rules:
 
 Do not postpone the HuggingFace attempt until after later filtering if the current search result already exposes a stable arXiv ID or paper URL.
 
-### Step 3: Incremental Shared-Graph Reconciliation
+### Step 3: Incremental Graph Readiness + Brainstorm Refresh
 
 **After EACH search query** (when ≥3 new papers ingested):
 
@@ -252,13 +257,15 @@ Update `{PROJ}/PROJECT_MANIFEST.json`:
 ```
 
 Notes:
-- `/graph-build` now means "reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph through the Python PaperNexus control plane"
+- `/graph-build` now means "check this project's `PAPER_SOURCE_INDEX.json` against the shared global graph, confirm the automatic import worker has caught up, and refresh the brainstorm bundle through the Python PaperNexus control plane"
+- if benchmark coverage, baseline ambiguity, or scope creep remains high after the raw survey, insert `/literature-review` before relying on the frontier or brainstorm bundle for idea selection
 - do not create or name a new per-project corpus during this step
-- if required papers are missing from the shared graph, record the gap and request or queue a shared-graph refresh rather than building a project-local corpus
+- if required papers are missing from the shared graph, record the gap and request or queue automatic graph catch-up rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
-- if a PaperNexus queued import or remote graph reconcile has not finished within 60 seconds for one paper, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
-- if `PAPERNEXUS_STATUS.json` still looks stale but `paper_ingestion.runtime_status` says `waiting_import`, `waiting_graph`, or `reconciling`, treat the graph refresh as in-flight rather than silently claiming the corpus is permanently missing
+- if a PaperNexus queued import or remote status / brainstorm refresh pass has not finished within 60 seconds, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
+- if `PAPERNEXUS_STATUS.json` still looks stale but `paper_ingestion.runtime_status` says `waiting_import`, `waiting_graph`, or `reconciling`, treat automatic graph catch-up as in-flight rather than silently claiming the corpus is permanently missing
 - when checking presence or frontier structure, prefer `research_workflow.run_papernexus_wrapper` with `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
+- once the required papers are present, refresh `ideas`, `brainstorm`, and `brainstorm-brief` outputs so the literature stage ends with a current graph-grounded brainstorm packet
 
 ### Step 3.5: Brainstorm During Research (mandatory)
 
@@ -282,7 +289,7 @@ Frontier mapping should refine and package this brainstorm scaffold, not start i
 
 ### Step 4: Write Literature Report
 
-After all searches and shared-graph reconciliations complete:
+After all searches and graph-readiness / brainstorm refresh passes complete:
 
 Write `{PROJ}/researcher/LITERATURE.md` with:
 - Search queries used
@@ -313,12 +320,12 @@ For each arXiv ID from search results:
 /hugging-face-paper-pages --arxiv <arxiv_id> --output-dir {paper_source_dir}/md/
 ```
 
-**Success:** Markdown saved, ready for shared-graph reconciliation  
+**Success:** Markdown saved, ready for automatic graph catch-up and the next `/graph-build` status pass  
 **Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md-api`, then `arxiv2md`, and only then fall back to PDF download
 
 ### Batch Processing
 
-Search and metadata screening can still happen in batches of 10, but remote PaperNexus ingestion must stay single-paper:
+Search and metadata screening can still happen in batches of 10, and remote PaperNexus ingestion should switch to one manifest-backed batch for 2 or more staged papers:
 
 ```python
 # Check 10 papers at once
@@ -338,11 +345,11 @@ Important:
 
 ## Graph Build Integration
 
-**Trigger shared-graph reconciliation when:**
+**Trigger `/graph-build` when:**
 
 1. ≥3 new papers ingested since last build
 2. A key paper (changes novelty baseline) is ingested
-3. All searches complete (final reconciliation pass)
+3. All searches complete (final readiness + brainstorm refresh pass)
 
 **Graph build action:**
 
@@ -350,13 +357,14 @@ Important:
 /graph-build
 ```
 
-**After graph reconciliation:**
+**After `/graph-build`:**
 
 1. Check project graph presence against the shared global graph
 2. Update `PROJECT_MANIFEST.json` with:
    - `graph_last_built_at`
    - `paper_ingestion.last_graph_sync_at`
    - shared-graph readiness metadata written by the workflow runtime
+   - refreshed brainstorm cycle metadata or artifact pointers when available
 
 ---
 
@@ -367,7 +375,8 @@ Important:
 - `/hugging-face-paper-pages` — Fetch markdown from HuggingFace
 - `/arxiv2md-api` — Direct raw markdown fallback for arXiv papers
 - `/arxiv2md` — Legacy webpage markdown fallback for arXiv papers
-- `/graph-build` — Reconcile project paper selection against the shared global graph
+- `/graph-build` — Validate automatic graph catch-up and refresh graph-grounded brainstorm artifacts
+- `/papernexus-research-chains` — Refresh `brainstorm-brief`, `research-brief`, and other typed chain bundles after the graph catches up
 - `/frontier-mapping` — Extract research frontiers from graph
 
 ---
@@ -388,4 +397,4 @@ Important:
 
 When literature ingestion, preliminary brainstorming, and the durable outputs are complete, Researcher may trigger the Lobster handoff workflow only if the current stage is actually ready to advance.
 
-Do not hand off if the shared graph still needs reconciliation, key papers are still missing from the shared graph, or brainstorming is still stale relative to the new papers.
+Do not hand off if automatic graph catch-up is still pending, key papers are still missing from the shared graph, or brainstorming is still stale relative to the new papers.

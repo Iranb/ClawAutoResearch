@@ -49,6 +49,7 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md` — advisory `green / red` state to update as sections are written
 - `{PROJ}/academic_writer/paper/figures/` — figures (copied from `{PROJ}/analyzer/figures/` at paper-phase start)
 - `{PROJ}/researcher/LITERATURE.md` — related work for citations
+- `{PROJ}/researcher/ZOTERO_PACKET.md` — Zotero `bot/<project-id>` writing-shortlist context when available
 - `research_workflow.get_writing_contract` — template path and paragraph-logic contract
 - `research_workflow.get_citation_integrity` — bibliography path, verification expectations, and placeholder budget
 
@@ -85,6 +86,9 @@ Then inspect:
 ```json
 {"action":"get_citation_integrity"}
 ```
+
+If `{PROJ}/researcher/ZOTERO_PACKET.md` exists, use `/citation-management` to turn the Zotero `bot/<project-id>/writing-shortlist` into the section's citation queue before finalizing references.
+If the target venue is already known, keep `/venue-templates` constraints in view while drafting so section length, ordering, and formatting do not drift.
 
 If the writing template is required but missing, stop and restore it first.
 If a template path is configured, read the project-local copied template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing. Never edit the external source template in place.

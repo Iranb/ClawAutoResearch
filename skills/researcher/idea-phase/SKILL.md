@@ -1,6 +1,6 @@
 ---
 name: idea-phase
-description: "Research idea discovery: literature survey → graph build → frontier mapping → track generation → novelty check → portfolio selection. Use when starting a new research direction."
+description: "Research idea discovery: literature survey → graph readiness / brainstorm refresh → frontier mapping → track generation → novelty check → portfolio selection. Use when starting a new research direction."
 argument-hint: "[research-direction]"
 allowed-tools:
   - Bash(*)
@@ -18,15 +18,15 @@ allowed-tools:
 
 # Idea Phase
 
-从文献到 track portfolio，包含 PaperNexus 图谱前置、graph-grounded 头脑风暴、对抗式 novelty 过滤和 pilot 实验验证。
+从文献到 track portfolio，包含系统文献综述、Zotero 文献组织、PaperNexus 图谱前置、graph-grounded 头脑风暴、bounded scientific brainstorming、对抗式 novelty 过滤和 pilot 实验验证。
 
 ## Pipeline
 
 ```
-/research-lit → /graph-build → /frontier-mapping → /innovation-reflection (if due) → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
-     ↓               ↓                ↓                           ↓                        ↓                  ↓                  ↓                    ↓
-  landscape      remote graph     graph frontier         实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
-  + gaps         + API-backed KG  + frontier files       + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
+/research-lit → /literature-review (if needed) → /graph-build → /frontier-mapping → /scientific-brainstorming → /innovation-reflection (if due) → /idea-generator → /novelty-check → /research-reflect → Cross-model Review
+     ↓                      ↓                        ↓                ↓                           ↓                        ↓                  ↓                  ↓                    ↓
+  landscape            SoTA matrix + Zotero      remote graph     graph frontier         bounded divergence              实验后反思 + do-not-repeat      4-8 tracks         验证新颖性         portfolio decision    深度审稿
+  + gaps               + gap packet              + API-backed KG  + frontier files       + assumption stress test        + next brainstorm anchors       + diverge/converge  → 淘汰已做         → advance/park/kill  → IDEA_REPORT.md
 ```
 
 ## Execution
@@ -48,9 +48,12 @@ allowed-tools:
 - 若三路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
 - 把 markdown / PDF 保存到 `{PROJ}/researcher/paper-staging/` 作为项目内 staging，再通过远程导入进入 `/graph-build`
 - 如果当前 graph 里还没有这些关键论文，必须先刷新 graph，再进入创新点分析
+- 如果主题跨度大、baseline 多、或者后续需要严谨对比矩阵，先补一轮 `/literature-review`
+- 如果本地 Zotero MCP 可用，同步维护 `bot/<project-id>`，保证 included / excluded / baselines / writing-shortlist 在后续 plan、write、review 阶段可重用
 
 **Output**:
 - `{PROJ}/researcher/LITERATURE.md`（landscape、gaps、key methods、baselines）
+- `{PROJ}/researcher/LITERATURE_REVIEW.md`、`SOTA_MATRIX.md`、`GAP_SYNTHESIS.md`（当项目需要系统综述包时）
 - `{PROJ}/researcher/paper-staging/` 下的 markdown / PDF staging 语料
 `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
@@ -60,7 +63,7 @@ allowed-tools:
 /graph-build "$ARGUMENTS"
 ```
 
-通过远程 PaperNexus API 对 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` 和 `{PROJ}/researcher/paper-staging/` 做 graph reconciliation。不要依赖任何 home 目录下的共享 PaperNexus 存储或本地 CLI graph roots。
+通过远程 PaperNexus API 检查 `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` 和 `{PROJ}/researcher/paper-staging/` 是否已被自动同步到共享图中，并刷新这一轮 ideation 所需的 brainstorm bundle。不要依赖任何 home 目录下的共享 PaperNexus 存储或本地 CLI graph roots。
 
 **Output**:
 - `{PROJ}/graph/PAPERNEXUS_STATUS.json`
@@ -81,6 +84,7 @@ allowed-tools:
 **Output**: `{PROJ}/researcher/FRONTIER_REPORT.md`
 
 同时要求 `{PROJ}/graph/` 下的 frontier files 已生成，并保留 graph anchor 快照。
+如果 `{PROJ}/researcher/LITERATURE_REVIEW.md`、`SOTA_MATRIX.md` 或 `GAP_SYNTHESIS.md` 已存在，frontier 结论必须与这些文件保持一致，而不是重新发明一个脱离基线的 brainstorm。
 
 ### Phase 4: Idea Generation
 
@@ -104,6 +108,7 @@ allowed-tools:
 
 执行 graph-grounded dialectic loop：
 1. 基于 `LITERATURE.md` + `FRONTIER_REPORT.md` + `{PROJ}/graph/*.md` frontier files 做一次 **diverge**，生成 4-8 个 typed tracks
+1a. 在 graph-grounded brainstorm bundle 已就绪的前提下，先运行一轮 `/scientific-brainstorming`，专门做假设反转、跨领域迁移和 falsifier 设计；不要用它替代前面的 graph grounding
 2. 如果存在 `{PROJ}/researcher/INNOVATION_REFLECTION.md`，把其中的：
    - do-not-repeat constraints
    - transferable lessons

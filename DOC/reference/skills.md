@@ -11,7 +11,7 @@
   Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus wrapper-based graph control。
 
 - `graph-build`  
-  基于论文源和 PaperNexus Python wrappers 刷新图谱与 graph readiness。
+  基于论文源和 PaperNexus Python wrappers 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle 与 graph readiness。
 
 - `frontier-mapping`  
   生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus wrappers。
@@ -32,7 +32,7 @@
   实验总控阶段，协调计划、账本、结果和下游分析。
 
 - `monitor-experiment`  
-  监控已运行实验的状态和结果。
+  监控远程实验的运行、完成和结果落盘，并负责把 `EXPERIMENT_LEDGER.json`、`EXPERIMENT_REGISTRY.md` 与 `experiment_search` 推到可进入分析阶段的状态。
 
 - `parallel-experiments`  
   管理并行实验发起与资源编排。
@@ -47,7 +47,16 @@
   在新实验结果出现后，对创新方向进行基于 PaperNexus 的反思。
 
 - `research-lit`  
-  常规文献调研与文献池维护，并通过 PaperNexus wrappers 做 remote import / graph reconciliation。
+  常规文献调研与文献池维护，并通过 PaperNexus wrappers 做 remote import、自动图谱 catch-up 跟踪和 brainstorm scaffold 刷新。
+
+- `literature-review`  
+  结构化文献综述包，负责 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合放在 `research-lit` 之后、`frontier-mapping` 和 `idea-phase` 之前。
+
+- `zotero-project-library`  
+  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献组织到 Zotero `bot/<project-id>` 目录下，维护 selected / included / excluded / baselines / writing-shortlist 这些集合，并生成项目侧 `ZOTERO_PACKET.md`。
+
+- `scientific-brainstorming`  
+  在 graph-grounded brainstorm bundle 已经准备好的前提下，做有边界的科研发散、假设反转和跨领域联想；它增强 `idea-phase`，但不替代 PaperNexus 的 graph grounding。
 
 - `idle-research`  
   在空闲时围绕 `idle_research.topic` 做 bounded literature round。
@@ -98,6 +107,9 @@
 - `implement-experiment`  
   实验实现、代码修改和运行准备。
 
+- `scientific-visualization`  
+  Coder 在实现和 dry-run 阶段使用的科研绘图能力，用来做 baseline/proposed 的 sanity-check 图、ablation 预览图和可复用的实验图。
+
 - `run-experiment`  
   实验启动、运行参数、screen / server / result path 管理。
 
@@ -126,6 +138,12 @@
 - `paper-plan`  
   论文计划、章节规划、模版映射。
 
+- `citation-management`  
+  基于 Zotero `bot/<project-id>` 的 writing-shortlist 和外部 metadata source-of-truth，清洗引用候选并为 `refs.bib` 做准备。
+
+- `venue-templates`  
+  面向目标 venue 的模板、页数预算和章节约束，帮助 Writer 在 `paper-plan` 和 `paper-write` 里保持结构一致。
+
 - `paper-write`  
   正文撰写、paragraph logic audit、section draft 维护。
 
@@ -148,6 +166,15 @@
 
 - `review-phase`  
   review 主阶段执行。
+
+- `scientific-critical-thinking`  
+  Reviewer 的方法学、偏差、统计与证据质量审查能力，特别适合 CODE innovation review 和内部 REVIEW。
+
+- `scholar-evaluation`  
+  给问题定义、文献、方法、分析、写作、引用这些维度打分的结构化评估框架，适合 aggressive 模式下的多 reviewer quorum。
+
+- `peer-review`  
+  更接近期刊/会议正式审稿口吻的结构化 review，适合 late review、submit 前和 revise 阶段。
 
 - `evidence-grading`  
   对 claim 和 evidence 的支撑强度评分。

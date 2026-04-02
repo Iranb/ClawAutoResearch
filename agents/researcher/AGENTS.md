@@ -33,12 +33,13 @@ On every session start:
 4. Read `{PROJ}/TRACK_REGISTRY.json` if it exists — active / parked / killed tracks and recent decisions
 5. Read `{PROJ}/CLAIM_POLICY.md` if it exists — how claim support labels constrain writing and rollback
 6. Read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` if it exists — restart-safe experiment memory and remote PaperNexus sync state
-7. Read `PROJECT_MANIFEST.json.idle_research` via `research_workflow.get_idle_research` when available — confirm topic, cooldown, last digest, and whether the next background round is due
-8. Read `{PMEM}/YYYY-MM-DD.md` if it exists — today's and yesterday's logs
-9. Read `MEMORY.md` (long-term memory)
-10. Check for in-progress projects by reading `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md`
-11. Before any write, confirm that `{PROJ}/PROJECT_MANIFEST.json.project_id`, `owner_agent`, `next_action`, and `resume_action` match the current task
-12. If you just switched from another project, run `/resume-pipeline` before doing new writes
+7. Read `{PROJ}/researcher/ZOTERO_PACKET.md` if it exists — current Zotero `bot/<project-id>` bibliography state, shortlist, and baseline folders
+8. Read `PROJECT_MANIFEST.json.idle_research` via `research_workflow.get_idle_research` when available — confirm topic, cooldown, last digest, and whether the next background round is due
+9. Read `{PMEM}/YYYY-MM-DD.md` if it exists — today's and yesterday's logs
+10. Read `MEMORY.md` (long-term memory)
+11. Check for in-progress projects by reading `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md`
+12. Before any write, confirm that `{PROJ}/PROJECT_MANIFEST.json.project_id`, `owner_agent`, `next_action`, and `resume_action` match the current task
+13. If you just switched from another project, run `/resume-pipeline` before doing new writes
 
 ## Remote Server
 
@@ -113,6 +114,9 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 
 **Skill entry points:**
 - `/research-lit` — continuous literature research and full-text corpus accumulation
+- `/literature-review` — structured literature review packet with inclusion/exclusion, SoTA matrix, baseline coverage, and gap synthesis before frontier mapping or ideation
+- `/zotero-project-library` — keep the local Zotero `bot/<project-id>` collection tree in sync with selected / included / excluded / baseline papers and the writing shortlist
+- `/scientific-brainstorming` — bounded graph-grounded ideation expansion after the brainstorm bundle is already prepared
 - `/idle-research` — bounded background-topic literature watch driven by `PROJECT_MANIFEST.json.idle_research`
 - `/papers-cool` — coarse search, venue sweep, abstract and PDF retrieval
 - `/hugging-face-paper-pages` — preferred full-paper Markdown retrieval for key papers
@@ -120,12 +124,14 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/papernexus-agentic-reasoning` — structured graph-grounded innovation analysis
 - `/papernexus-batch-import` — manifest-based multi-paper import, queue tracking, and durable batch status handling
 - `/papernexus-research-chains` — typed research chains, evidence bundles, and brief-style graph synthesis
-- `/graph-build` — new-project graph initialization and remote shared-graph reconciliation
+- `/workspace-update` — update the local `ClawAutoResearch` workspace and rerun `install.sh --yes --force-role-files`
+- `/graph-build` — graph readiness verification plus brainstorm bundle refresh after automatic PaperNexus catch-up
 - `/frontier-mapping` — graph frontier extraction (limitations, contradictions, transfer, composition)
 - `/idea-phase` — Stage 1 (IDEA)
 - `/research-reflect` — track / budget / evidence decision checkpoint
 - `/plan-research` — Stage 2 (PLAN, executed by Orchestrator; Researcher must proactively wake it when outputs are missing)
 - `/experiment-phase` — Stage 4 (EXPERIMENT)
+- `/monitor-experiment` — default experiment-stage heartbeat once remote runs exist; reconcile remote completion, ledger state, and analysis readiness
 - `/resume-pipeline` — reconcile the state machine, experiment registry, and sub-agent outputs after restart
 - `/analyze-results` — Stage 5 (ANALYZE, via Analyzer)
 - `/review-phase` — Stage 6 (REVIEW, via Reviewer)
@@ -185,13 +191,23 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Key papers must enter the graph first:** after `/papers-cool` finds a key paper, do not ideate from the abstract alone. Try `/hugging-face-paper-pages` for full-text Markdown first; if that fails, download the PDF. If the current graph still does not contain the paper, refresh the graph before novelty or innovation reasoning.
 
+**Brainstorm grounding must be durable:** once graph readiness is good enough for frontier mapping or ideation, use the typed PaperNexus wrappers (`pn_graph_query.py`, `pn_research_chains.py`) and persist the resulting chain bundle through `research_workflow.run_brainstorm_cycle`. Do not rely on free-form brainstorm chat alone.
+
+**Systematic review is upstream context, not optional fluff:** when a project needs strong baseline coverage, benchmark clarity, or a durable gap packet, run `/literature-review` after `/research-lit` and before locking frontier or idea decisions. Treat `SOTA_MATRIX.md` and `GAP_SYNTHESIS.md` as hard inputs for later planning and code review.
+
+**Zotero is the durable bibliography organizer:** if a local Zotero MCP connector is available, maintain `bot/<project-id>` as the per-project literature home. Keep `selected`, `included`, `excluded`, `baselines`, and `writing-shortlist` synchronized and refresh `{PROJ}/researcher/ZOTERO_PACKET.md` whenever the project paper set changes materially.
+
+**Scientific brainstorming is an enhancer, not a replacement:** only run `/scientific-brainstorming` after the PaperNexus brainstorm bundle exists. Use it to challenge assumptions and expand options, then write the surviving directions back into durable reasoning packets instead of leaving them in chat.
+
 **Graph reasoning must have working memory:** for every serious candidate track, do not stop at `FRONTIER_REPORT.md` or `IDEA_REPORT.md`. Maintain `{PROJ}/researcher/reasoning/<track-id>/QUESTION_PACKET.md`, `WORKING_MEMORY.json`, `REASONING_TRACE.jsonl`, and `SYNTHESIS_PACKET.md`, and explicitly mark each step as `expand`, `refine_query`, `answer_try`, or `stop`.
 
-**Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, remote import-task progress checks, shared-graph reconciliation, and innovation analysis with the relevant agents. If `idle_research.enabled = true` and the round is due, Researcher must prioritize `/idle-research` on that topic before generic literature drift. If new papers may change the frontier, refresh the graph before the next critical decision.
+**Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, remote import-task progress checks, automatic graph catch-up monitoring, brainstorm bundle refreshes, and innovation analysis with the relevant agents. If `idle_research.enabled = true` and the round is due, Researcher must prioritize `/idle-research` on that topic before generic literature drift. If new papers may change the frontier, refresh graph readiness and the brainstorm bundle before the next critical decision.
 
 **PaperNexus feedback is durable, not conversational:** when you delegate wrapper-driven upload / parse / queue work into a dedicated subagent session, do not wait for a free-form chat reply before updating workflow state. Use `research_workflow.set_paper_ingestion` for every per-paper queued / running / completed / timed_out / failed milestone so `/workflow-status` and channel broadcasts stay current.
 
 **Experiment memory is mandatory:** do not trust chat history for what was already run. Before launching, resuming, or interpreting experiments, read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` or `research_workflow.get_experiment_memory`. After any queue / launch / result / decision milestone, upsert the ledger and mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`.
+
+**Experiment completion must be noticed, not assumed:** once remote runs exist, `/monitor-experiment` becomes the default follow-up. It must reconcile `REMOTE_RUN.json`, logs, result artifacts, `EXPERIMENT_REGISTRY.md`, `EXPERIMENT_LEDGER.json`, and `experiment_search` so auto mode can advance to ANALYZE as soon as the run bundle is truly ready.
 
 **Tracks must be explicitly managed:** after idea discovery, candidate directions must be written into `{PROJ}/TRACK_REGISTRY.json`, with clear `active`, `parked`, and `killed` states. Do not rely on vague prose inside `IDEA_REPORT.md`.
 
@@ -201,6 +217,7 @@ When waiting on a gate, another agent, a remote experiment, or the user, priorit
 
 - Run `/idle-research` for the configured topic if `PROJECT_MANIFEST.json.idle_research` is enabled and due, then record the round through `research_workflow.record_idle_research_run`
 - Continue literature research, venue sweeps, key-paper full-text acquisition, and deduplication
+- Keep the Zotero `bot/<project-id>` collection and writing shortlist synchronized with the latest paper set
 - Check whether key papers are already in the graph; prepare graph refresh if needed
 - Reflect on innovation opportunities, composition opportunities, and closest prior work using the current graph
 - Reconcile experiment results, failed runs, and remote PaperNexus sync status inside `{PROJ}/researcher/EXPERIMENT_LEDGER.json`

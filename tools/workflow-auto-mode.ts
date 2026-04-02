@@ -41,6 +41,7 @@ export type WorkflowAutoGateConfig = {
   reviewTimeoutMinutes: number;
   quorum: number;
   thresholds: {
+    code_to_experiment: WorkflowAutoGateThreshold;
     review_to_write: WorkflowAutoGateThreshold;
     write_to_submit: WorkflowAutoGateThreshold;
     submit_to_done: WorkflowAutoGateThreshold;
@@ -56,12 +57,16 @@ export const DEFAULT_WORKFLOW_AUTO_MODE: WorkflowAutoMode = "off";
 
 export const DEFAULT_WORKFLOW_AUTO_GATE: WorkflowAutoGateConfig = {
   enabled: false,
-  allowAutonomousDone: true,
+  allowAutonomousDone: false,
   maxReviewRounds: 2,
   maxMitigationRounds: 2,
   reviewTimeoutMinutes: 20,
   quorum: 2,
   thresholds: {
+    code_to_experiment: {
+      avg: 8.0,
+      minSingle: 7.2,
+    },
     review_to_write: {
       avg: 7.8,
       minSingle: 7.0,
@@ -147,6 +152,10 @@ export function normalizeWorkflowAutoGateConfig(value: unknown): WorkflowAutoGat
         ? Math.max(1, Math.floor(record.quorum))
         : DEFAULT_WORKFLOW_AUTO_GATE.quorum,
     thresholds: {
+      code_to_experiment: normalizeThreshold(
+        thresholdRecord.code_to_experiment,
+        DEFAULT_WORKFLOW_AUTO_GATE.thresholds.code_to_experiment
+      ),
       review_to_write: normalizeThreshold(
         thresholdRecord.review_to_write,
         DEFAULT_WORKFLOW_AUTO_GATE.thresholds.review_to_write

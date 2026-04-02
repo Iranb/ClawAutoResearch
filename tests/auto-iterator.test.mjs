@@ -15,6 +15,11 @@ import {
 } from "../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import {
+  aggregateCodeReviewRound,
+  createCodeReviewRound,
+  saveCodeReviewStore,
+} from "../tools/workflow-code-review.ts";
+import {
   createAutoModeDiscussionRound,
   saveAutoModeDiscussionStore,
 } from "../tools/workflow-auto-discussion.ts";
@@ -292,6 +297,61 @@ async function seedProjectReadyForCode(projectRoot) {
   return { now, trackId };
 }
 
+function buildAlignedExperimentManifest(trackId, overrides = {}) {
+  return {
+    experiment_id: "exp-1",
+    project_id: "demo-project",
+    track_id: trackId,
+    question: "Does graph grounding improve support precision?",
+    hypothesis: "Graph grounding improves support precision.",
+    novelty_basis: "It couples frontier packets with section drafting.",
+    baseline_reference: "baseline-a",
+    primary_baseline_metric: "acc",
+    target_improvement: "Improve acc by >= 2 points over baseline-a.",
+    baseline_training_protocol:
+      "Match baseline-a optimizer, schedule, seeds, epochs, and data preprocessing unless allowed_deviations says otherwise.",
+    baseline_eval_protocol:
+      "Use the baseline-a validation split, checkpoint selection, and accuracy evaluation method unchanged.",
+    innovation_points: [
+      "Graph-grounded support routing",
+      "Frontier-packet-conditioned section drafting",
+    ],
+    validation_steps: [
+      {
+        step_id: "baseline-repro",
+        objective: "Reproduce baseline-a with the unchanged eval protocol.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        step_id: "innovation-step-1",
+        objective: "Enable graph-grounded support routing only.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        step_id: "innovation-step-2",
+        objective: "Add frontier-packet-conditioned drafting on top of step 1.",
+        covers: ["Frontier-packet-conditioned section drafting"],
+      },
+    ],
+    ablation_plan: [
+      {
+        ablation_id: "minus-routing",
+        objective: "Disable graph-grounded support routing to verify its contribution.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        ablation_id: "minus-packets",
+        objective: "Disable frontier packets to verify the drafting contribution.",
+        covers: ["Frontier-packet-conditioned section drafting"],
+      },
+    ],
+    name: "baseline",
+    entry_point: "train.py",
+    status: "draft",
+    ...overrides,
+  };
+}
+
 async function seedProjectReadyForSubmit(projectRoot) {
   const { now, trackId } = await seedProjectReadyForCode(projectRoot);
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
@@ -332,14 +392,10 @@ async function seedProjectReadyForSubmit(projectRoot) {
       `${experimentId}__baseline`,
       "EXPERIMENT_MANIFEST.json"
     ),
-    {
+    buildAlignedExperimentManifest(trackId, {
       experiment_id: experimentId,
-      project_id: "demo-project",
-      track_id: trackId,
-      name: "baseline",
-      entry_point: "train.py",
       status: "completed",
-    }
+    })
   );
 
   for (const fileName of [
@@ -842,7 +898,7 @@ test("auto iterator advances setup to graph_build when setup signals are complet
   assert.equal(result.ownerAfter, "researcher");
   assert.equal(
     result.nextAction,
-    "Run /graph-build to reconcile PAPER_SOURCE_INDEX.json against the shared global graph and update graph readiness metadata before frontier mapping."
+    "Run /graph-build to verify PAPER_SOURCE_INDEX.json is already reflected in the shared global graph, update graph readiness metadata, and refresh the brainstorm bundle before frontier mapping."
   );
   assert.equal(result.gateBlocking, false);
 });
@@ -1223,7 +1279,7 @@ test("graph presence check reports remote PaperNexus reconciliation in progress 
   });
 
   assert.equal(result.status, "missing_corpus");
-  assert.match(result.blockingReason ?? "", /still reconciling/i);
+  assert.match(result.blockingReason ?? "", /automatic graph catch-up is still running/i);
   assert.match(result.blockingReason ?? "", /paper_ingestion reports status=waiting_graph/i);
   assert.match(result.blockingReason ?? "", /import_tasks=2/i);
   assert.match(result.blockingReason ?? "", /completed=1/i);
@@ -1428,7 +1484,7 @@ test("auto iterator blocks on the mandatory submit human gate once submit artifa
   assert.equal(result.recommendedActions[0]?.kind, "wait_human");
 });
 
-test("auto iterator keeps submit blocked in aggressive mode while auto gate review is pending", async (t) => {
+test("auto iterator keeps submit blocked in aggressive mode because final confirmation stays manual", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -1452,7 +1508,7 @@ test("auto iterator keeps submit blocked in aggressive mode while auto gate revi
   assert.equal(result.stageBefore, "submit");
   assert.equal(result.stageAfter, "submit");
   assert.equal(result.gateBlocking, true);
-  assert.match(result.gateReason ?? "", /auto review is pending/i);
+  assert.match(result.gateReason ?? "", /human confirmation|OpenReview-facing submission path/i);
 });
 
 test("auto iterator clears a timed-default waiting gate after the confirmation deadline expires", async (t) => {
@@ -1495,7 +1551,7 @@ test("auto iterator clears a timed-default waiting gate after the confirmation d
   assert.equal(savedGate.default_action_executed_at, "2026-03-28T10:05:00.000Z");
 });
 
-test("auto iterator advances submit to done when aggressive auto gate review is approved", async (t) => {
+test("auto iterator keeps submit blocked even when a legacy aggressive auto gate round was approved", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -1611,9 +1667,10 @@ test("auto iterator advances submit to done when aggressive auto gate review is 
   });
 
   assert.equal(result.stageBefore, "submit");
-  assert.equal(result.stageAfter, "done");
-  assert.equal(result.gateBlocking, false);
-  assert.equal(result.ownerAfter, "researcher");
+  assert.equal(result.stageAfter, "submit");
+  assert.equal(result.gateBlocking, true);
+  assert.match(result.gateReason ?? "", /human confirmation|OpenReview-facing submission path/i);
+  assert.equal(result.ownerAfter, "reviewer");
 });
 
 test("auto iterator keeps submit blocked when citation verification is not complete", async (t) => {
@@ -1907,10 +1964,123 @@ test("auto iterator accepts structured coder experiment bundles with index file"
       "exp-1__baseline",
       "EXPERIMENT_MANIFEST.json"
     ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+});
+
+test("auto iterator keeps code stage blocked when experiment bundle is not aligned to the active innovation track", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId, {
+      hypothesis: "A different hypothesis entirely.",
+      novelty_basis: "A novelty basis that does not match the active track.",
+    })
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "code");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /must align its hypothesis to active track/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps code stage blocked when the experiment bundle does not declare baseline and validation contracts", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
     {
       experiment_id: "exp-1",
       project_id: "demo-project",
       track_id: trackId,
+      question: "Does graph grounding improve support precision?",
+      hypothesis: "Graph grounding improves support precision.",
+      novelty_basis: "It couples frontier packets with section drafting.",
       name: "baseline",
       entry_point: "train.py",
       status: "draft",
@@ -1923,8 +2093,366 @@ test("auto iterator accepts structured coder experiment bundles with index file"
     queueMailbox: false,
   });
 
+  assert.equal(result.stageAfter, "code");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /baseline_reference|primary_baseline_metric|validation_steps|ablation_plan/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps code blocked in aggressive mode while code innovation review is pending", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "code");
+  assert.equal(result.gateBlocking, true);
+  assert.match(result.gateReason ?? "", /code innovation review is pending/i);
+});
+
+test("auto iterator advances code to experiment when aggressive code innovation review is approved", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const autoGate = {
+    ...defaultAutoGateConfig(),
+    enabled: true,
+  };
+  const round = createCodeReviewRound({
+    stage: "code",
+    packetPath: path.join(
+      projectRoot,
+      "reviewer",
+      "code-review",
+      "CODE_REVIEW_PACKET.md"
+    ),
+    packetJsonPath: path.join(
+      projectRoot,
+      "reviewer",
+      "code-review",
+      "CODE_REVIEW_PACKET.json"
+    ),
+    packetFingerprint: "approved-code-packet",
+    attempts: [
+      {
+        reviewerRole: "researcher",
+        sessionKey: "agent:researcher:main",
+        runId: "code-review-researcher",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "researcher",
+          verdict: "pass",
+          overallScore: 9,
+          dimensionScores: { innovation_alignment: 9, baseline_fidelity: 9 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["coder/EXPERIMENT_INDEX.md"],
+          summary: "Innovation contract matches the active track.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-researcher",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "orchestrator",
+        sessionKey: "agent:orchestrator:main",
+        runId: "code-review-orchestrator",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "orchestrator",
+          verdict: "pass",
+          overallScore: 8.8,
+          dimensionScores: { validation_plan: 9, ablation_plan: 8.5 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["orchestrator/PLAN_AUDIT.md"],
+          summary: "Validation steps cover each innovation point.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-orchestrator",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "reviewer",
+        sessionKey: "agent:reviewer:main",
+        runId: "code-review-reviewer",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "reviewer",
+          verdict: "pass",
+          overallScore: 8.9,
+          dimensionScores: { execution_readiness: 9, eval_fidelity: 8.8 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["coder/experiments/track-1/exp-1__baseline/README.md"],
+          summary: "Bundle is executable and respects baseline evaluation.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-reviewer",
+          rawText: "{}",
+        },
+      },
+    ],
+  });
+  round.aggregate = aggregateCodeReviewRound(round, autoGate);
+  round.status = round.aggregate.status;
+  await saveCodeReviewStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-04-01T00:01:00.000Z",
+    roundsStarted: 1,
+    currentRound: round,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate,
+    },
+  });
+
   assert.equal(result.stageBefore, "code");
   assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.gateBlocking, false);
+});
+
+test("auto iterator points experiment stage at monitor-experiment while remote runs are still active", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now, trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId, {
+      experiment_id: "exp-1",
+      status: "running",
+    })
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "pilot_runs_complete";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: null,
+    last_failed_experiment_id: null,
+    best_known_config_ref: null,
+    last_decision_summary: null,
+    papernexus_sync_required: false,
+    papernexus_sync_status: "unknown",
+  };
+  manifest.experiment_search = {
+    status: "running",
+    current_main_stage: "baseline_implementation",
+    current_substage: "remote_training",
+    multi_seed_status: "running",
+    plot_pack_status: "pending",
+    pending_reason: "Remote training is still running.",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: now,
+    summary: {
+      activeExperimentIds: ["exp-1"],
+      lastCompletedExperimentId: null,
+      lastFailedExperimentId: null,
+      bestKnownConfigRef: null,
+      lastDecisionSummary: null,
+      papernexusSyncRequired: false,
+      papernexusLastSyncAt: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId,
+        name: "baseline",
+        kind: "train",
+        status: "running",
+        stage: "training",
+        hypothesis: "Graph grounding improves support precision.",
+        configRef: "configs/baseline.yaml",
+        summary: "Remote training is still running.",
+        server: "gpu-0",
+        gpuId: "0",
+        screenName: "exp-1-baseline",
+        launchedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        lastUpdatedBy: "coder",
+        decision: null,
+        keyMetric: null,
+        metrics: null,
+        resultPaths: [],
+        evidencePointers: [],
+        failureSignature: null,
+        notes: [],
+        metadata: {
+          remoteRunPath: `coder/experiments/${trackId}/exp-1__baseline/REMOTE_RUN.json`,
+        },
+        papernexusSync: {
+          status: null,
+          corpus: null,
+          lastSyncedAt: null,
+          nodeRefs: [],
+          notes: null,
+        },
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "experiment");
+  assert.match(result.nextAction ?? "", /\/monitor-experiment/i);
+  assert.match(result.resumeAction ?? "", /\/monitor-experiment/i);
+  assert.ok(
+    result.recommendedActions.some((action) =>
+      /\/monitor-experiment/i.test(action.command ?? "")
+    )
+  );
 });
 
 test("auto iterator keeps write stage blocked when theory appendix draft is missing", async (t) => {

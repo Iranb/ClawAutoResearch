@@ -145,24 +145,26 @@ When starting a **new workflow run** for a project (i.e., when `{PROJ}/` is crea
      - `current_stage: "setup"`
      - `current_micro_stage: "state_templates_ready"`
 
-### Stage 0.5: Graph Foundation (Mandatory for new projects)
+### Stage 0.5: Graph + Brainstorm Foundation (Mandatory for new projects)
 
-Before graph build, the Researcher must first gather papers and full text into project-local staging under `{PROJ}/researcher/paper-staging/`, record the selected canonical papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, upload/import them through the configured remote PaperNexus wrapper flow, then reconcile that selection against the shared global graph:
+Before frontier mapping, the Researcher must first gather papers and full text into project-local staging under `{PROJ}/researcher/paper-staging/`, record the selected canonical papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, upload/import them through the configured remote PaperNexus wrapper flow, then use `/graph-build` as a bounded graph-readiness + brainstorm refresh pass:
 
 ```
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + {PROJ}/researcher/PAPER_SOURCE_INDEX.json
+/literature-review "$ARGUMENTS"     → {PROJ}/researcher/LITERATURE_REVIEW.md + {PROJ}/researcher/SOTA_MATRIX.md + {PROJ}/researcher/GAP_SYNTHESIS.md (when systematic coverage is needed)
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/RESEARCH_BRAINSTORM.md
-/graph-build "$ARGUMENTS"           → {PROJ}/graph/PAPERNEXUS_STATUS.json
+/graph-build "$ARGUMENTS"           → {PROJ}/graph/PAPERNEXUS_STATUS.json + refreshed brainstorm bundle
 /frontier-mapping "$ARGUMENTS"      → {PROJ}/researcher/FRONTIER_REPORT.md
 /papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
 ```
 
 Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
+- when the topic has many competing baselines, benchmark variants, or close prior work, insert `/literature-review` before trusting frontier or ideation outputs; use it to lock inclusion / exclusion criteria, SoTA coverage, and the gap packet
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
-- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request a shared-graph refresh before innovation analysis
+- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request automatic graph catch-up before innovation analysis
 - if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task wrappers and task logs instead of touching any home-directory shared PaperNexus storage directly
-- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; `/graph-build` should track manifest progress and then run short reconciliation passes
+- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; `/graph-build` should track manifest progress and then run short readiness / brainstorm refresh passes
 - if workflow touches remote PaperNexus, go through the wrappers so auth and request shape stay consistent; do not write hand-rolled REST calls
 - workflow-owned automation must not depend on home-directory shared PaperNexus storage; use project-local staging plus authenticated remote wrapper calls instead
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
@@ -238,7 +240,7 @@ Researcher continuous-duty rule:
 - when Orchestrator / Coder / Analyzer / Writer are working, Researcher should continue literature watch, papers ingestion, graph refresh preparation, and innovation analysis instead of idling
 - if `PROJECT_MANIFEST.json.idle_research.enabled = true`, prioritize `/idle-research` for that topic during wait states, obey `max_papers_per_cycle` and `cooldown_minutes`, and record each round through `research_workflow.record_idle_research_run`
 - new papers discovered during execution should be added to project-local staging, recorded in `PAPER_SOURCE_INDEX.json`, and queued into the remote PaperNexus service; if they materially change the frontier, refresh graph state before the next major idea or revision decision
-- prefer remote import-task progress and short reconciliation passes for active projects with steady paper inflow, and make `/resume-pipeline` reconcile remote ingestion status after restarts
+- prefer remote import-task progress and short readiness / brainstorm refresh passes for active projects with steady paper inflow, and make `/resume-pipeline` reconcile remote ingestion status after restarts
 - use waiting time to reopen unresolved graph questions, compact working memory, refresh synthesis packets for active or parked tracks, and refresh experiment-informed innovation reflection when it becomes due, without silently changing track ownership
 
 **Gate 1 — Idea Selection:**

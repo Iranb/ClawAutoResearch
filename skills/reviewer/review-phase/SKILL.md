@@ -109,6 +109,12 @@ Researcher Agent 自我反思当前工作：
 如果材料里提供了 theory support note，请额外给出 `Theory: GREEN/RED` 的 advisory signal。
 ```
 
+在正式给出 verdict 之前：
+
+- 用 `/scientific-critical-thinking` 检查方法学、偏差、baseline fidelity 和 eval protocol drift
+- 用 `/scholar-evaluation` 做结构化维度评分
+- 用 `/peer-review` 生成更接近正式 reviewer voice 的整合意见
+
 #### Phase C: Parse & Decide
 
 解析 Reviewer 返回的审稿意见：

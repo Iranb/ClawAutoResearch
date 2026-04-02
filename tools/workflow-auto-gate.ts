@@ -640,36 +640,10 @@ export async function evaluateSubmitAutoGate(params: {
   if (params.hasStageWorkRemaining) {
     return { blocking: true, reason: "GATE-5 waits until all submit artifacts are present." };
   }
-  if (params.autoMode !== "aggressive" || !params.autoGate.enabled) {
-    return {
-      blocking: true,
-      reason: "GATE-5 revision decision is mandatory at SUBMIT; wait for human response before DONE.",
-    };
-  }
-  if (!params.autoGate.allowAutonomousDone) {
-    return {
-      blocking: true,
-      reason: "GATE-5 auto review is enabled, but autonomous DONE is disabled by policy.",
-    };
-  }
-  const store = await readGateReviewStore(params.projectRoot);
-  const round = store.currentRound;
-  if (!round || round.stage !== "submit" || round.gateId !== "GATE-5") {
-    return {
-      blocking: true,
-      reason: "GATE-5 auto review is pending; wait for the reviewer panel to score the packet.",
-    };
-  }
-  const aggregate = round.aggregate ?? aggregateGateReviewRound(round, params.autoGate);
-  if (aggregate.approved) {
-    return { blocking: false, reason: null };
-  }
   return {
     blocking: true,
     reason:
-      aggregate.status === "rejected"
-        ? `GATE-5 auto review rejected the submission packet. ${aggregate.summary}`
-        : "GATE-5 auto review is still pending reviewer quorum.",
+      "GATE-5 revision decision is mandatory at SUBMIT for the OpenReview-facing submission path; wait for explicit human confirmation before DONE.",
   };
 }
 

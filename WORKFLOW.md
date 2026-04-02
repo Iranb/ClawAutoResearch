@@ -110,6 +110,7 @@ Citation reliability must become durable workflow state instead of a last-minute
 - record it in `{PROJ}/PROJECT_MANIFEST.json.citation_integrity`
 - keep `citation_integrity.bibliography_path = academic_writer/paper/refs.bib`
 - keep `citation_integrity.verification_report_path = reviewer/CITATION_VERIFICATION.md`
+- when the local Zotero MCP server is configured, use that local Zotero server directly and treat Zotero `bot/<project-id>` as the bibliography queue and writing shortlist, while still verifying final metadata against DBLP/CrossRef/DataCite/Semantic Scholar/arXiv before accepting citations
 - require writer-side `/citation-preflight` before final citation review
 - require reviewer-side citation verification before SUBMIT
 - block submission when citation verification is not `verified`
@@ -124,6 +125,8 @@ Coder must keep experiment folders self-describing enough that a later run can r
 - track
 - experiment id
 - scientific question
+- track hypothesis
+- track novelty basis
 - entry point
 - config set
 - result directory
@@ -158,16 +161,11 @@ Default portfolio rule:
 
 PaperNexus is not just a pre-processing step. Before any idea divergence, the pipeline must build a **brainstorm pack** grounded in the graph.
 
-At minimum, the brainstorming flow must use authenticated typed PaperNexus capabilities against the shared project graph:
+At minimum, the brainstorming flow must use the authenticated PaperNexus Python wrappers through workflow-owned control paths:
 
-- `GET /api/corpus-meta` or equivalent status endpoint — verify the shared graph exists, is current enough, and has non-trivial coverage
-- `POST /api/query` — retrieve topic-relevant graph anchors
-- `POST /api/context` — inspect local neighborhoods around promising anchors
-- `POST /api/impact` — trace upstream / downstream influence or dependencies
-- `POST /api/research-brief` — compress the topic into a compact graph-grounded research brief
-- `POST /api/ideas` — extract graph-grounded opportunity candidates
-- `POST /api/brainstorm` and `POST /api/brainstorm-brief` — run explicit divergence / convergence passes over the topic
-- `POST /api/path-trace`, `POST /api/evidence-chain`, `POST /api/reflection-chain`, `POST /api/theory-brief`, and `POST /api/storyline-brief` when the topic requires justification, mechanism, experiment reflection, or narrative closure
+- `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` — verify graph readiness and retrieve topic-relevant anchors, contexts, impacts, and brainstorm-quality node views
+- `research_workflow.run_papernexus_wrapper` with `pn_research_chains.py` — build `research-brief`, `ideas`, `brainstorm`, `brainstorm-brief`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`
+- `research_workflow.run_brainstorm_cycle` — persist the selected brainstorm / chain bundle so question packets, working memory, evidence chains, and synthesis packets survive restarts and agent handoffs
 
 The graph-backed brainstorming pack should preserve:
 
@@ -177,29 +175,30 @@ The graph-backed brainstorming pack should preserve:
 - one plausible pilot
 - one plausible falsifier / failure condition
 
-Before graph build, Researcher must also maintain a project-local paper selection that points into the shared global PaperNexus graph:
+Before graph build, Researcher must also maintain a project-local paper selection that points into the remote shared PaperNexus graph:
 
 - use `/papers-cool` for rough keyword search and venue sweep
 - when stable and available, also use `/pasa-paper-search` as a second retrieval source and merge by canonical identity; if PASA fails, continue with `papers-cool`
-- once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into the shared PaperNexus source tree
+- once a concrete paper identity is known (for example arXiv ID or paper URL), immediately prefer `/hugging-face-paper-pages` to save full-paper markdown into `{PROJ}/researcher/paper-staging/`
 - if Hugging Face does not provide valid markdown for an arXiv paper, try `/arxiv2md-api`, then `/arxiv2md`
 - if both markdown sources are unavailable, fall back to `/papers-cool` PDF download
 - record every selected canonical paper in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
-- if new PDFs or Markdown arrive through the PaperNexus UI or Web/API, prefer the queued import-task path under `.papernexus/imports/` or `POST /api/imports`; do not manually copy those ad hoc uploads into the shared paper source tree during automation
-- if a workflow calls PaperNexus `/api/*`, assume authenticated access and use `Authorization: Bearer <token>` from the configured token source
-- for a live shared graph, authenticated HTTP API requests are required; do not use local `papernexus query/context/impact/ideas/brainstorm/...` CLI reads in workflow execution
-- if the current shared graph does not already contain a newly found key paper, Researcher must queue a shared-graph refresh before novelty or innovation analysis
+- if the local Zotero MCP server is configured, use that local Zotero server directly and keep a per-project bibliography tree under `bot/<project-id>/` synchronized with the selected / included / excluded / baseline paper sets; Zotero is the organizer, while PaperNexus remains the full-text and graph source of truth
+- if new PDFs or Markdown arrive through the PaperNexus UI or Web/API, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) and durable `research_workflow.set_paper_ingestion` updates; do not manually copy those ad hoc uploads into local shared storage during automation
+- do not hand-write `/api/*` REST calls in workflow execution; use the authenticated Python wrappers so token handling and route shape stay consistent
+- if the current shared graph does not already contain a newly found key paper, Researcher must queue automatic graph catch-up before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
 
 Paper source layout and refresh rules:
 
-- keep a stable shared PaperNexus source tree with `md/` and `pdf/` subdirectories
+- keep temporary staging files under `{PROJ}/researcher/paper-staging/`; treat the remote PaperNexus service as the source of truth for shared graph state
 - project state should record which canonical papers are in scope via `PAPER_SOURCE_INDEX.json`; do not create a separate project-local corpus
 - use canonical filenames prefixed by arXiv ID, e.g. `<arxiv-id>--<normalized-title>.md`
 - deduplicate by canonical paper identity, not by raw filename
-- reconcile the shared graph immediately if a newly ingested paper changes the novelty baseline or closest prior work
-- otherwise reconcile when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
+- refresh graph readiness immediately if a newly ingested paper changes the novelty baseline or closest prior work
+- otherwise refresh graph readiness when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
 - for ideation, prefer the brainstorm-quality node layer (`brainstormEligible`, `brainstormScore`, `brainstormTier`) over the raw full graph when choosing anchors for `ideas`, `brainstorm`, and typed brief / chain endpoints
+- keep a durable Zotero sync note under `{PROJ}/researcher/ZOTERO_PACKET.md`, including the `bot/<project-id>` path, shortlist counts, baseline collection status, and unresolved metadata cleanup work
 - agents may add or update understanding in the shared graph, but must not delete shared corpus data or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks
 
 ### Experiment-Informed Innovation Reflection Contract
@@ -301,7 +300,7 @@ This applies regardless of `AUTO_PROCEED`. Skipping a stage (e.g. going IDEA →
 | FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, frontier files under `{PROJ}/graph/` (or legacy non-empty `{PROJ}/graph/subgraphs/`), and `current_micro_stage = frontiers_packaged` |
 | IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track, and when experiment memory contains newer evidence than the last ideation reflection, `{PROJ}/researcher/INNOVATION_REFLECTION.md` refreshed after the latest experiment results |
 | **PLAN**   | **CODE** | **`{PROJ}/orchestrator/PLAN.md`** AND **`{PROJ}/orchestrator/TODOS.md`** AND **`{PROJ}/orchestrator/PLAN_AUDIT.md`** |
-| CODE       | EXPERIMENT | At least one `{PROJ}/coder/<experiment-name>/` with `train.py` (or equivalent) and `README.md` |
+| CODE       | EXPERIMENT | At least one runnable experiment bundle with `train.py` (or equivalent), `README.md`, and `EXPERIMENT_MANIFEST.json` carrying `track_id`, `question`, `hypothesis`, `novelty_basis`, `baseline_reference`, `primary_baseline_metric`, `target_improvement`, `baseline_training_protocol`, `baseline_eval_protocol`, `innovation_points`, `validation_steps`, and `ablation_plan`; in aggressive mode the bundle must also pass the CODE innovation review quorum before advancement |
 | EXPERIMENT | ANALYZE | `{PROJ}/researcher/artifacts/results/` non-empty, `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` updated, `{PROJ}/researcher/EXPERIMENT_LEDGER.json` updated, `PROJECT_MANIFEST.json.experiment_memory.last_ledger_update_at` recorded, and `TRACK_REGISTRY.json` updated with experiment outcomes |
 | ANALYZE   | REVIEW  | `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/QUALITY_AUDIT.md` |
 | REVIEW    | WRITE   | `{PROJ}/reviewer/REVIEW_REPORT.md` or review loop marked complete in REVIEW_STATE.json, and no `UNSUPPORTED` primary claims remain in the selected writing scope |
@@ -468,31 +467,33 @@ Actions:
 
 ### Stage 0A · GRAPH_BUILD
 **Owner:** Researcher
-**Skills:** `/graph-build`
+**Skills:** `/graph-build`, `/zotero-project-library`
 **Inputs:** `{PROJ}/researcher/LITERATURE.md`, `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`, shared global PaperNexus graph
 **Outputs:**
 - `{PROJ}/graph/PAPERNEXUS_STATUS.json` — shared PaperNexus graph status for this project's selected papers
-- `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — shared-graph reconciliation summary
+- `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — graph-readiness plus brainstorm-refresh summary
 - `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` — preliminary brainstorm scaffold built during literature work
+- `{PROJ}/researcher/ZOTERO_PACKET.md` — synced Zotero `bot/<project-id>` bibliography status and shortlist summary
 
 ```
 Procedure:
   1. Run /research-lit first if the project has not yet recorded key papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
   2. Use `/papers-cool` for broad discovery and venue sweep; if stable, also query `/pasa-paper-search` and merge by canonical identity
-  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into the shared PaperNexus source tree; if that fails and the paper is on arXiv, try `/arxiv2md-api`, then `/arxiv2md`; only if all markdown sources are unavailable, save PDF via `/papers-cool`
-  3a. If material enters through the PaperNexus dashboard or Web/API upload path, prefer the queued import-task flow (`POST /api/imports`) and inspect `.papernexus/imports/` task logs instead of copying those files by hand
+  3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into `{PROJ}/researcher/paper-staging/`; if that fails and the paper is on arXiv, try `/arxiv2md-api`, then `/arxiv2md`; only if all markdown sources are unavailable, save PDF via `/papers-cool`
+  3a. Keep Zotero synchronized through `/zotero-project-library`: selected papers belong in `bot/<project-id>/selected`, and baseline-defining papers also belong in `bot/<project-id>/baselines`
+  3b. If material enters through the PaperNexus dashboard or Web/API upload path, prefer the queued wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) instead of copying those files by hand
   4. Apply the graph refresh trigger rule:
      - refresh now if 1 new paper changes novelty / closest prior work
      - refresh now if 3+ genuinely new canonical papers accumulated
      - refresh now if 2+ overlapping recent venue papers accumulated
      - otherwise defer until the next major checkpoint
-  5. Resolve PaperNexus root and shared corpus
-  6. Check shared-graph status (`status` / registry) before trusting an existing graph
-  7. Run /graph-build to reconcile this project's `PAPER_SOURCE_INDEX.json` against the shared global graph; do not create a project-scoped corpus
-  8. If the shared graph is missing required papers, queue or request a shared-corpus refresh instead of rebuilding a project-local corpus
-  9. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
+  5. Check remote graph-readiness status before trusting an existing graph
+  6. Run /graph-build as a bounded status pass: verify automatic graph catch-up, refresh graph readiness metadata, and update the brainstorm bundle; do not create a project-scoped corpus or manually rebuild the shared graph
+  7. If required papers are still missing, queue or request wrapper-driven import / catch-up instead of rebuilding a project-local corpus
+  8. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
+  9. Persist typed brainstorm artifacts through `research_workflow.run_brainstorm_cycle` once graph readiness is sufficient
   10. Save status + build report under {PROJ}/graph/
-  11. Update {PROJ}/PROJECT_MANIFEST.json with graph readiness metadata and `current_micro_stage: "graph_validated"`
+  11. Update {PROJ}/PROJECT_MANIFEST.json with graph readiness metadata, brainstorm bundle status, and `current_micro_stage: "graph_validated"`
   12. → proceed to FRONTIER_MAPPING
 ```
 
@@ -525,7 +526,7 @@ Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only 
 
 ### Stage 1 · IDEA
 **Owner:** Researcher  
-**Skills:** `/idea-phase` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
+**Skills:** `/idea-phase` → `/scientific-brainstorming` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
 **Inputs:** Research domain or topic (from user, or from memory), `{PROJ}/researcher/FRONTIER_REPORT.md`
 **Outputs:**
 - `{PROJ}/researcher/IDEA_REPORT.md` — top-ranked idea with novelty assessment
@@ -540,7 +541,7 @@ Procedure:
   1. Confirm {PROJ}/researcher/FRONTIER_REPORT.md and the required frontier files under graph/ exist; if missing, go back to FRONTIER_MAPPING
   2. If experiment memory contains reflectable evidence and `innovation_reflection` is stale or missing, run /innovation-reflection before proposing a new track set
   3. Run /idea-phase as a graph-grounded dialectic loop, not a one-shot prompt brainstorm
-  4. Diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas`, `brainstorm`, and `brainstorm-brief` outputs, preferring brainstorm-quality anchors over raw graph prominence
+  4. Use `/scientific-brainstorming` as a bounded divergence pass on top of the graph-grounded brainstorm bundle, then diverge 4–8 candidate tracks across the frontier lenses plus PaperNexus `ideas`, `brainstorm`, and `brainstorm-brief` outputs, preferring brainstorm-quality anchors over raw graph prominence
   5. Reuse `{PROJ}/researcher/INNOVATION_REFLECTION.md` as a negative-constraint and transfer-lesson packet whenever prior experiment evidence exists
   6. For each track, preserve a graph evidence packet:
      - anchor nodes / relations
@@ -735,11 +736,12 @@ Researcher should trigger Lobster handoff only when EXPERIMENT has produced the 
 
 ### Stage 3 · CODE
 **Owner:** Coder (spawned by Researcher via `sessions_spawn`)
-**Skills:** `/implement-experiment`, `/github-download`, `/resume-pipeline`
+**Skills:** `/implement-experiment`, `/scientific-visualization`, `/github-download`, `/resume-pipeline`
 **Inputs:** `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/TRACK_REGISTRY.json`
 **Outputs:**
 - `{PROJ}/coder/{experiment-name}/` — runnable code
 - `{PROJ}/coder/{experiment-name}/README.md` — setup + run instructions
+- `{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/EXPERIMENT_MANIFEST.json` — baseline-grounded experiment contract
 
 **Precondition (mandatory):** Before spawning Coder, both `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` must exist. If either is missing, do **not** spawn Coder; go back to Stage 2 (PLAN), spawn Orchestrator, and wait for both files to be written.
 
@@ -749,11 +751,20 @@ Procedure:
   2. Researcher spawns Coder with path to PLAN.md and the active track set
   3. Coder runs /implement-experiment for the highest-priority active track first
   3a. Coder treats dataset paths as read-only and writes any preprocessing outputs, caches, or converted artifacts under {PROJ}/coder/{experiment-name}/ or remote scratch/results, never back into dataset roots
+  3b. Every experiment bundle must encode the active track contract in `EXPERIMENT_MANIFEST.json`: `track_id`, `question`, `hypothesis`, and `novelty_basis` must match the active innovation track before coding can be considered handoff-ready
+  3c. The manifest must also declare the baseline contract: `baseline_reference`, `primary_baseline_metric`, `target_improvement`, `baseline_training_protocol`, `baseline_eval_protocol`, `innovation_points`, `validation_steps`, and `ablation_plan`
+  3d. Validation must stay incremental: every innovation point must be covered by at least one validation step or ablation instead of hiding multiple novelties in one opaque run
+  3e. Unless the manifest explicitly documents an allowed deviation, Coder must preserve the baseline training setup and evaluation method
   4. Coder marks TODOS.md item as complete
   5. Coder does local dry-run validation and reports the launch command
+  5a. If quick sanity-check figures or baseline-vs-proposed plots would reduce implementation risk, Coder may use `/scientific-visualization` under `{PROJ}/coder/.../figures/` before handoff
   6. If validation fails → Coder fixes
-  7. When multiple active tracks exist, only implement the next track if budget remains justified by the plan
-  8. → proceed to EXPERIMENT (no gate — coding is internal)
+  7. In aggressive mode, CODE cannot advance until the automatic multi-agent code innovation review approves the packet:
+     - Researcher checks innovation alignment and baseline-centered metric targeting
+     - Orchestrator checks that validation_steps / ablation_plan can verify each innovation sub-point step by step
+     - Reviewer checks execution faithfulness, baseline protocol fidelity, and eval-method consistency
+  8. When multiple active tracks exist, only implement the next track if budget remains justified by the plan
+  9. → proceed to EXPERIMENT only after the bundle is runnable and the CODE review gate is satisfied
 ```
 
 When CODE is complete and the required experiment bundle exists, Coder should trigger Lobster handoff. If dry-run, reproducibility, or implementation review still requires fixes, remain in CODE and do not hand off.
@@ -779,6 +790,8 @@ Procedure:
      - repair experiment
   3. Dispatch experiments (use /parallel-experiments if N>1; per-bundle launch is assigned to Coder via /run-experiment)
   4. Monitor with /monitor-experiment
+     - once remote runs exist, this becomes the default experiment-stage heartbeat
+     - auto mode should keep re-entering `/monitor-experiment` on bounded passes until the remote runs are terminal and the result bundle is analysis-ready
   5. On completion: collect results to artifacts/results/
   6. Update EXPERIMENT_REGISTRY.md
   7. After every meaningful checkpoint (queued, launched, running, done, failed, decision made), upsert `{PROJ}/researcher/EXPERIMENT_LEDGER.json` with:
@@ -797,6 +810,7 @@ Procedure:
      - `kill`
   12. Update {PROJ}/TRACK_REGISTRY.json and {PROJ}/PROJECT_MANIFEST.json with the new decision
   13. Set `current_micro_stage: "experiment_memory_synced"` only after registry, ledger, manifest summary, and innovation-reflection freshness state agree
+     - and only after `experiment_search` is honestly `ready_for_analysis` rather than merely "training finished"
   14. → POST GATE-3
 ```
 
@@ -869,7 +883,7 @@ When ANALYZE artifacts are complete and the current decision is to move into REV
 
 ### Stage 6 · REVIEW (Internal)
 **Owner:** Reviewer (invoked by Researcher via `sessions_send`)  
-**Skills:** `/review-phase`, `/evidence-grading`, `/citation-integrity-gate`  
+**Skills:** `/review-phase`, `/scientific-critical-thinking`, `/scholar-evaluation`, `/peer-review`, `/evidence-grading`, `/citation-integrity-gate`  
 **Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/artifacts/`
 **Outputs:**
 - `{PROJ}/reviewer/REVIEW_REPORT.md` — structured review
@@ -878,15 +892,16 @@ When ANALYZE artifacts are complete and the current decision is to move into REV
 ```
 Procedure:
   1. Researcher invokes Reviewer with NARRATIVE_REPORT.md + claim matrix + track verdicts + theory support note
-  2. Reviewer scores: Soundness, Significance, Reproducibility, Claim Support Coverage, Scope Discipline, Publishability
-  3. Reviewer also emits an advisory theory signal (`green` / `red`) for later writing
-  4. If score < 6/10 or any primary claim is UNSUPPORTED → flag specific weak points
-  5. If the work is already paper-worthy but missing polish, prefer scope narrowing over more experiments
-  6. If theory signal is `red`, carry it forward to WRITE; do not block draft generation
-  7. Researcher addresses weak points (re-experiment, downgrade claims, clarify, or stop a weak track)
-  8. Loop max 3 rounds
-  9. This is not the final publication-facing review. A compiled PDF must still go through Stage 8 external AI review via `/paperreview-submit`.
-  10. → proceed to WRITE
+  2. Reviewer uses `/scientific-critical-thinking` for rigor / bias / protocol defects, `/scholar-evaluation` for structured dimension scoring, and `/peer-review` for the integrated reviewer voice
+  3. Reviewer scores: Soundness, Significance, Reproducibility, Claim Support Coverage, Scope Discipline, Publishability
+  4. Reviewer also emits an advisory theory signal (`green` / `red`) for later writing
+  5. If score < 6/10 or any primary claim is UNSUPPORTED → flag specific weak points
+  6. If the work is already paper-worthy but missing polish, prefer scope narrowing over more experiments
+  7. If theory signal is `red`, carry it forward to WRITE; do not block draft generation
+  8. Researcher addresses weak points (re-experiment, downgrade claims, clarify, or stop a weak track)
+  9. Loop max 3 rounds
+  10. This is not the final publication-facing review. A compiled PDF must still go through Stage 8 external AI review via `/paperreview-submit`.
+  11. → proceed to WRITE
 ```
 
 Reviewer should trigger Lobster handoff only when the internal review loop is actually complete and the project is ready to enter WRITE. If review requests more experiments, narrower scope, or additional fixes, remain in REVIEW or send the project backward according to the gate result.
@@ -895,8 +910,8 @@ Reviewer should trigger Lobster handoff only when the internal review loop is ac
 
 ### Stage 7 · WRITE
 **Owner:** Academic Writer (spawned by Researcher)  
-**Skills:** `/paper-plan`, `/paper-write`, `/citation-preflight`, `/paper-compile`, `/ai-research-prompt`, `/research-paper-writing`  
-**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/analyzer/THEORY_STATE.json`, `{PROJ}/analyzer/proof-packets/`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`, and `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
+**Skills:** `/paper-plan`, `/citation-management`, `/venue-templates`, `/paper-write`, `/citation-preflight`, `/paper-compile`, `/ai-research-prompt`, `/research-paper-writing`  
+**Inputs:** `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, `{PROJ}/analyzer/TRACK_VERDICTS.md`, `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`, `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`, `{PROJ}/analyzer/THEORY_STATE.json`, `{PROJ}/analyzer/proof-packets/`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/researcher/ZOTERO_PACKET.md`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/analyzer/figures/`, and `{PROJ}/PROJECT_MANIFEST.json.writing_contract`
 **Outputs:**
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — paper outline
 - `{PROJ}/academic_writer/STORYLINE_SKETCH.md` — rough paper thesis and evidence spine
@@ -911,7 +926,7 @@ Reviewer should trigger Lobster handoff only when the internal review loop is ac
 Procedure:
   1. Researcher spawns Academic Writer with narrative report + claim matrix + track verdicts + theory support note + figures path
   2. Writer reads `PROJECT_MANIFEST.json.writing_contract`; if a user template is configured, Writer must read the project-local copied template before any outline or prose drafting
-  3. Writer runs /paper-plan → PAPER_PLAN.md + STORYLINE_SKETCH.md + THEORY_APPENDIX_PLAN.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
+  3. Writer runs /paper-plan and `/venue-templates` to lock template / section / page-budget constraints, then updates PAPER_PLAN.md + STORYLINE_SKETCH.md + THEORY_APPENDIX_PLAN.md + TEMPLATE_MAPPING.md + initial WRITING_SIGNALS.md
   4. Writer limits the paper to active / winning tracks only
   5. Writer removes or downgrades unsupported primary claims before prose drafting
   6. If theory or storyline signal is `red`, Writer still continues but marks the risky sections for human review
@@ -919,7 +934,7 @@ Procedure:
      → saved to {PROJ}/cross-reviewer/outline/{date}.md
   8. Writer runs /paper-write section by section, starts from the generated THEORY_APPENDIX_PLAN.md + appendix_theory.tex, keeps theorem / lemma statements concise in the body, and pushes detailed derivations to the appendix path from `writing_contract`
   9. For each section, Writer performs a reverse-outline pass and paragraph transition audit before treating the section as stable
-  10. Writer runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
+  10. Writer uses `/citation-management` to pull the paper queue from Zotero `bot/<project-id>/writing-shortlist`, then runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
   11. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
   12. Cross-Reviewer checks each section (Prose Mode)
   13. Writer runs /paper-compile → main.pdf
@@ -1124,15 +1139,15 @@ LOOP FOREVER (when AUTO_PROCEED=true):
 | Stage | Owner | Skills Used |
 |-------|-------|-------------|
 | SETUP | Researcher | BOOTSTRAP.md |
-| GRAPH_BUILD | Researcher | graph-build |
+| GRAPH_BUILD | Researcher | graph-build, zotero-project-library |
 | FRONTIER_MAPPING | Researcher | frontier-mapping |
-| IDEA | Researcher | idea-phase, idea-generator, novelty-check, idea-tournament, resume-pipeline |
+| IDEA | Researcher | idea-phase, scientific-brainstorming, idea-generator, novelty-check, idea-tournament, resume-pipeline |
 | PLAN | Orchestrator | plan-research |
-| CODE | Coder | implement-experiment, github-download, run-experiment, resume-pipeline |
+| CODE | Coder | implement-experiment, scientific-visualization, github-download, run-experiment, resume-pipeline |
 | EXPERIMENT | Researcher | experiment-phase, parallel-experiments, monitor-experiment, resume-pipeline |
 | ANALYZE | Analyzer | analyze-results, scientific-figures, resume-pipeline |
-| REVIEW | Reviewer | review-phase, evidence-grading, resume-pipeline |
-| WRITE | Academic Writer | paper-plan, paper-write, paper-compile, resume-pipeline |
+| REVIEW | Reviewer | review-phase, scientific-critical-thinking, scholar-evaluation, peer-review, evidence-grading, resume-pipeline |
+| WRITE | Academic Writer | paper-plan, citation-management, venue-templates, paper-write, paper-compile, resume-pipeline |
 | CROSS-REVIEW | Cross-Reviewer | resume-pipeline (stateless) + sessions_send |
 | SUBMIT | Reviewer | paperreview-submit, review-response |
 | REVISE | Researcher | (orchestrates loop-back) |
