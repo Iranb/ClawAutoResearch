@@ -7,8 +7,11 @@
 
 ## 2. 主流程命令
 
+- `/project-init`  
+  引导式项目开启入口。用于在 setup 阶段锁定 research program onboarding contract：研究目标、问题陈述、baseline、primary metric、数据集、success criteria，以及 Zotero `bot/<project-id>` 路径。`/workflow-status` 如果显示 setup checklist 缺项，应优先运行它。
+
 - `/research-pipeline`  
-  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus Python wrappers 控制图谱流。
+  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus Python wrappers 控制图谱流。现在它会先检查 guided setup/onboarding contract；如果 contract 还不完整，先补 `/project-init`，再继续图谱与文献流。
 
 - `/resume-pipeline`  
   恢复中断项目。通常先读 manifest、gate、ledger，再继续 auto iterator。
@@ -43,7 +46,7 @@
   当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
-  检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，走 PaperNexus Python wrappers 而不是手写 REST。
+  Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，走 PaperNexus Python wrappers 而不是手写 REST；如果本地 Zotero MCP server 已配置，还要同步更新 Zotero `bot/<project-id>/selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
 
 - `/zotero-project-library`  
   当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到 `bot/<project-id>` 目录，维护 selected / included / excluded / baselines / writing-shortlist。

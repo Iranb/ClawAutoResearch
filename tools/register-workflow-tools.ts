@@ -19,6 +19,7 @@ import {
   getInnovationReflectionStateSummary,
   getOrchestrationStateSummary,
   getPaperIngestionStateSummary,
+  queuePaperIngestionRequest,
   getPaperQcStateSummary,
   getResearchProgramStateSummary,
   getProjectRootForWorkflow,
@@ -115,6 +116,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
   "run_papernexus_wrapper",
+  "queue_paper_ingestion",
   "migrate_runtime_state",
   "set_gate_state",
   "set_paper_ingestion",
@@ -134,6 +136,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
+  queue_paper_ingestion: "queuePaperIngestionRequest",
   migrate_runtime_state: "migrateWorkflowRuntimeState",
   get_idle_research: "getIdleResearchStateSummary",
   set_idle_research: "setIdleResearchState",
@@ -418,6 +421,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "auto_iterator_tick",
               "start_background_run",
               "run_papernexus_wrapper",
+              "queue_paper_ingestion",
               "migrate_runtime_state",
               "get_idle_research",
               "set_idle_research",
@@ -492,6 +496,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           papernexusWrapper: {
+            type: "object",
+            additionalProperties: true,
+          },
+          paperIngestionRequest: {
             type: "object",
             additionalProperties: true,
           },
@@ -1024,6 +1032,49 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     wrapper: backgroundRun.wrapper,
                     commandText: backgroundRun.commandText,
                     statusBroadcast,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "queue_paper_ingestion": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const requestPayload = requireObject<Record<string, unknown>>(
+                params.paperIngestionRequest ?? params.papernexusWrapper,
+                "paperIngestionRequest"
+              );
+              const wrapperRun =
+                buildPapernexusWrapperBackgroundRunRequest(requestPayload);
+              const queued = await queuePaperIngestionRequest({
+                projectRoot: resolvedProjectRoot,
+                paperIngestionRequest: {
+                  request_id:
+                    readString(requestPayload.requestId ?? requestPayload.request_id) ??
+                    undefined,
+                  wrapper: wrapperRun.wrapper,
+                  args: Array.isArray(requestPayload.args)
+                    ? requestPayload.args
+                    : [],
+                  command_text: wrapperRun.commandText,
+                  manifest_path:
+                    readString(requestPayload.manifestPath ?? requestPayload.manifest_path) ??
+                    null,
+                  shared_corpus:
+                    readString(requestPayload.sharedCorpus ?? requestPayload.shared_corpus) ??
+                    null,
+                  paper_count:
+                    readNumber(requestPayload.paperCount ?? requestPayload.paper_count) ?? null,
+                  summary:
+                    readString(requestPayload.summary) ??
+                    wrapperRun.summary,
+                },
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...queued,
+                    commandText: queued.request.commandText,
                   },
                   null,
                   2

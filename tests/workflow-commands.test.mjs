@@ -185,6 +185,67 @@ test("research-pipeline command starts a background continuation on the bound re
   );
 });
 
+test("project-init command scaffolds a project and seeds the onboarding contract", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const projectInitCommand = getCommand(
+    createResearchWorkflowCommands(api),
+    "project-init"
+  );
+
+  const result = await projectInitCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/project-init "gcd confirmation bias mitigation"',
+    args: '"gcd confirmation bias mitigation"',
+    config: {},
+    from: "discord:channel:gcd-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.match(
+    result.text ?? "",
+    /Project init saved for gcd-confirmation-bias-mitigation/i
+  );
+  assert.match(
+    result.text ?? "",
+    /missing=baseline_reference, primary_metric, datasets, success_criteria/i
+  );
+  assert.equal(manifest.project_id, "gcd-confirmation-bias-mitigation");
+  assert.equal(
+    manifest.research_program.goal,
+    "gcd confirmation bias mitigation"
+  );
+  assert.equal(
+    manifest.research_program.problem_statement,
+    "gcd confirmation bias mitigation"
+  );
+  assert.equal(
+    manifest.research_program.zotero_project_path,
+    "bot/gcd-confirmation-bias-mitigation"
+  );
+  assert.equal(manifest.research_program.status, "draft");
+});
+
 test("research-queue command refuses to run from a non-researcher session", async () => {
   const queueCommand = getCommand(createResearchWorkflowCommands(makeApi(), {
     resolveConversationBindingRecord() {
@@ -382,6 +443,128 @@ test("resume-pipeline command queues the continuation instead of failing when ru
   assert.equal(drained.remaining.length, 1);
   assert.ok(["queued", "degraded"].includes(drained.remaining[0].status));
   assert.equal(drained.remaining[0].kind, "resume_pipeline");
+});
+
+test("graph-build command starts a background continuation for the current project and routes it to Researcher", async () => {
+  let captured = null;
+  const api = makeApi();
+  const graphBuildCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "orchestrator",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          projectResolutionSource: "channel_binding",
+          channelProjectBindingsEnabled: true,
+          unreadMailbox: [],
+          idleResearchEnabled: false,
+          idleResearchDue: false,
+          idleResearchTopic: null,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = params;
+        return {
+          started: true,
+          runId: "bg-run-graph-build",
+          sessionKey: "agent:researcher:discord:group:paper-lab:subagent:graph-build",
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background graph build started for paper-lab.",
+        };
+      },
+    }),
+    "graph-build"
+  );
+
+  const result = await graphBuildCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/graph-build "gcd confirmation bias mitigation"',
+    args: '"gcd confirmation bias mitigation"',
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background graph build started for paper-lab.");
+  assert.equal(captured.agentCtx.agentId, "researcher");
+  assert.equal(captured.agentCtx.workspaceDir, "/tmp/workspace-researcher");
+  assert.equal(captured.backgroundRun.kind, "graph_build");
+  assert.equal(captured.backgroundRun.projectId, "paper-lab");
+  assert.equal(captured.backgroundRun.projectRoot, "/tmp/projects/paper-lab");
+  assert.match(captured.backgroundRun.commandText, /^\/graph-build\b/);
+  assert.match(captured.backgroundRun.commandText, /__BACKGROUND_CONTINUATION__:\s*true/i);
+});
+
+test("graph-build command auto-injects repair flags when paper ingestion requires a graph sync repair", async () => {
+  let captured = null;
+  const api = makeApi();
+  const graphBuildCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "orchestrator",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          projectResolutionSource: "channel_binding",
+          channelProjectBindingsEnabled: true,
+          unreadMailbox: [],
+          idleResearchEnabled: false,
+          idleResearchDue: false,
+          idleResearchTopic: null,
+          paperIngestionRepairRequired: true,
+          paperIngestionRepairTargetCorpus: "GCD",
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = params;
+        return {
+          started: true,
+          runId: "bg-run-graph-build-repair",
+          sessionKey: "agent:researcher:discord:group:paper-lab:subagent:graph-build",
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background graph build started for paper-lab.",
+        };
+      },
+    }),
+    "graph-build"
+  );
+
+  const result = await graphBuildCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/graph-build",
+    args: "",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background graph build started for paper-lab.");
+  assert.match(captured.backgroundRun.commandText, /\/graph-build\b/);
+  assert.match(captured.backgroundRun.commandText, /--repair-import true/i);
+  assert.match(captured.backgroundRun.commandText, /--shared-corpus "?GCD"?/i);
 });
 
 test("workflow commands opportunistically replay queued background runs when runtime access returns", async (t) => {
@@ -599,6 +782,22 @@ test("workflow-status command returns a readable workflow summary", async () => 
         paperIngestionReconcileRequired: true,
         innovationReflectionStatus: "stale",
         innovationReflectionDue: true,
+        researchProgramStatus: "draft",
+        researchProgramTrackCount: 2,
+        researchProgramActiveTrackCount: 1,
+        researchProgramPrimaryGoal:
+          "Improve generalized category discovery under confirmation bias.",
+        researchProgramOnboardingStatus: "incomplete",
+        researchProgramOnboardingMissing: [
+          "baseline_reference",
+          "primary_metric",
+        ],
+        researchProgramBaselineReference: "ResNet-50 ERM baseline",
+        researchProgramPrimaryMetricName: "H-score",
+        researchProgramDatasetCount: 2,
+        researchProgramSuccessCriteriaCount: 1,
+        researchProgramZoteroProjectPath:
+          "bot/gcd-confirmation-bias-mitigation",
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
         experimentSearchStatus: "running",
@@ -703,8 +902,11 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Mailbox: 2 unread/);
   assert.match(result.text ?? "", /Idle research: enabled=true, due=true, topic=spectral clustering under drift/);
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
-  assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, reconcile_required=true/);
+  assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, queued_requests=0, running_requests=0, reconcile_required=true/);
   assert.match(result.text ?? "", /PaperNexus batch manifest: \/tmp\/demo\/batch-import\.json/);
+  assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
+  assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
+  assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
   assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);

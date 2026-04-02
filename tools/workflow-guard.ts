@@ -271,6 +271,12 @@ type BrainstormCycleState = {
   topic: string | null;
   basisStage: string | null;
   trackId: string | null;
+  provider: string | null;
+  providerMode: string | null;
+  providerStatus: string | null;
+  providerLastRunAt: string | null;
+  providerLastError: string | null;
+  contractVersion: number | null;
   rounds: BrainstormCycleRoundState[];
   selectedRoundId: string | null;
   selectedOptionId: string | null;
@@ -574,6 +580,13 @@ type ResearchProgramState = {
   programVersion: number;
   status: string;
   goal: string | null;
+  problemStatement: string | null;
+  baselineReference: string | null;
+  primaryMetric: string | null;
+  datasets: string[];
+  constraints: string[];
+  successCriteria: string[];
+  zoteroProjectPath: string | null;
   tracks: ResearchProgramTrack[];
   globalConstraints: ResearchProgramGlobalConstraints;
   taskGraph: ResearchProgramTask[];
@@ -635,9 +648,13 @@ type PaperIngestionState = {
   paperOperations: PaperIngestionPaperOperation[];
   activeBatches: PaperIngestionBatchRun[];
   batchItems: PaperIngestionBatchItem[];
+  queuedRequests: PaperIngestionQueuedRequest[];
   lastBatchManifestPath: string | null;
   graphVersionSeen: string | null;
   reconcileRequired: boolean;
+  repairRequired: boolean;
+  repairReason: string | null;
+  repairTargetCorpus: string | null;
   lastUpdatedAt: string | null;
 };
 
@@ -689,6 +706,27 @@ type PaperIngestionBatchItem = {
   matchedBy: string | null;
   error: string | null;
   updatedAt: string | null;
+};
+
+type PaperIngestionQueuedRequest = {
+  requestId: string;
+  status: "queued" | "launching" | "running" | "completed" | "needs_repair" | "failed";
+  wrapper: string | null;
+  args: string[];
+  commandText: string | null;
+  manifestPath: string | null;
+  sharedCorpus: string | null;
+  paperCount: number | null;
+  summary: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastRunId: string | null;
+  lastSessionKey: string | null;
+  lastError: string | null;
+  detail: string | null;
+  triggerKind: string | null;
 };
 
 type PaperQcState = {
@@ -814,10 +852,15 @@ export type WorkflowSnapshot = {
   paperIngestionPendingBatchItemCount: number | null;
   paperIngestionSyncedBatchItemCount: number | null;
   paperIngestionFailedBatchItemCount: number | null;
+  paperIngestionQueuedRequestCount: number | null;
+  paperIngestionRunningRequestCount: number | null;
   paperIngestionLastBatchManifestPath: string | null;
   paperIngestionLastImportStatus: string | null;
   paperIngestionGraphVersionSeen: string | null;
   paperIngestionReconcileRequired: boolean;
+  paperIngestionRepairRequired: boolean;
+  paperIngestionRepairReason: string | null;
+  paperIngestionRepairTargetCorpus: string | null;
   paperSourceDir: string | null;
   graphSourceDir: string | null;
   defaultPapernexusSourceDir: string | null;
@@ -849,6 +892,10 @@ export type WorkflowSnapshot = {
   brainstormCycleTopic: string | null;
   brainstormCycleBasisStage: string | null;
   brainstormCycleTrackId: string | null;
+  brainstormCycleProvider: string | null;
+  brainstormCycleProviderMode: string | null;
+  brainstormCycleProviderStatus: string | null;
+  brainstormCycleContractVersion: number | null;
   brainstormCycleGraphVersionSeen: string | null;
   brainstormCycleImportTaskCount: number | null;
   brainstormCycleChainBundleReady: boolean;
@@ -857,6 +904,13 @@ export type WorkflowSnapshot = {
   researchProgramTrackCount: number | null;
   researchProgramActiveTrackCount: number | null;
   researchProgramPrimaryGoal: string | null;
+  researchProgramOnboardingStatus: string | null;
+  researchProgramOnboardingMissing: string[];
+  researchProgramBaselineReference: string | null;
+  researchProgramPrimaryMetricName: string | null;
+  researchProgramDatasetCount: number | null;
+  researchProgramSuccessCriteriaCount: number | null;
+  researchProgramZoteroProjectPath: string | null;
   orchestrationStatus: string | null;
   orchestrationBlockingCategory: string | null;
   orchestrationNextTransitionCandidate: string | null;
@@ -1414,7 +1468,7 @@ const STAGE_REQUIREMENTS: Record<string, StageRequirement> = {
 
 const STAGE_ENTRY_MICRO_STAGES: Record<string, string> = {
   setup: "state_reconciled",
-  graph_build: "graph_refresh_requested",
+  graph_build: "uploading",
   frontier_mapping: "frontier_mapping_requested",
   idea: "idea_refresh_requested",
   plan: "planning_requested",
@@ -1438,15 +1492,15 @@ const STAGE_EXECUTION_HINTS: Record<
 > = {
   setup: {
     owner: "researcher",
-    summary: "Reconcile durable project state before doing fresh work.",
+    summary: "Lock the onboarding contract before doing fresh work.",
     command:
-      "Run /resume-pipeline and ensure PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, idle_research, and the experiment ledger are in sync.",
+      "Run /project-init to lock the research goal, baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path; then run /resume-pipeline to reconcile PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, idle_research, and the experiment ledger.",
   },
   graph_build: {
     owner: "researcher",
-    summary: "Validate PaperNexus grounding and refresh brainstorm artifacts before downstream reasoning.",
+    summary: "Drive workflow-owned upload, graph verification, and core brainstorm refresh before downstream reasoning.",
     command:
-      "Run /graph-build to verify PAPER_SOURCE_INDEX.json is already reflected in the shared global graph, update graph readiness metadata, and refresh the brainstorm bundle before frontier mapping.",
+      "Run /graph-build to let workflow-owned upload requests finish, verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, and refresh the core brainstorm bundle before frontier mapping.",
   },
   frontier_mapping: {
     owner: "researcher",
@@ -2004,9 +2058,25 @@ export async function ensureWorkflowProjectRoot(params: {
       owner_agent: "researcher",
       current_stage: "setup",
       current_micro_stage: "project_init",
-      next_action: '/research-pipeline "topic"',
+      next_action: '/project-init "research goal"',
       resume_action: '/resume-pipeline "<project_id>"',
-      blocking_reason: "Project scaffold created; continue with literature collection and graph build.",
+      blocking_reason:
+        "Project scaffold created; complete the onboarding contract before literature collection and graph grounding.",
+      research_program: {
+        ...(asRecord(template.research_program) ?? {}),
+        status: "draft",
+        goal: params.topic ?? title,
+        problem_statement: params.topic ?? title,
+        baseline_reference: null,
+        primary_metric: null,
+        datasets: [],
+        constraints: [],
+        success_criteria: [],
+        zotero_project_path: defaultResearchProgramZoteroProjectPath(projectId),
+        last_updated_at: now,
+        pending_reason:
+          "Complete the onboarding contract (baseline, metric, datasets, success criteria, Zotero path) before graph grounding.",
+      },
       memory_scope: {
         ...(asRecord(template.memory_scope) ?? {}),
         project_isolated: true,
@@ -3019,6 +3089,35 @@ function formatStageCommand(stage: string | null): string | null {
   return STAGE_EXECUTION_HINTS[stage]?.command ?? null;
 }
 
+function formatWorkflowShellArgument(value: string): string {
+  return /^[A-Za-z0-9._:/=-]+$/u.test(value)
+    ? value
+    : `"${value.replace(/(["\\])/g, "\\$1")}"`;
+}
+
+function buildGraphImportRepairSlashCommand(
+  targetCorpus: string | null | undefined
+): string {
+  const normalizedCorpus = asString(targetCorpus);
+  return (
+    `/graph-build --repair-import true` +
+    (normalizedCorpus
+      ? ` --shared-corpus ${formatWorkflowShellArgument(normalizedCorpus)}`
+      : "")
+  );
+}
+
+function buildGraphImportRepairGuidance(
+  targetCorpus: string | null | undefined
+): string {
+  return (
+    `Run ${buildGraphImportRepairSlashCommand(targetCorpus)} to regenerate a bounded ` +
+    "PaperNexus batch import repair pass against the locked shared corpus, persist progress " +
+    "through research_workflow.set_paper_ingestion, and refresh graph readiness metadata " +
+    "before frontier mapping or ideation."
+  );
+}
+
 function formatStageSummary(stage: string | null): string | null {
   if (!stage) {
     return null;
@@ -3402,12 +3501,27 @@ function normalizeBrainstormCycleState(value: unknown): BrainstormCycleState {
         .map((round) => normalizeBrainstormCycleRoundState(round))
         .filter((round): round is BrainstormCycleRoundState => Boolean(round))
     : [];
+  const normalizedStatus = normalizeStage(record.status) ?? "missing";
+  const normalizedLatestRunAt = pickString(record, ["latestRunAt", "latest_run_at"]);
   return {
-    status: normalizeStage(record.status) ?? "missing",
+    status: normalizedStatus,
     mode: pickString(record, ["mode"]),
     topic: pickString(record, ["topic"]),
     basisStage: normalizeStage(record.basisStage ?? record.basis_stage),
     trackId: pickString(record, ["trackId", "track_id"]),
+    provider:
+      pickString(record, ["provider"]) ?? "workflow_core_brainstorm",
+    providerMode:
+      pickString(record, ["providerMode", "provider_mode"]) ?? "core",
+    providerStatus:
+      normalizeStage(record.providerStatus ?? record.provider_status) ??
+      (["ready", "reconciled"].includes(normalizedStatus) ? "ready" : "pending"),
+    providerLastRunAt:
+      pickString(record, ["providerLastRunAt", "provider_last_run_at"]) ??
+      normalizedLatestRunAt,
+    providerLastError: pickString(record, ["providerLastError", "provider_last_error"]),
+    contractVersion:
+      pickNumber(record, ["contractVersion", "contract_version"]) ?? 1,
     rounds,
     selectedRoundId: pickString(record, ["selectedRoundId", "selected_round_id"]),
     selectedOptionId: pickString(record, [
@@ -3463,7 +3577,7 @@ function normalizeBrainstormCycleState(value: unknown): BrainstormCycleState {
     importTaskIdsSeen: asStringArray(
       record.importTaskIdsSeen ?? record.import_task_ids_seen
     ),
-    latestRunAt: pickString(record, ["latestRunAt", "latest_run_at"]),
+    latestRunAt: normalizedLatestRunAt,
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
   };
 }
@@ -3477,6 +3591,12 @@ function serializeBrainstormCycleState(
     topic: state.topic,
     basis_stage: state.basisStage,
     track_id: state.trackId,
+    provider: state.provider,
+    provider_mode: state.providerMode,
+    provider_status: state.providerStatus,
+    provider_last_run_at: state.providerLastRunAt,
+    provider_last_error: state.providerLastError,
+    contract_version: state.contractVersion,
     rounds: state.rounds.map((round) => serializeBrainstormCycleRoundState(round)),
     selected_round_id: state.selectedRoundId,
     selected_option_id: state.selectedOptionId,
@@ -4761,6 +4881,24 @@ function normalizeResearchProgramState(value: unknown): ResearchProgramState {
     ),
     status: normalizeStage(record.status) ?? "missing",
     goal: pickString(record, ["goal"]),
+    problemStatement: pickString(record, [
+      "problemStatement",
+      "problem_statement",
+    ]),
+    baselineReference: pickString(record, [
+      "baselineReference",
+      "baseline_reference",
+    ]),
+    primaryMetric: pickString(record, ["primaryMetric", "primary_metric"]),
+    datasets: asStringArray(record.datasets),
+    constraints: asStringArray(record.constraints),
+    successCriteria: asStringArray(
+      record.successCriteria ?? record.success_criteria
+    ),
+    zoteroProjectPath: pickString(record, [
+      "zoteroProjectPath",
+      "zotero_project_path",
+    ]),
     tracks: Array.isArray(record.tracks)
       ? record.tracks.map((entry) => normalizeResearchProgramTrack(entry))
       : [],
@@ -4782,6 +4920,13 @@ function serializeResearchProgramState(
     program_version: value.programVersion,
     status: value.status,
     goal: value.goal,
+    problem_statement: value.problemStatement,
+    baseline_reference: value.baselineReference,
+    primary_metric: value.primaryMetric,
+    datasets: value.datasets,
+    constraints: value.constraints,
+    success_criteria: value.successCriteria,
+    zotero_project_path: value.zoteroProjectPath,
     tracks: value.tracks.map((entry) => serializeResearchProgramTrack(entry)),
     global_constraints: serializeResearchProgramGlobalConstraints(
       value.globalConstraints
@@ -4999,6 +5144,23 @@ function normalizePaperIngestionOperationStatus(
   }
 }
 
+function normalizePaperIngestionQueuedRequestStatus(
+  value: unknown
+): PaperIngestionQueuedRequest["status"] {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "queued":
+    case "launching":
+    case "running":
+    case "completed":
+    case "needs_repair":
+    case "failed":
+      return normalized;
+    default:
+      return "queued";
+  }
+}
+
 function normalizePaperIngestionState(value: unknown): PaperIngestionState {
   const record = asRecord(value) ?? {};
   const importTaskIdsRaw = record.import_task_ids ?? record.importTaskIds;
@@ -5006,6 +5168,7 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
   const paperOperationsRaw = record.paper_operations ?? record.paperOperations;
   const activeBatchesRaw = record.active_batches ?? record.activeBatches;
   const batchItemsRaw = record.batch_items ?? record.batchItems;
+  const queuedRequestsRaw = record.queued_requests ?? record.queuedRequests;
   const activeBatches = normalizePaperIngestionBatchRuns(activeBatchesRaw);
   const batchItems = normalizePaperIngestionBatchItems(batchItemsRaw);
   return {
@@ -5025,6 +5188,7 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
     paperOperations: normalizePaperIngestionPaperOperations(paperOperationsRaw),
     activeBatches,
     batchItems,
+    queuedRequests: normalizePaperIngestionQueuedRequests(queuedRequestsRaw),
     lastBatchManifestPath:
       pickString(record, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
       activeBatches[activeBatches.length - 1]?.manifestPath ??
@@ -5033,6 +5197,13 @@ function normalizePaperIngestionState(value: unknown): PaperIngestionState {
     graphVersionSeen: pickString(record, ["graphVersionSeen", "graph_version_seen"]),
     reconcileRequired:
       record.reconcileRequired === true || record.reconcile_required === true,
+    repairRequired:
+      record.repairRequired === true || record.repair_required === true,
+    repairReason: pickString(record, ["repairReason", "repair_reason"]),
+    repairTargetCorpus: pickString(record, [
+      "repairTargetCorpus",
+      "repair_target_corpus",
+    ]),
     lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
   };
 }
@@ -5050,11 +5221,60 @@ function serializePaperIngestionState(
     paper_operations: value.paperOperations.map(serializePaperIngestionPaperOperation),
     active_batches: value.activeBatches.map(serializePaperIngestionBatchRun),
     batch_items: value.batchItems.map(serializePaperIngestionBatchItem),
+    queued_requests: value.queuedRequests.map(serializePaperIngestionQueuedRequest),
     last_batch_manifest_path: value.lastBatchManifestPath,
     graph_version_seen: value.graphVersionSeen,
     reconcile_required: value.reconcileRequired,
+    repair_required: value.repairRequired,
+    repair_reason: value.repairReason,
+    repair_target_corpus: value.repairTargetCorpus,
     last_updated_at: value.lastUpdatedAt,
   };
+}
+
+function hasActiveWorkflowOwnedPaperUpload(state: PaperIngestionState): boolean {
+  if (
+    ["waiting_import", "waiting_graph", "reconciling"].includes(
+      normalizePaperIngestionRuntimeStatus(state.runtimeStatus) ?? ""
+    )
+  ) {
+    return true;
+  }
+  if (
+    state.queuedRequests.some((request) =>
+      ["queued", "launching", "running"].includes(normalizeStage(request.status) ?? "")
+    )
+  ) {
+    return true;
+  }
+  if (
+    state.activeBatches.some((batch) =>
+      ["queued", "running"].includes(normalizeStage(batch.status) ?? "")
+    )
+  ) {
+    return true;
+  }
+  if (
+    state.paperOperations.some((operation) =>
+      ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function deriveGraphBuildMicroStage(params: {
+  paperIngestionState: PaperIngestionState;
+  graphPresenceStatus: string | null;
+}): string {
+  if (hasActiveWorkflowOwnedPaperUpload(params.paperIngestionState)) {
+    return "uploading";
+  }
+  if (normalizeGraphPresenceStatus(params.graphPresenceStatus) !== "ready") {
+    return "verifying";
+  }
+  return "brainstorm_refresh";
 }
 
 function normalizeCompletedPaperEntry(
@@ -5465,6 +5685,166 @@ function serializePaperIngestionBatchItem(
     matched_by: value.matchedBy,
     error: value.error,
     updated_at: value.updatedAt,
+  };
+}
+
+function normalizePaperIngestionQueuedRequest(
+  value: unknown
+): PaperIngestionQueuedRequest | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const requestId =
+    pickString(record, ["requestId", "request_id"]) ?? randomUUID();
+  const wrapper = pickString(record, ["wrapper"]);
+  const commandText = pickString(record, ["commandText", "command_text"]);
+  const manifestPath = pickString(record, ["manifestPath", "manifest_path"]);
+  const sharedCorpus = pickString(record, ["sharedCorpus", "shared_corpus"]);
+  const summary = pickString(record, ["summary"]);
+  const argsRaw = record.args;
+  const args = Array.isArray(argsRaw)
+    ? argsRaw
+        .map((item) => asString(item))
+        .filter((item): item is string => Boolean(item))
+    : [];
+  if (!requestId || (!wrapper && !commandText && !manifestPath && !summary)) {
+    return null;
+  }
+  return {
+    requestId,
+    status: normalizePaperIngestionQueuedRequestStatus(record.status),
+    wrapper,
+    args,
+    commandText,
+    manifestPath,
+    sharedCorpus,
+    paperCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["paperCount", "paper_count"]) ?? 0
+      )
+    ) || null,
+    summary,
+    createdAt: pickString(record, ["createdAt", "created_at"]),
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+    startedAt: pickString(record, ["startedAt", "started_at"]),
+    finishedAt: pickString(record, ["finishedAt", "finished_at"]),
+    lastRunId: pickString(record, ["lastRunId", "last_run_id"]),
+    lastSessionKey: pickString(record, ["lastSessionKey", "last_session_key"]),
+    lastError: pickString(record, ["lastError", "last_error"]),
+    detail: pickString(record, ["detail"]),
+    triggerKind: pickString(record, ["triggerKind", "trigger_kind"]),
+  };
+}
+
+function normalizePaperIngestionQueuedRequests(
+  value: unknown
+): PaperIngestionQueuedRequest[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionQueuedRequest[] = [];
+  for (const item of value) {
+    const normalized = normalizePaperIngestionQueuedRequest(item);
+    if (!normalized) {
+      continue;
+    }
+    const existingIndex = entries.findIndex(
+      (entry) => entry.requestId === normalized.requestId
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = mergePaperIngestionQueuedRequestValues(
+        entries[existingIndex],
+        normalized
+      );
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializePaperIngestionQueuedRequest(
+  value: PaperIngestionQueuedRequest
+): Record<string, unknown> {
+  return {
+    request_id: value.requestId,
+    status: value.status,
+    wrapper: value.wrapper,
+    args: value.args,
+    command_text: value.commandText,
+    manifest_path: value.manifestPath,
+    shared_corpus: value.sharedCorpus,
+    paper_count: value.paperCount,
+    summary: value.summary,
+    created_at: value.createdAt,
+    updated_at: value.updatedAt,
+    started_at: value.startedAt,
+    finished_at: value.finishedAt,
+    last_run_id: value.lastRunId,
+    last_session_key: value.lastSessionKey,
+    last_error: value.lastError,
+    detail: value.detail,
+    trigger_kind: value.triggerKind,
+  };
+}
+
+function mergePaperIngestionQueuedRequestValues(
+  current: PaperIngestionQueuedRequest,
+  patch: PaperIngestionQueuedRequest
+): PaperIngestionQueuedRequest {
+  return {
+    requestId: current.requestId,
+    status: patch.status ?? current.status,
+    wrapper: patch.wrapper ?? current.wrapper,
+    args: patch.args.length > 0 ? patch.args : current.args,
+    commandText: patch.commandText ?? current.commandText,
+    manifestPath: patch.manifestPath ?? current.manifestPath,
+    sharedCorpus: patch.sharedCorpus ?? current.sharedCorpus,
+    paperCount: patch.paperCount ?? current.paperCount,
+    summary: patch.summary ?? current.summary,
+    createdAt: current.createdAt ?? patch.createdAt,
+    updatedAt: patch.updatedAt ?? current.updatedAt,
+    startedAt: patch.startedAt ?? current.startedAt,
+    finishedAt: patch.finishedAt ?? current.finishedAt,
+    lastRunId: patch.lastRunId ?? current.lastRunId,
+    lastSessionKey: patch.lastSessionKey ?? current.lastSessionKey,
+    lastError: patch.lastError ?? current.lastError,
+    detail: patch.detail ?? current.detail,
+    triggerKind: patch.triggerKind ?? current.triggerKind,
+  };
+}
+
+function mergePaperIngestionQueuedRequests(params: {
+  current: PaperIngestionQueuedRequest[];
+  patch: unknown;
+}): {
+  queuedRequests: PaperIngestionQueuedRequest[];
+} {
+  const currentEntries = normalizePaperIngestionQueuedRequests(params.current);
+  const patchEntries = normalizePaperIngestionQueuedRequests(params.patch);
+  if (patchEntries.length === 0) {
+    return {
+      queuedRequests: currentEntries,
+    };
+  }
+  const merged = [...currentEntries];
+  for (const entry of patchEntries) {
+    const existingIndex = merged.findIndex(
+      (currentEntry) => currentEntry.requestId === entry.requestId
+    );
+    if (existingIndex >= 0) {
+      merged[existingIndex] = mergePaperIngestionQueuedRequestValues(
+        merged[existingIndex],
+        entry
+      );
+      continue;
+    }
+    merged.push(entry);
+  }
+  return {
+    queuedRequests: merged,
   };
 }
 
@@ -6634,6 +7014,59 @@ function getResearchProgramValidationErrors(
   return errors;
 }
 
+function defaultResearchProgramZoteroProjectPath(
+  projectId: string | null | undefined
+): string | null {
+  const normalizedProjectId = asString(projectId);
+  if (!normalizedProjectId) {
+    return null;
+  }
+  return `bot/${normalizedProjectId}`;
+}
+
+function getResearchProgramOnboardingGaps(params: {
+  state: ResearchProgramState;
+  projectId?: string | null;
+}): string[] {
+  const { state } = params;
+  const gaps: string[] = [];
+  if (!state.goal) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.goal");
+  }
+  if (!state.problemStatement) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.problem_statement");
+  }
+  if (!state.baselineReference) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.baseline_reference");
+  }
+  if (!state.primaryMetric) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.primary_metric");
+  }
+  if (state.datasets.length === 0) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.datasets");
+  }
+  if (state.successCriteria.length === 0) {
+    gaps.push("PROJECT_MANIFEST.json.research_program.success_criteria");
+  }
+  if (!state.zoteroProjectPath) {
+    gaps.push(
+      `PROJECT_MANIFEST.json.research_program.zotero_project_path (recommended: ${
+        defaultResearchProgramZoteroProjectPath(params.projectId) ?? "bot/<project-id>"
+      })`
+    );
+  }
+  return gaps;
+}
+
+function getResearchProgramOnboardingStatus(params: {
+  state: ResearchProgramState;
+  projectId?: string | null;
+}): string {
+  return getResearchProgramOnboardingGaps(params).length === 0
+    ? "ready"
+    : "incomplete";
+}
+
 function getOrchestrationStateValidationErrors(
   state: OrchestrationState,
   currentStage: string | null
@@ -6772,6 +7205,15 @@ function getBrainstormCycleValidationErrors(
   if (!state.basisStage) {
     errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.basis_stage is required");
   }
+  if (!state.provider) {
+    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider is required");
+  }
+  if (!state.providerMode) {
+    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider_mode is required");
+  }
+  if (!Number.isFinite(state.contractVersion ?? NaN)) {
+    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.contract_version is required");
+  }
   for (const [field, value] of [
     ["topic_summary_path", state.topicSummaryPath],
     ["research_brief_path", state.researchBriefPath],
@@ -6788,6 +7230,11 @@ function getBrainstormCycleValidationErrors(
     }
   }
   if (isBrainstormCycleReady(state)) {
+    if (!["ready", "reconciled"].includes(normalizeStage(state.providerStatus) ?? "")) {
+      errors.push(
+        "PROJECT_MANIFEST.json.brainstorm_cycle.provider_status = ready|reconciled is required when the brainstorm cycle is ready"
+      );
+    }
     if (state.rounds.length === 0) {
       errors.push(
         "PROJECT_MANIFEST.json.brainstorm_cycle.rounds must contain at least one completed brainstorm round"
@@ -8455,6 +8902,17 @@ async function getMissingStageSignals(params: {
       if (!(await pathExists(path.join(projectRoot, "graph")))) {
         missing.push("{PROJ}/graph/");
       }
+      {
+        const researchProgram = normalizeResearchProgramState(
+          manifest?.research_program
+        );
+        missing.push(
+          ...getResearchProgramOnboardingGaps({
+            state: researchProgram,
+            projectId: pickString(manifest ?? {}, ["project_id", "projectId"]),
+          })
+        );
+      }
       break;
     case "graph_build":
       if (!(await pathExists(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json")))) {
@@ -8484,6 +8942,12 @@ async function getMissingStageSignals(params: {
           }
         }
       }
+      missing.push(
+        ...(await getBrainstormCycleMissingSignals({
+          projectRoot,
+          manifest,
+        }))
+      );
       break;
     case "frontier_mapping":
       if (!(await pathExists(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md")))) {
@@ -9130,6 +9594,15 @@ function buildDynamicTasks(params: {
       `Graph presence is not ready (${graphPresenceStatus}); run research_workflow.check_graph_presence and refresh graph readiness plus the brainstorm bundle via /graph-build before novelty-sensitive work${missingSummary ? ` (${missingSummary})` : ""}.`
     );
   }
+  if (
+    params.role === "researcher" &&
+    paperIngestionState.repairRequired &&
+    ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
+  ) {
+    tasks.unshift(
+      `Graph sync repair is required${paperIngestionState.repairReason ? `: ${paperIngestionState.repairReason}` : "."} ${buildGraphImportRepairGuidance(paperIngestionState.repairTargetCorpus)}`
+    );
+  }
 
   if (
     params.role === "researcher" &&
@@ -9140,7 +9613,7 @@ function buildDynamicTasks(params: {
       params.papernexusMineruHttpUrl)
   ) {
     tasks.unshift(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); for workflow-owned background graph work, prefer \`research_workflow.run_papernexus_wrapper\`; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
+      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); queue upload work through \`research_workflow.queue_paper_ingestion\`, and prefer \`research_workflow.run_papernexus_wrapper\` for live graph / brainstorm reads; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
     );
     tasks.unshift(
       "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
@@ -9161,7 +9634,7 @@ function buildDynamicTasks(params: {
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     tasks.unshift(
-      "If new PDFs or Markdown arrive through a UI/API upload, use the queued PaperNexus import wrappers from project-local staging, preferably through `research_workflow.run_papernexus_wrapper`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest."
+      "If new PDFs or Markdown arrive through a UI/API upload, queue the PaperNexus import wrappers from project-local staging through `research_workflow.queue_paper_ingestion`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. `/graph-build` and `/resume-pipeline` will launch the queued request for you."
     );
     tasks.unshift(
       "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
@@ -9410,6 +9883,12 @@ export async function buildWorkflowSnapshot(params: {
   const paperIngestionFailedBatchItemCount = paperIngestionState.batchItems.filter(
     (entry) => entry.status === "failed" || entry.status === "submit_failed"
   ).length;
+  const paperIngestionQueuedRequestCount = paperIngestionState.queuedRequests.filter(
+    (entry) => entry.status === "queued" || entry.status === "needs_repair"
+  ).length;
+  const paperIngestionRunningRequestCount = paperIngestionState.queuedRequests.filter(
+    (entry) => entry.status === "launching" || entry.status === "running"
+  ).length;
   const experimentMemory = asRecord(projectState.manifest?.experiment_memory);
   const idleResearch = normalizeIdleResearchState(
     asRecord(projectState.manifest?.idle_research)
@@ -9429,6 +9908,10 @@ export async function buildWorkflowSnapshot(params: {
   const researchProgram = normalizeResearchProgramState(
     asRecord(projectState.manifest?.research_program)
   );
+  const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
+    state: researchProgram,
+    projectId: projectState.projectId,
+  });
   const orchestrationState = normalizeOrchestrationState(
     asRecord(projectState.manifest?.orchestration_state)
   );
@@ -9642,10 +10125,15 @@ export async function buildWorkflowSnapshot(params: {
     paperIngestionPendingBatchItemCount,
     paperIngestionSyncedBatchItemCount,
     paperIngestionFailedBatchItemCount,
+    paperIngestionQueuedRequestCount,
+    paperIngestionRunningRequestCount,
     paperIngestionLastBatchManifestPath: paperIngestionState.lastBatchManifestPath,
     paperIngestionLastImportStatus: paperIngestionState.lastImportStatus,
     paperIngestionGraphVersionSeen: paperIngestionState.graphVersionSeen,
     paperIngestionReconcileRequired: paperIngestionState.reconcileRequired,
+    paperIngestionRepairRequired: paperIngestionState.repairRequired,
+    paperIngestionRepairReason: paperIngestionState.repairReason,
+    paperIngestionRepairTargetCorpus: paperIngestionState.repairTargetCorpus,
     paperSourceDir: resolvedPaperSourceDir,
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
@@ -9681,6 +10169,10 @@ export async function buildWorkflowSnapshot(params: {
     brainstormCycleTopic: brainstormCycle.topic,
     brainstormCycleBasisStage: brainstormCycle.basisStage,
     brainstormCycleTrackId: brainstormCycle.trackId,
+    brainstormCycleProvider: brainstormCycle.provider,
+    brainstormCycleProviderMode: brainstormCycle.providerMode,
+    brainstormCycleProviderStatus: brainstormCycle.providerStatus,
+    brainstormCycleContractVersion: brainstormCycle.contractVersion,
     brainstormCycleGraphVersionSeen: brainstormCycle.graphVersionSeen,
     brainstormCycleImportTaskCount: brainstormCycle.importTaskIdsSeen.length,
     brainstormCycleChainBundleReady:
@@ -9693,6 +10185,19 @@ export async function buildWorkflowSnapshot(params: {
       (track) => normalizeStage(track.status) === "active"
     ).length,
     researchProgramPrimaryGoal: researchProgram.goal,
+    researchProgramOnboardingStatus: getResearchProgramOnboardingStatus({
+      state: researchProgram,
+      projectId: projectState.projectId,
+    }),
+    researchProgramOnboardingMissing,
+    researchProgramBaselineReference: researchProgram.baselineReference,
+    researchProgramPrimaryMetricName: researchProgram.primaryMetric,
+    researchProgramDatasetCount: researchProgram.datasets.length,
+    researchProgramSuccessCriteriaCount:
+      researchProgram.successCriteria.length,
+    researchProgramZoteroProjectPath:
+      researchProgram.zoteroProjectPath ??
+      defaultResearchProgramZoteroProjectPath(projectState.projectId),
     orchestrationStatus: orchestrationState.status,
     orchestrationBlockingCategory: orchestrationState.blockingCategory,
     orchestrationNextTransitionCandidate:
@@ -9975,7 +10480,7 @@ export function buildFocusedPromptAssembly(params: {
       snapshot.brainstormCycleChainBundleReady)
   ) {
     layer3Lines.push(
-      `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
+      `brainstorm_cycle=${snapshot.brainstormCycleStatus ?? "unknown"} provider=${snapshot.brainstormCycleProvider ?? "unset"} mode=${snapshot.brainstormCycleProviderMode ?? "unset"} topic=${snapshot.brainstormCycleTopic ?? "unset"} chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
     );
   }
   if (
@@ -10371,7 +10876,7 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
   if (snapshot.brainstormCycleStatus) {
     lines.push(
-      `Brainstorm cycle: status=${snapshot.brainstormCycleStatus}, topic=${snapshot.brainstormCycleTopic ?? "unset"}, basis_stage=${snapshot.brainstormCycleBasisStage ?? "unset"}, track=${snapshot.brainstormCycleTrackId ?? "unset"}, graph_version=${snapshot.brainstormCycleGraphVersionSeen ?? "unset"}, import_tasks=${snapshot.brainstormCycleImportTaskCount ?? 0}, chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
+      `Brainstorm cycle: status=${snapshot.brainstormCycleStatus}, provider=${snapshot.brainstormCycleProvider ?? "unset"}, provider_mode=${snapshot.brainstormCycleProviderMode ?? "unset"}, provider_status=${snapshot.brainstormCycleProviderStatus ?? "unset"}, contract_version=${snapshot.brainstormCycleContractVersion ?? "unset"}, topic=${snapshot.brainstormCycleTopic ?? "unset"}, basis_stage=${snapshot.brainstormCycleBasisStage ?? "unset"}, track=${snapshot.brainstormCycleTrackId ?? "unset"}, graph_version=${snapshot.brainstormCycleGraphVersionSeen ?? "unset"}, import_tasks=${snapshot.brainstormCycleImportTaskCount ?? 0}, chain_bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`
     );
     if (snapshot.brainstormCyclePendingReason) {
       lines.push(`Brainstorm cycle pending_reason: ${snapshot.brainstormCyclePendingReason}`);
@@ -10385,8 +10890,18 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
   if (snapshot.researchProgramStatus) {
     lines.push(
-      `Research program: status=${snapshot.researchProgramStatus}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
+      `Research program: status=${snapshot.researchProgramStatus}, onboarding=${snapshot.researchProgramOnboardingStatus ?? "unknown"}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, baseline=${snapshot.researchProgramBaselineReference ?? "unset"}, primary_metric=${snapshot.researchProgramPrimaryMetricName ?? "unset"}, datasets=${snapshot.researchProgramDatasetCount ?? 0}, success_criteria=${snapshot.researchProgramSuccessCriteriaCount ?? 0}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
     );
+    if (snapshot.researchProgramZoteroProjectPath) {
+      lines.push(
+        `Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`
+      );
+    }
+    if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
+      lines.push(
+        `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`
+      );
+    }
   }
   if (snapshot.orchestrationStatus) {
     lines.push(
@@ -10553,10 +11068,10 @@ export function formatWorkflowSnapshotForPrompt(params: {
   }
 
   lines.push(
-    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> use queued PaperNexus wrapper tasks (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py`) for one-paper uploads and `pn_batch_import.py` with one manifest for 2+ staged papers, preferably through `research_workflow.run_papernexus_wrapper` or the dedicated /papernexus-batch-import skill -> /graph-build readiness + brainstorm bundle refresh."
+    "Preferred paper-ingestion order: /papers-cool search (optionally merge /pasa-paper-search when it succeeds) -> once paper identity is confirmed, call /hugging-face-paper-pages -> if needed call /arxiv2md-api -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, call /papers-cool PDF fallback -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> queue one PaperNexus upload request through `research_workflow.queue_paper_ingestion` (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py` for one paper, `pn_batch_import.py` with one manifest for 2+ staged papers, or the dedicated /papernexus-batch-import skill) -> /graph-build readiness + brainstorm bundle refresh."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) and its task logs, ideally by launching them through `research_workflow.run_papernexus_wrapper`. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) by recording it through `research_workflow.queue_paper_ingestion`. `/graph-build` or `/resume-pipeline` should launch the queued request later. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
@@ -11721,12 +12236,17 @@ export async function getResearchProgramStateSummary(params: {
 }): Promise<{
   state: ResearchProgramState;
   validationErrors: string[];
+  onboardingStatus: string;
+  onboardingGaps: string[];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const state = normalizeResearchProgramState(manifest.research_program);
+  const projectId = pickString(manifest, ["project_id", "projectId"]);
   return {
     state,
     validationErrors: getResearchProgramValidationErrors(state),
+    onboardingStatus: getResearchProgramOnboardingStatus({ state, projectId }),
+    onboardingGaps: getResearchProgramOnboardingGaps({ state, projectId }),
   };
 }
 
@@ -12462,6 +12982,54 @@ export async function getPaperIngestionStateSummary(params: {
   const manifest = await readManifestEnsured(params.projectRoot);
   return {
     state: normalizePaperIngestionState(manifest.paper_ingestion),
+  };
+}
+
+export async function queuePaperIngestionRequest(params: {
+  projectRoot: string;
+  paperIngestionRequest: Record<string, unknown>;
+}): Promise<{
+  state: PaperIngestionState;
+  request: PaperIngestionQueuedRequest;
+}> {
+  const patch = asRecord(params.paperIngestionRequest) ?? {};
+  const normalized = normalizePaperIngestionQueuedRequest({
+    ...patch,
+    request_id:
+      pickString(patch, ["requestId", "request_id"]) ?? randomUUID(),
+    status:
+      pickString(patch, ["status"]) ??
+      "queued",
+    created_at:
+      pickString(patch, ["createdAt", "created_at"]) ?? new Date().toISOString(),
+    updated_at:
+      pickString(patch, ["updatedAt", "updated_at"]) ?? new Date().toISOString(),
+  });
+  if (!normalized) {
+    throw new Error(
+      "paperIngestionRequest must include at least a wrapper/command_text/manifest_path/summary."
+    );
+  }
+  normalized.status = "queued";
+  normalized.startedAt = null;
+  normalized.finishedAt = null;
+  normalized.lastRunId = null;
+  normalized.lastSessionKey = null;
+  normalized.lastError = null;
+  normalized.triggerKind = null;
+  const result = await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      queued_requests: [serializePaperIngestionQueuedRequest(normalized)],
+      last_updated_at: normalized.updatedAt,
+    },
+  });
+  const request =
+    result.state.queuedRequests.find((entry) => entry.requestId === normalized.requestId) ??
+    normalized;
+  return {
+    state: result.state,
+    request,
   };
 }
 
@@ -13278,6 +13846,26 @@ export async function setBrainstormCycleState(params: {
     ...serializeBrainstormCycleState(current),
     ...patch,
     track_id: trackId,
+    provider:
+      pickString(patch, ["provider"]) ?? current.provider ?? "workflow_core_brainstorm",
+    provider_mode:
+      pickString(patch, ["providerMode", "provider_mode"]) ??
+      current.providerMode ??
+      "core",
+    provider_status:
+      normalizeStage(patch.providerStatus ?? patch.provider_status) ??
+      current.providerStatus ??
+      (isBrainstormCycleReady(current) ? "ready" : "pending"),
+    provider_last_run_at:
+      pickString(patch, ["providerLastRunAt", "provider_last_run_at"]) ??
+      current.providerLastRunAt,
+    provider_last_error:
+      pickString(patch, ["providerLastError", "provider_last_error"]) ??
+      current.providerLastError,
+    contract_version:
+      pickNumber(patch, ["contractVersion", "contract_version"]) ??
+      current.contractVersion ??
+      1,
     topic_summary_path:
       pickString(patch, ["topicSummaryPath", "topic_summary_path"]) ??
       (preferScopedDefaults ? defaultPaths.topicSummaryPath : current.topicSummaryPath) ??
@@ -13377,6 +13965,26 @@ export async function runBrainstormCycle(params: {
     ...patch,
     mode: pickString(patch, ["mode"]) ?? current.mode,
     track_id: trackId,
+    provider:
+      pickString(patch, ["provider"]) ?? current.provider ?? "workflow_core_brainstorm",
+    provider_mode:
+      pickString(patch, ["providerMode", "provider_mode"]) ??
+      current.providerMode ??
+      "core",
+    provider_status:
+      normalizeStage(patch.providerStatus ?? patch.provider_status) ??
+      (selection ? "ready" : current.providerStatus) ??
+      (isBrainstormCycleReady(current) ? "ready" : "pending"),
+    provider_last_run_at:
+      pickString(patch, ["providerLastRunAt", "provider_last_run_at"]) ??
+      new Date().toISOString(),
+    provider_last_error:
+      pickString(patch, ["providerLastError", "provider_last_error"]) ??
+      (selection ? null : current.providerLastError),
+    contract_version:
+      pickNumber(patch, ["contractVersion", "contract_version"]) ??
+      current.contractVersion ??
+      1,
     selection_mode: selection?.mode ?? current.selectionMode,
     selected_round_id:
       selection?.round.roundId ??
@@ -13618,6 +14226,8 @@ export async function setResearchProgramState(params: {
 }): Promise<{
   state: ResearchProgramState;
   validationErrors: string[];
+  onboardingStatus: string;
+  onboardingGaps: string[];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeResearchProgramState(manifest.research_program);
@@ -13644,9 +14254,18 @@ export async function setResearchProgramState(params: {
   });
   manifest.research_program = serializeResearchProgramState(merged);
   await saveManifest(params.projectRoot, manifest);
+  const projectId = pickString(manifest, ["project_id", "projectId"]);
   return {
     state: merged,
     validationErrors: getResearchProgramValidationErrors(merged),
+    onboardingStatus: getResearchProgramOnboardingStatus({
+      state: merged,
+      projectId,
+    }),
+    onboardingGaps: getResearchProgramOnboardingGaps({
+      state: merged,
+      projectId,
+    }),
   };
 }
 
@@ -13996,6 +14615,7 @@ export async function setPaperIngestionState(params: {
   const paperOperationsRaw = patch.paper_operations ?? patch.paperOperations;
   const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
   const batchItemsRaw = patch.batch_items ?? patch.batchItems;
+  const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
   const completedPaperUpdate = mergeCompletedPaperEntries({
     current: current.completedPapers,
     patch: completedPapersRaw,
@@ -14011,6 +14631,10 @@ export async function setPaperIngestionState(params: {
   const batchItemUpdate = mergePaperIngestionBatchItems({
     current: current.batchItems,
     patch: batchItemsRaw,
+  });
+  const queuedRequestUpdate = mergePaperIngestionQueuedRequests({
+    current: current.queuedRequests,
+    patch: queuedRequestsRaw,
   });
   const next: PaperIngestionState = {
     ...current,
@@ -14034,6 +14658,7 @@ export async function setPaperIngestionState(params: {
     paperOperations: paperOperationUpdate.paperOperations,
     activeBatches: batchRunUpdate.activeBatches,
     batchItems: batchItemUpdate.batchItems,
+    queuedRequests: queuedRequestUpdate.queuedRequests,
     lastBatchManifestPath:
       pickString(patch, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
       batchRunUpdate.activeBatches[batchRunUpdate.activeBatches.length - 1]?.manifestPath ??
@@ -14048,6 +14673,22 @@ export async function setPaperIngestionState(params: {
       (patch.reconcileRequired === false || patch.reconcile_required === false
         ? false
         : current.reconcileRequired),
+    repairRequired:
+      patch.repairRequired === true ||
+      patch.repair_required === true ||
+      (patch.repairRequired === false || patch.repair_required === false
+        ? false
+        : current.repairRequired),
+    repairReason:
+      pickString(patch, ["repairReason", "repair_reason"]) ??
+      (patch.repairRequired === false || patch.repair_required === false
+        ? null
+        : current.repairReason),
+    repairTargetCorpus:
+      pickString(patch, ["repairTargetCorpus", "repair_target_corpus"]) ??
+      (patch.repairRequired === false || patch.repair_required === false
+        ? null
+        : current.repairTargetCorpus),
     lastUpdatedAt:
       pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
       new Date().toISOString(),
@@ -14797,6 +15438,9 @@ export async function runWorkflowAutoIterator(params: {
 
   const ownerBefore = asString(manifest.owner_agent);
   const ownerAfter = stageOwner(stageAfter);
+  const paperIngestionStateForActions = normalizePaperIngestionState(
+    manifest.paper_ingestion
+  );
   const experimentSearchState = normalizeExperimentSearchState(manifest.experiment_search);
   const shouldMonitorExperiments =
     stageAfter === "experiment" &&
@@ -14808,17 +15452,51 @@ export async function runWorkflowAutoIterator(params: {
   const experimentMonitorCommand = shouldMonitorExperiments
     ? buildExperimentMonitorCommand()
     : null;
+  const setupOnboardingCommand =
+    stageAfter === "setup" &&
+    activeStageSignals.some((signal) =>
+      signal.includes("PROJECT_MANIFEST.json.research_program")
+    )
+      ? "Run /project-init to complete the onboarding contract and lock the baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path before graph grounding."
+      : null;
+  const graphImportRepairCommand =
+    stageAfter === "graph_build" && paperIngestionStateForActions.repairRequired
+      ? buildGraphImportRepairGuidance(
+          paperIngestionStateForActions.repairTargetCorpus
+        )
+      : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : experimentMonitorCommand ?? formatStageCommand(stageAfter);
+    : experimentMonitorCommand ??
+      graphImportRepairCommand ??
+      setupOnboardingCommand ??
+      formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : experimentMonitorCommand ?? formatStageCommand(stageAfter);
+    : experimentMonitorCommand ??
+      graphImportRepairCommand ??
+      setupOnboardingCommand ??
+      formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
     : activeStageSignals.length > 0
       ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${activeStageSignals.join("; ")}`
       : null;
+  const previousMicroStage =
+    normalizeStage(manifest.current_micro_stage) ?? null;
+  const nextMicroStage =
+    stageAfter === "graph_build"
+      ? deriveGraphBuildMicroStage({
+          paperIngestionState: paperIngestionStateForActions,
+          graphPresenceStatus:
+            normalizeGraphPresenceStatus(
+              asRecord(manifest.paper_ingestion)?.graph_presence_status ??
+                asRecord(manifest.paper_ingestion)?.graphPresenceStatus
+            ) ?? graphPresenceCheck?.status ?? null,
+        })
+      : stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
+        ? STAGE_ENTRY_MICRO_STAGES[stageAfter] ?? previousMicroStage
+        : previousMicroStage;
 
   manifest.project_id = projectId;
   manifest.current_stage = stageAfter;
@@ -14827,12 +15505,9 @@ export async function runWorkflowAutoIterator(params: {
   manifest.resume_action = resumeAction;
   manifest.blocking_reason = blockingReason;
   manifest.last_heartbeat_at = now;
+  manifest.current_micro_stage = nextMicroStage;
   if (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed) {
     manifest.last_handoff_at = now;
-    manifest.current_micro_stage =
-      STAGE_ENTRY_MICRO_STAGES[stageAfter] ??
-      normalizeStage(manifest.current_micro_stage) ??
-      null;
   }
   await saveManifest(projectRoot, manifest);
 
@@ -14939,6 +15614,7 @@ export async function runWorkflowAutoIterator(params: {
       owner: "researcher",
       summary: "PaperNexus graph catch-up is pending and should refresh brainstorm grounding before novelty-sensitive work.",
       command:
+        graphImportRepairCommand ??
         "Run /graph-build to verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, refresh graph readiness metadata, and update the brainstorm bundle (cache-first, without --force) before continuing frontier mapping or ideation. If wrapper-driven graph catch-up still fails, hand the exact non-force command to the user to run manually.",
       mailboxQueued: false,
       mailboxMessageId: null,

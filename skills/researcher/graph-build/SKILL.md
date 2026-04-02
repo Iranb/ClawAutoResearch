@@ -15,8 +15,49 @@ allowed-tools:
 
 Validate that the current project's selected literature is already reflected in the shared global PaperNexus graph, then refresh the brainstorm package that later idea generation depends on. Queued import workers should do the real graph mutation automatically; this skill is the bounded readiness and brainstorm-refresh pass that keeps workflow state honest.
 
+If the local Zotero MCP server is configured, this same pass must also synchronize the verified project bibliography into Zotero's `bot/<project-id>/` tree and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`. `/graph-build` is the point where graph readiness, brainstorm grounding, and bibliography organization should converge before frontier mapping.
+
 > **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+
+## Workflow-Owned Micro-Stages
+
+`graph_build` is a fixed three-step workflow phase:
+
+1. `graph_build/uploading`
+   - workflow-owned queued upload requests are still `queued`, `launching`, or `running`
+   - remote import / graph catch-up may still be in flight
+2. `graph_build/verifying`
+   - upload work is idle
+   - the workflow is checking whether required canonical papers are actually present in the shared graph
+3. `graph_build/brainstorm_refresh`
+   - graph presence is already `ready`
+   - the workflow is refreshing the **core brainstorm provider contract** that downstream frontier/idea work consumes
+
+Do not invent extra graph-build micro-stages in durable state. If graph presence is ready but the brainstorm contract is still stale, keep the project in `graph_build/brainstorm_refresh` instead of advancing.
+
+## Core Brainstorm Provider Contract
+
+The workflow treats brainstorm refresh as a replaceable provider, not a hard-coded single skill. The default core provider is `workflow_core_brainstorm`, but future providers may change as long as they still persist the same durable contract through `research_workflow.run_brainstorm_cycle`.
+
+The provider contract must keep these fields current in `PROJECT_MANIFEST.json.brainstorm_cycle`:
+
+- `provider`
+- `provider_mode`
+- `provider_status`
+- `contract_version`
+- the durable chain bundle artifacts:
+  - `topic_summary_path`
+  - `research_brief_path`
+  - `brainstorm_brief_path`
+  - `logic_chain_path`
+  - `evidence_chain_path`
+  - `reasoning_trace_path`
+  - `question_packet_path`
+  - `working_memory_path`
+  - `synthesis_packet_path`
+
+You may swap which brainstorm skill or wrapper creates the bundle later, but you must not change the contract that `graph_build` validates.
 
 ## Remote Access Requirement
 
@@ -34,7 +75,7 @@ Read the remote access settings from the plugin-level workflow config:
 Rules:
 
 - when using remote PaperNexus, let the Python wrappers resolve auth from the configured token source
-- for workflow-owned background graph work, prefer `research_workflow.run_papernexus_wrapper` to launch the wrappers in a durable dedicated subagent session
+- for workflow-owned background graph work, queue upload wrappers through `research_workflow.queue_paper_ingestion`; use `research_workflow.run_papernexus_wrapper` for the live graph / brainstorm wrappers that `/graph-build` still needs after upload
 - `auto` means: env first, then native OS keychain
 - native keychain means:
   - macOS Keychain on `darwin`
@@ -108,13 +149,16 @@ Normal workflow-owned action:
 ```
 
 This should:
+- trigger any durable queued upload request first; `/graph-build` is allowed to launch queued `queue_paper_ingestion` work before it starts the readiness pass
 - check whether the canonical papers recorded in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` are already present in the shared global graph
 - update project-local readiness metadata
 - record whether automatic shared-graph catch-up is still required
 - avoid rebuilding a project-specific corpus
 - treat remote graph advancement as queued import-worker progress, not a second manual rebuild step
+- if uploads are still missing, create or repair one queued upload request and let the workflow-owned continuation run the actual wrappers; do not turn Researcher into the direct uploader
 - after each completed paper import or each batch status pass, run a short status pass and report progress before the next workflow tick
-- once the required papers are present, run one bounded brainstorm refresh using the typed wrappers (`pn_graph_query.py ideas|brainstorm` and `pn_research_chains.py brainstorm-brief|research-brief`) and persist the resulting durable bundle through `research_workflow.run_brainstorm_cycle`
+- once the required papers are present, move the workflow to `graph_build/brainstorm_refresh`, run one bounded core-provider refresh using the typed wrappers (`pn_graph_query.py ideas|brainstorm` and `pn_research_chains.py brainstorm-brief|research-brief`) or a future compatible provider, and persist the resulting durable bundle through `research_workflow.run_brainstorm_cycle`
+- if the local Zotero MCP server is available, sync the verified canonical set into `bot/<project-id>/selected`, put baseline-defining papers into `bot/<project-id>/baselines`, keep `bot/<project-id>/writing-shortlist` untouched unless the project is already entering writing-heavy work, and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 
 Hard rule:
 
@@ -123,8 +167,10 @@ Hard rule:
 - if automatic graph catch-up is still pending and the automated path fails, report the exact non-force command to the user and let the user run it manually instead of escalating to a forced rebuild
 - do **not** wait indefinitely for one remote paper import, one batch wait, or one status/brainstorm refresh attempt; cap each workflow wait pass at 60 seconds, record durable progress, and continue on the next pass
 - for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; the workflow needs manifest-level progress plus per-item visibility
+- Researcher should stage papers and queue the upload request; `/graph-build` or `/resume-pipeline` is the workflow-owned place that actually launches the queued request and preserves `queued_requests` state across restarts
 - when remote PaperNexus status looks stale, cross-check `PROJECT_MANIFEST.json.paper_ingestion` before declaring a hard missing-corpus failure; `waiting_import`, `waiting_graph`, or `reconciling` means the wrapper-driven catch-up is still in flight
 - every per-paper terminal state, every batch summary/item refresh, and every brainstorm bundle refresh must be reflected through `research_workflow.set_paper_ingestion` or `research_workflow.run_brainstorm_cycle`, because that is what feeds `/workflow-status` and the Discord-visible completion/progress updates
+- if the local Zotero MCP server is unavailable, record that explicitly in `{PROJ}/researcher/ZOTERO_PACKET.md` instead of silently skipping bibliography sync
 
 Use these refresh triggers:
 - 1 newly ingested paper that changes the novelty baseline or closest prior work
@@ -138,6 +184,7 @@ Feedback rule:
 - if graph build delegated wrapper work into a background subagent, require progress to come back through `research_workflow.set_paper_ingestion` and the workflow status broadcast path
 - do not wait for a free-form subagent reply before updating channel-visible status
 - if graph readiness is already satisfied, spend the remaining `/graph-build` budget on refreshing the brainstorm bundle rather than re-running a fake manual reconciliation loop
+- if graph readiness is already satisfied, spend the remaining `/graph-build` budget on refreshing the brainstorm bundle and Zotero `bot/<project-id>` collections rather than re-running a fake manual reconciliation loop
 
 ## Output Files
 
@@ -177,10 +224,10 @@ Update `{PROJ}/PROJECT_MANIFEST.json` with:
 - `paper_ingestion.changed_files_since_graph: 0`
 - `paper_ingestion.refresh_required: false`
 - `paper_ingestion.refresh_reason: null`
-- refreshed `brainstorm_cycle` artifact pointers or `latest_run_at` when this pass updates the brainstorm bundle
+- refreshed `brainstorm_cycle.provider*`, `contract_version`, artifact pointers, and `latest_run_at` when this pass updates the brainstorm bundle
 - `graph_watch.enabled`
 - `current_stage: "graph_build"`
-- `current_micro_stage: "graph_validated"`
+- `current_micro_stage: "uploading" | "verifying" | "brainstorm_refresh"` while the stage is still active
 - `updated_at`
 - `gates.quality: "pending"` until frontier mapping and track selection complete
 

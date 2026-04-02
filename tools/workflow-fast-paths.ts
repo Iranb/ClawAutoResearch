@@ -13,6 +13,8 @@ import {
 import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
+  getPaperIngestionStateSummary,
+  setPaperIngestionState,
   type WorkflowGuardPolicy,
 } from "./workflow-guard";
 import {
@@ -65,6 +67,7 @@ export type BackgroundRunRequest = {
   projectId?: string;
   projectRoot?: string;
   ensureProjectBinding?: boolean;
+  extraSystemPrompt?: string;
 };
 
 export type PapernexusWrapperScript =
@@ -363,6 +366,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "research_pipeline":
     case "research_queue":
     case "resume_pipeline":
+    case "graph_build":
     case "idle_research":
       return "research";
     case "papernexus_skill":
@@ -2302,6 +2306,17 @@ export function buildResumePipelineBackgroundCommand(commandText: string): strin
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+export function buildGraphBuildBackgroundCommand(commandText: string): string {
+  const trimmed = commandText.trim();
+  if (!trimmed) {
+    return '/graph-build "current project" -- __BACKGROUND_CONTINUATION__: true';
+  }
+  if (hasBackgroundContinuationMarker(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
+}
+
 export function buildPapernexusSkillBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
   if (hasBackgroundContinuationMarker(trimmed)) {
@@ -2339,6 +2354,19 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
 }): string {
   const normalizedKind = readString(params?.kind)?.toLowerCase() ?? null;
   const commandText = readString(params?.commandText) ?? null;
+  const graphBuildContinuation =
+    normalizedKind === "graph_build" || /^\/graph-build\b/i.test(commandText ?? "");
+  const graphBuildRepairContinuation =
+    graphBuildContinuation &&
+    /--repair-import(?:\s+|=)(?:true|1|yes)\b/i.test(commandText ?? "");
+  const graphBuildRepairTargetCorpus =
+    (() => {
+      const match =
+        /--shared-corpus(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(
+          commandText ?? ""
+        );
+      return readString(match?.[1] ?? match?.[2] ?? match?.[3] ?? null) ?? null;
+    })();
   const papernexusBackground =
     isPapernexusBackgroundKind(normalizedKind ?? "") ||
     looksLikePapernexusHeavyCommand(commandText ?? "");
@@ -2354,6 +2382,39 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     lines.push(
       "PaperNexus workflow rule: stay wrapper-first. Use the authenticated Python wrappers and do not fall back to local PaperNexus live-graph CLI work or hand-written REST calls."
     );
+  }
+  if (graphBuildContinuation) {
+    lines.push(
+      "Graph-build workflow rule: treat /graph-build as a bounded graph-readiness and brainstorm-refresh pass. The remote PaperNexus import worker performs the real graph mutation; do not turn this continuation into a manual rebuild loop."
+    );
+    lines.push(
+      "During /graph-build, use the local Zotero MCP server through /zotero-project-library and keep the project's bibliography synchronized under bot/<project-id> (for example bot/paper-lab)."
+    );
+    lines.push(
+      "At minimum, sync the verified canonical paper set into bot/<project-id>/selected, put baseline-defining papers into bot/<project-id>/baselines, and refresh {PROJ}/researcher/ZOTERO_PACKET.md with collection path, counts, and unresolved metadata cleanup tasks."
+    );
+    lines.push(
+      "Do not wait indefinitely on Zotero work either; keep graph readiness and brainstorm bundle refresh as the primary bounded pass, then complete the Zotero bot/<project-id> sync before reporting graph-build completion."
+    );
+    if (graphBuildRepairContinuation) {
+      lines.push(
+        "Graph-build repair mode: this continuation was launched because graph sync is still missing papers while ingestion is idle. Treat it as a bounded graph-sync repair pass, not a passive status check."
+      );
+      if (graphBuildRepairTargetCorpus) {
+        lines.push(
+          `Lock the repair pass to the shared corpus ${graphBuildRepairTargetCorpus}; do not switch to a project-local or differently named corpus.`
+        );
+      }
+      lines.push(
+        "Regenerate one manifest for the missing canonical papers and drive the repair through pn_batch_import.py submit/status/wait instead of hand-rolled loops or repeated one-paper submit commands."
+      );
+      lines.push(
+        "If a prior workflow queue/session is marked needs_repair, treat it as stale bookkeeping and start a fresh bounded repair batch instead of waiting forever on the stale run."
+      );
+      lines.push(
+        "Keep repair progress durable through research_workflow.set_paper_ingestion: mirror active_batches, batch_items, completed_papers, and paper_operations, and clear repair_required only after a fresh batch is running or graph_presence_status becomes ready."
+      );
+    }
   }
   if (importLifecycleCommand) {
     if (batchImportCommand) {
@@ -2393,6 +2454,184 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
   return `${lines.join("\n")}\n`;
 }
 
+function mergeBackgroundWorkflowSystemPrompt(
+  basePrompt: string,
+  extraPrompt: string | null | undefined
+): string {
+  const extra = readString(extraPrompt);
+  if (!extra) {
+    return basePrompt;
+  }
+  return `${basePrompt.trimEnd()}\n\n${extra.trim()}\n`;
+}
+
+function isPaperIngestionStateInFlight(state: {
+  runtimeStatus: string;
+  importTaskIds: string[];
+  completedPapers: unknown[];
+  paperOperations: Array<{ status: string }>;
+  activeBatches: Array<{ status: string }>;
+  batchItems: Array<{ status: string | null }>;
+}): boolean {
+  if (["waiting_import", "waiting_graph", "reconciling"].includes(state.runtimeStatus)) {
+    return true;
+  }
+  if (state.paperOperations.some((entry) => ["queued", "running"].includes(entry.status))) {
+    return true;
+  }
+  if (state.activeBatches.some((entry) => ["queued", "running"].includes(entry.status))) {
+    return true;
+  }
+  if (state.batchItems.some((entry) => ["pending", "running"].includes(entry.status ?? ""))) {
+    return true;
+  }
+  return state.importTaskIds.length > 0 && state.completedPapers.length === 0;
+}
+
+function buildWorkflowOwnedIngestionRequestPrompt(params: {
+  requestId: string;
+  triggerKind: string;
+  sharedCorpus: string | null;
+}): string {
+  const lines = [
+    `WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=${params.requestId}`,
+    `This wrapper run was launched by workflow-owned ${params.triggerKind} trigger, not by ad-hoc agent delegation.`,
+    "Treat this as the authoritative upload execution for the queued paper ingestion request and keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion.",
+    "When you report progress, include queued_requests with this request_id so status moves through running/completed/failed and preserves last_run_id, last_session_key, last_error, and detail.",
+  ];
+  if (params.sharedCorpus) {
+    lines.push(
+      `Use the locked shared corpus ${params.sharedCorpus} for this queued upload request and do not switch corpora mid-run.`
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function maybeTriggerQueuedPaperIngestionRequest(params: {
+  runtimeSubagent?: {
+    run: (params: {
+      sessionKey: string;
+      message: string;
+      lane?: string;
+      deliver?: boolean;
+      idempotencyKey?: string;
+      extraSystemPrompt?: string;
+    }) => Promise<{ runId: string }>;
+    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+      status: "ok" | "error" | "timeout";
+      error?: string;
+    }>;
+    deleteSession?: (params: {
+      sessionKey: string;
+      deleteTranscript?: boolean;
+    }) => Promise<void>;
+  };
+  workflowPolicy: WorkflowGuardPolicy;
+  agentCtx: BackgroundRunAgentContext;
+  snapshot: BackgroundRunSnapshot;
+  triggerKind: string;
+  projectRoot: string | null;
+  projectId: string | null;
+}): Promise<BackgroundRunStartResult | null> {
+  if (!params.projectRoot) {
+    return null;
+  }
+  const ingestion = await getPaperIngestionStateSummary({
+    projectRoot: params.projectRoot,
+  });
+  const inFlight = isPaperIngestionStateInFlight(ingestion.state);
+  const queuedCandidate =
+    ingestion.state.queuedRequests.find((entry) =>
+      ["queued", "needs_repair"].includes(entry.status)
+    ) ??
+    (!inFlight
+      ? ingestion.state.queuedRequests.find((entry) =>
+          ["launching", "running"].includes(entry.status)
+        ) ?? null
+      : null);
+  if (!queuedCandidate || !queuedCandidate.commandText) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const staleRunning = ["launching", "running"].includes(queuedCandidate.status);
+  if (staleRunning) {
+    await setPaperIngestionState({
+      projectRoot: params.projectRoot,
+      paperIngestion: {
+        queued_requests: [
+          {
+            request_id: queuedCandidate.requestId,
+            wrapper: queuedCandidate.wrapper,
+            command_text: queuedCandidate.commandText,
+            manifest_path: queuedCandidate.manifestPath,
+            summary: queuedCandidate.summary,
+            status: "needs_repair",
+            updated_at: now,
+            detail:
+              "Workflow detected a stale running upload request with no active ingestion state; requeueing it for a fresh workflow-owned launch.",
+          },
+        ],
+      },
+    });
+  }
+
+  const requestPrompt = buildWorkflowOwnedIngestionRequestPrompt({
+    requestId: queuedCandidate.requestId,
+    triggerKind: params.triggerKind,
+    sharedCorpus: queuedCandidate.sharedCorpus,
+  });
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: params.runtimeSubagent,
+    workflowPolicy: params.workflowPolicy,
+    agentCtx: params.agentCtx,
+    snapshot: {
+      ...params.snapshot,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      commandText: queuedCandidate.commandText,
+      summary:
+        queuedCandidate.summary ??
+        `Workflow-triggered paper ingestion request ${queuedCandidate.requestId}.`,
+      projectId: params.projectId ?? undefined,
+      projectRoot: params.projectRoot,
+      ensureProjectBinding: true,
+      extraSystemPrompt: requestPrompt,
+    },
+  });
+
+  await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      queued_requests: [
+        {
+          request_id: queuedCandidate.requestId,
+          wrapper: queuedCandidate.wrapper,
+          command_text: queuedCandidate.commandText,
+          manifest_path: queuedCandidate.manifestPath,
+          summary: queuedCandidate.summary,
+          status: result.started ? "running" : "queued",
+          updated_at: new Date().toISOString(),
+          started_at: result.started ? new Date().toISOString() : null,
+          last_run_id: result.runId,
+          last_session_key: result.sessionKey,
+          last_error: result.started ? null : result.summary,
+          trigger_kind: params.triggerKind,
+          detail:
+            result.started
+              ? `Workflow-triggered upload started from ${params.triggerKind}.`
+              : `Workflow tried to trigger upload from ${params.triggerKind} but it remained queued (${result.reason}).`,
+        },
+      ],
+    },
+  });
+
+  return result;
+}
+
 async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
@@ -2405,6 +2644,7 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
   projectRoot: string | null;
   summary: string | null;
   commandText: string;
+  extraSystemPrompt?: string | null;
   reusableBackgroundSessionKey?: string | null;
   activeResearcherSessionsInChannel?: number | null;
   unavailableReason?: string | null;
@@ -2427,10 +2667,13 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
       lane: "nested",
       deliver: false,
       idempotencyKey: `openclaw-research:bg:${params.preferredSessionKey}:${params.queueKey}`,
-      extraSystemPrompt: buildBackgroundWorkflowContinuationSystemPrompt({
-        kind: params.kind,
-        commandText: params.commandText,
-      }),
+      extraSystemPrompt: mergeBackgroundWorkflowSystemPrompt(
+        buildBackgroundWorkflowContinuationSystemPrompt({
+          kind: params.kind,
+          commandText: params.commandText,
+        }),
+        params.extraSystemPrompt
+      ),
     },
   });
   const targetLabel =
@@ -2540,6 +2783,10 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildResearchQueueBackgroundCommand(
             `/research-queue "${topic ?? ensuredProject?.title ?? "status"}"`
           )
+      : normalizedKind === "graph_build"
+        ? buildGraphBuildBackgroundCommand(
+            `/graph-build "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
+          )
       : normalizedKind === "idle_research"
         ? requestedCommandText ?? null
       : null);
@@ -2547,7 +2794,7 @@ export async function startBackgroundWorkflowRun(params: {
     throw new Error(
       isPapernexusBackgroundKind(normalizedKind)
         ? "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
-        : "backgroundRun.commandText is required unless kind=research_pipeline."
+        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, or graph_build."
     );
   }
   if (
@@ -2605,6 +2852,10 @@ export async function startBackgroundWorkflowRun(params: {
     kind: normalizedKind,
     commandText,
   });
+  const mergedContinuationSystemPrompt = mergeBackgroundWorkflowSystemPrompt(
+    continuationSystemPrompt,
+    params.backgroundRun.extraSystemPrompt
+  );
   const queueIfRuntimeUnavailable = async (reason?: string | null) =>
     queueBackgroundWorkflowUntilRuntimeRecovers({
       workflowPolicy: params.workflowPolicy,
@@ -2620,6 +2871,7 @@ export async function startBackgroundWorkflowRun(params: {
         readString(params.backgroundRun.summary) ??
         `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
       commandText,
+      extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
       unavailableReason: reason,
     });
 
@@ -2627,6 +2879,25 @@ export async function startBackgroundWorkflowRun(params: {
     return queueIfRuntimeUnavailable(
       "Background workflow execution requires gateway runtime.subagent access."
     );
+  }
+
+  if (
+    resolvedProjectRoot &&
+    (normalizedKind === "graph_build" || normalizedKind === "resume_pipeline")
+  ) {
+    await maybeTriggerQueuedPaperIngestionRequest({
+      runtimeSubagent: params.runtimeSubagent,
+      workflowPolicy: params.workflowPolicy,
+      agentCtx: params.agentCtx,
+      snapshot: {
+        ...params.snapshot,
+        projectRoot: resolvedProjectRoot,
+        projectId: resolvedProjectId,
+      },
+      triggerKind: normalizedKind,
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
+    });
   }
 
   const sessionLease = await acquireBackgroundWorkflowSession({
@@ -2667,7 +2938,7 @@ export async function startBackgroundWorkflowRun(params: {
         lane: "nested",
         deliver: false,
         idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
-        extraSystemPrompt: continuationSystemPrompt,
+        extraSystemPrompt: mergedContinuationSystemPrompt,
       },
     });
     return {
@@ -2714,7 +2985,7 @@ export async function startBackgroundWorkflowRun(params: {
             lane: "nested",
             deliver: false,
             idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
-            extraSystemPrompt: continuationSystemPrompt,
+            extraSystemPrompt: mergedContinuationSystemPrompt,
           },
         },
         spawn: async () => {
@@ -2724,7 +2995,7 @@ export async function startBackgroundWorkflowRun(params: {
             lane: "nested",
             deliver: false,
             idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
-            extraSystemPrompt: continuationSystemPrompt,
+            extraSystemPrompt: mergedContinuationSystemPrompt,
           });
           return {
             runId: started.runId,
@@ -2757,6 +3028,7 @@ export async function startBackgroundWorkflowRun(params: {
           readString(params.backgroundRun.summary) ??
           `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
         commandText,
+        extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
         reusableBackgroundSessionKey,
         activeResearcherSessionsInChannel,
         unavailableReason: directLaunch.error,
@@ -2790,7 +3062,7 @@ export async function startBackgroundWorkflowRun(params: {
           lane: "nested",
           deliver: false,
           idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
-          extraSystemPrompt: continuationSystemPrompt,
+          extraSystemPrompt: mergedContinuationSystemPrompt,
         })
       ).runId;
   } catch (error) {
@@ -2813,6 +3085,7 @@ export async function startBackgroundWorkflowRun(params: {
         readString(params.backgroundRun.summary) ??
         `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
       commandText,
+      extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
       reusableBackgroundSessionKey,
       activeResearcherSessionsInChannel,
       unavailableReason: error instanceof Error ? error.message : String(error),
@@ -2849,6 +3122,8 @@ export async function startBackgroundWorkflowRun(params: {
         ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background research pipeline started for"} ${topic ?? ensuredProject?.title ?? "research topic"}.`
         : normalizedKind === "resume_pipeline"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
+        : normalizedKind === "graph_build"
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background graph build started for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "idle_research"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Idle research started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current project"}.`
         : isPapernexusBackgroundKind(normalizedKind)

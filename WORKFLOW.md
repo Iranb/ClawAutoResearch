@@ -410,7 +410,9 @@ Shared workspaces do not justify shared project cognition.
 For graph-grounded ideation and novelty analysis, prefer this micro-stage progression:
 
 - `literature_collected`
-- `graph_built`
+- `uploading`
+- `verifying`
+- `brainstorm_refresh`
 - `frontiers_packaged`
 - `question_anchored`
 - `graph_exploring`
@@ -421,7 +423,7 @@ For graph-grounded ideation and novelty analysis, prefer this micro-stage progre
 | Stage | Required micro-stages before exit |
 |-------|-----------------------------------|
 | SETUP | `project_init` → `identity_locked` → `state_templates_ready` |
-| GRAPH_BUILD | `literature_ingested` → `graph_presence_checked` → `refresh_decision_made` → `corpus_resolved` → `corpus_status_checked` → `corpus_built` → `graph_validated` |
+| GRAPH_BUILD | `uploading` → `verifying` → `brainstorm_refresh` |
 | FRONTIER_MAPPING | `query_pack_built` → `anchors_extracted` → `frontiers_packaged` |
 | IDEA | `graph_diverge_complete` → `graph_converge_complete` → `innovation_construction_complete` → `duplicate_risk_checked` → `attacker_pass_complete` → `novelty_checked` → `idea_audited` → `portfolio_selected` |
 | PLAN | `innovation_package_locked` → `track_plan_written` → `budgeted` → `stop_rules_defined` → `plan_audited` |
@@ -450,17 +452,26 @@ Actions:
   3. Ensure {PROJ}/PROJECT_MANIFEST.json, {PROJ}/TRACK_REGISTRY.json, {PROJ}/CLAIM_POLICY.md, {PROJ}/researcher/EXPERIMENT_LEDGER.json, and {PROJ}/graph/ exist
   4. If any state file is missing, initialize it from templates/
   5. Load {PROJ}/PROJECT_MANIFEST.json and confirm `project_id`, `owner_agent`, and `memory_scope.project_isolated`
+  5a. Complete the guided onboarding contract through `/project-init` before leaving SETUP:
+      - `research_program.goal`
+      - `research_program.problem_statement`
+      - `research_program.baseline_reference`
+      - `research_program.primary_metric`
+      - `research_program.datasets`
+      - `research_program.success_criteria`
+      - `research_program.zotero_project_path = bot/<project-id>`
   6. Load {PROJ}/TRACK_REGISTRY.json
   7. Load {PROJ}/CLAIM_POLICY.md
   8. Load {PROJ}/memory/ideation-memory.md, {PROJ}/memory/experiment-memory.md, and {PROJ}/researcher/EXPERIMENT_LEDGER.json (project-isolated + restart-safe)
   9. Check {PROJECTS_ROOT}/PROJECTS_STATE.json for active projects
   10. Set `current_micro_stage: "identity_locked"` once project identity and write target are confirmed
   11. If active project found → resume at last incomplete stage + micro-stage
-  12. If no active project → proceed to GRAPH_BUILD stage
-  13. Post Session Ready message (see BOOTSTRAP.md)
-  14. All writes to ideation memory, experiment memory, daily logs, and REVIEW_STATE must go through the `research_memory` plugin tool rather than raw file appends
-  15. All writes to {PROJ}/researcher/EXPERIMENT_LEDGER.json must go through `research_workflow.upsert_experiment`; do not hand-edit the ledger during active runs
-  16. All runtime writes to `PROJECT_MANIFEST.json.idle_research` should go through `research_workflow.set_idle_research` or `research_workflow.record_idle_research_run` when the plugin tool is available
+  12. If onboarding checklist is incomplete → stay in SETUP and surface `/project-init` as `next_action`
+  13. If setup checklist is complete → proceed to GRAPH_BUILD stage
+  14. Post Session Ready message (see BOOTSTRAP.md)
+  15. All writes to ideation memory, experiment memory, daily logs, and REVIEW_STATE must go through the `research_memory` plugin tool rather than raw file appends
+  16. All writes to {PROJ}/researcher/EXPERIMENT_LEDGER.json must go through `research_workflow.upsert_experiment`; do not hand-edit the ledger during active runs
+  17. All runtime writes to `PROJECT_MANIFEST.json.idle_research` should go through `research_workflow.set_idle_research` or `research_workflow.record_idle_research_run` when the plugin tool is available
 ```
 
 ---
@@ -488,7 +499,7 @@ Procedure:
      - refresh now if 2+ overlapping recent venue papers accumulated
      - otherwise defer until the next major checkpoint
   5. Check remote graph-readiness status before trusting an existing graph
-  6. Run /graph-build as a bounded status pass: verify automatic graph catch-up, refresh graph readiness metadata, and update the brainstorm bundle; do not create a project-scoped corpus or manually rebuild the shared graph
+  6. Run /graph-build as a bounded status pass: verify automatic graph catch-up, refresh graph readiness metadata, update the brainstorm bundle, and synchronize Zotero `bot/<project-id>/selected` plus `baselines`; do not create a project-scoped corpus or manually rebuild the shared graph
   7. If required papers are still missing, queue or request wrapper-driven import / catch-up instead of rebuilding a project-local corpus
   8. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
   9. Persist typed brainstorm artifacts through `research_workflow.run_brainstorm_cycle` once graph readiness is sufficient

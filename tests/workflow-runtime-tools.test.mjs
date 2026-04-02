@@ -217,6 +217,56 @@ test("research_workflow paper-ingestion actions persist formal waiting and recon
   assert.equal(snapshot.paperIngestionImportTaskCount, 1);
 });
 
+test("research_workflow queue_paper_ingestion persists a durable workflow-owned upload request", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      wrapper: "pn_batch_import.py",
+      args: [
+        "--api-base",
+        "https://papernexus.example/api",
+        "--corpus",
+        "GCD",
+        "--manifest",
+        "/tmp/demo/batch-import.json",
+        "submit",
+      ],
+      summary: "Queue shared-corpus batch import for graph-build.",
+      manifest_path: "/tmp/demo/batch-import.json",
+      shared_corpus: "GCD",
+      paper_count: 4,
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+  assert.equal(result.request.sharedCorpus, "GCD");
+  assert.equal(result.request.paperCount, 4);
+  assert.match(result.request.commandText ?? "", /python3 scripts\/pn_batch_import\.py/);
+  assert.equal(result.state.queuedRequests.length, 1);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
+  assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+});
+
 test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -1157,6 +1207,10 @@ test("research_workflow runtime-state actions persist manifest state and append 
       topic: "Graph-grounded novelty synthesis for section planning",
       basis_stage: "frontier_mapping",
       track_id: "track-main",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      provider_status: "ready",
+      contract_version: 1,
       graph_version_seen: "global-v42",
       import_task_ids_seen: ["imp-1", "imp-2"],
       topic_summary: {
@@ -1231,6 +1285,10 @@ test("research_workflow runtime-state actions persist manifest state and append 
   assert.equal(brainstormCycle.state.status, "reconciled");
   assert.equal(brainstormCycle.state.selectedOptionId, "opt-b");
   assert.equal(brainstormCycle.state.selectedRoundId, "round-1");
+  assert.equal(brainstormCycle.state.provider, "workflow_core_brainstorm");
+  assert.equal(brainstormCycle.state.providerMode, "core");
+  assert.equal(brainstormCycle.state.providerStatus, "ready");
+  assert.equal(brainstormCycle.state.contractVersion, 1);
   assert.equal(brainstormCycle.chainBundleReady, true);
 
   const brainstormCycleSummary = await executeWorkflowTool(tool, {
@@ -1238,6 +1296,7 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(brainstormCycleSummary.state.selectedOptionId, "opt-b");
   assert.equal(brainstormCycleSummary.state.rounds.length, 2);
+  assert.equal(brainstormCycleSummary.state.provider, "workflow_core_brainstorm");
   assert.equal(brainstormCycleSummary.logicChainExists, true);
   assert.equal(brainstormCycleSummary.reasoningTraceExists, true);
 
@@ -1302,6 +1361,10 @@ test("research_workflow runtime-state actions persist manifest state and append 
   assert.equal(manifest.experiment_search.status, "running");
   assert.equal(manifest.brainstorm_cycle.status, "reconciled");
   assert.equal(manifest.brainstorm_cycle.selected_option_id, "opt-b");
+  assert.equal(manifest.brainstorm_cycle.provider, "workflow_core_brainstorm");
+  assert.equal(manifest.brainstorm_cycle.provider_mode, "core");
+  assert.equal(manifest.brainstorm_cycle.provider_status, "ready");
+  assert.equal(manifest.brainstorm_cycle.contract_version, 1);
 
   const experimentSearchFile = JSON.parse(
     await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"), "utf8")

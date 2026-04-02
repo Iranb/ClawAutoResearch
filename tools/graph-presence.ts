@@ -80,6 +80,9 @@ export type GraphPresenceCheckResult = {
   corpusMetaPath: string | null;
   refreshRequired: boolean;
   refreshReason: string | null;
+  repairRequired: boolean;
+  repairReason: string | null;
+  repairTargetCorpus: string | null;
   presentPapers: GraphPresenceMatch[];
   missingPapers: GraphPresenceMissingPaper[];
   manifestUpdated: boolean;
@@ -1007,6 +1010,52 @@ function buildInFlightRemoteRefreshReason(params: {
   );
 }
 
+function resolveGraphRepairTargetCorpus(params: {
+  manifest: ManifestLike;
+  corpusName: string | null;
+}): string | null {
+  return (
+    pickString(params.manifest, ["papernexus_corpus"]) ??
+    params.corpusName ??
+    "shared-global-graph"
+  );
+}
+
+function shouldRequireGraphImportRepair(params: {
+  status: GraphPresenceStatus;
+  expectedPaperCount: number;
+  presentPaperCount: number;
+  paperIngestion: ReturnType<typeof summarizePaperIngestionProgress>;
+  canRepair: boolean;
+}): boolean {
+  if (!params.canRepair) {
+    return false;
+  }
+  if (params.paperIngestion.inFlight) {
+    return false;
+  }
+  if (params.expectedPaperCount === 0) {
+    return false;
+  }
+  if (params.presentPaperCount >= params.expectedPaperCount) {
+    return false;
+  }
+  return params.status === "missing_papers" || params.status === "missing_corpus";
+}
+
+function buildGraphImportRepairReason(params: {
+  corpusName: string | null;
+  expectedPaperCount: number;
+  presentPaperCount: number;
+  refreshReason: string | null;
+}): string {
+  return (
+    `PaperNexus graph sync repair is required for shared corpus ${params.corpusName ?? "shared-global-graph"}: ` +
+    `${params.presentPaperCount}/${params.expectedPaperCount} expected paper(s) are currently visible and no import/graph catch-up activity is in flight. ` +
+    `${params.refreshReason ?? "Regenerate a bounded batch import repair pass."}`
+  );
+}
+
 function serializeMissingPapers(missingPapers: GraphPresenceMissingPaper[]) {
   return missingPapers.map((paper) => ({
     canonical_id: paper.canonicalId,
@@ -1237,6 +1286,26 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     }
   }
 
+  const repairTargetCorpus = resolveGraphRepairTargetCorpus({
+    manifest: params.manifest,
+    corpusName: pickString(statusRecord, ["corpus_name", "corpusName"]),
+  });
+  const repairRequired = shouldRequireGraphImportRepair({
+    status,
+    expectedPaperCount: params.expected.papers.length,
+    presentPaperCount,
+    paperIngestion: paperIngestionProgress,
+    canRepair: remoteInspection.tokenAvailable,
+  });
+  const repairReason = repairRequired
+    ? buildGraphImportRepairReason({
+        corpusName: repairTargetCorpus,
+        expectedPaperCount: params.expected.papers.length,
+        presentPaperCount,
+        refreshReason,
+      })
+    : null;
+
   const result: GraphPresenceCheckResult = {
     projectRoot: params.projectRoot,
     projectId: params.projectId,
@@ -1264,6 +1333,9 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     corpusMetaPath: null,
     refreshRequired: status === "missing_corpus" || status === "missing_papers",
     refreshReason,
+    repairRequired,
+    repairReason,
+    repairTargetCorpus: repairRequired ? repairTargetCorpus : null,
     presentPapers: [],
     missingPapers: status === "ready" ? [] : missingPapers,
     manifestUpdated: false,
@@ -1283,6 +1355,9 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     missing_paper_count: result.missingPaperCount,
     refresh_required: result.refreshRequired,
     refresh_reason: result.refreshReason,
+    repair_required: result.repairRequired,
+    repair_reason: result.repairReason,
+    repair_target_corpus: result.repairTargetCorpus,
     missing_papers: serializeMissingPapers(result.missingPapers),
     present_papers: [],
   });
@@ -1330,6 +1405,9 @@ export async function checkGraphPresenceForWorkflow(params: {
         graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
         refresh_required: result.refreshRequired ? true : false,
         refresh_reason: result.refreshRequired ? result.refreshReason : null,
+        repair_required: result.repairRequired ? true : false,
+        repair_reason: result.repairRequired ? result.repairReason : null,
+        repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
       };
       await saveManifest(projectRoot, manifest);
       result.manifestUpdated = true;
@@ -1404,6 +1482,28 @@ export async function checkGraphPresenceForWorkflow(params: {
           expected.papers.length,
           corpusResolution.corpusRoot
         );
+  const paperIngestionProgress = summarizePaperIngestionProgress(manifest);
+  const repairTargetCorpus = resolveGraphRepairTargetCorpus({
+    manifest,
+    corpusName:
+      corpusResolution.corpusName ??
+      pickString(corpusMeta, ["name", "corpusName", "corpus_name"]),
+  });
+  const repairRequired = shouldRequireGraphImportRepair({
+    status,
+    expectedPaperCount: expected.papers.length,
+    presentPaperCount: presentPapers.length,
+    paperIngestion: paperIngestionProgress,
+    canRepair: true,
+  });
+  const repairReason = repairRequired
+    ? buildGraphImportRepairReason({
+        corpusName: repairTargetCorpus,
+        expectedPaperCount: expected.papers.length,
+        presentPaperCount: presentPapers.length,
+        refreshReason,
+      })
+    : null;
 
   const result: GraphPresenceCheckResult = {
     projectRoot,
@@ -1425,6 +1525,9 @@ export async function checkGraphPresenceForWorkflow(params: {
     corpusMetaPath,
     refreshRequired,
     refreshReason,
+    repairRequired,
+    repairReason,
+    repairTargetCorpus: repairRequired ? repairTargetCorpus : null,
     presentPapers,
     missingPapers,
     manifestUpdated: false,
@@ -1444,6 +1547,9 @@ export async function checkGraphPresenceForWorkflow(params: {
     missing_paper_count: result.missingPaperCount,
     refresh_required: result.refreshRequired,
     refresh_reason: result.refreshReason,
+    repair_required: result.repairRequired,
+    repair_reason: result.repairReason,
+    repair_target_corpus: result.repairTargetCorpus,
     missing_papers: serializeMissingPapers(result.missingPapers),
     present_papers: result.presentPapers.map((paper) => ({
       canonical_id: paper.canonicalId,
@@ -1470,6 +1576,9 @@ export async function checkGraphPresenceForWorkflow(params: {
       graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
       refresh_required: refreshRequired ? true : false,
       refresh_reason: refreshRequired ? refreshReason : null,
+      repair_required: result.repairRequired ? true : false,
+      repair_reason: result.repairRequired ? result.repairReason : null,
+      repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
     };
     await saveManifest(projectRoot, manifest);
     result.manifestUpdated = true;

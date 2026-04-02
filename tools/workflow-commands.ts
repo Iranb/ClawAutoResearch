@@ -12,11 +12,15 @@ import type {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildWorkflowSnapshot,
+  ensureWorkflowProjectRoot,
+  getResearchProgramStateSummary,
   getWorkflowGuardPolicy,
   inferTargetRoleFromToolParams,
   runWorkflowAutoIterator,
+  setResearchProgramState,
 } from "./workflow-guard";
 import {
+  buildGraphBuildBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
@@ -41,9 +45,13 @@ import { enqueueWorkflowTask, resolveWorkflowQueueKey } from "./workflow-coordin
 type WorkflowBackgroundCommandKind =
   | "research_pipeline"
   | "research_queue"
-  | "resume_pipeline";
+  | "resume_pipeline"
+  | "graph_build";
 
-type WorkflowCommandKind = WorkflowBackgroundCommandKind | "workflow_status";
+type WorkflowCommandKind =
+  | WorkflowBackgroundCommandKind
+  | "project_init"
+  | "workflow_status";
 
 type WorkflowCommandDependencies = {
   resolveConversationBindingRecord: (
@@ -93,6 +101,8 @@ const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   research_pipeline: "/research-pipeline",
   research_queue: "/research-queue",
   resume_pipeline: "/resume-pipeline",
+  graph_build: "/graph-build",
+  project_init: "/project-init",
   workflow_status: "/workflow-status",
 };
 
@@ -320,6 +330,45 @@ function extractQuotedSegment(value: string | undefined): string | undefined {
   return trimmed.split(/\s+--\s+/u, 1)[0]?.trim() || undefined;
 }
 
+function formatWorkflowCommandArgument(value: string): string {
+  return /^[A-Za-z0-9._:/=-]+$/u.test(value)
+    ? value
+    : `"${value.replace(/(["\\])/g, "\\$1")}"`;
+}
+
+function injectGraphBuildRepairFlags(
+  commandText: string | undefined,
+  snapshot: WorkflowSnapshot
+): string {
+  const base = readString(commandText) ?? "/graph-build";
+  if (!snapshot.paperIngestionRepairRequired) {
+    return buildGraphBuildBackgroundCommand(base);
+  }
+  let next = base;
+  if (!/--repair-import\b/i.test(next)) {
+    next = `${next.trim()} --repair-import true`;
+  }
+  if (
+    snapshot.paperIngestionRepairTargetCorpus &&
+    !/--shared-corpus\b/i.test(next)
+  ) {
+    next =
+      `${next.trim()} --shared-corpus ` +
+      formatWorkflowCommandArgument(snapshot.paperIngestionRepairTargetCorpus);
+  }
+  return buildGraphBuildBackgroundCommand(next);
+}
+
+function formatResearchProgramOnboardingGapLabels(gaps: string[]): string {
+  return gaps
+    .map((gap) =>
+      gap
+        .replace(/^PROJECT_MANIFEST\.json\.research_program\./, "")
+        .replace(/\s+\(recommended:.*\)$/, "")
+    )
+    .join(", ");
+}
+
 function buildBackgroundRunRequest(
   kind: WorkflowBackgroundCommandKind,
   ctx: Pick<PluginCommandContext, "args" | "commandBody">,
@@ -339,6 +388,19 @@ function buildBackgroundRunRequest(
       kind,
       commandText: buildResearchQueueBackgroundCommand(ctx.commandBody),
       summary: "Background research queue task started.",
+      ...overrides,
+    };
+  }
+  if (kind === "graph_build") {
+    return {
+      kind,
+      commandText: buildGraphBuildBackgroundCommand(ctx.commandBody),
+      topic: extractQuotedSegment(ctx.args),
+      summary:
+        overrides.summary ??
+        `Background graph build started for ${
+          readString(overrides.projectId) ?? "the current project"
+        }.`,
       ...overrides,
     };
   }
@@ -577,7 +639,8 @@ function formatWorkflowStatusText(params: {
     (snapshot.paperIngestionPendingBatchItemCount ?? 0) > 0 ||
     (snapshot.paperIngestionSyncedBatchItemCount ?? 0) > 0 ||
     (snapshot.paperIngestionFailedBatchItemCount ?? 0) > 0 ||
-    snapshot.paperIngestionReconcileRequired;
+    snapshot.paperIngestionReconcileRequired ||
+    snapshot.paperIngestionRepairRequired;
   const lines = [
     "Workflow Status",
     `Session: ${params.targetSessionKey}`,
@@ -593,12 +656,22 @@ function formatWorkflowStatusText(params: {
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
     ...(hasPaperIngestionSummary
       ? [
-          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, batches=${snapshot.paperIngestionBatchCount ?? 0}, active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0}, batch_pending_items=${snapshot.paperIngestionPendingBatchItemCount ?? 0}, batch_synced_items=${snapshot.paperIngestionSyncedBatchItemCount ?? 0}, batch_failed_items=${snapshot.paperIngestionFailedBatchItemCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+          `PaperNexus ingestion: status=${snapshot.paperIngestionRuntimeStatus ?? "unknown"}, import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0}, completed_papers=${snapshot.paperIngestionCompletedPaperCount ?? 0}, active_ops=${snapshot.paperIngestionActiveOperationCount ?? 0}, timed_out=${snapshot.paperIngestionTimedOutOperationCount ?? 0}, failed=${snapshot.paperIngestionFailedOperationCount ?? 0}, batches=${snapshot.paperIngestionBatchCount ?? 0}, active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0}, batch_pending_items=${snapshot.paperIngestionPendingBatchItemCount ?? 0}, batch_synced_items=${snapshot.paperIngestionSyncedBatchItemCount ?? 0}, batch_failed_items=${snapshot.paperIngestionFailedBatchItemCount ?? 0}, queued_requests=${snapshot.paperIngestionQueuedRequestCount ?? 0}, running_requests=${snapshot.paperIngestionRunningRequestCount ?? 0}, reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`,
+          ...(snapshot.paperIngestionRepairRequired
+            ? [
+                `PaperNexus repair: required=true, target_corpus=${snapshot.paperIngestionRepairTargetCorpus ?? "unset"}, reason=${snapshot.paperIngestionRepairReason ?? "pending"}`,
+              ]
+            : []),
           ...(snapshot.paperIngestionLastBatchManifestPath
             ? [
                 `PaperNexus batch manifest: ${snapshot.paperIngestionLastBatchManifestPath}`,
-              ]
-            : []),
+            ]
+          : []),
+        ]
+      : []),
+    ...(snapshot.brainstormCycleStatus || snapshot.brainstormCycleProvider
+      ? [
+          `Brainstorm contract: provider=${snapshot.brainstormCycleProvider ?? "unset"}, provider_mode=${snapshot.brainstormCycleProviderMode ?? "unset"}, provider_status=${snapshot.brainstormCycleProviderStatus ?? "unset"}, contract_version=${snapshot.brainstormCycleContractVersion ?? "unset"}, bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
         ]
       : []),
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
@@ -608,6 +681,24 @@ function formatWorkflowStatusText(params: {
     lines.push(
       `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
     );
+  }
+  if (
+    snapshot.researchProgramStatus ||
+    (snapshot.researchProgramOnboardingMissing ?? []).length > 0
+  ) {
+    lines.push(
+      `Research program: status=${snapshot.researchProgramStatus ?? "missing"}, onboarding=${snapshot.researchProgramOnboardingStatus ?? "unknown"}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, baseline=${snapshot.researchProgramBaselineReference ?? "unset"}, primary_metric=${snapshot.researchProgramPrimaryMetricName ?? "unset"}, datasets=${snapshot.researchProgramDatasetCount ?? 0}, success_criteria=${snapshot.researchProgramSuccessCriteriaCount ?? 0}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
+    );
+    if (snapshot.researchProgramZoteroProjectPath) {
+      lines.push(
+        `Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`
+      );
+    }
+    if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
+      lines.push(
+        `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`
+      );
+    }
   }
   if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {
     lines.push(
@@ -805,6 +896,13 @@ function createBackgroundWorkflowCommandHandler(
         sessionKey: targetSessionKey,
         messageChannel: ctx.channel,
       });
+      if (kind === "graph_build" && !snapshot.projectRoot) {
+        return {
+          text:
+            `❌ ${commandLabel} requires a project-bound workflow conversation. ` +
+            "Run it from a conversation already bound to a project or resume the project first.",
+        };
+      }
       const explicitProject =
         kind === "resume_pipeline"
           ? await resolveExistingWorkflowProjectSelection({
@@ -847,20 +945,41 @@ function createBackgroundWorkflowCommandHandler(
                   projectId: explicitProject.projectId,
                 }
               : currentSnapshot;
+          const graphBuildCommandText =
+            kind === "graph_build"
+              ? injectGraphBuildRepairFlags(ctx.commandBody, commandSnapshot)
+              : undefined;
+
+      const resolvedBackgroundAgentId =
+        kind === "graph_build"
+          ? "researcher"
+          : target.agentId ?? currentSnapshot.role ?? undefined;
+      const resolvedBackgroundWorkspaceDir =
+        kind === "graph_build" &&
+        typeof api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
+          ? readString(api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, "researcher")) ??
+            target.workspaceDir ??
+            undefined
+          : target.workspaceDir ?? undefined;
 
           return deps.startBackgroundWorkflowRun({
             runtimeSubagent: api.runtime?.subagent,
             workflowPolicy,
             agentCtx: {
-              agentId: target.agentId ?? currentSnapshot.role ?? undefined,
-              workspaceDir: target.workspaceDir ?? undefined,
+              agentId: resolvedBackgroundAgentId,
+              workspaceDir: resolvedBackgroundWorkspaceDir,
               sessionKey: targetSessionKey,
               messageChannel: ctx.channel,
             },
             snapshot: commandSnapshot,
             backgroundRun: buildBackgroundRunRequest(kind, ctx, {
-              projectId: explicitProject?.projectId,
-              projectRoot: explicitProject?.projectRoot,
+              ...(graphBuildCommandText ? { commandText: graphBuildCommandText } : {}),
+              projectId:
+                explicitProject?.projectId ??
+                (kind === "graph_build" ? commandSnapshot.projectId ?? undefined : undefined),
+              projectRoot:
+                explicitProject?.projectRoot ??
+                (kind === "graph_build" ? commandSnapshot.projectRoot ?? undefined : undefined),
             }),
           });
         },
@@ -878,6 +997,90 @@ function createBackgroundWorkflowCommandHandler(
       });
       return {
         text: `❌ Failed to start the background workflow: ${message}`,
+      };
+    }
+  };
+}
+
+function createProjectInitCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.project_init;
+    try {
+      const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      const target = resolveWorkflowCommandSessionTarget(
+        api,
+        ctx,
+        deps.resolveConversationBindingRecord
+      );
+      const targetRole = inferTargetRoleFromToolParams({
+        agentId: target.agentId ?? undefined,
+        sessionKey: target.sessionKey,
+      });
+      const topic = extractQuotedSegment(ctx.args);
+      const snapshot = target.sessionKey && targetRole
+        ? await deps.buildWorkflowSnapshot({
+            policy: workflowPolicy,
+            agentId: target.agentId ?? undefined,
+            workspaceDir: target.workspaceDir ?? undefined,
+            sessionKey: target.sessionKey,
+            messageChannel: ctx.channel,
+          })
+        : null;
+      const ensuredProject = await ensureWorkflowProjectRoot({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: target.sessionKey ?? undefined,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingConversation?.conversationId,
+        projectRoot: snapshot?.projectRoot ?? null,
+        projectId: snapshot?.projectId ?? null,
+        title: topic ?? snapshot?.projectId ?? null,
+        topic,
+      });
+      const currentSummary = await getResearchProgramStateSummary({
+        projectRoot: ensuredProject.projectRoot,
+      });
+      const seededGoal =
+        topic ?? currentSummary.state.goal ?? ensuredProject.title;
+      const update = await setResearchProgramState({
+        projectRoot: ensuredProject.projectRoot,
+        researchProgram: {
+          status:
+            currentSummary.state.status === "missing"
+              ? "draft"
+              : currentSummary.state.status,
+          goal: currentSummary.state.goal ?? seededGoal,
+          problem_statement:
+            currentSummary.state.problemStatement ?? seededGoal,
+          zotero_project_path:
+            currentSummary.state.zoteroProjectPath ??
+            `bot/${ensuredProject.projectId}`,
+          pending_reason:
+            currentSummary.state.pendingReason ??
+            "Complete the onboarding contract before graph grounding.",
+        },
+      });
+      const missingLabels = formatResearchProgramOnboardingGapLabels(
+        update.onboardingGaps
+      );
+      return {
+        text:
+          `Project init saved for ${ensuredProject.projectId}. ` +
+          `Research program onboarding=${update.onboardingStatus}. ` +
+          `Zotero path=${update.state.zoteroProjectPath ?? `bot/${ensuredProject.projectId}`}. ` +
+          (missingLabels ? `missing=${missingLabels}` : "missing=none"),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to initialize workflow project onboarding.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to initialize the workflow project: ${message}`,
       };
     }
   };
@@ -1016,6 +1219,13 @@ export function createResearchWorkflowCommands(
 
   return [
     {
+      name: "project-init",
+      description:
+        "Initialize or refresh the guided workflow onboarding contract for the current project.",
+      acceptsArgs: true,
+      handler: createProjectInitCommandHandler(api, resolvedDeps),
+    },
+    {
       name: "research-pipeline",
       description:
         "Start the research pipeline as a background continuation for the current Researcher session.",
@@ -1045,6 +1255,17 @@ export function createResearchWorkflowCommands(
       handler: createBackgroundWorkflowCommandHandler(
         api,
         "resume_pipeline",
+        resolvedDeps
+      ),
+    },
+    {
+      name: "graph-build",
+      description:
+        "Run the bounded graph-readiness and brainstorm-refresh pass for the current project in a background Researcher continuation.",
+      acceptsArgs: true,
+      handler: createBackgroundWorkflowCommandHandler(
+        api,
+        "graph_build",
         resolvedDeps
       ),
     },

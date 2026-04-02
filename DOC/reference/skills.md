@@ -11,7 +11,7 @@
   Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus wrapper-based graph control。
 
 - `graph-build`  
-  基于论文源和 PaperNexus Python wrappers 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle 与 graph readiness。
+  基于论文源和 PaperNexus Python wrappers 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle、graph readiness，以及 Zotero `bot/<project-id>` 项目文献集合。
 
 - `frontier-mapping`  
   生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus wrappers。

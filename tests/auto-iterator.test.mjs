@@ -116,6 +116,91 @@ async function seedRemoteGraphStatus(
   });
 }
 
+async function seedReadyBrainstormCycle(
+  projectRoot,
+  {
+    trackId = "track-main",
+    provider = "workflow_core_brainstorm",
+    providerMode = "core",
+    providerStatus = "ready",
+    contractVersion = 1,
+  } = {}
+) {
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"),
+    {
+      objective: "Seeded brainstorm bundle",
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "RESEARCH_BRIEF.json"),
+    {
+      anchors: ["paper:seed"],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "BRAINSTORM_BRIEF.json"),
+    { mode: "diverge_then_converge" }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence chain\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "REASONING_TRACE.jsonl"),
+    "{\"step\":\"seed\"}\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"),
+    { hypothesis: "demo" }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+    "# Synthesis\n"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.brainstorm_cycle = {
+    status: "reconciled",
+    mode: "aggressive",
+    topic: "Seeded brainstorm bundle",
+    basis_stage: "graph_build",
+    track_id: trackId,
+    provider,
+    provider_mode: providerMode,
+    provider_status: providerStatus,
+    contract_version: contractVersion,
+    rounds: [
+      {
+        round_id: "seed-round",
+        options: [{ option_id: "seed-option", score: 0.8 }],
+      },
+    ],
+    selected_round_id: "seed-round",
+    selected_option_id: "seed-option",
+    selected_option_score: 0.8,
+    topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.json",
+    research_brief_path: "researcher/brainstorm-cycle/RESEARCH_BRIEF.json",
+    brainstorm_brief_path: "researcher/brainstorm-cycle/BRAINSTORM_BRIEF.json",
+    logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
+    evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
+    reasoning_trace_path: "researcher/brainstorm-cycle/REASONING_TRACE.jsonl",
+    question_packet_path: "researcher/brainstorm-cycle/QUESTION_PACKET.md",
+    working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+    synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
 function buildEmptyLedger(projectId, updatedAt) {
   return {
     schemaVersion: 1,
@@ -142,6 +227,27 @@ async function seedSetupCompleteProject(projectRoot, stage = "setup") {
     title: "Demo Project",
     current_stage: stage,
     idle_research: { enabled: false },
+    research_program: {
+      program_version: 1,
+      status: "draft",
+      goal: "Demo project goal",
+      problem_statement: "Demo project problem statement",
+      baseline_reference: "demo-baseline",
+      primary_metric: "acc",
+      datasets: ["demo-dataset"],
+      constraints: ["fixed_eval_protocol"],
+      success_criteria: ["improve acc over baseline"],
+      zotero_project_path: "bot/demo-project",
+      tracks: [],
+      global_constraints: {
+        max_active_tracks: null,
+        must_run_multi_seed_before_analysis: true,
+        must_run_plot_aggregation_before_write: true,
+      },
+      task_graph: [],
+      last_updated_at: now,
+      pending_reason: null,
+    },
   });
   await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
   await writeText(path.join(projectRoot, "CLAIM_POLICY.md"));
@@ -898,9 +1004,65 @@ test("auto iterator advances setup to graph_build when setup signals are complet
   assert.equal(result.ownerAfter, "researcher");
   assert.equal(
     result.nextAction,
-    "Run /graph-build to verify PAPER_SOURCE_INDEX.json is already reflected in the shared global graph, update graph readiness metadata, and refresh the brainstorm bundle before frontier mapping."
+    "Run /graph-build to let workflow-owned upload requests finish, verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, and refresh the core brainstorm bundle before frontier mapping."
   );
   assert.equal(result.gateBlocking, false);
+});
+
+test("auto iterator keeps setup blocked until the onboarding contract is complete", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "setup");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    title: "Demo Project",
+    current_stage: "setup",
+    idle_research: { enabled: false },
+    research_program: {
+      program_version: 1,
+      status: "draft",
+      goal: "Demo project goal",
+      problem_statement: "Demo project problem statement",
+      baseline_reference: null,
+      primary_metric: null,
+      datasets: [],
+      constraints: [],
+      success_criteria: [],
+      zotero_project_path: null,
+      tracks: [],
+      global_constraints: {
+        max_active_tracks: null,
+        must_run_multi_seed_before_analysis: true,
+        must_run_plot_aggregation_before_write: true,
+      },
+      task_graph: [],
+      last_updated_at: "2026-03-22T12:00:00.000Z",
+      pending_reason: "Complete guided setup.",
+    },
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "setup");
+  assert.equal(result.stageAfter, "setup");
+  assert.match(result.nextAction ?? "", /\/project-init/i);
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      signal.includes("research_program.baseline_reference")
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      signal.includes("research_program.zotero_project_path")
+    )
+  );
 });
 
 test("graph presence check reports missing canonical papers before novelty-sensitive work", async (t) => {
@@ -1319,6 +1481,7 @@ test("auto iterator uses remote graph status for graph_build when remote PaperNe
     expectedPaperCount: 1,
     presentPaperCount: 1,
   });
+  await seedReadyBrainstormCycle(projectRoot);
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -1334,6 +1497,264 @@ test("auto iterator uses remote graph status for graph_build when remote PaperNe
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.graphPresenceCheck?.status, "ready");
   assert.equal(result.stageAfter, "frontier_mapping");
+});
+
+test("auto iterator points graph_build at a repair import pass when remote graph sync is stalled and idle", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    papers: {
+      "2501.00031": {
+        arxiv_id: "2501.00031",
+        title: "Remote Frontier Paper",
+        source_provider: "arxiv2md-api",
+        retrieval_providers: ["papers-cool"],
+      },
+    },
+    summary: "metadata only",
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "GCD",
+    corpusRoot: "https://papernexus.example/corpora/GCD",
+    status: "missing_papers",
+    expectedPaperCount: 1,
+    presentPaperCount: 0,
+    missingPapers: [
+      {
+        canonical_id: "2501.00031",
+        title: "Remote Frontier Paper",
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.graphPresenceCheck?.status, "missing_papers");
+  assert.match(result.nextAction ?? "", /\/graph-build --repair-import true/i);
+  assert.match(result.nextAction ?? "", /--shared-corpus "?GCD"?/i);
+  assert.equal(manifest.paper_ingestion.repair_required, true);
+  assert.equal(manifest.paper_ingestion.repair_target_corpus, "GCD");
+  assert.match(manifest.paper_ingestion.repair_reason ?? "", /missing|repair/i);
+});
+
+test("auto iterator marks graph_build as uploading while workflow-owned ingestion is still active", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    papers: {
+      "2501.00031": {
+        arxiv_id: "2501.00031",
+        title: "Remote Frontier Paper",
+      },
+    },
+  });
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "graph_build";
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    runtime_status: "waiting_import",
+    waiting_reason: "workflow-owned batch import is still running",
+    graph_presence_status: "missing_papers",
+    queued_requests: [
+      {
+        request_id: "req-1",
+        status: "running",
+        wrapper: "pn_batch_import.py",
+        shared_corpus: "GCD",
+        manifest_path: "researcher/paper_source/manifest.json",
+        summary: "Upload selected graph papers",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "GCD",
+    corpusRoot: "https://papernexus.example/corpora/GCD",
+    status: "missing_papers",
+    expectedPaperCount: 1,
+    presentPaperCount: 0,
+    missingPapers: [{ canonical_id: "2501.00031", title: "Remote Frontier Paper" }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const updatedManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+});
+
+test("auto iterator marks graph_build as verifying when uploads are idle but graph presence is not ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    papers: {
+      "2501.00032": {
+        arxiv_id: "2501.00032",
+        title: "Verification Paper",
+      },
+    },
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "GCD",
+    corpusRoot: "https://papernexus.example/corpora/GCD",
+    status: "missing_papers",
+    expectedPaperCount: 1,
+    presentPaperCount: 0,
+    missingPapers: [{ canonical_id: "2501.00032", title: "Verification Paper" }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(manifest.current_micro_stage, "verifying");
+});
+
+test("auto iterator marks graph_build as brainstorm_refresh when graph is ready but the brainstorm contract is still missing", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00033",
+      arxiv_id: "2501.00033",
+      title: "Ready Graph Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00033--ready-graph-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00033--ready-graph-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00033--ready-graph-paper.md"),
+      kind: "markdown",
+      paperId: "paper:ready-graph",
+      paperTitle: "Ready Graph Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00033--ready-graph-paper.md"),
+      sourceMarkdownPath: path.join(
+        sourceRoot,
+        "md",
+        "2501.00033--ready-graph-paper.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(
+        sourceRoot,
+        "md",
+        "2501.00033--ready-graph-paper.md"
+      ),
+    },
+  ]);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.graphPresenceCheck?.status, "ready");
+  assert.equal(manifest.current_micro_stage, "brainstorm_refresh");
 });
 
 test("auto iterator advances graph_build once graph presence is ready", async (t) => {
@@ -1371,6 +1792,7 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
       canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  await seedReadyBrainstormCycle(projectRoot);
 
   const result = await runWorkflowAutoIterator({
     projectRoot,

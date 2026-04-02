@@ -26,6 +26,7 @@ import {
 import {
   buildPapernexusWrapperCommand,
   buildPapernexusSkillBackgroundCommand,
+  buildGraphBuildBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   clearBackgroundWorkflowQueueForTests,
@@ -228,6 +229,14 @@ test("buildResearchQueueBackgroundCommand appends the continuation marker once",
   assert.equal(buildResearchQueueBackgroundCommand(command), command);
 });
 
+test("buildGraphBuildBackgroundCommand appends the continuation marker once", () => {
+  const command = buildGraphBuildBackgroundCommand(
+    '/graph-build "gcd confirmation bias mitigation"'
+  );
+  assert.match(command, /__BACKGROUND_CONTINUATION__:\s*true/i);
+  assert.equal(buildGraphBuildBackgroundCommand(command), command);
+});
+
 test("buildPapernexusSkillBackgroundCommand appends the continuation marker once", () => {
   const command = buildPapernexusSkillBackgroundCommand(
     'python3 scripts/pn_graph_query.py --api-base "https://papernexus.example/api" --corpus "demo" query "topic" --limit 8'
@@ -422,6 +431,294 @@ test("startBackgroundWorkflowRun gives PaperNexus batch continuations explicit m
   assert.match(runCalls[0].extraSystemPrompt ?? "", /summary\/items|summary and items/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /completed_papers/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /60s|60 seconds/i);
+});
+
+test("startBackgroundWorkflowRun gives graph-build continuations explicit Zotero bot sync instructions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-graph-build-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-bg-graph-build-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      projectId: "paper-lab",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "graph_build",
+      projectId: "paper-lab",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      commandText: '/graph-build "gcd confirmation bias mitigation" -- __BACKGROUND_CONTINUATION__: true',
+      summary: "Background graph build started for paper-lab.",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^\/graph-build\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /zotero-project-library/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /bot\/<project-id>|bot\/paper-lab/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_PACKET\.md/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /graph readiness|brainstorm bundle/i);
+});
+
+test("startBackgroundWorkflowRun gives graph-build repair continuations explicit import repair instructions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-graph-build-repair-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-bg-graph-build-repair-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      projectId: "paper-lab",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "graph_build",
+      projectId: "paper-lab",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      commandText:
+        '/graph-build --repair-import true --shared-corpus "GCD" -- __BACKGROUND_CONTINUATION__: true',
+      summary: "Background graph build started for paper-lab.",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /repair mode|graph-sync repair/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /pn_batch_import\.py/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /shared corpus/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /GCD/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /set_paper_ingestion/i);
+});
+
+test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned ingestion before the stage continuation", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "paper-lab",
+        current_stage: "graph_build",
+        owner_agent: "researcher",
+        idle_research: { enabled: false },
+        paper_ingestion: {
+          queued_requests: [
+            {
+              request_id: "req-batch-1",
+              status: "queued",
+              wrapper: "pn_batch_import.py",
+              command_text:
+                "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
+              manifest_path: "/tmp/demo/batch-import.json",
+              shared_corpus: "GCD",
+              paper_count: 4,
+              summary: "Queued corpus upload",
+              created_at: "2026-04-02T00:00:00.000Z",
+              updated_at: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: `bg-run-${runCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-bg-graph-build-trigger-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "paper-lab",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "graph_build",
+      projectId: "paper-lab",
+      projectRoot,
+      commandText: '/graph-build "paper-lab" -- __BACKGROUND_CONTINUATION__: true',
+      summary: "Background graph build started for paper-lab.",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 2);
+  assert.match(runCalls[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(runCalls[1].message, /^\/graph-build\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /req-batch-1/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /queue_paper_ingestion|queued_requests/i);
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "bg-run-1");
+});
+
+test("startBackgroundWorkflowRun for resume-pipeline requeues stale running ingestion requests before triggering upload", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "paper-lab",
+        current_stage: "graph_build",
+        owner_agent: "researcher",
+        idle_research: { enabled: false },
+        paper_ingestion: {
+          runtime_status: "idle",
+          queued_requests: [
+            {
+              request_id: "req-batch-stale",
+              status: "running",
+              wrapper: "pn_batch_import.py",
+              command_text:
+                "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
+              manifest_path: "/tmp/demo/batch-import.json",
+              shared_corpus: "GCD",
+              paper_count: 4,
+              summary: "Queued corpus upload",
+              created_at: "2026-04-02T00:00:00.000Z",
+              updated_at: "2026-04-02T00:00:00.000Z",
+              started_at: "2026-04-02T00:00:10.000Z",
+              last_run_id: "bg-run-old",
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: `bg-run-${runCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-bg-resume-trigger-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "paper-lab",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "resume_pipeline",
+      projectId: "paper-lab",
+      projectRoot,
+      commandText: "/resume-pipeline paper-lab -- __BACKGROUND_CONTINUATION__: true",
+      summary: "Background resume pipeline started for paper-lab.",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 2);
+  assert.match(runCalls[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(runCalls[1].message, /^\/resume-pipeline\b/);
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "bg-run-1");
+  assert.match(
+    manifest.paper_ingestion.queued_requests[0].detail ?? "",
+    /resumed|workflow-triggered|repair/i
+  );
 });
 
 test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {

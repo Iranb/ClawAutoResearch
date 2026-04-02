@@ -58,6 +58,7 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     path.join(repoRoot, "agents", "academic_writer", "AGENTS.md"),
     path.join(repoRoot, "agents", "academic_writer", "SOUL.md"),
     path.join(repoRoot, "skills", "researcher", "research-lit", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "literature-review", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "idea-phase", "SKILL.md"),
     path.join(repoRoot, "skills", "academic_writer", "citation-preflight", "SKILL.md"),

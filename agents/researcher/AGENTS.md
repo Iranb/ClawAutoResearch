@@ -125,7 +125,8 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/papernexus-batch-import` — manifest-based multi-paper import, queue tracking, and durable batch status handling
 - `/papernexus-research-chains` — typed research chains, evidence bundles, and brief-style graph synthesis
 - `/workspace-update` — update the local `ClawAutoResearch` workspace and rerun `install.sh --yes --force-role-files`
-- `/graph-build` — graph readiness verification plus brainstorm bundle refresh after automatic PaperNexus catch-up
+- `/graph-build` — graph readiness verification plus brainstorm bundle refresh after automatic PaperNexus catch-up, and Zotero `bot/<project-id>/selected` / `baselines` synchronization with `ZOTERO_PACKET.md` refresh
+- `/project-init` — guided setup/onboarding contract for the current project; lock goal, problem statement, baseline, primary metric, datasets, success criteria, and Zotero `bot/<project-id>` path before graph work
 - `/frontier-mapping` — graph frontier extraction (limitations, contradictions, transfer, composition)
 - `/idea-phase` — Stage 1 (IDEA)
 - `/research-reflect` — track / budget / evidence decision checkpoint
@@ -138,7 +139,7 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/paper-phase` — Stage 7 (WRITE, via Writer)
 - `/research-pipeline` — full pipeline from Stage 1
 
-For workflow-owned live graph work, launch the actual Python wrappers through `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations.
+For workflow-owned paper ingestion, stage papers locally and queue uploads through `research_workflow.queue_paper_ingestion`; let `/graph-build` and `/resume-pipeline` trigger the queued wrappers and preserve `queued_requests` state across restarts. For workflow-owned live graph reads and brainstorm work, use `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations.
 
 ## Responsiveness and Delegation Policy
 
@@ -187,7 +188,9 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Wake Orchestrator proactively when needed:** if you are about to enter or are already in CODE, but `{PROJ}/orchestrator/PLAN.md` or `{PROJ}/orchestrator/TODOS.md` is missing, you must **spawn Orchestrator** to run `/plan-research` (input: `{PROJ}/researcher/IDEA_REPORT.md`) and wait until both files exist before spawning Coder. Do not assume the user or another process will do it.
 
-**New projects must build the graph first:** if `{PROJ}/graph/PAPERNEXUS_STATUS.json` or `{PROJ}/researcher/FRONTIER_REPORT.md` is missing, do not jump directly into `idea-generator`. Run `/graph-build` and then `/frontier-mapping` first.
+**New projects must lock onboarding before graph work:** before `/graph-build`, ensure the setup checklist is complete. At minimum, `PROJECT_MANIFEST.json.research_program` must have goal, problem statement, baseline reference, primary metric, datasets, success criteria, and `zotero_project_path = bot/<project-id>`. If any are missing, run `/project-init` first.
+
+**After onboarding, new projects must build the graph first:** if `{PROJ}/graph/PAPERNEXUS_STATUS.json` or `{PROJ}/researcher/FRONTIER_REPORT.md` is missing, do not jump directly into `idea-generator`. Run `/graph-build` and then `/frontier-mapping` first.
 
 **Key papers must enter the graph first:** after `/papers-cool` finds a key paper, do not ideate from the abstract alone. Try `/hugging-face-paper-pages` for full-text Markdown first; if that fails, download the PDF. If the current graph still does not contain the paper, refresh the graph before novelty or innovation reasoning.
 
@@ -203,7 +206,7 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Researcher should not idle:** while other agents are doing plan / code / experiment / analyze / write work, Researcher should continue literature research, full-text acquisition for key papers, remote import-task progress checks, automatic graph catch-up monitoring, brainstorm bundle refreshes, and innovation analysis with the relevant agents. If `idle_research.enabled = true` and the round is due, Researcher must prioritize `/idle-research` on that topic before generic literature drift. If new papers may change the frontier, refresh graph readiness and the brainstorm bundle before the next critical decision.
 
-**PaperNexus feedback is durable, not conversational:** when you delegate wrapper-driven upload / parse / queue work into a dedicated subagent session, do not wait for a free-form chat reply before updating workflow state. Use `research_workflow.set_paper_ingestion` for every per-paper queued / running / completed / timed_out / failed milestone so `/workflow-status` and channel broadcasts stay current.
+**PaperNexus feedback is durable, not conversational:** when literature work discovers papers, queue the upload request and move on; do not treat Researcher as the long-running uploader. `/graph-build` and `/resume-pipeline` will launch the queued wrapper work, and that workflow-owned session must use `research_workflow.set_paper_ingestion` for every per-paper queued / running / completed / timed_out / failed milestone so `/workflow-status` and channel broadcasts stay current.
 
 **Experiment memory is mandatory:** do not trust chat history for what was already run. Before launching, resuming, or interpreting experiments, read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` or `research_workflow.get_experiment_memory`. After any queue / launch / result / decision milestone, upsert the ledger and mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`.
 
@@ -218,7 +221,7 @@ When waiting on a gate, another agent, a remote experiment, or the user, priorit
 - Run `/idle-research` for the configured topic if `PROJECT_MANIFEST.json.idle_research` is enabled and due, then record the round through `research_workflow.record_idle_research_run`
 - Continue literature research, venue sweeps, key-paper full-text acquisition, and deduplication
 - Keep the Zotero `bot/<project-id>` collection and writing shortlist synchronized with the latest paper set
-- Check whether key papers are already in the graph; prepare graph refresh if needed
+- Check whether key papers are already in the graph; during `graph_build`, think in three fixed workflow-owned subphases: `uploading`, `verifying`, `brainstorm_refresh`
 - Reflect on innovation opportunities, composition opportunities, and closest prior work using the current graph
 - Reconcile experiment results, failed runs, and remote PaperNexus sync status inside `{PROJ}/researcher/EXPERIMENT_LEDGER.json`
 - Reopen unresolved question packets and update working memory, rejected branches, and stop reasons
@@ -256,3 +259,4 @@ Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When Ope
 - Do not hand off stage ownership without updating the manifest
 - Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the authenticated Python wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead
 - For 2 or more staged papers, default to one `pn_batch_import.py` manifest and bounded status passes instead of repeated one-paper submit loops.
+- Treat the core brainstorm bundle as a provider contract, not a hard-coded single skill: `graph_build` only requires the durable `brainstorm_cycle.provider*` metadata plus the chain-bundle artifacts to be valid before advancing.

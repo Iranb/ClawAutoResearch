@@ -66,7 +66,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - If the current channel is not yet bound, the plugin should read configured `projectsRoot`, create `{PROJ}` automatically when missing, and then bind the current channel to it
    - Treat the returned `projectRoot` as authoritative `{PROJ}`
 
-5. **Initialize project:**
+5. **Initialize project shell and onboarding contract:**
    - Read `{WS}/CONFIG.md` only as a reference; prefer the `projectRoot` returned by `research_workflow.bind_channel_project`
    - Generate `project_id` from topic: lowercase, replace spaces with `-`, truncate to 40 chars
    - Ensure `{PROJ}` exists
@@ -78,13 +78,23 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - Create `{PROJ}/memory/ideation-memory.md` and `{PROJ}/memory/experiment-memory.md` (copy from `templates/memory/` or create with section headers)
    - Copy `{WS}/WORKFLOW.md` → `{PROJ}/WORKFLOW.md`
    - Create `{PROJ}/researcher/workflow_snapshots/` and save timestamped copy
+   - Run `/project-init "[topic]"` or the equivalent `research_program` setup so the onboarding contract is durable before graph work
+   - At minimum, persist:
+     - `research_program.goal`
+     - `research_program.problem_statement`
+     - `research_program.baseline_reference`
+     - `research_program.primary_metric`
+     - `research_program.datasets`
+     - `research_program.success_criteria`
+     - `research_program.zotero_project_path = bot/<project-id>`
 
 6. **Update state:**
    - Set `{PROJ}/PROJECT_MANIFEST.json`:
-     - `current_stage: "graph_build"`
+     - `current_stage: "setup"` until the onboarding contract is complete
      - `current_micro_stage: "project_init"`
      - `memory_scope.project_isolated: true`
      - keep `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project explicitly overrides the shared-global defaults
+   - Do **not** advance to `graph_build` until setup checklist is complete; `/workflow-status` should show no missing onboarding items
 
 7. **Announce and begin Stage 0.5:**
    - Post: "🚀 Starting research pipeline for: [topic]"
@@ -114,7 +124,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 - project-local paper staging root = `{PROJ}/researcher/paper-staging`
-- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`), normally launched through `research_workflow.run_papernexus_wrapper`
+- remote PaperNexus graph = configured `papernexusApiBaseUrl` plus the authenticated Python wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`); workflow-owned uploads should be queued through `research_workflow.queue_paper_ingestion`, while graph reads / brainstorm reads still run through `research_workflow.run_papernexus_wrapper`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 
@@ -153,7 +163,7 @@ Before frontier mapping, the Researcher must first gather papers and full text i
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + {PROJ}/researcher/PAPER_SOURCE_INDEX.json
 /literature-review "$ARGUMENTS"     → {PROJ}/researcher/LITERATURE_REVIEW.md + {PROJ}/researcher/SOTA_MATRIX.md + {PROJ}/researcher/GAP_SYNTHESIS.md (when systematic coverage is needed)
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/RESEARCH_BRAINSTORM.md
-/graph-build "$ARGUMENTS"           → {PROJ}/graph/PAPERNEXUS_STATUS.json + refreshed brainstorm bundle
+/graph-build "$ARGUMENTS"           → workflow-owned `uploading -> verifying -> brainstorm_refresh`, {PROJ}/graph/PAPERNEXUS_STATUS.json, refreshed core brainstorm contract, Zotero `bot/<project-id>/selected` / `baselines`, and {PROJ}/researcher/ZOTERO_PACKET.md
 /frontier-mapping "$ARGUMENTS"      → {PROJ}/researcher/FRONTIER_REPORT.md
 /papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
 ```
@@ -162,9 +172,14 @@ Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
 - when the topic has many competing baselines, benchmark variants, or close prior work, insert `/literature-review` before trusting frontier or ideation outputs; use it to lock inclusion / exclusion criteria, SoTA coverage, and the gap packet
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
-- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue or request automatic graph catch-up before innovation analysis
-- if new material arrives through the PaperNexus dashboard or Web/API, prefer the queued import-task wrappers and task logs instead of touching any home-directory shared PaperNexus storage directly
-- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; `/graph-build` should track manifest progress and then run short readiness / brainstorm refresh passes
+- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue the required upload through `research_workflow.queue_paper_ingestion` before innovation analysis
+- if new material arrives through the PaperNexus dashboard or Web/API, prefer durable queued upload requests plus wrapper task logs instead of touching any home-directory shared PaperNexus storage directly
+- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; queue that manifest through `research_workflow.queue_paper_ingestion`, then let `/graph-build` or `/resume-pipeline` trigger it, track manifest progress, refresh Zotero `bot/<project-id>` collections, and run short readiness / brainstorm refresh passes
+- treat `/graph-build` as a fixed workflow phase with these micro-stages:
+  - `graph_build/uploading`
+  - `graph_build/verifying`
+  - `graph_build/brainstorm_refresh`
+- only the **core brainstorm provider contract** is mandatory before `frontier_mapping`; later brainstorm enhancers may change, but they must not change the durable contract consumed by workflow state
 - if workflow touches remote PaperNexus, go through the wrappers so auth and request shape stay consistent; do not write hand-rolled REST calls
 - workflow-owned automation must not depend on home-directory shared PaperNexus storage; use project-local staging plus authenticated remote wrapper calls instead
 - Do **not** enter idea selection without `{PROJ}/researcher/FRONTIER_REPORT.md`
