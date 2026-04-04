@@ -13,7 +13,7 @@ allowed-tools:
 
 # Paper Plan
 
-Build a paper outline from experiment results, then validate it with the Cross-Reviewer before any prose is written.
+Build a paper outline from experiment results, then validate it with the Cross-Reviewer before any prose is written. In the current workflow this stage must also materialize a durable `paper_story_state`, so the story skeleton becomes a workflow contract rather than a loose writing note.
 
 > **File ownership**: Write ONLY to `{PROJ}/academic_writer/`. Read from `{PROJ}/analyzer/`, `{PROJ}/reviewer/`, `{PROJ}/researcher/`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -135,6 +135,13 @@ Rules:
 - Only use `GREEN` or `RED`
 - `RED` means the storyline is still loose, not that writing must stop
 - If `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` is `RED`, reflect that in the limitation boundary instead of inventing stronger theory
+- Once the sketch is coherent, let workflow scaffold the durable story contract first:
+
+```json
+{"action":"materialize_paper_story_state","paperStoryMaterialization":{"basis_stage":"plan"}}
+```
+
+- Use `research_workflow.set_paper_story_state` only for bounded follow-up patches after the scaffold exists
 
 ### 2.2 Theory / Proof Appendix Plan
 
@@ -181,6 +188,20 @@ The packet must map:
 - off-limit side tracks
 
 When the packet is writing-safe, update `writing_contract.kg_storyline_status = ready`.
+
+Before leaving `/paper-plan`, the durable story contract should be complete enough to cover:
+
+- `TASK_SUMMARY.md`
+- `CHALLENGE_STATEMENT.md`
+- `INSIGHT_SUMMARY.md`
+- `CONTRIBUTION_MAP.md`
+- `ADVANTAGE_MAP.md`
+- `STORY_SPINE.md`
+- `PIPELINE_FIGURE_SKETCH.md`
+- `MODULE_MOTIVATION_MAP.md`
+- `CLAIM_TO_EXPERIMENT_MAP.md`
+- `FALLBACK_NARRATIVE.md`
+- `REJECTION_RISK_TABLE.md`
 
 ### 3. Section Outline
 
@@ -348,3 +369,6 @@ Also write:
 - `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`
 - `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when a template is configured
 - `{PROJ}/academic_writer/WRITING_SIGNALS.md`
+- `{PROJ}/academic_writer/story/` 下的 durable story contract files
+
+When those story files are updated, sync `PROJECT_MANIFEST.json.paper_story_state` through `research_workflow.set_paper_story_state` instead of hand-editing the manifest.

@@ -34,6 +34,16 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 - `{PROJ}/academic_writer/PAPER_PLAN.md` — outline, claims, figure assignments
+- `{PROJ}/academic_writer/story/STORY_SPINE.md`
+- `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md`
+- `{PROJ}/academic_writer/story/FALLBACK_NARRATIVE.md`
+- `{PROJ}/academic_writer/story/REJECTION_RISK_TABLE.md`
+- `{PROJ}/reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
+- `{PROJ}/reviewer/story-pressure/NOVELTY_ATTACK.md`
+- `{PROJ}/reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md`
+- `{PROJ}/reviewer/story-pressure/REVERSE_OUTLINE.md`
+- `{PROJ}/reviewer/story-pressure/FIGURE_TABLE_QC.md`
+- `{PROJ}/reviewer/story-pressure/LIMITATION_AUDIT.md`
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md` — experimental results
 - `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md` — authoritative claim support status
 - `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks belong in the paper's main arc
@@ -94,6 +104,18 @@ If the writing template is required but missing, stop and restore it first.
 If a template path is configured, read the project-local copied template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing. Never edit the external source template in place.
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
+
+Before writing full prose, treat the durable story contract as authoritative:
+- `STORY_SPINE.md` defines the main arc `task -> challenge -> insight -> contribution -> advantage`
+- `CLAIM_TO_EXPERIMENT_MAP.md` binds every headline claim to evidence or tables
+- `FALLBACK_NARRATIVE.md` defines the backup story if the main contribution framing is too aggressive
+- `REJECTION_RISK_TABLE.md` and the reviewer story-pressure packet define what not to overclaim
+
+If the story packet is missing or stale relative to the current plan / ideation basis, regenerate it through workflow first:
+
+```json
+{"action":"materialize_paper_story_state","paperStoryMaterialization":{"basis_stage":"write"}}
+```
 
 **Claim safety rule**:
 - Claims marked `SUPPORTED` may appear as primary contributions
@@ -214,6 +236,20 @@ If proof-aware writing is enabled, also update the appendix status when needed:
   "action": "set_writing_contract",
   "writingContract": {
     "proof_appendix_status": "green or red"
+  }
+}
+```
+
+Keep `paper_story_state` current as durable workflow state, not just prose files. When story artifacts materially change, sync them through:
+
+```json
+{
+  "action": "set_paper_story_state",
+  "paperStoryState": {
+    "status": "ready",
+    "story_spine_path": "academic_writer/story/STORY_SPINE.md",
+    "claim_to_experiment_map_path": "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+    "fallback_narrative_path": "academic_writer/story/FALLBACK_NARRATIVE.md"
   }
 }
 ```

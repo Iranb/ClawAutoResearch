@@ -25,6 +25,7 @@ export type WorkflowTraceEvent = {
 };
 
 const TRACE_DIR_NAME = "openclaw-research-workflow-trace";
+const PROJECT_LOCAL_TRACE_FILENAME = "workflow-trace.jsonl";
 
 function sanitizeTraceSegment(value: string | null | undefined): string {
   const normalized = String(value ?? "")
@@ -36,6 +37,17 @@ function sanitizeTraceSegment(value: string | null | undefined): string {
 }
 
 export function getWorkflowTraceLogPath(params: {
+  projectRoot: string;
+  projectId?: string | null;
+}): string {
+  return path.join(
+    path.resolve(params.projectRoot),
+    ".openclaw-research",
+    PROJECT_LOCAL_TRACE_FILENAME
+  );
+}
+
+export function getWorkflowTempTraceLogPath(params: {
   projectRoot: string;
   projectId?: string | null;
 }): string {
@@ -68,6 +80,10 @@ export async function appendWorkflowTraceEvent(params: {
     projectRoot,
     projectId: params.projectId ?? null,
   });
+  const tempMirrorPath = getWorkflowTempTraceLogPath({
+    projectRoot,
+    projectId: params.projectId ?? null,
+  });
   const event: WorkflowTraceEvent = {
     recordedAt: new Date().toISOString(),
     projectId: params.projectId ?? null,
@@ -84,6 +100,8 @@ export async function appendWorkflowTraceEvent(params: {
   };
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, "utf8");
+  await fs.mkdir(path.dirname(tempMirrorPath), { recursive: true });
+  await fs.appendFile(tempMirrorPath, `${JSON.stringify(event)}\n`, "utf8");
   await appendWorkflowRuntimeEvent({
     projectRoot,
     projectId: params.projectId ?? null,
@@ -97,6 +115,7 @@ export async function appendWorkflowTraceEvent(params: {
       agentId: params.agentId ?? null,
       sessionKey: params.sessionKey ?? null,
       traceMirrorPath: logPath,
+      tempTraceMirrorPath: tempMirrorPath,
       ...(params.details ?? {}),
     },
   });

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { normalizeWorkflowSubagentParentSessionKey } from "./workflow-subagent-sessions";
 import {
@@ -116,7 +115,9 @@ function getBackgroundRunRegistryPath(): string {
   if (override) {
     return path.resolve(override);
   }
-  return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
+  throw new Error(
+    "A project-scoped background run registry path is required; refusing ephemeral /tmp fallback. Pass projectRoot/projectsRoot or set OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH for tests."
+  );
 }
 
 function resolveBackgroundRuntimeScope(

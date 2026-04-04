@@ -1,5 +1,7 @@
 # Workflow Plugin-Subagent Avoidance Plan
 
+> **Status:** PARTIALLY COMPLETE
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reshape `openclaw-research` so critical workflow paths no longer depend on plugin-internal `runtime.subagent.*` execution, minimizing `Plugin runtime subagent methods are only available during a gateway request` failures even before `openclaw` upstream is fully fixed.
@@ -262,17 +264,17 @@ Add a section covering:
 **Files:**
 - Modify: `docs/superpowers/plans/2026-04-02-workflow-plugin-subagent-avoidance.md`
 
-- [ ] **Step 1: Run targeted tests**
+- [x] **Step 1: Run targeted tests**
 
 Run:
 - `node --test tests/workflow-commands.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-service.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-guard-boundaries.test.mjs`
 
-- [ ] **Step 2: Run build verification**
+- [x] **Step 2: Run build verification**
 
 Run:
 - `npm run build`
 
-- [ ] **Step 3: Update progress snapshot in this plan**
+- [x] **Step 3: Update progress snapshot in this plan**
 
 Record:
 - implemented slices
@@ -282,6 +284,13 @@ Record:
 ---
 
 ## Notes
+
+## Progress Snapshot
+
+- Critical slash commands now follow a queue-first contract with durable replay rather than hard-failing on plugin runtime subagent unavailability.
+- The queue and background run registry no longer silently fall back to ephemeral `/tmp` paths without explicit test overrides.
+- Critical PaperNexus and graph-refresh progress flows persist through `research_workflow.set_paper_ingestion`, including completion and timeout status updates.
+- Remaining gaps still depend on the broader runtime rewrite plan: durable broadcast outbox completion, persistent session reattachment, and deeper crash recovery.
 
 - This plan is intentionally scoped to `openclaw-research`.
 - If upstream `openclaw` later lands a full fix for `#50131`, this plan still remains useful because queue-first critical workflow execution is a stronger contract than ad-hoc delegated plugin subagent execution.

@@ -1,5 +1,7 @@
 # Workflow P0/P1 Hardening Implementation Plan
 
+> **Status:** PARTIALLY COMPLETE
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the automation gap between workflow guards and tool actions, enforce the missing IDEA/REVIEW semantic gates from `WORKFLOW.md`, and emit durable workflow trace logs into the system temp directory.
@@ -17,15 +19,15 @@
 - Modify: `tests/auto-iterator.test.mjs`
 - Modify: `tests/writer-reviewer-runtime-state.test.mjs`
 
-- [ ] **Step 1: Add a tool-surface regression test**
+- [x] **Step 1: Add a tool-surface regression test**
 
 Cover `research_workflow` get/set actions for `writing_session`, `review_session`, and `graph_guided_writing`, and assert that a temp-folder trace log is created.
 
-- [ ] **Step 2: Add semantic gate regressions**
+- [x] **Step 2: Add semantic gate regressions**
 
 Cover IDEA blocking when reasoning packets/evidence are only declared in metadata but not materially present, and REVIEW blocking when unsupported primary claims remain in the selected writing scope.
 
-- [ ] **Step 3: Upgrade legacy submit fixtures**
+- [x] **Step 3: Upgrade legacy submit fixtures**
 
 Seed the new writer runtime-state blocks in existing submit fixtures so full-suite auto-iterator expectations still describe a truly ready project.
 
@@ -36,15 +38,15 @@ Seed the new writer runtime-state blocks in existing submit fixtures so full-sui
 - Modify: `tools/register-workflow-tools.ts`
 - Modify: `tools/workflow-guard.ts`
 
-- [ ] **Step 1: Add a shared trace helper**
+- [x] **Step 1: Add a shared trace helper**
 
 Append JSONL events under `os.tmpdir()/openclaw-research-workflow-trace/` with project, stage, action, function, and summary metadata.
 
-- [ ] **Step 2: Expose runtime-state actions**
+- [x] **Step 2: Expose runtime-state actions**
 
 Add `get_*` / `set_*` actions for `writing_session`, `review_session`, and `graph_guided_writing`, wiring them to the existing manifest-backed helpers.
 
-- [ ] **Step 3: Log tool calls and iterator flow**
+- [x] **Step 3: Log tool calls and iterator flow**
 
 Record trace events for workflow tool actions and for `runWorkflowAutoIterator` stage evaluations/transitions.
 
@@ -55,11 +57,11 @@ Record trace events for workflow tool actions and for `runWorkflowAutoIterator` 
 - Modify: `tests/auto-iterator.test.mjs`
 - Modify: `tests/writer-reviewer-runtime-state.test.mjs`
 
-- [ ] **Step 1: Harden IDEA -> PLAN checks**
+- [x] **Step 1: Harden IDEA -> PLAN checks**
 
 Require graph-backed evidence fields plus non-empty reasoning packet artifacts on disk for each active track.
 
-- [ ] **Step 2: Harden REVIEW -> WRITE checks**
+- [x] **Step 2: Harden REVIEW -> WRITE checks**
 
 Detect unsupported primary claims that still overlap the selected writing scope and keep the workflow blocked until they are cleared.
 
@@ -70,12 +72,12 @@ Detect unsupported primary claims that still overlap the selected writing scope 
 - Modify: `tools/register-workflow-tools.ts`
 - Create: `tools/workflow-trace.ts`
 
-- [ ] **Step 1: Run focused runtime-state/tool tests**
+- [x] **Step 1: Run focused runtime-state/tool tests**
 
 Run: `node --test tests/workflow-runtime-tools.test.mjs tests/writer-reviewer-runtime-state.test.mjs`
 Expected: PASS
 
-- [ ] **Step 2: Run workflow regression tests**
+- [x] **Step 2: Run workflow regression tests**
 
 Run: `node --test tests/auto-iterator.test.mjs tests/workflow-commands.test.mjs tests/workflow-service.test.mjs`
 Expected: PASS

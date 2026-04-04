@@ -618,18 +618,25 @@ export function normalizePaperIngestionQueuedRequest(
   const manifestPath = pickString(record, ["manifestPath", "manifest_path"]);
   const sharedCorpus = pickString(record, ["sharedCorpus", "shared_corpus"]);
   const summary = pickString(record, ["summary"]);
+  const status = normalizePaperIngestionQueuedRequestStatus(record.status);
+  const detail = pickString(record, ["detail"]);
+  const triggerKind = pickString(record, ["triggerKind", "trigger_kind"]);
   const argsRaw = record.args;
   const args = Array.isArray(argsRaw)
     ? argsRaw
         .map((item) => asString(item))
         .filter((item): item is string => Boolean(item))
     : [];
-  if (!requestId || (!wrapper && !commandText && !manifestPath && !summary)) {
+  const hasSparsePatchPayload = Boolean(detail || triggerKind || record.status != null);
+  if (
+    !requestId ||
+    (!wrapper && !commandText && !manifestPath && !summary && !hasSparsePatchPayload)
+  ) {
     return null;
   }
   return {
     requestId,
-    status: normalizePaperIngestionQueuedRequestStatus(record.status),
+    status,
     wrapper,
     args,
     commandText,
@@ -647,8 +654,8 @@ export function normalizePaperIngestionQueuedRequest(
     lastRunId: pickString(record, ["lastRunId", "last_run_id"]),
     lastSessionKey: pickString(record, ["lastSessionKey", "last_session_key"]),
     lastError: pickString(record, ["lastError", "last_error"]),
-    detail: pickString(record, ["detail"]),
-    triggerKind: pickString(record, ["triggerKind", "trigger_kind"]),
+    detail,
+    triggerKind,
   };
 }
 

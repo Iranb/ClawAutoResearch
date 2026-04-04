@@ -36,7 +36,9 @@ Read in order:
 2. `{PROJ}/TRACK_REGISTRY.json` — active track ids plus the durable `hypothesis` / `novelty_basis` contract
 3. `{PROJ}/PROJECT_MANIFEST.json` — confirm CODE ownership and any mirrored research-program contract
 4. `{PROJ}/researcher/IDEA_REPORT.md` — method details and novelty claims
-5. `{PROJ}/orchestrator/TODOS.md` — identify the specific stage(s) to implement
+5. `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md` and `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md` — the current rationale for why this direction exists and how it should be decomposed into executable deltas
+6. `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md` when it already exists — use it as a claim-pressure contract, not just a writing artifact
+7. `{PROJ}/orchestrator/TODOS.md` — identify the specific stage(s) to implement
 
 ## Steps
 
@@ -51,6 +53,10 @@ Before writing any code:
   - `question`
   - `hypothesis`
   - `novelty_basis`
+- Resolve the proposal/story contract:
+  - the selected direction from `RESEARCH_PROPOSAL.md`
+  - the decomposition from `PROBLEM_DECOMPOSITION.md`
+  - any already-locked claim → experiment obligations from `CLAIM_TO_EXPERIMENT_MAP.md`
 - Resolve the baseline contract:
   - `baseline_reference`
   - `primary_baseline_metric`
@@ -61,6 +67,7 @@ Before writing any code:
   - `validation_steps`
   - `ablation_plan`
 - If PLAN.md or the current task conflicts with the active track contract, stop and ask Researcher / Orchestrator to reconcile it before implementing
+- If code would violate the current `RESEARCH_PROPOSAL.md`, `PROBLEM_DECOMPOSITION.md`, or `CLAIM_TO_EXPERIMENT_MAP.md`, stop and force a plan/story update before implementing
 - If the requested code change would alter the baseline training setup or eval method without an explicit allowed deviation, stop and force a plan update before implementing
 
 ### 2. Determine Dataset Configuration
@@ -270,6 +277,8 @@ Every bundle must include `EXPERIMENT_MANIFEST.json` with:
 - `innovation_points`
 - `validation_steps`
 - `ablation_plan`
+- `claim_ids_supported`
+- `proposal_basis`
 - `allowed_deviations`
 
 Update `{PROJ}/coder/EXPERIMENT_INDEX.md` so Coder can later recover:

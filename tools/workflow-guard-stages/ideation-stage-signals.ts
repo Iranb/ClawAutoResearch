@@ -1,4 +1,9 @@
 import * as path from "node:path";
+import {
+  getIdeaCatalystRequisitionBlockingSignal,
+  getIdeaCatalystRequiredArtifactPaths,
+  isIdeaCatalystReadyForPlan,
+} from "../idea-catalyst/workflow-bridge";
 import type {
   ManifestLike,
   StageSignalsContext,
@@ -19,6 +24,8 @@ export interface IdeationStageDeps {
     projectRoot: string,
     artifactPath: string | null
   ) => string | null;
+  normalizeIdeaCatalystState: (value: unknown) => any;
+  getIdeaCatalystValidationErrors: (state: any) => string[];
   normalizeIdeationContractState: (value: unknown) => any;
   getIdeationContractValidationErrors: (state: any) => string[];
   normalizeInnovationReflectionState: (value: unknown) => any;
@@ -93,6 +100,19 @@ export async function collectIdeaStageMissingSignals(
       if (relativePath) {
         missing.push(`{PROJ}/${relativePath}`);
       }
+    }
+  }
+
+  const ideaCatalyst = deps.normalizeIdeaCatalystState(ctx.manifest?.idea_catalyst);
+  missing.push(...deps.getIdeaCatalystValidationErrors(ideaCatalyst));
+  const requisitionBlockingSignal =
+    getIdeaCatalystRequisitionBlockingSignal(ideaCatalyst);
+  if (requisitionBlockingSignal) {
+    missing.push(requisitionBlockingSignal);
+  }
+  for (const relativePath of getIdeaCatalystRequiredArtifactPaths(ideaCatalyst)) {
+    if (!(await artifactHasMeaningfulContent(ctx.projectRoot, relativePath, deps))) {
+      missing.push(`{PROJ}/${relativePath}`);
     }
   }
 
@@ -203,6 +223,21 @@ export async function collectPlanStageMissingSignals(
     missing.push(
       `PROJECT_MANIFEST.json.ideation_contract.research_proposal_path must point to a non-empty artifact (${ideationContract.researchProposalPath ?? "unset"})`
     );
+  }
+
+  const ideaCatalyst = deps.normalizeIdeaCatalystState(ctx.manifest?.idea_catalyst);
+  if (!isIdeaCatalystReadyForPlan(ideaCatalyst)) {
+    missing.push(...deps.getIdeaCatalystValidationErrors(ideaCatalyst));
+    const requisitionBlockingSignal =
+      getIdeaCatalystRequisitionBlockingSignal(ideaCatalyst);
+    if (requisitionBlockingSignal) {
+      missing.push(requisitionBlockingSignal);
+    }
+  }
+  for (const relativePath of getIdeaCatalystRequiredArtifactPaths(ideaCatalyst)) {
+    if (!(await artifactHasMeaningfulContent(ctx.projectRoot, relativePath, deps))) {
+      missing.push(`{PROJ}/${relativePath}`);
+    }
   }
 
   const orchestrationState = deps.normalizeOrchestrationState(

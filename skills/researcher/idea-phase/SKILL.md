@@ -18,7 +18,7 @@ allowed-tools:
 
 # Idea Phase
 
-从文献到 track portfolio，包含系统文献综述、Zotero 文献组织、PaperNexus 图谱前置、graph-grounded 头脑风暴、bounded scientific brainstorming、对抗式 novelty 过滤和 pilot 实验验证。
+从文献到 track portfolio，包含系统文献综述、Zotero 文献组织、PaperNexus 图谱前置、graph-grounded 头脑风暴、bounded scientific brainstorming、对抗式 novelty 过滤和 pilot 实验验证。当前 workflow 要求这一阶段落成 durable `ideation_contract`，而不是只留下自由文本 brainstorm。
 
 ## Pipeline
 
@@ -127,10 +127,42 @@ allowed-tools:
 9. 保留至多 1 个 parked track
 10. 对 active tracks 做并行 pilot 实验（小规模快速验证）
 11. 按 pilot 实证信号排序并写入 `TRACK_REGISTRY.json`
+12. 在 converge 之后立即调用：
+
+```json
+{"action":"materialize_ideation_contract","ideationMaterialization":{"basis_stage":"frontier_mapping"}}
+```
+
+让 workflow 从现有 graph / brainstorm / frontier / track memory 自动生成：
+- `GRAPH_IDEATION_PACKET.json`
+- `NOVELTY_TREE.md`
+- `CHALLENGE_INSIGHT_TREE.md`
+- `WELL_ESTABLISHED_SOLUTION_CHECK.md`
+- `CANDIDATE_POOL.json`
+- `TOURNAMENT_SCOREBOARD.json`
+- `TOP3_DIRECTION_SUMMARY.md`
+- `RESEARCH_PROPOSAL.md`
+
+13. 只在上述 durable artifacts 已落盘后，再补充或修订 `IDEA_REPORT.md`
+
+其中有三个硬要求：
+- `NOVELTY_TREE.md` 必须先基于 frontier files、anchor index、logic/evidence/storyline chain bundle 抽出 `novelty zones`
+- `CHALLENGE_INSIGHT_TREE.md` 必须先抽 `challenge clusters` 和 `insight clusters`，再写树
+- `WELL_ESTABLISHED_SOLUTION_CHECK.md` 必须显式判断每个方向是 `open`、`occupied` 还是 `open_with_constraints`
 
 **Output**:
 - 初步 `{PROJ}/researcher/IDEA_REPORT.md`
 - `{PROJ}/TRACK_REGISTRY.json`
+- `{PROJ}/researcher/ideation/GRAPH_IDEATION_PACKET.json`
+- `{PROJ}/researcher/ideation/NOVELTY_TREE.md`
+- `{PROJ}/researcher/ideation/CHALLENGE_INSIGHT_TREE.md`
+- `{PROJ}/researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md`
+- `{PROJ}/researcher/ideation/CROSS_DOMAIN_TRANSFER.md`
+- `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md`
+- `{PROJ}/researcher/ideation/CANDIDATE_POOL.json`
+- `{PROJ}/researcher/ideation/TOURNAMENT_SCOREBOARD.json`
+- `{PROJ}/researcher/ideation/TOP3_DIRECTION_SUMMARY.md`
+- `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md`
 - 若已有实验历史，则刷新 `{PROJ}/researcher/INNOVATION_REFLECTION.md`
 
 ### Phase 5: Novelty Check
@@ -183,6 +215,13 @@ Phase 完成后更新 `{PMEM}/ideation-memory.md`：
 - 有效选题模式（IDE: Idea Discovery Evolution）
 - 如果所有 idea 被否决：记录失败分类（IVE: Idea Validation Evolution）
 - 如果某条 track 被 kill：记录其 falsification signal 和不要重试的条件
+
+同时优先复用现有 graph-backed memory，而不是再造一套平行 ideation memory：
+- top-3 / do-not-repeat / failed direction / transferable lessons 优先写回 `brainstorm_cycle.working_memory_path`
+- 需要反思链时写回 `brainstorm_cycle.reflection_chain_path`
+- 需要 storyline grounding 时写回 `brainstorm_cycle.storyline_brief_path`
+- surviving direction 的 reasoning / synthesis / evidence 指针继续落在 `TRACK_REGISTRY.json`
+- `materialize_ideation_contract` 是默认的 scaffold 动作；只有当自动生成结果明显失真时，才手工细修这些 ideation 文档
 
 ## Stage Closeout
 

@@ -247,12 +247,37 @@ async function seedProjectReadyForWrite(projectRoot) {
     issues: [],
   });
   await writeText(path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"));
+  for (const fileName of [
+    "REJECT_FIRST_REVIEW.md",
+    "NOVELTY_ATTACK.md",
+    "UNSUPPORTED_CLAIM_AUDIT.md",
+    "REVERSE_OUTLINE.md",
+    "FIGURE_TABLE_QC.md",
+    "LIMITATION_AUDIT.md",
+  ]) {
+    await writeText(path.join(projectRoot, "reviewer", "story-pressure", fileName));
+  }
 
   await writeText(path.join(projectRoot, "cross-reviewer", "notes.md"));
   await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
   await writeText(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"));
   await writeText(path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"));
   await writeText(path.join(projectRoot, "academic_writer", "THEORY_APPENDIX_PLAN.md"));
+  for (const fileName of [
+    "TASK_SUMMARY.md",
+    "CHALLENGE_STATEMENT.md",
+    "INSIGHT_SUMMARY.md",
+    "CONTRIBUTION_MAP.md",
+    "ADVANTAGE_MAP.md",
+    "STORY_SPINE.md",
+    "PIPELINE_FIGURE_SKETCH.md",
+    "MODULE_MOTIVATION_MAP.md",
+    "CLAIM_TO_EXPERIMENT_MAP.md",
+    "FALLBACK_NARRATIVE.md",
+    "REJECTION_RISK_TABLE.md",
+  ]) {
+    await writeText(path.join(projectRoot, "academic_writer", "story", fileName));
+  }
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex"),
     "% appendix\n"
@@ -404,6 +429,30 @@ async function seedProjectReadyForWrite(projectRoot) {
       proof_packet_dir: "analyzer/proof-packets",
       citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
     },
+    paper_story_state: {
+      status: "ready",
+      track_id: trackId,
+      task_summary_path: "academic_writer/story/TASK_SUMMARY.md",
+      challenge_statement_path: "academic_writer/story/CHALLENGE_STATEMENT.md",
+      insight_summary_path: "academic_writer/story/INSIGHT_SUMMARY.md",
+      contribution_map_path: "academic_writer/story/CONTRIBUTION_MAP.md",
+      advantage_map_path: "academic_writer/story/ADVANTAGE_MAP.md",
+      story_spine_path: "academic_writer/story/STORY_SPINE.md",
+      pipeline_figure_sketch_path:
+        "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+      module_motivation_map_path:
+        "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+      claim_to_experiment_map_path:
+        "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+      rejection_risk_table_path:
+        "academic_writer/story/REJECTION_RISK_TABLE.md",
+      claim_support_status: "supported",
+      supported_claim_count: 2,
+      partial_claim_count: 0,
+      unsupported_claim_count: 0,
+      pending_reason: null,
+    },
     review_issue_tracker: {
       status: "ready",
       issue_manifest_path: "reviewer/REVIEW_ISSUES.json",
@@ -414,6 +463,20 @@ async function seedProjectReadyForWrite(projectRoot) {
         low: 0,
       },
       issues: [],
+    },
+    review_pressure_packet: {
+      status: "ready",
+      mode: "aggressive",
+      track_id: trackId,
+      reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+      novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+      unsupported_claim_audit_path:
+        "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+      reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+      figure_table_qc_path: "reviewer/story-pressure/FIGURE_TABLE_QC.md",
+      limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+      latest_round_at: now,
+      pending_reason: null,
     },
     review_session: {
       status: "completed",

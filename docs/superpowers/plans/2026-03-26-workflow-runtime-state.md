@@ -1,5 +1,7 @@
 # Workflow Runtime State Implementation Plan
 
+> **Status:** COMPLETE
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Persist writer/reviewer runtime state in `PROJECT_MANIFEST.json`, expose summaries, surface the data in workflow snapshots/status output, and gate `write` stage progression on the new runtime readiness signals.
@@ -17,12 +19,12 @@
 - Test: `tests/writer-reviewer-runtime-state.test.mjs`
 - Test: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Run the new runtime-state test file**
+- [x] **Step 1: Run the new runtime-state test file**
 
 Run: `node --test tests/writer-reviewer-runtime-state.test.mjs`
 Expected: FAIL because writer/reviewer runtime state APIs are not exported or not wired through manifest/snapshot logic yet.
 
-- [ ] **Step 2: Run the workflow-status regression test**
+- [x] **Step 2: Run the workflow-status regression test**
 
 Run: `node --test tests/workflow-commands.test.mjs`
 Expected: FAIL in the workflow-status coverage that now expects writing/review/graph-guided lines.
@@ -33,15 +35,15 @@ Expected: FAIL in the workflow-status coverage that now expects writing/review/g
 - Modify: `tools/workflow-guard.ts`
 - Test: `tests/writer-reviewer-runtime-state.test.mjs`
 
-- [ ] **Step 1: Implement getter summary APIs**
+- [x] **Step 1: Implement getter summary APIs**
 
 Add `getWritingSessionStateSummary`, `getReviewSessionStateSummary`, and `getGraphGuidedWritingStateSummary` that mirror the citation-integrity summary shape and resolve key artifact paths/existence where useful.
 
-- [ ] **Step 2: Implement setter APIs**
+- [x] **Step 2: Implement setter APIs**
 
 Add `setWritingSessionState`, `setReviewSessionState`, and `setGraphGuidedWritingState`, each reading the current manifest, applying a normalized patch, serializing back into `PROJECT_MANIFEST.json`, and returning the normalized state payload.
 
-- [ ] **Step 3: Keep defaults and normalization aligned**
+- [x] **Step 3: Keep defaults and normalization aligned**
 
 Use the new `normalize*` / `serialize*` helpers so snake_case and camelCase inputs both persist correctly and default artifact paths stay stable.
 
@@ -51,11 +53,11 @@ Use the new `normalize*` / `serialize*` helpers so snake_case and camelCase inpu
 - Modify: `tools/workflow-guard.ts`
 - Test: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Extend `buildWorkflowSnapshot`**
+- [x] **Step 1: Extend `buildWorkflowSnapshot`**
 
 Normalize the three runtime-state blocks from the manifest, compute derived booleans/summary fields, and populate the new `WorkflowSnapshot` fields.
 
-- [ ] **Step 2: Extend `formatWorkflowSnapshotForPrompt` / workflow-status output**
+- [x] **Step 2: Extend `formatWorkflowSnapshotForPrompt` / workflow-status output**
 
 Emit readable lines for writing-session status, evidence coverage, review status/rubric summary, graph-guided-writing status, and scholar fallback slot using the exact semantics expected by the tests.
 
@@ -65,11 +67,11 @@ Emit readable lines for writing-session status, evidence coverage, review status
 - Modify: `tools/workflow-guard.ts`
 - Test: `tests/writer-reviewer-runtime-state.test.mjs`
 
-- [ ] **Step 1: Add `write` stage manifest checks**
+- [x] **Step 1: Add `write` stage manifest checks**
 
 Inside `getMissingStageSignals`, require `PROJECT_MANIFEST.json.writing_session` and `PROJECT_MANIFEST.json.graph_guided_writing` to exist in ready/covered form before the auto iterator can advance from `write` to `submit`.
 
-- [ ] **Step 2: Preserve review-session observability without new blocking**
+- [x] **Step 2: Preserve review-session observability without new blocking**
 
 Persist and surface `review_session`, but do not make it a hard `write` gate beyond the writing/graph-guided checks already covered by the approved design.
 
@@ -80,17 +82,17 @@ Persist and surface `review_session`, but do not make it a hard `write` gate bey
 - Test: `tests/writer-reviewer-runtime-state.test.mjs`
 - Test: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Re-run runtime-state tests**
+- [x] **Step 1: Re-run runtime-state tests**
 
 Run: `node --test tests/writer-reviewer-runtime-state.test.mjs`
 Expected: PASS
 
-- [ ] **Step 2: Re-run workflow-status tests**
+- [x] **Step 2: Re-run workflow-status tests**
 
 Run: `node --test tests/workflow-commands.test.mjs`
 Expected: PASS
 
-- [ ] **Step 3: Run the TypeScript build**
+- [x] **Step 3: Run the TypeScript build**
 
 Run: `npm run build`
 Expected: PASS

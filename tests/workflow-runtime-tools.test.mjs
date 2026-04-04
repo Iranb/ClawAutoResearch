@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = path.join(
+  os.tmpdir(),
+  "openclaw-research-background-runs-workflow-runtime-tools.json"
+);
+
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import {
   clearBackgroundWorkflowRunRegistryForTests,
@@ -69,6 +74,11 @@ async function executeWorkflowTool(tool, params) {
   const response = await tool.execute("test-call", params);
   assert.equal(response.content[0]?.type, "text");
   return JSON.parse(response.content[0].text);
+}
+
+async function writeJson(targetPath, value) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 test("research_workflow get_papernexus_remote_access returns a redacted token status", async (t) => {
@@ -265,6 +275,73 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   });
   assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+});
+
+test("research_workflow queue_literature_discovery_requisition bridges a structured discovery packet into durable paper_ingestion queued requests", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    corpus_name: "GCD",
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    {
+      discovery_id: "disc-gap-memory-001",
+      discovery_reason: "Bridge evidence is weak for memory-preservation under domain shift.",
+      target_question_ids: ["q-memory-1"],
+      target_domains: ["Psychology", "Control Theory"],
+      candidate_queries: [
+        {
+          domain: "Psychology",
+          query: "metacontrol adaptive memory under shifting collaborators",
+        },
+        {
+          domain: "Control Theory",
+          query: "adaptive regulation preserving prior state under drift",
+        },
+      ],
+      next_action_suggestion: "Import selected papers and rerun graph-build before revisiting the story.",
+      required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+    }
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_literature_discovery_requisition",
+    literatureDiscovery: {
+      packet_path: "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+      trigger_kind: "literature_discovery",
+      origin_stage: "review",
+      summary: "Queue graph-backed literature discovery for missing bridge evidence.",
+    },
+  });
+
+  assert.equal(result.created ?? false, true);
+  assert.equal(result.request.triggerKind, "literature_discovery");
+  assert.match(result.request.requestId, /^literature-discovery-/);
+  assert.equal(result.request.sharedCorpus, "GCD");
+  assert.match(result.request.commandText ?? "", /LITERATURE_DISCOVERY_PACKET\.json/);
+  assert.match(result.request.commandText ?? "", /graph-build/i);
+  assert.match(result.request.detail ?? "", /review/i);
+  assert.equal(result.state.queuedRequests.length >= 1, true);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
+  assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+  assert.equal(snapshot.paperIngestionRuntimeStatus, "idle");
 });
 
 test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
@@ -799,6 +876,13 @@ test("research_workflow materializes paper story and review pressure contracts f
     problem_scope: "Support precision under widening narrative scope.",
     research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
     problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    graph_ideation_indices: {
+      status: "ready",
+      candidate_source_domains: ["scientific-visualization", "human-computer-interaction"],
+      selected_source_domains: ["scientific-visualization"],
+      pruned_source_domains: ["human-computer-interaction"],
+      bridge_evidence_tier: "moderate",
+    },
     selected_direction_id: "dir-main",
     selected_track_id: "track-main",
   };
@@ -875,6 +959,43 @@ test("research_workflow materializes paper story and review pressure contracts f
   );
   assert.match(unsupportedClaims, /claim-1/i);
   assert.match(unsupportedClaims, /graph-grounded routing/i);
+
+  const discoveryResult = await executeWorkflowTool(tool, {
+    action: "materialize_literature_discovery_packet",
+    literatureDiscoveryMaterialization: {
+      origin_stage: "review",
+    },
+  });
+
+  assert.equal(discoveryResult.required, true);
+  assert.equal(
+    discoveryResult.packetPath,
+    "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json"
+  );
+  assert.equal(discoveryResult.packet.discovery_reason, "review_story_support_gap");
+  assert.deepEqual(discoveryResult.packet.required_stage_reentry, [
+    "graph_build",
+    "review",
+  ]);
+  assert.ok(discoveryResult.packet.candidate_queries.length >= 2);
+  assert.deepEqual(discoveryResult.packet.target_domains, [
+    "scientific-visualization",
+  ]);
+
+  const discoveryPacket = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-discovery",
+        "LITERATURE_DISCOVERY_PACKET.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(discoveryPacket.discovery_reason, "review_story_support_gap");
+  assert.match(discoveryPacket.selection_rationale ?? "", /unsupported|limitation/i);
+  assert.match(discoveryPacket.next_action_suggestion ?? "", /graph_build/i);
 });
 
 test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {

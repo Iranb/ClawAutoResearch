@@ -205,10 +205,22 @@ idea 阶段的审计材料。
 - recovery repair
 - announce / broadcast 生命周期
 
+### `.openclaw-research/workflow-trace.jsonl`
+
+项目本地的追加式 trace 镜像。
+
+它用于：
+
+- auto iterator 决策痕迹
+- prompt assembly 摘要
+- workflow tool action 审计
+- 写作与运行时关键路径的补充 trace
+
 注意：
 
-- `/tmp/openclaw-research-workflow-trace/...jsonl` 仍保留为临时 trace
-- 但恢复运行所需的关键记录现在应优先依赖项目内 runtime state
+- `.openclaw-research/workflow-trace.jsonl` 是当前主 trace 文件
+- `/tmp/openclaw-research-workflow-trace/...jsonl` 只作为临时 debug mirror 保留
+- 恢复运行所需的关键记录应优先依赖项目内 runtime state 与项目本地 trace
 
 ### `tools/workflow-announce-runtime.ts` / `tools/workflow-runtime-recovery.ts`
 
@@ -231,6 +243,7 @@ idea 阶段的审计材料。
 - `.openclaw-research/workflow-runtime-sessions.json`
 - `.openclaw-research/workflow-announce-outbox.json`
 - `.openclaw-research/workflow-broadcast-outbox.json`
+- `.openclaw-research/workflow-trace.jsonl`
 
 更推荐用这些工具动作：
 

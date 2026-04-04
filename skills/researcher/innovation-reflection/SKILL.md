@@ -68,6 +68,11 @@ research_workflow.run_papernexus_wrapper -> pn_research_chains.py ... evidence-c
    - prefer brainstorm-quality anchors over raw graph prominence when deciding which opportunities are worth carrying forward
 6. Write `{PROJ}/researcher/INNOVATION_REFLECTION.md`.
 7. Immediately call `research_workflow.record_innovation_reflection` with the new path and refreshed experiment coverage.
+8. If this reflection materially changes the next ideation round, make sure the reusable constraints are visible to the graph-backed memory layer that ideation already consumes:
+   - `brainstorm_cycle.working_memory_path`
+   - `brainstorm_cycle.reflection_chain_path`
+   - `TRACK_REGISTRY.json`
+   so the later `materialize_ideation_contract` step reuses the same lesson set instead of inventing a parallel memory packet
 
 ## Required Output Structure
 

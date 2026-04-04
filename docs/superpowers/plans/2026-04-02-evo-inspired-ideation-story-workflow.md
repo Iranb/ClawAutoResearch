@@ -269,3 +269,30 @@
 - 先用 tests 锁 gate，再加实现，避免状态机退化
 - 不改变顶层阶段名，减少兼容风险
 - 保持旧 artifact 继续可读，逐步把新合同变成硬 gate
+
+---
+
+## 6. 进度快照（2026-04-02）
+
+- `Task 1-3`：已完成
+  - durable state、snapshot、tool read/write 已接入
+- `Task 4`：已完成主链
+  - `materialize_ideation_contract` 已落地，并复用现有 graph / brainstorm / frontier / track memory
+  - `IDEA_TREE.md`、`CANDIDATE_POOL.json`、`RANKING_HISTORY.json` 现在显式包含 graph-first 的 tree expansion、`propose -> review -> refine` 和等价 Elo 排名历史
+  - `research-ideation` 与更新后的 `idea-tournament` skill 已接入本地 skill 索引和文档
+- `Task 6`：已完成主链
+  - `materialize_paper_story_state` 已落地，会从 `ideation_contract`、`research_program`、storyline brief 生成 durable story contract
+  - analyzer 的 `CLAIM_EVIDENCE_MATRIX.md`、`TRACK_VERDICTS.md`、`UNSUPPORTED_CLAIMS.md` 现在会被吸收到 story contract 的 claim-support snapshot / fallback hooks
+  - `runWorkflowAutoIterator` 进入 `code / experiment / analyze / review / write / submit` 时会先做 workflow-owned preflight，缺失或过期的 `paper_story_state` 会自动重建，而不是只等 agent 手动调用 tool
+- `Task 7`：已完成主链
+  - `materialize_review_pressure_packet` 已落地，会从 `paper_story_state` 与 ideation / baseline 信息生成 durable reviewer pressure packet
+  - 本地 `paper-review` skill 已补齐，承接 reject-first / novelty attack / unsupported-claim / reverse outline / limitation audit 的 Evo 风格方法层
+  - `runWorkflowAutoIterator` 进入 `review / write / submit` 时会自动补齐或刷新 `review_pressure_packet`，让 writer/reviewer 的 durable pressure artifacts 跟随阶段推进同步更新
+- `Task 5`：主链已完成
+  - `plan-research`、`implement-experiment`、Coder 文档已切到 proposal / claim-map-first
+  - analyze 产出的 claim support / track verdict / unsupported-claim hooks 已能 workflow-owned 地反写回 `paper_story_state`
+  - `runWorkflowAutoIterator` 进入 `plan / code / experiment / analyze / review / write / submit` 时会先校正 `ideation_contract`，让 proposal / decomposition / tournament artifacts 作为 workflow-owned stage contract 持续参与闭环
+  - 后续还可继续加强更细粒度的 advantage / limitation 自动抽取，但主闭环已打通
+- `Task 8`：大体完成
+  - `/workflow-status` 与核心 workflow / skill / agent 文档已同步
+  - reference 文档已覆盖 analyzer -> paper story 回写主链，以及 `research-ideation` / `paper-review` 的新增支撑

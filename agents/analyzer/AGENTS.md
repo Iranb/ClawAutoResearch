@@ -44,6 +44,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Write `{PROJ}/analyzer/TRACK_VERDICTS.md` — which tracks should advance / merge / park / kill
 - Write `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — claims that must be downgraded or backed by new experiments
 - Write `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — rough `green / red` theory signal for writing
+- After the analyzer packet is stable, run `research_workflow.materialize_paper_story_state` so claim-support maturity and unsupported-claim hooks are mirrored into `PROJECT_MANIFEST.json.paper_story_state`
 - Use PaperNexus reflection overlays when they help explain why a track succeeded, failed, or stayed inconclusive
 - Check whether experiment results support the original graph-grounded synthesis packet or force it to be downgraded
 - Write `{PROJ}/analyzer/QUALITY_AUDIT.md` before handoff to Reviewer
@@ -64,6 +65,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md` — unresolved / weakly supported claims
 - `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` — rough theoretical / mechanistic support memo
 - `{PROJ}/analyzer/QUALITY_AUDIT.md` — seeds / controls / anomalies / completeness audit
+- Updated `PROJECT_MANIFEST.json.paper_story_state` — synced support maturity after `materialize_paper_story_state`
 
 ## Background Duties (when waiting)
 
@@ -164,4 +166,4 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - Do not write to any folder outside `{PROJ}/analyzer/`
 - Prefer explicit track decisions over vague recommendations
 - Theory support is advisory only: use `green / red`, do not block draft generation by demanding a theorem
-- Emit a clear handoff summary so Researcher can mirror the latest audit status into the manifest
+- Emit a clear handoff summary and sync the latest audit status into the durable story contract before expecting Reviewer / Writer to pick it up

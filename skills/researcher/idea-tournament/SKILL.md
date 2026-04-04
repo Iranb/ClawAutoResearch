@@ -1,216 +1,168 @@
 ---
 name: idea-tournament
-description: "Run parallel pilot experiments on top-K tracks and rank them by empirical signal. Supports track combination. Use after idea-generator produces candidates."
-argument-hint: "[top-K tracks from IDEA_REPORT.md, or 'all']"
+description: "Tree-structured idea expansion and ranking. Use after research-ideation / idea-phase to expand candidates across technique/domain/formulation axes, record propose-review-refine traces, rank with Elo-style or equivalent history, preserve top-3 directions, and extend the winner into a proposal."
+argument-hint: "[research direction or active track set]"
 allowed-tools:
-  - Bash(*)
   - Read
   - Write
   - Edit
   - Grep
   - Glob
+  - research_workflow
+  - Agent
 ---
 
 # Idea Tournament
 
-Parallel pilot experiments on multiple tracks → empirical ranking → optional combination → top-K selection.
+把“已经有研究方向”变成“经过系统比较后的冠军方向”。当前 workflow 中，`idea-tournament` 不再只是 pilot 排名器，而是 ideation contract 的显式收敛步骤。
 
-## Constants
+## 角色
 
-- **MAX_PILOT_IDEAS = 3** — max tracks to pilot simultaneously (one per GPU group)
-- **MAX_PILOT_GPU_HOURS = 2** — max GPU-hours per single pilot (skip if over budget)
-- **PILOT_TIMEOUT_H = 3** — hard kill timeout per pilot
-- **TOURNAMENT_TOP_K = 2** — how many tracks pass to full experiment stage
-- **COMBINE_THRESHOLD = 0.4** — if two tracks each score ≥ 40% of the top track, consider combining
+- `research-ideation` / `/idea-phase` 负责找到值得展开的问题空间
+- `idea-tournament` 负责把候选方向做成：
+  - tree-structured search
+  - propose -> review -> refine trace
+  - ranking history
+  - top-3 direction summary
+  - winner research proposal
 
-## Input
+## 输入
 
-> **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+优先读取：
 
-Read `{PROJ}/researcher/IDEA_REPORT.md` — candidates ranked by initial scoring (no pilot yet).
+- `{PROJ}/researcher/ideation/GRAPH_IDEATION_PACKET.json`
+- `{PROJ}/researcher/ideation/NOVELTY_TREE.md`
+- `{PROJ}/researcher/ideation/CHALLENGE_INSIGHT_TREE.md`
+- `{PROJ}/researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md`
+- `{PROJ}/researcher/ideation/CROSS_DOMAIN_TRANSFER.md`
+- `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md`
+- `{PROJ}/TRACK_REGISTRY.json`
+- `brainstorm_cycle` 的 working / reflection / storyline briefs（通过 workflow-owned ideation contract 间接复用）
+- 如果当前方向走了 IDEA-CATALYST，还要读：
+  - `{PROJ}/researcher/idea-catalyst/DECOMPOSITION_PACKET.json`
+  - `{PROJ}/researcher/idea-catalyst/ABSTRACTION_PACKET.json`
+  - `{PROJ}/researcher/idea-catalyst/SCOUTING_REPORT.json`
+  - `{PROJ}/researcher/idea-catalyst/GATE_DECISION.json`
+  - `{PROJ}/researcher/idea-catalyst/IDEA_FRAGMENTS.json`
+  - `{PROJ}/researcher/idea-catalyst/RANKED_FRAGMENTS.json`
 
-Check `{PMEM}/ideation-memory.md` — skip any track matching a known failed direction. `{PMEM}` = `{PROJ}/memory`
+如果上述 ideation scaffold 还没齐，先调用：
 
-## Phase 1: GPU Allocation
-
-Check server resources:
-```bash
-ssh <server> "nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader"
-ssh <server> "screen -ls 2>/dev/null || echo 'No screens'"
-```
-
-Build GPU allocation table:
-```
-Available GPUs: [list free GPUs]
-Tracks to pilot: [list top-N tracks after budget filter]
-Assignment:
-  GPU 0 → Track 1 pilot  (screen: pilot_track1)
-  GPU 1 → Track 2 pilot  (screen: pilot_track2)
-  GPU 2 → Track 3 pilot  (screen: pilot_track3)
-```
-
-If fewer GPUs than tracks: queue by priority (feasibility × impact score).
-
-## Phase 2: Parallel Pilot Launch
-
-For each track, generate a minimal pilot script (< 2h GPU):
-- Smallest viable dataset split (10-20% of full data)
-- 1-3 epochs / short horizon
-- Single seed only (seed=42)
-- Only the core proposed component, no ablations
-
-Launch ALL pilots simultaneously:
-```bash
-# Launch track 1
-ssh <server> "screen -dmS pilot_track1 bash -c \
-  'cd <remote_dst> && \
-   CUDA_VISIBLE_DEVICES=<gpu_id> uv run python train.py --config pilot/track_1.yaml \
-   > logs/pilot_track1.log 2>&1; echo EXIT_CODE=\$? >> logs/pilot_track1.log'"
-
-# Launch track 2 (same command, different config)
-ssh <server> "screen -dmS pilot_track2 bash -c ..."
-
-# Launch track 3
-ssh <server> "screen -dmS pilot_track3 bash -c ..."
-```
-
-Verify all launched:
-```bash
-ssh <server> "screen -ls | grep pilot_track"
-```
-
-Write to `{PROJ}/researcher/IDEA_TOURNAMENT_STATE.json`:
 ```json
-{
-  "round": 1,
-  "status": "running_pilots",
-  "pilots": [
-    {"track_id": 1, "screen": "pilot_track1", "gpu": 0, "launched": "ISO-TS"},
-    {"track_id": 2, "screen": "pilot_track2", "gpu": 1, "launched": "ISO-TS"},
-    {"track_id": 3, "screen": "pilot_track3", "gpu": 2, "launched": "ISO-TS"}
-  ],
-  "timeout_at": "ISO-TS + PILOT_TIMEOUT_H"
-}
+{"action":"materialize_ideation_contract","ideationMaterialization":{"basis_stage":"frontier_mapping"}}
 ```
 
-## Phase 3: Monitor Pilots (Polling)
+## 核心流程
 
-Poll all pilots until ALL complete (or timeout):
+### Phase 1: Tree Expansion
 
-```bash
-# Check completion status
-ssh <server> "for s in pilot_track1 pilot_track2 pilot_track3; do
-  screen -ls | grep \$s > /dev/null && echo \"\$s: RUNNING\" || echo \"\$s: DONE\"
-done"
+不要直接在“我最喜欢哪个方向”上做排序，先强制广度。
 
-# Tail logs for running pilots
-ssh <server> "tail -5 logs/pilot_track1.log; echo '---'; tail -5 logs/pilot_track2.log"
-```
+用三层树展开候选：
 
-Polling interval: 2min → 5min → 10min (exponential backoff).
+1. `Technique`
+   - 同一问题下至少给出 2-3 个 genuinely different technical routes
+2. `Domain`
+   - 对每个 route 指定它最自然成立的约束 / 任务环境 / 失败场景
+3. `Formulation`
+   - 把每个 route 落成一个可验证的问题表述
 
-**Timeout handling**: If `pilot_trackN` exceeds `PILOT_TIMEOUT_H`:
-```bash
-ssh <server> "screen -X -S pilot_trackN quit"
-```
-Mark track N as "TIMEOUT — signal unknown".
+候选总量上限默认是 `21`：
 
-## Phase 4: Collect Results
+- technique layer 最多 7
+- domain layer 最多 14
+- formulation layer 最多 21
 
-Pull pilot results:
-```bash
-rsync -avz <server>:<remote_dst>/results/pilot_* {PROJ}/researcher/artifacts/pilots/
-```
+这样可以强制广度，但又不会让 tournament 失控。
 
-For each completed pilot, extract the key metric (from logs or results JSON).
+每个节点都必须经历：
 
-**Signal classification**:
-- `STRONG_POSITIVE`: key metric ≥ baseline + 2%
-- `POSITIVE`: key metric ≥ baseline + 0.5%
-- `NEUTRAL`: within ±0.5% of baseline
-- `NEGATIVE`: below baseline
-- `TIMEOUT`: did not complete in budget
+- `propose`
+- `review`
+- `refine`
 
-## Phase 5: Tournament Scoring & Ranking
+只允许剪掉：
 
-Score each track:
-```
-pilot_signal_score: STRONG_POSITIVE=4, POSITIVE=3, NEUTRAL=1, NEGATIVE=0, TIMEOUT=1
-feasibility_score: (1-5 from initial scoring)
-novelty_score: (1-5 from novelty-check)
-total = 0.5 × pilot + 0.3 × novelty + 0.2 × feasibility
-```
+- 明显 infeasible 的分支
+- 被 well-established solution check 判成 `occupied` 且没有新约束空间的分支
 
-**Combination check** (borrow from EvoScientist DELEGATION_STRATEGY):
-If tracks A and B each score ≥ `COMBINE_THRESHOLD × top_score`:
-- Check if they are architecturally compatible (non-conflicting mechanisms)
-- If yes: propose a combined track ("Track A+B") with additive hypothesis
-- The combined track automatically advances alongside the top individual track
+禁止凭直觉过早收窄。
 
-## Phase 6: Update IDEA_REPORT.md
+### Phase 2: Ranking
 
-Rewrite `{PROJ}/researcher/IDEA_REPORT.md` with tournament results:
+对 surviving candidates 做四维评估：
 
-```markdown
-# Idea Tournament Results
+- `novelty`
+- `feasibility`
+- `relevance`
+- `clarity`
 
-**Date**: YYYY-MM-DD
-**Pilots run**: N
-**Advancing to full experiment**: K idea(s)
+优先保留 pairwise / Elo 风格排序；如果当前环境无法真实跑 Elo tournament，也必须留下等价的 ranking history，而不是只写最终分数。
 
----
+四个维度默认等权，不允许只按 novelty 单轴拍板。
 
-## 🏆 Advancing Tracks
+最少要保留：
 
-### Rank 1 Track: [Title] — STRONG_POSITIVE ★★★
-- **Pilot metric**: +X.X% over baseline (baseline: Y.Y%)
-- **Score**: Z.Z/10
-- **Hypothesis**: [one sentence]
-- **Why novel**: [confirmed by novelty-check]
-- **Estimated full experiment**: ~N GPU-hours
-- **Next**: `/parallel-experiments "track_1"`
+- 当前 round
+- pairing / compared candidates
+- 四维分数
+- winner / loser
+- composite score
 
-### Rank 2 Track: [Title] — POSITIVE ★★
-...
+### Phase 3: Top-3 Summary
 
-### 🔀 Combined Track (if applicable): [Track A + Track B]
-- **Rationale**: [why combination makes sense]
-- **Pilot evidence**: A showed X, B showed Y, complementary because Z
-- **Risk**: [potential conflict or implementation complexity]
-- **Next**: implement combined approach if Rank 1 shows diminishing returns
+不是只保留 top-1。
 
----
+必须写出：
 
-## Eliminated Tracks
+- top-3 候选方向
+- 每个方向的核心 insight
+- 每个方向的 primary risk
+- 哪些方向应该：
+  - `advance`
+  - `park`
+  - `merge`
+  - `kill`
 
-| Track | Signal | Reason |
-|-------|--------|--------|
-| [Title] | NEGATIVE | Baseline outperforms by -2.1% |
-| [Title] | NEUTRAL | No signal at pilot scale, not worth full run |
+并把 top-3 / do-not-repeat / failed direction / transferable lessons 同步回现有 graph-backed memory，而不是再造一套平行 memory。
 
----
+### Phase 4: Proposal Extension
 
-## Memory Updates
-- Eliminated tracks → `{PMEM}/ideation-memory.md` (IVE update)
-- Advancing pattern → `{PMEM}/ideation-memory.md` (IDE update)
-```
+把冠军方向扩成：
 
-Update `{PROJ}/researcher/IDEA_TOURNAMENT_STATE.json`:
-```json
-{"status": "completed", "advancing_tracks": [1, 3], "combined": false}
-```
+- `Background`
+- `Related work pressure`
+- `Method`
+- `Experiment plan`
+- `Expected results`
+- `Risks and mitigations`
 
-## Gate — Human Checkpoint
+## Durable Outputs
 
-Present tournament results to user:
-- Show ranking table with pilot metrics
-- Show combination proposal (if any)
+本阶段的标准 durable outputs 是：
 
-User options:
-- `"proceed"` → advance top-K to full experiment
-- `"combine 1 3"` → combine tracks 1 and 3, advance as single track
-- `"only 1"` → override K, advance only track 1
-- `"rerun 2"` → re-pilot track 2 with larger scale before deciding
-- `"generate more"` → back to idea-generator with new constraints
+- `{PROJ}/researcher/ideation/IDEA_TREE.md`
+- `{PROJ}/researcher/ideation/CANDIDATE_POOL.json`
+- `{PROJ}/researcher/ideation/RANKING_HISTORY.json`
+- `{PROJ}/researcher/ideation/TOURNAMENT_SCOREBOARD.json`
+- `{PROJ}/researcher/ideation/TOP3_DIRECTION_SUMMARY.md`
+- `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md`
 
-`AUTO_PROCEED=true`: wait 15 seconds, auto-advance with top-K by score.
+如果这些文件缺失，不要声称 tournament 已完成。
+
+## 与现有 workflow 的关系
+
+- `idea-phase` 负责 graph-first ideation grounding
+- IDEA-CATALYST 子流水线负责跨域 challenge decomposition / abstraction / scouting / gating / fragment synthesis / judging
+- `idea-tournament` 负责 competitive narrowing
+- 后续 `plan` / `code` / `experiment` 以 `RESEARCH_PROPOSAL.md` 和 `CLAIM_TO_EXPERIMENT_MAP.md` 为约束
+
+在当前 repo 中，workflow-owned `materialize_ideation_contract` 会自动生成 `IDEA_TREE.md`、`RANKING_HISTORY.json`、`TOURNAMENT_SCOREBOARD.json` 等 scaffold。默认先用这个 scaffold，再做 bounded refinement；不要从零手写另一套 tournament packet。
+
+## 经验法则
+
+- Quantity before quality
+- Feasibility is not optional
+- Top-3 比 top-1 更有价值
+- Ranking history 比“最终直觉排序”更重要
+- 问题选择的价值通常高于模块小修小补

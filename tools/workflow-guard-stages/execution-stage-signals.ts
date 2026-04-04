@@ -24,6 +24,7 @@ export interface ExecutionStageDeps {
   }) => Promise<{ blocked: boolean; reason: string | null }>;
   normalizeReviewPressurePacketState: (value: unknown) => any;
   getReviewPressurePacketValidationErrors: (state: any) => string[];
+  normalizeWritingContractState: (value: unknown) => any;
   fileHasNonWhitespaceContent: (targetPath: string | null) => Promise<boolean>;
   DEFAULT_FIGURE_REVIEW_PATH: string;
   DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH: string;
@@ -72,21 +73,32 @@ export async function collectAnalyzeStageMissingSignals(
   deps: ExecutionStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+  const writingContract = deps.normalizeWritingContractState(
+    ctx.manifest?.writing_contract
+  );
+  const proofAppendixRequired = writingContract.proofAppendixRequired === true;
   for (const file of [
     "NARRATIVE_REPORT.md",
     "CLAIM_EVIDENCE_MATRIX.md",
     "TRACK_VERDICTS.md",
     "UNSUPPORTED_CLAIMS.md",
     "QUALITY_AUDIT.md",
-    "THEORY_SUPPORT_NOTE.md",
-    "THEORY_STATE.json",
   ]) {
     if (!(await deps.pathExists(path.join(ctx.projectRoot, "analyzer", file)))) {
       missing.push(`{PROJ}/analyzer/${file}`);
     }
   }
-  if (!(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "analyzer", "proof-packets")))) {
-    missing.push("{PROJ}/analyzer/proof-packets/");
+  if (proofAppendixRequired) {
+    for (const file of ["THEORY_SUPPORT_NOTE.md", "THEORY_STATE.json"]) {
+      if (!(await deps.pathExists(path.join(ctx.projectRoot, "analyzer", file)))) {
+        missing.push(`{PROJ}/analyzer/${file}`);
+      }
+    }
+    if (
+      !(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "analyzer", "proof-packets")))
+    ) {
+      missing.push("{PROJ}/analyzer/proof-packets/");
+    }
   }
   return missing;
 }

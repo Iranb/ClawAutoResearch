@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   dispatchWorkflowTaskToAgent,
@@ -241,10 +240,8 @@ export type BackgroundRunSnapshot = {
 
 const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
 const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
-const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
 const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
-const BACKGROUND_QUEUE_FILENAME = "openclaw-research-background-queue.json";
 
 type BackgroundRuntimeScope = {
   projectId?: string | null;
@@ -413,7 +410,9 @@ function getBackgroundRunRegistryPath(): string {
   if (override) {
     return path.resolve(override);
   }
-  return path.join(os.tmpdir(), BACKGROUND_RUN_REGISTRY_FILENAME);
+  throw new Error(
+    "A project-scoped background run registry path is required; refusing ephemeral /tmp fallback. Pass projectRoot/projectsRoot or set OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH for tests."
+  );
 }
 
 function getBackgroundQueuePath(): string {
@@ -423,7 +422,9 @@ function getBackgroundQueuePath(): string {
   if (override) {
     return path.resolve(override);
   }
-  return path.join(os.tmpdir(), BACKGROUND_QUEUE_FILENAME);
+  throw new Error(
+    "A project-scoped background queue path is required; refusing ephemeral /tmp fallback. Pass projectRoot/projectsRoot or set OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH for tests."
+  );
 }
 
 function resolveBackgroundRuntimeScope(

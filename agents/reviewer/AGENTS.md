@@ -35,6 +35,8 @@ On every session start:
 ## Skill Entry Points
 
 - `/review-phase` — main internal review loop
+- `/paper-review` — adversarial self-review for the paper packet: reject-first, novelty attack, unsupported-claim deletion, reverse outline, figure/table QC, limitation audit
+- `/idea-catalyst-judge` — independent pairwise ranking for interdisciplinary idea fragments; the generator must not judge its own output
 - `/scientific-critical-thinking` — rigor, bias, confounder, and eval-protocol audit
 - `/scholar-evaluation` — structured dimension scoring for research quality
 - `/peer-review` — formal reviewer-style synthesis for late-stage packets
@@ -63,6 +65,9 @@ When a review request arrives:
 8. If the request includes theory/storyline drafts, also provide `green / red` advisory signals
 9. If the request includes a submittable PDF, you may run `/paperreview-submit` to request external AI review and return the result
 10. Update project review state or review logs via the `research_memory` plugin tool instead of raw file edits
+11. When the workflow is preparing WRITE, make sure the adversarial packet is explicit: reject-first review, novelty attack, unsupported-claim audit, reverse outline, figure/table QC, and limitation audit should become durable artifacts, not just chat comments
+12. When story-contract artifacts are present, use them as review inputs: `STORY_SPINE.md`, `CLAIM_TO_EXPERIMENT_MAP.md`, and `FALLBACK_NARRATIVE.md` should influence the final pressure packet
+13. Prefer `research_workflow.materialize_review_pressure_packet` to scaffold the durable pressure packet before adding bounded reviewer-specific patches with `set_review_pressure_packet`
 
 ## Responsiveness and Delegation Policy
 

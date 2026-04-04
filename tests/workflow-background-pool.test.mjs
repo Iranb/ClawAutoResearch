@@ -59,3 +59,24 @@ test("workflow background pool lists and retires researcher sessions", async () 
     "agent:researcher:discord:channel:test-room:subagent:abc",
   ]);
 });
+
+test("workflow background pool refuses ephemeral registry fallback without project scope", async (t) => {
+  const previousRegistryPath =
+    process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+
+  delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+
+  try {
+    await assert.rejects(
+      () => listBackgroundWorkflowRuns({}),
+      /project-scoped background run registry path/i
+    );
+  } finally {
+    if (previousRegistryPath) {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH =
+        previousRegistryPath;
+    } else {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+    }
+  }
+});

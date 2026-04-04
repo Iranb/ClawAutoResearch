@@ -17,7 +17,7 @@ allowed-tools:
 # Review Phase
 
 混合审稿循环：同模型快速反思 + 独立 Reviewer Agent 跨 Agent 审稿。
-这是实验和 claim 层面的内部审稿，不替代成稿后的 `/paperreview-submit` 外部 AI 审稿。
+这是实验和 claim 层面的内部审稿，不替代成稿后的 `/paperreview-submit` 外部 AI 审稿。当前 workflow 还要求这一阶段产出 durable `review_pressure_packet`，把 reject-first / unsupported-claim / reverse-outline 等 adversarial 审稿压力测试固定下来。
 
 ## Research Rigor Constraints
 
@@ -69,6 +69,7 @@ allowed-tools:
 6. 若存在，读取 `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
 7. 读取 `{PROJ}/CLAIM_POLICY.md`
 8. 读取 `{PROJ}/reviewer/REVIEW_REPORT.md`（如有历史审稿）
+9. 若存在，读取 `{PROJ}/academic_writer/story/STORY_SPINE.md`、`CLAIM_TO_EXPERIMENT_MAP.md`、`FALLBACK_NARRATIVE.md`
 9. 初始化轮次计数
 
 ### Loop (≤ MAX_ROUNDS)
@@ -94,6 +95,7 @@ Researcher Agent 自我反思当前工作：
 - 附上 `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`
 - 附上 `{PROJ}/analyzer/TRACK_VERDICTS.md`
 - 附上 `{PROJ}/analyzer/QUALITY_AUDIT.md`
+- 若存在，附上 story contract（`STORY_SPINE.md`、`CLAIM_TO_EXPERIMENT_MAP.md`、`FALLBACK_NARRATIVE.md`）
 - 若存在，附上 `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md`
 - 不包含实现细节、调试日志等内部信息
 - 附上图表和关键指标表
@@ -114,6 +116,13 @@ Researcher Agent 自我反思当前工作：
 - 用 `/scientific-critical-thinking` 检查方法学、偏差、baseline fidelity 和 eval protocol drift
 - 用 `/scholar-evaluation` 做结构化维度评分
 - 用 `/peer-review` 生成更接近正式 reviewer voice 的整合意见
+- 先调用：
+
+```json
+{"action":"materialize_review_pressure_packet","reviewPressureMaterialization":{"basis_stage":"review"}}
+```
+
+- 再把 reject-first simulation、novelty attack、unsupported-claim audit、reverse outline、figure/table QC、limitation audit 写成 durable artifacts，而不是只留在评论里
 
 #### Phase C: Parse & Decide
 
@@ -149,6 +158,14 @@ Researcher Agent 自我反思当前工作：
 
 更新 `{PROJ}/researcher/REVIEW_STATE.json`。
 
+同时把 adversarial paper-review 产物固定为 durable packet：
+- `reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
+- `reviewer/story-pressure/NOVELTY_ATTACK.md`
+- `reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md`
+- `reviewer/story-pressure/REVERSE_OUTLINE.md`
+- `reviewer/story-pressure/FIGURE_TABLE_QC.md`
+- `reviewer/story-pressure/LIMITATION_AUDIT.md`
+
 每轮至少保留这些字段：
 - `Overall score`
 - `Verdict`
@@ -161,8 +178,9 @@ Researcher Agent 自我反思当前工作：
 
 1. 更新 `{PROJ}/researcher/REVIEW_STATE.json` 为 `status: "completed"`
 2. 写入最终审稿总结到 `{PROJ}/reviewer/REVIEW_REPORT.md`
-3. 更新 `{PMEM}/experiment-memory.md`（ESE），`{PMEM}` = `{PROJ}/memory`
-4. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
+3. 先通过 `research_workflow.materialize_review_pressure_packet` 生成 `{PROJ}/reviewer/story-pressure/` 的 durable review-pressure packet，再用 `research_workflow.set_review_pressure_packet` 做必要的 bounded patch 同步 manifest
+4. 更新 `{PMEM}/experiment-memory.md`（ESE），`{PMEM}` = `{PROJ}/memory`
+5. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
 
 只有当 `REVIEW_REPORT.md` 明确写出：
 - `Verdict: READY` 或等价 ready 结论

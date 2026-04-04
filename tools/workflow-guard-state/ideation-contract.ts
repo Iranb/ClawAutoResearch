@@ -128,6 +128,17 @@ export function normalizeIdeationGraphIndicesState(
     transferBridges: asStringArray(
       record.transferBridges ?? record.transfer_bridges
     ),
+    candidateSourceDomains: asStringArray(
+      record.candidateSourceDomains ?? record.candidate_source_domains
+    ),
+    selectedSourceDomains: asStringArray(
+      record.selectedSourceDomains ?? record.selected_source_domains
+    ),
+    prunedSourceDomains: asStringArray(
+      record.prunedSourceDomains ?? record.pruned_source_domains
+    ),
+    bridgeEvidenceTier:
+      pickString(record, ["bridgeEvidenceTier", "bridge_evidence_tier"]) ?? null,
     lastRefreshAt: pickString(record, ["lastRefreshAt", "last_refresh_at"]),
   };
 }
@@ -142,6 +153,10 @@ export function serializeIdeationGraphIndicesState(
     insight_clusters: value.insightClusters,
     occupied_solution_zones: value.occupiedSolutionZones,
     transfer_bridges: value.transferBridges,
+    candidate_source_domains: value.candidateSourceDomains,
+    selected_source_domains: value.selectedSourceDomains,
+    pruned_source_domains: value.prunedSourceDomains,
+    bridge_evidence_tier: value.bridgeEvidenceTier,
     last_refresh_at: value.lastRefreshAt,
   };
 }

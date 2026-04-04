@@ -17,13 +17,31 @@
   生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus wrappers。
 
 - `idea-phase`  
-  主 ideation 阶段，负责创新点形成与 active track 选择。
+  主 ideation 阶段，负责创新点形成与 active track 选择，并把 graph / brainstorm / frontier 结果通过 `materialize_ideation_contract` 收口成 novelty tree、challenge-insight tree、tournament scoreboard 和 research proposal。
+
+- `research-ideation`  
+  更贴近 EvoScientist / EvoSkills 的 graph-first ideation 方法层：先锁长期目标，再构造 novelty tree、challenge-insight tree、well-established solution check、cross-domain transfer 和 problem decomposition。
+
+- `idea-catalyst-decompose`  
+  IDEA-CATALYST 子流水线的第 1 步：把 target-domain 问题拆成 durable decomposition packet，并做 coverage / challenge 优先级判断。
+
+- `idea-catalyst-translate`  
+  IDEA-CATALYST 子流水线的第 2 步：把挑战改写成 mechanism-level 的 domain-agnostic 抽象，而不是仅仅去术语化。
+
+- `idea-catalyst-scout`  
+  IDEA-CATALYST 子流水线的第 3 步：graph-first 跨域 scouting、domain distance 过滤、bridge/takeaway 收集。
+
+- `idea-catalyst-gatekeeper`  
+  IDEA-CATALYST 子流水线的第 4 步：做 sufficiency gate，决定继续 brainstorm 还是发 investigation requisition。
+
+- `idea-catalyst-integrator`  
+  IDEA-CATALYST 子流水线的第 5 步：把 target challenge 和 source-domain takeaways 结构化合成为 idea fragments。
 
 - `idea-generator`  
   做候选 idea 发散。
 
 - `idea-tournament`  
-  对 idea 做比较、淘汰和组合。
+  对 idea 做 tree expansion、`propose -> review -> refine`、Elo-style 或等价排序、top-3 summary 和冠军 proposal extension。
 
 - `novelty-check`  
   基于图谱和已有工作检查创新性与相邻工作。
@@ -97,7 +115,7 @@
 ## 3. Orchestrator
 
 - `plan-research`  
-  研究计划、风险登记、资源分配与 TODO 组织。
+  研究计划、风险登记、资源分配与 TODO 组织；默认读取 `RESEARCH_PROPOSAL.md`、`PROBLEM_DECOMPOSITION.md` 和 tournament artifacts，而不只是自由文本 idea report。
 
 - `resume-pipeline`  
   Orchestrator 视角下的恢复入口。
@@ -105,7 +123,7 @@
 ## 4. Coder
 
 - `implement-experiment`  
-  实验实现、代码修改和运行准备。
+  实验实现、代码修改和运行准备；要求同时尊重 baseline contract、proposal decomposition，以及 `CLAIM_TO_EXPERIMENT_MAP.md` 的后续 claim 压力。
 
 - `scientific-visualization`  
   Coder 在实现和 dry-run 阶段使用的科研绘图能力，用来做 baseline/proposed 的 sanity-check 图、ablation 预览图和可复用的实验图。
@@ -122,7 +140,7 @@
 ## 5. Analyzer
 
 - `analyze-results`  
-  结果解释、指标拆解、claim-evidence 整理。
+  结果解释、指标拆解、claim-evidence 整理，并在分析结束后通过 workflow-owned `materialize_paper_story_state` 把 claim support / track verdict / unsupported-claim hooks 回写到 durable story contract。
 
 - `scientific-figures`  
   科学图表、结果可视化和 figure asset 组织。
@@ -136,7 +154,7 @@
 ## 6. Academic Writer
 
 - `paper-plan`  
-  论文计划、章节规划、模版映射。
+  论文计划、章节规划、模版映射，并通过 workflow-owned `materialize_paper_story_state` 脚手架生成 durable story contract。
 
 - `citation-management`  
   基于 Zotero `bot/<project-id>` 的 writing-shortlist 和外部 metadata source-of-truth，清洗引用候选并为 `refs.bib` 做准备。
@@ -145,7 +163,7 @@
   面向目标 venue 的模板、页数预算和章节约束，帮助 Writer 在 `paper-plan` 和 `paper-write` 里保持结构一致。
 
 - `paper-write`  
-  正文撰写、paragraph logic audit、section draft 维护。
+  正文撰写、paragraph logic audit、section draft 维护；直接消费 durable `paper_story_state` 和 `review_pressure_packet`，必要时先通过 workflow-owned materializer 刷新这两个合同，再按 story-first / claim-evidence-first 方式成稿。
 
 - `paper-compile`  
   编译和输出检查。
@@ -165,7 +183,13 @@
 ## 7. Reviewer
 
 - `review-phase`  
-  review 主阶段执行。
+  review 主阶段执行，并先通过 workflow-owned `materialize_review_pressure_packet` 脚手架生成，再补齐 reject-first review、novelty attack、unsupported-claim audit、reverse outline、figure/table QC、limitation audit，最终落成 durable `review_pressure_packet`。
+
+- `paper-review`  
+  Evo 风格的对抗式自审 skill，专门用于稿件故事链的 reject-first simulation、unsupported claim 删除、reverse outline、figure/table QC 和 limitation stress test。
+
+- `idea-catalyst-judge`  
+  IDEA-CATALYST 子流水线的独立评委，负责对 interdisciplinary idea fragments 做 pairwise / Elo-style ranking，避免生成者自己给自己打分。
 
 - `scientific-critical-thinking`  
   Reviewer 的方法学、偏差、统计与证据质量审查能力，特别适合 CODE innovation review 和内部 REVIEW。

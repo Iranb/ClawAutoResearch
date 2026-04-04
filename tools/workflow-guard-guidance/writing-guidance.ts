@@ -10,6 +10,8 @@ export function buildWritingGuidance(
 ): GuidanceContribution {
   const prepend: string[] = [];
   const append: string[] = [];
+  const paperStory = deps.asRecord(params.manifest?.paper_story_state);
+  const reviewPressure = deps.asRecord(params.manifest?.review_pressure_packet);
 
   if (
     params.role === "researcher" &&
@@ -60,6 +62,16 @@ export function buildWritingGuidance(
         "Run a reverse-outline and paragraph-bridge audit before finalizing the current section; keep WRITING_SIGNALS.md visible."
       );
     }
+    if (paperStory && deps.asString(paperStory.status) === "ready") {
+      prepend.push(
+        `Use the story-first packet before drafting: ${deps.asString(paperStory.story_spine_path) ?? "academic_writer/story/STORY_SPINE.md"}, ${deps.asString(paperStory.claim_to_experiment_map_path) ?? "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md"}, and ${deps.asString(paperStory.fallback_narrative_path) ?? "academic_writer/story/FALLBACK_NARRATIVE.md"}.`
+      );
+    }
+    if (reviewPressure && deps.asString(reviewPressure.status) === "ready") {
+      append.push(
+        `Consume the adversarial review packet before polishing prose: ${deps.asString(reviewPressure.reject_first_review_path) ?? "reviewer/story-pressure/REJECT_FIRST_REVIEW.md"}, ${deps.asString(reviewPressure.reverse_outline_path) ?? "reviewer/story-pressure/REVERSE_OUTLINE.md"}, and ${deps.asString(reviewPressure.unsupported_claim_audit_path) ?? "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md"}.`
+      );
+    }
     if (params.writingContractPendingReason) {
       append.push(`Writing contract pending: ${params.writingContractPendingReason}`);
     }
@@ -84,6 +96,16 @@ export function buildWritingGuidance(
         `Citation verification is ${params.citationIntegrity.verificationStatus}; do not finalize submission until it becomes verified.`
       );
     }
+  }
+  if (
+    params.role === "reviewer" &&
+    (params.currentStage === "review" || params.currentStage === "write" || params.currentStage === "submit") &&
+    reviewPressure &&
+    deps.asString(reviewPressure.status) === "ready"
+  ) {
+    append.push(
+      `Run reject-first and novelty attack story-pressure checks from ${deps.asString(reviewPressure.reject_first_review_path) ?? "reviewer/story-pressure/REJECT_FIRST_REVIEW.md"} and ${deps.asString(reviewPressure.novelty_attack_path) ?? "reviewer/story-pressure/NOVELTY_ATTACK.md"} before signing off on the manuscript arc.`
+    );
   }
 
   return { prepend, append };

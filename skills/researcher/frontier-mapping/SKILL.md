@@ -143,6 +143,12 @@ If `{PROJ}/researcher/LITERATURE_REVIEW.md` or `{PROJ}/researcher/GAP_SYNTHESIS.
 
 Do not delete shared graph data or run PaperNexus backup / restore commands during frontier work.
 
+These frontier outputs are not terminal prose. They are the graph-first basis packet for later workflow-owned ideation materialization:
+
+- `research_workflow.materialize_ideation_contract` will read `FRONTIER_REPORT.md`, the frontier files, `ANCHOR_INDEX.md`, and the current brainstorm chain bundle
+- therefore frontier items should stay compact, typed, and reusable enough to survive that later synthesis step
+- prefer bullet points that name the challenge / insight / transfer / composition explicitly, because those labels are later reused to build novelty tree and challenge-insight tree contracts
+
 After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
 
 - `frontier_report`

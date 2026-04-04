@@ -12,6 +12,13 @@ import {
   deriveGraphBuildMicroStage,
   normalizePaperIngestionState,
 } from "../workflow-guard-state/paper-ingestion";
+import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
+import {
+  deriveIdeaCatalystMicroStage,
+  shouldRouteIdeaCatalystToGraphBuild,
+} from "../idea-catalyst/workflow-bridge";
+import { shouldRouteLiteratureDiscoveryToGraphBuild } from "../literature-discovery/workflow-bridge";
+import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
   AutoIteratorAction,
@@ -196,7 +203,53 @@ type AutoIteratorDeps = {
     summary: string;
     details: Record<string, unknown>;
   }) => Promise<void>;
+  materializeIdeationContract: (params: {
+    projectRoot: string;
+    ideationMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializePaperStoryState: (params: {
+    projectRoot: string;
+    paperStoryMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeReviewPressurePacket: (params: {
+    projectRoot: string;
+    reviewPressureMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeIdeaCatalystState: (params: {
+    projectRoot: string;
+    ideaCatalystMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeLiteratureDiscoveryPacket: (params: {
+    projectRoot: string;
+    literatureDiscoveryMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  queueIdeaCatalystRequisition: (params: {
+    projectRoot: string;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  queueLiteratureDiscoveryRequisition: (params: {
+    projectRoot: string;
+    packetPath: string;
+    triggerKind?: string | null;
+    originStage?: string | null;
+    summary?: string | null;
+    sharedCorpus?: string | null;
+    requestIdPrefix?: string | null;
+  }) => Promise<unknown>;
 };
+
+const MAX_REGRESSION_DEPTH = 3;
 
 export async function runWorkflowAutoIteratorImpl(
   params: {
@@ -239,6 +292,23 @@ export async function runWorkflowAutoIteratorImpl(
   const mode = asString(params.mode) ?? "manual";
   const stageBefore =
     normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  const stagePreflight = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: stageBefore,
+    agentId: actorRole,
+    trigger: `auto_iterator:${mode}`,
+    deps: {
+      materializeIdeationContract: deps.materializeIdeationContract,
+      materializePaperStoryState: deps.materializePaperStoryState,
+      materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
+      materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
+      materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
+      queueIdeaCatalystRequisition: deps.queueIdeaCatalystRequisition,
+      queueLiteratureDiscoveryRequisition: deps.queueLiteratureDiscoveryRequisition,
+    },
+  });
+  manifest = stagePreflight.manifest;
   const writePackageBefore = deps.normalizeWritePackageState(manifest.write_package);
   if (
     workflowPolicy.autoMode === "aggressive" &&
@@ -278,10 +348,32 @@ export async function runWorkflowAutoIteratorImpl(
       manifest;
   }
 
-  let stageEffective = stageBefore;
-  let regressed = false;
+  const paperIngestionStateBeforeRouting = normalizePaperIngestionState(
+    manifest.paper_ingestion
+  );
+  const ideaCatalystStateBeforeRouting = normalizeIdeaCatalystState(manifest.idea_catalyst);
+  const catalystRequestedGraphReentry = shouldRouteIdeaCatalystToGraphBuild({
+    currentStage: stageBefore,
+    ideaCatalyst: ideaCatalystStateBeforeRouting,
+    paperIngestion: paperIngestionStateBeforeRouting,
+  });
+  const literatureDiscoveryRequestedGraphReentry =
+    shouldRouteLiteratureDiscoveryToGraphBuild({
+      currentStage: stageBefore,
+      paperIngestion: paperIngestionStateBeforeRouting,
+    });
+  const requestedGraphReentry =
+    catalystRequestedGraphReentry || literatureDiscoveryRequestedGraphReentry;
+  let stageEffective = requestedGraphReentry ? "graph_build" : stageBefore;
+  let regressed = requestedGraphReentry;
   const visited = new Set<string>();
-  while (stageEffective) {
+  let regressionDepth = requestedGraphReentry ? 1 : 0;
+  let regressionDepthCapped = false;
+  while (stageEffective && !requestedGraphReentry) {
+    if (regressionDepth >= MAX_REGRESSION_DEPTH) {
+      regressionDepthCapped = true;
+      break;
+    }
     const previousStage = deps.PREVIOUS_STAGE[stageEffective];
     if (!previousStage || visited.has(previousStage)) {
       break;
@@ -299,6 +391,7 @@ export async function runWorkflowAutoIteratorImpl(
     }
     stageEffective = previousStage;
     regressed = true;
+    regressionDepth += 1;
   }
 
   const effectiveMissingSignals = await deps.getMissingStageSignals({
@@ -402,16 +495,25 @@ export async function runWorkflowAutoIteratorImpl(
           paperIngestionStateForActions.repairTargetCorpus
         )
       : null;
+  const ideaCatalystStateForActions = normalizeIdeaCatalystState(manifest.idea_catalyst);
+  const ideaCatalystRequisitionCommand =
+    stageAfter === "idea" &&
+    (ideaCatalystStateForActions.requisitionRequired ||
+      ideaCatalystStateForActions.status === "requisition")
+      ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA.`
+      : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
     : experimentMonitorCommand ??
       graphImportRepairCommand ??
+      ideaCatalystRequisitionCommand ??
       setupOnboardingCommand ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
     : experimentMonitorCommand ??
       graphImportRepairCommand ??
+      ideaCatalystRequisitionCommand ??
       setupOnboardingCommand ??
       deps.formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
@@ -430,6 +532,8 @@ export async function runWorkflowAutoIteratorImpl(
                 asRecord(manifest.paper_ingestion)?.graphPresenceStatus
             ) ?? graphPresenceCheck?.status ?? null,
         })
+      : stageAfter === "idea"
+        ? deriveIdeaCatalystMicroStage(asRecord(manifest.idea_catalyst))
       : stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
         ? deps.STAGE_ENTRY_MICRO_STAGES[stageAfter] ?? previousMicroStage
         : previousMicroStage;
@@ -450,27 +554,77 @@ export async function runWorkflowAutoIteratorImpl(
   const nextGateState: GateStateLike = {
     ...gateState,
     currentStage: stageAfter,
+    gateType:
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.gateType,
     gateTimestamp:
       gateEvaluation.blocking && stageAfter === "submit"
         ? gateState.gateTimestamp ?? now
-        : gateState.gateTimestamp,
+        : stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+          ? null
+          : gateState.gateTimestamp,
     lastGate:
       gateEvaluation.blocking && stageAfter === "submit"
         ? gateState.lastGate ?? "GATE-5"
-        : gateState.lastGate,
+        : stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+          ? null
+          : gateState.lastGate,
     gateStatus:
-      gateEvaluation.timedDefaultTriggered
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateEvaluation.timedDefaultTriggered
         ? "approved"
         : gateEvaluation.blocking
           ? "waiting"
           : gateState.gateStatus === "waiting"
             ? "approved"
             : gateState.gateStatus,
+    confirmationRequestedAt:
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.confirmationRequestedAt,
+    confirmationDeadlineAt:
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.confirmationDeadlineAt,
+    defaultAction:
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.defaultAction,
+    defaultActionReason:
+      stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.defaultActionReason,
     defaultActionExecutedAt: gateEvaluation.timedDefaultTriggered
       ? gateState.defaultActionExecutedAt ?? now
-      : gateState.defaultActionExecutedAt,
+      : stageAfter !== "submit" && gateState.lastGate?.trim().toUpperCase() === "GATE-5"
+        ? null
+        : gateState.defaultActionExecutedAt,
   };
   await deps.saveGateState(projectRoot, nextGateState);
+
+  if (regressionDepthCapped) {
+    await deps.appendWorkflowTraceEvent({
+      projectRoot,
+      projectId,
+      kind: "auto_iterator",
+      action: "regression_depth_capped",
+      functionName: "runWorkflowAutoIterator",
+      stage: stageAfter,
+      owner: ownerAfter,
+      agentId: actorRole,
+      sessionKey: null,
+      summary: `Auto iterator capped backward regression at depth ${MAX_REGRESSION_DEPTH}.`,
+      details: {
+        stageBefore,
+        stageEffective,
+        stageAfter,
+        regressionDepth,
+        maxRegressionDepth: MAX_REGRESSION_DEPTH,
+      },
+    });
+  }
 
   const recommendedActions: AutoIteratorAction[] = [];
   if (gateEvaluation.blocking) {
@@ -684,6 +838,8 @@ export async function runWorkflowAutoIteratorImpl(
       stageEffective,
       stageAfter,
       regressed,
+      regressionDepth,
+      regressionDepthCapped,
       gateBlocking: gateEvaluation.blocking,
       blockingReason,
       missingStageSignals: activeStageSignals,

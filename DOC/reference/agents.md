@@ -6,12 +6,12 @@
 
 | Role | 主要职责 |
 | --- | --- |
-| `researcher` | 项目 owner、阶段协调、文献、Zotero 文献管理、图谱、创新、graph-first ideation contract、`research-ideation` / `idea-tournament` 收敛、实验总账、恢复与自动迭代 |
+| `researcher` | 项目 owner、阶段协调、文献、Zotero 文献管理、图谱、创新、graph-first ideation contract、`research-ideation` / IDEA-CATALYST 子流水线 / `idea-tournament` 收敛、实验总账、恢复与自动迭代 |
 | `orchestrator` | 研究计划、实验排期、风险、预算和 TODO 编排 |
 | `coder` | 实验代码实现、运行脚本、复现实验、工程侧 smoke test、实现阶段科研绘图，并对齐 proposal / claim-to-experiment contract |
 | `analyzer` | 结果解释、图表、claim-evidence、PaperNexus 反思，并把 claim support / track verdict / unsupported-claim hooks 回写到 durable `paper_story_state` |
 | `academic_writer` | 论文大纲、模版映射、Zotero 引用队列、workflow-owned durable paper story contract、段落逻辑、正文写作与编译 |
-| `reviewer` | review phase、`paper-review` 对抗式自审、critical thinking、scholar evaluation、workflow-owned durable review pressure packet、submission packet、review response |
+| `reviewer` | review phase、`paper-review` 对抗式自审、`idea-catalyst-judge` 独立 pairwise ranking、critical thinking、scholar evaluation、workflow-owned durable review pressure packet、submission packet、review response |
 | `cross-reviewer` | 隔离式外部视角审阅，不持有主动项目写权限 |
 
 ## 2. 每个 Agent 目录中的配置文件

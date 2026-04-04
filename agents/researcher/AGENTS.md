@@ -64,7 +64,7 @@ ssh <server> "screen -dmS <exp_name> bash -c 'cd <remote_dst> && CUDA_VISIBLE_DE
 
 - `{PMEM}/YYYY-MM-DD.md` — daily experiment log (append-only, project-isolated)
 - `MEMORY.md` — long-term memory (research directions, server config, personal preferences)
-- `{PMEM}/ideation-memory.md` — idea memory (successful patterns + failure classes, project-isolated)
+- `{PMEM}/ideation-memory.md` — lightweight summary memory only; prefer graph-backed memory and durable ideation artifacts as the real fact source
 - `{PMEM}/experiment-memory.md` — experiment strategy memory (effective hyperparameters, data-handling tactics, project-isolated)
 - `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — authoritative structured experiment ledger (queued / running / done / failed / remote PaperNexus sync state)
 
@@ -128,7 +128,14 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/graph-build` — graph readiness verification plus brainstorm bundle refresh after automatic PaperNexus catch-up, and Zotero `bot/<project-id>/selected` / `baselines` synchronization with `ZOTERO_PACKET.md` refresh
 - `/project-init` — guided setup/onboarding contract for the current project; lock goal, problem statement, baseline, primary metric, datasets, success criteria, and Zotero `bot/<project-id>` path before graph work
 - `/frontier-mapping` — graph frontier extraction (limitations, contradictions, transfer, composition)
+- `/research-ideation` — graph-first ideation construction: long-term goal, novelty tree, challenge-insight tree, solution check, transfer, decomposition
+- `/idea-catalyst-decompose` — target-domain decomposition packet for interdisciplinary ideation
+- `/idea-catalyst-translate` — mechanism-level domain-agnostic abstraction for catalyst challenges
+- `/idea-catalyst-scout` — graph-first cross-domain scouting with distance-aware source-domain selection
+- `/idea-catalyst-gatekeeper` — sufficiency decision: continue or emit investigation requisition
+- `/idea-catalyst-integrator` — structured target-source synthesis into idea fragments
 - `/idea-phase` — Stage 1 (IDEA)
+- `/idea-tournament` — tree expansion + propose/review/refine + Elo-style ranking + top-3 + proposal extension
 - `/research-reflect` — track / budget / evidence decision checkpoint
 - `/plan-research` — Stage 2 (PLAN, executed by Orchestrator; Researcher must proactively wake it when outputs are missing)
 - `/experiment-phase` — Stage 4 (EXPERIMENT)
@@ -139,7 +146,7 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/paper-phase` — Stage 7 (WRITE, via Writer)
 - `/research-pipeline` — full pipeline from Stage 1
 
-For workflow-owned paper ingestion, stage papers locally and queue uploads through `research_workflow.queue_paper_ingestion`; let `/graph-build` and `/resume-pipeline` trigger the queued wrappers and preserve `queued_requests` state across restarts. For workflow-owned live graph reads and brainstorm work, use `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations.
+For workflow-owned paper ingestion, stage papers locally and queue uploads through `research_workflow.queue_paper_ingestion`; let `/graph-build` and `/resume-pipeline` trigger the queued wrappers and preserve `queued_requests` state across restarts. For workflow-owned live graph reads and brainstorm work, use `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations. For IDEA-CATALYST, keep the durable packet chain under `researcher/idea-catalyst/` and treat it as a formal IDEA sub-pipeline, not as an ad hoc brainstorm thread.
 
 ## Responsiveness and Delegation Policy
 
@@ -196,11 +203,15 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Brainstorm grounding must be durable:** once graph readiness is good enough for frontier mapping or ideation, use the typed PaperNexus wrappers (`pn_graph_query.py`, `pn_research_chains.py`) and persist the resulting chain bundle through `research_workflow.run_brainstorm_cycle`. Do not rely on free-form brainstorm chat alone.
 
+**IDEA must end in a contract, not just a report:** beyond `IDEA_REPORT.md`, lock `ideation_contract` through workflow tools and keep `GRAPH_IDEATION_PACKET.json`, `IDEA_TREE.md`, `NOVELTY_TREE.md`, `CHALLENGE_INSIGHT_TREE.md`, `WELL_ESTABLISHED_SOLUTION_CHECK.md`, `CANDIDATE_POOL.json`, `RANKING_HISTORY.json`, tournament scoreboard, top-3 summary, and research proposal current.
+
+**Reuse graph-backed memory first:** top-3 directions, do-not-repeat constraints, failed directions, and transferable lessons should land in the existing brainstorm working memory / reflection chain / storyline brief plus `TRACK_REGISTRY.json`, not in a new parallel ideation memory system.
+
 **Systematic review is upstream context, not optional fluff:** when a project needs strong baseline coverage, benchmark clarity, or a durable gap packet, run `/literature-review` after `/research-lit` and before locking frontier or idea decisions. Treat `SOTA_MATRIX.md` and `GAP_SYNTHESIS.md` as hard inputs for later planning and code review.
 
 **Zotero is the durable bibliography organizer:** if a local Zotero MCP connector is available, maintain `bot/<project-id>` as the per-project literature home. Keep `selected`, `included`, `excluded`, `baselines`, and `writing-shortlist` synchronized and refresh `{PROJ}/researcher/ZOTERO_PACKET.md` whenever the project paper set changes materially.
 
-**Scientific brainstorming is an enhancer, not a replacement:** only run `/scientific-brainstorming` after the PaperNexus brainstorm bundle exists. Use it to challenge assumptions and expand options, then write the surviving directions back into durable reasoning packets instead of leaving them in chat.
+**Scientific brainstorming is an enhancer, not a replacement:** only run `/scientific-brainstorming` after the graph-grounded brainstorm bundle exists. Use it to challenge assumptions and expand options, then write the surviving directions back into durable reasoning packets instead of leaving them in chat.
 
 **Graph reasoning must have working memory:** for every serious candidate track, do not stop at `FRONTIER_REPORT.md` or `IDEA_REPORT.md`. Maintain `{PROJ}/researcher/reasoning/<track-id>/QUESTION_PACKET.md`, `WORKING_MEMORY.json`, `REASONING_TRACE.jsonl`, and `SYNTHESIS_PACKET.md`, and explicitly mark each step as `expand`, `refine_query`, `answer_try`, or `stop`.
 

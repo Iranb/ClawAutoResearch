@@ -246,6 +246,16 @@ export function formatWorkflowStatusText(params: {
           `Ideation contract: status=${snapshot.ideationContractStatus}, track=${snapshot.ideationContractSelectedTrackId ?? "unset"}, direction=${snapshot.ideationContractSelectedDirectionId ?? "unset"}, idea_tree=${snapshot.ideationContractIdeaTreePath ?? "unset"}, proposal=${snapshot.ideationContractResearchProposalPath ?? "unset"}, ranking=${snapshot.ideationContractRankingHistoryPath ?? "unset"}, scoreboard=${snapshot.ideationContractTournamentScoreboardPath ?? "unset"}, top3=${snapshot.ideationContractTop3SummaryPath ?? "unset"}, graph_packet=${snapshot.ideationContractGraphPacketPath ?? "unset"}`,
         ]
       : []),
+    ...(snapshot.ideaCatalystStatus
+      ? [
+          `IDEA-CATALYST: status=${snapshot.ideaCatalystStatus}, mode=${snapshot.ideaCatalystMode ?? "unset"}, micro_stage=${snapshot.ideaCatalystMicroStage ?? "unset"}, target_domain=${snapshot.ideaCatalystTargetDomain ?? "unset"}, source_domains=${snapshot.ideaCatalystSourceDomainCount ?? 0}, bridges=${snapshot.ideaCatalystBridgeCount ?? 0}, top_fragment=${snapshot.ideaCatalystTopFragmentId ?? "unset"}`,
+          ...(snapshot.ideaCatalystRequisitionRequired
+            ? [
+                `IDEA-CATALYST requisition: required=true, cycle=${snapshot.ideaCatalystLastRequisitionCycle ?? "unset"}, retry_budget=${snapshot.ideaCatalystRequisitionRetryBudget ?? "unset"}, saturated=${snapshot.ideaCatalystRequisitionSaturated ? "true" : "false"}, reason=${snapshot.ideaCatalystPendingReason ?? "pending"}`,
+              ]
+            : []),
+        ]
+      : []),
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
     `Experiment sync: ${snapshot.experimentSyncRequired ? `required (${snapshot.experimentPapernexusSyncStatus ?? "pending"})` : "not required"}`,
   ];

@@ -30,3 +30,171 @@ test("workflow guard materializer and guidance modules expose dedicated entrypoi
   assert.equal(typeof upsertExperimentLedgerEntryImpl, "function");
   assert.equal(typeof runWorkflowAutoIteratorImpl, "function");
 });
+
+test("buildWritingGuidance surfaces story-first and adversarial review reminders for writer/reviewer roles", () => {
+  const writerGuidance = buildWritingGuidance(
+    {
+      role: "academic_writer",
+      currentStage: "write",
+      manifest: {
+        paper_story_state: {
+          status: "ready",
+          story_spine_path: "academic_writer/story/STORY_SPINE.md",
+          claim_to_experiment_map_path: "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+          fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+        },
+        review_pressure_packet: {
+          status: "ready",
+          reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+          reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+          unsupported_claim_audit_path:
+            "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+        },
+      },
+      missingStageSignals: [],
+      idleResearch: { enabled: false, topic: null, maxPapersPerCycle: 0 },
+      innovationReflection: { lastReflectionPath: null },
+      innovationReflectionDue: false,
+      writingContract: {
+        templateRequired: false,
+        paperMode: "conference",
+        bodyPageBudget: 9,
+        referencePageBudget: 2,
+        bodyWordTargetMin: 4500,
+        bodyWordTargetMax: 6000,
+        kgStorylineRequired: true,
+        kgStorylinePacketPath: "academic_writer/KG_STORYLINE_PACKET.json",
+        kgStorylineStatus: "ready",
+        templateMappingPath: "academic_writer/TEMPLATE_MAPPING.md",
+      },
+      writingTemplatePath: null,
+      writingTemplateStatus: "ready",
+      paragraphLogicStatus: "red",
+      writingContractPendingReason: null,
+      citationIntegrity: {
+        enabled: true,
+        verificationRequired: true,
+        verificationStatus: "pending",
+        sourceOfTruth: ["DBLP", "CrossRef"],
+        allowedPlaceholderCount: 0,
+      },
+      citationReportPath: "reviewer/CITATION_VERIFICATION.md",
+      recentExperiments: [],
+      unreadMailbox: [],
+      papernexusApiBaseUrl: null,
+      papernexusApiTokenEnv: null,
+      papernexusApiTokenSource: null,
+      papernexusApiTokenService: null,
+      papernexusApiTokenAccount: null,
+      papernexusMineruHttpUrl: null,
+    },
+    {
+      rolePolicies: {},
+      asRecord: (value) =>
+        value && typeof value === "object" && !Array.isArray(value) ? value : null,
+      asString: (value) => (typeof value === "string" ? value : null),
+      normalizePaperIngestionState: () => ({
+        runtimeStatus: null,
+        waitingReason: null,
+        repairRequired: false,
+        repairReason: null,
+        repairTargetCorpus: null,
+      }),
+      normalizeIdeaCatalystState: () => ({}),
+      normalizeGraphPresenceStatus: () => null,
+      summarizeGraphPresenceMissing: () => null,
+      buildGraphImportRepairGuidance: () => "repair",
+      isIdleResearchDue: () => false,
+      computeIdleResearchNextDueAt: () => null,
+      uniqueStrings: (items) => [...new Set(items)],
+      DEFAULT_KG_STORYLINE_PACKET_PATH: "academic_writer/KG_STORYLINE_PACKET.json",
+      DEFAULT_CITATION_REPORT_PATH: "reviewer/CITATION_VERIFICATION.md",
+    }
+  );
+
+  assert.ok(
+    writerGuidance.prepend.some((entry) => /story spine|claim-to-experiment|fallback/i.test(entry))
+  );
+  assert.ok(
+    writerGuidance.append.some((entry) => /reject-first|reverse-outline|unsupported/i.test(entry))
+  );
+
+  const reviewerGuidance = buildWritingGuidance(
+    {
+      role: "reviewer",
+      currentStage: "write",
+      manifest: {
+        review_pressure_packet: {
+          status: "ready",
+          reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+          novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+        },
+      },
+      missingStageSignals: [],
+      idleResearch: { enabled: false, topic: null, maxPapersPerCycle: 0 },
+      innovationReflection: { lastReflectionPath: null },
+      innovationReflectionDue: false,
+      writingContract: {
+        templateRequired: false,
+        paperMode: null,
+        bodyPageBudget: null,
+        referencePageBudget: null,
+        bodyWordTargetMin: null,
+        bodyWordTargetMax: null,
+        kgStorylineRequired: false,
+        kgStorylinePacketPath: null,
+        kgStorylineStatus: null,
+        templateMappingPath: null,
+      },
+      writingTemplatePath: null,
+      writingTemplateStatus: "ready",
+      paragraphLogicStatus: "green",
+      writingContractPendingReason: null,
+      citationIntegrity: {
+        enabled: true,
+        verificationRequired: true,
+        verificationStatus: "pending",
+        sourceOfTruth: ["DBLP"],
+        allowedPlaceholderCount: 0,
+      },
+      citationReportPath: "reviewer/CITATION_VERIFICATION.md",
+      recentExperiments: [],
+      unreadMailbox: [],
+      papernexusApiBaseUrl: null,
+      papernexusApiTokenEnv: null,
+      papernexusApiTokenSource: null,
+      papernexusApiTokenService: null,
+      papernexusApiTokenAccount: null,
+      papernexusMineruHttpUrl: null,
+    },
+    {
+      rolePolicies: {},
+      asRecord: (value) =>
+        value && typeof value === "object" && !Array.isArray(value) ? value : null,
+      asString: (value) => (typeof value === "string" ? value : null),
+      normalizePaperIngestionState: () => ({
+        runtimeStatus: null,
+        waitingReason: null,
+        repairRequired: false,
+        repairReason: null,
+        repairTargetCorpus: null,
+      }),
+      normalizeIdeaCatalystState: () => ({}),
+      normalizeGraphPresenceStatus: () => null,
+      summarizeGraphPresenceMissing: () => null,
+      buildGraphImportRepairGuidance: () => "repair",
+      isIdleResearchDue: () => false,
+      computeIdleResearchNextDueAt: () => null,
+      uniqueStrings: (items) => [...new Set(items)],
+      DEFAULT_KG_STORYLINE_PACKET_PATH: "academic_writer/KG_STORYLINE_PACKET.json",
+      DEFAULT_CITATION_REPORT_PATH: "reviewer/CITATION_VERIFICATION.md",
+    }
+  );
+
+  assert.ok(
+    reviewerGuidance.prepend.some((entry) => /citation integrity gate/i.test(entry))
+  );
+  assert.ok(
+    reviewerGuidance.append.some((entry) => /reject-first|novelty attack/i.test(entry))
+  );
+});

@@ -36,6 +36,16 @@ Read `{PROJ}/researcher/IDEA_REPORT.md` to understand:
 - Novelty claims and closest baselines
 - The graph-backed innovation evidence packet for each surviving track
 
+Read the durable ideation contract artifacts when present:
+- `{PROJ}/researcher/ideation/GRAPH_IDEATION_PACKET.json`
+- `{PROJ}/researcher/ideation/NOVELTY_TREE.md`
+- `{PROJ}/researcher/ideation/CHALLENGE_INSIGHT_TREE.md`
+- `{PROJ}/researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md`
+- `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md`
+- `{PROJ}/researcher/ideation/TOURNAMENT_SCOREBOARD.json`
+- `{PROJ}/researcher/ideation/TOP3_DIRECTION_SUMMARY.md`
+- `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md`
+
 Read `{PROJ}/TRACK_REGISTRY.json` to understand:
 - which tracks are `active`
 - which track is the current leading narrative
@@ -66,6 +76,7 @@ Before writing the plan, perform one explicit innovation-construction pass:
 - convert each active track's graph evidence into a bounded hypothesis package
 - preserve anchor nodes, relation patterns, closest prior work, why-now, weakest assumption, and falsifier pilot
 - narrow vague ideas into executable deltas instead of rewriting the idea from scratch
+- treat `RESEARCH_PROPOSAL.md` and `PROBLEM_DECOMPOSITION.md` as the default story of record for the surviving direction; if PLAN.md diverges from them, say so explicitly instead of silently rewriting the idea
 
 ### 2. Estimate Compute
 
@@ -92,6 +103,7 @@ Additional required sections:
 - Per-track stop / rollback / kill rules
 - Per-track baseline contract section (`baseline_reference`, `primary_baseline_metric`, `target_improvement`, `baseline_training_protocol`, `baseline_eval_protocol`)
 - Per-track innovation validation ladder (`innovation_points`, `validation_steps`, `ablation_plan`, `allowed_deviations`)
+- Per-track proposal carryover section (`selected_direction_id`, proposal summary, tournament rank, why the losing directions were not chosen)
 - Scope narrowing rule if multiple tracks survive but budget is tight
 
 Add one explicit **Theory / Proof Appendix Plan** section:

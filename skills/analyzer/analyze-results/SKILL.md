@@ -169,6 +169,29 @@ Rules:
 - main text should consume only body-safe objects
 - detailed derivation steps belong to appendix-oriented packets, not headline contribution bullets
 
+### 5.8 Sync The Durable Story Contract
+
+Once `CLAIM_EVIDENCE_MATRIX.md`, `TRACK_VERDICTS.md`, and `UNSUPPORTED_CLAIMS.md` are written, immediately mirror them back into the workflow-owned paper story contract:
+
+```json
+{
+  "action": "materialize_paper_story_state",
+  "paperStoryMaterialization": {
+    "basis_stage": "analyze"
+  }
+}
+```
+
+This step is required before handoff. It updates `PROJECT_MANIFEST.json.paper_story_state` with:
+
+- `claim_support_status`
+- `supported_claim_count`
+- `partial_claim_count`
+- `unsupported_claim_count`
+- refreshed story / fallback narrative sections that absorb analyzer verdicts and unsupported-claim hooks
+
+Do not leave analysis maturity only in `{PROJ}/analyzer/`; push it into the durable story contract before Reviewer or Writer consumes the project.
+
 After writing the files, call:
 
 ```json

@@ -794,6 +794,19 @@ test("workflow-status command returns a readable workflow summary", async () => 
           "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
         ideationContractGraphPacketPath:
           "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+        ideaCatalystStatus: "ready",
+        ideaCatalystMode: "graph-first",
+        ideaCatalystMicroStage: "judging",
+        ideaCatalystTargetDomain: "Computer Science",
+        ideaCatalystSourceDomainCount: 2,
+        ideaCatalystBridgeCount: 5,
+        ideaCatalystTopFragmentId: "frag-1",
+        ideaCatalystRequisitionRequired: true,
+        ideaCatalystLastRequisitionCycle: "req-computer-science-2-2",
+        ideaCatalystRequisitionRetryBudget: 1,
+        ideaCatalystRequisitionSaturated: false,
+        ideaCatalystPendingReason:
+          "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions.",
         innovationReflectionStatus: "stale",
         innovationReflectionDue: true,
         researchProgramStatus: "draft",
@@ -935,6 +948,8 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, queued_requests=0, running_requests=0, reconcile_required=true/);
   assert.match(result.text ?? "", /PaperNexus batch manifest: \/tmp\/demo\/batch-import\.json/);
   assert.match(result.text ?? "", /Ideation contract: status=ready, track=track-idea-1, direction=dir-2, idea_tree=researcher\/ideation\/IDEA_TREE\.md, proposal=researcher\/ideation\/RESEARCH_PROPOSAL\.md, ranking=researcher\/ideation\/RANKING_HISTORY\.json, scoreboard=researcher\/ideation\/TOURNAMENT_SCOREBOARD\.json, top3=researcher\/ideation\/TOP3_DIRECTION_SUMMARY\.md, graph_packet=researcher\/ideation\/GRAPH_IDEATION_PACKET\.json/);
+  assert.match(result.text ?? "", /IDEA-CATALYST: status=ready, mode=graph-first, micro_stage=judging, target_domain=Computer Science, source_domains=2, bridges=5, top_fragment=frag-1/);
+  assert.match(result.text ?? "", /IDEA-CATALYST requisition: required=true, cycle=req-computer-science-2-2, retry_budget=1, saturated=false, reason=Cross-domain bridge evidence is still insufficient for unresolved catalyst questions\./);
   assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);

@@ -9,6 +9,14 @@ import {
   runWorkflowAutoIterator,
 } from "../tools/workflow-guard.ts";
 import {
+  getWorkflowAnnounceOutboxPath,
+  getWorkflowBroadcastOutboxPath,
+  getWorkflowRuntimeEventsPath,
+  getWorkflowRuntimeQueuePath,
+  getWorkflowRuntimeSessionsPath,
+  migrateWorkflowRuntimeState,
+} from "../tools/workflow-runtime-state.ts";
+import {
   aggregateGateReviewRound,
   createGateReviewRound,
   saveGateReviewStore,
@@ -159,6 +167,13 @@ async function seedReadyBrainstormCycle(
     "# Questions\n"
   );
   await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "STORYLINE_BRIEF.json"),
+    {
+      thesis: "Graph-grounded support routing tightens claim precision.",
+      arc: "Task -> challenge -> insight -> contribution -> advantage",
+    }
+  );
+  await writeJson(
     path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"),
     { hypothesis: "demo" }
   );
@@ -182,11 +197,19 @@ async function seedReadyBrainstormCycle(
     rounds: [
       {
         round_id: "seed-round",
-        options: [{ option_id: "seed-option", score: 0.8 }],
+        options: [
+          {
+            option_id: "seed-option",
+            title: "Graph-grounded support router",
+            summary: "Use graph evidence to route claims through a tighter support path.",
+            score: 0.8,
+          },
+        ],
       },
     ],
     selected_round_id: "seed-round",
     selected_option_id: "seed-option",
+    selected_option_title: "Graph-grounded support router",
     selected_option_score: 0.8,
     topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.json",
     research_brief_path: "researcher/brainstorm-cycle/RESEARCH_BRIEF.json",
@@ -194,9 +217,319 @@ async function seedReadyBrainstormCycle(
     logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
     evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
     reasoning_trace_path: "researcher/brainstorm-cycle/REASONING_TRACE.jsonl",
+    storyline_brief_path: "researcher/brainstorm-cycle/STORYLINE_BRIEF.json",
     question_packet_path: "researcher/brainstorm-cycle/QUESTION_PACKET.md",
     working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
     synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyIdeationContract(
+  projectRoot,
+  { trackId = "track-main" } = {}
+) {
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "NOVELTY_TREE.md"),
+    "# Novelty Tree\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "CHALLENGE_INSIGHT_TREE.md"
+    ),
+    "# Challenge Insight Tree\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "WELL_ESTABLISHED_SOLUTION_CHECK.md"
+    ),
+    "# Solution Check\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "CROSS_DOMAIN_TRANSFER.md"
+    ),
+    "# Cross Domain Transfer\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "PROBLEM_DECOMPOSITION.md"
+    ),
+    "# Problem Decomposition\n"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"),
+    {
+      candidates: [
+        {
+          id: "dir-1",
+          formulation: "Graph-grounded method idea",
+          novelty_hypothesis: "Open challenge remains unresolved.",
+          status: "surviving",
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "TOURNAMENT_SCOREBOARD.json"
+    ),
+    {
+      status: "completed",
+      selected_direction_id: "dir-1",
+      rankings: [
+        {
+          direction_id: "dir-1",
+          novelty: 0.9,
+          feasibility: 0.7,
+          relevance: 0.8,
+          clarity: 0.8,
+        },
+      ],
+    }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "IDEA_TREE.md"),
+    "# Idea Tree\n"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "RANKING_HISTORY.json"),
+    {
+      status: "completed",
+      method: "equivalent_elo_v1",
+      rounds: [],
+    }
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "TOP3_DIRECTION_SUMMARY.md"
+    ),
+    "# Top 3 Directions\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "RESEARCH_PROPOSAL.md"
+    ),
+    "# Research Proposal\n"
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "GRAPH_IDEATION_PACKET.json"
+    ),
+    {
+      project_id: "demo-project",
+      challenge_clusters: ["cluster:challenge-1"],
+      insight_clusters: ["cluster:insight-1"],
+      novelty_zones: ["zone:1"],
+      occupied_zones: [],
+      transfer_bridges: ["bridge:1"],
+    }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.ideation_contract = {
+    status: "ready",
+    contract_version: 1,
+    long_term_goal: "Discover a robust graph-grounded innovation direction.",
+    problem_scope: "Support precision in scientific writing",
+    basis_stage: "frontier_mapping",
+    graph_basis_paths: {
+      papernexus_status_path: "graph/PAPERNEXUS_STATUS.json",
+      frontier_report: "researcher/FRONTIER_REPORT.md",
+      anchor_index_path: "graph/ANCHOR_INDEX.md",
+      limitation_frontier_path: "graph/LIMITATION_FRONTIER.md",
+      contradiction_frontier_path: "graph/CONTRADICTION_FRONTIER.md",
+      transfer_frontier_path: "graph/TRANSFER_FRONTIER.md",
+      composition_frontier_path: "graph/COMPOSITION_FRONTIER.md",
+      topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.json",
+      logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
+      evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
+      storyline_brief_path: "researcher/brainstorm-cycle/STORYLINE_BRIEF.json",
+    },
+    graph_ideation_indices: {
+      status: "ready",
+      novelty_candidate_clusters: ["zone:1"],
+      challenge_clusters: ["cluster:challenge-1"],
+      insight_clusters: ["cluster:insight-1"],
+      occupied_solution_zones: [],
+      transfer_bridges: ["bridge:1"],
+      last_refresh_at: "2026-03-22T12:00:00.000Z",
+    },
+    novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
+    challenge_insight_tree_path: "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
+    solution_check_path:
+      "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+    cross_domain_transfer_path: "researcher/ideation/CROSS_DOMAIN_TRANSFER.md",
+    problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+    idea_tree_path: "researcher/ideation/IDEA_TREE.md",
+    ranking_history_path: "researcher/ideation/RANKING_HISTORY.json",
+    tournament_scoreboard_path:
+      "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+    top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+    research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
+    graph_ideation_packet_path:
+      "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+    selected_direction_id: "dir-1",
+    selected_track_id: trackId,
+    pending_reason: null,
+    last_updated_at: "2026-03-22T12:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyIdeaCatalystState(
+  projectRoot,
+  { microStage = "judging" } = {}
+) {
+  const root = path.join(projectRoot, "researcher", "idea-catalyst");
+  await writeJson(path.join(root, "DECOMPOSITION_PACKET.json"), { version: 1 });
+  await writeJson(path.join(root, "ABSTRACTION_PACKET.json"), { version: 1 });
+  await writeJson(path.join(root, "SCOUTING_REPORT.json"), {
+    target_domain: "Computer Science",
+    candidate_domains: [{ domain: "Psychology" }],
+  });
+  await writeJson(path.join(root, "GATE_DECISION.json"), {
+    decision: "brainstorm",
+  });
+  await writeJson(path.join(root, "IDEA_FRAGMENTS.json"), {
+    fragments: [{ fragment_id: "frag-1", source_domain: "Psychology" }],
+  });
+  await writeJson(path.join(root, "RANKED_FRAGMENTS.json"), {
+    ranking: [{ rank: 1, fragment_id: "frag-1" }],
+  });
+  await writeJson(path.join(root, "CATALYST_SESSION_STATE.json"), {
+    status: "ready",
+    micro_stage: microStage,
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.idea_catalyst = {
+    status: "ready",
+    contract_version: 1,
+    mode: "graph-first",
+    micro_stage: microStage,
+    decomposition_packet_path: "researcher/idea-catalyst/DECOMPOSITION_PACKET.json",
+    abstraction_packet_path: "researcher/idea-catalyst/ABSTRACTION_PACKET.json",
+    scouting_report_path: "researcher/idea-catalyst/SCOUTING_REPORT.json",
+    gate_decision_path: "researcher/idea-catalyst/GATE_DECISION.json",
+    idea_fragments_path: "researcher/idea-catalyst/IDEA_FRAGMENTS.json",
+    ranked_fragments_path: "researcher/idea-catalyst/RANKED_FRAGMENTS.json",
+    investigation_requisition_path:
+      "researcher/idea-catalyst/INVESTIGATION_REQUISITION.json",
+    session_state_path: "researcher/idea-catalyst/CATALYST_SESSION_STATE.json",
+    target_domain: "Computer Science",
+    source_domains: ["Psychology"],
+    bridge_count: 2,
+    top_fragment_id: "frag-1",
+    requisition_required: false,
+    pending_reason: null,
+    last_updated_at: "2026-03-22T12:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyPaperStoryState(
+  projectRoot,
+  { trackId = "track-main" } = {}
+) {
+  const root = path.join(projectRoot, "academic_writer", "story");
+  for (const [name, text] of [
+    ["TASK_SUMMARY.md", "# Task Summary\n"],
+    ["CHALLENGE_STATEMENT.md", "# Challenge Statement\n"],
+    ["INSIGHT_SUMMARY.md", "# Insight Summary\n"],
+    ["CONTRIBUTION_MAP.md", "# Contribution Map\n"],
+    ["ADVANTAGE_MAP.md", "# Advantage Map\n"],
+    ["STORY_SPINE.md", "# Story Spine\n"],
+    ["PIPELINE_FIGURE_SKETCH.md", "# Pipeline Figure Sketch\n"],
+    ["MODULE_MOTIVATION_MAP.md", "# Module Motivation Map\n"],
+    ["CLAIM_TO_EXPERIMENT_MAP.md", "# Claim To Experiment Map\n"],
+    ["FALLBACK_NARRATIVE.md", "# Fallback Narrative\n"],
+    ["REJECTION_RISK_TABLE.md", "# Rejection Risk Table\n"],
+  ]) {
+    await writeText(path.join(root, name), text);
+  }
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_story_state = {
+    status: "ready",
+    contract_version: 1,
+    task_summary_path: "academic_writer/story/TASK_SUMMARY.md",
+    challenge_statement_path:
+      "academic_writer/story/CHALLENGE_STATEMENT.md",
+    insight_summary_path: "academic_writer/story/INSIGHT_SUMMARY.md",
+    contribution_map_path: "academic_writer/story/CONTRIBUTION_MAP.md",
+    advantage_map_path: "academic_writer/story/ADVANTAGE_MAP.md",
+    story_spine_path: "academic_writer/story/STORY_SPINE.md",
+    pipeline_figure_sketch_path:
+      "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+    module_motivation_map_path:
+      "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+    claim_to_experiment_map_path:
+      "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+    fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+    rejection_risk_table_path:
+      "academic_writer/story/REJECTION_RISK_TABLE.md",
+    storyline_source_track_id: trackId,
+    pending_reason: null,
+    last_updated_at: "2026-03-22T12:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyReviewPressurePacket(projectRoot) {
+  const root = path.join(projectRoot, "reviewer", "story-pressure");
+  for (const [name, text] of [
+    ["REJECT_FIRST_REVIEW.md", "# Reject First Review\n"],
+    ["NOVELTY_ATTACK.md", "# Novelty Attack\n"],
+    ["UNSUPPORTED_CLAIM_AUDIT.md", "# Unsupported Claim Audit\n"],
+    ["REVERSE_OUTLINE.md", "# Reverse Outline\n"],
+    ["FIGURE_TABLE_QC.md", "# Figure Table QC\n"],
+    ["LIMITATION_AUDIT.md", "# Limitation Audit\n"],
+  ]) {
+    await writeText(path.join(root, name), text);
+  }
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.review_pressure_packet = {
+    status: "ready",
+    reject_first_review_path:
+      "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+    novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+    unsupported_claim_audit_path:
+      "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+    reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+    figure_table_qc_path: "reviewer/story-pressure/FIGURE_TABLE_QC.md",
+    limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+    status_reason: null,
+    last_updated_at: "2026-03-22T12:00:00.000Z",
   };
   await writeJson(manifestPath, manifest);
 }
@@ -345,6 +678,12 @@ async function seedProjectReadyForCode(projectRoot) {
     research_program: {
       status: "approved",
       goal: "Demo workflow control plane",
+      problem_statement: "Support scientific storytelling with graph-grounded evidence.",
+      baseline_reference: "baseline-a",
+      primary_metric: "acc",
+      datasets: ["demo-dataset"],
+      success_criteria: ["acc>=0.9"],
+      zotero_project_path: "bot/demo-project",
       tracks: [
         {
           track_id: trackId,
@@ -399,6 +738,10 @@ async function seedProjectReadyForCode(projectRoot) {
       last_contract_eval_result: "pass",
     },
   });
+
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+  await seedReadyIdeationContract(projectRoot, { trackId });
+  await seedReadyIdeaCatalystState(projectRoot);
 
   return { now, trackId };
 }
@@ -563,7 +906,6 @@ async function seedProjectReadyForSubmit(projectRoot) {
   );
   await writeText(path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"));
   await writeText(path.join(projectRoot, "cross-reviewer", "notes.md"));
-
   await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
     schemaVersion: 1,
     projectId: "demo-project",
@@ -777,6 +1119,9 @@ async function seedProjectReadyForSubmit(projectRoot) {
       last_updated_at: now,
     },
   });
+  await seedReadyIdeationContract(projectRoot, { trackId });
+  await seedReadyPaperStoryState(projectRoot, { trackId });
+  await seedReadyReviewPressurePacket(projectRoot);
   await writeJson(path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"), {
     issues: [],
   });
@@ -923,7 +1268,98 @@ test("auto iterator keeps idea stage blocked when active tracks lack materialize
   );
 });
 
-test("auto iterator keeps review stage blocked when unsupported primary claims remain in scope", async (t) => {
+test("auto iterator keeps idea stage blocked when the ideation contract is missing", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  delete manifest.ideation_contract;
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "idea");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /PROJECT_MANIFEST\.json\.ideation_contract\.status = ready/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator auto-materializes the ideation contract when plan needs a repaired proposal packet", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "plan";
+  manifest.current_micro_stage = "proposal_missing";
+  manifest.ideation_contract = {
+    status: "ready",
+    contract_version: 1,
+    long_term_goal: "Demo",
+    problem_scope: "Demo",
+    basis_stage: "idea",
+    graph_basis_paths: {},
+    graph_ideation_indices: { status: "ready" },
+    novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
+    challenge_insight_tree_path: "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
+    solution_check_path:
+      "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+    cross_domain_transfer_path: "researcher/ideation/CROSS_DOMAIN_TRANSFER.md",
+    problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+    tournament_scoreboard_path:
+      "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+    top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+    research_proposal_path: "researcher/ideation/MISSING_PROPOSAL.md",
+    selected_direction_id: "dir-1",
+    selected_track_id: trackId,
+    last_updated_at: "2026-03-22T12:00:00.000Z",
+  };
+  await seedReadyIdeationContract(projectRoot, { trackId });
+  manifest.ideation_contract.research_proposal_path =
+    "researcher/ideation/MISSING_PROPOSAL.md";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "plan");
+  const repairedManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(repairedManifest.ideation_contract.status, "ready");
+  await fs.access(
+    path.join(projectRoot, repairedManifest.ideation_contract.research_proposal_path)
+  );
+  assert.ok(
+    !result.missingStageSignals.some((signal) => /research_proposal_path/i.test(signal))
+  );
+});
+
+test("auto iterator turns unsupported review-stage story gaps into a workflow-owned literature discovery rerun", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -956,11 +1392,134 @@ test("auto iterator keeps review stage blocked when unsupported primary claims r
     queueMailbox: false,
   });
 
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+
   assert.equal(result.stageBefore, "review");
-  assert.equal(result.stageAfter, "review");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.regressed, true);
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests.some(
+      (entry) => entry.trigger_kind === "review_literature_discovery"
+    ),
+    true
+  );
+  await fs.access(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-discovery",
+      "LITERATURE_DISCOVERY_PACKET.json"
+    )
+  );
+});
+
+test("auto iterator turns unsupported write-stage story gaps into a workflow-owned literature discovery rerun", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.owner_agent = "academic_writer";
+  manifest.paper_story_state.claim_support_status = "unsupported";
+  manifest.paper_story_state.supported_claim_count = 1;
+  manifest.paper_story_state.partial_claim_count = 0;
+  manifest.paper_story_state.unsupported_claim_count = 2;
+  await writeJson(manifestPath, manifest);
+  await writeText(
+    path.join(projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"),
+    `# Claim Evidence Matrix
+
+| Claim ID | Verdict |
+| --- | --- |
+| claim-1 | SUPPORTED |
+| claim-2 | UNSUPPORTED |
+| claim-3 | UNSUPPORTED |
+`
+  );
+  await writeText(
+    path.join(projectRoot, "analyzer", "UNSUPPORTED_CLAIMS.md"),
+    `# Unsupported Claims
+
+- claim-2: boundary case still collapses under longer drafts
+- claim-3: graph-grounded routing still overclaims outside measured scope
+`
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.regressed, true);
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+  assert.match(updatedManifest.next_action ?? "", /graph-build/i);
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests.some(
+      (entry) => entry.trigger_kind === "write_literature_discovery"
+    ),
+    true
+  );
+  await fs.access(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-discovery",
+      "LITERATURE_DISCOVERY_PACKET.json"
+    )
+  );
+});
+
+test("auto iterator auto-materializes the review pressure packet for review-stage pressure checks", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "review";
+  manifest.current_micro_stage = "story_pressure_pending";
+  delete manifest.paper_story_state;
+  delete manifest.review_pressure_packet;
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "review");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.paper_story_state.status, "ready");
+  assert.equal(repairedManifest.review_pressure_packet.status, "ready");
+  await fs.access(
+    path.join(projectRoot, repairedManifest.paper_story_state.claim_to_experiment_map_path)
+  );
+  await fs.access(
+    path.join(
+      projectRoot,
+      repairedManifest.review_pressure_packet.reject_first_review_path
+    )
+  );
   assert.ok(
-    result.missingStageSignals.some((signal) =>
-      /unsupported primary claims remain in the selected writing scope/i.test(signal)
+    !result.missingStageSignals.some((signal) =>
+      /PROJECT_MANIFEST\.json\.review_pressure_packet\.status = ready/i.test(signal)
     )
   );
 });
@@ -1691,7 +2250,7 @@ test("auto iterator marks graph_build as verifying when uploads are idle but gra
   assert.equal(manifest.current_micro_stage, "verifying");
 });
 
-test("auto iterator marks graph_build as brainstorm_refresh when graph is ready but the brainstorm contract is still missing", async (t) => {
+test("auto iterator advances graph_build to frontier_mapping when graph is ready even if the brainstorm contract is still missing", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -1752,9 +2311,317 @@ test("auto iterator marks graph_build as brainstorm_refresh when graph is ready 
   );
 
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
   assert.equal(result.graphPresenceCheck?.status, "ready");
-  assert.equal(manifest.current_micro_stage, "brainstorm_refresh");
+  assert.equal(manifest.current_stage, "frontier_mapping");
+  assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
+});
+
+test("auto iterator surfaces the IDEA-CATALYST micro-stage while idea remains in progress", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId: "track-1" });
+  await seedReadyIdeationContract(projectRoot, { trackId: "track-1" });
+  await seedReadyIdeaCatalystState(projectRoot, { microStage: "judging" });
+  await fs.rm(path.join(projectRoot, "researcher", "IDEA_REPORT.md"), { force: true });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "idea_refresh_requested";
+  manifest.owner_agent = "researcher";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "idea");
+  assert.equal(updatedManifest.current_micro_stage, "judging");
+});
+
+test("auto iterator queues an IDEA-CATALYST requisition and regresses idea back to graph_build uploading", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "gatekeeping";
+  manifest.owner_agent = "researcher";
+  manifest.idea_catalyst = {
+    ...manifest.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason: "Cross-domain bridge evidence is insufficient for the unresolved catalyst questions.",
+  };
+  delete manifest.paper_ingestion;
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "idea-catalyst",
+      "INVESTIGATION_REQUISITION.json"
+    ),
+    {
+      requisition_id: "req-catalyst-1",
+      target_domain: "Computer Science",
+      missing_domains: ["Psychology", "Control Theory"],
+      challenge_clusters: ["memory preservation", "cross-domain alignment"],
+      coverage_gap_questions: [
+        {
+          question_id: "q1",
+          question: "How should memory be preserved under cross-domain shift?",
+          coverage_status: "unexplored",
+          required_domain_evidence: ["Psychology", "Control Theory"],
+        },
+      ],
+      search_queries: [
+        {
+          domain: "Psychology",
+          query: "Psychology memory preservation transferable principle",
+          rationale: "Acquire source-domain evidence for q1.",
+        },
+        {
+          domain: "Control Theory",
+          query: "Control Theory adaptive regulation transferable principle",
+          rationale: "Acquire source-domain evidence for q1.",
+        },
+      ],
+      minimum_sources_per_domain: 2,
+      minimum_bridge_nodes: 2,
+      retry_budget: 2,
+      saturation_signal: "idea-catalyst-requisition:test",
+      required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+      ingestion_mode: "paper_search_then_queue_import",
+    }
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+  assert.equal(updatedManifest.paper_ingestion.queued_requests.length >= 1, true);
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests[0].trigger_kind,
+    "idea_catalyst_requisition"
+  );
+  assert.match(updatedManifest.next_action ?? "", /graph-build/i);
+  assert.equal(updatedManifest.idea_catalyst.status, "requisition");
+  assert.equal(updatedManifest.ideation_contract.selected_track_id, trackId);
+});
+
+test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into idea and plan", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "gatekeeping";
+  manifest.owner_agent = "researcher";
+  manifest.idea_catalyst = {
+    ...manifest.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason: "Cross-domain bridge evidence is insufficient for the unresolved catalyst questions.",
+  };
+  delete manifest.paper_ingestion;
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+    {
+      requisition_id: "req-catalyst-rerun",
+      target_domain: "Computer Science",
+      missing_domains: ["Psychology", "Control Theory"],
+      challenge_clusters: ["memory preservation", "cross-domain alignment"],
+      coverage_gap_questions: [
+        {
+          question_id: "q1",
+          question: "How should memory be preserved under cross-domain shift?",
+          coverage_status: "unexplored",
+          required_domain_evidence: ["Psychology", "Control Theory"],
+        },
+      ],
+      search_queries: [
+        {
+          domain: "Psychology",
+          query: "Psychology memory preservation transferable principle",
+          rationale: "Acquire source-domain evidence for q1.",
+        },
+      ],
+      minimum_sources_per_domain: 2,
+      minimum_bridge_nodes: 2,
+      retry_budget: 2,
+      saturation_signal: "idea-catalyst-requisition:rerun",
+      required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+      ingestion_mode: "paper_search_then_queue_import",
+    }
+  );
+
+  const first = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(first.stageAfter, "graph_build");
+
+  const queuedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  queuedManifest.current_stage = "graph_build";
+  queuedManifest.current_micro_stage = "uploading";
+  queuedManifest.paper_ingestion.graph_presence_checked_at = "2026-04-03T00:00:00.000Z";
+  queuedManifest.paper_ingestion.graph_presence_status = "ready";
+  queuedManifest.paper_ingestion.graph_presence_expected_papers = 1;
+  queuedManifest.paper_ingestion.graph_presence_present_papers = 1;
+  queuedManifest.paper_ingestion.graph_presence_missing_papers = [];
+  queuedManifest.paper_ingestion.refresh_required = false;
+  queuedManifest.paper_ingestion.runtime_status = "idle";
+  queuedManifest.paper_ingestion.queued_requests =
+    queuedManifest.paper_ingestion.queued_requests.map((entry) => ({
+      ...entry,
+      status: "completed",
+    }));
+  await writeJson(manifestPath, queuedManifest);
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2604.00001",
+      arxiv_id: "2604.00001",
+      title: "Catalyst Bridge Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2604.00001--catalyst-bridge-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2604.00001--catalyst-bridge-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2604.00001--catalyst-bridge-paper.md"),
+      kind: "markdown",
+      paperId: "paper:catalyst-bridge",
+      paperTitle: "Catalyst Bridge Paper",
+      sourcePath: path.join(sourceRoot, "md", "2604.00001--catalyst-bridge-paper.md"),
+      sourceMarkdownPath: path.join(
+        sourceRoot,
+        "md",
+        "2604.00001--catalyst-bridge-paper.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(
+        sourceRoot,
+        "md",
+        "2604.00001--catalyst-bridge-paper.md"
+      ),
+    },
+  ]);
+
+  const second = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(second.stageAfter, "frontier_mapping");
+
+  const third = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(third.stageAfter, "idea");
+
+  const fourth = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const finalManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(fourth.stageBefore, "idea");
+  assert.equal(fourth.stageAfter, "plan");
+  assert.equal(finalManifest.current_stage, "plan");
+  assert.equal(finalManifest.idea_catalyst.status, "ready");
+  assert.equal(finalManifest.idea_catalyst.requisition_required, false);
+  assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
+});
+
+test("auto iterator routes active literature discovery requests back through graph_build before continuing review-time work", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "review";
+  manifest.current_micro_stage = "review_requested";
+  manifest.owner_agent = "reviewer";
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    queued_requests: [
+      {
+        request_id: "literature-discovery-gap-1",
+        status: "running",
+        trigger_kind: "literature_discovery",
+        summary: "Bridge evidence discovery for review-time limitation gap",
+        detail:
+          "Structured literature discovery triggered from review to close limitation evidence before rerunning graph-build.",
+        created_at: "2026-04-04T09:00:00.000Z",
+        updated_at: "2026-04-04T09:01:00.000Z",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.stageBefore, "review");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.regressed, true);
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+  assert.match(updatedManifest.next_action ?? "", /graph-build/i);
 });
 
 test("auto iterator advances graph_build once graph presence is ready", async (t) => {
@@ -1803,6 +2670,67 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
   assert.equal(result.graphPresenceCheck?.status, "ready");
+});
+
+test("auto iterator advances analyze without theory appendix artifacts when proof appendix is not required", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    completed_node_ids: ["node-1", "node-2"],
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+    checkpoint_path: "researcher/checkpoints/experiment-manager.json",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  await fs.rm(path.join(projectRoot, "analyzer", "THEORY_SUPPORT_NOTE.md"), {
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "analyzer", "THEORY_STATE.json"), {
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "analyzer", "proof-packets"), {
+    recursive: true,
+    force: true,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "review");
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /THEORY_SUPPORT_NOTE|THEORY_STATE|proof-packets/i.test(signal)
+    )
+  );
 });
 
 test("auto iterator regresses frontier_mapping back to graph_build when graph misses canonical papers", async (t) => {
@@ -1906,6 +2834,33 @@ test("auto iterator blocks on the mandatory submit human gate once submit artifa
   assert.equal(result.recommendedActions[0]?.kind, "wait_human");
 });
 
+test("auto iterator advances submit to done once GATE-5 is explicitly approved", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  await writeJson(path.join(projectRoot, "researcher", "GATE_STATE.json"), {
+    current_stage: "submit",
+    last_gate: "GATE-5",
+    gate_status: "approved",
+    gate_type: "manual_confirmation",
+    gate_timestamp: "2026-04-03T09:00:00.000Z",
+    auto_proceed: false,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "done");
+  assert.equal(result.gateBlocking, false);
+});
+
 test("auto iterator keeps submit blocked in aggressive mode because final confirmation stays manual", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -1931,6 +2886,26 @@ test("auto iterator keeps submit blocked in aggressive mode because final confir
   assert.equal(result.stageAfter, "submit");
   assert.equal(result.gateBlocking, true);
   assert.match(result.gateReason ?? "", /human confirmation|OpenReview-facing submission path/i);
+});
+
+test("auto iterator caps backward regression depth before falling all the way to setup", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "write");
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageEffective, "experiment");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.regressed, true);
 });
 
 test("auto iterator clears a timed-default waiting gate after the confirmation deadline expires", async (t) => {
@@ -1971,6 +2946,62 @@ test("auto iterator clears a timed-default waiting gate after the confirmation d
   );
   assert.equal(savedGate.gate_status, "approved");
   assert.equal(savedGate.default_action_executed_at, "2026-03-28T10:05:00.000Z");
+});
+
+test("auto iterator clears stale submit gate timestamps after regression and resets them on re-entry", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const gatePath = path.join(projectRoot, "researcher", "GATE_STATE.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.citation_integrity.verification_status = "needs_revision";
+  manifest.citation_integrity.hallucinated_citation_count = 1;
+  await writeJson(manifestPath, manifest);
+  await writeJson(gatePath, {
+    current_stage: "submit",
+    last_gate: "GATE-5",
+    gate_status: "waiting",
+    gate_timestamp: "2026-03-28T09:00:00.000Z",
+    auto_proceed: false,
+  });
+
+  const regressed = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    now: "2026-03-28T10:05:00.000Z",
+  });
+
+  assert.equal(regressed.stageAfter, "write");
+  const regressedGate = JSON.parse(await fs.readFile(gatePath, "utf8"));
+  assert.equal(regressedGate.gate_timestamp, null);
+  assert.equal(regressedGate.last_gate, null);
+  assert.equal(regressedGate.gate_status, null);
+
+  const recoveredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  recoveredManifest.current_stage = "submit";
+  recoveredManifest.citation_integrity.verification_status = "verified";
+  recoveredManifest.citation_integrity.hallucinated_citation_count = 0;
+  await writeJson(manifestPath, recoveredManifest);
+
+  const resubmitted = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    now: "2026-03-28T11:00:00.000Z",
+  });
+
+  assert.equal(resubmitted.stageAfter, "submit");
+  assert.equal(resubmitted.gateBlocking, true);
+  const resubmittedGate = JSON.parse(await fs.readFile(gatePath, "utf8"));
+  assert.equal(resubmittedGate.gate_timestamp, "2026-03-28T11:00:00.000Z");
+  assert.equal(resubmittedGate.last_gate, "GATE-5");
+  assert.equal(resubmittedGate.gate_status, "waiting");
 });
 
 test("auto iterator keeps submit blocked even when a legacy aggressive auto gate round was approved", async (t) => {
@@ -2169,6 +3200,295 @@ test("auto iterator keeps submit blocked when external Stanford review has not r
       signal.includes("external_review_state")
     )
   );
+});
+
+test("workflow runtime rewrite E2E migrates a legacy project and walks setup through done", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "setup");
+
+  const migration = await migrateWorkflowRuntimeState({
+    projectRoot,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "workflow_e2e_integration",
+  });
+  assert.equal(migration.compatibilityMode, "sessions_spawn_runtime");
+  await fs.access(getWorkflowRuntimeQueuePath(projectRoot));
+  await fs.access(getWorkflowRuntimeSessionsPath(projectRoot));
+  await fs.access(getWorkflowAnnounceOutboxPath(projectRoot));
+  await fs.access(getWorkflowBroadcastOutboxPath(projectRoot));
+  await fs.access(getWorkflowRuntimeEventsPath(projectRoot));
+
+  let result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "setup");
+  assert.equal(result.stageAfter, "graph_build");
+
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Alpha Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      kind: "markdown",
+      paperId: "paper:alpha",
+      paperTitle: "Alpha Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+    },
+  ]);
+  await seedReadyBrainstormCycle(projectRoot);
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
+
+  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
+  for (const fileName of [
+    "LIMITATION_FRONTIER.md",
+    "CONTRADICTION_FRONTIER.md",
+    "TRANSFER_FRONTIER.md",
+    "COMPOSITION_FRONTIER.md",
+    "ANCHOR_INDEX.md",
+  ]) {
+    await writeText(path.join(projectRoot, "graph", fileName));
+  }
+  let manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  let manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_micro_stage = "frontiers_packaged";
+  await writeJson(manifestPath, manifest);
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "frontier_mapping");
+  assert.equal(result.stageAfter, "idea");
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Alpha Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+    },
+  ]);
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      kind: "markdown",
+      paperId: "paper:alpha",
+      paperTitle: "Alpha Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+    },
+  ]);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
+  for (const fileName of [
+    "LIMITATION_FRONTIER.md",
+    "CONTRADICTION_FRONTIER.md",
+    "TRANSFER_FRONTIER.md",
+    "COMPOSITION_FRONTIER.md",
+    "ANCHOR_INDEX.md",
+  ]) {
+    await writeText(path.join(projectRoot, "graph", fileName));
+  }
+  manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  await writeJson(manifestPath, manifest);
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "plan");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "plan");
+  assert.equal(result.stageAfter, "code");
+
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+
+  await seedProjectReadyForSubmit(projectRoot);
+  manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "ready_for_analysis";
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    completed_node_ids: ["node-1", "node-2"],
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+    checkpoint_path: "researcher/checkpoints/experiment-manager.json",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "analyze");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "review");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "review");
+  assert.equal(result.stageAfter, "write");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "submit");
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "submit");
+  assert.equal(result.gateBlocking, true);
+
+  await writeJson(path.join(projectRoot, "researcher", "GATE_STATE.json"), {
+    current_stage: "submit",
+    last_gate: "GATE-5",
+    gate_status: "approved",
+    gate_type: "manual_confirmation",
+    gate_timestamp: "2026-04-03T09:00:00.000Z",
+    auto_proceed: false,
+  });
+
+  result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(
+    result.stageAfter,
+    "done",
+    `Unexpected submit completion: stageAfter=${result.stageAfter}; gateBlocking=${result.gateBlocking}; missing=${JSON.stringify(result.missingStageSignals)}; gateReason=${result.gateReason ?? "none"}`
+  );
+  assert.equal(result.gateBlocking, false);
 });
 
 test("auto iterator downgrades only after mitigation rounds are exhausted for the same risk", async (t) => {
@@ -2908,6 +4228,46 @@ test("auto iterator keeps write stage blocked when theory appendix draft is miss
   );
 });
 
+test("auto iterator auto-materializes the paper story contract before write-stage drafting checks", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "story_contract_pending";
+  delete manifest.paper_story_state;
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.paper_story_state.status, "ready");
+  await fs.access(
+    path.join(projectRoot, repairedManifest.paper_story_state.story_spine_path)
+  );
+  await fs.access(
+    path.join(
+      projectRoot,
+      repairedManifest.paper_story_state.claim_to_experiment_map_path
+    )
+  );
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /PROJECT_MANIFEST\.json\.paper_story_state\.status = ready/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator keeps write stage blocked when paper QC reports a hard compile failure", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -3000,5 +4360,114 @@ test("auto iterator keeps write stage blocked when figure QC reports caption ali
     result.missingStageSignals.some((signal) =>
       /figure_qc.*caption_alignment_status = pass/i.test(signal)
     )
+  );
+});
+
+test("PROBLEM_DECOMPOSITION.md generated by seedReadyIdeationContract contains required structure", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+  await seedReadyIdeationContract(projectRoot, { trackId });
+
+  const decompositionPath = path.join(
+    projectRoot,
+    "researcher",
+    "ideation",
+    "PROBLEM_DECOMPOSITION.md"
+  );
+
+  // Verify file exists
+  const fileExists = await fs.access(decompositionPath).then(
+    () => true,
+    () => false
+  );
+  assert.ok(fileExists, "PROBLEM_DECOMPOSITION.md should exist after seeding ideation contract");
+
+  // Verify file has content
+  const content = await fs.readFile(decompositionPath, "utf8");
+  assert.ok(content.trim().length > 0, "PROBLEM_DECOMPOSITION.md should not be empty");
+
+  // Verify content has heading structure
+  assert.ok(
+    /^#\s+Problem Decomposition/im.test(content),
+    "PROBLEM_DECOMPOSITION.md should have a heading"
+  );
+});
+
+test("PROBLEM_DECOMPOSITION.md file existence is tracked in ideation contract state", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+
+  // Seed ideation contract with PROBLEM_DECOMPOSITION.md path
+  const ideationDir = path.join(projectRoot, "researcher", "ideation");
+  await fs.mkdir(ideationDir, { recursive: true });
+
+  // Create required files including PROBLEM_DECOMPOSITION.md with proper content
+  await writeText(
+    path.join(ideationDir, "PROBLEM_DECOMPOSITION.md"),
+    "# Problem Decomposition\n\n## Sub-problems\n- preserve support precision\n- avoid clarity collapse\n\n## Validation Ladder\n- reproduce baseline\n- enable routing delta\n"
+  );
+  await writeText(
+    path.join(ideationDir, "RESEARCH_PROPOSAL.md"),
+    "# Research Proposal\n\n## Method\nDemo method.\n"
+  );
+  await writeText(path.join(ideationDir, "NOVELTY_TREE.md"), "# Novelty Tree\n");
+  await writeText(path.join(ideationDir, "CHALLENGE_INSIGHT_TREE.md"), "# Challenge Insight Tree\n");
+  await writeText(path.join(ideationDir, "WELL_ESTABLISHED_SOLUTION_CHECK.md"), "# Solution Check\n");
+  await writeText(path.join(ideationDir, "CROSS_DOMAIN_TRANSFER.md"), "# Cross Domain Transfer\n");
+  await writeText(path.join(ideationDir, "TOP3_DIRECTION_SUMMARY.md"), "# Top 3 Directions\n");
+  await writeJson(path.join(ideationDir, "CANDIDATE_POOL.json"), { candidates: [] });
+  await writeJson(path.join(ideationDir, "TOURNAMENT_SCOREBOARD.json"), { status: "completed" });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.ideation_contract = {
+    status: "ready",
+    contract_version: 1,
+    basis_stage: "idea",
+    long_term_goal: "Demo goal",
+    problem_scope: "Demo scope",
+    graph_basis_paths: {},
+    graph_ideation_indices: { status: "ready" },
+    novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
+    challenge_insight_tree_path: "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
+    solution_check_path: "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+    cross_domain_transfer_path: "researcher/ideation/CROSS_DOMAIN_TRANSFER.md",
+    problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+    tournament_scoreboard_path: "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+    top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+    research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
+    selected_direction_id: "dir-1",
+    selected_track_id: trackId,
+    last_updated_at: new Date().toISOString(),
+  };
+  await writeJson(manifestPath, manifest);
+
+  // Verify the decomposition file can be read through the path in manifest
+  const decompositionPath = path.join(projectRoot, manifest.ideation_contract.problem_decomposition_path);
+  const content = await fs.readFile(decompositionPath, "utf8");
+
+  // Validate expected sections exist
+  assert.ok(
+    /^#\s+Problem Decomposition/im.test(content),
+    "PROBLEM_DECOMPOSITION.md should have a 'Problem Decomposition' heading"
+  );
+  assert.ok(
+    /##\s+Sub-problems/im.test(content) || /sub.?problems?/im.test(content),
+    "PROBLEM_DECOMPOSITION.md should contain sub-problems section"
+  );
+  assert.ok(
+    /##\s+Validation/im.test(content) || /validation/im.test(content),
+    "PROBLEM_DECOMPOSITION.md should contain validation ladder or validation section"
   );
 });

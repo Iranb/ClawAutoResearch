@@ -1,5 +1,7 @@
 # Workflow Runtime State Phase 2 Implementation Plan
 
+> **Status:** COMPLETE
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the next workflow runtime-state slice with durable support for `paper_qc`, `figure_qc`, `citation_collection`, `review_issue_tracker`, and independent `EXPERIMENT_SEARCH.json`, while keeping `WRITE -> SUBMIT` moderately strict and aligning the design with the latest human decisions.
@@ -18,7 +20,7 @@
 - Modify: `tests/auto-iterator.test.mjs`
 - Modify: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Add runtime-tool coverage for the new state blocks**
+- [x] **Step 1: Add runtime-tool coverage for the new state blocks**
 
 Write failing tests for:
 - `get_paper_qc` / `set_paper_qc`
@@ -29,7 +31,7 @@ Write failing tests for:
 
 Also assert manifest persistence, `EXPERIMENT_SEARCH.json` persistence, and temp-trace function names.
 
-- [ ] **Step 2: Add write-gate coverage for moderate `WRITE -> SUBMIT` behavior**
+- [x] **Step 2: Add write-gate coverage for moderate `WRITE -> SUBMIT` behavior**
 
 Write tests showing:
 - open `critical` or `high` review issues block `write`
@@ -37,7 +39,7 @@ Write tests showing:
 - explicit hard failures such as `paper_qc.compile_status = fail` or `figure_qc.caption_alignment_status = fail` block `write`
 - pending-but-not-failed QC states do not block `write`
 
-- [ ] **Step 3: Add snapshot and command-output coverage**
+- [x] **Step 3: Add snapshot and command-output coverage**
 
 Add tests showing the new state summaries appear in `workflow-status`, including concise issue counts and `EXPERIMENT_SEARCH.json` state visibility.
 
@@ -48,7 +50,7 @@ Add tests showing the new state summaries appear in `workflow-status`, including
 - Modify: `templates/PROJECT_MANIFEST.json`
 - Create: `templates/EXPERIMENT_SEARCH.json`
 
-- [ ] **Step 1: Define the new state types**
+- [x] **Step 1: Define the new state types**
 
 Add normalized types and serializers for:
 - `PaperQcState`
@@ -57,11 +59,11 @@ Add normalized types and serializers for:
 - `ReviewIssueTrackerState`
 - `ExperimentSearchState`
 
-- [ ] **Step 2: Make `experiment_search` file-backed**
+- [x] **Step 2: Make `experiment_search` file-backed**
 
 Persist the canonical state to `researcher/EXPERIMENT_SEARCH.json`, mirror a summary into `PROJECT_MANIFEST.json.experiment_search`, and expose resolved-path helpers.
 
-- [ ] **Step 3: Keep state semantics aligned with the approved design choices**
+- [x] **Step 3: Keep state semantics aligned with the approved design choices**
 
 Reflect these decisions directly in the normalization and defaults:
 - `Planner` and `Orchestrator` remain one agent role
@@ -74,11 +76,11 @@ Reflect these decisions directly in the normalization and defaults:
 - Modify: `tools/register-workflow-tools.ts`
 - Modify: `tools/workflow-guard.ts`
 
-- [ ] **Step 1: Register new actions**
+- [x] **Step 1: Register new actions**
 
 Expose getter/setter actions for the five new state blocks.
 
-- [ ] **Step 2: Return useful summary payloads**
+- [x] **Step 2: Return useful summary payloads**
 
 Each getter/setter should return normalized state plus readiness/blocking helpers and resolved artifact/file paths where relevant.
 
@@ -89,7 +91,7 @@ Each getter/setter should return normalized state plus readiness/blocking helper
 - Modify: `tools/workflow-commands.ts`
 - Modify: `docs/superpowers/specs/2026-03-26-agent-prompt-assembly-spec.zh-CN.md`
 
-- [ ] **Step 1: Extend `WorkflowSnapshot`**
+- [x] **Step 1: Extend `WorkflowSnapshot`**
 
 Add concise fields for:
 - experiment-search progress
@@ -98,11 +100,11 @@ Add concise fields for:
 - citation collection
 - review issue counts/status
 
-- [ ] **Step 2: Update `workflow-status`**
+- [x] **Step 2: Update `workflow-status`**
 
 Print concise, scan-friendly lines so operators can see what is blocking and which late-stage QC systems are only advisory vs hard-fail.
 
-- [ ] **Step 3: Update prompt assembly guidance**
+- [x] **Step 3: Update prompt assembly guidance**
 
 Document which of the new states may enter the focused writer/reviewer prompt and which must stay in control-plane/trace only.
 
@@ -113,15 +115,15 @@ Document which of the new states may enter the focused writer/reviewer prompt an
 - Modify: `tests/writer-reviewer-runtime-state.test.mjs`
 - Modify: `tests/auto-iterator.test.mjs`
 
-- [ ] **Step 1: Keep the existing hard evidence checks**
+- [x] **Step 1: Keep the existing hard evidence checks**
 
 Do not weaken current hard blockers such as unsupported primary claims, missing required writing state, or missing graph-guided evidence coverage.
 
-- [ ] **Step 2: Add review-issue hard blockers**
+- [x] **Step 2: Add review-issue hard blockers**
 
 Block `write` on unresolved `critical` or `high` review issues unless the tracker reports them as closed or waived.
 
-- [ ] **Step 3: Add QC hard-fail blockers instead of universal ready-state blockers**
+- [x] **Step 3: Add QC hard-fail blockers instead of universal ready-state blockers**
 
 Block `write` only when QC states explicitly report failure on high-signal checks, rather than requiring every late-stage QC block to already be fully `ready`.
 
@@ -131,7 +133,7 @@ Block `write` only when QC states explicitly report failure on high-signal check
 - Modify: `docs/superpowers/specs/2026-03-26-workflow-target-architecture-design.zh-CN.md`
 - Modify: `docs/superpowers/specs/2026-03-26-workflow-target-architecture-design.md`
 
-- [ ] **Step 1: Resolve the open questions that the human already answered**
+- [x] **Step 1: Resolve the open questions that the human already answered**
 
 Update the spec to reflect:
 - Planner and Orchestrator remain one agent
@@ -148,12 +150,12 @@ Update the spec to reflect:
 - Test: `tests/auto-iterator.test.mjs`
 - Test: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Run the targeted runtime-state and iterator tests**
+- [x] **Step 1: Run the targeted runtime-state and iterator tests**
 
 Run: `node --test tests/workflow-runtime-tools.test.mjs tests/writer-reviewer-runtime-state.test.mjs tests/auto-iterator.test.mjs tests/workflow-commands.test.mjs`
 Expected: PASS
 
-- [ ] **Step 2: Run the TypeScript build**
+- [x] **Step 2: Run the TypeScript build**
 
 Run: `npm run build`
 Expected: PASS

@@ -41,6 +41,8 @@ On every session start:
 12. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm current stage, active tracks, next writing handoff, and `writing_contract`
 13. Read `{PROJ}/researcher/ZOTERO_PACKET.md` if exists — use the Zotero `bot/<project-id>` writing shortlist and baseline folders as bibliography-organizing context
 14. If `writing_contract.template_required = true`, make sure the template file is readable before planning or drafting prose
+15. When present, read `{PROJ}/reviewer/story-pressure/` packet files before drafting major sections; they are the adversarial pressure layer for story and claim choices
+16. If the durable story packet is missing or stale, regenerate it through `research_workflow.materialize_paper_story_state` before large drafting passes; use `set_paper_story_state` only for bounded follow-up patches
 
 ## Core Responsibilities
 
@@ -50,6 +52,7 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - Incorporate reviewer feedback from `AUTO_REVIEW.md`
 - Maintain the paper directory structure
 - Keep `WRITING_SIGNALS.md` current as the writing-side audit artifact
+- Materialize and maintain the durable `paper_story_state` contract under `{PROJ}/academic_writer/story/`
 - Respect the configured writing template and keep `TEMPLATE_MAPPING.md` aligned with the actual draft structure
 - Use `/citation-management` to turn the Zotero `bot/<project-id>/writing-shortlist` into a verified bibliography queue
 - Use `/venue-templates` to keep section order, page budget, and venue constraints aligned with the writing contract
@@ -156,6 +159,7 @@ Do not:
 3. **Resolve unsupported claims first** — downgrade to exploratory wording, remove, or send back for more evidence
 4. **Use theory support as an advisory, not a blocker** — `red` means write more conservatively and leave the issue visible for human review
 5. **Write the storyline sketch before long prose** — keep one thesis, one evidence spine, and one limits paragraph
+5a. **Lock the story contract before calling WRITE done** — `STORY_SPINE.md`, `CLAIM_TO_EXPERIMENT_MAP.md`, `FALLBACK_NARRATIVE.md`, `MODULE_MOTIVATION_MAP.md`, and `REJECTION_RISK_TABLE.md` are workflow facts, not optional notes
 6. **Apply the writing template before long prose** — if a user template is configured, map it in `TEMPLATE_MAPPING.md` and follow its section logic unless you explicitly document an adaptation
 7. **Then confirm the outline** — structure follows supported claims, not the other way around
 8. **Write method section first** — clearest, most factual section

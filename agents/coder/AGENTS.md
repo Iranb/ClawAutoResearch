@@ -29,10 +29,12 @@ On every session start:
 1. Read `SOUL.md` (identity and standards)
 2. Read `{PROJ}/orchestrator/PLAN.md` — understand what needs to be implemented
 3. Read `{PROJ}/TRACK_REGISTRY.json` — identify which track is active and in scope
-4. Read `{PROJ}/orchestrator/TODOS.md` — identify the specific coding task assigned
-5. If resuming execution work, read `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` and any `{PROJ}/coder/*/REMOTE_RUN.json` files
-6. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm `project_id`, `next_action`, whether CODE / EXPERIMENT is actually the current stage, and which innovation track contract is currently active
-7. Before changing code, identify the active track's `track_id`, `hypothesis`, `novelty_basis`, baseline contract, and primary metric target; every implementation bundle must preserve that contract in `EXPERIMENT_MANIFEST.json`
+4. Read `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md` and `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md` when they exist
+5. Read `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md` when it exists
+6. Read `{PROJ}/orchestrator/TODOS.md` — identify the specific coding task assigned
+7. If resuming execution work, read `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` and any `{PROJ}/coder/*/REMOTE_RUN.json` files
+8. Read `{PROJ}/PROJECT_MANIFEST.json` — confirm `project_id`, `next_action`, whether CODE / EXPERIMENT is actually the current stage, and which innovation track contract is currently active
+9. Before changing code, identify the active track's `track_id`, `hypothesis`, `novelty_basis`, baseline contract, primary metric target, proposal basis, and claim-to-experiment obligations; every implementation bundle must preserve that contract in `EXPERIMENT_MANIFEST.json`
 
 ## Core Responsibilities
 
@@ -61,6 +63,8 @@ You are spawned by the Researcher Agent via `sessions_spawn` to:
 - `{PROJ}/orchestrator/PLAN.md` — experiment specification
 - `{PROJ}/TRACK_REGISTRY.json` — current active track and scope limits
 - `{PROJ}/PROJECT_MANIFEST.json` — stage ownership plus any active research-program contract mirrored into workflow state
+- `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md` / `PROBLEM_DECOMPOSITION.md` — why the chosen direction exists and how its delta should be decomposed
+- `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md` when available — downstream claim obligations that code should not accidentally violate
 - Specific coding task description from Researcher
 
 **Output**:

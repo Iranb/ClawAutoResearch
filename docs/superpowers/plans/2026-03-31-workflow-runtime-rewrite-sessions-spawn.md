@@ -8,9 +8,9 @@
 
 **Tech Stack:** TypeScript, Node.js built-in test runner, existing workflow guard/service/tool infrastructure, OpenClaw runtime bindings
 
-**Progress Snapshot (2026-03-31):**
-- Implemented: project-local runtime state files, orchestrator transition intents, session persistence, degraded fallback tracking, broadcast outbox persistence, announce consumption helpers, recovery helpers, persistent workflow binding metadata, prompt/hook cutover, auto-stage/mitigation/background-run orchestrator launch paths, gate/discussion child-launch persistence, announce-first parent synthesis for gate review plus auto discussion panels with transcript polling only as fallback, and project-local `workflow-events.jsonl` coverage for queued/replayed background lifecycle plus runtime session recording.
-- Remaining: retire the last `/tmp`-first debugging assumptions, keep shrinking legacy fallback paths beyond the newly-blocked projectless dispatch queue case, and keep broadening durable event coverage until `workflow-events.jsonl` is the clear first-stop audit surface for every workflow-owned control transition.
+**Progress Snapshot (2026-04-03):**
+- Implemented: project-local runtime state files, orchestrator transition intents, session persistence, degraded fallback tracking, announce outbox persistence, durable broadcast outbox replay, recovery helpers, persistent workflow binding metadata, prompt/hook cutover, auto-stage/mitigation/background-run orchestrator launch paths, gate/discussion child-launch persistence, project-local `workflow-events.jsonl`, project-local `workflow-trace.jsonl` with `/tmp` debug mirror only, explicit project-scoped queue/session storage, and a full `setup -> ... -> done` end-to-end lifecycle test that simulates legacy-project migration plus manual `GATE-5` approval.
+- Remaining: follow-up hardening can continue in separate plans, but the main `sessions_spawn + announce + recovery` rewrite contract is now implemented and verified.
 
 ---
 
@@ -23,35 +23,35 @@
 - Modify: `tests/stage-broadcast.test.mjs`
 - Modify: `tests/channel-project-bindings.test.mjs`
 
-- [ ] **Step 1: Add tests for durable transition intents**
+- [x] **Step 1: Add tests for durable transition intents**
 
 Write failing tests showing:
 - a stage decision writes a durable transition intent before any spawn happens
 - spawn is not attempted when intent persistence fails
 - legacy fallback is only used after explicit new-runtime failure
 
-- [ ] **Step 2: Add tests for session registry persistence and recovery**
+- [x] **Step 2: Add tests for session registry persistence and recovery**
 
 Write failing tests showing:
 - spawned workflow sessions are recorded in a project-local runtime session file
 - a restart can reload active sessions and continue
 - orphan sessions become `needs_repair` instead of silently disappearing
 
-- [ ] **Step 3: Add tests for announce inbox/outbox behavior**
+- [x] **Step 3: Add tests for announce inbox/outbox behavior**
 
 Write failing tests showing:
 - child completion is persisted before parent synthesis
 - nested child results stay internal by default
 - top-level stage handoff/status completion reaches channel broadcast through the outbox
 
-- [ ] **Step 4: Add tests for broadcast outbox and idempotent retry**
+- [x] **Step 4: Add tests for broadcast outbox and idempotent retry**
 
 Write failing tests showing:
 - a failed broadcast is retained and retried
 - repeated retries do not duplicate channel-visible updates
 - `recovered_after_restart` can be emitted exactly once after recovery
 
-- [ ] **Step 5: Add migration tests for legacy projects**
+- [x] **Step 5: Add migration tests for legacy projects**
 
 Write failing tests showing:
 - a project with only existing manifest/mailbox/binding files can be migrated lazily
@@ -65,7 +65,7 @@ Write failing tests showing:
 - Modify: `DOC/reference/state-files.md`
 - Modify: `templates/PROJECT_MANIFEST.json`
 
-- [ ] **Step 1: Define runtime state types and paths**
+- [x] **Step 1: Define runtime state types and paths**
 
 Add durable file helpers and normalized types for:
 - `workflow-runtime-queue.json`
@@ -74,13 +74,13 @@ Add durable file helpers and normalized types for:
 - `workflow-broadcast-outbox.json`
 - `workflow-events.jsonl`
 
-- [ ] **Step 2: Keep new runtime state strictly separate from workflow fact state**
+- [x] **Step 2: Keep new runtime state strictly separate from workflow fact state**
 
 Ensure:
 - manifest stays the source of truth for `stage`, `owner`, `blocking_reason`, `next_action`
 - runtime files only describe execution, retry, broadcast, and recovery state
 
-- [ ] **Step 3: Add versioned migration metadata**
+- [x] **Step 3: Add versioned migration metadata**
 
 Expose helpers for:
 - runtime framework version
@@ -94,7 +94,7 @@ Expose helpers for:
 - Modify: `tools/register-workflow-service.ts`
 - Modify: `tools/workflow-fast-paths.ts`
 
-- [ ] **Step 1: Implement transition intent creation**
+- [x] **Step 1: Implement transition intent creation**
 
 Add orchestrator entrypoints that:
 - accept a decision-layer action
@@ -102,14 +102,14 @@ Add orchestrator entrypoints that:
 - choose runtime mode
 - return a structured launch decision without immediately mutating workflow facts
 
-- [ ] **Step 2: Implement spawn/resume execution**
+- [x] **Step 2: Implement spawn/resume execution**
 
 Add orchestrator helpers that:
 - invoke `sessions_spawn`-style runtime execution
 - persist the resulting session identity and lineage
 - support persistent thread/session binding for long-lived owner agents
 
-- [ ] **Step 3: Implement explicit degraded fallback**
+- [x] **Step 3: Implement explicit degraded fallback**
 
 If the new runtime cannot spawn or resume:
 - mark the intent as degraded
@@ -128,7 +128,7 @@ If the new runtime cannot spawn or resume:
 
 Replace project-critical `/tmp` queue/registry usage with project-local runtime state.
 
-- [ ] **Step 2: Preserve only non-authoritative temp traces in `/tmp`**
+- [x] **Step 2: Preserve only non-authoritative temp traces in `/tmp`**
 
 Keep `/tmp` only for disposable diagnostics. Recovery-critical data must come from project-local files.
 
@@ -176,14 +176,14 @@ Prevent repeated announce replay and repeated channel status delivery using stab
 - Modify: `tools/register-workflow-service.ts`
 - Modify: `tests/stage-broadcast.test.mjs`
 
-- [ ] **Step 1: Convert stage/status broadcasts into outbox-backed sends**
+- [x] **Step 1: Convert stage/status broadcasts into outbox-backed sends**
 
 Before sending to channel:
 - write a broadcast record
 - allocate an idempotency key
 - mark delivery status transitions explicitly
 
-- [ ] **Step 2: Keep the current visible message shape**
+- [x] **Step 2: Keep the current visible message shape**
 
 Retain the existing canonical block:
 - `[STATUS]`
@@ -195,7 +195,7 @@ Also preserve:
 - one raw `@next-owner` at most
 - sanitized follow-up replies
 
-- [ ] **Step 3: Restrict external broadcasts to key workflow nodes**
+- [x] **Step 3: Restrict external broadcasts to key workflow nodes**
 
 Only emit channel-visible updates for:
 - `queued`
@@ -215,14 +215,14 @@ Only emit channel-visible updates for:
 - Modify: `tools/workflow-subagent-sessions.ts`
 - Modify: `tests/channel-project-bindings.test.mjs`
 
-- [ ] **Step 1: Preserve current project binding behavior**
+- [x] **Step 1: Preserve current project binding behavior**
 
 Do not break the existing:
 - channel -> project binding
 - session sample lookup
 - project-root resolution
 
-- [ ] **Step 2: Add runtime session binding metadata**
+- [x] **Step 2: Add runtime session binding metadata**
 
 Add binding helpers for:
 - project + role -> persistent workflow session
@@ -239,7 +239,7 @@ Also persist the normalized runtime binding fields alongside the existing channe
 - `lineageKey`
 - `workflowBindingMode`
 
-- [ ] **Step 3: Add degraded thread fallback**
+- [x] **Step 3: Add degraded thread fallback**
 
 If thread creation/binding fails:
 - continue in degraded channel mode when safe
@@ -259,7 +259,7 @@ Implementation note for this slice:
 - expose `recoverWorkflowRuntimeState` as the ordered sweep that the main service can call after restart
 - keep the helper self-contained so it can be reused by future sessions_spawn integration without duplicating recovery rules
 
-- [ ] **Step 1: Add startup/project recovery sweep**
+- [x] **Step 1: Add startup/project recovery sweep**
 
 On recovery, inspect:
 - runtime queue
@@ -268,7 +268,7 @@ On recovery, inspect:
 - broadcast outbox
 - current manifest owner/stage
 
-- [ ] **Step 2: Implement ordered repair**
+- [x] **Step 2: Implement ordered repair**
 
 Recovery order:
 1. unconsumed announce events
@@ -277,7 +277,7 @@ Recovery order:
 4. stale active sessions
 5. degraded fallback entries needing retry
 
-- [ ] **Step 3: Define `continue` as checkpoint resume, not blind rerun**
+- [x] **Step 3: Define `continue` as checkpoint resume, not blind rerun**
 
 Prefer:
 - reattaching to an active persistent session
@@ -292,7 +292,7 @@ Prefer:
 - Modify: `tools/register-workflow-service.ts`
 - Modify: `tests/workflow-runtime-orchestrator.test.mjs`
 
-- [ ] **Step 1: Implement lazy migration**
+- [x] **Step 1: Implement lazy migration**
 
 When an old project is touched by:
 - `workflow-status`
@@ -302,7 +302,7 @@ When an old project is touched by:
 
 initialize the new runtime files from current project state.
 
-- [ ] **Step 2: Add explicit migration action**
+- [x] **Step 2: Add explicit migration action**
 
 Expose a tool action such as:
 - `research_workflow.migrate_runtime_state`
@@ -312,7 +312,7 @@ Support:
 - dry run
 - diagnostics summary
 
-- [ ] **Step 3: Keep migration non-destructive**
+- [x] **Step 3: Keep migration non-destructive**
 
 Migration must:
 - never delete old files
@@ -328,7 +328,7 @@ Migration must:
 - Modify: `DOC/concepts/workflow-and-auto-iterator.md`
 - Modify: `DOC/reference/configuration.md`
 
-- [ ] **Step 1: Teach the prompt about the new control plane**
+- [x] **Step 1: Teach the prompt about the new control plane**
 
 Explain that:
 - `auto_iterator_tick` remains the decision boundary
@@ -336,7 +336,7 @@ Explain that:
 - child completions are announce-driven
 - non-owner guidance should prefer runtime/orchestrator handoff first, with `dispatch_task` / `sessions_send` / mailbox only as compatibility fallback
 
-- [ ] **Step 2: Preserve bounded communication and anti-spam rules**
+- [x] **Step 2: Preserve bounded communication and anti-spam rules**
 
 Keep:
 - mention normalization
@@ -345,7 +345,7 @@ Keep:
 
 while allowing coordinator-safe nested execution.
 
-- [ ] **Step 3: Add recovery-aware guidance**
+- [x] **Step 3: Add recovery-aware guidance**
 
 Tell agents:
 - do not re-run blindly after restart
@@ -359,15 +359,15 @@ Tell agents:
 - Modify: `tools/register-workflow-service.ts`
 - Modify: `DOC/reference/state-files.md`
 
-- [ ] **Step 1: Keep append-only event logging project-local**
+- [x] **Step 1: Keep append-only event logging project-local**
 
 Move workflow-critical event logs from `/tmp` into project-local `workflow-events.jsonl`.
 
-- [ ] **Step 2: Preserve temp traces only for debug convenience**
+- [x] **Step 2: Preserve temp traces only for debug convenience**
 
 Do not rely on temp logs for recovery.
 
-- [ ] **Step 3: Record fallback and degraded states explicitly**
+- [x] **Step 3: Record fallback and degraded states explicitly**
 
 Every fallback event must include:
 - source node
@@ -385,21 +385,21 @@ Every fallback event must include:
 - Test: `tests/channel-project-bindings.test.mjs`
 - Test: `tests/workflow-guard-boundaries.test.mjs`
 
-- [ ] **Step 1: Run targeted runtime rewrite tests**
+- [x] **Step 1: Run targeted runtime rewrite tests**
 
 Run: `node --test tests/workflow-runtime-orchestrator.test.mjs tests/workflow-service.test.mjs tests/stage-broadcast.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-guard-boundaries.test.mjs`
 Expected: PASS
 
-- [ ] **Step 2: Run the broader workflow regression suite**
+- [x] **Step 2: Run the broader workflow regression suite**
 
 Run: `node --test tests/workflow-prompt-ownership.test.mjs tests/workflow-commands.test.mjs tests/researcher-paper-ingestion-skills.test.mjs`
 Expected: PASS
 
-- [ ] **Step 3: Run the TypeScript build**
+- [x] **Step 3: Run the TypeScript build**
 
 Run: `npm run build`
 Expected: PASS
 
-- [ ] **Step 4: Run one old-project migration simulation**
+- [x] **Step 4: Run one old-project migration simulation**
 
 Create or reuse a fixture with only the legacy manifest/mailbox/binding files populated, then verify that migration initializes the new runtime state and can continue without rebuilding the project.

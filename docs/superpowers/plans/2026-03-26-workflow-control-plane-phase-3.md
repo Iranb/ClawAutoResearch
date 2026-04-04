@@ -1,5 +1,7 @@
 # Workflow Control Plane Phase 3 Implementation Plan
 
+> **Status:** COMPLETE
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the next approved workflow architecture slice by adding durable control-plane state for planner/orchestrator and write-package assembly, promoting `experiment_search` into a real stage gate, strengthening review into a richer issue-closure system, and upgrading focused prompt assembly plus prompt-trace metadata.
@@ -19,7 +21,7 @@
 - Modify: `tests/workflow-prompt-ownership.test.mjs`
 - Modify: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Add runtime-tool coverage for new control-plane states**
+- [x] **Step 1: Add runtime-tool coverage for new control-plane states**
 
 Write failing tests for:
 - `get_research_program` / `set_research_program`
@@ -28,7 +30,7 @@ Write failing tests for:
 
 Assert manifest persistence, trace events, and summary helpers.
 
-- [ ] **Step 2: Add planner/orchestrator contract regressions**
+- [x] **Step 2: Add planner/orchestrator contract regressions**
 
 Write failing tests showing `PLAN -> CODE` stays blocked unless:
 - `research_program` exists
@@ -36,7 +38,7 @@ Write failing tests showing `PLAN -> CODE` stays blocked unless:
 - each active track has experiment-stage coverage
 - each active track has baseline, ablation, stop rule, and rollback trigger coverage
 
-- [ ] **Step 3: Add experiment/write/review gate regressions**
+- [x] **Step 3: Add experiment/write/review gate regressions**
 
 Write failing tests showing:
 - `EXPERIMENT -> ANALYZE` stays blocked until `experiment_search` is ready for analysis
@@ -45,7 +47,7 @@ Write failing tests showing:
 - `REVIEW` / `SUBMIT` block when medium issues remain open without waiver
 - paper-surface and submission-simulation review artifacts are enforced
 
-- [ ] **Step 4: Add prompt-layer metadata regressions**
+- [x] **Step 4: Add prompt-layer metadata regressions**
 
 Write failing tests showing focused prompt assembly exposes:
 - a layered payload structure
@@ -58,18 +60,18 @@ Write failing tests showing focused prompt assembly exposes:
 - Modify: `tools/workflow-guard.ts`
 - Modify: `templates/PROJECT_MANIFEST.json`
 
-- [ ] **Step 1: Define new state types and defaults**
+- [x] **Step 1: Define new state types and defaults**
 
 Add normalized types and serializers for:
 - `ResearchProgramState`
 - `OrchestrationState`
 - `WritePackageState`
 
-- [ ] **Step 2: Implement getter and setter APIs**
+- [x] **Step 2: Implement getter and setter APIs**
 
 Add `getResearchProgramStateSummary`, `setResearchProgramState`, `getOrchestrationStateSummary`, `setOrchestrationState`, `getWritePackageStateSummary`, and `setWritePackageState`.
 
-- [ ] **Step 3: Mirror state into snapshot and status surfaces**
+- [x] **Step 3: Mirror state into snapshot and status surfaces**
 
 Populate concise summary fields in `WorkflowSnapshot` and `workflow-status`.
 
@@ -79,15 +81,15 @@ Populate concise summary fields in `WorkflowSnapshot` and `workflow-status`.
 - Modify: `tools/workflow-guard.ts`
 - Modify: `tests/auto-iterator.test.mjs`
 
-- [ ] **Step 1: Strengthen `plan` stage requirements**
+- [x] **Step 1: Strengthen `plan` stage requirements**
 
 Require machine-readable `research_program` semantics in addition to `PLAN.md`, `TODOS.md`, and `PLAN_AUDIT.md`.
 
-- [ ] **Step 2: Strengthen `experiment` stage requirements**
+- [x] **Step 2: Strengthen `experiment` stage requirements**
 
 Require `experiment_search` readiness before advancing to `analyze`.
 
-- [ ] **Step 3: Surface orchestration control-plane state**
+- [x] **Step 3: Surface orchestration control-plane state**
 
 Expose blocking category, next transition candidate, retry budget, rollback target, and resume cursor summaries.
 
@@ -98,15 +100,15 @@ Expose blocking category, next transition candidate, retry budget, rollback targ
 - Modify: `tests/writer-reviewer-runtime-state.test.mjs`
 - Modify: `tests/auto-iterator.test.mjs`
 
-- [ ] **Step 1: Require `write_package` for submit handoff**
+- [x] **Step 1: Require `write_package` for submit handoff**
 
 Block `WRITE -> SUBMIT` until `write_package.status = ready` and required package inputs are assembled.
 
-- [ ] **Step 2: Tighten citation and review issue policy**
+- [x] **Step 2: Tighten citation and review issue policy**
 
 Require citation verification before submit handoff and block on unresolved `medium` issues unless they are explicitly waived with a machine-readable waiver reason.
 
-- [ ] **Step 3: Add paper-surface and submission-simulation review requirements**
+- [x] **Step 3: Add paper-surface and submission-simulation review requirements**
 
 Make `SURFACE_REVIEW.json` and `SUBMISSION_SIMULATION_REVIEW.json` part of the review contract without introducing a separate stage.
 
@@ -118,7 +120,7 @@ Make `SURFACE_REVIEW.json` and `SUBMISSION_SIMULATION_REVIEW.json` part of the r
 - Modify: `tools/workflow-trace.ts`
 - Modify: `tests/workflow-prompt-ownership.test.mjs`
 
-- [ ] **Step 1: Add a layered prompt-assembly helper**
+- [x] **Step 1: Add a layered prompt-assembly helper**
 
 Build focused prompt output from:
 - stable policy
@@ -127,11 +129,11 @@ Build focused prompt output from:
 - supporting evidence
 - reflection delta
 
-- [ ] **Step 2: Emit prompt-trace metadata**
+- [x] **Step 2: Emit prompt-trace metadata**
 
 Record prompt-assembly metadata without storing the full prompt body.
 
-- [ ] **Step 3: Keep hook injection on the focused path**
+- [x] **Step 3: Keep hook injection on the focused path**
 
 Continue using focused prompts for writer/reviewer lanes, now backed by the layered builder.
 
@@ -144,12 +146,12 @@ Continue using focused prompts for writer/reviewer lanes, now backed by the laye
 - Test: `tests/auto-iterator.test.mjs`
 - Test: `tests/workflow-commands.test.mjs`
 
-- [ ] **Step 1: Run targeted test suites**
+- [x] **Step 1: Run targeted test suites**
 
 Run: `node --test tests/workflow-runtime-tools.test.mjs tests/writer-reviewer-runtime-state.test.mjs tests/workflow-prompt-ownership.test.mjs tests/auto-iterator.test.mjs tests/workflow-commands.test.mjs`
 Expected: PASS
 
-- [ ] **Step 2: Run the TypeScript build**
+- [x] **Step 2: Run the TypeScript build**
 
 Run: `npm run build`
 Expected: PASS

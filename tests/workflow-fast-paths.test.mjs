@@ -53,6 +53,40 @@ test.afterEach(async () => {
   await clearBackgroundWorkflowQueueForTests();
 });
 
+test("background queue refuses ephemeral fallback without project scope", async (t) => {
+  const previousQueuePath = process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+
+  delete process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+
+  try {
+    await assert.rejects(
+      () =>
+        enqueueQueuedBackgroundWorkflowRun({
+          source: "start_background_run",
+          ownerAgent: "researcher",
+          requesterSessionKey: "agent:researcher:discord:channel:test-room",
+          messageChannel: "discord",
+          kind: "resume_pipeline",
+          summary: "Queue a background resume run",
+          runPayload: {
+            message: "/resume-pipeline",
+            lane: "nested",
+            deliver: false,
+            idempotencyKey: null,
+            extraSystemPrompt: null,
+          },
+        }),
+      /project-scoped background queue path/i
+    );
+  } finally {
+    if (previousQueuePath) {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH = previousQueuePath;
+    } else {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+    }
+  }
+});
+
 test("ensureWorkflowProjectRoot creates a project from configured projectsRoot and topic", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

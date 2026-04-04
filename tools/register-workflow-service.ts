@@ -78,6 +78,8 @@ import {
   type AutoModeDiscussionResult,
 } from "./workflow-auto-discussion";
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
+import { asRecord, asString } from "./workflow-guard-core/coercion";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -99,8 +101,6 @@ type WorkflowCoordinatorDependencies = {
   getIdleResearchStateSummary: typeof getIdleResearchStateSummary;
   listChannelProjectBindingsForWorkflow: typeof listChannelProjectBindingsForWorkflow;
 };
-
-const EXPERIMENT_MONITOR_STAGE_COOLDOWN_MS = 60 * 1000;
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -273,15 +273,7 @@ type WorkflowCoordinatorVisibleStatusUpdate = {
 const DEFAULT_WORKFLOW_COORDINATOR_INTERVAL_MS = 120_000;
 const DEFAULT_WORKFLOW_COORDINATOR_MAX_PROJECTS = 3;
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+const readString = asString;
 
 function slugifyForIdempotency(value: string): string {
   return value.replace(/[^a-z0-9_.:-]+/gi, "-");
@@ -424,17 +416,6 @@ function resolveWorkflowRequesterBinding(params: {
     sessionKey: binding?.sessionKeySample ?? null,
     messageChannel: binding?.messageChannel ?? null,
   };
-}
-
-async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -1544,7 +1525,10 @@ export async function maybeLaunchAutoStageForProject(params: {
       const cooldownMs = Math.max(
         1,
         isExperimentMonitorCommand(action.command)
-          ? Math.floor(EXPERIMENT_MONITOR_STAGE_COOLDOWN_MS / 1000)
+          ? Math.floor(
+              (params.workflowPolicy.autoGate?.experimentMonitorCooldownMs ?? 5 * 60 * 1000) /
+                1000
+            )
           : params.workflowPolicy.agentContactCooldownSeconds
       ) * 1000;
       if (

@@ -558,7 +558,7 @@ Before leaving FRONTIER_MAPPING, Researcher should trigger Lobster handoff only 
 
 ### Stage 1 · IDEA
 **Owner:** Researcher  
-**Skills:** `/idea-phase` → `/research-ideation` → `/scientific-brainstorming` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
+**Skills:** `/idea-phase` → `/research-ideation` → IDEA-CATALYST sub-pipeline (`/idea-catalyst-decompose` → `/idea-catalyst-translate` → `/idea-catalyst-scout` → `/idea-catalyst-gatekeeper` → `/idea-catalyst-integrator` → `/idea-catalyst-judge`) → `/scientific-brainstorming` → `/innovation-reflection` (when due) → `/idea-generator` → `/novelty-check` → `/idea-tournament`  
 **Inputs:** Research domain or topic (from user, or from memory), `{PROJ}/researcher/FRONTIER_REPORT.md`
 **Outputs:**
 - `{PROJ}/researcher/IDEA_REPORT.md` — top-ranked idea with novelty assessment
@@ -585,19 +585,26 @@ Procedure:
      - one falsifier pilot
   7. Run attacker / novelty pass on each track
   8. Use a converge pass on the shortlist before locking the portfolio
-  9. If ≥2 tracks survive: run `/idea-tournament` with tree expansion, propose/review/refine, equal-weight Elo-style ranking, and top-3 summary
-  10. Select the portfolio:
+  9. If interdisciplinary transfer is central to the candidate set, run IDEA-CATALYST as a formal IDEA sub-pipeline:
+     - `/idea-catalyst-decompose`
+     - `/idea-catalyst-translate`
+     - `/idea-catalyst-scout`
+     - `/idea-catalyst-gatekeeper`
+     - if the gate passes: `/idea-catalyst-integrator` then `/idea-catalyst-judge`
+     - if the gate emits a requisition: feed it back into ingestion / graph refresh before resuming IDEA
+  10. If ≥2 tracks survive: run `/idea-tournament` with tree expansion, propose/review/refine, equal-weight Elo-style ranking, and top-3 summary
+  11. Select the portfolio:
      - max 2 active tracks
      - max 1 parked track
      - all others merged or killed
-  11. Update {PROJ}/TRACK_REGISTRY.json with explicit decisions, rationale, graph grounding, and which reflection lesson influenced each surviving track
-  12. Write IDEA_AUDIT.md covering duplicate risk, closest prior work, evidence pointers, failure signatures, retry conditions, and experiment-informed reflection takeaways for each surviving track
-  13. Update {PROJ}/PROJECT_MANIFEST.json with `active_track_ids`, `parked_track_ids`, `audit.idea_audit_path`, and `current_micro_stage: "portfolio_selected"`
-  14. Select the current leading track → write IDEA_REPORT.md
-  15. Run `research_workflow.materialize_ideation_contract` so workflow-owned code scaffolds GRAPH_IDEATION_PACKET, novelty tree, challenge-insight tree, solution check, scoreboard, top-3 summary, and research proposal from the current graph + brainstorm bundle
-  16. Sync `ideation_contract` in PROJECT_MANIFEST.json through workflow tools so IDEA becomes a durable contract, not just a report
-  17. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
-  18. → POST GATE-1
+  12. Update {PROJ}/TRACK_REGISTRY.json with explicit decisions, rationale, graph grounding, and which reflection lesson influenced each surviving track
+  13. Write IDEA_AUDIT.md covering duplicate risk, closest prior work, evidence pointers, failure signatures, retry conditions, and experiment-informed reflection takeaways for each surviving track
+  14. Update {PROJ}/PROJECT_MANIFEST.json with `active_track_ids`, `parked_track_ids`, `audit.idea_audit_path`, and `current_micro_stage: "portfolio_selected"`
+  15. Select the current leading track → write IDEA_REPORT.md
+  16. Run `research_workflow.materialize_ideation_contract` so workflow-owned code scaffolds GRAPH_IDEATION_PACKET, novelty tree, challenge-insight tree, solution check, scoreboard, top-3 summary, and research proposal from the current graph + brainstorm bundle
+  17. Sync `ideation_contract` in PROJECT_MANIFEST.json through workflow tools so IDEA becomes a durable contract, not just a report
+  18. If the literature set changed materially during ideation: refresh GRAPH_BUILD + FRONTIER_MAPPING before locking the idea
+  19. → POST GATE-1
 ```
 
 Before leaving IDEA, Researcher should trigger Lobster handoff only if `IDEA_REPORT.md`, `IDEA_AUDIT.md`, the required reasoning packets, and the narrowed active portfolio already exist, and there is no pending novelty / attacker / reflection retry.
@@ -1185,12 +1192,12 @@ LOOP FOREVER (when AUTO_PROCEED=true):
 | SETUP | Researcher | BOOTSTRAP.md |
 | GRAPH_BUILD | Researcher | graph-build, zotero-project-library |
 | FRONTIER_MAPPING | Researcher | frontier-mapping |
-| IDEA | Researcher | idea-phase, research-ideation, scientific-brainstorming, idea-generator, novelty-check, idea-tournament, resume-pipeline |
+| IDEA | Researcher | idea-phase, research-ideation, idea-catalyst-decompose, idea-catalyst-translate, idea-catalyst-scout, idea-catalyst-gatekeeper, idea-catalyst-integrator, scientific-brainstorming, idea-generator, novelty-check, idea-tournament, resume-pipeline |
 | PLAN | Orchestrator | plan-research |
 | CODE | Coder | implement-experiment, scientific-visualization, github-download, run-experiment, resume-pipeline |
 | EXPERIMENT | Researcher | experiment-phase, parallel-experiments, monitor-experiment, resume-pipeline |
 | ANALYZE | Analyzer | analyze-results, scientific-figures, resume-pipeline |
-| REVIEW | Reviewer | review-phase, scientific-critical-thinking, scholar-evaluation, peer-review, evidence-grading, resume-pipeline |
+| REVIEW | Reviewer | review-phase, scientific-critical-thinking, scholar-evaluation, peer-review, paper-review, idea-catalyst-judge, evidence-grading, resume-pipeline |
 | WRITE | Academic Writer | paper-plan, citation-management, venue-templates, paper-write, paper-compile, resume-pipeline |
 | CROSS-REVIEW | Cross-Reviewer | resume-pipeline (stateless) + sessions_send |
 | SUBMIT | Reviewer | paperreview-submit, review-response |

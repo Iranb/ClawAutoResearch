@@ -39,6 +39,7 @@ export type WorkflowAutoGateConfig = {
   maxReviewRounds: number;
   maxMitigationRounds: number;
   reviewTimeoutMinutes: number;
+  experimentMonitorCooldownMs: number;
   quorum: number;
   thresholds: {
     code_to_experiment: WorkflowAutoGateThreshold;
@@ -61,6 +62,7 @@ export const DEFAULT_WORKFLOW_AUTO_GATE: WorkflowAutoGateConfig = {
   maxReviewRounds: 2,
   maxMitigationRounds: 2,
   reviewTimeoutMinutes: 20,
+  experimentMonitorCooldownMs: 5 * 60 * 1000,
   quorum: 2,
   thresholds: {
     code_to_experiment: {
@@ -147,6 +149,11 @@ export function normalizeWorkflowAutoGateConfig(value: unknown): WorkflowAutoGat
       Number.isFinite(record.reviewTimeoutMinutes)
         ? Math.max(1, Math.floor(record.reviewTimeoutMinutes))
         : DEFAULT_WORKFLOW_AUTO_GATE.reviewTimeoutMinutes,
+    experimentMonitorCooldownMs:
+      typeof record.experimentMonitorCooldownMs === "number" &&
+      Number.isFinite(record.experimentMonitorCooldownMs)
+        ? Math.max(1_000, Math.floor(record.experimentMonitorCooldownMs))
+        : DEFAULT_WORKFLOW_AUTO_GATE.experimentMonitorCooldownMs,
     quorum:
       typeof record.quorum === "number" && Number.isFinite(record.quorum)
         ? Math.max(1, Math.floor(record.quorum))

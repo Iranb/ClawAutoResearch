@@ -88,6 +88,7 @@ export type BuildDynamicTasksDeps = {
   asRecord: (value: unknown) => Record<string, unknown> | null;
   asString: (value: unknown) => string | null | undefined;
   normalizePaperIngestionState: (value: unknown) => PaperIngestionState;
+  normalizeIdeaCatalystState: (value: unknown) => Record<string, unknown>;
   normalizeGraphPresenceStatus: (value: unknown) => string | null;
   summarizeGraphPresenceMissing: (value: Record<string, unknown> | null) => string | null;
   buildGraphImportRepairGuidance: (sharedCorpus: string | null | undefined) => string;

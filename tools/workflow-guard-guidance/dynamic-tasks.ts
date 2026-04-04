@@ -1,3 +1,4 @@
+import { buildIdeaCatalystGuidance } from "./idea-catalyst-guidance";
 import { buildPapernexusGuidance } from "./papernexus-guidance";
 import { buildWritingGuidance } from "./writing-guidance";
 import type {
@@ -27,6 +28,13 @@ export function buildDynamicTasksImpl(
     tasks.unshift(task);
   }
   for (const task of papernexusGuidance.append) {
+    tasks.push(task);
+  }
+  const ideaCatalystGuidance = buildIdeaCatalystGuidance(params, deps);
+  for (const task of ideaCatalystGuidance.prepend) {
+    tasks.unshift(task);
+  }
+  for (const task of ideaCatalystGuidance.append) {
     tasks.push(task);
   }
 

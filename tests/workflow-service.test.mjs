@@ -648,7 +648,98 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
   assert.match(runs[0].message, /Immediate command: \/run-experiments/);
 });
 
-test("maybeLaunchAutoStageForProject uses a short cooldown for experiment monitor dispatches", async (t) => {
+test("maybeLaunchAutoStageForProject honors configured experiment monitor cooldowns", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const monitorCommand =
+    "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis.";
+  const launchedStageKeys = new Map([
+    [
+      projectRoot,
+      {
+        key: `${projectRoot}::experiment::researcher::${monitorCommand}`,
+        launchedAt: Date.now() - 61_000,
+      },
+    ],
+  ]);
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `monitor-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        experimentMonitorCooldownMs: 60 * 1000,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Monitor active remote experiments and reconcile finished runs.",
+          command: monitorCommand,
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys,
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(launch.stage, "experiment");
+  assert.equal(launch.owner, "researcher");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message ?? "", /\/monitor-experiment/i);
+});
+
+test("maybeLaunchAutoStageForProject defaults experiment monitor cooldown to five minutes", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
   const runs = [];
@@ -728,12 +819,9 @@ test("maybeLaunchAutoStageForProject uses a short cooldown for experiment monito
     },
   });
 
-  assert.equal(launch.launched, true);
-  assert.equal(launch.reason, "started");
-  assert.equal(launch.stage, "experiment");
-  assert.equal(launch.owner, "researcher");
-  assert.equal(runs.length, 1);
-  assert.match(runs[0].message ?? "", /\/monitor-experiment/i);
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "already_launched");
+  assert.equal(runs.length, 0);
 });
 
 test("maybeLaunchAutoStageForProject shares the researcher service session pool across projects", async (t) => {

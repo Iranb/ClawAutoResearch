@@ -22,6 +22,7 @@ import {
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
   materializeIdeationContract,
+  materializeLiteratureDiscoveryPacket,
   materializePaperStoryState,
   queuePaperIngestionRequest,
   getPaperQcStateSummary,
@@ -72,6 +73,13 @@ import {
   upsertExperimentLedgerEntry,
   upsertTheoryProofPacket,
 } from "./workflow-guard";
+import {
+  getIdeaCatalystStateSummary,
+  setIdeaCatalystState,
+} from "./idea-catalyst/state";
+import { materializeIdeaCatalystState } from "./idea-catalyst/materializers";
+import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
+import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
 import {
   dispatchWorkflowTaskToAgent,
   type DispatchableWorkflowRole,
@@ -129,12 +137,17 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "start_background_run",
   "run_papernexus_wrapper",
   "queue_paper_ingestion",
+  "queue_idea_catalyst_requisition",
+  "queue_literature_discovery_requisition",
   "migrate_runtime_state",
   "set_gate_state",
   "set_paper_ingestion",
   "materialize_ideation_contract",
+  "materialize_literature_discovery_packet",
   "materialize_paper_story_state",
+  "materialize_idea_catalyst_state",
   "set_ideation_contract",
+  "set_idea_catalyst_state",
   "set_paper_story_state",
   "materialize_review_pressure_packet",
   "set_review_pressure_packet",
@@ -156,6 +169,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
   queue_paper_ingestion: "queuePaperIngestionRequest",
+  queue_idea_catalyst_requisition: "queueIdeaCatalystRequisition",
+  queue_literature_discovery_requisition: "queueLiteratureDiscoveryRequisition",
   migrate_runtime_state: "migrateWorkflowRuntimeState",
   get_idle_research: "getIdleResearchStateSummary",
   set_idle_research: "setIdleResearchState",
@@ -166,9 +181,13 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_brainstorm_cycle: "setBrainstormCycleState",
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
+  materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
+  materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   materialize_paper_story_state: "materializePaperStoryState",
   get_ideation_contract: "getIdeationContractStateSummary",
+  get_idea_catalyst_state: "getIdeaCatalystStateSummary",
   set_ideation_contract: "setIdeationContractState",
+  set_idea_catalyst_state: "setIdeaCatalystState",
   get_research_program: "getResearchProgramStateSummary",
   set_research_program: "setResearchProgramState",
   get_orchestration_state: "getOrchestrationStateSummary",
@@ -451,6 +470,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "start_background_run",
               "run_papernexus_wrapper",
               "queue_paper_ingestion",
+              "queue_literature_discovery_requisition",
               "migrate_runtime_state",
               "get_idle_research",
               "set_idle_research",
@@ -461,6 +481,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_brainstorm_cycle",
               "run_brainstorm_cycle",
               "materialize_ideation_contract",
+              "materialize_literature_discovery_packet",
               "materialize_paper_story_state",
               "get_research_program",
               "set_research_program",
@@ -539,6 +560,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          literatureDiscovery: {
+            type: "object",
+            additionalProperties: true,
+          },
           runtimeState: {
             type: "object",
             additionalProperties: true,
@@ -564,6 +589,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           ideationMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          literatureDiscoveryMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -1129,6 +1158,49 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 )
               );
             }
+            case "queue_idea_catalyst_requisition": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await queueIdeaCatalystRequisition({
+                projectRoot: resolvedProjectRoot,
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "queue_literature_discovery_requisition": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const literatureDiscovery = requireObject<Record<string, unknown>>(
+                params.literatureDiscovery ?? {},
+                "literatureDiscovery"
+              );
+              const result = await queueLiteratureDiscoveryRequisition({
+                projectRoot: resolvedProjectRoot,
+                packetPath:
+                  readString(
+                    literatureDiscovery.packetPath ?? literatureDiscovery.packet_path
+                  ) ??
+                  "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+                triggerKind:
+                  readString(
+                    literatureDiscovery.triggerKind ?? literatureDiscovery.trigger_kind
+                  ) ?? "literature_discovery",
+                originStage:
+                  readString(
+                    literatureDiscovery.originStage ?? literatureDiscovery.origin_stage
+                  ) ?? snapshot.currentStage,
+                summary: readString(literatureDiscovery.summary),
+                sharedCorpus:
+                  readString(
+                    literatureDiscovery.sharedCorpus ?? literatureDiscovery.shared_corpus
+                  ) ?? null,
+                requestIdPrefix:
+                  readString(
+                    literatureDiscovery.requestIdPrefix ??
+                      literatureDiscovery.request_id_prefix
+                  ) ?? null,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "migrate_runtime_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const runtimeState = asObject(params.runtimeState);
@@ -1390,6 +1462,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_idea_catalyst_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getIdeaCatalystStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "materialize_ideation_contract": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await materializeIdeationContract({
@@ -1403,6 +1482,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "materialize_idea_catalyst_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeIdeaCatalystState({
+                projectRoot: resolvedProjectRoot,
+                ideaCatalystMaterialization: requireObject(
+                  params.ideaCatalystMaterialization ?? {},
+                  "ideaCatalystMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "set_ideation_contract": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await setIdeationContractState({
@@ -1410,6 +1502,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ideationContract: requireObject(
                   params.ideationContract,
                   "ideationContract"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_idea_catalyst_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setIdeaCatalystState({
+                projectRoot: resolvedProjectRoot,
+                ideaCatalyst: requireObject(
+                  params.ideaCatalyst,
+                  "ideaCatalyst"
                 ),
               });
               return textResponse(JSON.stringify(result, null, 2));
@@ -1471,6 +1574,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "materialize_literature_discovery_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeLiteratureDiscoveryPacket({
+                projectRoot: resolvedProjectRoot,
+                literatureDiscoveryMaterialization: requireObject(
+                  params.literatureDiscoveryMaterialization ?? {},
+                  "literatureDiscoveryMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "materialize_paper_story_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

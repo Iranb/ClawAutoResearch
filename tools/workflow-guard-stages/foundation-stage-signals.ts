@@ -15,6 +15,8 @@ export interface FoundationStageDeps {
   }) => string[];
   asRecord: (value: unknown) => Record<string, unknown> | null;
   normalizeGraphPresenceStatus: (value: unknown) => string | null;
+  normalizePaperIngestionState: (value: unknown) => any;
+  hasActiveWorkflowOwnedPaperUpload: (state: any) => boolean;
   summarizeGraphPresenceMissing: (
     paperIngestion: Record<string, unknown> | null
   ) => string | null;
@@ -81,6 +83,12 @@ export async function collectGraphBuildStageMissingSignals(
   }
 
   const paperIngestion = deps.asRecord(ctx.manifest?.paper_ingestion);
+  const paperIngestionState = deps.normalizePaperIngestionState(paperIngestion);
+  if (deps.hasActiveWorkflowOwnedPaperUpload(paperIngestionState)) {
+    missing.push(
+      "workflow-owned PaperNexus ingestion is still active; wait for upload / graph sync completion before frontier mapping"
+    );
+  }
   const graphPresenceStatus = deps.normalizeGraphPresenceStatus(
     paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
   );
@@ -93,13 +101,6 @@ export async function collectGraphBuildStageMissingSignals(
       missing.push(`PaperNexus corpus still misses canonical papers: ${missingSummary}`);
     }
   }
-
-  missing.push(
-    ...(await deps.getBrainstormCycleMissingSignals({
-      projectRoot: ctx.projectRoot,
-      manifest: ctx.manifest,
-    }))
-  );
   return missing;
 }
 
@@ -129,7 +130,8 @@ export async function collectFrontierMappingStageMissingSignals(
   const legacySubgraphsReady = await deps.isNonEmptyDirectory(
     path.join(ctx.projectRoot, "graph", "subgraphs")
   );
-  if (!directFrontiersReady && !legacySubgraphsReady) {
+  const frontierPackReady = directFrontiersReady || legacySubgraphsReady;
+  if (!frontierPackReady) {
     missing.push(
       "{PROJ}/graph/LIMITATION_FRONTIER.md, CONTRADICTION_FRONTIER.md, TRANSFER_FRONTIER.md, COMPOSITION_FRONTIER.md, ANCHOR_INDEX.md (or legacy {PROJ}/graph/subgraphs/)"
     );
@@ -137,7 +139,8 @@ export async function collectFrontierMappingStageMissingSignals(
 
   if (
     deps.normalizeStage(ctx.manifest?.current_stage) === "frontier_mapping" &&
-    deps.normalizeStage(ctx.manifest?.current_micro_stage) !== "frontiers_packaged"
+    deps.normalizeStage(ctx.manifest?.current_micro_stage) !== "frontiers_packaged" &&
+    !frontierPackReady
   ) {
     missing.push("PROJECT_MANIFEST.json.current_micro_stage = frontiers_packaged");
   }
