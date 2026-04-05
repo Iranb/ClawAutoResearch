@@ -218,3 +218,6 @@ export async function materializeLiteratureDiscoveryPacketImpl(params: {
     packet,
   };
 }
+
+export const materializeLiteratureDiscoveryPacket =
+  materializeLiteratureDiscoveryPacketImpl;

@@ -153,6 +153,7 @@ export async function materializePaperStoryStateImpl(
     decompositionText,
     storylineBriefRecord,
     graphIdeationPacketRecord,
+    graphStorylinePacketRecord,
     ideaFragmentsRecord,
     rankedFragmentsRecord,
     claimEvidenceMatrixText,
@@ -170,6 +171,9 @@ export async function materializePaperStoryStateImpl(
       resolveProjectArtifactPath(projectRoot, ideationState.graphIdeationPacketPath) ?? ""
     ),
     readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "researcher", "papernexus", "GRAPH_STORYLINE_PACKET.json")
+    ),
+    readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, ideaCatalystState.ideaFragmentsPath) ?? ""
     ),
     readJsonIfExists<Record<string, unknown>>(
@@ -180,10 +184,11 @@ export async function materializePaperStoryStateImpl(
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.unsupportedClaimsPath)),
   ]);
 
-  const storylineBrief = asRecord(storylineBriefRecord);
-  const graphPacket = asRecord(graphIdeationPacketRecord);
-  const ideaFragmentsPacket = asRecord(ideaFragmentsRecord);
-  const rankedFragmentsPacket = asRecord(rankedFragmentsRecord);
+  const storylineBrief = asRecord(storylineBriefRecord) ?? {};
+  const graphPacket = asRecord(graphIdeationPacketRecord) ?? {};
+  const graphStorylinePacket = asRecord(graphStorylinePacketRecord) ?? {};
+  const ideaFragmentsPacket = asRecord(ideaFragmentsRecord) ?? {};
+  const rankedFragmentsPacket = asRecord(rankedFragmentsRecord) ?? {};
   const claimSupport = deps.summarizeClaimSupport({
     claimEvidenceMatrixRaw: claimEvidenceMatrixText,
     unsupportedClaimsRaw: unsupportedClaimsText,
@@ -194,14 +199,17 @@ export async function materializePaperStoryStateImpl(
     .slice(0, 4);
 
   const taskSummary =
+    pickString(graphStorylinePacket, ["task_summary", "taskSummary"]) ??
     researchProgram.goal ??
     ideationState.longTermGoal ??
     "Deliver a research narrative that stays grounded in explicit graph evidence.";
   const challengeStatement =
+    pickString(graphStorylinePacket, ["challenge_statement", "challengeStatement"]) ??
     researchProgram.problemStatement ??
     ideationState.problemScope ??
     "Current drafts lose fine-grained support as the narrative widens.";
   const insightSummary =
+    pickString(graphStorylinePacket, ["insight_summary", "insightSummary"]) ??
     (selectedTrack ? pickString(selectedTrack, ["hypothesis"]) : null) ??
     (selectedProgramTrack ? pickString(selectedProgramTrack, ["hypothesis"]) : null) ??
     (selectedTrack ? pickString(selectedTrack, ["novelty_basis"]) : null) ??
@@ -209,6 +217,13 @@ export async function materializePaperStoryStateImpl(
     (storylineBrief ? pickString(storylineBrief, ["thesis"]) : null) ??
     "Use graph-grounded routing to keep claims aligned with explicit support packets.";
   const contributionBullets = uniqueStrings([
+    ...((Array.isArray(
+      graphStorylinePacket?.contribution_bullets ?? graphStorylinePacket?.contributionBullets
+    )
+      ? (graphStorylinePacket?.contribution_bullets ?? graphStorylinePacket?.contributionBullets)
+      : []) as unknown[])
+      .map((entry) => pickString({ value: entry }, ["value"]))
+      .filter((entry): entry is string => Boolean(entry)),
     "Graph-grounded routing turns evidence links into a controllable story-planning signal.",
     "The method preserves support precision without abandoning clarity-oriented structure.",
     "The workflow keeps claim, experiment, and reviewer pressure aligned around one direction.",
@@ -220,6 +235,13 @@ export async function materializePaperStoryStateImpl(
     }),
   ]).slice(0, 4);
   const advantageBullets = uniqueStrings([
+    ...((Array.isArray(
+      graphStorylinePacket?.advantage_bullets ?? graphStorylinePacket?.advantageBullets
+    )
+      ? (graphStorylinePacket?.advantage_bullets ?? graphStorylinePacket?.advantageBullets)
+      : []) as unknown[])
+      .map((entry) => pickString({ value: entry }, ["value"]))
+      .filter((entry): entry is string => Boolean(entry)),
     `Improves the primary metric: ${researchProgram.primaryMetric ?? "primary_metric"}.`,
     `Stays comparable to the baseline: ${researchProgram.baselineReference ?? "named baseline"}.`,
     "Makes each claim easier to defend with explicit graph-backed support packets.",
@@ -228,6 +250,16 @@ export async function materializePaperStoryStateImpl(
       includeSectionsContaining: ["expected", "advantage"],
     }),
   ]).slice(0, 4);
+  const packetLimitationFallbackSignals = ((Array.isArray(
+    graphStorylinePacket?.limitation_boundaries ?? graphStorylinePacket?.limitationBoundaries
+  )
+    ? (graphStorylinePacket?.limitation_boundaries ??
+        graphStorylinePacket?.limitationBoundaries)
+    : []) as unknown[])
+    .map((entry) => pickString({ value: entry }, ["value"]))
+    .filter((entry): entry is string => Boolean(entry))
+    .map((line) => `If unresolved evidence persists, downgrade around: ${line}`)
+    .slice(0, 3);
 
   const storySpine = `# Story Spine
 
@@ -291,11 +323,41 @@ ${deps.quoteMarkdownText(
    - Evidence-backed narrative bundle
 4. Evaluation overlay
    - Primary metric: ${deps.quoteMarkdownText(researchProgram.primaryMetric)}
+
+## Graph Storyline Hooks
+${deps.renderMarkdownBulletList(
+  uniqueStrings(
+    ((Array.isArray(
+      graphStorylinePacket?.related_work_tension ?? graphStorylinePacket?.relatedWorkTension
+    )
+      ? (graphStorylinePacket?.related_work_tension ?? graphStorylinePacket?.relatedWorkTension)
+      : []) as unknown[])
+      .map((entry) => pickString({ value: entry }, ["value"]))
+      .filter((entry): entry is string => Boolean(entry))
+  ).slice(0, 3)
+)}
 `;
 
+  const packetModuleMotivations: Array<Record<string, unknown>> = Array.isArray(
+    graphStorylinePacket.module_motivations ?? graphStorylinePacket.moduleMotivations
+  )
+    ? ((graphStorylinePacket.module_motivations ?? graphStorylinePacket.moduleMotivations) as unknown[])
+        .map((entry: unknown) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
   const moduleMotivationMap = `# Module Motivation Map
 
-## Module 1: Graph-grounded support router
+${packetModuleMotivations.length > 0
+    ? packetModuleMotivations
+        .map((entry: Record<string, unknown>, index: number) => {
+          const moduleName = pickString(entry, ["module"]) ?? `module-${index + 1}`;
+          return `## Module ${index + 1}: ${moduleName}
+- Design: ${pickString(entry, ["design"]) ?? "pending"}
+- Motivation: ${pickString(entry, ["motivation"]) ?? "pending"}
+- Advantage: ${pickString(entry, ["advantage"]) ?? "pending"}`;
+        })
+        .join("\n\n")
+    : `## Module 1: Graph-grounded support router
 - Design: route each claim through graph evidence packets before surface drafting
 - Motivation: reduce support attribution drift as the story widens
 - Advantage: preserve support precision while keeping a readable narrative
@@ -303,7 +365,7 @@ ${deps.quoteMarkdownText(
 ## Module 2: Claim-to-experiment alignment layer
 - Design: bind each research claim to a concrete validation step
 - Motivation: prevent unsupported or over-broad claims from entering the draft
-- Advantage: makes reviewer pressure explicit before writing
+- Advantage: makes reviewer pressure explicit before writing`}
 `;
 
   const claimToExperimentMap = `# Claim To Experiment Map
@@ -380,7 +442,9 @@ ${deps.renderMarkdownBulletList(
     ? unsupportedClaimSignals.map(
         (line) => `If unresolved evidence persists, downgrade around: ${line}`
       )
-    : ["If unresolved evidence persists, tighten scope before escalating any headline claim."]
+    : packetLimitationFallbackSignals.length > 0
+      ? packetLimitationFallbackSignals
+      : ["If unresolved evidence persists, tighten scope before escalating any headline claim."]
 )}
 `;
 

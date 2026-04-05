@@ -44,6 +44,7 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/academic_writer/PREWRITE_REJECTION_SIMULATION.md`
 - `{PROJ}/academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md`
 - `{PROJ}/academic_writer/FIGURE_ANCHOR_PLAN.md`
+- `{PROJ}/academic_writer/VENUE_ROUTING_PLAN.md`
 - `{PROJ}/reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
 - `{PROJ}/reviewer/story-pressure/NOVELTY_ATTACK.md`
 - `{PROJ}/reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md`
@@ -120,6 +121,7 @@ Before writing full prose, treat the durable story contract as authoritative:
 - `FALLBACK_ACTIVATION.json` tells you whether the main story is still active or whether fallback mode is mandatory
 - `PAPER_REVISION_STATE.json` defines which revision pass is active
 - `PREWRITE_REJECTION_SIMULATION.md`, `CONTRIBUTION_TO_STORY_BRIDGE.md`, and `FIGURE_ANCHOR_PLAN.md` define the story-first, figure-first, and skeptic-first constraints for the current draft
+- `VENUE_ROUTING_PLAN.md` defines whether the draft should stay venue-facing or switch to a narrower risk-limited route
 
 If the story packet is missing or stale relative to the current plan / ideation basis, regenerate it through workflow first:
 

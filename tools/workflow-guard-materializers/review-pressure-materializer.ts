@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { asRecord } from "../workflow-guard-core/coercion";
-import { readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { readJsonIfExists, readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
@@ -89,6 +89,8 @@ export async function materializeReviewPressurePacketImpl(
     fallbackNarrativeText,
     rejectionRiskText,
     proposalText,
+    graphStorylinePacketRaw,
+    challengeInsightPacketRaw,
   ] = await Promise.all([
     readTextIfExists(resolveProjectArtifactPath(projectRoot, paperStoryState.storySpinePath)),
     readTextIfExists(
@@ -101,7 +103,33 @@ export async function materializeReviewPressurePacketImpl(
       resolveProjectArtifactPath(projectRoot, paperStoryState.rejectionRiskTablePath)
     ),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, ideationState.researchProposalPath)),
+    readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "researcher", "papernexus", "GRAPH_STORYLINE_PACKET.json")
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "researcher", "papernexus", "CHALLENGE_INSIGHT_PACKET.json")
+    ),
   ]);
+  const graphStorylinePacket = asRecord(graphStorylinePacketRaw) ?? {};
+  const challengeInsightPacket = asRecord(challengeInsightPacketRaw) ?? {};
+  const limitationBoundarySource = graphStorylinePacket.limitation_boundaries ?? graphStorylinePacket.limitationBoundaries;
+  const relatedWorkTensionSource = graphStorylinePacket.related_work_tension ?? graphStorylinePacket.relatedWorkTension;
+  const challengeClusterSource = challengeInsightPacket.challenge_clusters ?? challengeInsightPacket.challengeClusters;
+  const limitationBoundaries = Array.isArray(limitationBoundarySource)
+    ? (limitationBoundarySource as unknown[])
+        .map((entry: unknown) => String(entry ?? "").trim())
+        .filter(Boolean)
+    : [];
+  const relatedWorkTensions = Array.isArray(relatedWorkTensionSource)
+    ? (relatedWorkTensionSource as unknown[])
+        .map((entry: unknown) => String(entry ?? "").trim())
+        .filter(Boolean)
+    : [];
+  const challengeClusters = Array.isArray(challengeClusterSource)
+    ? (challengeClusterSource as unknown[])
+        .map((entry: unknown) => String(entry ?? "").trim())
+        .filter(Boolean)
+    : [];
 
   const rejectFirstReview = `# Reject First Review
 
@@ -110,6 +138,9 @@ ${deps.renderMarkdownBulletList([
   `The gain over ${researchProgram.baselineReference ?? "the baseline"} may be too small or too narrow.`,
   "The story may sound cleaner than the empirical evidence can support.",
   "The claimed novelty may overlap with already occupied solution zones.",
+  ...challengeClusters.slice(0, 2).map(
+    (cluster: string) => `The challenge cluster "${cluster}" may still look under-resolved.`
+  ),
 ])}
 
 ## Immediate defenses
@@ -130,6 +161,7 @@ ${deps.renderMarkdownBulletList([
 - Defense: The story contract only survives if the router and claim map remain necessary under ablation.
 - Proposal pressure points:
 ${deps.renderMarkdownBulletList(deps.collectMarkdownSignalLines(proposalText).slice(0, 3))}
+${relatedWorkTensions.length > 0 ? `- Related-work tensions:\n${deps.renderMarkdownBulletList(relatedWorkTensions.slice(0, 3))}` : ""}
 `;
 
   const unsupportedClaimAudit = `# Unsupported Claim Audit
@@ -157,6 +189,9 @@ ${deps.renderMarkdownBulletList(deps.collectMarkdownSignalLines(proposalText).sl
    - Claim-to-experiment alignment constrains the draft to what can be verified.
 5. Reviewer risk
    - Overclaiming beyond the measured routing delta.
+   - ${deps.quoteMarkdownText(
+       limitationBoundaries[0] ?? "Keep the limitation boundary explicit when moving from insight to contribution."
+     )}
 `;
 
   const figureTableQc = `# Figure Table QC
@@ -174,6 +209,7 @@ ${deps.renderMarkdownBulletList([
   "The current story only defends the routing delta, not a universal writing agent improvement.",
   "Empirical gains must stay tied to the unchanged baseline protocol.",
   "Fallback narrative should be preferred whenever novelty overlap becomes the main review risk.",
+  ...limitationBoundaries.slice(0, 3),
   ...deps.collectMarkdownSignalLines(claimMapText).slice(0, 2),
   ...deps.collectMarkdownSignalLines(fallbackNarrativeText).slice(0, 1),
   ...deps.collectMarkdownSignalLines(rejectionRiskText).slice(0, 3),

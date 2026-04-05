@@ -148,6 +148,14 @@ export async function materializeIdeaCatalystState(params: {
     projectRoot,
     ideationContract.graphIdeationPacketPath
   );
+  const mechanismBridgePacketPath = resolveProjectArtifactPath(
+    projectRoot,
+    "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json"
+  );
+  const challengeInsightPacketPath = resolveProjectArtifactPath(
+    projectRoot,
+    "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json"
+  );
   const topicSummaryPath = resolveProjectArtifactPath(
     projectRoot,
     ideationContract.graphBasisPaths.topicSummaryPath
@@ -161,17 +169,68 @@ export async function materializeIdeaCatalystState(params: {
     ideationContract.problemDecompositionPath
   );
 
-  const [graphPacket, topicSummary, candidatePool, problemDecompositionText] =
+  const [
+    graphPacket,
+    mechanismBridgePacket,
+    challengeInsightPacket,
+    topicSummary,
+    candidatePool,
+    problemDecompositionText,
+  ] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(graphPacketPath ?? ""),
+      readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath ?? ""),
+      readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(topicSummaryPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(candidatePoolPath ?? ""),
       readTextIfExists(problemDecompositionPath),
     ]);
 
+  const mergedGraphPacket: Record<string, unknown> = {
+    ...(graphPacket ?? {}),
+    ...(challengeInsightPacket ?? {}),
+    ...(mechanismBridgePacket ?? {}),
+    challenge_clusters:
+      challengeInsightPacket?.challenge_clusters ??
+      challengeInsightPacket?.challengeClusters ??
+      graphPacket?.challenge_clusters ??
+      graphPacket?.challengeClusters,
+    candidate_domains:
+      mechanismBridgePacket?.candidate_domains ??
+      mechanismBridgePacket?.candidateDomains ??
+      graphPacket?.candidate_domains ??
+      graphPacket?.candidateDomains,
+    selected_domains:
+      mechanismBridgePacket?.selected_domains ??
+      mechanismBridgePacket?.selectedDomains,
+    pruned_domains:
+      mechanismBridgePacket?.pruned_domains ??
+      mechanismBridgePacket?.prunedDomains,
+    transfer_bridges:
+      mechanismBridgePacket?.transfer_bridges ??
+      mechanismBridgePacket?.transferBridges ??
+      graphPacket?.transfer_bridges ??
+      graphPacket?.transferBridges,
+    bridge_nodes:
+      mechanismBridgePacket?.bridge_nodes ??
+      mechanismBridgePacket?.bridgeNodes ??
+      graphPacket?.bridge_nodes ??
+      graphPacket?.bridgeNodes,
+    domain_distance_matrix:
+      mechanismBridgePacket?.domain_distance_matrix ??
+      mechanismBridgePacket?.domainDistanceMatrix ??
+      graphPacket?.domain_distance_matrix ??
+      graphPacket?.domainDistanceMatrix,
+    bridge_evidence_tier:
+      mechanismBridgePacket?.bridge_evidence_tier ??
+      mechanismBridgePacket?.bridgeEvidenceTier ??
+      graphPacket?.bridge_evidence_tier ??
+      graphPacket?.bridgeEvidenceTier,
+  };
+
   const targetDomain =
     pickString(patch, ["target_domain", "targetDomain"]) ??
-    pickString(graphPacket ?? {}, ["target_domain", "targetDomain"]) ??
+    pickString(mergedGraphPacket, ["target_domain", "targetDomain"]) ??
     pickString(topicSummary ?? {}, ["target_domain", "targetDomain"]) ??
     "Computer Science";
   const graphIndices = ideationContract.graphIdeationIndices;
@@ -228,9 +287,9 @@ export async function materializeIdeaCatalystState(params: {
       selectedTrackId: ideationContract.selectedTrackId,
       challengeClusters: workingChallengeClusters,
       graphChallengeClusters: Array.isArray(
-        graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters
+        mergedGraphPacket?.challenge_clusters ?? mergedGraphPacket?.challengeClusters
       )
-        ? ((graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters) as unknown[])
+        ? ((mergedGraphPacket?.challenge_clusters ?? mergedGraphPacket?.challengeClusters) as unknown[])
             .map((entry) => asString(entry))
             .filter((entry): entry is string => Boolean(entry))
         : [],
@@ -244,7 +303,7 @@ export async function materializeIdeaCatalystState(params: {
       targetDomain
     );
     scoutingReport = deriveIdeaCatalystScoutReport({
-      graphIdeationPacket: graphPacket,
+      graphIdeationPacket: mergedGraphPacket,
       topicSummary,
       challengeClusters: workingChallengeClusters,
       transferBridges,

@@ -8,8 +8,10 @@ import {
 import { materializeFigureAnchorPlan } from "./figure-anchor";
 import { materializePrewriteRejectionSimulation } from "./prewrite-rejection";
 import { materializeWritingReferenceBundle } from "./reference-bundles";
+import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
 import { materializeContributionToStoryBridge } from "./story-bridge";
+import { materializeVenueRoutingPlan } from "./venue-routing";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
 
@@ -37,9 +39,15 @@ export async function materializeWritingSupportArtifacts(params: {
     projectRoot: params.projectRoot,
     paperStoryState: params.paperStoryState,
   });
+  const venueRouting = await materializeVenueRoutingPlan({
+    projectRoot: params.projectRoot,
+    paperStoryState: params.paperStoryState,
+    reviewPressureState: params.reviewPressureState,
+  });
 
   let fallbackActivation = null;
   let revisionCycle = null;
+  let rebuttalResponse = null;
   if (FALLBACK_RELEVANT_STAGES.has(params.stage ?? "")) {
     fallbackActivation = await materializeFallbackActivation({
       projectRoot: params.projectRoot,
@@ -52,6 +60,10 @@ export async function materializeWritingSupportArtifacts(params: {
       paperStoryState: params.paperStoryState,
       fallbackActivation: fallbackActivation.activation,
     });
+    rebuttalResponse = await materializeRebuttalResponse({
+      projectRoot: params.projectRoot,
+      reviewPressureState: params.reviewPressureState,
+    });
   }
 
   const generatedFiles = [
@@ -59,8 +71,10 @@ export async function materializeWritingSupportArtifacts(params: {
     prewriteRejection.path,
     storyBridge.path,
     figureAnchor.path,
+    venueRouting.path,
     fallbackActivation?.path,
     revisionCycle?.path,
+    rebuttalResponse?.path,
   ].filter((value): value is string => typeof value === "string");
 
   return {
@@ -69,8 +83,10 @@ export async function materializeWritingSupportArtifacts(params: {
     prewriteRejection: { path: prewriteRejection.path },
     contributionToStoryBridge: { path: storyBridge.path },
     figureAnchorPlan: { path: figureAnchor.path },
+    venueRoutingPlan: { path: venueRouting.path, recommendedVenue: venueRouting.recommendedVenue },
     fallbackActivation: fallbackActivation?.activation ?? null,
     revisionCycle: revisionCycle?.state ?? null,
+    rebuttalResponse: rebuttalResponse ?? null,
     generatedFiles,
   };
 }

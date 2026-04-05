@@ -80,6 +80,7 @@ import {
 import { materializeIdeaCatalystState } from "./idea-catalyst/materializers";
 import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
+import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import {
@@ -146,6 +147,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "set_paper_ingestion",
   "materialize_ideation_contract",
   "materialize_literature_discovery_packet",
+  "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
   "materialize_cycle_memory",
@@ -186,6 +188,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
+  materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
@@ -488,6 +491,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "run_brainstorm_cycle",
               "materialize_ideation_contract",
               "materialize_literature_discovery_packet",
+              "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
               "materialize_cycle_memory",
@@ -1599,6 +1603,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   params.literatureDiscoveryMaterialization ?? {},
                   "literatureDiscoveryMaterialization"
                 ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_papernexus_packet_contracts": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializePapernexusPacketContracts({
+                projectRoot: resolvedProjectRoot,
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
               });

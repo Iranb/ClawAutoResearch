@@ -13,6 +13,7 @@ import {
 } from "../literature-discovery/materializer";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
 import { materializeCycleMemory } from "../research-memory-cycle";
+import { materializePapernexusPacketContracts } from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
@@ -50,6 +51,11 @@ type StagePreflightDeps = {
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
+  materializePapernexusPacketContracts?: (params: {
+    projectRoot: string;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
   queueIdeaCatalystRequisition: (params: {
     projectRoot: string;
     trigger?: string | null;
@@ -67,6 +73,16 @@ type StagePreflightDeps = {
 };
 
 const IDEA_CATALYST_PREP_STAGES = new Set([
+  "idea",
+  "plan",
+  "code",
+  "experiment",
+  "analyze",
+  "review",
+  "write",
+  "submit",
+]);
+const PAPERNEXUS_PACKET_PREP_STAGES = new Set([
   "idea",
   "plan",
   "code",
@@ -95,7 +111,12 @@ const PAPER_STORY_PREP_STAGES = new Set([
   "submit",
 ]);
 const REVIEW_PRESSURE_PREP_STAGES = new Set(["review", "write", "submit"]);
-const LITERATURE_DISCOVERY_PREP_STAGES = new Set(["review", "write", "submit"]);
+const LITERATURE_DISCOVERY_PREP_STAGES = new Set([
+  "idea",
+  "review",
+  "write",
+  "submit",
+]);
 const WRITING_SUPPORT_PREP_STAGES = new Set(["plan", "write", "review", "submit"]);
 const CYCLE_MEMORY_PREP_STAGES = new Set(["idea", "review", "write", "submit"]);
 
@@ -339,13 +360,18 @@ async function shouldMaterializeLiteratureDiscoveryPacket(params: {
   if (!params.stage || !LITERATURE_DISCOVERY_PREP_STAGES.has(params.stage)) {
     return false;
   }
-  if (!needsStoryGapLiteratureDiscovery({ manifest: params.manifest, stage: params.stage })) {
-    return false;
-  }
   const packetResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
   );
+  const packetExists = Boolean(packetResolvedPath && (await pathExists(packetResolvedPath)));
+  const storyGapRequired = needsStoryGapLiteratureDiscovery({
+    manifest: params.manifest,
+    stage: params.stage,
+  });
+  if (!storyGapRequired && !packetExists) {
+    return false;
+  }
   if (!packetResolvedPath || !(await pathExists(packetResolvedPath))) {
     return true;
   }
@@ -367,6 +393,36 @@ async function shouldMaterializeLiteratureDiscoveryPacket(params: {
   return sourceTimestamp !== null && sourceTimestamp > packetTimestamp;
 }
 
+async function shouldMaterializePapernexusPacketContracts(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !PAPERNEXUS_PACKET_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const mechanismPacketPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json"
+  );
+  const challengePacketPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json"
+  );
+  const storylinePacketPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "researcher/papernexus/GRAPH_STORYLINE_PACKET.json"
+  );
+  if (
+    (mechanismPacketPath && (await pathExists(mechanismPacketPath))) ||
+    (challengePacketPath && (await pathExists(challengePacketPath))) ||
+    (storylinePacketPath && (await pathExists(storylinePacketPath)))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 async function shouldQueueLiteratureDiscoveryRequisition(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -375,7 +431,15 @@ async function shouldQueueLiteratureDiscoveryRequisition(params: {
   if (!params.stage || !LITERATURE_DISCOVERY_PREP_STAGES.has(params.stage)) {
     return false;
   }
-  if (!needsStoryGapLiteratureDiscovery({ manifest: params.manifest, stage: params.stage })) {
+  const packetResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+  );
+  const packetExists = Boolean(packetResolvedPath && (await pathExists(packetResolvedPath)));
+  if (
+    !packetExists &&
+    !needsStoryGapLiteratureDiscovery({ manifest: params.manifest, stage: params.stage })
+  ) {
     return false;
   }
   return !hasActiveLiteratureDiscoveryRequest({
@@ -442,6 +506,14 @@ export async function maybePrepareWorkflowStageContracts(params: {
     }
   };
 
+  await runStep("papernexus_packet_contracts", shouldMaterializePapernexusPacketContracts, () =>
+    (params.deps.materializePapernexusPacketContracts ?? materializePapernexusPacketContracts)({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+    })
+  );
+
   await runStep("ideation_contract", shouldMaterializeIdeationContract, () =>
     params.deps.materializeIdeationContract({
       projectRoot,
@@ -505,15 +577,42 @@ export async function maybePrepareWorkflowStageContracts(params: {
   await runStep(
     "literature_discovery_requisition",
     shouldQueueLiteratureDiscoveryRequisition,
-    () =>
-      params.deps.queueLiteratureDiscoveryRequisition({
+    async () => {
+      const packetPath = resolveProjectArtifactPath(
+        projectRoot,
+        DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+      );
+      const packet =
+        (await readJsonIfExists<Record<string, unknown>>(packetPath ?? "")) ?? {};
+      const packetTriggerKind =
+        typeof packet.trigger_kind === "string"
+          ? packet.trigger_kind
+          : typeof packet.triggerKind === "string"
+            ? packet.triggerKind
+            : null;
+      const packetSummary =
+        typeof packet.discovery_reason === "string"
+          ? packet.discovery_reason
+          : typeof packet.discoveryReason === "string"
+            ? packet.discoveryReason
+            : null;
+      const packetRequestId =
+        typeof packet.discovery_id === "string"
+          ? packet.discovery_id
+          : typeof packet.discoveryId === "string"
+            ? packet.discoveryId
+            : null;
+      return params.deps.queueLiteratureDiscoveryRequisition({
         projectRoot,
         packetPath: DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
-        triggerKind: `${params.stage ?? "review"}_literature_discovery`,
+        triggerKind: packetTriggerKind ?? `${params.stage ?? "review"}_literature_discovery`,
         originStage: params.stage,
-        summary: `Workflow-owned ${params.stage ?? "review"} literature discovery rerun for story support gaps.`,
-        requestIdPrefix: `${params.stage ?? "review"}-literature-discovery`,
-      })
+        summary:
+          packetSummary ??
+          `Workflow-owned ${params.stage ?? "review"} literature discovery rerun for story support gaps.`,
+        requestIdPrefix: packetRequestId ?? `${params.stage ?? "review"}-literature-discovery`,
+      });
+    }
   );
   await runStep("writing_support_artifacts", shouldMaterializeWritingSupport, async () => {
     const paperStoryState = normalizePaperStoryState(manifest.paper_story_state);

@@ -244,6 +244,7 @@ export function formatWorkflowStatusText(params: {
     ...(snapshot.ideationContractStatus
       ? [
           `Ideation contract: status=${snapshot.ideationContractStatus}, track=${snapshot.ideationContractSelectedTrackId ?? "unset"}, direction=${snapshot.ideationContractSelectedDirectionId ?? "unset"}, idea_tree=${snapshot.ideationContractIdeaTreePath ?? "unset"}, proposal=${snapshot.ideationContractResearchProposalPath ?? "unset"}, ranking=${snapshot.ideationContractRankingHistoryPath ?? "unset"}, scoreboard=${snapshot.ideationContractTournamentScoreboardPath ?? "unset"}, top3=${snapshot.ideationContractTop3SummaryPath ?? "unset"}, graph_packet=${snapshot.ideationContractGraphPacketPath ?? "unset"}`,
+          `Ideation graph signals: bridge_evidence=${snapshot.ideationContractBridgeEvidenceTier ?? "unset"}, candidate_source_domains=${snapshot.ideationContractCandidateSourceDomainCount ?? 0}, selected_source_domains=${snapshot.ideationContractSelectedSourceDomainCount ?? 0}`,
         ]
       : []),
     ...(snapshot.ideaCatalystStatus
@@ -254,6 +255,11 @@ export function formatWorkflowStatusText(params: {
                 `IDEA-CATALYST requisition: required=true, cycle=${snapshot.ideaCatalystLastRequisitionCycle ?? "unset"}, retry_budget=${snapshot.ideaCatalystRequisitionRetryBudget ?? "unset"}, saturated=${snapshot.ideaCatalystRequisitionSaturated ? "true" : "false"}, reason=${snapshot.ideaCatalystPendingReason ?? "pending"}`,
               ]
             : []),
+        ]
+      : []),
+    ...((snapshot.kgStorylineStatus || snapshot.kgStorylinePacketPath)
+      ? [
+          `KG storyline: required=${snapshot.kgStorylineRequired ? "true" : "false"}, status=${snapshot.kgStorylineStatus ?? "unset"}, packet=${snapshot.kgStorylinePacketPath ?? "unset"}`,
         ]
       : []),
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,

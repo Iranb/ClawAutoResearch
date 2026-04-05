@@ -215,6 +215,7 @@ import {
 import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
 import { materializeLiteratureDiscoveryPacketImpl } from "./literature-discovery/materializer";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
+import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeIdeationContractImpl } from "./workflow-guard-materializers/ideation-contract-materializer";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
@@ -1272,6 +1273,9 @@ export type WorkflowSnapshot = {
   ideationContractTournamentScoreboardPath: string | null;
   ideationContractTop3SummaryPath: string | null;
   ideationContractGraphPacketPath: string | null;
+  ideationContractBridgeEvidenceTier: string | null;
+  ideationContractCandidateSourceDomainCount: number | null;
+  ideationContractSelectedSourceDomainCount: number | null;
   ideationContractPendingReason: string | null;
   ideaCatalystStatus: string | null;
   ideaCatalystMode: string | null;
@@ -5931,6 +5935,12 @@ export async function buildWorkflowSnapshot(params: {
       ideationContract.tournamentScoreboardPath,
     ideationContractTop3SummaryPath: ideationContract.top3SummaryPath,
     ideationContractGraphPacketPath: ideationContract.graphIdeationPacketPath,
+    ideationContractBridgeEvidenceTier:
+      ideationContract.graphIdeationIndices.bridgeEvidenceTier,
+    ideationContractCandidateSourceDomainCount:
+      ideationContract.graphIdeationIndices.candidateSourceDomains.length,
+    ideationContractSelectedSourceDomainCount:
+      ideationContract.graphIdeationIndices.selectedSourceDomains.length,
     ideationContractPendingReason: ideationContract.pendingReason,
     ideaCatalystStatus: ideaCatalyst.status,
     ideaCatalystMode: ideaCatalyst.mode,
@@ -10528,6 +10538,7 @@ export async function runWorkflowAutoIterator(params: {
     appendWorkflowTraceEvent,
     materializeIdeaCatalystState,
     materializeLiteratureDiscoveryPacket,
+    materializePapernexusPacketContracts,
     queueIdeaCatalystRequisition,
     queueLiteratureDiscoveryRequisition,
     materializeIdeationContract,

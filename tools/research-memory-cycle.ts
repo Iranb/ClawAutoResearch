@@ -5,6 +5,7 @@ import {
   writeJsonEnsured,
 } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { materializePortfolioCycleMemory } from "./research-memory-portfolio";
 
 export const DEFAULT_IDE_CYCLE_MEMORY_PATH = "memory/IDE_CYCLE_MEMORY.json";
 export const DEFAULT_IVE_CYCLE_MEMORY_PATH = "memory/IVE_CYCLE_MEMORY.json";
@@ -197,14 +198,18 @@ export async function materializeCycleMemory(params: {
     writeJsonEnsured(eseResolvedPath, ese),
   ]);
 
+  const portfolio = await materializePortfolioCycleMemory({ projectRoot });
+
   return {
     ide,
     ive,
     ese,
+    portfolio,
     generatedFiles: [
       params.idePath ?? DEFAULT_IDE_CYCLE_MEMORY_PATH,
       params.ivePath ?? DEFAULT_IVE_CYCLE_MEMORY_PATH,
       params.esePath ?? DEFAULT_ESE_CYCLE_MEMORY_PATH,
+      portfolio.path,
     ],
   };
 }

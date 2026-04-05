@@ -43,6 +43,7 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
 - `{PROJ}/researcher/ZOTERO_PACKET.md` — Zotero `bot/<project-id>` writing-shortlist / baseline summary when available
 - `{PROJ}/researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json` — authoritative idea-fragments to claim traceability map; use it to preserve which catalyst fragment justifies each contribution and which claims still need downstream experiment support
+- `{PROJ}/academic_writer/VENUE_ROUTING_PLAN.md` — workflow-owned venue recommendation and risk-limited routing envelope
 - `research_workflow.get_writing_contract` — user-provided template path, section order, and paragraph-logic contract
 - `research_workflow.get_citation_integrity` — source-of-truth citation policy and placeholder budget
 
@@ -84,6 +85,7 @@ Also read `{PROJ}/researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json` before drafti
   - `{PROJ}/academic_writer/PREWRITE_REJECTION_SIMULATION.md`
   - `{PROJ}/academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md`
   - `{PROJ}/academic_writer/FIGURE_ANCHOR_PLAN.md`
+  - `{PROJ}/academic_writer/VENUE_ROUTING_PLAN.md`
 
 If a template path is configured:
 

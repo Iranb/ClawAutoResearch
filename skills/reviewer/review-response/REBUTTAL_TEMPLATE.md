@@ -3,6 +3,7 @@
 ## Metadata
 - Project: [project-id]
 - Source review: `reviewer/external_review_[date].md`
+- Workflow-owned draft source: `reviewer/rebuttal_[date].md` (if pre-materialized)
 - Draft date: YYYY-MM-DD
 - Target venue: [venue or unknown]
 

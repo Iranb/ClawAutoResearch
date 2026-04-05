@@ -31,6 +31,7 @@ Draft a structured, evidence-backed rebuttal from the latest project-local exter
 
 Read:
 - the latest `{PROJ}/reviewer/external_review_{date}.md` unless the user provided a specific path
+- the workflow-owned rebuttal draft `{PROJ}/reviewer/rebuttal_{date}.md` if it already exists, and refine it instead of discarding it
 - `{PROJ}/academic_writer/paper/` for the current paper draft when needed
 - `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`

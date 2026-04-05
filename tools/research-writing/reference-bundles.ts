@@ -44,6 +44,7 @@ export async function materializeWritingReferenceBundle(params: {
       fallbackNarrativePath: params.paperStoryState.fallbackNarrativePath,
       rejectionRiskTablePath: params.paperStoryState.rejectionRiskTablePath,
       ideaToClaimMapPath: params.paperStoryState.ideaToClaimMapPath,
+      venueRoutingPlanPath: "academic_writer/VENUE_ROUTING_PLAN.md",
     },
     reviewArtifacts: {
       rejectFirstReviewPath: params.reviewPressureState?.rejectFirstReviewPath ?? null,
@@ -53,6 +54,7 @@ export async function materializeWritingReferenceBundle(params: {
       reverseOutlinePath: params.reviewPressureState?.reverseOutlinePath ?? null,
       figureTableQcPath: params.reviewPressureState?.figureTableQcPath ?? null,
       limitationAuditPath: params.reviewPressureState?.limitationAuditPath ?? null,
+      rebuttalResponsePath: "reviewer/rebuttal_{date}.md",
     },
     globalReferencePaths: uniqueStrings([
       refPath("counterintuitive-writing.md"),
@@ -72,6 +74,7 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("introduction.md"),
           refPath("method.md"),
           refPath("experiments.md"),
+          "academic_writer/VENUE_ROUTING_PLAN.md",
         ]),
       },
       write: {
@@ -87,6 +90,7 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("experiments.md"),
           refPath("conclusion.md"),
           refPath("paper-review.md"),
+          "academic_writer/VENUE_ROUTING_PLAN.md",
         ]),
       },
       review: {
@@ -95,6 +99,7 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("self-attack-protocol.md"),
           refPath("counterintuitive-writing.md"),
           refPath("does-my-writing-flow-source.md"),
+          "reviewer/rebuttal_{date}.md",
         ]),
       },
       submit: {
@@ -103,6 +108,8 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("counterintuitive-writing.md"),
           refPath("figure-centric-writing.md"),
           refPath("does-my-writing-flow-source.md"),
+          "academic_writer/VENUE_ROUTING_PLAN.md",
+          "reviewer/rebuttal_{date}.md",
         ]),
       },
     },
