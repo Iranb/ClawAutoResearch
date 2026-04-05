@@ -12,6 +12,8 @@ import {
   needsStoryGapLiteratureDiscovery,
 } from "../literature-discovery/materializer";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
+import { materializeCycleMemory } from "../research-memory-cycle";
+import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 
@@ -84,6 +86,7 @@ const IDEATION_PREP_STAGES = new Set([
   "submit",
 ]);
 const PAPER_STORY_PREP_STAGES = new Set([
+  "plan",
   "code",
   "experiment",
   "analyze",
@@ -93,6 +96,8 @@ const PAPER_STORY_PREP_STAGES = new Set([
 ]);
 const REVIEW_PRESSURE_PREP_STAGES = new Set(["review", "write", "submit"]);
 const LITERATURE_DISCOVERY_PREP_STAGES = new Set(["review", "write", "submit"]);
+const WRITING_SUPPORT_PREP_STAGES = new Set(["plan", "write", "review", "submit"]);
+const CYCLE_MEMORY_PREP_STAGES = new Set(["idea", "review", "write", "submit"]);
 
 function parseTimestampMs(value: string | null | undefined): number | null {
   if (!value) {
@@ -378,6 +383,23 @@ async function shouldQueueLiteratureDiscoveryRequisition(params: {
   });
 }
 
+async function shouldMaterializeWritingSupport(params: {
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !WRITING_SUPPORT_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  return paperStory.status === "ready";
+}
+
+async function shouldRefreshCycleMemory(params: {
+  stage: string | null;
+}): Promise<boolean> {
+  return Boolean(params.stage && CYCLE_MEMORY_PREP_STAGES.has(params.stage));
+}
+
 export async function maybePrepareWorkflowStageContracts(params: {
   projectRoot: string;
   manifest?: ManifestLike | null;
@@ -493,6 +515,24 @@ export async function maybePrepareWorkflowStageContracts(params: {
         requestIdPrefix: `${params.stage ?? "review"}-literature-discovery`,
       })
   );
+  await runStep("writing_support_artifacts", shouldMaterializeWritingSupport, async () => {
+    const paperStoryState = normalizePaperStoryState(manifest.paper_story_state);
+    const reviewPressureState = normalizeReviewPressurePacketState(
+      manifest.review_pressure_packet
+    );
+    await materializeWritingSupportArtifacts({
+      projectRoot,
+      stage: params.stage,
+      paperStoryState,
+      reviewPressureState,
+    });
+  });
+  await runStep("cycle_memory", shouldRefreshCycleMemory, async () => {
+    await materializeCycleMemory({
+      projectRoot,
+      stage: params.stage,
+    });
+  });
 
   return {
     manifest,

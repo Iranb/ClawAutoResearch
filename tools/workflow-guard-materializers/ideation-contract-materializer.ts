@@ -318,9 +318,14 @@ export async function materializeIdeationContractImpl(
     ...asStringArray(selectedTrack?.linked_graph_nodes ?? selectedTrack?.linkedGraphNodes),
   ]).slice(0, 8);
 
+  const persistedGraphIndices = current.graphIdeationIndices;
+  const persistedPatchGraphIndices = normalizeIdeationGraphIndicesState(
+    patch.graphIdeationIndices ?? patch.graph_ideation_indices
+  );
+
   const graphIndices = normalizeIdeationGraphIndicesState({
-    ...(asRecord(patch.graphIdeationIndices ?? patch.graph_ideation_indices) ??
-      serializeIdeationGraphIndicesState(current.graphIdeationIndices)),
+    ...serializeIdeationGraphIndicesState(persistedGraphIndices),
+    ...serializeIdeationGraphIndicesState(persistedPatchGraphIndices),
     status:
       seedCandidates.length > 0 && (challengeClusters.length > 0 || insightClusters.length > 0)
         ? "ready"
@@ -329,7 +334,27 @@ export async function materializeIdeationContractImpl(
     challenge_clusters: challengeClusters,
     insight_clusters: insightClusters,
     occupied_solution_zones: occupiedSolutionZones,
-    transfer_bridges: transferBridges,
+    transfer_bridges: uniqueStrings([
+      ...transferBridges,
+      ...persistedGraphIndices.transferBridges,
+      ...persistedPatchGraphIndices.transferBridges,
+    ]).slice(0, 12),
+    candidate_source_domains: uniqueStrings([
+      ...persistedGraphIndices.candidateSourceDomains,
+      ...persistedPatchGraphIndices.candidateSourceDomains,
+    ]).slice(0, 12),
+    selected_source_domains: uniqueStrings([
+      ...persistedGraphIndices.selectedSourceDomains,
+      ...persistedPatchGraphIndices.selectedSourceDomains,
+    ]).slice(0, 12),
+    pruned_source_domains: uniqueStrings([
+      ...persistedGraphIndices.prunedSourceDomains,
+      ...persistedPatchGraphIndices.prunedSourceDomains,
+    ]).slice(0, 12),
+    bridge_evidence_tier:
+      persistedPatchGraphIndices.bridgeEvidenceTier ??
+      persistedGraphIndices.bridgeEvidenceTier ??
+      null,
     last_refresh_at: new Date().toISOString(),
   });
   const topicSummaryData = asRecord(topicSummaryRecord);
@@ -638,10 +663,49 @@ ${deps.renderMarkdownBulletList(
           : [],
   };
 
+  const candidateTargetCount = 15;
+  const hardFloorCandidateCount = 9;
+  const top3 = candidatePool.slice(0, 3);
+  const candidatePoolStatus =
+    candidatePool.length >= candidateTargetCount
+      ? "healthy"
+      : candidatePool.length >= hardFloorCandidateCount
+        ? "scarce"
+        : "below_floor";
+  const candidateScarcityReason =
+    candidatePool.length >= candidateTargetCount
+      ? null
+      : uniqueStrings(
+          [
+            graphIndices.transferBridges.length < candidateTargetCount
+              ? "Graph bridge evidence is still sparse, so the tournament could not safely expand to the target breadth."
+              : null,
+            graphIndices.challengeClusters.length < 3
+              ? "Challenge coverage is still narrow, so broad candidate expansion would mostly generate padded variants."
+              : null,
+            candidatePool.length < hardFloorCandidateCount
+              ? "Only a small set of candidates survived propose-review-refine without becoming obviously weak or redundant."
+              : "The candidate pool is below the target breadth and should be treated as evidence-scarce rather than fully explored.",
+          ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        ).join(" ");
+  const contributionHints = uniqueStrings(
+    [
+      selectedDirection?.summary ?? null,
+      selectedTrack ? pickString(selectedTrack, ["hypothesis"]) : null,
+      selectedTrack ? pickString(selectedTrack, ["novelty_basis"]) : null,
+      selectedProgramTrack ? pickString(selectedProgramTrack, ["hypothesis"]) : null,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+  ).slice(0, 4);
   const scoreboard = {
     status: candidatePool.length > 0 ? "completed" : "pending",
     selected_direction_id: resolvedSelectedDirectionId,
     selected_track_id: selectedTrackId,
+    candidate_target_count: candidateTargetCount,
+    hard_floor_candidate_count: hardFloorCandidateCount,
+    candidate_pool_status: candidatePoolStatus,
+    candidate_scarcity_reason: candidateScarcityReason,
+    selected_direction_contribution_hints: contributionHints,
+    top_direction_titles: top3.map((candidate) => candidate.title),
     rankings: candidatePool.map((candidate, index) => ({
       rank: index + 1,
       direction_id: candidate.direction_id,
@@ -659,8 +723,6 @@ ${deps.renderMarkdownBulletList(
       baseline_relation: candidate.baseline_relation,
     })),
   };
-
-  const top3 = candidatePool.slice(0, 3);
   const noveltyTree = `# Novelty Tree
 
 ## Long-term Goal
@@ -765,6 +827,7 @@ ${top3
 - Summary: ${candidate.summary}
  - Action: ${action}
  - Primary risk: ${primaryRisk}
+ - Contribution hints: ${contributionHints.join("; ") || "derive the smallest defense-ready contribution from the selected direction."}
 `;
   })
   .join("\n")}
@@ -855,6 +918,11 @@ ${deps.renderMarkdownBulletList([
       nextState.candidatePoolPath,
       {
         status: "ready",
+        candidate_target_count: candidateTargetCount,
+        hard_floor_candidate_count: hardFloorCandidateCount,
+        candidate_pool_status: candidatePoolStatus,
+        candidate_scarcity_reason: candidateScarcityReason,
+        selected_direction_contribution_hints: contributionHints,
         tree_expansion: {
           max_candidates: 21,
           roots: candidatePool.map((candidate) => candidate.direction_id),

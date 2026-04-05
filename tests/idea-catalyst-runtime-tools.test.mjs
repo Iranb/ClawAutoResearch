@@ -272,9 +272,30 @@ test("research_workflow materialize_idea_catalyst_state scaffolds IDEA-CATALYST 
   assert.ok(
     abstractionPacket.abstractions.every(
       (entry) =>
-        typeof entry.mechanism_hypothesis === "string" &&
-        entry.mechanism_hypothesis.length > 0 &&
-        Array.isArray(entry.transfer_axes)
+        ["exploratory", "targeted", "resolved"].includes(entry.strategy) &&
+        Array.isArray(entry.transfer_axes) &&
+        (entry.mechanism_hypothesis === null ||
+          (typeof entry.mechanism_hypothesis === "string" &&
+            entry.mechanism_hypothesis.length > 0))
+    )
+  );
+
+  const ideaFragmentsPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_FRAGMENTS.json"),
+      "utf8"
+    )
+  );
+  assert.ok(
+    ideaFragmentsPacket.fragments.every(
+      (fragment) =>
+        fragment.integration_mechanism &&
+        Array.isArray(fragment.integration_mechanism.selected_takeaways) &&
+        fragment.integration_mechanism.selected_takeaways.length >= 1 &&
+        typeof fragment.integration_mechanism.selected_takeaways[0]
+          .mechanism_explanation === "string" &&
+        fragment.challenge_resolution &&
+        typeof fragment.challenge_resolution.addresses_target_challenge === "string"
     )
   );
 
@@ -317,6 +338,12 @@ test("research_workflow materialize_idea_catalyst_state prunes unsupported scout
   await executeWorkflowTool(tool, {
     action: "materialize_idea_catalyst_state",
     ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "materialize_ideation_contract",
+    ideationMaterialization: {
       basis_stage: "idea",
     },
   });
@@ -367,6 +394,32 @@ test("research_workflow materialize_idea_catalyst_state prunes unsupported scout
     ),
     true
   );
+
+  const candidatePool = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"),
+      "utf8"
+    )
+  );
+  const scoreboard = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "ideation", "TOURNAMENT_SCOREBOARD.json"),
+      "utf8"
+    )
+  );
+  const top3Summary = await fs.readFile(
+    path.join(projectRoot, "researcher", "ideation", "TOP3_DIRECTION_SUMMARY.md"),
+    "utf8"
+  );
+
+  assert.equal(candidatePool.candidate_target_count, 15);
+  assert.equal(candidatePool.hard_floor_candidate_count, 9);
+  assert.match(candidatePool.candidate_scarcity_reason ?? "", /graph|evidence|scarcity/i);
+  assert.equal(scoreboard.candidate_target_count, 15);
+  assert.equal(scoreboard.hard_floor_candidate_count, 9);
+  assert.equal(scoreboard.candidate_pool_status, "below_floor");
+  assert.match(scoreboard.candidate_scarcity_reason ?? "", /graph|evidence|scarcity/i);
+  assert.match(top3Summary, /Contribution hints:/i);
 });
 
 test("stage preflight materializes idea_catalyst after ideation_contract becomes ready", async (t) => {
@@ -483,6 +536,28 @@ test("research_workflow materialize_idea_catalyst_state emits a structured requi
   assert.equal(requisition.retry_budget >= 1, true);
   assert.equal(typeof requisition.saturation_signal, "string");
   assert.equal(requisition.saturation_signal.length > 0, true);
+
+  const sessionState = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "CATALYST_SESSION_STATE.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(typeof sessionState.iteration_count, "number");
+  assert.equal(sessionState.iteration_count >= 2, true);
+  assert.equal(Array.isArray(sessionState.iterations), true);
+  assert.equal(sessionState.iterations.length, sessionState.iteration_count);
+  assert.equal(
+    sessionState.iterations.some((entry) =>
+      ["refine_questions", "expand_domains", "requisition"].includes(entry.strategy)
+    ),
+    true
+  );
 });
 
 test("research_workflow queue_idea_catalyst_requisition bridges a catalyst requisition into durable paper_ingestion queued requests", async (t) => {

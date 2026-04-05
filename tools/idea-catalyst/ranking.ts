@@ -1,3 +1,5 @@
+import type { PairwiseJudgment } from "./llm-judge";
+
 export type IdeaFragment = {
   fragment_id: string;
   title: string;
@@ -73,7 +75,78 @@ function describeWinningDimensions(params: {
   ];
 }
 
-export function rankIdeaCatalystFragments(fragments: IdeaFragment[]) {
+function buildTop3Summary(ranking: Array<{
+  fragment_id: string;
+  title: string;
+  source_domain: string;
+  elo_score: number;
+}>) {
+  return ranking.slice(0, 3).map((entry) => ({
+    fragment_id: entry.fragment_id,
+    title: entry.title,
+    source_domain: entry.source_domain,
+    summary: `${entry.title} remains strong on novelty, feasibility, relevance, and clarity with an Elo score of ${entry.elo_score}.`,
+  }));
+}
+
+function applyPairwiseResult(params: {
+  left: IdeaFragment;
+  right: IdeaFragment;
+  winner: IdeaFragment;
+  loser: IdeaFragment;
+  margin: number;
+  winLoss: Map<string, { wins: number; losses: number; elo: number; margins: number[] }>;
+  pairwiseResults: Array<Record<string, unknown>>;
+  judgeType: "metric" | "llm";
+  voteBreakdown: Record<string, string>;
+  fragmentAVotes: number;
+  fragmentBVotes: number;
+  reasoningPoints: string[];
+  minimumDelta?: number;
+  kFactorBase?: number;
+}) {
+  const winnerActual = params.winner.fragment_id === params.left.fragment_id ? 1 : 0;
+  const winnerScore = params.winLoss.get(params.winner.fragment_id);
+  const loserScore = params.winLoss.get(params.loser.fragment_id);
+  if (!winnerScore || !loserScore) {
+    return;
+  }
+
+  const winnerExpected = expectedScore(winnerScore.elo, loserScore.elo);
+  const kFactor = (params.kFactorBase ?? 24) * (1 + params.margin);
+  const eloDelta = Math.max(
+    params.minimumDelta ?? 8,
+    Math.round(kFactor * Math.abs(winnerActual - winnerExpected))
+  );
+
+  winnerScore.wins += 1;
+  winnerScore.elo += eloDelta;
+  winnerScore.margins.push(params.margin);
+  loserScore.losses += 1;
+  loserScore.elo -= eloDelta;
+  loserScore.margins.push(-params.margin);
+
+  params.pairwiseResults.push({
+    fragment_a: params.left.fragment_id,
+    fragment_b: params.right.fragment_id,
+    judge_type: params.judgeType,
+    vote_breakdown: params.voteBreakdown,
+    fragment_a_votes: params.fragmentAVotes,
+    fragment_b_votes: params.fragmentBVotes,
+    overall_winner: params.winner.fragment_id,
+    overall_loser: params.loser.fragment_id,
+    margin: params.margin,
+    elo_delta: eloDelta,
+    reasoning_points: params.reasoningPoints,
+  });
+}
+
+export function rankIdeaCatalystFragments(
+  fragments: IdeaFragment[],
+  options?: {
+    llmJudgments?: PairwiseJudgment[];
+  }
+) {
   const pairwiseResults: Array<Record<string, unknown>> = [];
   const winLoss = new Map(
     fragments.map((fragment) => [
@@ -117,44 +190,92 @@ export function rankIdeaCatalystFragments(fragments: IdeaFragment[]) {
           ? left
           : right;
       const loser = winner.fragment_id === left.fragment_id ? right : left;
-      const winnerActual = winner.fragment_id === left.fragment_id ? 1 : 0;
-      const winnerScore = winLoss.get(winner.fragment_id);
-      const loserScore = winLoss.get(loser.fragment_id);
-      if (!winnerScore || !loserScore) {
-        continue;
-      }
-
-      const winnerExpected = expectedScore(winnerScore.elo, loserScore.elo);
-      const kFactor = 24 * (1 + margin);
-      const eloDelta = Math.max(
-        8,
-        Math.round(kFactor * Math.abs(winnerActual - winnerExpected))
-      );
-
-      winnerScore.wins += 1;
-      winnerScore.elo += eloDelta;
-      winnerScore.margins.push(margin);
-      loserScore.losses += 1;
-      loserScore.elo -= eloDelta;
-      loserScore.margins.push(-margin);
-
-      pairwiseResults.push({
-        fragment_a: left.fragment_id,
-        fragment_b: right.fragment_id,
-        vote_breakdown: voteBreakdown,
-        fragment_a_votes: leftVotes,
-        fragment_b_votes: rightVotes,
-        overall_winner: winner.fragment_id,
-        overall_loser: loser.fragment_id,
+      applyPairwiseResult({
+        left,
+        right,
+        winner,
+        loser,
         margin,
-        elo_delta: eloDelta,
-        reasoning_points: describeWinningDimensions({
+        winLoss,
+        pairwiseResults,
+        judgeType: "metric",
+        voteBreakdown,
+        fragmentAVotes: leftVotes,
+        fragmentBVotes: rightVotes,
+        reasoningPoints: describeWinningDimensions({
           winner,
           loser,
           voteBreakdown,
         }),
       });
     }
+  }
+
+  const fragmentsById = new Map(
+    fragments.map((fragment) => [fragment.fragment_id, fragment] as const)
+  );
+  const llmJudgments = Array.isArray(options?.llmJudgments) ? options?.llmJudgments : [];
+  let llmJudgmentCount = 0;
+  for (const judgment of llmJudgments) {
+    const left = fragmentsById.get(judgment.fragment_a);
+    const right = fragmentsById.get(judgment.fragment_b);
+    if (!left || !right || judgment.preferred === "tie") {
+      continue;
+    }
+    const winner = judgment.preferred === "a" ? left : right;
+    const loser = winner.fragment_id === left.fragment_id ? right : left;
+    const dimensionVotes = {
+      interdisciplinary_novelty:
+        judgment.dimensions.interdisciplinary_novelty === "a"
+          ? left.fragment_id
+          : judgment.dimensions.interdisciplinary_novelty === "b"
+            ? right.fragment_id
+            : "tie",
+      interdisciplinary_usefulness:
+        judgment.dimensions.interdisciplinary_usefulness === "a"
+          ? left.fragment_id
+          : judgment.dimensions.interdisciplinary_usefulness === "b"
+            ? right.fragment_id
+            : "tie",
+      depth_of_integration:
+        judgment.dimensions.depth_of_integration === "a"
+          ? left.fragment_id
+          : judgment.dimensions.depth_of_integration === "b"
+            ? right.fragment_id
+            : "tie",
+    };
+    const leftVotes = Object.values(dimensionVotes).filter(
+      (entry) => entry === left.fragment_id
+    ).length;
+    const rightVotes = Object.values(dimensionVotes).filter(
+      (entry) => entry === right.fragment_id
+    ).length;
+    const margin = Number(
+      (
+        Math.abs(leftVotes - rightVotes) / 3 +
+        (dimensionVotes.depth_of_integration === winner.fragment_id ? 0.35 : 0)
+      ).toFixed(4)
+    );
+    applyPairwiseResult({
+      left,
+      right,
+      winner,
+      loser,
+      margin,
+      winLoss,
+      pairwiseResults,
+      judgeType: "llm",
+      voteBreakdown: dimensionVotes,
+      fragmentAVotes: leftVotes,
+      fragmentBVotes: rightVotes,
+      reasoningPoints: [
+        judgment.reasoning,
+        `LLM preference favored ${winner.title} for interdisciplinary transfer quality.`,
+      ],
+      minimumDelta: 24,
+      kFactorBase: 40,
+    });
+    llmJudgmentCount += 1;
   }
 
   const ranking = fragments
@@ -198,21 +319,15 @@ export function rankIdeaCatalystFragments(fragments: IdeaFragment[]) {
       rank: index + 1,
     }));
 
-  const top3 = ranking.slice(0, 3).map((entry) => ({
-    fragment_id: entry.fragment_id,
-    title: entry.title,
-    source_domain: entry.source_domain,
-    summary: `${entry.title} remains strong on novelty, feasibility, relevance, and clarity with an Elo score of ${entry.elo_score}.`,
-  }));
-
   return {
     ranking,
     pairwise_results: pairwiseResults,
     judging_summary: {
       compared_pairs: pairwiseResults.length,
+      llm_judgment_count: llmJudgmentCount,
       scoring_dimensions: SCORE_DIMENSIONS,
       top_fragment_id: ranking[0]?.fragment_id ?? null,
-      top_3: top3,
+      top_3: buildTop3Summary(ranking),
     },
   };
 }

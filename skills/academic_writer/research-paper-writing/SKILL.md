@@ -13,7 +13,7 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 
 1. Clarify the paper story before sentence-level edits.
 2. If the user has provided a paper template, read it first and preserve its section logic before adapting the wording.
-3. Use section-specific guidance in `references/`.
+3. Use section-specific guidance in `references/`, plus the workflow-owned `WRITING_REFERENCE_BUNDLE.json` when it exists.
 4. Rewrite paragraph-by-paragraph with one message per paragraph.
 5. Run reverse outlining after writing each section.
 6. Check every major claim in Abstract/Introduction against experimental evidence.
@@ -68,6 +68,10 @@ Load only the needed section file:
 - Conclusion: `references/conclusion.md`
 - Paper review (Paper Rview): `references/paper-review.md`
 - Paragraph clarity source: `references/does-my-writing-flow-source.md`
+- Counterintuitive writing rules: `references/counterintuitive-writing.md`
+- Story planning rules: `references/story-planning-rules.md`
+- Self-attack protocol: `references/self-attack-protocol.md`
+- Figure-centric writing: `references/figure-centric-writing.md`
 - Example bank index: `references/examples/index.md`
 
 ## Paper Review Core Points
@@ -83,6 +87,7 @@ Use `references/paper-review.md` for the full checklist and workflow.
 2. Treat claim-evidence alignment as a hard constraint, especially for Abstract and Introduction.
 3. Perform adversarial writing: review as a skeptical reviewer and resolve every high-risk question.
 4. Revise until major rejection risks are explicitly addressed.
+5. If the workflow has materialized `PREWRITE_REJECTION_SIMULATION.md`, `CONTRIBUTION_TO_STORY_BRIDGE.md`, or `FIGURE_ANCHOR_PLAN.md`, treat them as execution inputs rather than optional notes.
 
 ## Execution Rules
 

@@ -16,6 +16,14 @@ import { buildIdeaCatalystDecompositionPacket } from "./decomposer";
 import { buildIdeaCatalystGateDecision } from "./gatekeeper";
 import { buildIdeaCatalystIdeaFragments } from "./integrator";
 import { buildIdeaCatalystRankedFragments } from "./judge";
+import type { PairwiseJudgment } from "./llm-judge";
+import { parseGeneratedQuestions } from "./llm-question-generator";
+import { parseSufficiencyJudgment } from "./llm-sufficiency";
+import {
+  assessIdeaCatalystProgress,
+  buildCatalystIterationRecord,
+  deriveRefinedChallengeClusters,
+} from "./metacognition";
 import {
   DEFAULT_IDEA_CATALYST_PATHS,
   getIdeaCatalystValidationErrors,
@@ -48,6 +56,49 @@ function markdownBulletsToList(rawText: unknown): string[] {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizePairwiseVote(value: unknown): "a" | "b" | "tie" {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "a") return "a";
+  if (normalized === "b") return "b";
+  return "tie";
+}
+
+function normalizePairwiseJudgments(value: unknown): PairwiseJudgment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map((entry) => {
+      const dimensions = asRecord(entry.dimensions) ?? {};
+      return {
+        fragment_a:
+          pickString(entry, ["fragment_a", "fragmentA"]) ?? "fragment-a",
+        fragment_b:
+          pickString(entry, ["fragment_b", "fragmentB"]) ?? "fragment-b",
+        preferred: normalizePairwiseVote(entry.preferred),
+        reasoning:
+          pickString(entry, ["reasoning"]) ?? "No explicit LLM reasoning provided.",
+        dimensions: {
+          interdisciplinary_novelty: normalizePairwiseVote(
+            dimensions.interdisciplinary_novelty ??
+              dimensions.interdisciplinaryNovelty
+          ),
+          interdisciplinary_usefulness: normalizePairwiseVote(
+            dimensions.interdisciplinary_usefulness ??
+              dimensions.interdisciplinaryUsefulness
+          ),
+          depth_of_integration: normalizePairwiseVote(
+            dimensions.depth_of_integration ?? dimensions.depthOfIntegration
+          ),
+        },
+      };
+    });
 }
 
 function resolveRequiredProjectArtifactPath(
@@ -139,15 +190,105 @@ export async function materializeIdeaCatalystState(params: {
     ...graphIndices.transferBridges,
     ...graphPacketTransferBridges,
   ]).slice(0, 6);
+  const llmJudgments = normalizePairwiseJudgments(
+    patch.llm_judgments ?? patch.llmJudgments
+  );
+  const llmGeneratedQuestions = Array.isArray(
+    patch.llm_generated_questions ?? patch.llmGeneratedQuestions
+  )
+    ? parseGeneratedQuestions(
+        JSON.stringify({
+          questions:
+            patch.llm_generated_questions ?? patch.llmGeneratedQuestions,
+        })
+      )
+    : [];
+  const llmSufficiencyJudgment =
+    patch.llm_sufficiency_judgment ?? patch.llmSufficiencyJudgment
+      ? parseSufficiencyJudgment(
+          JSON.stringify(
+            patch.llm_sufficiency_judgment ?? patch.llmSufficiencyJudgment
+          )
+        )
+      : null;
+  let workingChallengeClusters = challengeClusters;
+  let decompositionPacket: Record<string, unknown> | null = null;
+  let abstractionPacket: Record<string, unknown> | null = null;
+  let scoutingReport: Record<string, unknown> | null = null;
+  let gateDecision: Record<string, unknown> | null = null;
+  const iterations: Array<Record<string, unknown>> = [];
+  let strategy: "initial_scan" | "refine_questions" | "expand_domains" | "requisition" =
+    "initial_scan";
 
-  const scoutingReport = deriveIdeaCatalystScoutReport({
-    graphIdeationPacket: graphPacket,
-    topicSummary,
-    challengeClusters,
-    transferBridges,
-    targetDomain,
-  });
-  const candidateDomains = scoutingReport.candidate_domains ?? [];
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    decompositionPacket = buildIdeaCatalystDecompositionPacket({
+      targetDomain,
+      longTermGoal: researchProgram.goal,
+      problemStatement: researchProgram.problemStatement,
+      selectedTrackId: ideationContract.selectedTrackId,
+      challengeClusters: workingChallengeClusters,
+      graphChallengeClusters: Array.isArray(
+        graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters
+      )
+        ? ((graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters) as unknown[])
+            .map((entry) => asString(entry))
+            .filter((entry): entry is string => Boolean(entry))
+        : [],
+      occupiedSolutionZones: graphIndices.occupiedSolutionZones,
+      transferBridges,
+    }, {
+      llmGeneratedQuestions,
+    });
+    abstractionPacket = buildIdeaCatalystAbstractionPacket(
+      decompositionPacket,
+      targetDomain
+    );
+    scoutingReport = deriveIdeaCatalystScoutReport({
+      graphIdeationPacket: graphPacket,
+      topicSummary,
+      challengeClusters: workingChallengeClusters,
+      transferBridges,
+      targetDomain,
+    });
+    gateDecision = buildIdeaCatalystGateDecision(
+      scoutingReport,
+      decompositionPacket,
+      {
+        llmJudgment: llmSufficiencyJudgment,
+      }
+    );
+    iterations.push(
+      buildCatalystIterationRecord({
+        iteration,
+        strategy,
+        decompositionPacket,
+        scoutingReport,
+        gateDecision,
+      })
+    );
+    const progress = assessIdeaCatalystProgress({
+      iteration,
+      gateDecision,
+    });
+    if (!progress.shouldContinue || progress.nextStrategy === "brainstorm") {
+      break;
+    }
+    if (progress.nextStrategy === "refine_questions") {
+      workingChallengeClusters = deriveRefinedChallengeClusters({
+        challengeClusters: workingChallengeClusters,
+        decompositionPacket,
+      });
+    }
+    strategy = progress.nextStrategy;
+  }
+  if (!decompositionPacket || !abstractionPacket || !scoutingReport || !gateDecision) {
+    throw new Error("IDEA-CATALYST materialization did not produce required packets.");
+  }
+  const candidateDomainRecords = Array.isArray(scoutingReport.candidate_domains)
+    ? scoutingReport.candidate_domains
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
   const selectedSourceDomains = Array.isArray(scoutingReport.selected_source_domains)
     ? scoutingReport.selected_source_domains
         .map((entry) => asString(entry))
@@ -159,31 +300,28 @@ export async function materializeIdeaCatalystState(params: {
         .filter((entry): entry is string => Boolean(entry))
     : [];
   const scoutingReportRecord = asRecord(scoutingReport) ?? {};
-  const candidateSourceDomains = Array.isArray(scoutingReport.candidate_domains)
-    ? scoutingReport.candidate_domains
-        .map((entry) => {
-          const record = asRecord(entry) ?? {};
-          return pickString(record, ["domain"]);
-        })
-        .filter((entry): entry is string => Boolean(entry))
-    : [];
+  const candidateSourceDomains = candidateDomainRecords
+    .map((entry) => pickString(entry, ["domain"]))
+    .filter((entry): entry is string => Boolean(entry));
   const bridgeEvidenceTier =
     pickString(scoutingReportRecord, ["bridge_evidence_tier", "bridgeEvidenceTier"]) ??
     null;
-  const bridgeNodeLabels = Array.isArray(scoutingReport.bridge_nodes)
+  const bridgeNodeRecords = Array.isArray(scoutingReport.bridge_nodes)
     ? scoutingReport.bridge_nodes
-        .map((entry) => {
-          const record = asRecord(entry) ?? {};
-          const domain = pickString(record, ["domain"]);
-          const mechanism =
-            pickString(record, ["mechanism"]) ?? pickString(record, ["node_name"]);
-          if (!mechanism) {
-            return null;
-          }
-          return domain ? `${domain}:${mechanism}` : mechanism;
-        })
-        .filter((entry): entry is string => Boolean(entry))
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const bridgeNodeLabels = bridgeNodeRecords
+    .map((record) => {
+      const domain = pickString(record, ["domain"]);
+      const mechanism =
+        pickString(record, ["mechanism"]) ?? pickString(record, ["node_name"]);
+      if (!mechanism) {
+        return null;
+      }
+      return domain ? `${domain}:${mechanism}` : mechanism;
+    })
+    .filter((entry): entry is string => Boolean(entry));
 
   const candidates: IdeaCatalystCandidate[] = Array.isArray(candidatePool?.candidates)
     ? (candidatePool.candidates as IdeaCatalystCandidate[])
@@ -191,35 +329,15 @@ export async function materializeIdeaCatalystState(params: {
   const sourceDomains = uniqueStrings(
     selectedSourceDomains.length > 0
       ? selectedSourceDomains
-      : candidateDomains
+      : candidateDomainRecords
           .filter((entry) => entry?.pruned !== true)
           .map((entry) => asString(entry.domain))
           .filter((entry): entry is string => Boolean(entry))
   );
-  const decompositionPacket = buildIdeaCatalystDecompositionPacket({
-    targetDomain,
-    longTermGoal: researchProgram.goal,
-    problemStatement: researchProgram.problemStatement,
-    selectedTrackId: ideationContract.selectedTrackId,
-    challengeClusters,
-    graphChallengeClusters: Array.isArray(
-      graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters
-    )
-      ? ((graphPacket?.challenge_clusters ?? graphPacket?.challengeClusters) as unknown[])
-          .map((entry) => asString(entry))
-          .filter((entry): entry is string => Boolean(entry))
-      : [],
-    occupiedSolutionZones: graphIndices.occupiedSolutionZones,
-    transferBridges,
-  });
-  const abstractionPacket = buildIdeaCatalystAbstractionPacket(
-    decompositionPacket,
-    targetDomain
-  );
-  const gateDecision = buildIdeaCatalystGateDecision(
-    scoutingReport,
-    decompositionPacket
-  );
+  const requisitionRecord = (asRecord(gateDecision.requisition) ?? {}) as Record<
+    string,
+    unknown
+  >;
   const shouldIntegrateFragments = gateDecision.decision === "brainstorm";
   const ideaFragmentsPacket = shouldIntegrateFragments
     ? buildIdeaCatalystIdeaFragments({
@@ -228,11 +346,13 @@ export async function materializeIdeaCatalystState(params: {
         targetDomain,
         selectedTrackId: ideationContract.selectedTrackId,
         problemStatement: researchProgram.problemStatement,
+        decompositionPacket,
+        scoutingReport,
       })
     : null;
   const rankedFragmentsPacket =
     shouldIntegrateFragments && ideaFragmentsPacket
-      ? buildIdeaCatalystRankedFragments(ideaFragmentsPacket)
+      ? buildIdeaCatalystRankedFragments(ideaFragmentsPacket, { llmJudgments })
       : null;
 
   const next = normalizeIdeaCatalystState({
@@ -243,20 +363,20 @@ export async function materializeIdeaCatalystState(params: {
     micro_stage: gateDecision.decision === "brainstorm" ? "judging" : "gatekeeping",
     target_domain: targetDomain,
     source_domains: sourceDomains,
-    bridge_count: (scoutingReport.bridge_nodes ?? []).length,
+    bridge_count: bridgeNodeRecords.length,
     top_fragment_id: rankedFragmentsPacket?.ranking?.[0]?.fragment_id ?? null,
     requisition_required: gateDecision.decision !== "brainstorm",
     last_requisition_cycle:
       gateDecision.decision === "brainstorm"
         ? current.lastRequisitionCycle
-        : pickString(gateDecision.requisition ?? {}, [
+        : pickString(requisitionRecord, [
             "requisition_id",
             "requisitionId",
           ]),
     requisition_retry_budget:
       gateDecision.decision === "brainstorm"
         ? current.requisitionRetryBudget
-        : pickNumber(gateDecision.requisition ?? {}, [
+        : pickNumber(requisitionRecord, [
             "retry_budget",
             "retryBudget",
           ]),
@@ -297,17 +417,27 @@ export async function materializeIdeaCatalystState(params: {
       gateDecision.decision === "brainstorm"
         ? null
         : {
-            ...gateDecision.requisition,
+            ...(requisitionRecord ?? {}),
             trigger: params.trigger ?? "idea_catalyst",
           },
     ],
-    [next.sessionStatePath, {
-      status: next.status,
-      micro_stage: next.microStage,
-      trigger: params.trigger ?? null,
-      agent_id: params.agentId ?? null,
-      updated_at: next.lastUpdatedAt,
-    }],
+    [
+      next.sessionStatePath,
+      {
+        status: next.status,
+        micro_stage: next.microStage,
+        trigger: params.trigger ?? null,
+        agent_id: params.agentId ?? null,
+        iteration_count: iterations.length,
+        iterations,
+        final_strategy: iterations[iterations.length - 1]?.strategy ?? strategy,
+        bridge_evidence_tier: bridgeEvidenceTier,
+        selected_source_domains: selectedSourceDomains,
+        pruned_source_domains: prunedSourceDomains,
+        top_fragment_id: rankedFragmentsPacket?.ranking?.[0]?.fragment_id ?? null,
+        updated_at: next.lastUpdatedAt,
+      },
+    ],
   ];
 
   const generatedFiles: string[] = [];

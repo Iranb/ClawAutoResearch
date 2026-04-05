@@ -80,6 +80,8 @@ import {
 import { materializeIdeaCatalystState } from "./idea-catalyst/materializers";
 import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
+import { materializeCycleMemory } from "./research-memory-cycle";
+import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import {
   dispatchWorkflowTaskToAgent,
   type DispatchableWorkflowRole,
@@ -145,6 +147,8 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_ideation_contract",
   "materialize_literature_discovery_packet",
   "materialize_paper_story_state",
+  "materialize_writing_support_artifacts",
+  "materialize_cycle_memory",
   "materialize_idea_catalyst_state",
   "set_ideation_contract",
   "set_idea_catalyst_state",
@@ -184,6 +188,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   materialize_paper_story_state: "materializePaperStoryState",
+  materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
+  materialize_cycle_memory: "materializeCycleMemory",
   get_ideation_contract: "getIdeationContractStateSummary",
   get_idea_catalyst_state: "getIdeaCatalystStateSummary",
   set_ideation_contract: "setIdeationContractState",
@@ -483,6 +489,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_ideation_contract",
               "materialize_literature_discovery_packet",
               "materialize_paper_story_state",
+              "materialize_writing_support_artifacts",
+              "materialize_cycle_memory",
               "get_research_program",
               "set_research_program",
               "get_orchestration_state",
@@ -597,6 +605,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           paperStoryMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writingSupportMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          cycleMemoryMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -1598,6 +1614,41 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_writing_support_artifacts": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const paperStorySummary = await getPaperStoryStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              const reviewPressureSummary =
+                await getReviewPressurePacketStateSummary({
+                  projectRoot: resolvedProjectRoot,
+                });
+              const basisStage =
+                readString(asObject(params.writingSupportMaterialization)?.basis_stage) ??
+                readString(asObject(params.writingSupportMaterialization)?.basisStage) ??
+                snapshot.currentStage ??
+                "write";
+              const result = await materializeWritingSupportArtifacts({
+                projectRoot: resolvedProjectRoot,
+                stage: basisStage,
+                paperStoryState: paperStorySummary.state,
+                reviewPressureState: reviewPressureSummary.state,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_cycle_memory": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const basisStage =
+                readString(asObject(params.cycleMemoryMaterialization)?.basis_stage) ??
+                readString(asObject(params.cycleMemoryMaterialization)?.basisStage) ??
+                snapshot.currentStage ??
+                "write";
+              const result = await materializeCycleMemory({
+                projectRoot: resolvedProjectRoot,
+                stage: basisStage,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

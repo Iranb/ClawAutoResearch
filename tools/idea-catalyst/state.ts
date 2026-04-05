@@ -34,6 +34,40 @@ export type IdeaCatalystState = {
   lastUpdatedAt: string | null;
 };
 
+export type CatalystIterationCoverageSummary = {
+  totalQuestions: number;
+  resolvedQuestions: number;
+  partialQuestions: number;
+  unexploredQuestions: number;
+  unresolvedQuestions: number;
+};
+
+export type CatalystIterationRecord = {
+  iteration: number;
+  strategy: string;
+  coverageSummary: CatalystIterationCoverageSummary;
+  selectedDomains: string[];
+  prunedDomains: string[];
+  bridgeEvidenceTier: string | null;
+  gateDecision: string | null;
+  timestamp: string | null;
+};
+
+export type CatalystSessionState = {
+  status: string;
+  microStage: string | null;
+  trigger: string | null;
+  agentId: string | null;
+  iterationCount: number;
+  iterations: CatalystIterationRecord[];
+  finalStrategy: string | null;
+  bridgeEvidenceTier: string | null;
+  selectedSourceDomains: string[];
+  prunedSourceDomains: string[];
+  topFragmentId: string | null;
+  updatedAt: string | null;
+};
+
 const DEFAULT_DIR = "researcher/idea-catalyst";
 
 export const DEFAULT_IDEA_CATALYST_PATHS = {
@@ -46,6 +80,188 @@ export const DEFAULT_IDEA_CATALYST_PATHS = {
   investigationRequisitionPath: `${DEFAULT_DIR}/INVESTIGATION_REQUISITION.json`,
   sessionStatePath: `${DEFAULT_DIR}/CATALYST_SESSION_STATE.json`,
 };
+
+function normalizeCatalystIterationCoverageSummary(
+  value: unknown
+): CatalystIterationCoverageSummary {
+  const record = asRecord(value) ?? {};
+  return {
+    totalQuestions: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["totalQuestions", "total_questions"]) ?? 0)
+    ),
+    resolvedQuestions: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["resolvedQuestions", "resolved_questions"]) ?? 0
+      )
+    ),
+    partialQuestions: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["partialQuestions", "partial_questions"]) ?? 0
+      )
+    ),
+    unexploredQuestions: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["unexploredQuestions", "unexplored_questions"]) ?? 0
+      )
+    ),
+    unresolvedQuestions: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["unresolvedQuestions", "unresolved_questions"]) ?? 0
+      )
+    ),
+  };
+}
+
+function serializeCatalystIterationCoverageSummary(
+  value: CatalystIterationCoverageSummary
+): Record<string, unknown> {
+  return {
+    total_questions: value.totalQuestions,
+    resolved_questions: value.resolvedQuestions,
+    partial_questions: value.partialQuestions,
+    unexplored_questions: value.unexploredQuestions,
+    unresolved_questions: value.unresolvedQuestions,
+  };
+}
+
+function normalizeCatalystIterationRecord(
+  value: unknown,
+  index: number
+): CatalystIterationRecord {
+  const record = asRecord(value) ?? {};
+  return {
+    iteration: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["iteration"]) ?? index)
+    ),
+    strategy: pickString(record, ["strategy"]) ?? "initial_scan",
+    coverageSummary: normalizeCatalystIterationCoverageSummary(
+      record.coverageSummary ?? record.coverage_summary
+    ),
+    selectedDomains: asStringArray(
+      record.selectedDomains ?? record.selected_domains
+    ),
+    prunedDomains: asStringArray(record.prunedDomains ?? record.pruned_domains),
+    bridgeEvidenceTier: pickString(record, [
+      "bridgeEvidenceTier",
+      "bridge_evidence_tier",
+    ]),
+    gateDecision: pickString(record, ["gateDecision", "gate_decision"]),
+    timestamp: pickString(record, ["timestamp"]),
+  };
+}
+
+function serializeCatalystIterationRecord(
+  value: CatalystIterationRecord
+): Record<string, unknown> {
+  return {
+    iteration: value.iteration,
+    strategy: value.strategy,
+    coverage_summary: serializeCatalystIterationCoverageSummary(
+      value.coverageSummary
+    ),
+    selected_domains: value.selectedDomains,
+    pruned_domains: value.prunedDomains,
+    bridge_evidence_tier: value.bridgeEvidenceTier,
+    gate_decision: value.gateDecision,
+    timestamp: value.timestamp,
+  };
+}
+
+export function normalizeCatalystSessionState(
+  value: unknown
+): CatalystSessionState {
+  const record = asRecord(value) ?? {};
+  const iterations = Array.isArray(record.iterations)
+    ? record.iterations.map((entry, index) =>
+        normalizeCatalystIterationRecord(entry, index)
+      )
+    : [];
+  return {
+    status: normalizeStage(record.status) ?? "missing",
+    microStage: normalizeStage(record.microStage ?? record.micro_stage),
+    trigger: pickString(record, ["trigger"]),
+    agentId: pickString(record, ["agentId", "agent_id"]),
+    iterationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["iterationCount", "iteration_count"]) ??
+          iterations.length
+      )
+    ),
+    iterations,
+    finalStrategy: pickString(record, ["finalStrategy", "final_strategy"]),
+    bridgeEvidenceTier: pickString(record, [
+      "bridgeEvidenceTier",
+      "bridge_evidence_tier",
+    ]),
+    selectedSourceDomains: asStringArray(
+      record.selectedSourceDomains ?? record.selected_source_domains
+    ),
+    prunedSourceDomains: asStringArray(
+      record.prunedSourceDomains ?? record.pruned_source_domains
+    ),
+    topFragmentId: pickString(record, ["topFragmentId", "top_fragment_id"]),
+    updatedAt: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+export function serializeCatalystSessionState(
+  value: CatalystSessionState
+): Record<string, unknown> {
+  return {
+    status: value.status,
+    micro_stage: value.microStage,
+    trigger: value.trigger,
+    agent_id: value.agentId,
+    iteration_count: value.iterationCount,
+    iterations: value.iterations.map(serializeCatalystIterationRecord),
+    final_strategy: value.finalStrategy,
+    bridge_evidence_tier: value.bridgeEvidenceTier,
+    selected_source_domains: value.selectedSourceDomains,
+    pruned_source_domains: value.prunedSourceDomains,
+    top_fragment_id: value.topFragmentId,
+    updated_at: value.updatedAt,
+  };
+}
+
+export function getCatalystSessionStateValidationErrors(
+  state: CatalystSessionState
+): string[] {
+  const errors: string[] = [];
+  if (state.iterationCount !== state.iterations.length) {
+    errors.push(
+      `CATALYST_SESSION_STATE.iteration_count must match iterations.length (current: ${state.iterationCount} vs ${state.iterations.length})`
+    );
+  }
+  for (const [index, iteration] of state.iterations.entries()) {
+    if (iteration.iteration !== index) {
+      errors.push(
+        `CATALYST_SESSION_STATE.iterations[${index}].iteration should equal ${index} (current: ${iteration.iteration})`
+      );
+    }
+    if (!iteration.strategy) {
+      errors.push(
+        `CATALYST_SESSION_STATE.iterations[${index}].strategy is required`
+      );
+    }
+  }
+  return errors;
+}
+
+export function summarizeIdeaCatalystSessionState(value: unknown) {
+  const state = normalizeCatalystSessionState(value);
+  return {
+    state,
+    ready: state.status === "ready",
+    validationErrors: getCatalystSessionStateValidationErrors(state),
+  };
+}
 
 export function normalizeIdeaCatalystState(value: unknown): IdeaCatalystState {
   const record = asRecord(value) ?? {};

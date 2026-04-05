@@ -38,6 +38,12 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md`
 - `{PROJ}/academic_writer/story/FALLBACK_NARRATIVE.md`
 - `{PROJ}/academic_writer/story/REJECTION_RISK_TABLE.md`
+- `{PROJ}/academic_writer/WRITING_REFERENCE_BUNDLE.json`
+- `{PROJ}/academic_writer/FALLBACK_ACTIVATION.json`
+- `{PROJ}/academic_writer/PAPER_REVISION_STATE.json`
+- `{PROJ}/academic_writer/PREWRITE_REJECTION_SIMULATION.md`
+- `{PROJ}/academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md`
+- `{PROJ}/academic_writer/FIGURE_ANCHOR_PLAN.md`
 - `{PROJ}/reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
 - `{PROJ}/reviewer/story-pressure/NOVELTY_ATTACK.md`
 - `{PROJ}/reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md`
@@ -110,6 +116,10 @@ Before writing full prose, treat the durable story contract as authoritative:
 - `CLAIM_TO_EXPERIMENT_MAP.md` binds every headline claim to evidence or tables
 - `FALLBACK_NARRATIVE.md` defines the backup story if the main contribution framing is too aggressive
 - `REJECTION_RISK_TABLE.md` and the reviewer story-pressure packet define what not to overclaim
+- `WRITING_REFERENCE_BUNDLE.json` tells you which section references and wisdom-layer writing guides are mandatory for the current pass
+- `FALLBACK_ACTIVATION.json` tells you whether the main story is still active or whether fallback mode is mandatory
+- `PAPER_REVISION_STATE.json` defines which revision pass is active
+- `PREWRITE_REJECTION_SIMULATION.md`, `CONTRIBUTION_TO_STORY_BRIDGE.md`, and `FIGURE_ANCHOR_PLAN.md` define the story-first, figure-first, and skeptic-first constraints for the current draft
 
 If the story packet is missing or stale relative to the current plan / ideation basis, regenerate it through workflow first:
 
@@ -123,6 +133,7 @@ If the story packet is missing or stale relative to the current plan / ideation 
 - Claims marked `UNSUPPORTED` must not be promoted as headline results
 - Claims from parked / killed tracks must not quietly re-enter the paper as if they were winning contributions
 - If `THEORY_SUPPORT_NOTE.md` marks a claim or overall paper `RED`, keep the language empirical / mechanistic and avoid theorem-like phrasing
+- Run a self-attack pass while drafting: novelty attack, overclaim check, and claim-evidence drift check must happen before a section is considered stable
 
 **Citation rule**: Fetch every citation from real APIs — do not invent BibTeX:
 ```

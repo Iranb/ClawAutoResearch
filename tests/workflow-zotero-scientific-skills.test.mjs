@@ -86,6 +86,33 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     assert.match(content, /citation-management/i);
     assert.match(content, /venue-templates/i);
   }
+  const paperPlan = await fs.readFile(
+    path.join(repoRoot, "skills", "academic_writer", "paper-plan", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(paperPlan, /IDEA_TO_CLAIM_MAP\.json/i);
+  assert.match(paperPlan, /idea fragments|idea-to-claim/i);
+  assert.match(paperPlan, /PREWRITE_REJECTION_SIMULATION\.md/i);
+  assert.match(paperPlan, /CONTRIBUTION_TO_STORY_BRIDGE\.md/i);
+  assert.match(paperPlan, /FIGURE_ANCHOR_PLAN\.md/i);
+
+  const paperWrite = await fs.readFile(
+    path.join(repoRoot, "skills", "academic_writer", "paper-write", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(paperWrite, /WRITING_REFERENCE_BUNDLE\.json/i);
+  assert.match(paperWrite, /FALLBACK_ACTIVATION\.json/i);
+  assert.match(paperWrite, /PAPER_REVISION_STATE\.json/i);
+  assert.match(paperWrite, /self-attack/i);
+
+  const researchPaperWriting = await fs.readFile(
+    path.join(repoRoot, "skills", "academic_writer", "research-paper-writing", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(researchPaperWriting, /counterintuitive-writing\.md/i);
+  assert.match(researchPaperWriting, /story-planning-rules\.md/i);
+  assert.match(researchPaperWriting, /self-attack-protocol\.md/i);
+  assert.match(researchPaperWriting, /figure-centric-writing\.md/i);
 
   const reviewerDocs = [
     path.join(repoRoot, "agents", "reviewer", "AGENTS.md"),
@@ -98,6 +125,31 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     assert.match(content, /scholar-evaluation/i);
     assert.match(content, /peer-review/i);
   }
+  const reviewResponse = await fs.readFile(
+    path.join(repoRoot, "skills", "reviewer", "review-response", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(reviewResponse, /champion/i);
+  assert.match(
+    reviewResponse,
+    /fix_now|downgrade_claim|defer_with_scope_boundary|rebut_with_existing_evidence/i
+  );
+  assert.match(reviewResponse, /red|amber|green/i);
+
+  const rebuttalTemplate = await fs.readFile(
+    path.join(repoRoot, "skills", "reviewer", "review-response", "REBUTTAL_TEMPLATE.md"),
+    "utf8"
+  );
+  assert.match(rebuttalTemplate, /Champion Strategy/i);
+  assert.match(rebuttalTemplate, /Priority Color/i);
+
+  const ideaTournament = await fs.readFile(
+    path.join(repoRoot, "skills", "researcher", "idea-tournament", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(ideaTournament, /15/i);
+  assert.match(ideaTournament, /9/i);
+  assert.match(ideaTournament, /scarcity/i);
 
   const coderDocs = [
     path.join(repoRoot, "agents", "coder", "AGENTS.md"),

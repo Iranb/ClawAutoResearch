@@ -75,6 +75,17 @@ allowed-tools:
 
 这样可以强制广度，但又不会让 tournament 失控。
 
+当前 workflow 还要求：
+
+- `target_candidate_count = 15`
+- `hard_floor_candidate_count = 9`
+
+如果 surviving pool 少于 `15`：
+
+- 必须把 pool 标成 `scarce`
+- 必须写出 `candidate scarcity reason`
+- 不允许把一个很小的候选池假装成“已经充分探索”
+
 每个节点都必须经历：
 
 - `propose`

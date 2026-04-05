@@ -25,10 +25,24 @@ const DEFAULT_PAPER_STORY_MODULE_MOTIVATION_MAP_PATH =
   `${DEFAULT_PAPER_STORY_DIR}/MODULE_MOTIVATION_MAP.md`;
 const DEFAULT_PAPER_STORY_CLAIM_MAP_PATH =
   `${DEFAULT_PAPER_STORY_DIR}/CLAIM_TO_EXPERIMENT_MAP.md`;
+const DEFAULT_PAPER_STORY_IDEA_TO_CLAIM_MAP_PATH =
+  "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json";
 const DEFAULT_PAPER_STORY_FALLBACK_NARRATIVE_PATH =
   `${DEFAULT_PAPER_STORY_DIR}/FALLBACK_NARRATIVE.md`;
 const DEFAULT_PAPER_STORY_REJECTION_RISK_TABLE_PATH =
   `${DEFAULT_PAPER_STORY_DIR}/REJECTION_RISK_TABLE.md`;
+const DEFAULT_PAPER_STORY_WRITING_REFERENCE_BUNDLE_PATH =
+  "academic_writer/WRITING_REFERENCE_BUNDLE.json";
+const DEFAULT_PAPER_STORY_FALLBACK_ACTIVATION_PATH =
+  "academic_writer/FALLBACK_ACTIVATION.json";
+const DEFAULT_PAPER_STORY_REVISION_CYCLE_PATH =
+  "academic_writer/PAPER_REVISION_STATE.json";
+const DEFAULT_PAPER_STORY_PREWRITE_REJECTION_SIMULATION_PATH =
+  "academic_writer/PREWRITE_REJECTION_SIMULATION.md";
+const DEFAULT_PAPER_STORY_CONTRIBUTION_TO_STORY_BRIDGE_PATH =
+  "academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md";
+const DEFAULT_PAPER_STORY_FIGURE_ANCHOR_PLAN_PATH =
+  "academic_writer/FIGURE_ANCHOR_PLAN.md";
 
 export function normalizePaperStoryState(value: unknown): PaperStoryState {
   const record = asRecord(value) ?? {};
@@ -76,6 +90,9 @@ export function normalizePaperStoryState(value: unknown): PaperStoryState {
         "claimToExperimentMapPath",
         "claim_to_experiment_map_path",
       ]) ?? DEFAULT_PAPER_STORY_CLAIM_MAP_PATH,
+    ideaToClaimMapPath:
+      pickString(record, ["ideaToClaimMapPath", "idea_to_claim_map_path"]) ??
+      DEFAULT_PAPER_STORY_IDEA_TO_CLAIM_MAP_PATH,
     fallbackNarrativePath:
       pickString(record, [
         "fallbackNarrativePath",
@@ -86,6 +103,32 @@ export function normalizePaperStoryState(value: unknown): PaperStoryState {
         "rejectionRiskTablePath",
         "rejection_risk_table_path",
       ]) ?? DEFAULT_PAPER_STORY_REJECTION_RISK_TABLE_PATH,
+    writingReferenceBundlePath:
+      pickString(record, [
+        "writingReferenceBundlePath",
+        "writing_reference_bundle_path",
+      ]) ?? DEFAULT_PAPER_STORY_WRITING_REFERENCE_BUNDLE_PATH,
+    fallbackActivationPath:
+      pickString(record, [
+        "fallbackActivationPath",
+        "fallback_activation_path",
+      ]) ?? DEFAULT_PAPER_STORY_FALLBACK_ACTIVATION_PATH,
+    revisionCyclePath:
+      pickString(record, ["revisionCyclePath", "revision_cycle_path"]) ??
+      DEFAULT_PAPER_STORY_REVISION_CYCLE_PATH,
+    prewriteRejectionSimulationPath:
+      pickString(record, [
+        "prewriteRejectionSimulationPath",
+        "prewrite_rejection_simulation_path",
+      ]) ?? DEFAULT_PAPER_STORY_PREWRITE_REJECTION_SIMULATION_PATH,
+    contributionToStoryBridgePath:
+      pickString(record, [
+        "contributionToStoryBridgePath",
+        "contribution_to_story_bridge_path",
+      ]) ?? DEFAULT_PAPER_STORY_CONTRIBUTION_TO_STORY_BRIDGE_PATH,
+    figureAnchorPlanPath:
+      pickString(record, ["figureAnchorPlanPath", "figure_anchor_plan_path"]) ??
+      DEFAULT_PAPER_STORY_FIGURE_ANCHOR_PLAN_PATH,
     claimEvidenceMatrixPath:
       pickString(record, [
         "claimEvidenceMatrixPath",
@@ -139,8 +182,15 @@ export function serializePaperStoryState(
     pipeline_figure_sketch_path: value.pipelineFigureSketchPath,
     module_motivation_map_path: value.moduleMotivationMapPath,
     claim_to_experiment_map_path: value.claimToExperimentMapPath,
+    idea_to_claim_map_path: value.ideaToClaimMapPath,
     fallback_narrative_path: value.fallbackNarrativePath,
     rejection_risk_table_path: value.rejectionRiskTablePath,
+    writing_reference_bundle_path: value.writingReferenceBundlePath,
+    fallback_activation_path: value.fallbackActivationPath,
+    revision_cycle_path: value.revisionCyclePath,
+    prewrite_rejection_simulation_path: value.prewriteRejectionSimulationPath,
+    contribution_to_story_bridge_path: value.contributionToStoryBridgePath,
+    figure_anchor_plan_path: value.figureAnchorPlanPath,
     claim_evidence_matrix_path: value.claimEvidenceMatrixPath,
     track_verdicts_path: value.trackVerdictsPath,
     unsupported_claims_path: value.unsupportedClaimsPath,

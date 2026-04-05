@@ -64,7 +64,13 @@ export function buildWritingGuidance(
     }
     if (paperStory && deps.asString(paperStory.status) === "ready") {
       prepend.push(
-        `Use the story-first packet before drafting: ${deps.asString(paperStory.story_spine_path) ?? "academic_writer/story/STORY_SPINE.md"}, ${deps.asString(paperStory.claim_to_experiment_map_path) ?? "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md"}, and ${deps.asString(paperStory.fallback_narrative_path) ?? "academic_writer/story/FALLBACK_NARRATIVE.md"}.`
+        `Use the story-first packet before drafting: ${deps.asString(paperStory.story_spine_path) ?? "academic_writer/story/STORY_SPINE.md"}, ${deps.asString(paperStory.claim_to_experiment_map_path) ?? "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md"}, ${deps.asString(paperStory.fallback_narrative_path) ?? "academic_writer/story/FALLBACK_NARRATIVE.md"}, ${deps.asString(paperStory.prewrite_rejection_simulation_path) ?? "academic_writer/PREWRITE_REJECTION_SIMULATION.md"}, ${deps.asString(paperStory.contribution_to_story_bridge_path) ?? "academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md"}, and ${deps.asString(paperStory.figure_anchor_plan_path) ?? "academic_writer/FIGURE_ANCHOR_PLAN.md"}.`
+      );
+      append.push(
+        `Before section drafting, consult ${deps.asString(paperStory.writing_reference_bundle_path) ?? "academic_writer/WRITING_REFERENCE_BUNDLE.json"} and obey the fallback trigger at ${deps.asString(paperStory.fallback_activation_path) ?? "academic_writer/FALLBACK_ACTIVATION.json"} if it switches the narrative mode.`
+      );
+      append.push(
+        `Keep the revision scaffold current via ${deps.asString(paperStory.revision_cycle_path) ?? "academic_writer/PAPER_REVISION_STATE.json"} so section pass, intro-method consistency, and full-paper adversarial review stay explicit.`
       );
     }
     if (reviewPressure && deps.asString(reviewPressure.status) === "ready") {

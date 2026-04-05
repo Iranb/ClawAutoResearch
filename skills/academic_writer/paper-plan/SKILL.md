@@ -42,6 +42,7 @@ Build a paper outline from experiment results, then validate it with the Cross-R
 - `{PROJ}/analyzer/figures/` — available figures
 - `{PROJ}/researcher/LITERATURE.md` — related work landscape
 - `{PROJ}/researcher/ZOTERO_PACKET.md` — Zotero `bot/<project-id>` writing-shortlist / baseline summary when available
+- `{PROJ}/researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json` — authoritative idea-fragments to claim traceability map; use it to preserve which catalyst fragment justifies each contribution and which claims still need downstream experiment support
 - `research_workflow.get_writing_contract` — user-provided template path, section order, and paragraph-logic contract
 - `research_workflow.get_citation_integrity` — source-of-truth citation policy and placeholder budget
 
@@ -73,6 +74,16 @@ If `{PROJ}/researcher/ZOTERO_PACKET.md` exists, use it together with `/citation-
 - which papers belong in the writing shortlist
 - which baseline papers must appear in related work or setup
 - which venue structure and page budget should constrain the outline
+
+Also read `{PROJ}/researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json` before drafting the story skeleton:
+
+- preserve which idea fragments survive into paper-level claims
+- carry forward the fragment-to-claim linkage into `CONTRIBUTION_MAP.md`, `ADVANTAGE_MAP.md`, and `CLAIM_TO_EXPERIMENT_MAP.md`
+- if the idea-to-claim map is stale or contradicts `CLAIM_EVIDENCE_MATRIX.md`, repair the map before locking the outline
+- before freezing the outline, materialize and consume:
+  - `{PROJ}/academic_writer/PREWRITE_REJECTION_SIMULATION.md`
+  - `{PROJ}/academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md`
+  - `{PROJ}/academic_writer/FIGURE_ANCHOR_PLAN.md`
 
 If a template path is configured:
 
@@ -135,6 +146,10 @@ Rules:
 - Only use `GREEN` or `RED`
 - `RED` means the storyline is still loose, not that writing must stop
 - If `{PROJ}/analyzer/THEORY_SUPPORT_NOTE.md` is `RED`, reflect that in the limitation boundary instead of inventing stronger theory
+- Use `IDEA_TO_CLAIM_MAP.json` and the surviving idea fragments as the upstream source for:
+  - which contributions are foregrounded
+  - which claims remain contingent
+  - which fallback narrative branches are still valid
 - Once the sketch is coherent, let workflow scaffold the durable story contract first:
 
 ```json
@@ -202,6 +217,9 @@ Before leaving `/paper-plan`, the durable story contract should be complete enou
 - `CLAIM_TO_EXPERIMENT_MAP.md`
 - `FALLBACK_NARRATIVE.md`
 - `REJECTION_RISK_TABLE.md`
+- `PREWRITE_REJECTION_SIMULATION.md`
+- `CONTRIBUTION_TO_STORY_BRIDGE.md`
+- `FIGURE_ANCHOR_PLAN.md`
 
 ### 3. Section Outline
 

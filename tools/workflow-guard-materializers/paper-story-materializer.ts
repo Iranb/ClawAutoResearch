@@ -12,6 +12,8 @@ import {
   writeTextEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import { buildIdeaToClaimMap } from "../idea-catalyst/claim-mapper";
+import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
   normalizePaperStoryState,
@@ -118,6 +120,7 @@ export async function materializePaperStoryStateImpl(
   const researchProgram = normalizeResearchProgramState(manifest.research_program);
   const ideationSummary = await deps.getIdeationContractStateSummary({ projectRoot });
   const ideationState = ideationSummary.state;
+  const ideaCatalystState = normalizeIdeaCatalystState(manifest.idea_catalyst);
   const brainstormSummary = await deps.getBrainstormCycleStateSummary({ projectRoot });
   const brainstormState = brainstormSummary.state;
   const trackRegistry =
@@ -150,6 +153,8 @@ export async function materializePaperStoryStateImpl(
     decompositionText,
     storylineBriefRecord,
     graphIdeationPacketRecord,
+    ideaFragmentsRecord,
+    rankedFragmentsRecord,
     claimEvidenceMatrixText,
     trackVerdictsText,
     unsupportedClaimsText,
@@ -164,6 +169,12 @@ export async function materializePaperStoryStateImpl(
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, ideationState.graphIdeationPacketPath) ?? ""
     ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, ideaCatalystState.ideaFragmentsPath) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, ideaCatalystState.rankedFragmentsPath) ?? ""
+    ),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.claimEvidenceMatrixPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.trackVerdictsPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.unsupportedClaimsPath)),
@@ -171,6 +182,8 @@ export async function materializePaperStoryStateImpl(
 
   const storylineBrief = asRecord(storylineBriefRecord);
   const graphPacket = asRecord(graphIdeationPacketRecord);
+  const ideaFragmentsPacket = asRecord(ideaFragmentsRecord);
+  const rankedFragmentsPacket = asRecord(rankedFragmentsRecord);
   const claimSupport = deps.summarizeClaimSupport({
     claimEvidenceMatrixRaw: claimEvidenceMatrixText,
     unsupportedClaimsRaw: unsupportedClaimsText,
@@ -313,6 +326,25 @@ ${deps.quoteMarkdownText(
 - Validation step: compare support precision gains against clarity regressions
 `;
 
+  const ideaToClaimMap = buildIdeaToClaimMap({
+    rankedFragments: Array.isArray(rankedFragmentsPacket?.ranking)
+      ? rankedFragmentsPacket?.ranking
+      : [],
+    ideaFragments: Array.isArray(ideaFragmentsPacket?.fragments)
+      ? ideaFragmentsPacket?.fragments
+      : [],
+    selectedTrackId: storylineSourceTrackId,
+    baselineReference: researchProgram.baselineReference,
+    primaryMetric: researchProgram.primaryMetric,
+    problemStatement: researchProgram.problemStatement,
+    trackHypothesis:
+      (selectedTrack ? pickString(selectedTrack, ["hypothesis"]) : null) ??
+      (selectedProgramTrack ? pickString(selectedProgramTrack, ["hypothesis"]) : null),
+    noveltyBasis:
+      (selectedTrack ? pickString(selectedTrack, ["novelty_basis"]) : null) ??
+      (selectedProgramTrack ? pickString(selectedProgramTrack, ["novelty_basis"]) : null),
+  });
+
   const taskSummaryDoc = `# Task Summary
 
 ${deps.quoteMarkdownText(taskSummary)}
@@ -386,6 +418,9 @@ ${deps.renderMarkdownBulletList(
     partial_claim_count: claimSupport.partialCount,
     unsupported_claim_count: claimSupport.unsupportedCount,
     storyline_source_track_id: storylineSourceTrackId,
+    idea_to_claim_map_path:
+      pickString(patch, ["ideaToClaimMapPath", "idea_to_claim_map_path"]) ??
+      current.ideaToClaimMapPath,
     pending_reason:
       !deps.isIdeationContractReady(ideationState)
         ? "ideation_contract is not ready yet."
@@ -417,6 +452,14 @@ ${deps.renderMarkdownBulletList(
     }
     await writeTextEnsured(resolved, payload);
     generatedFiles.push(path.relative(projectRoot, resolved));
+  }
+  const ideaToClaimMapResolvedPath = resolveProjectArtifactPath(
+    projectRoot,
+    nextState.ideaToClaimMapPath
+  );
+  if (ideaToClaimMapResolvedPath) {
+    await writeJsonEnsured(ideaToClaimMapResolvedPath, ideaToClaimMap);
+    generatedFiles.push(path.relative(projectRoot, ideaToClaimMapResolvedPath));
   }
 
   if (trackRegistry && Array.isArray(trackRegistry.tracks)) {

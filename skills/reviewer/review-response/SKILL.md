@@ -48,6 +48,15 @@ The rebuttal must include:
 - a short response summary
 - point-by-point responses for the material reviewer concerns
 - explicit evidence or planned revisions for each concern
+- a `Priority Color` per concern:
+  - `red` = needs new evidence or major claim downgrade
+  - `amber` = manuscript revision can address
+  - `green` = already addressed with existing evidence
+- a `Champion Strategy` per concern:
+  - `fix_now`
+  - `downgrade_claim`
+  - `defer_with_scope_boundary`
+  - `rebut_with_existing_evidence`
 - a closing paragraph suitable for a response letter or revision memo
 
 ## Rules
@@ -56,6 +65,7 @@ The rebuttal must include:
 - If a reviewer request cannot be satisfied, explain the limitation directly and politely
 - If a concern maps to an unsupported claim, recommend downgrading or removing that claim
 - Keep the tone respectful, concise, and specific
+- Rank the top rebuttal priorities explicitly so the team knows which issues deserve the fastest revision budget
 - Do not leave the output only in chat; the project-local rebuttal file is mandatory
 
 ## Completion

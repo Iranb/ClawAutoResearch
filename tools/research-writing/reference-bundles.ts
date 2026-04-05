@@ -1,0 +1,171 @@
+import { writeJsonEnsured } from "../workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import type {
+  PaperStoryState,
+  ReviewPressurePacketState,
+} from "../workflow-guard.js";
+
+export const DEFAULT_WRITING_REFERENCE_BUNDLE_PATH =
+  "academic_writer/WRITING_REFERENCE_BUNDLE.json";
+
+const REFERENCE_ROOT = "skills/academic_writer/research-paper-writing/references";
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    results.push(normalized);
+  }
+  return results;
+}
+
+function refPath(fileName: string): string {
+  return `${REFERENCE_ROOT}/${fileName}`;
+}
+
+export async function materializeWritingReferenceBundle(params: {
+  projectRoot: string;
+  paperStoryState: PaperStoryState;
+  reviewPressureState: ReviewPressurePacketState | null;
+  artifactPath?: string | null;
+}) {
+  const bundle = {
+    status: "ready",
+    generatedAt: new Date().toISOString(),
+    referenceRoot: REFERENCE_ROOT,
+    storyArtifacts: {
+      storySpinePath: params.paperStoryState.storySpinePath,
+      claimToExperimentMapPath: params.paperStoryState.claimToExperimentMapPath,
+      fallbackNarrativePath: params.paperStoryState.fallbackNarrativePath,
+      rejectionRiskTablePath: params.paperStoryState.rejectionRiskTablePath,
+      ideaToClaimMapPath: params.paperStoryState.ideaToClaimMapPath,
+    },
+    reviewArtifacts: {
+      rejectFirstReviewPath: params.reviewPressureState?.rejectFirstReviewPath ?? null,
+      noveltyAttackPath: params.reviewPressureState?.noveltyAttackPath ?? null,
+      unsupportedClaimAuditPath:
+        params.reviewPressureState?.unsupportedClaimAuditPath ?? null,
+      reverseOutlinePath: params.reviewPressureState?.reverseOutlinePath ?? null,
+      figureTableQcPath: params.reviewPressureState?.figureTableQcPath ?? null,
+      limitationAuditPath: params.reviewPressureState?.limitationAuditPath ?? null,
+    },
+    globalReferencePaths: uniqueStrings([
+      refPath("counterintuitive-writing.md"),
+      refPath("story-planning-rules.md"),
+      refPath("self-attack-protocol.md"),
+      refPath("figure-centric-writing.md"),
+      refPath("paper-review.md"),
+      refPath("does-my-writing-flow-source.md"),
+    ]),
+    stageBundles: {
+      plan: {
+        referencePaths: uniqueStrings([
+          refPath("story-planning-rules.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("figure-centric-writing.md"),
+          refPath("paper-review.md"),
+          refPath("introduction.md"),
+          refPath("method.md"),
+          refPath("experiments.md"),
+        ]),
+      },
+      write: {
+        referencePaths: uniqueStrings([
+          refPath("counterintuitive-writing.md"),
+          refPath("story-planning-rules.md"),
+          refPath("self-attack-protocol.md"),
+          refPath("figure-centric-writing.md"),
+          refPath("abstract.md"),
+          refPath("introduction.md"),
+          refPath("related-work.md"),
+          refPath("method.md"),
+          refPath("experiments.md"),
+          refPath("conclusion.md"),
+          refPath("paper-review.md"),
+        ]),
+      },
+      review: {
+        referencePaths: uniqueStrings([
+          refPath("paper-review.md"),
+          refPath("self-attack-protocol.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("does-my-writing-flow-source.md"),
+        ]),
+      },
+      submit: {
+        referencePaths: uniqueStrings([
+          refPath("paper-review.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("figure-centric-writing.md"),
+          refPath("does-my-writing-flow-source.md"),
+        ]),
+      },
+    },
+    sectionBundles: {
+      abstract: {
+        referencePaths: uniqueStrings([
+          refPath("abstract.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("self-attack-protocol.md"),
+        ]),
+      },
+      introduction: {
+        referencePaths: uniqueStrings([
+          refPath("introduction.md"),
+          refPath("story-planning-rules.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("does-my-writing-flow-source.md"),
+        ]),
+      },
+      related_work: {
+        referencePaths: uniqueStrings([
+          refPath("related-work.md"),
+          refPath("counterintuitive-writing.md"),
+        ]),
+      },
+      method: {
+        referencePaths: uniqueStrings([
+          refPath("method.md"),
+          refPath("figure-centric-writing.md"),
+          refPath("does-my-writing-flow-source.md"),
+        ]),
+      },
+      experiments: {
+        referencePaths: uniqueStrings([
+          refPath("experiments.md"),
+          refPath("self-attack-protocol.md"),
+          refPath("paper-review.md"),
+        ]),
+      },
+      discussion: {
+        referencePaths: uniqueStrings([
+          refPath("paper-review.md"),
+          refPath("counterintuitive-writing.md"),
+          refPath("self-attack-protocol.md"),
+        ]),
+      },
+      conclusion: {
+        referencePaths: uniqueStrings([
+          refPath("conclusion.md"),
+          refPath("counterintuitive-writing.md"),
+        ]),
+      },
+    },
+  };
+
+  const artifactPath = params.artifactPath ?? DEFAULT_WRITING_REFERENCE_BUNDLE_PATH;
+  const resolvedPath = resolveProjectArtifactPath(params.projectRoot, artifactPath);
+  if (!resolvedPath) {
+    throw new Error("Unable to resolve WRITING_REFERENCE_BUNDLE.json path.");
+  }
+  await writeJsonEnsured(resolvedPath, bundle);
+  return {
+    path: artifactPath,
+    bundle,
+  };
+}

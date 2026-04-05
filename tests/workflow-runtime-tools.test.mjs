@@ -81,6 +81,11 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeText(targetPath, value) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value, "utf8");
+}
+
 test("research_workflow get_papernexus_remote_access returns a redacted token status", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -342,6 +347,120 @@ test("research_workflow queue_literature_discovery_requisition bridges a structu
   assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
   assert.equal(snapshot.paperIngestionRuntimeStatus, "idle");
+});
+
+test("research_workflow materialize_writing_support_artifacts scaffolds durable writer support packets", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    owner_agent: "academic_writer",
+    paper_story_state: {
+      status: "ready",
+      story_spine_path: "academic_writer/story/STORY_SPINE.md",
+      claim_to_experiment_map_path: "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+      rejection_risk_table_path: "academic_writer/story/REJECTION_RISK_TABLE.md",
+      pipeline_figure_sketch_path: "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+      module_motivation_map_path: "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+      idea_to_claim_map_path: "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json",
+      claim_support_status: "partial",
+      supported_claim_count: 1,
+      partial_claim_count: 1,
+      unsupported_claim_count: 1,
+    },
+    review_pressure_packet: {
+      status: "ready",
+      reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+      novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+      unsupported_claim_audit_path: "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+      reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+      figure_table_qc_path: "reviewer/story-pressure/FIGURE_TABLE_QC.md",
+      limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+    },
+  });
+
+  await writeText(path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"), "# Story\n");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "CLAIM_TO_EXPERIMENT_MAP.md"),
+    "# Claims\n## Claim 1 (claim-1)\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "FALLBACK_NARRATIVE.md"),
+    "# Fallback\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "REJECTION_RISK_TABLE.md"),
+    "# Risks\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "PIPELINE_FIGURE_SKETCH.md"),
+    "# Figure\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "MODULE_MOTIVATION_MAP.md"),
+    "# Modules\n"
+  );
+  await writeJson(path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"), {
+    top_fragments: [
+      {
+        fragment_id: "frag-1",
+        mapped_claims: [{ claim_id: "claim-1", claim: "Support precision gain." }],
+      },
+    ],
+    top3_directions: [{ direction_id: "dir-1", title: "Support router" }],
+  });
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "REJECT_FIRST_REVIEW.md"),
+    "# Reject\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "NOVELTY_ATTACK.md"),
+    "# Novelty Attack\n- claim-2\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "UNSUPPORTED_CLAIM_AUDIT.md"),
+    "# Unsupported\n- claim-2: unsupported\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "REVERSE_OUTLINE.md"),
+    "# Reverse Outline\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "FIGURE_TABLE_QC.md"),
+    "# Figure QC\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "story-pressure", "LIMITATION_AUDIT.md"),
+    "# Limitation Audit\n"
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_writing_support_artifacts",
+    paperStoryMaterialization: {
+      basis_stage: "write",
+    },
+  });
+
+  assert.equal(result.referenceBundle.status, "ready");
+  assert.equal(result.fallbackActivation.activeNarrativeMode, "fallback");
+  assert.equal(result.revisionCycle.stage, "write");
+  assert.ok(Array.isArray(result.generatedFiles));
+  assert.ok(result.generatedFiles.some((entry) => /WRITING_REFERENCE_BUNDLE\.json$/.test(entry)));
 });
 
 test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
@@ -912,6 +1031,10 @@ test("research_workflow materializes paper story and review pressure contracts f
   assert.equal(storyResult.state.unsupportedClaimCount, 1);
   assert.equal(storyResult.storySpineExists, true);
   assert.equal(storyResult.claimToExperimentMapExists, true);
+  assert.equal(
+    storyResult.state.ideaToClaimMapPath,
+    "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json"
+  );
 
   const storySpine = await fs.readFile(
     path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"),
@@ -928,6 +1051,23 @@ test("research_workflow materializes paper story and review pressure contracts f
   );
   assert.match(claimMap, /baseline-router/i);
   assert.match(claimMap, /support_precision/i);
+
+  const ideaToClaimMap = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"),
+      "utf8"
+    )
+  );
+  assert.equal(Array.isArray(ideaToClaimMap.mappings), true);
+  assert.equal(ideaToClaimMap.mappings.length >= 1, true);
+  assert.equal(
+    ["challenge", "insight", "contribution", "advantage"].includes(
+      ideaToClaimMap.mappings[0].story_arc_position
+    ),
+    true
+  );
+  assert.equal(Array.isArray(ideaToClaimMap.mappings[0].expected_claims), true);
+  assert.equal(ideaToClaimMap.mappings[0].expected_claims.length >= 1, true);
 
   const fallbackNarrative = await fs.readFile(
     path.join(projectRoot, "academic_writer", "story", "FALLBACK_NARRATIVE.md"),

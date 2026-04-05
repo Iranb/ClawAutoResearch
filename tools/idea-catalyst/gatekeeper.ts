@@ -1,3 +1,5 @@
+import type { SufficiencyJudgment } from "./llm-sufficiency";
+
 type ScoutingDomain = {
   domain?: string | null;
   pruned?: boolean | null;
@@ -75,7 +77,10 @@ function buildFallbackQueries(params: {
 
 export function buildIdeaCatalystGateDecision(
   scoutingReport: ScoutingReportLike,
-  decompositionPacket: DecompositionPacketLike = {}
+  decompositionPacket: DecompositionPacketLike = {},
+  options?: {
+    llmJudgment?: SufficiencyJudgment | null;
+  }
 ) {
   const candidateDomains = Array.isArray(scoutingReport.candidate_domains)
     ? scoutingReport.candidate_domains
@@ -127,6 +132,11 @@ export function buildIdeaCatalystGateDecision(
   const thresholdMet =
     (sufficientDomains.length >= 1 && totalRelevantNodes >= 1) ||
     (sufficientDomains.length >= 1 && bridgeNodeCount >= 1);
+  const llmJudgment = options?.llmJudgment ?? null;
+  const llmOverride =
+    llmJudgment && llmJudgment.confidence >= 0.8 ? llmJudgment : null;
+  const decision =
+    llmOverride?.preferredDecision ?? (thresholdMet ? "brainstorm" : "requisition");
 
   const requisitionMissingDomains = insufficientDomains.length
     ? insufficientDomains
@@ -157,10 +167,12 @@ export function buildIdeaCatalystGateDecision(
     .replace(/^-|-$/g, "")}-${questionGaps.length}-${requisitionMissingDomains.length}`;
 
   return {
-    decision: thresholdMet ? "brainstorm" : "requisition",
-    rationale: thresholdMet
-      ? "Sufficient cross-domain bridge evidence exists to continue IDEA-CATALYST integration."
-      : "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding.",
+    decision,
+    rationale:
+      llmOverride?.reasoning ??
+      (thresholdMet
+        ? "Sufficient cross-domain bridge evidence exists to continue IDEA-CATALYST integration."
+        : "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding."),
     evidence: {
       sufficient_domains: sufficientDomains,
       insufficient_domains: insufficientDomains,
@@ -168,25 +180,35 @@ export function buildIdeaCatalystGateDecision(
       threshold_met: thresholdMet,
       bridge_node_count: bridgeNodeCount,
       coverage_summary: coverageSummary,
-      gating_mode: "graph-bridge-sufficiency",
+      gating_mode: llmOverride
+        ? "graph-bridge-sufficiency+llm"
+        : "graph-bridge-sufficiency",
+      llm_confidence: llmOverride?.confidence ?? null,
+      llm_reasoning: llmOverride?.reasoning ?? null,
     },
-    requisition: thresholdMet
+    requisition: decision === "brainstorm"
       ? null
       : {
           requisition_id: requisitionId,
           target_domain: targetDomain,
-          missing_domains: requisitionMissingDomains,
+          missing_domains:
+            llmOverride?.missingDomains?.length
+              ? llmOverride.missingDomains
+              : requisitionMissingDomains,
           challenge_clusters: challengeClusters,
           coverage_gap_questions: questionGaps.map((entry) => ({
             question_id: entry.question_id,
             question: entry.question,
             coverage_status: entry.coverage_status,
-            required_domain_evidence: requisitionMissingDomains,
+            required_domain_evidence:
+              llmOverride?.missingDomains?.length
+                ? llmOverride.missingDomains
+                : requisitionMissingDomains,
           })),
           search_queries: fallbackQueries,
           minimum_sources_per_domain: 2,
           minimum_bridge_nodes: Math.max(2, Math.min(4, questionGaps.length || 1)),
-          retry_budget: 2,
+          retry_budget: llmOverride?.recommendedRetryBudget ?? 2,
           saturation_signal: `idea-catalyst-requisition:${targetDomain ?? "unknown"}:${questionGaps
             .map((entry) => entry.question_id)
             .join(",")}`,

@@ -26,6 +26,159 @@ function uniqueDomains(values: string[]): string[] {
   return entries;
 }
 
+function normalizeDomainKey(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function scoreDomainDistanceFromMatrix(
+  matrix: Record<string, unknown> | null,
+  targetDomain: string | null,
+  sourceDomain: string
+) {
+  const sourceKey = normalizeDomainKey(sourceDomain);
+  const targetKey = normalizeDomainKey(targetDomain);
+  if (!matrix || !targetKey || !sourceKey) {
+    return null;
+  }
+  const targetRow = asRecord(matrix[targetKey] ?? matrix[targetDomain ?? ""]);
+  if (!targetRow) {
+    return null;
+  }
+  const rawValue =
+    targetRow[sourceKey] ??
+    targetRow[sourceDomain] ??
+    asRecord(targetRow[sourceKey])?.score ??
+    asRecord(targetRow[sourceDomain])?.score;
+  if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
+    return null;
+  }
+  return Number(Math.max(0, Math.min(1, rawValue)).toFixed(2));
+}
+
+function overlapScore(left: string, right: string) {
+  const leftTokens = new Set(
+    String(left || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .filter((entry) => entry.length >= 3)
+  );
+  const rightTokens = new Set(
+    String(right || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .filter((entry) => entry.length >= 3)
+  );
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap / Math.max(leftTokens.size, rightTokens.size);
+}
+
+function chooseRelevantChallenge(params: {
+  mechanism: string;
+  concept: string;
+  challengeClusters: string[];
+}) {
+  const ranked = uniqueStrings(params.challengeClusters)
+    .map((challenge) => ({
+      challenge,
+      score: Math.max(
+        overlapScore(params.mechanism, challenge),
+        overlapScore(params.concept, challenge)
+      ),
+    }))
+    .sort((left, right) => right.score - left.score);
+  return ranked[0]?.challenge ?? params.challengeClusters[0] ?? "unresolved target-domain challenge";
+}
+
+function buildStructuredTakeaway(params: {
+  nodeId: string;
+  concept: string;
+  mechanism: string;
+  domain: string | null;
+  challengeClusters: string[];
+  properties?: Record<string, unknown> | null;
+}) {
+  const relevantChallenge = chooseRelevantChallenge({
+    mechanism: params.mechanism,
+    concept: params.concept,
+    challengeClusters: params.challengeClusters,
+  });
+  const properties = params.properties ?? {};
+  const sourceFormulation =
+    pickString(properties, ["abstract", "text", "evidenceText", "description"]) ??
+    `${params.domain ?? "Source domain"} frames ${params.concept} as a mechanism for ${relevantChallenge}.`;
+  const mechanismExplanation =
+    pickString(properties, ["evidenceText", "abstract", "text", "description"]) ??
+    `${params.mechanism} helps regulate ${relevantChallenge} under changing conditions.`;
+  return {
+    takeaway_id: `${params.nodeId}-takeaway`,
+    concept: params.concept,
+    mechanism: params.mechanism,
+    kg_node_id: params.nodeId,
+    source_domain_formulation: sourceFormulation,
+    mechanism_explanation: mechanismExplanation,
+    relevance_to_challenge: relevantChallenge,
+    selection_rationale: `Selected because ${params.domain ?? "the source domain"} offers transferable evidence for "${relevantChallenge}".`,
+  };
+}
+
+function normalizeBridgeNodes(params: {
+  graphPacket: Record<string, unknown>;
+  transferBridges: string[];
+  challengeClusters: string[];
+}) {
+  const explicitBridgeNodes = Array.isArray(params.graphPacket.bridge_nodes)
+    ? params.graphPacket.bridge_nodes
+    : Array.isArray(params.graphPacket.bridgeNodes)
+      ? params.graphPacket.bridgeNodes
+      : [];
+  if (explicitBridgeNodes.length > 0) {
+    return explicitBridgeNodes
+      .map((entry, index) => {
+        const record = asRecord(entry) ?? {};
+        const nodeId = pickString(record, ["node_id", "nodeId"]) ?? `bridge-${index + 1}`;
+        const domain = pickString(record, ["domain"]);
+        const mechanism =
+          pickString(record, ["mechanism"]) ??
+          pickString(record, ["node_name", "nodeName"]) ??
+          "cross-domain mechanism";
+        const concept =
+          pickString(record, ["node_name", "nodeName"]) ?? mechanism;
+        const properties = asRecord(record.properties) ?? null;
+        return {
+          node_id: nodeId,
+          node_name: concept,
+          domain,
+          mechanism,
+          score: Number(record.score ?? 0.75),
+          source: pickString(record, ["source"]) ?? "graph_bridge_node",
+          properties,
+        };
+      })
+      .filter((entry) => Boolean(entry.domain || entry.mechanism));
+  }
+  return params.transferBridges.map((entry, index) => {
+    const [domain, ...rest] = String(entry || "").split(":");
+    const mechanism = rest.join(":").trim() || String(entry || "").trim();
+    return {
+      node_id: `bridge-${index + 1}`,
+      node_name: mechanism,
+      domain: domain?.trim() || null,
+      mechanism,
+      score: 0.75,
+      source: "graph_transfer_bridge",
+      properties: null,
+    };
+  });
+}
+
 function buildDomainSearchQueries(params: {
   domain: string;
   targetDomain: string | null;
@@ -73,17 +226,17 @@ export function deriveIdeaCatalystScoutReport(params: {
     ...bridgeDomains,
   ]).filter((domain) => domain !== targetDomain);
 
-  const bridgeNodes = params.transferBridges.map((entry, index) => {
-    const [domain, ...rest] = String(entry || "").split(":");
-    const mechanism = rest.join(":").trim() || String(entry || "").trim();
-    return {
-      node_id: `bridge-${index + 1}`,
-      node_name: mechanism,
-      domain: domain?.trim() || null,
-      mechanism,
-      score: 0.75,
-      source: "graph_transfer_bridge",
-    };
+  const domainDistanceMatrix =
+    (asRecord(graphPacket.domain_distance_matrix) ??
+      asRecord(graphPacket.domainDistanceMatrix) ??
+      asRecord(topicSummary.domain_distance_matrix) ??
+      asRecord(topicSummary.domainDistanceMatrix) ??
+      null);
+
+  const bridgeNodes = normalizeBridgeNodes({
+    graphPacket,
+    transferBridges: params.transferBridges,
+    challengeClusters: params.challengeClusters,
   });
 
   const mechanismMatches = uniqueStrings(params.challengeClusters).map((challenge, index) => ({
@@ -102,11 +255,16 @@ export function deriveIdeaCatalystScoutReport(params: {
     const domainBridgeNodes = bridgeNodes.filter(
       (entry) => String(entry.domain ?? "").trim().toLowerCase() === normalizedDomain
     );
-    const takeaways = domainBridgeNodes.map((entry) => ({
-      concept: entry.node_name,
-      mechanism: entry.mechanism,
-      kg_node_id: entry.node_id,
-    }));
+    const takeaways = domainBridgeNodes.map((entry) =>
+      buildStructuredTakeaway({
+        nodeId: entry.node_id,
+        concept: entry.node_name,
+        mechanism: entry.mechanism,
+        domain: entry.domain,
+        challengeClusters: params.challengeClusters,
+        properties: entry.properties ?? null,
+      })
+    );
     const evidenceCount = Math.max(domainBridgeNodes.length, takeaways.length);
     const relevanceRatio = Number(Math.min(1, evidenceCount / 2).toFixed(2));
     const bridgeQuality = Number(
@@ -119,7 +277,9 @@ export function deriveIdeaCatalystScoutReport(params: {
     const pruned = evidenceCount === 0;
     return {
       domain,
-      domain_distance: Number((0.55 + index * 0.05).toFixed(2)),
+      domain_distance:
+        scoreDomainDistanceFromMatrix(domainDistanceMatrix, targetDomain, domain) ??
+        Number((0.55 + index * 0.05).toFixed(2)),
       selection_basis: domainBridgeNodes.length > 0 ? "shared_mechanisms" : "llm_fallback_candidate",
       rationale: domainBridgeNodes.length > 0
         ? `Derived from graph transfer bridge evidence for ${domain}.`

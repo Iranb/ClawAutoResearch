@@ -924,8 +924,15 @@ export type PaperStoryState = {
   pipelineFigureSketchPath: string | null;
   moduleMotivationMapPath: string | null;
   claimToExperimentMapPath: string | null;
+  ideaToClaimMapPath: string | null;
   fallbackNarrativePath: string | null;
   rejectionRiskTablePath: string | null;
+  writingReferenceBundlePath: string | null;
+  fallbackActivationPath: string | null;
+  revisionCyclePath: string | null;
+  prewriteRejectionSimulationPath: string | null;
+  contributionToStoryBridgePath: string | null;
+  figureAnchorPlanPath: string | null;
   claimEvidenceMatrixPath: string | null;
   trackVerdictsPath: string | null;
   unsupportedClaimsPath: string | null;
@@ -1372,6 +1379,7 @@ export type WorkflowSnapshot = {
   paperStoryTrackId: string | null;
   paperStoryStorySpinePath: string | null;
   paperStoryClaimToExperimentMapPath: string | null;
+  paperStoryIdeaToClaimMapPath: string | null;
   paperStoryFallbackNarrativePath: string | null;
   paperStoryClaimSupportStatus: string | null;
   paperStorySupportedClaimCount: number | null;
@@ -3300,6 +3308,7 @@ function getPaperStoryStateValidationErrors(state: PaperStoryState): string[] {
     ["pipeline_figure_sketch_path", state.pipelineFigureSketchPath],
     ["module_motivation_map_path", state.moduleMotivationMapPath],
     ["claim_to_experiment_map_path", state.claimToExperimentMapPath],
+    ["idea_to_claim_map_path", state.ideaToClaimMapPath],
     ["fallback_narrative_path", state.fallbackNarrativePath],
     ["rejection_risk_table_path", state.rejectionRiskTablePath],
   ] as Array<[string, string | null]>) {
@@ -6043,6 +6052,7 @@ export async function buildWorkflowSnapshot(params: {
     paperStoryTrackId: paperStoryState.storylineSourceTrackId,
     paperStoryStorySpinePath: paperStoryState.storySpinePath,
     paperStoryClaimToExperimentMapPath: paperStoryState.claimToExperimentMapPath,
+    paperStoryIdeaToClaimMapPath: paperStoryState.ideaToClaimMapPath,
     paperStoryFallbackNarrativePath: paperStoryState.fallbackNarrativePath,
     paperStoryClaimSupportStatus: paperStoryState.claimSupportStatus,
     paperStorySupportedClaimCount: paperStoryState.supportedClaimCount,
