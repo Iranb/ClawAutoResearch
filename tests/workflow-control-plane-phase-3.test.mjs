@@ -123,6 +123,318 @@ async function executeWorkflowTool(tool, params) {
   return JSON.parse(response.content[0].text);
 }
 
+async function seedReadyIdeationContract(
+  projectRoot,
+  { trackId = "track-main" } = {}
+) {
+  await writeText(path.join(projectRoot, "researcher", "ideation", "NOVELTY_TREE.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "CHALLENGE_INSIGHT_TREE.md")
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "researcher",
+      "ideation",
+      "WELL_ESTABLISHED_SOLUTION_CHECK.md"
+    )
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "CROSS_DOMAIN_TRANSFER.md")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "PROBLEM_DECOMPOSITION.md")
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"),
+    {
+      candidates: [
+        {
+          id: "dir-1",
+          formulation: "Graph-grounded method idea",
+          novelty_hypothesis: "Open challenge remains unresolved.",
+          status: "surviving",
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "TOURNAMENT_SCOREBOARD.json"),
+    {
+      status: "completed",
+      selected_direction_id: "dir-1",
+      rankings: [
+        {
+          direction_id: "dir-1",
+          novelty: 0.9,
+          feasibility: 0.7,
+          relevance: 0.8,
+          clarity: 0.8,
+        },
+      ],
+    }
+  );
+  await writeText(path.join(projectRoot, "researcher", "ideation", "IDEA_TREE.md"));
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "RANKING_HISTORY.json"),
+    {
+      status: "completed",
+      method: "equivalent_elo_v1",
+      rounds: [],
+    }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "TOP3_DIRECTION_SUMMARY.md")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "ideation", "RESEARCH_PROPOSAL.md")
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "GRAPH_IDEATION_PACKET.json"),
+    {
+      project_id: "demo-project",
+      challenge_clusters: ["cluster:challenge-1"],
+      insight_clusters: ["cluster:insight-1"],
+      novelty_zones: ["zone:1"],
+      occupied_zones: [],
+      transfer_bridges: ["bridge:1"],
+    }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.ideation_contract = {
+    status: "ready",
+    contract_version: 1,
+    long_term_goal: "Discover a robust graph-grounded innovation direction.",
+    problem_scope: "Support precision in scientific writing",
+    basis_stage: "frontier_mapping",
+    graph_ideation_indices: {
+      status: "ready",
+      novelty_candidate_clusters: ["zone:1"],
+      challenge_clusters: ["cluster:challenge-1"],
+      insight_clusters: ["cluster:insight-1"],
+      occupied_solution_zones: [],
+      transfer_bridges: ["bridge:1"],
+      last_refresh_at: "2026-03-26T09:00:00.000Z",
+    },
+    novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
+    challenge_insight_tree_path: "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
+    solution_check_path: "researcher/ideation/WELL_ESTABLISHED_SOLUTION_CHECK.md",
+    cross_domain_transfer_path: "researcher/ideation/CROSS_DOMAIN_TRANSFER.md",
+    problem_decomposition_path: "researcher/ideation/PROBLEM_DECOMPOSITION.md",
+    candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+    idea_tree_path: "researcher/ideation/IDEA_TREE.md",
+    ranking_history_path: "researcher/ideation/RANKING_HISTORY.json",
+    tournament_scoreboard_path: "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
+    top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
+    research_proposal_path: "researcher/ideation/RESEARCH_PROPOSAL.md",
+    graph_ideation_packet_path: "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+    selected_direction_id: "dir-1",
+    selected_track_id: trackId,
+    pending_reason: null,
+    last_updated_at: "2026-03-26T09:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyIdeaCatalystState(
+  projectRoot,
+  { microStage = "judging" } = {}
+) {
+  const root = path.join(projectRoot, "researcher", "idea-catalyst");
+  await writeJson(path.join(root, "DECOMPOSITION_PACKET.json"), { version: 1 });
+  await writeJson(path.join(root, "ABSTRACTION_PACKET.json"), { version: 1 });
+  await writeJson(path.join(root, "SCOUTING_REPORT.json"), {
+    target_domain: "Computer Science",
+    candidate_domains: [{ domain: "Psychology" }],
+  });
+  await writeJson(path.join(root, "GATE_DECISION.json"), {
+    decision: "brainstorm",
+  });
+  await writeJson(path.join(root, "IDEA_FRAGMENTS.json"), {
+    fragments: [{ fragment_id: "frag-1", source_domain: "Psychology" }],
+  });
+  await writeJson(path.join(root, "RANKED_FRAGMENTS.json"), {
+    ranking: [{ rank: 1, fragment_id: "frag-1" }],
+  });
+  await writeJson(path.join(root, "CATALYST_SESSION_STATE.json"), {
+    status: "ready",
+    micro_stage: microStage,
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.idea_catalyst = {
+    status: "ready",
+    contract_version: 1,
+    mode: "graph-first",
+    micro_stage: microStage,
+    decomposition_packet_path: "researcher/idea-catalyst/DECOMPOSITION_PACKET.json",
+    abstraction_packet_path: "researcher/idea-catalyst/ABSTRACTION_PACKET.json",
+    scouting_report_path: "researcher/idea-catalyst/SCOUTING_REPORT.json",
+    gate_decision_path: "researcher/idea-catalyst/GATE_DECISION.json",
+    idea_fragments_path: "researcher/idea-catalyst/IDEA_FRAGMENTS.json",
+    ranked_fragments_path: "researcher/idea-catalyst/RANKED_FRAGMENTS.json",
+    investigation_requisition_path:
+      "researcher/idea-catalyst/INVESTIGATION_REQUISITION.json",
+    session_state_path: "researcher/idea-catalyst/CATALYST_SESSION_STATE.json",
+    target_domain: "Computer Science",
+    source_domains: ["Psychology"],
+    bridge_count: 2,
+    top_fragment_id: "frag-1",
+    requisition_required: false,
+    pending_reason: null,
+    last_updated_at: "2026-03-26T09:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyPaperStoryState(
+  projectRoot,
+  { trackId = "track-main" } = {}
+) {
+  const root = path.join(projectRoot, "academic_writer", "story");
+  for (const [name, text] of [
+    ["TASK_SUMMARY.md", "# Task Summary\n"],
+    ["CHALLENGE_STATEMENT.md", "# Challenge Statement\n"],
+    ["INSIGHT_SUMMARY.md", "# Insight Summary\n"],
+    ["CONTRIBUTION_MAP.md", "# Contribution Map\n"],
+    ["ADVANTAGE_MAP.md", "# Advantage Map\n"],
+    ["STORY_SPINE.md", "# Story Spine\n"],
+    ["PIPELINE_FIGURE_SKETCH.md", "# Pipeline Figure Sketch\n"],
+    ["MODULE_MOTIVATION_MAP.md", "# Module Motivation Map\n"],
+    ["CLAIM_TO_EXPERIMENT_MAP.md", "# Claim To Experiment Map\n"],
+    ["FALLBACK_NARRATIVE.md", "# Fallback Narrative\n"],
+    ["REJECTION_RISK_TABLE.md", "# Rejection Risk Table\n"],
+  ]) {
+    await writeText(path.join(root, name), text);
+  }
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"),
+    {
+      claims: [
+        {
+          claim_id: "claim-1",
+          fragment_id: "frag-1",
+          track_id: trackId,
+        },
+      ],
+    }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_story_state = {
+    status: "ready",
+    track_id: trackId,
+    task_summary_path: "academic_writer/story/TASK_SUMMARY.md",
+    challenge_statement_path: "academic_writer/story/CHALLENGE_STATEMENT.md",
+    insight_summary_path: "academic_writer/story/INSIGHT_SUMMARY.md",
+    contribution_map_path: "academic_writer/story/CONTRIBUTION_MAP.md",
+    advantage_map_path: "academic_writer/story/ADVANTAGE_MAP.md",
+    story_spine_path: "academic_writer/story/STORY_SPINE.md",
+    pipeline_figure_sketch_path: "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+    module_motivation_map_path: "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+    claim_to_experiment_map_path: "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+    idea_to_claim_map_path: "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json",
+    fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+    rejection_risk_table_path: "academic_writer/story/REJECTION_RISK_TABLE.md",
+    claim_support_status: "supported",
+    supported_claim_count: 1,
+    partial_claim_count: 0,
+    unsupported_claim_count: 0,
+    pending_reason: null,
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+async function seedReadyReviewPressurePacket(projectRoot) {
+  const root = path.join(projectRoot, "reviewer", "story-pressure");
+  for (const [name, text] of [
+    ["REJECT_FIRST_REVIEW.md", "# Reject First Review\n"],
+    ["NOVELTY_ATTACK.md", "# Novelty Attack\n"],
+    ["UNSUPPORTED_CLAIM_AUDIT.md", "# Unsupported Claim Audit\n"],
+    ["REVERSE_OUTLINE.md", "# Reverse Outline\n"],
+    ["FIGURE_TABLE_QC.md", "# Figure Table QC\n"],
+    ["LIMITATION_AUDIT.md", "# Limitation Audit\n"],
+  ]) {
+    await writeText(path.join(root, name), text);
+  }
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.review_pressure_packet = {
+    status: "ready",
+    mode: "aggressive",
+    track_id: "track-main",
+    reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+    novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+    unsupported_claim_audit_path: "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+    reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+    figure_table_qc_path: "reviewer/story-pressure/FIGURE_TABLE_QC.md",
+    limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+    latest_round_at: "2026-03-26T10:30:00.000Z",
+    pending_reason: null,
+  };
+  await writeJson(manifestPath, manifest);
+}
+
+function buildAlignedExperimentManifest(trackId, overrides = {}) {
+  return {
+    experiment_id: "exp-1",
+    project_id: "demo-project",
+    track_id: trackId,
+    question: "Does graph grounding improve support precision?",
+    hypothesis: "Graph grounding improves support precision.",
+    novelty_basis: "It couples frontier packets with section drafting.",
+    baseline_reference: "baseline-a",
+    primary_baseline_metric: "acc",
+    target_improvement: "Improve acc by >= 2 points over baseline-a.",
+    baseline_training_protocol:
+      "Match baseline-a optimizer, schedule, seeds, epochs, and preprocessing unless allowed_deviations says otherwise.",
+    baseline_eval_protocol:
+      "Use the baseline-a validation split, checkpoint selection, and accuracy evaluation method unchanged.",
+    innovation_points: [
+      "Graph-grounded support routing",
+      "Frontier-packet-conditioned section drafting",
+    ],
+    validation_steps: [
+      {
+        step_id: "baseline-repro",
+        objective: "Reproduce baseline-a with the unchanged eval protocol.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        step_id: "innovation-step-1",
+        objective: "Enable graph-grounded support routing only.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        step_id: "innovation-step-2",
+        objective: "Add frontier-packet-conditioned drafting on top of step 1.",
+        covers: ["Frontier-packet-conditioned section drafting"],
+      },
+    ],
+    ablation_plan: [
+      {
+        ablation_id: "minus-routing",
+        objective: "Disable graph-grounded support routing to verify its contribution.",
+        covers: ["Graph-grounded support routing"],
+      },
+      {
+        ablation_id: "minus-packets",
+        objective: "Disable frontier packets to verify the drafting contribution.",
+        covers: ["Frontier-packet-conditioned section drafting"],
+      },
+    ],
+    name: "baseline",
+    entry_point: "train.py",
+    status: "draft",
+    ...overrides,
+  };
+}
+
 async function seedPlanProject(projectRoot) {
   const now = "2026-03-26T09:00:00.000Z";
   await writeText(path.join(projectRoot, "CLAIM_POLICY.md"));
@@ -312,6 +624,8 @@ async function seedPlanProject(projectRoot) {
       graph_presence_status: "ready",
     },
   });
+  await seedReadyIdeationContract(projectRoot);
+  await seedReadyIdeaCatalystState(projectRoot);
 }
 
 async function seedExperimentProject(projectRoot) {
@@ -348,7 +662,10 @@ async function seedExperimentProject(projectRoot) {
       "exp-1__baseline",
       "EXPERIMENT_MANIFEST.json"
     ),
-    { experiment_id: "exp-1", track_id: "track-main" }
+    buildAlignedExperimentManifest("track-main", {
+      hypothesis: "Demo hypothesis",
+      novelty_basis: "Demo novelty",
+    })
   );
   await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
   await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
@@ -465,6 +782,8 @@ async function seedExperimentProject(projectRoot) {
       papernexus_sync_status: "synced",
     },
   });
+  await seedReadyIdeationContract(projectRoot);
+  await seedReadyIdeaCatalystState(projectRoot);
 }
 
 async function seedWriteProject(projectRoot) {
@@ -701,6 +1020,8 @@ async function seedWriteProject(projectRoot) {
       plot_pack_path: "researcher/plot_pack.json",
     },
   });
+  await seedReadyPaperStoryState(projectRoot);
+  await seedReadyReviewPressurePacket(projectRoot);
 }
 
 async function seedWritePackageSourceSummaries(projectRoot) {

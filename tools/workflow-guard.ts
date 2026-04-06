@@ -116,6 +116,8 @@ import {
   normalizeCitationIntegrityState,
   normalizeExternalReviewState,
   normalizeGraphGuidedWritingState,
+  normalizeReviewScoreRecords,
+  type ReviewScoreRecord,
   normalizeReviewSessionRubric,
   normalizeReviewSessionState,
   normalizeWritingSectionPacketState,
@@ -320,6 +322,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   papernexusApiTokenAccount?: string;
   papernexusApiTokenLookupTimeoutMs?: number;
   papernexusMineruHttpUrl?: string;
+  papernexusAccessMode?: string;
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
@@ -1163,6 +1166,7 @@ type ReviewIssueTrackerState = {
   openCounts: ReviewIssueCounts;
   issueManifestPath: string | null;
   issues: ReviewIssueState[];
+  scoreRecords: ReviewScoreRecord[];
   lastReviewRound: number;
   lastUpdatedAt: string | null;
   pendingReason: string | null;
@@ -1235,6 +1239,7 @@ export type WorkflowSnapshot = {
   papernexusApiTokenService: string | null;
   papernexusApiTokenAccount: string | null;
   papernexusMineruHttpUrl: string | null;
+  papernexusAccessMode: string | null;
   idleResearchEnabled: boolean;
   idleResearchTopic: string | null;
   idleResearchStatus: string | null;
@@ -1541,6 +1546,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   papernexusApiTokenAccount: "default",
   papernexusApiTokenLookupTimeoutMs: 2000,
   papernexusMineruHttpUrl: "",
+  papernexusAccessMode: "auto",
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
   lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
@@ -2111,6 +2117,9 @@ function normalizePolicy(
     papernexusMineruHttpUrl:
       asString(config?.papernexusMineruHttpUrl) ??
       DEFAULT_POLICY.papernexusMineruHttpUrl,
+    papernexusAccessMode:
+      asString((config as Record<string, unknown> | null)?.papernexusAccessMode) ??
+      DEFAULT_POLICY.papernexusAccessMode,
     autoMode:
       config && typeof config === "object"
         ? normalizeWorkflowAutoMode((config as Record<string, unknown>).autoMode)
@@ -5533,6 +5542,7 @@ function buildDynamicTasks(params: {
   papernexusApiTokenService: string | null;
   papernexusApiTokenAccount: string | null;
   papernexusMineruHttpUrl: string | null;
+  papernexusAccessMode: string | null;
 }): string[] {
   return buildDynamicTasksImpl(params, {
     rolePolicies: ROLE_POLICIES,
@@ -5890,6 +5900,7 @@ export async function buildWorkflowSnapshot(params: {
     papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
     papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
     papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
+    papernexusAccessMode: typeof policy?.papernexusAccessMode === "string" ? policy.papernexusAccessMode : null,
     idleResearchEnabled: idleResearch.enabled,
     idleResearchTopic: idleResearch.topic,
     idleResearchStatus: idleResearch.status,
@@ -6144,6 +6155,7 @@ export async function buildWorkflowSnapshot(params: {
       papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
       papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
       papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
+      papernexusAccessMode: typeof policy?.papernexusAccessMode === "string" ? policy.papernexusAccessMode : null,
     }),
   };
 }
@@ -10236,12 +10248,18 @@ export async function setReviewIssueTrackerState(params: {
     value: manifest.review_issue_tracker,
   });
   const patch = asRecord(params.reviewIssueTracker) ?? {};
+  const hasScoreRecordPatch =
+    Object.prototype.hasOwnProperty.call(patch, "scoreRecords") ||
+    Object.prototype.hasOwnProperty.call(patch, "score_records");
   let next: ReviewIssueTrackerState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
     issues: Array.isArray(patch.issues)
       ? patch.issues.map((issue) => normalizeReviewIssueState(issue))
       : current.issues,
+    scoreRecords: hasScoreRecordPatch
+      ? normalizeReviewScoreRecords(patch.scoreRecords ?? patch.score_records)
+      : current.scoreRecords,
     openCounts:
       patch.openCounts || patch.open_counts
         ? normalizeReviewIssueCounts(patch.openCounts ?? patch.open_counts)

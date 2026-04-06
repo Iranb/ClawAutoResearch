@@ -44,6 +44,7 @@ import {
   buildAutoGateReviewPrompt,
   createGateReviewRound,
   defaultGateReviewPanel,
+  evaluateAutoGate,
   extractLatestAssistantText,
   materializeGateReviewPacket,
   parseGateReviewResult,
@@ -2600,6 +2601,27 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           approved: false,
         };
       }
+      const manifest = await readJsonIfExists<Record<string, unknown>>(
+        path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+      );
+      const scoreEvaluation = evaluateAutoGate(
+        "submit",
+        manifest,
+        params.workflowPolicy.autoGate
+      );
+      if (scoreEvaluation.scoreRecordCount > 0 && !scoreEvaluation.pass) {
+        return {
+          launched: false,
+          reason: "already_rejected",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "GATE-5",
+          stage: "submit",
+          status: "rejected",
+          reviewCount: scoreEvaluation.scoreRecordCount,
+          approved: false,
+        };
+      }
       return {
         launched: false,
         reason: "manual_confirmation_required",
@@ -2607,8 +2629,11 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
         projectRoot: params.projectRoot,
         gateId: "GATE-5",
         stage: "submit",
-        status: null,
-        reviewCount: 0,
+        status:
+          scoreEvaluation.scoreRecordCount > 0 && scoreEvaluation.pass
+            ? "thresholds_passed"
+            : null,
+        reviewCount: scoreEvaluation.scoreRecordCount,
         approved: false,
       };
     },

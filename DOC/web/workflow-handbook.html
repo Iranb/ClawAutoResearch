@@ -101,6 +101,31 @@
         font-size: 1.02rem;
       }
 
+      .lang-switch {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .lang-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 96px;
+        padding: 9px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(141, 77, 34, 0.14);
+        background: rgba(255, 255, 255, 0.78);
+        color: var(--brand);
+        text-decoration: none;
+        font-size: 0.9rem;
+      }
+
+      .hero-note {
+        margin-top: 16px;
+      }
+
       .hero-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -328,6 +353,24 @@
           PaperNexus 侧，把 <code>openclaw-research</code> 保持成 workflow engine、quality gate 和
           artifact orchestrator。
         </p>
+        <div class="lang-switch" aria-label="Language quick links">
+          <a class="lang-btn" data-lang-btn="zh" href="#lang-zh">中文导读</a>
+          <a class="lang-btn" data-lang-btn="en" href="#lang-en">English Quick Guide</a>
+        </div>
+        <div class="cards-2 hero-note">
+          <div class="card" id="lang-zh">
+            <h3>中文导读</h3>
+            <p>
+              这份手册当前以中文正文为主，但会保留关键英文术语、状态文件名和阶段名，方便直接映射到代码与运行时输出。
+            </p>
+          </div>
+          <div class="card" id="lang-en">
+            <h3>English Quick Guide</h3>
+            <p>
+              This handbook is Chinese-first, with an English quick path for the Stage Flow, key state files, and submit gate checks such as <code>GATE-5</code>.
+            </p>
+          </div>
+        </div>
         <div class="hero-grid">
           <div class="hero-stat">
             <strong>12</strong>
@@ -452,6 +495,10 @@
 
           <section id="workflow">
             <h2>3. 端到端工作流</h2>
+            <div class="pill-row">
+              <span class="pill">Stage Flow</span>
+              <span class="pill">阶段流</span>
+            </div>
             <p>
               当前主阶段机是：<code>setup -&gt; graph_build -&gt; frontier_mapping -&gt; idea -&gt; plan -&gt; code -&gt; experiment -&gt; analyze -&gt; review -&gt; write -&gt; submit -&gt; done</code>。
               它不是线性 happy path，而是一个可以自动回退、自动补料、自动重入的阶段控制系统。
@@ -483,7 +530,7 @@
               </div>
               <div class="stage-item">
                 <strong>experiment · owner = researcher</strong>
-                <div>发起、监控、同步实验，跟踪 ledger、remote run、batch、plot pack、monitor cooldown。</div>
+                <div>发起、监控、同步实验，必要时通过 <code>/monitor-experiment</code> 接管 remote run，跟踪 ledger、batch、plot pack 和 monitor cooldown。</div>
               </div>
               <div class="stage-item">
                 <strong>analyze · owner = analyzer</strong>

@@ -5,6 +5,7 @@ import {
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
+import { normalizeReviewScoreRecords } from "./authoring-review-state";
 
 const DEFAULT_REVIEW_ISSUES_PATH = "reviewer/REVIEW_ISSUES.json";
 
@@ -142,6 +143,7 @@ type ReviewIssueTrackerStateLike = {
   openCounts: ReviewIssueCountsLike;
   issueManifestPath: string | null;
   issues: ReviewIssueStateLike[];
+  scoreRecords: ReturnType<typeof normalizeReviewScoreRecords>;
   lastReviewRound: number;
   lastUpdatedAt: string | null;
   pendingReason: string | null;
@@ -630,6 +632,9 @@ export function normalizeReviewIssueTrackerState(
     issues: Array.isArray(record.issues)
       ? record.issues.map((issue) => normalizeReviewIssueState(issue))
       : [],
+    scoreRecords: normalizeReviewScoreRecords(
+      record.scoreRecords ?? record.score_records
+    ),
     lastReviewRound: Math.max(
       0,
       Math.floor(
@@ -649,6 +654,7 @@ export function serializeReviewIssueTrackerState(
     open_counts: serializeReviewIssueCounts(state.openCounts),
     issue_manifest_path: state.issueManifestPath,
     issues: state.issues.map((issue) => serializeReviewIssueState(issue)),
+    score_records: state.scoreRecords,
     last_review_round: state.lastReviewRound,
     last_updated_at: state.lastUpdatedAt,
     pending_reason: state.pendingReason,

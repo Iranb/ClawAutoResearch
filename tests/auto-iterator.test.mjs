@@ -891,6 +891,7 @@ async function seedProjectReadyForSubmit(projectRoot) {
   );
   await writeText(path.join(projectRoot, "reviewer", "external_review_2026-03-22.md"));
   await writeText(path.join(projectRoot, "reviewer", "rebuttal_2026-03-22.md"));
+  await writeText(path.join(projectRoot, "reviewer", "SIMULATED_EXTERNAL_REVIEW.md"));
   await writeText(path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"));
 
   await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));

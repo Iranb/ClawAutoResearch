@@ -13,7 +13,8 @@ test("workflow-owned upload docs teach queued ingestion requests instead of dire
     path.join(repoRoot, "agents", "researcher", "AGENTS.md"),
     path.join(repoRoot, "agents", "researcher", "TOOLS.md"),
     path.join(repoRoot, "agents", "researcher", "SOUL.md"),
-    path.join(repoRoot, "tools", "workflow-guard.ts"),
+    path.join(repoRoot, "tools", "workflow-guard-prompt-assembly.ts"),
+    path.join(repoRoot, "tools", "workflow-guard-guidance", "papernexus-guidance.ts"),
   ];
 
   for (const filePath of files) {

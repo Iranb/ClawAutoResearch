@@ -136,6 +136,12 @@
         "default": "",
         "description": "Optional remote MinerU HTTP endpoint used by PaperNexus for PDF materialization. When configured, the workflow prefers this remote parser path before local Docling or Marker fallbacks."
       },
+      "papernexusAccessMode": {
+        "type": "string",
+        "enum": ["remote_api", "local_mcp", "auto"],
+        "default": "auto",
+        "description": "How the workflow accesses PaperNexus graph operations. remote_api: HTTP bearer-token only. local_mcp: spawn local PaperNexus MCP server via stdio. auto: try remote API first, fall back to local MCP."
+      },
       "autoMode": {
         "type": "string",
         "enum": ["off", "conservative", "aggressive"],
@@ -178,6 +184,14 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "code_to_experiment": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "avg": { "type": "number", "minimum": 0, "maximum": 10, "default": 8.0 },
+                  "minSingle": { "type": "number", "minimum": 0, "maximum": 10, "default": 7.2 }
+                }
+              },
               "review_to_write": {
                 "type": "object",
                 "additionalProperties": false,
@@ -326,6 +340,9 @@
     },
     "papernexusMineruHttpUrl": {
       "label": "PaperNexus MinerU HTTP URL"
+    },
+    "papernexusAccessMode": {
+      "label": "PaperNexus Access Mode"
     },
     "autoMode": {
       "label": "Auto Mode"

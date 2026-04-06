@@ -1007,3 +1007,233 @@ export function mergeCompletedPaperEntries(params: {
     newlyCompletedPapers,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Experiment outcome → graph write-back
+// ---------------------------------------------------------------------------
+
+export type ExperimentSyncOutcome = {
+  synced: boolean;
+  experimentsProcessed: number;
+  findingsCreated: number;
+  error: string | null;
+};
+
+type ExperimentLedgerLike = Record<string, unknown> & {
+  summary?: Record<string, unknown> | null;
+  experiments?: Array<Record<string, unknown>> | null;
+};
+
+type McpClientLike = {
+  callTool: (
+    toolName: string,
+    params?: Record<string, unknown>
+  ) => Promise<{ ok: boolean; data: unknown; error: string | null }>;
+};
+
+function getOrCreateExperimentSyncRecord(
+  experiment: Record<string, unknown>
+): Record<string, unknown> {
+  const existing = asRecord(experiment.papernexusSync ?? experiment.papernexus_sync);
+  if (existing) {
+    experiment.papernexusSync = existing;
+    experiment.papernexus_sync = existing;
+    return existing;
+  }
+  const created: Record<string, unknown> = {};
+  experiment.papernexusSync = created;
+  experiment.papernexus_sync = created;
+  return created;
+}
+
+function recordExperimentSyncOutcome(params: {
+  experiment: Record<string, unknown>;
+  status: "synced" | "failed";
+  now: string;
+  note: string | null;
+  nodeRef?: string | null;
+}): void {
+  const syncRecord = getOrCreateExperimentSyncRecord(params.experiment);
+  syncRecord.status = params.status;
+  syncRecord.lastSyncedAt = params.status === "synced" ? params.now : null;
+  syncRecord.last_synced_at = params.status === "synced" ? params.now : null;
+  syncRecord.notes = params.note;
+  if (params.nodeRef) {
+    const existingRefs = Array.isArray(syncRecord.nodeRefs)
+      ? syncRecord.nodeRefs
+      : Array.isArray(syncRecord.node_refs)
+        ? syncRecord.node_refs
+        : [];
+    const nextRefs = Array.from(
+      new Set(
+        existingRefs
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .concat(params.nodeRef)
+      )
+    );
+    syncRecord.nodeRefs = nextRefs;
+    syncRecord.node_refs = nextRefs;
+  }
+}
+
+function recalculateExperimentLedgerSyncSummary(
+  ledger: ExperimentLedgerLike,
+  now: string,
+  markComplete: boolean
+): void {
+  const summary = asRecord(ledger.summary) ?? {};
+  const experiments = Array.isArray(ledger.experiments) ? ledger.experiments : [];
+  const syncRequired = experiments.some((experiment) => {
+    const status = asString(experiment.status);
+    if (
+      !["done", "completed", "failed", "timeout", "stalled", "killed", "cancelled"].includes(
+        status ?? ""
+      )
+    ) {
+      return false;
+    }
+    const syncRecord = asRecord(experiment.papernexusSync ?? experiment.papernexus_sync);
+    const syncStatus =
+      asString(syncRecord?.status) ??
+      asString((syncRecord as Record<string, unknown> | null)?.sync_status);
+    return !syncStatus || ["pending", "failed", "missing"].includes(syncStatus);
+  });
+  const latestSyncedAt =
+    experiments
+      .map((experiment) => {
+        const syncRecord = asRecord(experiment.papernexusSync ?? experiment.papernexus_sync);
+        return (
+          asString(syncRecord?.lastSyncedAt) ??
+          asString((syncRecord as Record<string, unknown> | null)?.last_synced_at)
+        );
+      })
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0] ??
+    (!syncRequired && markComplete
+      ? now
+      : asString(summary.papernexus_last_sync_at) ?? asString(summary.papernexusLastSyncAt));
+
+  summary.papernexus_sync_required = syncRequired;
+  summary.papernexusSyncRequired = syncRequired;
+  summary.papernexus_last_sync_at = latestSyncedAt ?? null;
+  summary.papernexusLastSyncAt = latestSyncedAt ?? null;
+  ledger.summary = summary;
+}
+
+export async function syncExperimentOutcomesToGraph(params: {
+  projectRoot: string;
+  ledger: ExperimentLedgerLike;
+  mcpClient: McpClientLike | null;
+  now?: string;
+}): Promise<ExperimentSyncOutcome> {
+  const { ledger, mcpClient, now = new Date().toISOString() } = params;
+  const syncRequired =
+    ledger.summary?.papernexus_sync_required === true ||
+    ledger.summary?.papernexusSyncRequired === true;
+
+  if (!syncRequired) {
+    return { synced: false, experimentsProcessed: 0, findingsCreated: 0, error: null };
+  }
+
+  if (!mcpClient) {
+    return {
+      synced: false,
+      experimentsProcessed: 0,
+      findingsCreated: 0,
+      error: "No MCP client available for graph write-back. Configure papernexusAccessMode or resolve token.",
+    };
+  }
+
+  const experiments = Array.isArray(ledger.experiments) ? ledger.experiments : [];
+  const completed = experiments.filter(
+    (exp) =>
+      asString(exp.status) === "completed" || asString(exp.status) === "failed"
+  );
+
+  let findingsCreated = 0;
+  const errors: string[] = [];
+
+  for (const exp of completed) {
+    const expId = asString(exp.experiment_id) ?? asString(exp.id) ?? "unknown";
+    const hypothesisRef = asString(exp.hypothesis_ref) ?? asString(exp.hypothesis);
+    const methodRef = asString(exp.method_ref) ?? asString(exp.method);
+    const status = asString(exp.status);
+    const resultSummary = asString(exp.result_summary) ?? asString(exp.summary) ?? "";
+    const edgeType = status === "completed" ? "SUPPORTED_BY" : "FALSIFIED_BY";
+    const findingName = `finding_${expId}`;
+    const findingRef = `finding:${expId}`;
+
+    try {
+      const result = await mcpClient.callTool("mutate_graph", {
+        dryRun: false,
+        operations: [
+          {
+            action: "upsert_node",
+            id: findingRef,
+            type: "Finding",
+            name: findingName,
+            properties: {
+              experimentId: expId,
+              hypothesisRef,
+              methodRef,
+              status,
+              resultSummary,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          ...(hypothesisRef
+            ? [
+                {
+                  action: "upsert_relationship",
+                  type: edgeType,
+                  source: hypothesisRef,
+                  target: { id: findingRef },
+                  properties: { experimentId: expId },
+                },
+              ]
+            : []),
+        ],
+      });
+
+      if (result.ok) {
+        findingsCreated++;
+        recordExperimentSyncOutcome({
+          experiment: exp,
+          status: "synced",
+          now,
+          note: null,
+          nodeRef: findingRef,
+        });
+      } else {
+        const errorMessage = `Experiment ${expId}: ${result.error ?? "graph mutation failed"}`;
+        errors.push(errorMessage);
+        recordExperimentSyncOutcome({
+          experiment: exp,
+          status: "failed",
+          now,
+          note: errorMessage,
+        });
+      }
+    } catch (error) {
+      const errorMessage = `Experiment ${expId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      errors.push(errorMessage);
+      recordExperimentSyncOutcome({
+        experiment: exp,
+        status: "failed",
+        now,
+        note: errorMessage,
+      });
+    }
+  }
+  recalculateExperimentLedgerSyncSummary(ledger, now, errors.length === 0);
+
+  return {
+    synced: errors.length === 0,
+    experimentsProcessed: completed.length,
+    findingsCreated,
+    error: errors.length > 0 ? errors.join("; ") : null,
+  };
+}

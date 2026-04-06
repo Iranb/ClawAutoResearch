@@ -278,6 +278,18 @@ async function seedProjectReadyForWrite(projectRoot) {
   ]) {
     await writeText(path.join(projectRoot, "academic_writer", "story", fileName));
   }
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"),
+    {
+      claims: [
+        {
+          claim_id: "claim-1",
+          fragment_id: "frag-1",
+          track_id: trackId,
+        },
+      ],
+    }
+  );
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex"),
     "% appendix\n"
@@ -444,6 +456,8 @@ async function seedProjectReadyForWrite(projectRoot) {
         "academic_writer/story/MODULE_MOTIVATION_MAP.md",
       claim_to_experiment_map_path:
         "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      idea_to_claim_map_path:
+        "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json",
       fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
       rejection_risk_table_path:
         "academic_writer/story/REJECTION_RISK_TABLE.md",
