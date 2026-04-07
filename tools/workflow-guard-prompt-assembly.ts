@@ -385,11 +385,21 @@ export function formatWorkflowSnapshotForPromptImpl(
       lines.push(`- ${signal}`);
     }
   }
+  const resolvedPapernexusAccessMode =
+    typeof snapshot.papernexusAccessMode === "string" &&
+    ["remote_api", "remote_mcp", "local_mcp"].includes(snapshot.papernexusAccessMode)
+      ? snapshot.papernexusAccessMode
+      : snapshot.papernexusMcpUrl
+        ? "remote_mcp"
+        : snapshot.papernexusApiBaseUrl
+          ? "remote_api"
+          : null;
   if (
     snapshot.graphRefreshRequired ||
     snapshot.paperSourceDir ||
     snapshot.graphSourceDir ||
     snapshot.papernexusApiBaseUrl ||
+    snapshot.papernexusMcpUrl ||
     snapshot.papernexusApiTokenEnv ||
     snapshot.papernexusApiTokenSource ||
     snapshot.papernexusApiTokenService ||
@@ -426,6 +436,7 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
     if (
       snapshot.papernexusApiBaseUrl ||
+      snapshot.papernexusMcpUrl ||
       snapshot.papernexusApiTokenEnv ||
       snapshot.papernexusApiTokenSource ||
       snapshot.papernexusApiTokenService ||
@@ -433,40 +444,62 @@ export function formatWorkflowSnapshotForPromptImpl(
       snapshot.papernexusMineruHttpUrl
     ) {
       lines.push(
-        `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
+        `PaperNexus remote access: api=${snapshot.papernexusApiBaseUrl ?? "unset"}, mcp=${snapshot.papernexusMcpUrl ?? "unset"}, mcp_transport=${snapshot.papernexusMcpTransport ?? "unset"}, mcp_timeout_ms=${snapshot.papernexusMcpTimeoutMs ?? "unset"}, token_source=${snapshot.papernexusApiTokenSource ?? "unset"}, token_env=${snapshot.papernexusApiTokenEnv ?? "unset"}, keychain_service=${snapshot.papernexusApiTokenService ?? "unset"}, keychain_account=${snapshot.papernexusApiTokenAccount ?? "unset"}, mineru_http=${snapshot.papernexusMineruHttpUrl ?? "unset"}`
       );
-      lines.push(
-        "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead, and prefer `research_workflow.run_papernexus_wrapper` for workflow-owned background graph work."
-      );
-      if (
-        snapshot.papernexusApiBaseUrl &&
-        snapshot.papernexusApiTokenSource === "env" &&
-        snapshot.papernexusApiTokenEnv
-      ) {
+      if (resolvedPapernexusAccessMode === "remote_mcp") {
         lines.push(
-          `Remote API rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}. Never print the raw token in chat, prompts, logs, or project files.`
+          "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the configured remote MCP endpoint instead."
         );
-      } else if (
-        snapshot.papernexusApiBaseUrl &&
-        snapshot.papernexusApiTokenSource === "os_keychain"
-      ) {
+        if (snapshot.papernexusApiTokenSource === "env" && snapshot.papernexusApiTokenEnv) {
+          lines.push(
+            `Remote MCP rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for the PaperNexus MCP endpoint at ${snapshot.papernexusMcpUrl ?? "unset"}. Never print the raw token in chat, prompts, logs, or project files.`
+          );
+        } else if (snapshot.papernexusApiTokenSource === "os_keychain") {
+          lines.push(
+            `Remote MCP rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusMcpUrl ?? "unset"}. Never print or persist the raw token.`
+          );
+        } else {
+          lines.push(
+            `Remote MCP rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusMcpUrl ?? "unset"}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
+          );
+        }
         lines.push(
-          `Remote API rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusApiBaseUrl}. Never print or persist the raw token.`
+          "Remote MCP rule: use PaperNexus MCP tools for graph reads and writes. Do not use `pn_graph_query.py` / `pn_research_chains.py` for remote graph queries in this mode."
         );
-      } else if (
-        snapshot.papernexusApiBaseUrl &&
-        snapshot.papernexusApiTokenSource === "auto"
-      ) {
+      } else {
         lines.push(
-          `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
+          "Remote-only storage rule: never use or inspect local PaperNexus storage under ~/.papernexus/papers or ~/.papernexus/index-store. Use project-local staging files plus the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead, and prefer `research_workflow.run_papernexus_wrapper` for workflow-owned background graph work."
         );
-        lines.push(
-          "Live graph rule: never use local PaperNexus live-graph CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."
-        );
-      } else if (snapshot.papernexusApiBaseUrl) {
-        lines.push(
-          `Remote API rule: prefer the configured PaperNexus Web/API endpoint at ${snapshot.papernexusApiBaseUrl} instead of assuming anonymous local access.`
-        );
+        if (
+          snapshot.papernexusApiBaseUrl &&
+          snapshot.papernexusApiTokenSource === "env" &&
+          snapshot.papernexusApiTokenEnv
+        ) {
+          lines.push(
+            `Remote API rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}. Never print the raw token in chat, prompts, logs, or project files.`
+          );
+        } else if (
+          snapshot.papernexusApiBaseUrl &&
+          snapshot.papernexusApiTokenSource === "os_keychain"
+        ) {
+          lines.push(
+            `Remote API rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusApiBaseUrl}. Never print or persist the raw token.`
+          );
+        } else if (
+          snapshot.papernexusApiBaseUrl &&
+          snapshot.papernexusApiTokenSource === "auto"
+        ) {
+          lines.push(
+            `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
+          );
+          lines.push(
+            "Live graph rule: never use local PaperNexus live-graph CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."
+          );
+        } else if (snapshot.papernexusApiBaseUrl) {
+          lines.push(
+            `Remote API rule: prefer the configured PaperNexus Web/API endpoint at ${snapshot.papernexusApiBaseUrl} instead of assuming anonymous local access.`
+          );
+        }
       }
       if (snapshot.papernexusMineruHttpUrl) {
         lines.push(
@@ -509,9 +542,15 @@ export function formatWorkflowSnapshotForPromptImpl(
     if (snapshot.brainstormCyclePendingReason) {
       lines.push(`Brainstorm cycle pending_reason: ${snapshot.brainstormCyclePendingReason}`);
     }
-    lines.push(
-      "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
-    );
+    if (resolvedPapernexusAccessMode === "remote_mcp") {
+      lines.push(
+        "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, use the configured remote PaperNexus MCP tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`) for graph grounding, and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
+      );
+    } else {
+      lines.push(
+        "Brainstorm rule: for novelty-sensitive reasoning, summarize the topic, call PaperNexus typed wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet through research_workflow.run_brainstorm_cycle."
+      );
+    }
     lines.push(
       "Brainstorm selection rule: multiple brainstorm rounds may coexist, but aggressive auto mode should keep all candidates and promote the highest-scoring option to the selected durable bundle."
     );
@@ -726,9 +765,15 @@ export function formatWorkflowSnapshotForPromptImpl(
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
   );
-  lines.push(
-    "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`) or the dedicated /papernexus-research-chains skill before trusting raw full-graph prominence."
-  );
+  if (resolvedPapernexusAccessMode === "remote_mcp") {
+    lines.push(
+      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote MCP graph tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`) before trusting raw full-graph prominence."
+    );
+  } else {
+    lines.push(
+      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the brainstorm-quality node view (`brainstormEligible`, `brainstormScore`, `brainstormTier`) and typed wrapper calls through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`) or the dedicated /papernexus-research-chains skill before trusting raw full-graph prominence."
+    );
+  }
   lines.push(
     "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
   );

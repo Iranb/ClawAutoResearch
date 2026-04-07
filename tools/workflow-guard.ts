@@ -42,7 +42,9 @@ import {
   type WorkflowRuntimeSessionBinding,
 } from "./workflow-subagent-sessions";
 import {
+  normalizePapernexusAccessMode,
   normalizePapernexusApiTokenSource,
+  normalizePapernexusMcpTransport,
   summarizePapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
 import {
@@ -316,6 +318,9 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
   papernexusApiBaseUrl?: string;
+  papernexusMcpUrl?: string;
+  papernexusMcpTransport?: string;
+  papernexusMcpTimeoutMs?: number;
   papernexusApiTokenEnv?: string;
   papernexusApiTokenSource?: string;
   papernexusApiTokenService?: string;
@@ -1234,6 +1239,9 @@ export type WorkflowSnapshot = {
   defaultPapernexusSourceDir: string | null;
   defaultPapernexusIndexRoot: string | null;
   papernexusApiBaseUrl: string | null;
+  papernexusMcpUrl: string | null;
+  papernexusMcpTransport: string | null;
+  papernexusMcpTimeoutMs: number | null;
   papernexusApiTokenEnv: string | null;
   papernexusApiTokenSource: string | null;
   papernexusApiTokenService: string | null;
@@ -1540,6 +1548,9 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
   papernexusApiBaseUrl: "",
+  papernexusMcpUrl: "",
+  papernexusMcpTransport: "streamable-http",
+  papernexusMcpTimeoutMs: 30000,
   papernexusApiTokenEnv: "",
   papernexusApiTokenSource: "auto",
   papernexusApiTokenService: "papernexus-api-token",
@@ -2097,6 +2108,26 @@ function normalizePolicy(
     papernexusApiBaseUrl:
       asString(config?.papernexusApiBaseUrl) ??
       DEFAULT_POLICY.papernexusApiBaseUrl,
+    papernexusMcpUrl:
+      asString((config as Record<string, unknown> | null)?.papernexusMcpUrl) ??
+      DEFAULT_POLICY.papernexusMcpUrl,
+    papernexusMcpTransport:
+      normalizePapernexusMcpTransport(
+        (config as Record<string, unknown> | null)?.papernexusMcpTransport
+      ) ?? DEFAULT_POLICY.papernexusMcpTransport,
+    papernexusMcpTimeoutMs:
+      typeof (config as Record<string, unknown> | null)?.papernexusMcpTimeoutMs === "number" &&
+      Number.isFinite(
+        (config as Record<string, unknown> | null)?.papernexusMcpTimeoutMs
+      )
+        ? Math.max(
+            1000,
+            Math.floor(
+              ((config as Record<string, unknown> | null)?.papernexusMcpTimeoutMs ??
+                DEFAULT_POLICY.papernexusMcpTimeoutMs) as number
+            )
+          )
+        : DEFAULT_POLICY.papernexusMcpTimeoutMs,
     papernexusApiTokenEnv:
       asString(config?.papernexusApiTokenEnv) ??
       DEFAULT_POLICY.papernexusApiTokenEnv,
@@ -2118,7 +2149,9 @@ function normalizePolicy(
       asString(config?.papernexusMineruHttpUrl) ??
       DEFAULT_POLICY.papernexusMineruHttpUrl,
     papernexusAccessMode:
-      asString((config as Record<string, unknown> | null)?.papernexusAccessMode) ??
+      normalizePapernexusAccessMode(
+        (config as Record<string, unknown> | null)?.papernexusAccessMode
+      ) ??
       DEFAULT_POLICY.papernexusAccessMode,
     autoMode:
       config && typeof config === "object"
@@ -2180,8 +2213,14 @@ function isLocalPapernexusStoragePath(value: string | null | undefined): boolean
   );
 }
 
-function isRemoteOnlyPapernexusWorkflow(apiBaseUrl: string | null | undefined): boolean {
-  return Boolean(apiBaseUrl && apiBaseUrl.trim());
+function isRemoteOnlyPapernexusWorkflow(params: {
+  apiBaseUrl: string | null | undefined;
+  mcpUrl?: string | null | undefined;
+}): boolean {
+  return Boolean(
+    (params.apiBaseUrl && params.apiBaseUrl.trim()) ||
+      (params.mcpUrl && params.mcpUrl.trim())
+  );
 }
 
 function getTemplatesRoot(): string {
@@ -5537,6 +5576,8 @@ function buildDynamicTasks(params: {
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
   papernexusApiBaseUrl: string | null;
+  papernexusMcpUrl: string | null;
+  papernexusMcpTransport: string | null;
   papernexusApiTokenEnv: string | null;
   papernexusApiTokenSource: string | null;
   papernexusApiTokenService: string | null;
@@ -5739,6 +5780,7 @@ export async function buildWorkflowSnapshot(params: {
   );
   const papernexusAccessConfigured =
     (policy.papernexusApiBaseUrl ?? "").trim().length > 0 ||
+    (policy.papernexusMcpUrl ?? "").trim().length > 0 ||
     (policy.papernexusApiTokenEnv ?? "").trim().length > 0 ||
     (policy.papernexusMineruHttpUrl ?? "").trim().length > 0 ||
     normalizePapernexusApiTokenSource(policy.papernexusApiTokenSource) !==
@@ -5752,6 +5794,9 @@ export async function buildWorkflowSnapshot(params: {
   const papernexusAccess = papernexusAccessConfigured
     ? summarizePapernexusRemoteAccessConfig({
         apiBaseUrl: policy.papernexusApiBaseUrl,
+        mcpUrl: policy.papernexusMcpUrl,
+        mcpTransport: policy.papernexusMcpTransport,
+        mcpTimeoutMs: policy.papernexusMcpTimeoutMs,
         tokenEnv: policy.papernexusApiTokenEnv,
         tokenSource: policy.papernexusApiTokenSource,
         tokenService: policy.papernexusApiTokenService,
@@ -5760,9 +5805,10 @@ export async function buildWorkflowSnapshot(params: {
         tokenLookupTimeoutMs: policy.papernexusApiTokenLookupTimeoutMs,
       })
     : null;
-  const remoteOnlyPapernexus = isRemoteOnlyPapernexusWorkflow(
-    papernexusAccess?.apiBaseUrl ?? null
-  );
+  const remoteOnlyPapernexus = isRemoteOnlyPapernexusWorkflow({
+    apiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
+    mcpUrl: papernexusAccess?.mcpUrl ?? null,
+  });
   const runtimeBinding = projectState.channelBinding
     ? buildWorkflowRuntimeSessionBinding({
         projectRoot: projectState.channelBinding.projectRoot,
@@ -5895,6 +5941,9 @@ export async function buildWorkflowSnapshot(params: {
     defaultPapernexusSourceDir,
     defaultPapernexusIndexRoot,
     papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
+    papernexusMcpUrl: papernexusAccess?.mcpUrl ?? null,
+    papernexusMcpTransport: papernexusAccess?.mcpTransport ?? null,
+    papernexusMcpTimeoutMs: papernexusAccess?.mcpTimeoutMs ?? null,
     papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
     papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
     papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
@@ -6150,6 +6199,8 @@ export async function buildWorkflowSnapshot(params: {
       recentExperiments,
       unreadMailbox,
       papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
+      papernexusMcpUrl: papernexusAccess?.mcpUrl ?? null,
+      papernexusMcpTransport: papernexusAccess?.mcpTransport ?? null,
       papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
       papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
       papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
@@ -6610,11 +6661,17 @@ export function shouldBlockPapernexusLocalGraphProcessing(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
   remoteApiBaseUrl?: string | null;
+  remoteMcpUrl?: string | null;
 }): { block: boolean; reason?: string } {
   if (!["researcher", "analyzer"].includes(params.role ?? "")) {
     return { block: false };
   }
-  if (!params.remoteApiBaseUrl) {
+  if (
+    !isRemoteOnlyPapernexusWorkflow({
+      apiBaseUrl: params.remoteApiBaseUrl,
+      mcpUrl: params.remoteMcpUrl,
+    })
+  ) {
     return { block: false };
   }
   if (!["bash", "sessions_send"].includes(params.toolName)) {
@@ -6634,8 +6691,8 @@ export function shouldBlockPapernexusLocalGraphProcessing(params: {
   return {
     block: true,
     reason:
-      `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl}). ` +
-      "Use the configured authenticated remote API through the Python wrappers instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
+      `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "configured remote endpoint"}). ` +
+      "Use the configured remote API or remote MCP endpoint instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
   };
 }
 
@@ -6644,8 +6701,15 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
   remoteApiBaseUrl?: string | null;
+  remoteMcpUrl?: string | null;
 }): { block: boolean; reason?: string } {
-  if (!params.role || !isRemoteOnlyPapernexusWorkflow(params.remoteApiBaseUrl)) {
+  if (
+    !params.role ||
+    !isRemoteOnlyPapernexusWorkflow({
+      apiBaseUrl: params.remoteApiBaseUrl,
+      mcpUrl: params.remoteMcpUrl,
+    })
+  ) {
     return { block: false };
   }
 
@@ -6660,7 +6724,7 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
       return {
         block: true,
         reason:
-          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and the Python wrappers instead.`,
+          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "the configured remote endpoint"}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and the configured remote API/MCP path instead.`,
       };
     }
     return { block: false };
@@ -6676,7 +6740,7 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
   return {
     block: true,
     reason:
-      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus the Python wrappers instead.`,
+      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "the configured remote endpoint"}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus the configured remote API/MCP path instead.`,
   };
 }
 

@@ -47,6 +47,21 @@
 
 插件层并不是把所有 Agent 都当成平级实体，而是有显式角色策略。
 
+### 统一路径约束
+
+- 当前所有 workflow 项目都必须位于 `plugins.entries.ClawAutoResearch.config.projectsRoot` 下。
+- `.openclaw-research` 是项目内 runtime 状态目录，固定路径是 `{PROJ}/.openclaw-research/`。
+- workflow 不再接受 workspace fallback，也不再接受额外的 binding/runtime 存储路径覆盖。
+- 如果 `OPENCLAW_PROJECT`、显式 `projectRoot` 或 channel binding 指向 `projectsRoot` 外部，运行时会拒绝该路径，而不是偷偷在别处创建项目目录。
+
+### PaperNexus / MCP 约定
+
+- workflow 默认仍然是 wrapper-first。
+- `papernexusAccessMode = remote_api` 时，Agent 应走认证后的 wrapper / Web API 路径，不手写 REST，也不擅自切到本地 MCP。
+- `papernexusAccessMode = remote_mcp` 时，Agent 应把配置好的远程 PaperNexus HTTP MCP endpoint 当作图谱读写入口；上传/导入仍遵守 workflow 的 queued wrapper 路径。
+- `papernexusAccessMode = local_mcp` 时，Agent 应把 PaperNexus MCP tools 当作图谱读写入口。
+- `papernexusAccessMode = auto` 时，优先 `remote_api`，其次 `remote_mcp`，只有 workflow guidance 明确允许时才回退到 `local_mcp`。
+
 ### `researcher`
 
 - 可联系：所有主 Agent

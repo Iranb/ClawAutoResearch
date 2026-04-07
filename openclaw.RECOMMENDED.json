@@ -101,6 +101,17 @@
           // 不再默认假设只能本地访问 PaperNexus。
           "papernexusApiBaseUrl": "http://127.0.0.1:4175",
 
+          // 可选的远程 PaperNexus HTTP MCP 地址。
+          // 适用于 PaperNexus 已启用 remote MCP（streamable-http）时的图谱读写。
+          "papernexusMcpUrl": "",
+
+          // 远程 PaperNexus MCP transport。
+          // 当前只支持 streamable-http。
+          "papernexusMcpTransport": "streamable-http",
+
+          // 远程 PaperNexus MCP 请求超时，单位毫秒。
+          "papernexusMcpTimeoutMs": 30000,
+
           // 存放 PaperNexus API Bearer token 的环境变量名。
           // 推荐只在环境变量里放 secret，不要把明文 token 写进 openclaw.json。
           // 当前 workflow prompt 会引用这个 env 名，但不会把 token 值写进项目状态或 prompt trace。
@@ -128,6 +139,13 @@
           // 参照 PaperNexus 最新 SKILL：PDF materialization 默认优先 remote mineru；
           // 只有远程不可达或任务明确要求时，才考虑本地 docling / marker fallback。
           "papernexusMineruHttpUrl": "",
+
+          // 图谱访问模式：
+          // remote_api = 优先走认证后的远程 wrapper / Web API
+          // remote_mcp = 走远程 PaperNexus HTTP MCP
+          // local_mcp  = 走本地 PaperNexus MCP stdio
+          // auto       = 先 remote_api，再 remote_mcp，最后 local_mcp
+          "papernexusAccessMode": "auto",
 
           // 自动推进模式：
           // off           = 不自动推进，只做 guard / snapshot / 状态辅助
@@ -193,7 +211,7 @@
             // false = 完全使用插件内建 native dispatch
             // true  = Auto mode 下优先用 Lobster 做 handoff
             // 当前推荐仍是 false，因为 native dispatch 已足够稳定，Lobster 更像增强项。
-            "enabled": false,
+            "enabled": true,
 
             // 是否只在 Auto mode 激活时才使用 Lobster。
             // 推荐 true，这样手动模式不会额外引入 Lobster 依赖。
@@ -204,7 +222,7 @@
 
             // 自定义 Lobster workflow 路径。
             // 留空时使用插件内置的 workflow-agent-dispatch.lobster。
-            "pipelinePath": "",
+            "pipelinePath": "lobster/workflows/workflow-agent-dispatch.lobster",
 
             // 调用 Lobster tool 的超时时间，单位毫秒。
             "timeoutMs": 30000,

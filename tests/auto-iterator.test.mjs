@@ -100,6 +100,7 @@ async function seedRemoteGraphStatus(
     corpusName = "shared-global-graph",
     corpusRoot = "https://papernexus.example/corpora/shared-global-graph",
     status = "ready",
+    mode = "remote_api",
     expectedPaperCount = 0,
     presentPaperCount = 0,
     missingPapers = [],
@@ -111,7 +112,7 @@ async function seedRemoteGraphStatus(
     corpus_root: corpusRoot,
     checked_at: "2026-03-22T12:05:00.000Z",
     status,
-    mode: "remote_api",
+    mode,
     expected_paper_count: expectedPaperCount,
     present_paper_count: presentPaperCount,
     missing_paper_count: missingPapers.length,
@@ -1916,6 +1917,57 @@ test("graph presence check does not fall back to local corpus files when remote 
   assert.match(result.blockingReason ?? "", /remote PaperNexus/i);
   assert.equal(result.presentPaperCount, 0);
   assert.equal(result.missingPaperCount, 1);
+});
+
+test("graph presence check uses recorded remote status metadata when remote_mcp is configured", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00022",
+      arxiv_id: "2501.00022",
+      title: "Remote MCP Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00022--remote-mcp-paper.md"
+      ),
+    },
+  ]);
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusRoot: "https://papernexus.example/mcp",
+    mode: "remote_mcp",
+    expectedPaperCount: 1,
+    presentPaperCount: 1,
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      mcpUrl: "https://papernexus.example/mcp",
+      mcpTransport: "streamable-http",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.presentPaperCount, 1);
+  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.corpusRoot, "https://papernexus.example/mcp");
 });
 
 test("graph presence check reports remote PaperNexus reconciliation in progress when wrapper-driven ingestion is active", async (t) => {

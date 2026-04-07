@@ -76,11 +76,14 @@ export type BuildDynamicTasksParams = {
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
   papernexusApiBaseUrl: string | null;
+  papernexusMcpUrl: string | null;
+  papernexusMcpTransport: string | null;
   papernexusApiTokenEnv: string | null;
   papernexusApiTokenSource: string | null;
   papernexusApiTokenService: string | null;
   papernexusApiTokenAccount: string | null;
   papernexusMineruHttpUrl: string | null;
+  papernexusAccessMode: string | null;
 };
 
 export type BuildDynamicTasksDeps = {

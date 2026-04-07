@@ -115,7 +115,7 @@ idea 阶段的审计材料。
 - `graph_source_dir` 现在是可选覆盖项，不再是常规项目必填字段
 - 正常情况下，所有项目共享同一张全局 PaperNexus 图
 - 项目本地只记录 paper selection、presence check 和 graph readiness 元数据
-- 默认图索引应由配置中的远程 PaperNexus 服务与项目侧状态决定，不再依赖 `~/.papernexus/index-store/.papernexus/` 作为 workflow 默认来源
+- 默认图索引应由配置中的远程 PaperNexus 服务与项目侧状态决定，不再依赖 `~/.papernexus/index-store/.papernexus/` 作为 workflow 默认来源；这里的远程服务可以是 `remote_api` 或 `remote_mcp`
 
 ## 5. Writer 与评审阶段产物
 
@@ -149,8 +149,9 @@ idea 阶段的审计材料。
 
 ### `.openclaw-research/channel-project-bindings.json`
 
-当启用 channel-project binding 且没有显式 `channelProjectBindingsPath` 时，这个文件默认写到当前项目目录下：`{PROJ}/.openclaw-research/channel-project-bindings.json`。  
-如果当前 turn 还没有解析出项目，才会暂时回退到 workspace 下的 `.openclaw-research/channel-project-bindings.json`。  
+这个文件固定写到当前项目目录下：`{PROJ}/.openclaw-research/channel-project-bindings.json`。  
+这里的 `{PROJ}` 必须是 `projectsRoot` 下的真实项目目录；workflow 不再接受 workspace fallback，也不再接受额外的自定义 binding store 路径。  
+如果当前 turn 还没有解析出项目，运行时只会在 `projectsRoot/*/.openclaw-research/channel-project-bindings.json` 范围内扫描已有绑定，不会在 workspace 根目录新建一份平行状态。  
 它保存 Discord / session channel 到项目目录的绑定关系。
 
 ### `.openclaw-research/workflow-runtime-queue.json`

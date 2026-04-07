@@ -231,6 +231,7 @@ async function runBeforeToolCallHook(params: {
       toolName,
       toolParams,
       remoteApiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+      remoteMcpUrl: workflowPolicy.papernexusMcpUrl,
     });
     if (papernexusLocalGraphProcessingCheck.block) {
       return {
@@ -244,6 +245,7 @@ async function runBeforeToolCallHook(params: {
       toolName,
       toolParams,
       remoteApiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+      remoteMcpUrl: workflowPolicy.papernexusMcpUrl,
     });
     if (papernexusLocalStorageCheck.block) {
       return {

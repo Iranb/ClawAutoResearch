@@ -807,6 +807,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "get_papernexus_remote_access": {
               const access = await inspectPapernexusRemoteAccess({
                 apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+                mcpUrl: workflowPolicy.papernexusMcpUrl,
+                mcpTransport: workflowPolicy.papernexusMcpTransport,
+                mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
                 tokenSource: workflowPolicy.papernexusApiTokenSource,
                 tokenEnv: workflowPolicy.papernexusApiTokenEnv,
                 tokenService: workflowPolicy.papernexusApiTokenService,
@@ -837,6 +840,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     : true,
                 remoteAccess: {
                   apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+                  mcpUrl: workflowPolicy.papernexusMcpUrl,
+                  mcpTransport: workflowPolicy.papernexusMcpTransport,
+                  mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
                   tokenSource: workflowPolicy.papernexusApiTokenSource,
                   tokenEnv: workflowPolicy.papernexusApiTokenEnv,
                   tokenService: workflowPolicy.papernexusApiTokenService,

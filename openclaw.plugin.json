@@ -9,7 +9,7 @@
       "allowWorkspaceFallback": {
         "type": "boolean",
         "default": false,
-        "description": "Allow research memory writes to fall back to workspace-level memory when OPENCLAW_PROJECT is unset."
+        "description": "Deprecated compatibility flag. Workflow project state and research memory no longer fall back to workspace-level paths; projects must resolve under projectsRoot."
       },
       "requireProjectIsolation": {
         "type": "boolean",
@@ -87,7 +87,7 @@
       "channelProjectBindingsPath": {
         "type": "string",
         "default": "",
-        "description": "Optional shared JSON path for channel-project bindings. When empty, bindings default to {projectRoot}/.openclaw-research/channel-project-bindings.json when a project is known, otherwise they fall back to the current workspace."
+        "description": "Deprecated compatibility field. Channel-project bindings now always live at {projectRoot}/.openclaw-research/channel-project-bindings.json for projects under projectsRoot."
       },
       "defaultConferenceTemplatePath": {
         "type": "string",
@@ -103,6 +103,23 @@
         "type": "string",
         "default": "",
         "description": "Optional remote PaperNexus Web/API base URL. When configured, workflow prompts steer graph-heavy tasks toward the remote PaperNexus service instead of assuming local-only access."
+      },
+      "papernexusMcpUrl": {
+        "type": "string",
+        "default": "",
+        "description": "Optional remote PaperNexus MCP endpoint URL. When papernexusAccessMode is remote_mcp, the workflow uses this HTTP MCP endpoint instead of spawning a local PaperNexus CLI."
+      },
+      "papernexusMcpTransport": {
+        "type": "string",
+        "enum": ["streamable-http"],
+        "default": "streamable-http",
+        "description": "Remote PaperNexus MCP transport. The current workflow client supports streamable-http."
+      },
+      "papernexusMcpTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "default": 30000,
+        "description": "Timeout for PaperNexus MCP requests. Applies to both local stdio MCP and remote HTTP MCP."
       },
       "papernexusApiTokenEnv": {
         "type": "string",
@@ -138,9 +155,9 @@
       },
       "papernexusAccessMode": {
         "type": "string",
-        "enum": ["remote_api", "local_mcp", "auto"],
+        "enum": ["remote_api", "remote_mcp", "local_mcp", "auto"],
         "default": "auto",
-        "description": "How the workflow accesses PaperNexus graph operations. remote_api: HTTP bearer-token only. local_mcp: spawn local PaperNexus MCP server via stdio. auto: try remote API first, fall back to local MCP."
+        "description": "How the workflow accesses PaperNexus graph operations. remote_api: HTTP bearer-token wrappers/Web API. remote_mcp: remote HTTP MCP endpoint. local_mcp: spawn local PaperNexus MCP server via stdio. auto: try remote API first, then remote MCP, then local MCP."
       },
       "autoMode": {
         "type": "string",
@@ -322,6 +339,15 @@
     },
     "papernexusApiBaseUrl": {
       "label": "PaperNexus API Base URL"
+    },
+    "papernexusMcpUrl": {
+      "label": "PaperNexus MCP URL"
+    },
+    "papernexusMcpTransport": {
+      "label": "PaperNexus MCP Transport"
+    },
+    "papernexusMcpTimeoutMs": {
+      "label": "PaperNexus MCP Timeout (ms)"
     },
     "papernexusApiTokenEnv": {
       "label": "PaperNexus API Token Env"

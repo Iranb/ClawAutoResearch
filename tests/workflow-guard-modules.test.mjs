@@ -198,3 +198,82 @@ test("buildWritingGuidance surfaces story-first and adversarial review reminders
     reviewerGuidance.append.some((entry) => /reject-first|novelty attack/i.test(entry))
   );
 });
+
+test("buildPapernexusGuidance teaches researcher to use remote MCP when remote_mcp is configured", () => {
+  const guidance = buildPapernexusGuidance(
+    {
+      role: "researcher",
+      currentStage: "graph_build",
+      manifest: null,
+      missingStageSignals: [],
+      idleResearch: { enabled: false, topic: null, maxPapersPerCycle: 0 },
+      innovationReflection: { lastReflectionPath: null },
+      innovationReflectionDue: false,
+      writingContract: {
+        templateRequired: false,
+        paperMode: null,
+        bodyPageBudget: null,
+        referencePageBudget: null,
+        bodyWordTargetMin: null,
+        bodyWordTargetMax: null,
+        kgStorylineRequired: false,
+        kgStorylinePacketPath: null,
+        kgStorylineStatus: null,
+        templateMappingPath: null,
+      },
+      writingTemplatePath: null,
+      writingTemplateStatus: "ready",
+      paragraphLogicStatus: "green",
+      writingContractPendingReason: null,
+      citationIntegrity: {
+        enabled: true,
+        verificationRequired: true,
+        verificationStatus: "pending",
+        sourceOfTruth: ["DBLP"],
+        allowedPlaceholderCount: 0,
+      },
+      citationReportPath: "reviewer/CITATION_VERIFICATION.md",
+      recentExperiments: [],
+      unreadMailbox: [],
+      papernexusApiBaseUrl: null,
+      papernexusMcpUrl: "https://papernexus.example/mcp",
+      papernexusMcpTransport: "streamable-http",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusApiTokenSource: "auto",
+      papernexusApiTokenService: "papernexus-api-token",
+      papernexusApiTokenAccount: "default",
+      papernexusMineruHttpUrl: null,
+      papernexusAccessMode: "remote_mcp",
+    },
+    {
+      rolePolicies: {},
+      asRecord: (value) =>
+        value && typeof value === "object" && !Array.isArray(value) ? value : null,
+      asString: (value) => (typeof value === "string" ? value : null),
+      normalizePaperIngestionState: () => ({
+        runtimeStatus: null,
+        waitingReason: null,
+        repairRequired: false,
+        repairReason: null,
+        repairTargetCorpus: null,
+      }),
+      normalizeIdeaCatalystState: () => ({}),
+      normalizeGraphPresenceStatus: () => null,
+      summarizeGraphPresenceMissing: () => null,
+      buildGraphImportRepairGuidance: () => "repair",
+      isIdleResearchDue: () => false,
+      computeIdleResearchNextDueAt: () => null,
+      uniqueStrings: (items) => [...new Set(items)],
+      DEFAULT_KG_STORYLINE_PACKET_PATH: "academic_writer/KG_STORYLINE_PACKET.json",
+      DEFAULT_CITATION_REPORT_PATH: "reviewer/CITATION_VERIFICATION.md",
+    }
+  );
+
+  assert.ok(guidance.prepend.some((entry) => /remote_mcp/i.test(entry)));
+  assert.ok(guidance.prepend.some((entry) => /PaperNexus MCP server tools|MCP tools/i.test(entry)));
+  assert.ok(
+    guidance.prepend.some(
+      (entry) => /Do not use .*pn_graph_query\.py.*pn_research_chains\.py/i.test(entry)
+    )
+  );
+});

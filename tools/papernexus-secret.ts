@@ -1,9 +1,16 @@
 import { execFile } from "node:child_process";
+import type {
+  PapernexusMcpClientConfig,
+  PapernexusRemoteMcpTransport,
+} from "./papernexus-packets/mcp-client";
 
 export type PapernexusApiTokenSource = "env" | "os_keychain" | "auto";
 
 export type PapernexusRemoteAccessConfig = {
   apiBaseUrl?: string | null;
+  mcpUrl?: string | null;
+  mcpTransport?: string | null;
+  mcpTimeoutMs?: number | null;
   tokenSource?: string | null;
   tokenEnv?: string | null;
   tokenService?: string | null;
@@ -14,6 +21,9 @@ export type PapernexusRemoteAccessConfig = {
 
 export type PapernexusRemoteAccessSummary = {
   apiBaseUrl: string | null;
+  mcpUrl: string | null;
+  mcpTransport: PapernexusRemoteMcpTransport | null;
+  mcpTimeoutMs: number;
   tokenSourceConfigured: PapernexusApiTokenSource;
   tokenEnv: string | null;
   tokenService: string | null;
@@ -53,6 +63,7 @@ type InspectPapernexusRemoteAccessOptions = {
 const DEFAULT_TOKEN_SERVICE = "papernexus-api-token";
 const DEFAULT_TOKEN_ACCOUNT = "default";
 const DEFAULT_LOOKUP_TIMEOUT_MS = 2000;
+const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 
 function asOptionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -62,6 +73,12 @@ function asTimeoutMs(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.max(250, Math.floor(value))
     : DEFAULT_LOOKUP_TIMEOUT_MS;
+}
+
+function asMcpTimeoutMs(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.max(1000, Math.floor(value))
+    : DEFAULT_MCP_TIMEOUT_MS;
 }
 
 function escapePowerShellSingleQuoted(value: string): string {
@@ -84,11 +101,30 @@ export function normalizePapernexusApiTokenSource(value: unknown): PapernexusApi
   return "auto";
 }
 
+export function normalizePapernexusMcpTransport(
+  value: unknown
+): PapernexusRemoteMcpTransport | null {
+  const normalized =
+    typeof value === "string" ? value.trim().toLowerCase().replace(/[^a-z]+/g, "_") : "";
+  if (normalized === "streamable_http") {
+    return "streamable-http";
+  }
+  return null;
+}
+
 export function summarizePapernexusRemoteAccessConfig(
   config: PapernexusRemoteAccessConfig | null | undefined
 ): PapernexusRemoteAccessSummary {
+  const mcpUrl = asOptionalString(config?.mcpUrl) ?? null;
+  const mcpTransportRaw = asOptionalString(config?.mcpTransport);
+  const mcpTransport =
+    normalizePapernexusMcpTransport(mcpTransportRaw) ??
+    (mcpUrl && !mcpTransportRaw ? "streamable-http" : null);
   return {
     apiBaseUrl: asOptionalString(config?.apiBaseUrl) ?? null,
+    mcpUrl,
+    mcpTransport,
+    mcpTimeoutMs: asMcpTimeoutMs(config?.mcpTimeoutMs),
     tokenSourceConfigured: normalizePapernexusApiTokenSource(config?.tokenSource),
     tokenEnv: asOptionalString(config?.tokenEnv) ?? null,
     tokenService: asOptionalString(config?.tokenService) ?? DEFAULT_TOKEN_SERVICE,
@@ -237,6 +273,7 @@ export async function inspectPapernexusRemoteAccess(
   const summary = summarizePapernexusRemoteAccessConfig(config);
   const explicitlyConfigured =
     summary.apiBaseUrl !== null ||
+    summary.mcpUrl !== null ||
     summary.tokenEnv !== null ||
     summary.mineruHttpUrl !== null ||
     summary.tokenSourceConfigured !== "auto" ||
@@ -320,4 +357,237 @@ export async function inspectPapernexusRemoteAccess(
     tokenError: keychainLookup.error,
     summary,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Access mode resolution — remote API vs. remote MCP vs. local MCP
+// ---------------------------------------------------------------------------
+
+export type PapernexusAccessMode = "remote_api" | "remote_mcp" | "local_mcp" | "auto";
+
+export type PapernexusAccessResolution = {
+  mode: "remote_api" | "remote_mcp" | "local_mcp" | "unavailable";
+  remoteInspection: PapernexusRemoteAccessInspection | null;
+  corpusRoot: string | null;
+  error: string | null;
+};
+
+export function normalizePapernexusAccessMode(value: unknown): PapernexusAccessMode {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase().replace(/[^a-z_]+/g, "_") : "";
+  if (normalized === "remote_api") return "remote_api";
+  if (normalized === "remote_mcp") return "remote_mcp";
+  if (normalized === "local_mcp") return "local_mcp";
+  return "auto";
+}
+
+function buildRemoteApiUnavailableError(
+  inspection: PapernexusRemoteAccessInspection
+): string {
+  if (!inspection.summary.apiBaseUrl) {
+    return "Remote API base URL is not configured.";
+  }
+  return inspection.tokenError ?? "Remote API token not available.";
+}
+
+function buildRemoteMcpUnavailableError(
+  inspection: PapernexusRemoteAccessInspection,
+  corpusRoot: string | null
+): string {
+  if (!inspection.summary.mcpUrl) {
+    return "Remote MCP URL is not configured.";
+  }
+  if (!inspection.summary.mcpTransport) {
+    return "Remote MCP transport is unsupported. Currently only streamable-http is supported.";
+  }
+  if (!corpusRoot) {
+    return "Remote MCP requires a corpus identifier/path but none was provided.";
+  }
+  return inspection.tokenError ?? "Remote MCP token not available.";
+}
+
+export async function resolvePapernexusAccessPath(
+  config: PapernexusRemoteAccessConfig | null | undefined,
+  options: {
+    accessMode?: PapernexusAccessMode;
+    corpusRoot?: string | null;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    commandRunner?: PapernexusCommandRunner;
+    checkLocalBin?: (bin: string) => Promise<boolean>;
+  } = {}
+): Promise<PapernexusAccessResolution> {
+  const accessMode = options.accessMode ?? "auto";
+  const corpusRoot = options.corpusRoot ?? null;
+  let remoteInspection: PapernexusRemoteAccessInspection | null = null;
+
+  const getRemoteInspection = async (): Promise<PapernexusRemoteAccessInspection> => {
+    if (remoteInspection) {
+      return remoteInspection;
+    }
+    remoteInspection = await inspectPapernexusRemoteAccess(config, {
+      env: options.env,
+      platform: options.platform,
+      commandRunner: options.commandRunner,
+    });
+    return remoteInspection;
+  };
+
+  // Remote API path
+  if (accessMode === "remote_api" || accessMode === "auto") {
+    const inspection = await getRemoteInspection();
+    if (inspection.summary.apiBaseUrl && inspection.tokenAvailable) {
+      return {
+        mode: "remote_api",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: null,
+      };
+    }
+    if (accessMode === "remote_api") {
+      return {
+        mode: "unavailable",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: buildRemoteApiUnavailableError(inspection),
+      };
+    }
+    // accessMode === "auto" — fall through to remote MCP, then local MCP
+  }
+
+  // Remote MCP path
+  if (accessMode === "remote_mcp" || accessMode === "auto") {
+    const inspection = await getRemoteInspection();
+    if (
+      inspection.summary.mcpUrl &&
+      inspection.summary.mcpTransport === "streamable-http" &&
+      corpusRoot &&
+      inspection.tokenAvailable
+    ) {
+      return {
+        mode: "remote_mcp",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: null,
+      };
+    }
+    if (accessMode === "remote_mcp") {
+      return {
+        mode: "unavailable",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: buildRemoteMcpUnavailableError(inspection, corpusRoot),
+      };
+    }
+  }
+
+  // Local MCP path
+  if (accessMode === "local_mcp" || accessMode === "auto") {
+    if (!corpusRoot) {
+      return {
+        mode: "unavailable",
+        remoteInspection: null,
+        corpusRoot: null,
+        error: "Local MCP requires a corpus root path but none was provided.",
+      };
+    }
+    const checkBin = options.checkLocalBin ?? defaultCheckLocalBin;
+    const binAvailable = await checkBin("papernexus");
+    if (binAvailable) {
+      return {
+        mode: "local_mcp",
+        remoteInspection: null,
+        corpusRoot,
+        error: null,
+      };
+    }
+    if (accessMode === "local_mcp") {
+      return {
+        mode: "unavailable",
+        remoteInspection: null,
+        corpusRoot,
+        error: "papernexus CLI not found on PATH.",
+      };
+    }
+  }
+
+  return {
+    mode: "unavailable",
+    remoteInspection,
+    corpusRoot,
+    error: "Neither remote API, remote MCP, nor local MCP is available.",
+  };
+}
+
+export async function resolvePapernexusMcpClientConfig(
+  config: PapernexusRemoteAccessConfig | null | undefined,
+  options: {
+    accessMode?: PapernexusAccessMode;
+    corpusRoot?: string | null;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    commandRunner?: PapernexusCommandRunner;
+    checkLocalBin?: (bin: string) => Promise<boolean>;
+  } = {}
+): Promise<{
+  access: PapernexusAccessResolution;
+  clientConfig: PapernexusMcpClientConfig | null;
+  error: string | null;
+}> {
+  const access = await resolvePapernexusAccessPath(config, options);
+  if (access.mode === "local_mcp") {
+    return {
+      access,
+      clientConfig: {
+        transport: "stdio",
+        corpusRoot: access.corpusRoot ?? "",
+        timeoutMs: summarizePapernexusRemoteAccessConfig(config).mcpTimeoutMs,
+      },
+      error: null,
+    };
+  }
+
+  if (
+    access.mode === "remote_mcp" &&
+    access.remoteInspection?.summary.mcpUrl &&
+    access.remoteInspection.summary.mcpTransport
+  ) {
+    const headers =
+      access.remoteInspection.token && access.remoteInspection.token.trim().length > 0
+        ? {
+            Authorization: `Bearer ${access.remoteInspection.token}`,
+          }
+        : undefined;
+    return {
+      access,
+      clientConfig: {
+        transport: access.remoteInspection.summary.mcpTransport,
+        url: access.remoteInspection.summary.mcpUrl,
+        headers,
+        corpusRoot: access.corpusRoot ?? "",
+        timeoutMs: access.remoteInspection.summary.mcpTimeoutMs,
+      },
+      error: null,
+    };
+  }
+
+  return {
+    access,
+    clientConfig: null,
+    error:
+      access.mode === "remote_api"
+        ? "Resolved PaperNexus access mode is remote_api; no MCP client should be constructed."
+        : access.error ?? "No PaperNexus MCP client configuration could be resolved.",
+  };
+}
+
+async function defaultCheckLocalBin(bin: string): Promise<boolean> {
+  const { execFile: execFileCb } = await import("node:child_process");
+  return new Promise((resolve) => {
+    execFileCb(
+      process.platform === "win32" ? "where" : "which",
+      [bin],
+      { timeout: 3000, windowsHide: true },
+      (error) => resolve(!error)
+    );
+  });
 }

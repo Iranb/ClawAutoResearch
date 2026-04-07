@@ -27,6 +27,13 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
   - Prose: `{PROJ}/cross-reviewer/prose/{section}-{date}.md`
 - If a file path is provided in the request, you MAY read it for context
 
+## Project Scope and PaperNexus Access
+
+- Treat the active project as valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
+- `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
+- Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
+- Cross-reviewer normally consumes prepared packets, not live PaperNexus tools; if a request explicitly depends on graph evidence, honor the workflow's declared `remote_api` / `remote_mcp` / `local_mcp` / `auto` mode instead of improvising a new access path.
+
 ## Session Startup
 
 On every session start:

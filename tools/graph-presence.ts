@@ -985,7 +985,7 @@ function summarizePaperIngestionProgress(
 }
 
 function buildInFlightRemoteRefreshReason(params: {
-  remoteApiBaseUrl: string | null;
+  remoteEndpoint: string | null;
   expectedPaperCount: number;
   presentPaperCount: number;
   paperIngestion: ReturnType<typeof summarizePaperIngestionProgress>;
@@ -1003,7 +1003,7 @@ function buildInFlightRemoteRefreshReason(params: {
     `batch_failed_items=${params.paperIngestion.failedBatchItemCount}`,
   ];
   return (
-    `PaperNexus automatic graph catch-up is still running through the remote wrapper flow${params.remoteApiBaseUrl ? ` at ${params.remoteApiBaseUrl}` : ""}: ` +
+    `PaperNexus automatic graph catch-up is still running through the remote PaperNexus flow${params.remoteEndpoint ? ` at ${params.remoteEndpoint}` : ""}: ` +
     `remote status currently covers ${params.presentPaperCount}/${params.expectedPaperCount} expected paper(s), and ${details.join(", ")}.` +
     `${params.paperIngestion.waitingReason ? ` Waiting reason: ${params.paperIngestion.waitingReason}.` : ""} ` +
     "Continue /graph-build for a bounded status/brainstorm pass or wait for the next wrapper status update before frontier mapping or ideation."
@@ -1190,7 +1190,8 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const remoteInspection = await inspectPapernexusRemoteAccess(params.remoteAccess);
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
   const statusRecord = await readJsonIfExists<Record<string, unknown>>(statusPath);
-  const remoteApiBaseUrl = remoteInspection.summary.apiBaseUrl;
+  const remoteEndpoint =
+    remoteInspection.summary.apiBaseUrl ?? remoteInspection.summary.mcpUrl ?? null;
   const paperIngestionProgress = summarizePaperIngestionProgress(params.manifest);
 
   let status: GraphPresenceStatus = "ready";
@@ -1203,7 +1204,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   } else if (!remoteInspection.tokenAvailable) {
     status = "missing_corpus";
     refreshReason =
-      `Configured remote PaperNexus access is unavailable${remoteApiBaseUrl ? ` at ${remoteApiBaseUrl}` : ""}` +
+      `Configured remote PaperNexus access is unavailable${remoteEndpoint ? ` at ${remoteEndpoint}` : ""}` +
       `${remoteInspection.tokenError ? `: ${remoteInspection.tokenError}` : "."}` +
       " Fix the remote token/configuration and rerun /graph-build before frontier mapping or ideation.";
     presentPaperCount = 0;
@@ -1211,12 +1212,12 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     status = "missing_corpus";
     refreshReason = paperIngestionProgress.inFlight
       ? buildInFlightRemoteRefreshReason({
-          remoteApiBaseUrl,
+          remoteEndpoint,
           expectedPaperCount: params.expected.papers.length,
           presentPaperCount: 0,
           paperIngestion: paperIngestionProgress,
         })
-      : `No remote PaperNexus graph status is recorded yet for ${remoteApiBaseUrl ?? "the configured API"}. ` +
+      : `No remote PaperNexus graph status is recorded yet for ${remoteEndpoint ?? "the configured endpoint"}. ` +
         "Run /graph-build with the configured remote PaperNexus endpoint to refresh graph readiness metadata and the brainstorm bundle before frontier mapping or ideation.";
     presentPaperCount = 0;
   } else {
@@ -1240,12 +1241,12 @@ async function checkGraphPresenceViaRemoteStatus(params: {
       status = "missing_corpus";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
-            remoteApiBaseUrl,
+            remoteEndpoint,
             expectedPaperCount: params.expected.papers.length,
             presentPaperCount,
             paperIngestion: paperIngestionProgress,
           })
-        : `Remote PaperNexus graph status is stale for ${remoteApiBaseUrl ?? "the configured API"}: ` +
+        : `Remote PaperNexus graph status is stale for ${remoteEndpoint ?? "the configured endpoint"}: ` +
           `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
           "Rerun /graph-build to refresh readiness metadata and brainstorm grounding before frontier mapping or ideation.";
       presentPaperCount = Math.min(presentPaperCount, params.expected.papers.length);
@@ -1257,7 +1258,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
           "missing_corpus",
           [],
           params.expected.papers.length,
-          remoteApiBaseUrl
+          remoteEndpoint
         );
     } else if (
       normalizedStatus === "missing_papers" ||
@@ -1267,7 +1268,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
       status = "missing_papers";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
-            remoteApiBaseUrl,
+            remoteEndpoint,
             expectedPaperCount: params.expected.papers.length,
             presentPaperCount,
             paperIngestion: paperIngestionProgress,
@@ -1277,7 +1278,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
             "missing_papers",
             missingPapers,
             params.expected.papers.length,
-            remoteApiBaseUrl
+            remoteEndpoint
           );
     } else {
       status = "ready";
@@ -1327,7 +1328,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
               : params.expected.papers.length - presentPaperCount
           ),
     corpusRoot:
-      pickString(statusRecord, ["corpus_root", "corpusRoot"]) ?? remoteApiBaseUrl ?? null,
+      pickString(statusRecord, ["corpus_root", "corpusRoot"]) ?? remoteEndpoint ?? null,
     corpusName: pickString(statusRecord, ["corpus_name", "corpusName"]),
     corpusManifestPath: null,
     corpusMetaPath: null,
@@ -1382,7 +1383,8 @@ export async function checkGraphPresenceForWorkflow(params: {
     projectId,
   });
   const remoteApiBaseUrl = asString(params.remoteAccess?.apiBaseUrl);
-  if (remoteApiBaseUrl) {
+  const remoteMcpUrl = asString(params.remoteAccess?.mcpUrl);
+  if (remoteApiBaseUrl || remoteMcpUrl) {
     const result = await checkGraphPresenceViaRemoteStatus({
       projectRoot,
       manifest,
@@ -1585,4 +1587,117 @@ export async function checkGraphPresenceForWorkflow(params: {
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Automatic graph refresh trigger
+// ---------------------------------------------------------------------------
+
+export type GraphRefreshTriggerResult = {
+  triggered: boolean;
+  mode: "local_mcp" | "remote_api" | "skipped";
+  error: string | null;
+};
+
+type McpClientLike = {
+  callTool: (
+    toolName: string,
+    params?: Record<string, unknown>
+  ) => Promise<{ ok: boolean; data: unknown; error: string | null }>;
+};
+
+export async function triggerGraphRefreshIfNeeded(params: {
+  projectRoot: string;
+  presenceResult: GraphPresenceCheckResult;
+  mcpClient?: McpClientLike | null;
+  remoteApiBaseUrl?: string | null;
+  remoteApiToken?: string | null;
+  manifest?: Record<string, unknown> | null;
+  saveManifest?: (projectRoot: string, manifest: Record<string, unknown>) => Promise<void>;
+}): Promise<GraphRefreshTriggerResult> {
+  const {
+    presenceResult,
+    mcpClient,
+    remoteApiBaseUrl,
+    remoteApiToken,
+    manifest,
+    saveManifest: saveFn,
+  } = params;
+
+  if (!presenceResult.refreshRequired) {
+    return { triggered: false, mode: "skipped", error: null };
+  }
+
+  const now = new Date().toISOString();
+
+  // Try local MCP first
+  if (mcpClient) {
+    const statusResult = await mcpClient.callTool("refresh_corpus", {
+      corpus: presenceResult.corpusName ?? undefined,
+      incremental: true,
+    });
+    if (statusResult.ok) {
+      if (manifest && saveFn) {
+        const graphWatch = (manifest.graph_watch ?? {}) as Record<string, unknown>;
+        graphWatch.refreshTriggered = true;
+        graphWatch.refreshTriggeredAt = now;
+        graphWatch.refreshMode = "local_mcp";
+        manifest.graph_watch = graphWatch;
+        await saveFn(params.projectRoot, manifest);
+      }
+      return { triggered: true, mode: "local_mcp", error: null };
+    }
+    return {
+      triggered: false,
+      mode: "local_mcp",
+      error: statusResult.error ?? "MCP corpus_status call failed.",
+    };
+  }
+
+  // Try remote API
+  if (remoteApiBaseUrl && remoteApiToken) {
+    try {
+      const url = `${remoteApiBaseUrl.replace(/\/+$/, "")}/api/corpus/refresh`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${remoteApiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          corpus: presenceResult.corpusName ?? undefined,
+          incremental: true,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.ok) {
+        if (manifest && saveFn) {
+          const graphWatch = (manifest.graph_watch ?? {}) as Record<string, unknown>;
+          graphWatch.refreshTriggered = true;
+          graphWatch.refreshTriggeredAt = now;
+          graphWatch.refreshMode = "remote_api";
+          manifest.graph_watch = graphWatch;
+          await saveFn(params.projectRoot, manifest);
+        }
+        return { triggered: true, mode: "remote_api", error: null };
+      }
+      return {
+        triggered: false,
+        mode: "remote_api",
+        error: `Remote API refresh returned ${response.status}: ${response.statusText}`,
+      };
+    } catch (err) {
+      return {
+        triggered: false,
+        mode: "remote_api",
+        error: `Remote API refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  return {
+    triggered: false,
+    mode: "skipped",
+    error: "No MCP client or remote API credentials available for graph refresh.",
+  };
 }

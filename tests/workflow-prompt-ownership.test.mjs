@@ -40,11 +40,15 @@ function makeBaseSnapshot() {
     defaultPapernexusSourceDir: null,
     defaultPapernexusIndexRoot: null,
     papernexusApiBaseUrl: null,
+    papernexusMcpUrl: null,
+    papernexusMcpTransport: null,
+    papernexusMcpTimeoutMs: null,
     papernexusApiTokenEnv: null,
     papernexusApiTokenSource: null,
     papernexusApiTokenService: null,
     papernexusApiTokenAccount: null,
     papernexusMineruHttpUrl: null,
+    papernexusAccessMode: null,
     idleResearchEnabled: false,
     idleResearchTopic: null,
     idleResearchStatus: null,
@@ -272,19 +276,27 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
 test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () => {
   const policy = getWorkflowGuardPolicy({
     papernexusApiBaseUrl: "https://papernexus.example/api",
+    papernexusMcpUrl: "https://papernexus.example/mcp",
+    papernexusMcpTransport: "streamable-http",
+    papernexusMcpTimeoutMs: 45000,
     papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
     papernexusApiTokenSource: "auto",
     papernexusApiTokenService: "papernexus-api-token",
     papernexusApiTokenAccount: "default",
     papernexusMineruHttpUrl: "http://mineru.example:30000",
+    papernexusAccessMode: "remote_mcp",
   });
 
   assert.equal(policy.papernexusApiBaseUrl, "https://papernexus.example/api");
+  assert.equal(policy.papernexusMcpUrl, "https://papernexus.example/mcp");
+  assert.equal(policy.papernexusMcpTransport, "streamable-http");
+  assert.equal(policy.papernexusMcpTimeoutMs, 45000);
   assert.equal(policy.papernexusApiTokenEnv, "PAPERNEXUS_API_TOKEN");
   assert.equal(policy.papernexusApiTokenSource, "auto");
   assert.equal(policy.papernexusApiTokenService, "papernexus-api-token");
   assert.equal(policy.papernexusApiTokenAccount, "default");
   assert.equal(policy.papernexusMineruHttpUrl, "http://mineru.example:30000");
+  assert.equal(policy.papernexusAccessMode, "remote_mcp");
 });
 
 test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus access safely", () => {
@@ -350,4 +362,34 @@ test("formatWorkflowSnapshotForPrompt does not advertise local PaperNexus storag
     /never use or inspect local PaperNexus storage under ~\/\.papernexus\/papers or ~\/\.papernexus\/index-store/i
   );
   assert.match(prompt, /project-local staging files/i);
+});
+
+test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus MCP access safely", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "graph_build",
+      currentMicroStage: "graph_refresh_requested",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      graphRefreshRequired: true,
+      papernexusMcpUrl: "https://papernexus.example/mcp",
+      papernexusMcpTransport: "streamable-http",
+      papernexusMcpTimeoutMs: 45000,
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+      papernexusApiTokenSource: "auto",
+      papernexusApiTokenService: "papernexus-api-token",
+      papernexusApiTokenAccount: "default",
+      papernexusAccessMode: "remote_mcp",
+    },
+  });
+
+  assert.match(prompt, /PaperNexus remote access:/);
+  assert.match(prompt, /mcp=https:\/\/papernexus\.example\/mcp/);
+  assert.match(prompt, /mcp_transport=streamable-http/);
+  assert.match(prompt, /Remote MCP rule:/);
+  assert.match(prompt, /Use Authorization: Bearer from env PAPERNEXUS_API_TOKEN|Resolve the PaperNexus bearer token in auto mode/i);
+  assert.match(prompt, /PaperNexus MCP tools/i);
+  assert.match(prompt, /Do not use .*pn_graph_query\.py.*pn_research_chains\.py/i);
 });

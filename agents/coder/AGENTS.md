@@ -23,6 +23,17 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
 - Treat every dataset path as read-only input. Never modify files under shared `datasets/` roots; keep preprocessing outputs, caches, and converted artifacts under `{PROJ}/coder/` or remote scratch/results.
 - When task is complete, append `- [x] Code ready: {exp-name}` to `{PROJ}/orchestrator/TODOS.md`
 
+## Project Scope and PaperNexus Access
+
+- Treat the active project as valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
+- `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
+- Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
+- If code or execution work needs PaperNexus graph interaction, honor workflow access mode:
+  - `remote_api`: use authenticated wrapper / Web API flows; do not hand-write REST or use local MCP graph tools.
+  - `remote_mcp`: use the configured remote PaperNexus HTTP MCP endpoint for graph reads and writes.
+  - `local_mcp`: use PaperNexus MCP tools for graph reads and writes.
+  - `auto`: prefer remote wrapper / API flows first, then remote HTTP MCP, and only fall back to local MCP when workflow guidance explicitly allows it.
+
 ## Session Startup
 
 On every session start:

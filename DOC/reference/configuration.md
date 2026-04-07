@@ -16,7 +16,7 @@
 ### 当前重要配置项
 
 - `allowWorkspaceFallback`  
-  允许 research memory 在没有 `OPENCLAW_PROJECT` 时回退到 workspace 级别。
+  历史兼容字段。当前实现已不再把 research memory 或 workflow 项目状态回退到 workspace；项目必须解析到 `projectsRoot` 下的真实项目目录。
 
 - `requireProjectIsolation`  
   是否强制要求项目隔离。
@@ -34,7 +34,7 @@
   review state 超过多久会被判定为不适合直接恢复。
 
 - `projectsRoot`  
-  项目总根目录。应配置在 `plugins.entries.ClawAutoResearch.config.projectsRoot`，不要放在顶层 `openclaw.json`，否则会触发 `unrecognizedKeys`。
+  项目总根目录。应配置在 `plugins.entries.ClawAutoResearch.config.projectsRoot`，不要放在顶层 `openclaw.json`，否则会触发 `unrecognizedKeys`。当前 workflow 只承认位于这个根目录下的项目；如果 `projectRoot`、`OPENCLAW_PROJECT` 或 channel binding 指向其他位置，运行时会直接拒绝。
 
 - `injectWorkflowContext`  
   是否在每轮 prompt 中注入 workflow snapshot。当前注入策略会优先压缩成“稳定策略 -> 阶段局部控制 -> 主载荷”的分层 prompt，优先保留 owner gate、handoff 与 `research_workflow.auto_iterator_tick` 边界提醒，再按角色补充必要状态，避免把远端子系统和历史背景整包塞进每轮上下文。
@@ -61,7 +61,7 @@
   是否启用“频道/session -> 项目目录”绑定能力。
 
 - `channelProjectBindingsPath`  
-  可选的绑定存储文件路径。留空时，默认写入 `{PROJ}/.openclaw-research/channel-project-bindings.json`；只有当前 turn 还没解析出项目时，才回退到 workspace 下。多 workspace 场景下如果你需要统一共享一份绑定文件，再显式指定它。
+  历史兼容字段。当前实现固定把绑定信息写在 `{PROJ}/.openclaw-research/channel-project-bindings.json`，并在未解析出项目时只在 `projectsRoot` 范围内查找，不再接受额外的自定义绑定存储路径。
 
 - `defaultConferenceTemplatePath`  
   可选的 conference 默认模板路径。启用 `paper_mode = conference` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
@@ -71,6 +71,15 @@
 
 - `papernexusApiBaseUrl`  
   可选的 PaperNexus 远程 Web/API 地址。配置后，workflow prompt 会优先引导 Researcher / PaperNexus-heavy 流程使用这个远程入口，而不是默认假设只能本地访问。
+
+- `papernexusMcpUrl`  
+  可选的 PaperNexus 远程 HTTP MCP 地址。当前要求 PaperNexus 端启用 `streamable-http` transport，且与 `/api/*` 共用同一个 Bearer token。
+
+- `papernexusMcpTransport`  
+  远程 PaperNexus MCP transport。当前只支持 `streamable-http`。
+
+- `papernexusMcpTimeoutMs`  
+  远程 PaperNexus MCP 请求超时，单位毫秒。
 
 - `papernexusApiTokenEnv`  
   存放 PaperNexus API Bearer token 的环境变量名。推荐只在环境变量里放 secret，不把明文 token 写进 `openclaw.json` 或项目文件。
@@ -92,6 +101,13 @@
 
 - `papernexusMineruHttpUrl`  
   可选的 remote MinerU HTTP 地址。配置后，涉及 PDF materialization 的 PaperNexus 流程会优先走 remote mineru，再考虑本地 docling / marker fallback。
+
+- `papernexusAccessMode`  
+  PaperNexus 图谱访问模式。支持：
+  - `remote_api`：只走认证过的远程 wrapper / Web API 路径
+  - `remote_mcp`：只走远程 PaperNexus HTTP MCP 路径
+  - `local_mcp`：只走本地 PaperNexus MCP 工具
+  - `auto`：优先 `remote_api`，其次 `remote_mcp`，只有 workflow guidance 明确允许时才回退到 `local_mcp`
 
 ## 3. `~/.openclaw/openclaw.json`
 
@@ -163,7 +179,7 @@
    - `papernexusMineruHttpUrl`
 5. 如果你要在同一个 Discord 服务里并行跑多个项目：
    - 打开 `enableChannelProjectBindings`
-   - 显式设置共享 `channelProjectBindingsPath`
+   - 确保所有项目目录都在同一个 `projectsRoot` 下；binding 会固定写在各项目自己的 `.openclaw-research/`
 
 ## 7. 常见调参建议
 
@@ -203,14 +219,15 @@
 确保以下配置已经开启：
 
 - `enableChannelProjectBindings`
-- `channelProjectBindingsPath`
+- `projectsRoot`
 
-### 想让 Researcher 优先走远程 PaperNexus
+### 想让 Researcher 优先走远程 PaperNexus Web/API
 
 确保以下配置已经设置：
 
 - `papernexusApiBaseUrl`
 - `papernexusApiTokenSource`
+- `papernexusAccessMode = "remote_api"`
 
 如果你用环境变量，再配置：
 
@@ -228,6 +245,31 @@
 并在运行 OpenClaw 的环境里提供对应 token env，例如：
 
 - `PAPERNEXUS_API_TOKEN`
+
+### 想让 Researcher 优先走远程 PaperNexus MCP
+
+确保以下配置已经设置：
+
+- `papernexusMcpUrl`
+- `papernexusMcpTransport = "streamable-http"`
+- `papernexusMcpTimeoutMs`
+- `papernexusApiTokenSource`
+- `papernexusAccessMode = "remote_mcp"`
+
+如果你用环境变量，再配置：
+
+- `papernexusApiTokenEnv`
+
+如果你用系统原生 keychain，再配置：
+
+- `papernexusApiTokenService`
+- `papernexusApiTokenAccount`
+
+注意：
+
+- 远程 HTTP MCP 与 `/api/*` 共用同一个 Bearer token
+- `remote_mcp` 只替换图谱读写入口；workflow 里的 upload/import 仍走 `pn_stage_sync.py`、`pn_import_submit.py`、`pn_import_queue.py`、`pn_batch_import.py`
+- 如果你同时配置了 `papernexusApiBaseUrl` 和 `papernexusMcpUrl`，并把 `papernexusAccessMode` 设为 `auto`，系统会先尝试 `remote_api`，再尝试 `remote_mcp`
 
 ### 想让 PaperNexus token 走系统原生 keychain
 

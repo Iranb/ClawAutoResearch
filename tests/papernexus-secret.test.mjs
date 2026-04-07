@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   inspectPapernexusRemoteAccess,
+  normalizePapernexusAccessMode,
   normalizePapernexusApiTokenSource,
+  resolvePapernexusAccessPath,
 } from "../tools/papernexus-secret.ts";
 
 test("normalizePapernexusApiTokenSource defaults unknown values to auto", () => {
@@ -11,6 +13,14 @@ test("normalizePapernexusApiTokenSource defaults unknown values to auto", () => 
   assert.equal(normalizePapernexusApiTokenSource("ENV"), "env");
   assert.equal(normalizePapernexusApiTokenSource("os_keychain"), "os_keychain");
   assert.equal(normalizePapernexusApiTokenSource("weird"), "auto");
+});
+
+test("normalizePapernexusAccessMode recognizes remote_mcp", () => {
+  assert.equal(normalizePapernexusAccessMode("remote_mcp"), "remote_mcp");
+  assert.equal(normalizePapernexusAccessMode("REMOTE-MCP"), "remote_mcp");
+  assert.equal(normalizePapernexusAccessMode("local_mcp"), "local_mcp");
+  assert.equal(normalizePapernexusAccessMode("remote_api"), "remote_api");
+  assert.equal(normalizePapernexusAccessMode("weird"), "auto");
 });
 
 test("inspectPapernexusRemoteAccess resolves token from env when configured", async () => {
@@ -137,4 +147,69 @@ test("inspectPapernexusRemoteAccess uses Windows PasswordVault lookup on win32",
   assert.match(calls[0].args.join(" "), /PasswordVault/);
   assert.match(calls[0].args.join(" "), /papernexus-api-token/);
   assert.match(calls[0].args.join(" "), /default/);
+});
+
+test("resolvePapernexusAccessPath resolves remote_mcp when MCP URL and token are configured", async () => {
+  const result = await resolvePapernexusAccessPath(
+    {
+      mcpUrl: "https://papernexus.example/mcp",
+      mcpTransport: "streamable-http",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+    {
+      accessMode: "remote_mcp",
+      corpusRoot: "GCD",
+      env: {
+        PAPERNEXUS_API_TOKEN: "secret-from-env",
+      },
+    }
+  );
+
+  assert.equal(result.mode, "remote_mcp");
+  assert.equal(result.error, null);
+  assert.equal(result.corpusRoot, "GCD");
+  assert.equal(result.remoteInspection?.summary.mcpUrl, "https://papernexus.example/mcp");
+  assert.equal(result.remoteInspection?.summary.mcpTransport, "streamable-http");
+});
+
+test("resolvePapernexusAccessPath falls back to remote_mcp in auto mode when remote_api is not configured", async () => {
+  const result = await resolvePapernexusAccessPath(
+    {
+      mcpUrl: "https://papernexus.example/mcp",
+      mcpTransport: "streamable-http",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+    {
+      accessMode: "auto",
+      corpusRoot: "GCD",
+      env: {
+        PAPERNEXUS_API_TOKEN: "secret-from-env",
+      },
+      checkLocalBin: async () => false,
+    }
+  );
+
+  assert.equal(result.mode, "remote_mcp");
+  assert.equal(result.error, null);
+});
+
+test("resolvePapernexusAccessPath reports remote_mcp as unavailable when no MCP URL is configured", async () => {
+  const result = await resolvePapernexusAccessPath(
+    {
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+    {
+      accessMode: "remote_mcp",
+      corpusRoot: "GCD",
+      env: {
+        PAPERNEXUS_API_TOKEN: "secret-from-env",
+      },
+    }
+  );
+
+  assert.equal(result.mode, "unavailable");
+  assert.match(result.error ?? "", /mcp url/i);
 });

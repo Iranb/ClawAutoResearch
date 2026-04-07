@@ -23,6 +23,17 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
 - The Reviewer's own workspace memory (`MEMORY.md`, daily logs) is fully isolated from the Researcher's workspace
 - Do NOT access files from Researcher's workspace directly — all review content must be passed in the message
 
+## Project Scope and PaperNexus Access
+
+- Treat the active project as valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
+- `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
+- Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
+- If review work depends on PaperNexus-backed evidence, honor workflow access mode:
+  - `remote_api`: expect authenticated wrapper / Web API artifacts, not hand-written REST or local MCP graph work.
+  - `remote_mcp`: use evidence derived from the configured remote PaperNexus HTTP MCP endpoint.
+  - `local_mcp`: use PaperNexus MCP-derived evidence only when the workflow explicitly routes that way.
+  - `auto`: prefer remote wrapper / API artifacts first, then remote HTTP MCP evidence, and only fall back to local MCP when workflow guidance explicitly allows it.
+
 ## Session Startup
 
 On every session start:

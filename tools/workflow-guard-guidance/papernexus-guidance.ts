@@ -64,41 +64,78 @@ export function buildPapernexusGuidance(
     );
   }
 
+  const resolvedAccessMode =
+    typeof params.papernexusAccessMode === "string" &&
+    ["remote_api", "remote_mcp", "local_mcp"].includes(params.papernexusAccessMode)
+      ? params.papernexusAccessMode
+      : params.papernexusMcpUrl
+        ? "remote_mcp"
+        : null; // "auto" or unresolved — guidance will cover both paths
+
   if (
     params.role === "researcher" &&
     (["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "") ||
       paperIngestion?.refresh_required === true) &&
     (params.papernexusApiBaseUrl ||
+      params.papernexusMcpUrl ||
       params.papernexusApiTokenEnv ||
       params.papernexusMineruHttpUrl)
   ) {
-    prepend.push(
-      `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); queue upload work through \`research_workflow.queue_paper_ingestion\`, and prefer \`research_workflow.run_papernexus_wrapper\` for live graph / brainstorm reads; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
-    );
-    prepend.push(
-      "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
-    );
-    prepend.push(
-      "Do not read the live shared graph through local PaperNexus live-graph CLI reads or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
-    );
+    if (resolvedAccessMode === "local_mcp") {
+      prepend.push(
+        "PaperNexus access mode is local_mcp. Use the PaperNexus MCP server tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`, `mutate_graph`) for all graph operations. Do not use Python wrapper scripts in this mode."
+      );
+    } else if (resolvedAccessMode === "remote_mcp") {
+      prepend.push(
+        `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for graph operations. Authenticate with the configured bearer token source at runtime and do not print or persist the raw token.`
+      );
+      prepend.push(
+        "Remote MCP rule: use PaperNexus MCP server tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`, `mutate_graph`, `refresh_corpus`) for remote graph reads and writes. Do not use `pn_graph_query.py` or `pn_research_chains.py` for graph queries in this mode."
+      );
+      prepend.push(
+        "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the configured remote MCP endpoint instead."
+      );
+    } else {
+      prepend.push(
+        `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); queue upload work through \`research_workflow.queue_paper_ingestion\`, and prefer \`research_workflow.run_papernexus_wrapper\` for live graph / brainstorm reads; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
+      );
+      prepend.push(
+        "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
+      );
+      prepend.push(
+        "Do not read the live shared graph through local PaperNexus live-graph CLI reads or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
+      );
+    }
   }
 
   if (
     params.role === "researcher" &&
     ["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")
   ) {
-    prepend.push(
-      "For each novelty-sensitive topic, summarize the topic, launch the typed PaperNexus wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
-    );
+    if (resolvedAccessMode === "remote_mcp") {
+      prepend.push(
+        "For each novelty-sensitive topic, summarize the topic, use the configured remote PaperNexus MCP tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`) for graph-grounded reasoning, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+      );
+    } else {
+      prepend.push(
+        "For each novelty-sensitive topic, summarize the topic, launch the typed PaperNexus wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+      );
+    }
     prepend.push(
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     prepend.push(
       "If new PDFs or Markdown arrive through a UI/API upload, queue the PaperNexus import wrappers from project-local staging through `research_workflow.queue_paper_ingestion`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. `/graph-build` and `/resume-pipeline` will launch the queued request for you."
     );
-    prepend.push(
-      "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
-    );
+    if (resolvedAccessMode === "remote_mcp") {
+      prepend.push(
+        "For ideation and frontier work, prefer the configured remote MCP graph tools over raw full-graph inspection. Use MCP `query`, `context`, `impact`, `ideas`, and `brainstorm` before trusting raw prominence, and reserve wrapper-based import staging only for queued upload flows."
+      );
+    } else {
+      prepend.push(
+        "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
+      );
+    }
   }
 
   return { prepend, append };
