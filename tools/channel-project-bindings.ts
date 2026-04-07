@@ -5,6 +5,10 @@ import {
   buildWorkflowRuntimeSessionBinding,
   type WorkflowRuntimeSessionBinding,
 } from "./workflow-subagent-sessions";
+import {
+  assertProjectRootWithinProjectsRoot,
+  isProjectRootWithinProjectsRoot,
+} from "./workflow-guard-project-state";
 
 export interface ChannelProjectBindingPolicy {
   enableChannelProjectBindings?: boolean;
@@ -91,9 +95,7 @@ function normalizePolicy(
       policy?.enableChannelProjectBindings === true
         ? true
         : DEFAULT_POLICY.enableChannelProjectBindings,
-    channelProjectBindingsPath:
-      asString(policy?.channelProjectBindingsPath) ??
-      DEFAULT_POLICY.channelProjectBindingsPath,
+    channelProjectBindingsPath: DEFAULT_POLICY.channelProjectBindingsPath,
     projectsRoot:
       asString(policy?.projectsRoot) ??
       DEFAULT_POLICY.projectsRoot,
@@ -138,6 +140,14 @@ function getProjectScopedStorePath(projectRoot: string): string {
 function getProjectsRoot(policy: Required<ChannelProjectBindingPolicy>): string | null {
   const explicit = asString(policy.projectsRoot);
   return explicit ? path.resolve(expandHome(explicit)) : null;
+}
+
+function getProjectsScopedFallbackStorePath(projectsRoot: string): string {
+  return path.join(
+    path.resolve(expandHome(projectsRoot)),
+    ".openclaw-research",
+    "channel-project-bindings.json"
+  );
 }
 
 async function listCandidateProjectBindingStorePaths(
@@ -236,14 +246,19 @@ export function resolveChannelProjectBindingsPath(params: {
   context?: ChannelProjectBindingContext;
 }): string {
   const policy = normalizePolicy(params.policy);
-  const explicit = asString(policy.channelProjectBindingsPath);
-  if (explicit) {
-    return path.resolve(expandHome(explicit));
+  const projectsRoot = getProjectsRoot(policy);
+  const projectRoot = asString(params.context?.projectRoot);
+  if (projectRoot && projectsRoot) {
+    return getProjectScopedStorePath(
+      assertProjectRootWithinProjectsRoot({
+        projectRoot,
+        projectsRoot,
+        sourceLabel: "Channel-project binding",
+      })
+    );
   }
-  const projectRoot =
-    asString(params.context?.projectRoot) ?? getDirectProjectRootFromEnv();
-  if (projectRoot) {
-    return getProjectScopedStorePath(projectRoot);
+  if (projectsRoot) {
+    return getProjectsScopedFallbackStorePath(projectsRoot);
   }
   const workspaceRoot = getWorkspaceRoot(params.context ?? {});
   return path.join(workspaceRoot, ".openclaw-research", "channel-project-bindings.json");
@@ -303,7 +318,15 @@ export function getChannelProjectBinding(params: {
   const store = readStore(storePath);
   const directBinding =
     store.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
-  if (directBinding) {
+  const projectsRoot = getProjectsRoot(policy);
+  if (
+    directBinding &&
+    (!projectsRoot ||
+      isProjectRootWithinProjectsRoot({
+        projectRoot: directBinding.projectRoot,
+        projectsRoot,
+      }))
+  ) {
     return {
       enabled: true,
       storePath,
@@ -311,8 +334,7 @@ export function getChannelProjectBinding(params: {
       binding: directBinding,
     };
   }
-  const projectsRoot = getProjectsRoot(policy);
-  if (!asString(policy.channelProjectBindingsPath) && projectsRoot) {
+  if (projectsRoot) {
     try {
       const candidateStorePaths = fs
         .readdirSync(projectsRoot, { withFileTypes: true })
@@ -333,6 +355,14 @@ export function getChannelProjectBinding(params: {
         const candidateBinding =
           candidateStore.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
         if (!candidateBinding) {
+          continue;
+        }
+        if (
+          !isProjectRootWithinProjectsRoot({
+            projectRoot: candidateBinding.projectRoot,
+            projectsRoot,
+          })
+        ) {
           continue;
         }
         if (
@@ -377,47 +407,53 @@ export function listChannelProjectBindings(params: {
     policy,
     context: params.context,
   });
-  if (!asString(policy.channelProjectBindingsPath)) {
-    const projectsRoot = getProjectsRoot(policy);
-    if (projectsRoot) {
-      const bindingsByKey = new Map<string, ChannelProjectBindingRecord>();
-      try {
-        const storePaths = fs
-          .readdirSync(projectsRoot, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) =>
-            path.join(
+  const projectsRoot = getProjectsRoot(policy);
+  if (projectsRoot) {
+    const bindingsByKey = new Map<string, ChannelProjectBindingRecord>();
+    try {
+      const storePaths = fs
+        .readdirSync(projectsRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) =>
+          path.join(
+            projectsRoot,
+            entry.name,
+            ".openclaw-research",
+            "channel-project-bindings.json"
+          )
+        );
+      for (const candidatePath of storePaths) {
+        const candidateStore = readStore(candidatePath);
+        for (const binding of candidateStore.bindings) {
+          if (
+            !isProjectRootWithinProjectsRoot({
+              projectRoot: binding.projectRoot,
               projectsRoot,
-              entry.name,
-              ".openclaw-research",
-              "channel-project-bindings.json"
-            )
-          );
-        for (const candidatePath of storePaths) {
-          const candidateStore = readStore(candidatePath);
-          for (const binding of candidateStore.bindings) {
-            const existing = bindingsByKey.get(binding.channelKey);
-            if (
-              !existing ||
-              new Date(binding.updatedAt).getTime() >
-                new Date(existing.updatedAt).getTime()
-            ) {
-              bindingsByKey.set(binding.channelKey, binding);
-            }
+            })
+          ) {
+            continue;
+          }
+          const existing = bindingsByKey.get(binding.channelKey);
+          if (
+            !existing ||
+            new Date(binding.updatedAt).getTime() >
+              new Date(existing.updatedAt).getTime()
+          ) {
+            bindingsByKey.set(binding.channelKey, binding);
           }
         }
-      } catch {
-        // Ignore scan failures and fall back to the local store.
       }
-      if (bindingsByKey.size > 0) {
-        return {
-          enabled: policy.enableChannelProjectBindings,
-          storePath: projectsRoot,
-          bindings: [...bindingsByKey.values()].sort((left, right) =>
-            left.channelKey.localeCompare(right.channelKey)
-          ),
-        };
-      }
+    } catch {
+      // Ignore scan failures and fall back to the local store.
+    }
+    if (bindingsByKey.size > 0) {
+      return {
+        enabled: policy.enableChannelProjectBindings,
+        storePath: projectsRoot,
+        bindings: [...bindingsByKey.values()].sort((left, right) =>
+          left.channelKey.localeCompare(right.channelKey)
+        ),
+      };
     }
   }
   return {
@@ -432,6 +468,7 @@ export function resolveProjectContext(params: {
   context?: ChannelProjectBindingContext;
 }): ResolvedProjectContext {
   const policy = normalizePolicy(params.policy);
+  const projectsRoot = getProjectsRoot(policy);
   const storePath = resolveChannelProjectBindingsPath({
     policy,
     context: params.context,
@@ -458,11 +495,19 @@ export function resolveProjectContext(params: {
 
   const envProjectRoot = getDirectProjectRootFromEnv();
   if (envProjectRoot) {
+    const validatedProjectRoot =
+      projectsRoot
+        ? assertProjectRootWithinProjectsRoot({
+            projectRoot: envProjectRoot,
+            projectsRoot,
+            sourceLabel: "OPENCLAW_PROJECT",
+          })
+        : envProjectRoot;
     return {
       enabled: policy.enableChannelProjectBindings,
       channelKey: resolveChannelProjectKey(params.context),
-      projectRoot: envProjectRoot,
-      projectId: path.basename(envProjectRoot),
+      projectRoot: validatedProjectRoot,
+      projectId: path.basename(validatedProjectRoot),
       source: "env",
       storePath,
       binding: null,
@@ -509,7 +554,15 @@ export async function setChannelProjectBinding(params: {
     throw new Error("Unable to resolve the current channel key for project binding.");
   }
   const projectRoot = path.resolve(expandHome(params.projectRoot));
+  const projectsRoot = getProjectsRoot(policy);
   await fsp.access(projectRoot);
+  if (projectsRoot) {
+    assertProjectRootWithinProjectsRoot({
+      projectRoot,
+      projectsRoot,
+      sourceLabel: "Channel-project binding",
+    });
+  }
 
   const storePath = resolveChannelProjectBindingsPath({ policy, context });
   const store = readStore(storePath);
@@ -584,6 +637,7 @@ export async function clearChannelProjectBinding(params: {
   };
   const storePath = resolveChannelProjectBindingsPath({ policy, context });
   const channelKey = resolveChannelProjectKey(context);
+  const projectsRoot = getProjectsRoot(policy);
   if (!channelKey) {
     throw new Error("Unable to resolve the current channel key for project unbinding.");
   }
@@ -591,21 +645,18 @@ export async function clearChannelProjectBinding(params: {
   let store = readStore(storePath);
   if (
     !store.bindings.some((entry) => entry.channelKey === channelKey) &&
-    !asString(policy.channelProjectBindingsPath)
+    projectsRoot
   ) {
-    const projectsRoot = getProjectsRoot(policy);
-    if (projectsRoot) {
-      const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
-      for (const candidatePath of candidateStorePaths) {
-        if (candidatePath === storePath) {
-          continue;
-        }
-        const candidateStore = readStore(candidatePath);
-        if (candidateStore.bindings.some((entry) => entry.channelKey === channelKey)) {
-          effectiveStorePath = candidatePath;
-          store = candidateStore;
-          break;
-        }
+    const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
+    for (const candidatePath of candidateStorePaths) {
+      if (candidatePath === storePath) {
+        continue;
+      }
+      const candidateStore = readStore(candidatePath);
+      if (candidateStore.bindings.some((entry) => entry.channelKey === channelKey)) {
+        effectiveStorePath = candidatePath;
+        store = candidateStore;
+        break;
       }
     }
   }

@@ -659,3 +659,133 @@ export function defaultAutoGateConfig(): WorkflowAutoGateConfig {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Score-based auto-gate evaluation
+// ---------------------------------------------------------------------------
+
+export type AutoGateScoreEvaluation = {
+  pass: boolean;
+  reason: string;
+  averageScore: number | null;
+  minSingleScore: number | null;
+  thresholdAvg: number;
+  thresholdMinSingle: number;
+  scoreRecordCount: number;
+};
+
+type ScoreRecordLike = {
+  stage?: string;
+  average?: number;
+  minSingle?: number;
+  min_single?: number;
+  recommendation?: string;
+};
+
+export function evaluateAutoGate(
+  stage: string | null,
+  manifest: Record<string, unknown> | null,
+  config: WorkflowAutoGateConfig
+): AutoGateScoreEvaluation {
+  const thresholdKey = stage === "code"
+    ? "code_to_experiment"
+    : stage === "review"
+      ? "review_to_write"
+      : stage === "write"
+        ? "write_to_submit"
+        : stage === "submit"
+          ? "submit_to_done"
+          : null;
+
+  const threshold = thresholdKey
+    ? config.thresholds[thresholdKey as keyof typeof config.thresholds]
+    : null;
+  const thresholdAvg = threshold?.avg ?? 7.0;
+  const thresholdMinSingle = threshold?.minSingle ?? 6.0;
+
+  // Read score_records from review_issue_tracker in manifest
+  const reviewTracker =
+    manifest && typeof manifest === "object"
+      ? ((manifest as Record<string, unknown>).review_issue_tracker as Record<string, unknown> | undefined)
+      : null;
+  const rawRecords = Array.isArray(reviewTracker?.score_records)
+    ? reviewTracker!.score_records as ScoreRecordLike[]
+    : Array.isArray(reviewTracker?.scoreRecords)
+      ? reviewTracker!.scoreRecords as ScoreRecordLike[]
+      : [];
+
+  // Filter to records matching the current gate stage
+  const gateStage = thresholdKey ?? stage ?? "";
+  const stageRecords = rawRecords.filter(
+    (r) => typeof r.stage === "string" && r.stage === gateStage
+  );
+
+  if (stageRecords.length === 0) {
+    return {
+      pass: false,
+      reason: `No score records found for gate "${gateStage}". At least ${config.quorum} review(s) required.`,
+      averageScore: null,
+      minSingleScore: null,
+      thresholdAvg,
+      thresholdMinSingle,
+      scoreRecordCount: 0,
+    };
+  }
+
+  if (stageRecords.length < config.quorum) {
+    return {
+      pass: false,
+      reason: `Only ${stageRecords.length}/${config.quorum} review(s) collected for gate "${gateStage}".`,
+      averageScore: null,
+      minSingleScore: null,
+      thresholdAvg,
+      thresholdMinSingle,
+      scoreRecordCount: stageRecords.length,
+    };
+  }
+
+  const avgScores = stageRecords
+    .map((r) => (typeof r.average === "number" ? r.average : null))
+    .filter((v): v is number => v !== null);
+  const minScores = stageRecords
+    .map((r) => {
+      const v = typeof r.minSingle === "number" ? r.minSingle : typeof r.min_single === "number" ? r.min_single : null;
+      return v;
+    })
+    .filter((v): v is number => v !== null);
+
+  const overallAvg =
+    avgScores.length > 0
+      ? avgScores.reduce((sum, v) => sum + v, 0) / avgScores.length
+      : null;
+  const overallMin =
+    minScores.length > 0 ? Math.min(...minScores) : null;
+
+  const avgPass = overallAvg !== null && overallAvg >= thresholdAvg;
+  const minPass = overallMin !== null && overallMin >= thresholdMinSingle;
+  const pass = avgPass && minPass;
+
+  const reasons: string[] = [];
+  if (!avgPass) {
+    reasons.push(
+      `Average score ${overallAvg?.toFixed(2) ?? "N/A"} below threshold ${thresholdAvg}`
+    );
+  }
+  if (!minPass) {
+    reasons.push(
+      `Min single score ${overallMin?.toFixed(2) ?? "N/A"} below threshold ${thresholdMinSingle}`
+    );
+  }
+
+  return {
+    pass,
+    reason: pass
+      ? `Gate "${gateStage}" passed: avg=${overallAvg?.toFixed(2)}, min=${overallMin?.toFixed(2)}.`
+      : reasons.join("; "),
+    averageScore: overallAvg !== null ? Math.round(overallAvg * 100) / 100 : null,
+    minSingleScore: overallMin !== null ? Math.round(overallMin * 100) / 100 : null,
+    thresholdAvg,
+    thresholdMinSingle,
+    scoreRecordCount: stageRecords.length,
+  };
+}

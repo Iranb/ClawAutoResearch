@@ -260,6 +260,96 @@ test("channel-project bindings default to the project-local store when projectRo
   await fs.access(expectedStorePath);
 });
 
+test("channel-project bindings ignore custom store path overrides and stay under the project-local runtime dir", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "override-track");
+  const sessionKey = "agent:researcher:discord:group:override-room";
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const customStorePath = path.join(workspaceRoot, "custom", "bindings.json");
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const binding = await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      channelProjectBindingsPath: customStorePath,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  assert.equal(
+    binding.storePath,
+    path.join(projectRoot, ".openclaw-research", "channel-project-bindings.json")
+  );
+  await assert.rejects(() => fs.access(customStorePath), /ENOENT/);
+});
+
+test("unresolved channel-project lookup stays under projectsRoot instead of falling back to workspace", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const sessionKey = "agent:researcher:discord:group:lookup-room";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const binding = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+
+  assert.equal(
+    binding.storePath,
+    path.join(projectsRoot, ".openclaw-research", "channel-project-bindings.json")
+  );
+});
+
+test("research memory rejects OPENCLAW_PROJECT values outside the configured projectsRoot", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const strayProjectRoot = path.join(workspaceRoot, "..", "repo-like-location");
+  const sessionKey = "agent:researcher:discord:group:memory-room";
+  process.env.OPENCLAW_PROJECT = strayProjectRoot;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () =>
+      getResolvedResearchMemoryPaths(
+        {
+          enableChannelProjectBindings: true,
+          projectsRoot,
+          requireProjectIsolation: true,
+        },
+        {
+          workspaceDir: workspaceRoot,
+          sessionKey,
+          messageChannel: "discord",
+        }
+      ),
+    /must live under the configured projectsRoot/i
+  );
+});
+
 test("automatic channel binding creates the project-local file once a project is resolved", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "auto-bind-track");

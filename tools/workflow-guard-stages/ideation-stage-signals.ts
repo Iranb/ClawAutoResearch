@@ -72,6 +72,30 @@ export async function collectIdeaStageMissingSignals(
   deps: IdeationStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+
+  // Graph-awareness check: graceful degradation when PaperNexus is unavailable.
+  // If graph_presence_status is "missing_corpus" and autoMode is active, emit a
+  // non-blocking warning and set graph_mode to "lite" instead of hard-blocking.
+  const paperIngestion = ctx.manifest?.paper_ingestion as Record<string, unknown> | undefined;
+  const graphPresenceStatus = deps.asString(
+    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
+  );
+  const autoMode = deps.asString(ctx.manifest?.auto_mode) ?? deps.asString(ctx.manifest?.autoMode);
+  if (graphPresenceStatus === "missing_corpus") {
+    if (autoMode && autoMode !== "off") {
+      // Non-blocking: set lite mode in ideation contract so downstream checks
+      // skip graph-dependent artifacts. The warning is logged but does not block.
+      const ideationContract = ctx.manifest?.ideation_contract as Record<string, unknown> | undefined;
+      if (ideationContract) {
+        ideationContract.graph_mode = "lite";
+      }
+    } else {
+      missing.push(
+        "PaperNexus corpus unavailable (graph_presence_status=missing_corpus). Run /graph-build or configure papernexus access."
+      );
+    }
+  }
+
   if (!(await deps.pathExists(path.join(ctx.projectRoot, "researcher", "IDEA_REPORT.md")))) {
     missing.push("{PROJ}/researcher/IDEA_REPORT.md");
   }
@@ -226,7 +250,7 @@ export async function collectPlanStageMissingSignals(
   }
 
   const ideaCatalyst = deps.normalizeIdeaCatalystState(ctx.manifest?.idea_catalyst);
-  if (!isIdeaCatalystReadyForPlan(ideaCatalyst)) {
+  if (!isIdeaCatalystReadyForPlan(ideaCatalyst, ctx.manifest)) {
     missing.push(...deps.getIdeaCatalystValidationErrors(ideaCatalyst));
     const requisitionBlockingSignal =
       getIdeaCatalystRequisitionBlockingSignal(ideaCatalyst);

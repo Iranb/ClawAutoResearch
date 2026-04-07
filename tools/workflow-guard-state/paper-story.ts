@@ -203,3 +203,30 @@ export function serializePaperStoryState(
     last_updated_at: value.lastUpdatedAt,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Claim reconciliation → paper story state update
+// ---------------------------------------------------------------------------
+
+export type ClaimReconciliationSummary = {
+  supportedClaimCount: number;
+  partialClaimCount: number;
+  unsupportedClaimCount: number;
+  claimSupportStatus: string;
+  totalClaims: number;
+  reconciledAt: string;
+};
+
+export function materializePaperStoryFromClaims(
+  currentState: PaperStoryState,
+  reconciliation: ClaimReconciliationSummary
+): PaperStoryState {
+  return {
+    ...currentState,
+    claimSupportStatus: reconciliation.claimSupportStatus,
+    supportedClaimCount: reconciliation.supportedClaimCount,
+    partialClaimCount: reconciliation.partialClaimCount,
+    unsupportedClaimCount: reconciliation.unsupportedClaimCount,
+    lastUpdatedAt: reconciliation.reconciledAt,
+  };
+}

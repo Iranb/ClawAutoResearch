@@ -99,6 +99,73 @@ type ReviewSessionStateLike = {
   pendingReason: string | null;
 };
 
+// ---------------------------------------------------------------------------
+// Structured review score records for auto-gate evaluation
+// ---------------------------------------------------------------------------
+
+export type ReviewScoreRecord = {
+  reviewerId: string;
+  stage: string;
+  scores: {
+    novelty: number;
+    technical_soundness: number;
+    clarity: number;
+    significance: number;
+    reproducibility: number;
+  };
+  average: number;
+  minSingle: number;
+  recommendation: "advance" | "revise" | "reject";
+  timestamp: string;
+};
+
+export function normalizeReviewScoreRecord(value: unknown): ReviewScoreRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const rec = value as Record<string, unknown>;
+  const reviewerId = typeof rec.reviewerId === "string" ? rec.reviewerId :
+    typeof rec.reviewer_id === "string" ? rec.reviewer_id : null;
+  const stage = typeof rec.stage === "string" ? rec.stage : null;
+  if (!reviewerId || !stage) return null;
+
+  const scoresRaw = (rec.scores ?? rec.dimension_scores ?? {}) as Record<string, unknown>;
+  const scores = {
+    novelty: typeof scoresRaw.novelty === "number" ? scoresRaw.novelty : 0,
+    technical_soundness: typeof scoresRaw.technical_soundness === "number" ? scoresRaw.technical_soundness :
+      typeof scoresRaw.technicalSoundness === "number" ? scoresRaw.technicalSoundness : 0,
+    clarity: typeof scoresRaw.clarity === "number" ? scoresRaw.clarity : 0,
+    significance: typeof scoresRaw.significance === "number" ? scoresRaw.significance : 0,
+    reproducibility: typeof scoresRaw.reproducibility === "number" ? scoresRaw.reproducibility : 0,
+  };
+
+  const scoreValues = Object.values(scores);
+  const average = typeof rec.average === "number" ? rec.average :
+    scoreValues.length > 0 ? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length : 0;
+  const minSingle = typeof rec.minSingle === "number" ? rec.minSingle :
+    typeof rec.min_single === "number" ? rec.min_single :
+    scoreValues.length > 0 ? Math.min(...scoreValues) : 0;
+
+  const recStr = typeof rec.recommendation === "string" ? rec.recommendation.toLowerCase() : "";
+  const recommendation: "advance" | "revise" | "reject" =
+    recStr === "advance" ? "advance" : recStr === "reject" ? "reject" : "revise";
+
+  return {
+    reviewerId,
+    stage,
+    scores,
+    average: Math.round(average * 100) / 100,
+    minSingle: Math.round(minSingle * 100) / 100,
+    recommendation,
+    timestamp: typeof rec.timestamp === "string" ? rec.timestamp : new Date().toISOString(),
+  };
+}
+
+export function normalizeReviewScoreRecords(value: unknown): ReviewScoreRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(normalizeReviewScoreRecord)
+    .filter((r): r is ReviewScoreRecord => r !== null);
+}
+
 type GraphGuidedWritingStateLike = {
   enabled: boolean;
   status: string;

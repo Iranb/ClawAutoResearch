@@ -183,8 +183,7 @@ function normalizePolicy(
 ): Required<ResearchMemoryPolicy> {
   return {
     // Data integrity policies
-    allowWorkspaceFallback:
-      policy.allowWorkspaceFallback ?? DEFAULT_POLICY.allowWorkspaceFallback,
+    allowWorkspaceFallback: false,
     requireProjectIsolation:
       policy.requireProjectIsolation ?? DEFAULT_POLICY.requireProjectIsolation,
     requireProjectIdInEntries:
@@ -316,7 +315,7 @@ function resolveBaseDir(
 
   if (!policy.allowWorkspaceFallback) {
     throw new Error(
-      "Workspace fallback is disabled for research memory. Bind the current channel to a project, set OPENCLAW_PROJECT, or relax plugin policy."
+      "Workspace fallback is disabled for research memory. Bind the current channel to a project or set OPENCLAW_PROJECT to a project inside projectsRoot."
     );
   }
 
@@ -368,7 +367,7 @@ export function getResolvedResearchMemoryPaths(
 
   return {
     policy: normalized,
-    mode: projectRoot ? "project" : "workspace",
+    mode: projectRoot ? "project" : usingWorkspaceFallback ? "workspace" : "unresolved",
     projectIsolationSatisfied,
     usingWorkspaceFallback,
     workspaceRoot,

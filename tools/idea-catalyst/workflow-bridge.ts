@@ -154,8 +154,16 @@ export function getIdeaCatalystRequiredArtifactPaths(value: unknown): string[] {
   return required;
 }
 
-export function isIdeaCatalystReadyForPlan(value: unknown): boolean {
-  return normalizeIdeaCatalystState(value).status === "ready";
+export function isIdeaCatalystReadyForPlan(value: unknown, manifest?: Record<string, unknown> | null): boolean {
+  const state = normalizeIdeaCatalystState(value);
+  if (state.status === "ready") return true;
+  // In lite mode (graph unavailable), accept partial readiness: the pipeline
+  // can proceed without graph-backed frontier analysis and ranked fragments.
+  const ideationContract = manifest?.ideation_contract as Record<string, unknown> | undefined;
+  if (ideationContract?.graph_mode === "lite" && state.status !== "blocked") {
+    return true;
+  }
+  return false;
 }
 
 export function getIdeaCatalystRequisitionBlockingSignal(value: unknown): string | null {

@@ -1,4 +1,3 @@
-import os from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -149,14 +148,43 @@ export function getConfiguredProjectsRoot(params: {
   if (envProjectsRoot) {
     return path.resolve(expandHome(envProjectsRoot));
   }
-  if (params.policy?.allowWorkspaceFallback !== true) {
-    return null;
+  return null;
+}
+
+export function isProjectRootWithinProjectsRoot(params: {
+  projectRoot: string;
+  projectsRoot: string;
+}): boolean {
+  const normalizedProjectRoot = path.resolve(expandHome(params.projectRoot));
+  const normalizedProjectsRoot = path.resolve(expandHome(params.projectsRoot));
+  const relative = path.relative(normalizedProjectsRoot, normalizedProjectRoot);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+export function assertProjectRootWithinProjectsRoot(params: {
+  projectRoot: string;
+  projectsRoot: string;
+  sourceLabel?: string | null;
+}): string {
+  const normalizedProjectRoot = path.resolve(expandHome(params.projectRoot));
+  const normalizedProjectsRoot = path.resolve(expandHome(params.projectsRoot));
+  if (
+    !isProjectRootWithinProjectsRoot({
+      projectRoot: normalizedProjectRoot,
+      projectsRoot: normalizedProjectsRoot,
+    })
+  ) {
+    const sourcePrefix = asString(params.sourceLabel)
+      ? `${params.sourceLabel} `
+      : "";
+    throw new Error(
+      `${sourcePrefix}projectRoot must live under the configured projectsRoot. projectRoot=${normalizedProjectRoot} projectsRoot=${normalizedProjectsRoot}`
+    );
   }
-  const workspaceDir =
-    asString(params.workspaceDir) ??
-    asString(process.env.OPENCLAW_WORKSPACE) ??
-    path.join(os.homedir(), ".openclaw", "workspace-researcher");
-  return path.join(path.resolve(expandHome(workspaceDir)), "projects");
+  return normalizedProjectRoot;
 }
 
 export async function ensureTextFile(targetPath: string, content: string): Promise<boolean> {
@@ -262,12 +290,14 @@ export async function ensureWorkflowProjectRootImpl(params: {
   });
   if (!projectsRoot) {
     throw new Error(
-      "projectsRoot is not configured for ClawAutoResearch. Set plugins.entries.ClawAutoResearch.config.projectsRoot (or OPENCLAW_PROJECTS_ROOT), or explicitly enable allowWorkspaceFallback if you want project scaffolds under the agent workspace."
+      "projectsRoot is not configured for ClawAutoResearch. Set plugins.entries.ClawAutoResearch.config.projectsRoot (or OPENCLAW_PROJECTS_ROOT)."
     );
   }
-  const projectRoot = path.resolve(
-    expandHome(params.projectRoot ?? path.join(projectsRoot, projectId))
-  );
+  const projectRoot = assertProjectRootWithinProjectsRoot({
+    projectRoot: params.projectRoot ?? path.join(projectsRoot, projectId),
+    projectsRoot,
+    sourceLabel: "Workflow",
+  });
   const created = !(await pathExists(projectRoot));
   await fs.mkdir(projectRoot, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });

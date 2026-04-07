@@ -34,6 +34,73 @@ function quote(value: string | null | undefined): string {
   return value && value.trim().length > 0 ? value.trim() : "unset";
 }
 
+export type VenueArgumentStyle = {
+  venue: string;
+  style: "theorem-first" | "reproducibility-first" | "impact-first" | "linguistic-depth" | "general";
+  keyEmphases: string[];
+};
+
+function deriveArgumentStyle(venue: string): VenueArgumentStyle {
+  const normalized = venue.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/neurips|nips|icml/.test(normalized)) {
+    return {
+      venue,
+      style: "theorem-first",
+      keyEmphases: [
+        "Lead with theoretical grounding or formal guarantees",
+        "Follow with empirical validation on standard benchmarks",
+        "Highlight computational complexity and scalability analysis",
+        "Include ablation studies isolating each contribution",
+      ],
+    };
+  }
+  if (/iclr/.test(normalized)) {
+    return {
+      venue,
+      style: "reproducibility-first",
+      keyEmphases: [
+        "Emphasize reproducibility: code, hyperparameters, random seeds",
+        "Frame for open-review: anticipate reviewer questions in text",
+        "Lead with clear problem statement and motivation",
+        "Include reproducibility checklist compliance",
+      ],
+    };
+  }
+  if (/kdd/.test(normalized)) {
+    return {
+      venue,
+      style: "impact-first",
+      keyEmphases: [
+        "Lead with real-world application impact and deployment considerations",
+        "Demonstrate scalability with production-scale experiments",
+        "Include case studies or industry validation where possible",
+        "Address data pipeline and engineering aspects",
+      ],
+    };
+  }
+  if (/acl|emnlp|naacl|eacl|coling/.test(normalized)) {
+    return {
+      venue,
+      style: "linguistic-depth",
+      keyEmphases: [
+        "Include thorough linguistic analysis and error analysis",
+        "Human evaluation required alongside automatic metrics",
+        "Cross-lingual or multi-lingual evaluation where applicable",
+        "Discuss ethical implications and limitations explicitly",
+      ],
+    };
+  }
+  return {
+    venue,
+    style: "general",
+    keyEmphases: [
+      "Balance theoretical motivation with empirical evidence",
+      "Include comprehensive ablation studies",
+      "Address limitations and future work",
+    ],
+  };
+}
+
 function scoreVenue(params: {
   venue: string;
   targetVenues: string[];
@@ -45,7 +112,7 @@ function scoreVenue(params: {
     unsupportedClaimCount: number;
   };
   reviewPressureState: { status: string } | null;
-}): { score: number; rationale: string[] } {
+}): { score: number; rationale: string[]; argumentStyle: VenueArgumentStyle } {
   const venue = params.venue;
   let score = 0;
   const rationale: string[] = [];
@@ -78,7 +145,7 @@ function scoreVenue(params: {
     score += 1;
     rationale.push("Review pressure packet recommends a narrower, lower-risk submission envelope.");
   }
-  return { score, rationale };
+  return { score, rationale, argumentStyle: deriveArgumentStyle(venue) };
 }
 
 export async function materializeVenueRoutingPlan(params: {
@@ -159,4 +226,46 @@ ${scored
     routeMode,
     venueScores: scored,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Venue argument style materializer
+// ---------------------------------------------------------------------------
+
+export async function materializeVenueArgumentStyle(params: {
+  projectRoot: string;
+  recommendedVenue: string;
+  artifactPath?: string | null;
+}): Promise<{ path: string; content: string }> {
+  const style = deriveArgumentStyle(params.recommendedVenue);
+  const content = `# Venue Argument Style Guide
+
+**Target Venue:** ${style.venue}
+**Argument Style:** ${style.style}
+
+## Key Emphases
+
+${style.keyEmphases.map((e, i) => `${i + 1}. ${e}`).join("\n")}
+
+## Writing Instructions
+
+${style.style === "theorem-first" ? `- Structure: Theorem/Proposition → Proof sketch → Empirical validation
+- Introduction must state the theoretical contribution before discussing experiments
+- Related work should position against both theoretical and empirical baselines` : ""}${style.style === "reproducibility-first" ? `- Structure: Problem → Method → Reproducibility details → Results
+- Include a reproducibility checklist as an appendix
+- Hyperparameters, seeds, and compute budget must be explicit in the main text
+- Anticipate open-review feedback in the writing` : ""}${style.style === "impact-first" ? `- Structure: Real-world problem → Proposed solution → Scale evidence → Impact analysis
+- Lead the abstract with the application domain and impact metric
+- Include deployment considerations and computational cost analysis` : ""}${style.style === "linguistic-depth" ? `- Structure: Linguistic phenomenon → Method → Automatic + Human evaluation → Error analysis
+- Human evaluation methodology must be detailed (annotator agreement, guidelines)
+- Include cross-lingual experiments or justify single-language scope
+- Ethics statement required` : ""}${style.style === "general" ? `- Structure: Motivation → Method → Experiments → Analysis
+- Balance theoretical and empirical contributions
+- Include thorough ablation studies` : ""}
+`;
+
+  const artifactPath = params.artifactPath ?? "academic_writer/VENUE_ARGUMENT_STYLE.md";
+  const resolvedPath = path.join(path.resolve(params.projectRoot), artifactPath);
+  await writeTextEnsured(resolvedPath, content);
+  return { path: artifactPath, content };
 }

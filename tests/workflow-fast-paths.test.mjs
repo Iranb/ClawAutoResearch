@@ -152,6 +152,31 @@ test("ensureWorkflowProjectRoot fails fast when projectsRoot is missing and work
   );
 });
 
+test("ensureWorkflowProjectRoot rejects an explicit projectRoot outside the configured projectsRoot", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const strayProjectRoot = path.join(workspaceRoot, "..", "stray-project-root");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await assert.rejects(
+    () =>
+      ensureWorkflowProjectRoot({
+        policy: {
+          projectsRoot,
+          enableChannelProjectBindings: true,
+        },
+        workspaceDir: workspaceRoot,
+        projectRoot: strayProjectRoot,
+        projectId: "stray-project",
+        topic: "Stray project",
+      }),
+    /must live under the configured projectsRoot/i
+  );
+});
+
 test("ensureWorkflowProjectRoot backfills idle_research for an existing legacy manifest", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

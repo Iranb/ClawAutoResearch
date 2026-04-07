@@ -805,3 +805,92 @@ export async function evaluateCodeAutoReview(params: {
 export function defaultCodeReviewPanel(): CodeReviewReviewerRole[] {
   return [...PANEL_ROLES];
 }
+
+// ---------------------------------------------------------------------------
+// Sequential quorum for CODE → EXPERIMENT gate
+// ---------------------------------------------------------------------------
+
+export type CodeReviewQuorumResult = {
+  passed: boolean;
+  quorumMet: boolean;
+  requiredReviewers: number;
+  collectedReviewers: number;
+  averageScore: number | null;
+  minScore: number | null;
+  threshold: number;
+  results: Array<{
+    reviewerRole: CodeReviewReviewerRole;
+    score: number;
+    verdict: CodeReviewVerdict;
+  }>;
+  reason: string;
+  evaluatedAt: string;
+};
+
+export function evaluateCodeReviewQuorum(params: {
+  round: CodeReviewRound | null;
+  autoGate: WorkflowAutoGateConfig;
+  autoMode: WorkflowAutoMode;
+}): CodeReviewQuorumResult {
+  const { round, autoGate, autoMode } = params;
+  const threshold = autoGate.thresholds.code_to_experiment?.avg ?? 8.0;
+  const requiredReviewers = Math.max(2, autoGate.quorum);
+  const now = new Date().toISOString();
+
+  if (!round) {
+    return {
+      passed: false,
+      quorumMet: false,
+      requiredReviewers,
+      collectedReviewers: 0,
+      averageScore: null,
+      minScore: null,
+      threshold,
+      results: [],
+      reason: "No code review round exists.",
+      evaluatedAt: now,
+    };
+  }
+
+  const completed = round.attempts.filter(
+    (a) => a.status === "completed" && a.result !== null
+  );
+
+  const results = completed.map((a) => ({
+    reviewerRole: a.result!.reviewerRole,
+    score: a.result!.overallScore,
+    verdict: a.result!.verdict,
+  }));
+
+  const quorumMet = results.length >= requiredReviewers;
+  const scores = results.map((r) => r.score);
+  const averageScore =
+    scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  const minScore = scores.length > 0 ? Math.min(...scores) : null;
+
+  const scoresPassing =
+    averageScore !== null && averageScore >= threshold;
+  const passed = quorumMet && scoresPassing;
+
+  let reason: string;
+  if (passed) {
+    reason = `Quorum passed: ${results.length}/${requiredReviewers} reviews, avg=${averageScore?.toFixed(2)} >= ${threshold}.`;
+  } else if (!quorumMet) {
+    reason = `Quorum not met: ${results.length}/${requiredReviewers} reviews collected.`;
+  } else {
+    reason = `Scores below threshold: avg=${averageScore?.toFixed(2)} < ${threshold}.`;
+  }
+
+  return {
+    passed,
+    quorumMet,
+    requiredReviewers,
+    collectedReviewers: results.length,
+    averageScore: averageScore !== null ? Math.round(averageScore * 100) / 100 : null,
+    minScore: minScore !== null ? Math.round(minScore * 100) / 100 : null,
+    threshold,
+    results,
+    reason,
+    evaluatedAt: now,
+  };
+}

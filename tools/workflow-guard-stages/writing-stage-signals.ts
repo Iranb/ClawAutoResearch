@@ -72,6 +72,22 @@ export async function collectWriteStageMissingSignals(
   const missing: string[] = [];
   const paperStoryState = deps.normalizePaperStoryState(ctx.manifest?.paper_story_state);
   missing.push(...deps.getPaperStoryStateValidationErrors(paperStoryState));
+
+  // Phase 3.3 — Idea-to-claim traceability: every claim must be traceable to
+  // an idea fragment via IDEA_TO_CLAIM_MAP.json before WRITE proceeds.
+  if (paperStoryState.ideaToClaimMapPath) {
+    const ideaToClaimMapResolved = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      paperStoryState.ideaToClaimMapPath
+    );
+    if (!(await deps.fileHasNonWhitespaceContent(ideaToClaimMapResolved))) {
+      missing.push(
+        "WRITE stage requires all claims to be traceable to idea fragments — " +
+        `{PROJ}/${paperStoryState.ideaToClaimMapPath} must exist and be non-empty`
+      );
+    }
+  }
+
   for (const relativePath of [
     paperStoryState.taskSummaryPath,
     paperStoryState.challengeStatementPath,
@@ -379,5 +395,18 @@ export async function collectSubmitStageMissingSignals(
   if (!(await deps.hasPrefixedFile(path.join(ctx.projectRoot, "reviewer"), "rebuttal_"))) {
     missing.push("{PROJ}/reviewer/rebuttal_{date}.md");
   }
+
+  // Phase 5.4 — External reviewer simulation: require simulated review
+  // before SUBMIT to catch issues an area chair would raise.
+  if (
+    !(await deps.pathExists(
+      path.join(ctx.projectRoot, "reviewer", "SIMULATED_EXTERNAL_REVIEW.md")
+    ))
+  ) {
+    missing.push(
+      "{PROJ}/reviewer/SIMULATED_EXTERNAL_REVIEW.md — run simulated external review before SUBMIT"
+    );
+  }
+
   return missing;
 }
