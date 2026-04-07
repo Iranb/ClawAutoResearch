@@ -1,6 +1,6 @@
 ---
 name: papernexus-agentic-reasoning
-description: Use this skill when an agent needs stepwise graph-grounded reasoning on top of a live PaperNexus corpus while keeping uploads and reads wrapper-first.
+description: Use this skill when an agent needs stepwise graph-grounded reasoning on top of a live PaperNexus corpus while keeping uploads wrapper-backed and live graph reads MCP-first.
 ---
 
 # PaperNexus Agentic Reasoning
@@ -9,9 +9,14 @@ Use this skill when the goal is not just retrieval, but disciplined reasoning ov
 
 ## Control Plane
 
-For workflow-owned reasoning, prefer:
+For workflow-owned reasoning, prefer the remote HTTP MCP control plane:
 
-- `research_workflow.run_papernexus_wrapper`
+- `research_lookup`
+- `research_briefing`
+- `idea_catalyst`
+
+When a thin adapter layer is still useful, the wrappers remain valid because they are MCP-backed:
+
 - `python3 scripts/pn_graph_query.py`
 - `python3 scripts/pn_research_chains.py`
 
@@ -23,7 +28,7 @@ If fresh papers must be added first, use:
 - `python3 scripts/pn_import_queue.py`
 - `python3 scripts/pn_batch_import.py`
 
-Do not use local live-graph CLI commands as the primary reasoning path for a shared corpus.
+Do not use local live-graph CLI commands or raw `/api/*` calls as the primary reasoning path for a shared corpus.
 
 ## Reasoning Loop
 
@@ -46,59 +51,54 @@ Open gap:
 Next action:
 ```
 
-## Preferred Wrapper Operations
+## Preferred MCP Operations
 
 For topic understanding:
 
-- `pn_graph_query.py query`
-- `pn_graph_query.py context`
-- `pn_research_chains.py evidence-chain`
+- `research_lookup`
+- `research_briefing`
 
 For ideation:
 
-- `pn_graph_query.py ideas`
-- `pn_graph_query.py brainstorm`
-- `pn_research_chains.py brainstorm-brief`
+- `research_lookup`
+- `research_briefing`
+- `idea_catalyst`
 
 For theory and reflection:
 
-- `pn_research_chains.py theory-brief`
-- `pn_research_chains.py reflection-chain`
-- `pn_research_chains.py storyline-brief`
+- `research_briefing`
 
 For causal or support traversal:
 
-- `pn_research_chains.py path-trace`
-- `pn_research_chains.py evidence-chain`
+- `research_briefing`
 
 For paper-local overlays:
 
-- `pn_research_chains.py paper-enhancement`
+- `research_briefing`
 
 ## Example Sequences
 
 Understand a topic:
 
 ```bash
-research_workflow.run_papernexus_wrapper -> pn_graph_query.py query "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_graph_query.py context "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py evidence-chain "<topic>"
+research_lookup "<topic>"
+research_briefing evidence-chain "<topic>"
 ```
 
 Generate candidate directions:
 
 ```bash
-research_workflow.run_papernexus_wrapper -> pn_graph_query.py ideas "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_graph_query.py brainstorm "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py brainstorm-brief "<topic>"
+research_lookup ideas "<topic>"
+research_briefing brainstorm-brief "<topic>"
+idea_catalyst "<topic>"
 ```
 
 Evaluate support and risks:
 
 ```bash
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py evidence-chain "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py theory-brief "<topic>"
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py reflection-chain "<topic>"
+research_briefing evidence-chain "<topic>"
+research_briefing theory-brief "<topic>"
+research_briefing reflection-chain "<topic>"
 ```
 
 ## Upload Prerequisite Rules

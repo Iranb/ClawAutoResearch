@@ -11,7 +11,7 @@
   引导式项目开启入口。用于在 setup 阶段锁定 research program onboarding contract：研究目标、问题陈述、baseline、primary metric、数据集、success criteria，以及 Zotero `bot/<project-id>` 路径。`/workflow-status` 如果显示 setup checklist 缺项，应优先运行它。
 
 - `/research-pipeline`  
-  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus Python wrappers 控制图谱流。现在它会先检查 guided setup/onboarding contract；如果 contract 还不完整，先补 `/project-init`，再继续图谱与文献流。
+  完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus HTTP MCP 优先控制 live graph；导入/排队仍通过 wrappers。现在它会先检查 guided setup/onboarding contract；如果 contract 还不完整，先补 `/project-init`，再继续图谱与文献流。
 
 - `/resume-pipeline`  
   恢复中断项目。通常先读 manifest、gate、ledger，再继续 auto iterator。
@@ -25,7 +25,7 @@
 ## 3. 文献与图谱
 
 - `/research-lit`  
-  主题调研与持续文献跟踪，包含 project-local staging、wrapper-based PaperNexus import，以及自动图谱 catch-up / brainstorm scaffold 刷新；如果配置了本地 Zotero MCP server，则直接使用本地 Zotero 并同步维护 `bot/<project-id>` 文献集合。
+  主题调研与持续文献跟踪，包含 project-local staging、MCP-backed PaperNexus graph grounding，以及 wrapper-based import / queue tracking；如果配置了本地 Zotero MCP server，则直接使用本地 Zotero 并同步维护 `bot/<project-id>` 文献集合。
 
 - `/literature-review`  
   当项目需要更严谨的文献综述包时使用，生成 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合接在 `/research-lit` 后面，再进入 `/graph-build` 与 `/frontier-mapping`；完成后应把 included/excluded/baseline 清单同步到 Zotero `bot/<project-id>`。
@@ -46,16 +46,16 @@
   当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
-  Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，走 PaperNexus Python wrappers 而不是手写 REST；如果本地 Zotero MCP server 已配置，还要同步更新 Zotero `bot/<project-id>/selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
+  Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，live graph 走远程 HTTP MCP，导入/排队走 queued wrappers；如果本地 Zotero MCP server 已配置，还要同步更新 Zotero `bot/<project-id>/selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
 
 - `/zotero-project-library`  
   当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到 `bot/<project-id>` 目录，维护 selected / included / excluded / baselines / writing-shortlist。
 
 - `/papernexus`  
-  直接调用 PaperNexus 能力，默认通过 wrappers 和 typed graph APIs。
+  直接调用 PaperNexus 能力，默认优先走远程 HTTP MCP；导入类任务再走 wrappers。
 
 - `/frontier-mapping`  
-  基于图谱做研究前沿与空白映射，默认 wrapper-first。
+  基于图谱做研究前沿与空白映射，默认 MCP-first。
 
 ## 4. 创新与反思
 

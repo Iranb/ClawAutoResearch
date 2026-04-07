@@ -56,11 +56,11 @@
 
 ### PaperNexus / MCP 约定
 
-- workflow 默认仍然是 wrapper-first。
-- `papernexusAccessMode = remote_api` 时，Agent 应走认证后的 wrapper / Web API 路径，不手写 REST，也不擅自切到本地 MCP。
-- `papernexusAccessMode = remote_mcp` 时，Agent 应把配置好的远程 PaperNexus HTTP MCP endpoint 当作图谱读写入口；上传/导入仍遵守 workflow 的 queued wrapper 路径。
-- `papernexusAccessMode = local_mcp` 时，Agent 应把 PaperNexus MCP tools 当作图谱读写入口。
-- `papernexusAccessMode = auto` 时，优先 `remote_api`，其次 `remote_mcp`，只有 workflow guidance 明确允许时才回退到 `local_mcp`。
+- workflow 对 live graph 的默认约定已经改成 MCP-first。
+- `papernexusAccessMode = remote_mcp` 时，Agent 应把配置好的远程 PaperNexus HTTP MCP endpoint 当作图谱读写入口；优先使用 `research_lookup`、`research_briefing`、`idea_catalyst`，并把 `import_workflow` 或 queued wrappers 留给导入/排队/等待。
+- `papernexusAccessMode = remote_api` 时，Agent 应把认证后的 wrappers 当作兼容模式，而不是新的首选控制面；不要手写 REST，也不要把 wrapper 误当成绕开 MCP 约定的理由。
+- `papernexusAccessMode = local_mcp` 时，只在 workflow 明确配置成本地模式时才使用本地 PaperNexus MCP tools；它不是 live shared graph 的默认入口。
+- `papernexusAccessMode = auto` 时，优先 `remote_mcp`，其次 `remote_api`，只有 workflow guidance 明确允许时才回退到 `local_mcp`。
 
 ### `researcher`
 

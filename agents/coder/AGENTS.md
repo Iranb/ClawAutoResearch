@@ -29,10 +29,10 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
 - `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
 - Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
 - If code or execution work needs PaperNexus graph interaction, honor workflow access mode:
-  - `remote_api`: use authenticated wrapper / Web API flows; do not hand-write REST or use local MCP graph tools.
-  - `remote_mcp`: use the configured remote PaperNexus HTTP MCP endpoint for graph reads and writes.
-  - `local_mcp`: use PaperNexus MCP tools for graph reads and writes.
-  - `auto`: prefer remote wrapper / API flows first, then remote HTTP MCP, and only fall back to local MCP when workflow guidance explicitly allows it.
+  - `remote_mcp`: use the configured remote PaperNexus HTTP MCP endpoint for graph reads and writes; prefer `research_lookup`, `research_briefing`, and `idea_catalyst`.
+  - `remote_api`: use authenticated wrappers only as compatibility mode; do not hand-write REST or use local MCP graph tools unless the workflow explicitly says so.
+  - `local_mcp`: use PaperNexus MCP tools for graph reads and writes only when the workflow explicitly routes that way.
+  - `auto`: prefer remote HTTP MCP first, then remote_api compatibility mode, and only fall back to local MCP when workflow guidance explicitly allows it.
 
 ## Session Startup
 

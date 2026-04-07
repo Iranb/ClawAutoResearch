@@ -112,13 +112,13 @@ test("workflow-owned researcher skills describe remote-only staging instead of l
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /project-local staging|pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py|pn_graph_query\.py|pn_research_chains\.py|remote PaperNexus/i,
-      `Expected ${filePath} to teach wrapper-first remote PaperNexus workflow usage.`
+      /remote PaperNexus|HTTP MCP|MCP-first|research_lookup|research_briefing|idea_catalyst|import_workflow|pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py/i,
+      `Expected ${filePath} to teach MCP-first remote PaperNexus workflow usage with queued import wrappers as fallback.`
     );
   }
 });
 
-test("researcher-facing PaperNexus skills and persona docs stay wrapper-first instead of teaching raw typed REST calls", async () => {
+test("researcher-facing PaperNexus skills and persona docs stay MCP-first instead of teaching raw typed REST calls", async () => {
   const repoRoot = process.cwd();
   const files = [
     path.join(repoRoot, "skills", "researcher", "papernexus", "SKILL.md"),
@@ -134,8 +134,8 @@ test("researcher-facing PaperNexus skills and persona docs stay wrapper-first in
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py|pn_graph_query\.py|pn_research_chains\.py/i,
-      `Expected ${filePath} to teach the Python wrapper control plane.`
+      /remote PaperNexus HTTP MCP|MCP-first|research_lookup|research_briefing|idea_catalyst|import_workflow/i,
+      `Expected ${filePath} to teach the HTTP MCP-first control plane.`
     );
     assert.doesNotMatch(
       content,
@@ -145,7 +145,7 @@ test("researcher-facing PaperNexus skills and persona docs stay wrapper-first in
   }
 });
 
-test("workflow-owned PaperNexus docs teach the workflow wrapper action and avoid legacy live-graph CLI guidance", async () => {
+test("workflow-owned PaperNexus docs teach MCP-first live graph access and wrapper-backed import fallback", async () => {
   const repoRoot = process.cwd();
   const files = [
     path.join(repoRoot, "skills", "researcher", "papernexus", "SKILL.md"),
@@ -163,8 +163,13 @@ test("workflow-owned PaperNexus docs teach the workflow wrapper action and avoid
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /run_papernexus_wrapper/i,
-      `Expected ${filePath} to teach the workflow-owned PaperNexus wrapper action.`
+      /remote PaperNexus HTTP MCP|MCP-first|research_lookup|research_briefing|idea_catalyst|import_workflow/i,
+      `Expected ${filePath} to teach workflow-owned MCP-first PaperNexus access.`
+    );
+    assert.match(
+      content,
+      /pn_stage_sync\.py|pn_import_submit\.py|pn_import_queue\.py|pn_batch_import\.py/i,
+      `Expected ${filePath} to preserve queued import wrapper guidance.`
     );
     assert.doesNotMatch(
       content,
@@ -177,7 +182,7 @@ test("workflow-owned PaperNexus docs teach the workflow wrapper action and avoid
   const workflowGuard = await fs.readFile(workflowGuardPath, "utf8");
   assert.match(
     workflowGuard,
-    /run_papernexus_wrapper/i,
-    `Expected ${workflowGuardPath} to teach the workflow-owned PaperNexus wrapper action.`
+    /research_lookup|research_briefing|idea_catalyst|import_workflow/i,
+    `Expected ${workflowGuardPath} to teach the workflow-owned PaperNexus MCP control plane.`
   );
 });

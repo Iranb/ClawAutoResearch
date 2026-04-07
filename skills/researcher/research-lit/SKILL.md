@@ -133,7 +133,7 @@ Rules:
 - version-only changes such as `v1` → `v2` do not count as a new paper unless the content materially changes
 - `/graph-build` must reconcile the project's canonical paper selection against the shared global graph; do not create a second graph-only source tree for the same project
 - after each successful download, rename or save the file to the canonical stem immediately before updating `PAPER_SOURCE_INDEX.json`
-- if a remote PaperNexus flow is used, go through the configured Python wrappers so auth and request shape are resolved consistently instead of assuming anonymous access
+- if a remote PaperNexus flow is used, prefer remote HTTP MCP for live graph grounding and keep the configured Python wrappers as thin adapters for import/queue compatibility instead of assuming anonymous access
 - do not treat any home-directory shared PaperNexus storage as workflow-owned when remote access is configured
 
 Maintain `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` with one entry per canonical paper so later stages can detect real additions instead of filename noise.
@@ -264,7 +264,7 @@ Notes:
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
 - if a PaperNexus queued import or remote status / brainstorm refresh pass has not finished within 60 seconds, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
 - if `PAPERNEXUS_STATUS.json` still looks stale but `paper_ingestion.runtime_status` says `waiting_import`, `waiting_graph`, or `reconciling`, treat automatic graph catch-up as in-flight rather than silently claiming the corpus is permanently missing
-- when checking presence or frontier structure, prefer `research_workflow.run_papernexus_wrapper` with `python3 scripts/pn_graph_query.py` and `python3 scripts/pn_research_chains.py` over hand-written REST calls
+- when checking presence or frontier structure, prefer the MCP-first graph control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) or the thin wrappers backed by it over hand-written REST calls
 - once the required papers are present, refresh `ideas`, `brainstorm`, and `brainstorm-brief` outputs so the literature stage ends with a current graph-grounded brainstorm packet
 
 ### Step 3.5: Brainstorm During Research (mandatory)

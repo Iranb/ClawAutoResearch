@@ -464,7 +464,7 @@ export function formatWorkflowSnapshotForPromptImpl(
           );
         }
         lines.push(
-          "Remote MCP rule: use PaperNexus MCP tools for graph reads and writes. Do not use `pn_graph_query.py` / `pn_research_chains.py` for remote graph queries in this mode."
+          "Remote MCP rule: use the PaperNexus MCP tools through the MCP-first mapping for graph reads and writes: `research_lookup` for query/context/impact/ideas/brainstorm, `research_briefing` for brief and chain outputs, `idea_catalyst` for cross-domain ideation packets, and `import_workflow` for queued import/status/wait flows. Do not use `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane in this mode."
         );
       } else {
         lines.push(
@@ -767,7 +767,7 @@ export function formatWorkflowSnapshotForPromptImpl(
   );
   if (resolvedPapernexusAccessMode === "remote_mcp") {
     lines.push(
-      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote MCP graph tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`) before trusting raw full-graph prominence."
+      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) before trusting raw full-graph prominence. Keep `import_workflow` and the queued wrappers for staged import/status work."
     );
   } else {
     lines.push(

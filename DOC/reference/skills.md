@@ -8,13 +8,13 @@
 ## 2. Researcher
 
 - `research-pipeline`  
-  Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus wrapper-based graph control。
+  Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus MCP-first live graph control。
 
 - `graph-build`  
-  基于论文源和 PaperNexus Python wrappers 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle、graph readiness，以及 Zotero `bot/<project-id>` 项目文献集合。
+  基于论文源和 PaperNexus MCP-first graph control 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle、graph readiness，以及 Zotero `bot/<project-id>` 项目文献集合；导入与排队仍使用 wrappers。
 
 - `frontier-mapping`  
-  生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus wrappers。
+  生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus HTTP MCP。
 
 - `idea-phase`  
   主 ideation 阶段，负责创新点形成与 active track 选择，并把 graph / brainstorm / frontier 结果通过 `materialize_ideation_contract` 收口成 novelty tree、challenge-insight tree、tournament scoreboard 和 research proposal。
@@ -62,10 +62,10 @@
   做研究过程层面的反思与总结。
 
 - `innovation-reflection`  
-  在新实验结果出现后，对创新方向进行基于 PaperNexus 的反思。
+  在新实验结果出现后，对创新方向进行基于 PaperNexus MCP-first graph evidence 的反思。
 
 - `research-lit`  
-  常规文献调研与文献池维护，并通过 PaperNexus wrappers 做 remote import、自动图谱 catch-up 跟踪和 brainstorm scaffold 刷新。
+  常规文献调研与文献池维护，并通过 PaperNexus HTTP MCP 做 live graph grounding、通过 wrappers 做 remote import 与队列跟踪。
 
 - `literature-review`  
   结构化文献综述包，负责 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合放在 `research-lit` 之后、`frontier-mapping` 和 `idea-phase` 之前。
@@ -95,13 +95,13 @@
   当 direct raw markdown API 不可用时，用 arxiv2md 页面端作为下一层 Markdown fallback。
 
 - `papernexus`  
-  调用或接入 PaperNexus 功能做图谱构建与操作，默认走 Python wrappers 和 typed graph APIs。
+  调用或接入 PaperNexus 功能做图谱构建与操作，默认走远程 HTTP MCP；导入/排队类任务再走 wrappers。
 
 - `papernexus-agentic-reasoning`  
-  用 PaperNexus 图谱做更强的 trace、synthesis、brainstorm，默认走 wrappers 而不是手写 REST。
+  用 PaperNexus 图谱做更强的 trace、synthesis、brainstorm，默认走 MCP-first control plane，而不是手写 REST。
 
 - `papernexus-batch-import`  
-  用固定 manifest 和 Python wrappers 稳定上传、排队、跟踪多篇论文的导入状态。
+  用固定 manifest 和 wrappers 稳定上传、排队、跟踪多篇论文的导入状态；这些 wrappers 是 `import_workflow` 的薄适配层。
 
 - `papernexus-research-chains`  
   用 typed multi-hop research chains、evidence bundles 和 brief-style 输出做 graph-grounded synthesis。

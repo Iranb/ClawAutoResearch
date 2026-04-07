@@ -270,10 +270,14 @@ test("buildPapernexusGuidance teaches researcher to use remote MCP when remote_m
   );
 
   assert.ok(guidance.prepend.some((entry) => /remote_mcp/i.test(entry)));
-  assert.ok(guidance.prepend.some((entry) => /PaperNexus MCP server tools|MCP tools/i.test(entry)));
   assert.ok(
     guidance.prepend.some(
-      (entry) => /Do not use .*pn_graph_query\.py.*pn_research_chains\.py/i.test(entry)
+      (entry) => /PaperNexus MCP|research_lookup|research_briefing|idea_catalyst|import_workflow/i.test(entry)
+    )
+  );
+  assert.ok(
+    guidance.prepend.some(
+      (entry) => /Do not use .*pn_graph_query\.py.*pn_research_chains\.py|non-MCP control plane/i.test(entry)
     )
   );
 });

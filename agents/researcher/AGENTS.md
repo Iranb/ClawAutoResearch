@@ -29,10 +29,10 @@ Path variables: see `CONFIG.md` for `{PROJECTS_ROOT}` (env or `~/.openclaw/openc
 - `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
 - Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
 - If a task touches PaperNexus graph state, honor workflow access mode:
-  - `remote_api`: use authenticated wrapper / Web API flows; do not hand-write REST or use local MCP graph tools.
-  - `remote_mcp`: use the configured remote PaperNexus HTTP MCP endpoint for graph reads and writes; queued upload/import work still stays on the wrapper path.
-  - `local_mcp`: use PaperNexus MCP tools for graph reads and writes.
-  - `auto`: prefer remote wrapper / API flows first, then remote HTTP MCP, and only fall back to local MCP when workflow guidance explicitly allows it.
+  - `remote_mcp`: use the configured remote PaperNexus HTTP MCP endpoint for graph reads and writes; prefer `research_lookup`, `research_briefing`, and `idea_catalyst`, while queued upload/import work still stays on the wrapper / `import_workflow` path.
+  - `remote_api`: use authenticated wrappers only as compatibility mode; do not hand-write REST or use local MCP graph tools.
+  - `local_mcp`: use PaperNexus MCP tools for graph reads and writes only when the workflow explicitly routes that way.
+  - `auto`: prefer remote HTTP MCP first, then remote_api compatibility mode, and only fall back to local MCP when workflow guidance explicitly allows it.
 
 ## Session Startup
 
@@ -157,7 +157,7 @@ SETUP → GRAPH_BUILD → FRONTIER_MAPPING → IDEA → [GATE-1] → PLAN → [G
 - `/paper-phase` — Stage 7 (WRITE, via Writer)
 - `/research-pipeline` — full pipeline from Stage 1
 
-For workflow-owned paper ingestion, stage papers locally and queue uploads through `research_workflow.queue_paper_ingestion`; let `/graph-build` and `/resume-pipeline` trigger the queued wrappers and preserve `queued_requests` state across restarts. For workflow-owned live graph reads and brainstorm work, use `research_workflow.run_papernexus_wrapper`. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations. For IDEA-CATALYST, keep the durable packet chain under `researcher/idea-catalyst/` and treat it as a formal IDEA sub-pipeline, not as an ad hoc brainstorm thread.
+For workflow-owned paper ingestion, stage papers locally and queue uploads through `research_workflow.queue_paper_ingestion`; let `/graph-build` and `/resume-pipeline` trigger the queued wrappers and preserve `queued_requests` state across restarts. For workflow-owned live graph reads and brainstorm work, prefer the remote HTTP MCP control plane and its thin adapters: `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow`, with `pn_graph_query.py` / `pn_research_chains.py` only as MCP-backed compatibility wrappers. Use `/graph-build`, `/frontier-mapping`, and related skills as planning/coordination entrypoints, not as permission to fall back to local CLI graph operations. For IDEA-CATALYST, keep the durable packet chain under `researcher/idea-catalyst/` and treat it as a formal IDEA sub-pipeline, not as an ad hoc brainstorm thread.
 
 ## Responsiveness and Delegation Policy
 
@@ -212,7 +212,7 @@ Delegation rule: one subtask = one topic, with concrete file paths and explicit 
 
 **Key papers must enter the graph first:** after `/papers-cool` finds a key paper, do not ideate from the abstract alone. Try `/hugging-face-paper-pages` for full-text Markdown first; if that fails, download the PDF. If the current graph still does not contain the paper, refresh the graph before novelty or innovation reasoning.
 
-**Brainstorm grounding must be durable:** once graph readiness is good enough for frontier mapping or ideation, use the workflow-declared graph access path and persist the resulting chain bundle through `research_workflow.run_brainstorm_cycle`. In `remote_api`, that means the typed wrappers (`pn_graph_query.py`, `pn_research_chains.py`). In `remote_mcp`, that means the remote PaperNexus MCP tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`, `mutate_graph`, `refresh_corpus`). Do not rely on free-form brainstorm chat alone.
+**Brainstorm grounding must be durable:** once graph readiness is good enough for frontier mapping or ideation, use the workflow-declared graph access path and persist the resulting chain bundle through `research_workflow.run_brainstorm_cycle`. In `remote_mcp` and in `auto` when MCP is configured, that means the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) or the thin wrappers backed by those tools. In `remote_api`, that means the authenticated compatibility wrappers (`pn_graph_query.py`, `pn_research_chains.py`). Do not rely on free-form brainstorm chat alone.
 
 **IDEA must end in a contract, not just a report:** beyond `IDEA_REPORT.md`, lock `ideation_contract` through workflow tools and keep `GRAPH_IDEATION_PACKET.json`, `IDEA_TREE.md`, `NOVELTY_TREE.md`, `CHALLENGE_INSIGHT_TREE.md`, `WELL_ESTABLISHED_SOLUTION_CHECK.md`, `CANDIDATE_POOL.json`, `RANKING_HISTORY.json`, tournament scoreboard, top-3 summary, and research proposal current.
 
@@ -279,6 +279,6 @@ Skills define tool behavior; keep machine-specific notes in `TOOLS.md`. When Ope
 - Warn the user before long-running operations
 - Do not continue writing across projects without re-confirming `project_id`
 - Do not hand off stage ownership without updating the manifest
-- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the workflow-declared remote path instead. For `remote_api`, use the authenticated Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`). For `remote_mcp`, keep upload/import on the queued wrapper path but use the remote PaperNexus MCP tools for graph reads and writes.
+- Do not depend on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph PaperNexus CLI flows; use `{PROJ}/researcher/paper-staging/` plus the workflow-declared remote path instead. For `remote_mcp` and `auto`, use the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) for graph reads and writes, and keep upload/import on the queued wrapper / `import_workflow` path. For `remote_api`, use the authenticated Python wrappers only as compatibility mode.
 - For 2 or more staged papers, default to one `pn_batch_import.py` manifest and bounded status passes instead of repeated one-paper submit loops.
 - Treat the core brainstorm bundle as a provider contract, not a hard-coded single skill: `graph_build` only requires the durable `brainstorm_cycle.provider*` metadata plus the chain-bundle artifacts to be valid before advancing.

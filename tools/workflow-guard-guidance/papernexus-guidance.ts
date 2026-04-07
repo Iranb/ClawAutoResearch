@@ -70,6 +70,8 @@ export function buildPapernexusGuidance(
       ? params.papernexusAccessMode
       : params.papernexusMcpUrl
         ? "remote_mcp"
+        : params.papernexusApiBaseUrl
+          ? "remote_api"
         : null; // "auto" or unresolved — guidance will cover both paths
 
   if (
@@ -87,23 +89,26 @@ export function buildPapernexusGuidance(
       );
     } else if (resolvedAccessMode === "remote_mcp") {
       prepend.push(
-        `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for graph operations. Authenticate with the configured bearer token source at runtime and do not print or persist the raw token.`
+        `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus HTTP MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for live graph operations. Authenticate with the configured bearer token source at runtime and do not print or persist the raw token.`
       );
       prepend.push(
-        "Remote MCP rule: use PaperNexus MCP server tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`, `mutate_graph`, `refresh_corpus`) for remote graph reads and writes. Do not use `pn_graph_query.py` or `pn_research_chains.py` for graph queries in this mode."
+        "Remote MCP rule: the MCP-first tool mapping is `research_lookup` for query/context/impact/ideas/brainstorm, `research_briefing` for research-brief/brainstorm-brief/path-trace/evidence-chain/reflection-chain/theory-brief/storyline-brief, `idea_catalyst` for cross-domain ideation packets, and `import_workflow` for queued import/status/wait flows. Prefer those remote HTTP MCP tools or their thin wrappers, and do not treat `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane."
       );
       prepend.push(
         "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the configured remote MCP endpoint instead."
       );
     } else {
       prepend.push(
-        `Use the configured PaperNexus remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive it through the Python wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`); queue upload work through \`research_workflow.queue_paper_ingestion\`, and prefer \`research_workflow.run_papernexus_wrapper\` for live graph / brainstorm reads; resolve the token at runtime only and do not paste secrets into chat, prompts, or project files.`
+        `PaperNexus access mode is remote_api compatibility mode. Use the configured remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive compatibility work through the queued wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`), and resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
       );
       prepend.push(
-        "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the PaperNexus Python wrappers instead."
+        "Compatibility-mode rule: remote_api is a fallback for environments without remote MCP. If a remote MCP endpoint becomes available, prefer `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow` over direct wrapper-first graph work."
       );
       prepend.push(
-        "Do not read the live shared graph through local PaperNexus live-graph CLI reads or hand-written curl calls. In workflow mode, live-graph reads must use `pn_graph_query.py` or `pn_research_chains.py`."
+        "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the compatibility wrappers instead."
+      );
+      prepend.push(
+        "Do not read the live shared graph through local PaperNexus live-graph CLI reads or hand-written curl calls. In compatibility mode, live-graph reads must still use the authenticated wrappers rather than raw `/api/*`."
       );
     }
   }
@@ -114,11 +119,11 @@ export function buildPapernexusGuidance(
   ) {
     if (resolvedAccessMode === "remote_mcp") {
       prepend.push(
-        "For each novelty-sensitive topic, summarize the topic, use the configured remote PaperNexus MCP tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`) for graph-grounded reasoning, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+        "For each novelty-sensitive topic, summarize the topic, use the configured remote HTTP MCP tool family (`research_lookup`, `research_briefing`, and `idea_catalyst` as needed) for graph-grounded reasoning, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
       );
     } else {
       prepend.push(
-        "For each novelty-sensitive topic, summarize the topic, launch the typed PaperNexus wrapper commands through `research_workflow.run_papernexus_wrapper` (`pn_graph_query.py` / `pn_research_chains.py`), and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
+        "For each novelty-sensitive topic, summarize the topic, launch the authenticated compatibility wrappers (`pn_graph_query.py` / `pn_research_chains.py`) only when remote MCP is unavailable, and persist a reconciled chain bundle with research_workflow.run_brainstorm_cycle so logic_chain, evidence_chain, structured reasoning_trace, question_packet, working_memory, and synthesis_packet stay durable."
       );
     }
     prepend.push(
@@ -129,11 +134,11 @@ export function buildPapernexusGuidance(
     );
     if (resolvedAccessMode === "remote_mcp") {
       prepend.push(
-        "For ideation and frontier work, prefer the configured remote MCP graph tools over raw full-graph inspection. Use MCP `query`, `context`, `impact`, `ideas`, and `brainstorm` before trusting raw prominence, and reserve wrapper-based import staging only for queued upload flows."
+        "For ideation and frontier work, prefer the configured remote MCP graph tools over raw full-graph inspection. Use `research_lookup`, `research_briefing`, and `idea_catalyst` before trusting raw prominence, and reserve wrapper-based import staging only for queued upload flows backed by `import_workflow`."
       );
     } else {
       prepend.push(
-        "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and typed wrapper calls over raw full-graph inspection. Use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` and `pn_research_chains.py` for `research-brief`, `brainstorm-brief`, `ideas`, `brainstorm`, and `path-trace` before trusting raw prominence."
+        "For ideation and frontier work, prefer the brainstorm-quality PaperNexus node view and authenticated compatibility wrappers over raw full-graph inspection. Use `pn_graph_query.py` / `pn_research_chains.py` only when remote MCP is unavailable, and otherwise migrate this workflow to `research_lookup` / `research_briefing`."
       );
     }
   }

@@ -70,7 +70,7 @@
   可选的 journal 默认模板路径。启用 `paper_mode = journal` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
 
 - `papernexusApiBaseUrl`  
-  可选的 PaperNexus 远程 Web/API 地址。配置后，workflow prompt 会优先引导 Researcher / PaperNexus-heavy 流程使用这个远程入口，而不是默认假设只能本地访问。
+  可选的 PaperNexus 远程 Web/API 地址。现在它主要作为 `remote_api` compatibility mode 的回退入口；如果同时配置了 `papernexusMcpUrl`，workflow 会优先把 live graph 工作引导到远程 HTTP MCP。
 
 - `papernexusMcpUrl`  
   可选的 PaperNexus 远程 HTTP MCP 地址。当前要求 PaperNexus 端启用 `streamable-http` transport，且与 `/api/*` 共用同一个 Bearer token。
@@ -104,10 +104,10 @@
 
 - `papernexusAccessMode`  
   PaperNexus 图谱访问模式。支持：
-  - `remote_api`：只走认证过的远程 wrapper / Web API 路径
-  - `remote_mcp`：只走远程 PaperNexus HTTP MCP 路径
+  - `remote_mcp`：live graph 只走远程 PaperNexus HTTP MCP 路径；优先 MCP tools / MCP-backed wrappers
+  - `remote_api`：只走认证过的远程 wrapper / Web API compatibility 路径
   - `local_mcp`：只走本地 PaperNexus MCP 工具
-  - `auto`：优先 `remote_api`，其次 `remote_mcp`，只有 workflow guidance 明确允许时才回退到 `local_mcp`
+  - `auto`：优先 `remote_mcp`，其次 `remote_api`，只有 workflow guidance 明确允许时才回退到 `local_mcp`
 
 ## 3. `~/.openclaw/openclaw.json`
 
@@ -221,7 +221,7 @@
 - `enableChannelProjectBindings`
 - `projectsRoot`
 
-### 想让 Researcher 优先走远程 PaperNexus Web/API
+### 想让 Researcher 走 remote_api compatibility mode
 
 确保以下配置已经设置：
 
@@ -268,8 +268,8 @@
 注意：
 
 - 远程 HTTP MCP 与 `/api/*` 共用同一个 Bearer token
-- `remote_mcp` 只替换图谱读写入口；workflow 里的 upload/import 仍走 `pn_stage_sync.py`、`pn_import_submit.py`、`pn_import_queue.py`、`pn_batch_import.py`
-- 如果你同时配置了 `papernexusApiBaseUrl` 和 `papernexusMcpUrl`，并把 `papernexusAccessMode` 设为 `auto`，系统会先尝试 `remote_api`，再尝试 `remote_mcp`
+- `remote_mcp` 负责 live graph 的主控制面；优先使用 `research_lookup`、`research_briefing`、`idea_catalyst`，而 workflow 里的 upload/import 仍走 `pn_stage_sync.py`、`pn_import_submit.py`、`pn_import_queue.py`、`pn_batch_import.py`
+- 如果你同时配置了 `papernexusApiBaseUrl` 和 `papernexusMcpUrl`，并把 `papernexusAccessMode` 设为 `auto`，系统会先尝试 `remote_mcp`，再尝试 `remote_api`
 
 ### 想让 PaperNexus token 走系统原生 keychain
 

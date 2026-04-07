@@ -1,6 +1,6 @@
 ---
 name: papernexus-research-chains
-description: Use this skill when an agent needs typed multi-hop research chains, evidence bundles, reflection bundles, or brief-style API outputs from a live PaperNexus graph over authenticated HTTP.
+description: Use this skill when an agent needs typed multi-hop research chains, evidence bundles, reflection bundles, or brief-style outputs from a live PaperNexus graph over remote HTTP MCP.
 ---
 
 # PaperNexus Research Chains
@@ -25,17 +25,20 @@ These are easier to validate, easier to summarize, and less likely to drift into
 
 ## Live Graph Access Policy
 
-For a running user graph, prefer the local Python wrappers in `scripts/` first. They call the authenticated HTTP API and are easier for agents to use correctly than raw `curl`.
+For a running user graph, prefer remote HTTP MCP first.
 
-Do not use local CLI graph-query commands against the live graph.
+Use:
 
-Every `/api/*` request must include:
+- `research_lookup`
+- `research_briefing`
 
-- `Authorization: Bearer <token>`
+If you need a thin adapter layer, use the wrappers in `scripts/`; they are easier for agents to use correctly than raw JSON-RPC.
 
-## Preferred API Order
+Do not use local CLI graph-query commands or raw `/api/*` examples against the live graph.
 
-Start from the narrowest API that directly answers the task.
+## Preferred MCP Order
+
+Start from the narrowest MCP tool that directly answers the task.
 
 Default script mapping:
 
@@ -46,28 +49,19 @@ Default script mapping:
 
 Use:
 
-- `POST /api/query`
-- `POST /api/context`
-- `POST /api/impact`
+- `research_lookup`
 
 ### 2. Explicit chain retrieval
 
 Use:
 
-- `POST /api/path-trace`
-- `POST /api/evidence-chain`
-- `POST /api/reflection-chain`
+- `research_briefing`
 
 ### 3. Cognitive compression
 
 Use:
 
-- `POST /api/theory-brief`
-- `POST /api/storyline-brief`
-- `POST /api/research-brief`
-- `POST /api/brainstorm-brief`
-
-Only fall back to `GET /api/corpus` or `GET /api/paper-enhancement` when the typed APIs are insufficient.
+- `research_briefing`
 
 ## Which API Matches Which Task
 
@@ -151,10 +145,10 @@ Use:
 ## Minimal Script Examples
 
 ```bash
-python3 scripts/pn_graph_query.py --api-base "http://<host>:4821" --corpus "<corpus>" query "<topic>" --limit 8
-python3 scripts/pn_research_chains.py --api-base "http://<host>:4821" --corpus "<corpus>" evidence-chain "<topic>" --limit 5
-python3 scripts/pn_research_chains.py --api-base "http://<host>:4821" --corpus "<corpus>" reflection-chain "<topic>" --limit 5
-python3 scripts/pn_research_chains.py --api-base "http://<host>:4821" --corpus "<corpus>" research-brief "<topic>" --limit 5
+python3 scripts/pn_graph_query.py --mcp-url "http://<host>:4821/mcp" --corpus "<corpus>" query "<topic>" --limit 8
+python3 scripts/pn_research_chains.py --mcp-url "http://<host>:4821/mcp" --corpus "<corpus>" evidence-chain "<topic>" --limit 5
+python3 scripts/pn_research_chains.py --mcp-url "http://<host>:4821/mcp" --corpus "<corpus>" reflection-chain "<topic>" --limit 5
+python3 scripts/pn_research_chains.py --mcp-url "http://<host>:4821/mcp" --corpus "<corpus>" research-brief "<topic>" --limit 5
 ```
 
 Best for:

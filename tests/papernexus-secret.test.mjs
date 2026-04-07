@@ -173,9 +173,10 @@ test("resolvePapernexusAccessPath resolves remote_mcp when MCP URL and token are
   assert.equal(result.remoteInspection?.summary.mcpTransport, "streamable-http");
 });
 
-test("resolvePapernexusAccessPath falls back to remote_mcp in auto mode when remote_api is not configured", async () => {
+test("resolvePapernexusAccessPath prefers remote_mcp in auto mode when both remote_mcp and remote_api are configured", async () => {
   const result = await resolvePapernexusAccessPath(
     {
+      apiBaseUrl: "https://papernexus.example/api",
       mcpUrl: "https://papernexus.example/mcp",
       mcpTransport: "streamable-http",
       tokenSource: "env",

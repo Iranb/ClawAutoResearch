@@ -54,11 +54,13 @@ Do not hand-edit `PROJECT_MANIFEST.json.innovation_reflection`.
 3. Confirm the PaperNexus corpus is usable enough for reasoning:
    - if the corpus is stale or key papers are missing, refresh graph state before trusting the reflection
    - if new material arrived through the dashboard or Web/API upload path, prefer the queued import-task route and task logs instead of manually moving files into the shared source tree
-4. Run a graph-backed reflection pass with PaperNexus through the workflow wrapper runtime:
+   - queued import-task route here means `pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, or `pn_batch_import.py`, all treated as `import_workflow` adapters rather than a separate live-graph control plane
+4. Run a graph-backed reflection pass with PaperNexus through the remote HTTP MCP control plane:
 
 ```bash
-research_workflow.run_papernexus_wrapper -> pn_graph_query.py ... query/context/impact/ideas/brainstorm
-research_workflow.run_papernexus_wrapper -> pn_research_chains.py ... evidence-chain/research-brief/brainstorm-brief
+research_lookup ... query/context/impact/ideas/brainstorm
+research_briefing ... evidence-chain/research-brief/brainstorm-brief
+idea_catalyst ... when cross-domain transfer is part of the reflection question
 ```
 
 5. Compare the graph with the experiment evidence:
@@ -120,7 +122,7 @@ Use this section order:
 - Use the reflection to tighten the next brainstorm, not to retroactively justify a weak idea.
 - If reflection support is thin, say so explicitly and keep the next idea scope narrow.
 - If a previous reflection already covers the newest experiments, reuse it instead of rewriting it without new evidence.
-- If remote PaperNexus evidence is needed, launch `pn_graph_query.py` or `pn_research_chains.py` through `research_workflow.run_papernexus_wrapper` so auth, queueing, and request shape are resolved consistently.
+- If remote PaperNexus evidence is needed, use the MCP-first tool families (`research_lookup`, `research_briefing`, `idea_catalyst`) or the thin wrappers backed by them so auth and request shape are resolved consistently.
 - Do not delete shared graph data or run `backup-export`, `backup-unpack`, or `backup-load` during normal reflection work.
 
 ## Completion

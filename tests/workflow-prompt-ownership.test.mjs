@@ -244,7 +244,7 @@ test("formatWorkflowSnapshotForPrompt keeps exact handoff and auto-iterator remi
   assert.doesNotMatch(prompt, /PaperNexus local defaults:/);
 });
 
-test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainstorm-quality PaperNexus rules", () => {
+test("formatWorkflowSnapshotForPrompt teaches researcher MCP-first graph work with queued import fallback", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {
       ...makeBaseSnapshot(),
@@ -257,6 +257,8 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
       graphSourceDir: "/Users/demo/.papernexus/index-store",
       graphPresenceStatus: "ready",
       papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusMcpUrl: "https://papernexus.example/mcp",
+      papernexusMcpTransport: "streamable-http",
       papernexusApiTokenSource: "auto",
       papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
       papernexusApiTokenService: "papernexus-api-token",
@@ -265,11 +267,10 @@ test("formatWorkflowSnapshotForPrompt teaches researcher import-task and brainst
   });
 
   assert.match(prompt, /queued wrapper path|queued PaperNexus wrapper tasks/i);
-  assert.match(prompt, /brainstorm-quality node view/i);
-  assert.match(prompt, /pn_graph_query\.py/i);
-  assert.match(prompt, /pn_research_chains\.py/i);
+  assert.match(prompt, /remote MCP|remote PaperNexus MCP|HTTP MCP/i);
+  assert.match(prompt, /PaperNexus MCP tools/i);
+  assert.match(prompt, /research_lookup|research_briefing|idea_catalyst|import_workflow/i);
   assert.match(prompt, /pn_import_submit\.py/i);
-  assert.match(prompt, /run_papernexus_wrapper/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
 });
 

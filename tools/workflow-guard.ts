@@ -6605,7 +6605,7 @@ export function shouldBlockPapernexusInlineExecution(params: {
   return {
     block: true,
     reason:
-      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Prefer `research_workflow.run_papernexus_wrapper` for the wrapper launch, then let that subagent execute the remote typed PaperNexus work.",
+      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Prefer the remote HTTP MCP control plane there: `research_lookup`, `research_briefing`, and `idea_catalyst` for graph work, with `import_workflow` or the queued wrappers only for staged import/status flows.",
   };
 }
 
@@ -6630,7 +6630,7 @@ export function shouldBlockPapernexusRawHttpUsage(params: {
   return {
     block: true,
     reason:
-      "Workflow-owned PaperNexus live-graph work must use the Python wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`) instead of hand-written curl/fetch REST calls. Prefer `research_workflow.run_papernexus_wrapper`, `/papernexus-batch-import`, or `/papernexus-research-chains` so the wrapper executes inside the dedicated workflow runtime session; this avoids route-shape drift and keeps token handling consistent.",
+      "Workflow-owned PaperNexus live-graph work must use the remote HTTP MCP control plane instead of hand-written curl/fetch REST calls. Prefer `research_lookup`, `research_briefing`, and `idea_catalyst` for graph reads/writes; use `import_workflow` or the queued wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) only for staged import/status flows. This avoids route-shape drift and keeps token handling consistent.",
   };
 }
 
@@ -6652,7 +6652,7 @@ export function shouldBlockPapernexusLiveGraphCliRead(params: {
   return {
     block: true,
     reason:
-      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use the Python wrappers instead (`pn_graph_query.py` and `pn_research_chains.py`), which call the authenticated typed APIs safely.",
+      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use the remote HTTP MCP control plane instead (`research_lookup`, `research_briefing`, and `idea_catalyst`), or the authenticated thin wrappers when the workflow is in remote_api compatibility mode.",
   };
 }
 

@@ -184,9 +184,8 @@ PaperNexus is not just a pre-processing step. Before any idea divergence, the pi
 
 At minimum, the brainstorming flow must use the workflow-declared PaperNexus graph access path:
 
-- if `papernexusAccessMode = remote_api` or `auto` resolves to `remote_api`, use `research_workflow.run_papernexus_wrapper` with `pn_graph_query.py` to verify graph readiness and retrieve topic-relevant anchors, contexts, impacts, and brainstorm-quality node views
-- if `papernexusAccessMode = remote_api` or `auto` resolves to `remote_api`, use `research_workflow.run_papernexus_wrapper` with `pn_research_chains.py` to build `research-brief`, `ideas`, `brainstorm`, `brainstorm-brief`, `path-trace`, `evidence-chain`, `reflection-chain`, `theory-brief`, and `storyline-brief`
-- if `papernexusAccessMode = remote_mcp`, use the configured remote PaperNexus MCP tools (`query`, `context`, `impact`, `ideas`, `brainstorm`, `domain_distance`, `extract_takeaways`, `interdisciplinary_potential`, `mutate_graph`, `refresh_corpus`) for remote graph reads and writes
+- if `papernexusAccessMode = remote_mcp` or `auto` resolves to `remote_mcp`, use the configured remote PaperNexus HTTP MCP control plane: `research_lookup` for query/context/impact/ideas/brainstorm, `research_briefing` for brief/chain outputs, and `idea_catalyst` for cross-domain ideation packets
+- if `papernexusAccessMode = remote_api` or `auto` resolves to `remote_api`, use the authenticated compatibility wrappers (`pn_graph_query.py`, `pn_research_chains.py`) instead of raw REST, and treat them as a fallback when remote MCP is not available
 - if `papernexusAccessMode = local_mcp`, use the local PaperNexus MCP tools for graph reads and writes
 - `research_workflow.run_brainstorm_cycle` — persist the selected brainstorm / chain bundle so question packets, working memory, evidence chains, and synthesis packets survive restarts and agent handoffs
 
@@ -208,10 +207,10 @@ Before graph build, Researcher must also maintain a project-local paper selectio
 - record every selected canonical paper in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
 - if the local Zotero MCP server is configured, use that local Zotero server directly and keep a per-project bibliography tree under `bot/<project-id>/` synchronized with the selected / included / excluded / baseline paper sets; Zotero is the organizer, while PaperNexus remains the full-text and graph source of truth
 - if new PDFs or Markdown arrive through the PaperNexus UI or Web/API, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) and durable `research_workflow.set_paper_ingestion` updates; do not manually copy those ad hoc uploads into local shared storage during automation
-- do not hand-write `/api/*` REST calls in workflow execution; use the authenticated Python wrappers so token handling and route shape stay consistent
-- if `papernexusAccessMode = remote_mcp`, use the configured remote HTTP MCP endpoint (`streamable-http`) plus the shared bearer token for graph reads and writes; keep upload/import orchestration on the queued wrapper path
+- do not hand-write `/api/*` REST calls in workflow execution; live graph work should go through remote HTTP MCP, and compatibility mode should still go through the authenticated wrappers instead of ad hoc curl/fetch
+- if `papernexusAccessMode = remote_mcp`, use the configured remote HTTP MCP endpoint (`streamable-http`) plus the shared bearer token for graph reads and writes; prefer `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow`
 - if `papernexusAccessMode = local_mcp`, use PaperNexus MCP tools for graph reads and writes instead of the Python wrapper path
-- if `papernexusAccessMode = auto`, prefer the authenticated remote wrapper/API path first, then remote HTTP MCP, and only fall back to local MCP when workflow guidance explicitly permits it
+- if `papernexusAccessMode = auto`, prefer remote HTTP MCP first, then the authenticated remote wrapper/API compatibility path, and only fall back to local MCP when workflow guidance explicitly permits it
 - if the current shared graph does not already contain a newly found key paper, Researcher must queue automatic graph catch-up before novelty or innovation analysis
 - only after full-text ingestion and graph presence checks should Researcher run downstream brainstorming
 
@@ -236,7 +235,7 @@ The reflection flow must:
 
 - read the latest experiment memory via `research_workflow.get_experiment_memory`
 - inspect the latest `innovation_reflection` state from `{PROJ}/PROJECT_MANIFEST.json` or `research_workflow.get_innovation_reflection`
-- use authenticated PaperNexus `query`, `context`, `impact`, `ideas`, plus typed `reflection-chain`, `evidence-chain`, `theory-brief`, or `storyline-brief` calls as needed to reinterpret the latest experiment evidence
+- use authenticated PaperNexus MCP-first tool families such as `research_lookup`, `research_briefing`, and `idea_catalyst` as needed to reinterpret the latest experiment evidence
 - produce `{PROJ}/researcher/INNOVATION_REFLECTION.md`
 - record the refresh through `research_workflow.record_innovation_reflection` instead of hand-editing `PROJECT_MANIFEST.json`
 

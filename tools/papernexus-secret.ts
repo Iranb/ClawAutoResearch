@@ -432,28 +432,6 @@ export async function resolvePapernexusAccessPath(
     return remoteInspection;
   };
 
-  // Remote API path
-  if (accessMode === "remote_api" || accessMode === "auto") {
-    const inspection = await getRemoteInspection();
-    if (inspection.summary.apiBaseUrl && inspection.tokenAvailable) {
-      return {
-        mode: "remote_api",
-        remoteInspection: inspection,
-        corpusRoot,
-        error: null,
-      };
-    }
-    if (accessMode === "remote_api") {
-      return {
-        mode: "unavailable",
-        remoteInspection: inspection,
-        corpusRoot,
-        error: buildRemoteApiUnavailableError(inspection),
-      };
-    }
-    // accessMode === "auto" — fall through to remote MCP, then local MCP
-  }
-
   // Remote MCP path
   if (accessMode === "remote_mcp" || accessMode === "auto") {
     const inspection = await getRemoteInspection();
@@ -476,6 +454,28 @@ export async function resolvePapernexusAccessPath(
         remoteInspection: inspection,
         corpusRoot,
         error: buildRemoteMcpUnavailableError(inspection, corpusRoot),
+      };
+    }
+    // accessMode === "auto" — fall through to remote API compatibility mode, then local MCP
+  }
+
+  // Remote API compatibility path
+  if (accessMode === "remote_api" || accessMode === "auto") {
+    const inspection = await getRemoteInspection();
+    if (inspection.summary.apiBaseUrl && inspection.tokenAvailable) {
+      return {
+        mode: "remote_api",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: null,
+      };
+    }
+    if (accessMode === "remote_api") {
+      return {
+        mode: "unavailable",
+        remoteInspection: inspection,
+        corpusRoot,
+        error: buildRemoteApiUnavailableError(inspection),
       };
     }
   }

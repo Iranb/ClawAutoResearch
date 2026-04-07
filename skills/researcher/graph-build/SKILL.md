@@ -61,7 +61,7 @@ You may swap which brainstorm skill or wrapper creates the bundle later, but you
 
 ## Remote Access Requirement
 
-Workflow-owned graph work must use the configured remote PaperNexus control plane exposed through the Python wrappers in `scripts/`. Do not resolve or use local PaperNexus runtime roots, shared-disk graph storage, or hand-written REST calls for graph readiness checks or brainstorm refresh when remote access is configured.
+Workflow-owned graph work must use the configured remote PaperNexus HTTP MCP control plane for live graph access. Do not resolve or use local PaperNexus runtime roots, shared-disk graph storage, or hand-written REST calls for graph readiness checks or brainstorm refresh when remote access is configured.
 
 Read the remote access settings from the plugin-level workflow config:
 
@@ -74,8 +74,8 @@ Read the remote access settings from the plugin-level workflow config:
 
 Rules:
 
-- when using remote PaperNexus, let the Python wrappers resolve auth from the configured token source
-- for workflow-owned background graph work, queue upload wrappers through `research_workflow.queue_paper_ingestion`; use `research_workflow.run_papernexus_wrapper` for the live graph / brainstorm wrappers that `/graph-build` still needs after upload
+- when using remote PaperNexus, let the MCP-first tool families or their thin wrappers resolve auth from the configured token source
+- for workflow-owned background graph work, queue upload wrappers through `research_workflow.queue_paper_ingestion`; use remote HTTP MCP (`research_lookup`, `research_briefing`, `idea_catalyst`) for the live graph / brainstorm work that `/graph-build` still needs after upload
 - `auto` means: env first, then native OS keychain
 - native keychain means:
   - macOS Keychain on `darwin`
@@ -84,7 +84,7 @@ Rules:
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
 - do not fall back to local `papernexus` CLI graph-processing commands for workflow-owned graph readiness or brainstorm refresh
-- prefer `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_batch_import.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` over hand-written REST for remote graph reads and imports
+- prefer remote HTTP MCP for graph reads and brainstorm refresh, and keep `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_batch_import.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` as queued import or thin-MCP adapter paths instead of hand-written REST
 - if the wrapper-resolved remote PaperNexus session is unavailable or unauthenticated, stop and report that remote access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
@@ -99,7 +99,7 @@ Pick the richest available project paper-selection input in this order:
 
 Default policy:
 - keep `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project explicitly overrides the shared-global defaults
-- the authoritative graph lives behind the configured remote PaperNexus Web/API
+- the authoritative graph lives behind the configured remote PaperNexus service, with remote HTTP MCP as the default live-graph interface
 - this skill should not create or name a per-project corpus
 - the project should only record which canonical papers are in scope and whether those papers are present in the shared graph
 
@@ -157,7 +157,7 @@ This should:
 - treat remote graph advancement as queued import-worker progress, not a second manual rebuild step
 - if uploads are still missing, create or repair one queued upload request and let the workflow-owned continuation run the actual wrappers; do not turn Researcher into the direct uploader
 - after each completed paper import or each batch status pass, run a short status pass and report progress before the next workflow tick
-- once the required papers are present, move the workflow to `graph_build/brainstorm_refresh`, run one bounded core-provider refresh using the typed wrappers (`pn_graph_query.py ideas|brainstorm` and `pn_research_chains.py brainstorm-brief|research-brief`) or a future compatible provider, and persist the resulting durable bundle through `research_workflow.run_brainstorm_cycle`
+- once the required papers are present, move the workflow to `graph_build/brainstorm_refresh`, run one bounded core-provider refresh using `research_lookup` / `research_briefing` (or their thin wrappers `pn_graph_query.py` and `pn_research_chains.py`) or a future compatible provider, and persist the resulting durable bundle through `research_workflow.run_brainstorm_cycle`
 - if the local Zotero MCP server is available, sync the verified canonical set into `bot/<project-id>/selected`, put baseline-defining papers into `bot/<project-id>/baselines`, keep `bot/<project-id>/writing-shortlist` untouched unless the project is already entering writing-heavy work, and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 
 Hard rule:

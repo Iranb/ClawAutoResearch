@@ -1,6 +1,6 @@
 ---
 name: papernexus
-description: Use when working in PaperNexus and the task touches a live corpus, remote graph build, queued imports, or authenticated graph-backed reasoning.
+description: Use when working in PaperNexus and the task touches a live corpus, remote HTTP MCP graph work, queued imports, or authenticated graph-backed reasoning.
 ---
 
 # PaperNexus
@@ -9,13 +9,13 @@ Use this skill when the task is about a live PaperNexus corpus or the PaperNexus
 
 ## Primary Rule
 
-For workflow-owned work, do not treat raw HTTP routes or local live-graph CLI commands as the default control plane.
+For workflow-owned work, the live graph control plane is remote PaperNexus HTTP MCP. Do not treat raw HTTP routes, local live-graph CLI commands, or local stdio MCP as the default control plane.
 
 Prefer these paths, in order:
 
 1. `research_workflow.queue_paper_ingestion`
-2. `research_workflow.run_papernexus_wrapper`
-3. the local Python wrappers in `scripts/`
+2. the remote HTTP MCP tool families: `research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`
+3. the local Python wrappers in `scripts/` as thin adapters over that MCP surface
 
 Use local repo CLI stages only for isolated repository development or fixture debugging, not for a live shared graph.
 
@@ -25,9 +25,9 @@ When you are inside the OpenClaw research workflow:
 
 - queue uploads with `research_workflow.queue_paper_ingestion`
 - let `/graph-build` or `/resume-pipeline` trigger upload work
-- use `research_workflow.run_papernexus_wrapper` for live graph reads, reasoning, and bounded queue inspection
+- use the remote HTTP MCP control plane for live graph reads, reasoning, and bounded queue inspection
 
-The wrapper-first commands are:
+The wrappers are MCP-backed adapters:
 
 - `python3 scripts/pn_stage_sync.py`
 - `python3 scripts/pn_import_submit.py`
@@ -36,12 +36,12 @@ The wrapper-first commands are:
 - `python3 scripts/pn_graph_query.py`
 - `python3 scripts/pn_research_chains.py`
 
-Why:
+Underlying MCP tool mapping:
 
-- auth and request shape stay consistent
-- workflow state can persist progress durably
-- batch uploads become manifest-driven instead of shell-loop driven
-- graph reads stay aligned with the same remote corpus settings
+- `research_lookup` -> `pn_graph_query.py`
+- `research_briefing` -> `pn_research_chains.py`
+- `import_workflow` -> `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`
+- `idea_catalyst` -> idea-catalyst packet builders
 
 ## Upload Policy
 
@@ -66,9 +66,14 @@ Do not default to:
 
 ## Graph Read Policy
 
-Use graph reads through:
+Use remote PaperNexus HTTP MCP first:
 
-- `research_workflow.run_papernexus_wrapper`
+- `research_lookup`
+- `research_briefing`
+- `idea_catalyst`
+
+If the workflow or local tooling needs a thin adapter layer, use:
+
 - `python3 scripts/pn_graph_query.py`
 - `python3 scripts/pn_research_chains.py`
 
@@ -125,7 +130,7 @@ Typed graph read:
 
 ```bash
 python3 scripts/pn_graph_query.py \
-  --api-base "http://<host>:4821" \
+  --mcp-url "http://<host>:4821/mcp" \
   --corpus "<corpus>" \
   query "topic" --limit 8
 ```
@@ -134,7 +139,7 @@ Typed reasoning chain:
 
 ```bash
 python3 scripts/pn_research_chains.py \
-  --api-base "http://<host>:4821" \
+  --mcp-url "http://<host>:4821/mcp" \
   --corpus "<corpus>" \
   evidence-chain "topic" --limit 5
 ```
@@ -144,10 +149,10 @@ python3 scripts/pn_research_chains.py \
 - assume the authoritative graph is remote and shared
 - use `{PROJ}/researcher/paper-staging/` for temporary local staging
 - preserve progress through workflow-owned runtime state, not chat memory
-- if a live import or graph read fails, report the exact wrapper step and recent evidence instead of guessing
+- if a live import or graph read fails, report the exact MCP tool or thin-wrapper step and recent evidence instead of guessing
 
 ## Do Not Do
 
 - do not use local live-graph query or ideation CLI commands as the primary interface for a live workflow
 - do not rebuild the shared graph locally just to inspect one project
-- do not bypass `run_papernexus_wrapper` when the task belongs to workflow-owned graph work
+- do not bypass the remote HTTP MCP control plane when the task belongs to workflow-owned graph work

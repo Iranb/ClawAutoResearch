@@ -28,10 +28,10 @@ Path variables: `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PR
 - `.openclaw-research` is durable workflow runtime state under `{PROJ}/.openclaw-research/`; never create or use a copy under the repo root, an agent workspace, or an ad hoc override path.
 - Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
 - If planning work depends on PaperNexus-backed evidence, honor workflow access mode:
-  - `remote_api`: expect authenticated wrapper / Web API artifacts, not hand-written REST or local MCP graph work.
-  - `remote_mcp`: rely on the configured remote PaperNexus HTTP MCP endpoint for graph-backed evidence.
-  - `local_mcp`: rely on PaperNexus MCP-derived graph evidence only.
-  - `auto`: assume remote wrapper / API artifacts first, then remote HTTP MCP artifacts, unless workflow guidance explicitly switches to local MCP.
+  - `remote_mcp`: rely on the configured remote PaperNexus HTTP MCP endpoint for graph-backed evidence; prefer `research_lookup`, `research_briefing`, and `idea_catalyst`.
+  - `remote_api`: expect authenticated wrapper / Web API artifacts only as compatibility-mode evidence, not as the preferred live-graph control plane.
+  - `local_mcp`: rely on PaperNexus MCP-derived graph evidence only when the workflow explicitly switches to local MCP.
+  - `auto`: assume remote HTTP MCP artifacts first, then remote_api compatibility artifacts, unless workflow guidance explicitly switches to local MCP.
 
 ## Session Startup
 
