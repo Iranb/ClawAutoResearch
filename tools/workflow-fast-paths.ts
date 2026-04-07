@@ -534,9 +534,11 @@ function fromPersistedSessionEntry(
     kind: readString(entry.kind) ?? "generic",
     family: readString(entry.family) ?? "generic",
     status:
-      entry.status === "idle" || entry.status === "needs_repair"
-        ? entry.status
-        : "active",
+      entry.status === "active"
+        ? "active"
+        : entry.status === "needs_repair"
+          ? "needs_repair"
+          : "idle",
     projectId: readString(entry.projectId) ?? null,
     projectRoot: readString(entry.projectRoot) ?? null,
     startedAt,

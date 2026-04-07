@@ -345,6 +345,152 @@ test("announce and broadcast outboxes persist records and suppress duplicate ids
   assert.equal(broadcastStore.entries[0].deliveryStatus, "pending");
 });
 
+test("recordWorkflowAnnounceEvent backfills parent lineage and terminal runtime state for nested child sessions", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const parentSessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:workflow-stage";
+  const childSessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:workflow-stage:subagent:code-review";
+  const completedAt = "2026-04-01T00:00:00.000Z";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "announce-runtime");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "announce-runtime",
+    entries: [
+      {
+        transitionId: "transition-child-1",
+        queueId: "transition-child-1",
+        queueKey: "queue-child-1",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "reviewer",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: parentSessionKey,
+        messageChannel: "discord",
+        preferredSessionKey: childSessionKey,
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "announce-runtime",
+        projectRoot,
+        queuedAt: completedAt,
+        lastAttemptedAt: completedAt,
+        attemptCount: 1,
+        summary: "child queue",
+        status: "running",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey,
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 2,
+        runPayload: null,
+        dispatchPayload: null,
+      },
+    ],
+  });
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "announce-runtime",
+    entries: [
+      {
+        sessionKey: parentSessionKey,
+        sessionId: "session-parent",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "announce-runtime",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 1,
+        status: "active",
+        runId: "run-parent",
+        queueKey: "queue-parent",
+        startedAt: completedAt,
+        lastHeartbeatAt: completedAt,
+        lastAnnounceAt: null,
+        lastCheckedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+      {
+        sessionKey: childSessionKey,
+        sessionId: "session-child",
+        runtime: "subagent",
+        role: "reviewer",
+        agentId: "reviewer",
+        ownerAgent: "reviewer",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: parentSessionKey,
+        projectId: "announce-runtime",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 2,
+        status: "active",
+        runId: "run-child",
+        queueKey: "queue-child-1",
+        startedAt: completedAt,
+        lastHeartbeatAt: completedAt,
+        lastAnnounceAt: null,
+        lastCheckedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const announce = await recordWorkflowAnnounceEvent({
+    projectRoot,
+    projectId: "announce-runtime",
+    announceId: "announce:runtime:1",
+    parentSessionKey: null,
+    childSessionKey,
+    deliveryMode: "internal",
+    summary: "child reviewer completed",
+    payload: {
+      status: "completed",
+      completedAt,
+      result: {
+        verdict: "pass",
+      },
+    },
+  });
+
+  assert.equal(announce.entry.parentSessionKey, parentSessionKey);
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const parentSession = sessionsStore.entries.find(
+    (entry) => entry.sessionKey === parentSessionKey
+  );
+  const childSession = sessionsStore.entries.find(
+    (entry) => entry.sessionKey === childSessionKey
+  );
+  assert.equal(parentSession?.lastAnnounceAt, completedAt);
+  assert.equal(childSession?.parentSessionKey, parentSessionKey);
+  assert.equal(childSession?.status, "completed");
+  assert.equal(childSession?.lastFinishedAt, completedAt);
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queueStore.entries[0]?.status, "completed");
+});
+
 test("recoverWorkflowRuntimeState marks orphan active sessions as needs_repair and emits a recovery broadcast once", async (t) => {
   const projectRoot = await makeProjectRoot();
 
@@ -554,6 +700,170 @@ test("consumeWorkflowAnnounceOutbox groups by parent session, skips duplicates, 
   assert.ok(consumed?.consumedAt);
   assert.equal(duplicate?.status, "skipped");
   assert.equal(orphan?.status, "pending");
+});
+
+test("consumeWorkflowAnnounceOutbox repairs legacy nested child announces into parent-visible failed state", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const parentSessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:workflow-stage";
+  const childSessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:workflow-stage:subagent:analysis";
+  const finishedAt = "2026-04-02T00:00:00.000Z";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "announce-recovery");
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "announce-recovery",
+    entries: [
+      {
+        transitionId: "transition-child-2",
+        queueId: "transition-child-2",
+        queueKey: "queue-child-2",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "analyzer",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: parentSessionKey,
+        messageChannel: "discord",
+        preferredSessionKey: childSessionKey,
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "announce-recovery",
+        projectRoot,
+        queuedAt: finishedAt,
+        lastAttemptedAt: finishedAt,
+        attemptCount: 1,
+        summary: "legacy child queue",
+        status: "running",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey,
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 2,
+        runPayload: null,
+        dispatchPayload: null,
+      },
+    ],
+  });
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "announce-recovery",
+    entries: [
+      {
+        sessionKey: parentSessionKey,
+        sessionId: "session-parent-2",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "announce-recovery",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 1,
+        status: "active",
+        runId: "run-parent-2",
+        queueKey: "queue-parent-2",
+        startedAt: finishedAt,
+        lastHeartbeatAt: finishedAt,
+        lastAnnounceAt: null,
+        lastCheckedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+      {
+        sessionKey: childSessionKey,
+        sessionId: "session-child-2",
+        runtime: "subagent",
+        role: "analyzer",
+        agentId: "analyzer",
+        ownerAgent: "analyzer",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: parentSessionKey,
+        projectId: "announce-recovery",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: "agent:researcher:discord:group:paper-lab",
+        depth: 2,
+        status: "active",
+        runId: "run-child-2",
+        queueKey: "queue-child-2",
+        startedAt: finishedAt,
+        lastHeartbeatAt: finishedAt,
+        lastAnnounceAt: null,
+        lastCheckedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+  await writeWorkflowAnnounceOutboxStore({
+    projectRoot,
+    projectId: "announce-recovery",
+    entries: [
+      {
+        announceId: "announce-legacy-failure",
+        sourceTransitionId: "transition-child-2",
+        projectId: "announce-recovery",
+        projectRoot,
+        parentSessionKey: null,
+        childSessionKey,
+        deliveryMode: "internal",
+        status: "pending",
+        summary: "legacy nested failure",
+        payload: {
+          status: "error",
+          completedAt: finishedAt,
+          error: "analysis failed",
+        },
+        createdAt: finishedAt,
+        consumedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const consumed = await consumeWorkflowAnnounceOutbox({
+    projectRoot,
+    projectId: "announce-recovery",
+    markConsumed: true,
+  });
+
+  assert.deepEqual(
+    consumed.groups.map((group) => group.parentSessionKey),
+    [parentSessionKey]
+  );
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const parentSession = sessionsStore.entries.find(
+    (entry) => entry.sessionKey === parentSessionKey
+  );
+  const childSession = sessionsStore.entries.find(
+    (entry) => entry.sessionKey === childSessionKey
+  );
+  assert.equal(parentSession?.lastAnnounceAt, finishedAt);
+  assert.equal(parentSession?.lastError, "analysis failed");
+  assert.equal(childSession?.status, "failed");
+  assert.equal(childSession?.lastFinishedAt, finishedAt);
+  assert.equal(childSession?.lastError, "analysis failed");
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queueStore.entries[0]?.status, "failed");
+  assert.equal(queueStore.entries[0]?.lastError, "analysis failed");
+
+  const announceStore = await readWorkflowAnnounceOutboxStore(projectRoot);
+  assert.equal(announceStore.entries[0]?.parentSessionKey, parentSessionKey);
+  assert.equal(announceStore.entries[0]?.status, "consumed");
 });
 
 test("replayWorkflowBroadcastOutbox delivers pending and failed entries once", async (t) => {

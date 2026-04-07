@@ -12,6 +12,7 @@ import {
   writeWorkflowRuntimeQueueStore,
   writeWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
+import { deriveWorkflowSubagentImmediateParentSessionKey } from "./workflow-subagent-sessions";
 import type {
   WorkflowRuntimeAnnounceDeliveryMode,
   WorkflowRuntimeAnnounceEntry,
@@ -29,12 +30,183 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
 
 function resolveProjectId(projectRoot: string, projectId?: string | null): string {
   return readString(projectId) ?? path.basename(projectRoot);
+}
+
+function deriveWorkflowAnnounceTerminalState(
+  payload: Record<string, unknown> | null
+): {
+  status: "completed" | "failed" | null;
+  finishedAt: string | null;
+  error: string | null;
+} {
+  const rawStatus = readString(payload?.status)?.toLowerCase() ?? null;
+  const finishedAt =
+    readString(payload?.completedAt) ??
+    readString(payload?.finishedAt) ??
+    readString(payload?.lastFinishedAt) ??
+    null;
+  if (
+    rawStatus === "completed" ||
+    rawStatus === "complete" ||
+    rawStatus === "done" ||
+    rawStatus === "ok" ||
+    rawStatus === "success" ||
+    rawStatus === "succeeded"
+  ) {
+    return {
+      status: "completed",
+      finishedAt,
+      error: null,
+    };
+  }
+  if (
+    rawStatus === "failed" ||
+    rawStatus === "failure" ||
+    rawStatus === "error" ||
+    rawStatus === "blocked"
+  ) {
+    return {
+      status: "failed",
+      finishedAt,
+      error:
+        readString(payload?.error) ??
+        readString(asRecord(payload?.result)?.summary) ??
+        null,
+    };
+  }
+  return {
+    status: null,
+    finishedAt,
+    error: readString(payload?.error),
+  };
+}
+
+export async function reconcileWorkflowAnnounceRuntimeState(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  entry: WorkflowRuntimeAnnounceEntry;
+}): Promise<{
+  entry: WorkflowRuntimeAnnounceEntry;
+  sessionPatched: boolean;
+  queuePatched: boolean;
+}> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const projectId = resolveProjectId(projectRoot, params.projectId);
+  const [sessionsStore, queueStore] = await Promise.all([
+    readWorkflowRuntimeSessionsStore(projectRoot),
+    readWorkflowRuntimeQueueStore(projectRoot),
+  ]);
+  const childSession =
+    sessionsStore.entries.find((session) => session.sessionKey === params.entry.childSessionKey) ??
+    null;
+  const resolvedParentSessionKey =
+    readString(params.entry.parentSessionKey) ??
+    readString(childSession?.parentSessionKey) ??
+    readString(childSession?.requesterSessionKey) ??
+    deriveWorkflowSubagentImmediateParentSessionKey(params.entry.childSessionKey);
+  const entry =
+    resolvedParentSessionKey && resolvedParentSessionKey !== params.entry.parentSessionKey
+      ? {
+          ...params.entry,
+          parentSessionKey: resolvedParentSessionKey,
+        }
+      : params.entry;
+  const announceAt =
+    readString(asRecord(entry.payload)?.completedAt) ??
+    readString(asRecord(entry.payload)?.finishedAt) ??
+    readString(entry.createdAt) ??
+    nowIso();
+  const terminal = deriveWorkflowAnnounceTerminalState(asRecord(entry.payload));
+
+  let sessionPatched = false;
+  const nextSessionEntries = sessionsStore.entries.map((session) => {
+    if (session.sessionKey === entry.childSessionKey) {
+      const nextSession: WorkflowRuntimeSessionEntry = {
+        ...session,
+        parentSessionKey: readString(session.parentSessionKey) ?? resolvedParentSessionKey,
+        lastAnnounceAt: announceAt,
+        lastCheckedAt: announceAt,
+      };
+      if (terminal.status) {
+        nextSession.status = terminal.status;
+        nextSession.lastFinishedAt =
+          terminal.finishedAt ?? session.lastFinishedAt ?? announceAt;
+        nextSession.lastHeartbeatAt =
+          terminal.finishedAt ?? session.lastHeartbeatAt ?? announceAt;
+        nextSession.lastError = terminal.status === "failed" ? terminal.error : null;
+      }
+      sessionPatched =
+        sessionPatched ||
+        JSON.stringify(nextSession) !== JSON.stringify(session);
+      return nextSession;
+    }
+    if (resolvedParentSessionKey && session.sessionKey === resolvedParentSessionKey) {
+      const nextParent: WorkflowRuntimeSessionEntry = {
+        ...session,
+        lastAnnounceAt: announceAt,
+        lastCheckedAt: announceAt,
+        lastError:
+          terminal.status === "failed" ? terminal.error ?? session.lastError : session.lastError,
+      };
+      sessionPatched =
+        sessionPatched ||
+        JSON.stringify(nextParent) !== JSON.stringify(session);
+      return nextParent;
+    }
+    return session;
+  });
+  if (sessionPatched) {
+    await writeWorkflowRuntimeSessionsStore({
+      projectRoot,
+      projectId: sessionsStore.projectId,
+      entries: nextSessionEntries,
+    });
+  }
+
+  let queuePatched = false;
+  if (childSession?.queueKey && terminal.status) {
+    const nextQueueEntries = queueStore.entries.map((queueEntry) => {
+      if (queueEntry.queueKey !== childSession.queueKey) {
+        return queueEntry;
+      }
+      const nextQueue: WorkflowRuntimeQueueEntry = {
+        ...queueEntry,
+        status: terminal.status === "completed" ? "completed" : "failed",
+        lastAttemptedAt: terminal.finishedAt ?? announceAt,
+        lastError:
+          terminal.status === "failed"
+            ? terminal.error ?? queueEntry.lastError
+            : null,
+      };
+      queuePatched = queuePatched || JSON.stringify(nextQueue) !== JSON.stringify(queueEntry);
+      return nextQueue;
+    });
+    if (queuePatched) {
+      await writeWorkflowRuntimeQueueStore({
+        projectRoot,
+        projectId: queueStore.projectId,
+        entries: nextQueueEntries,
+      });
+    }
+  }
+
+  return {
+    entry,
+    sessionPatched,
+    queuePatched,
+  };
 }
 
 export type WorkflowTransitionInput = {
@@ -610,14 +782,32 @@ export async function recordWorkflowAnnounceEvent(params: {
     reason: "record_announce_event",
   });
   const store = await readWorkflowAnnounceOutboxStore(projectRoot);
-  const existing = store.entries.find((entry) => entry.announceId === params.announceId);
-  if (existing) {
+  const existingIndex = store.entries.findIndex(
+    (entry) => entry.announceId === params.announceId
+  );
+  if (existingIndex >= 0) {
+    const reconciled = await reconcileWorkflowAnnounceRuntimeState({
+      projectRoot,
+      projectId,
+      entry: store.entries[existingIndex],
+    });
+    if (
+      reconciled.entry.parentSessionKey !== store.entries[existingIndex].parentSessionKey
+    ) {
+      const nextEntries = [...store.entries];
+      nextEntries[existingIndex] = reconciled.entry;
+      await writeWorkflowAnnounceOutboxStore({
+        projectRoot,
+        projectId,
+        entries: nextEntries,
+      });
+    }
     return {
       created: false,
-      entry: existing,
+      entry: reconciled.entry,
     };
   }
-  const entry: WorkflowRuntimeAnnounceEntry = {
+  let entry: WorkflowRuntimeAnnounceEntry = {
     announceId: params.announceId,
     sourceTransitionId: readString(params.sourceTransitionId),
     projectId,
@@ -637,6 +827,20 @@ export async function recordWorkflowAnnounceEvent(params: {
     projectId,
     entries: [...store.entries, entry],
   });
+  const reconciled = await reconcileWorkflowAnnounceRuntimeState({
+    projectRoot,
+    projectId,
+    entry,
+  });
+  entry = reconciled.entry;
+  if (entry.parentSessionKey !== null) {
+    const nextEntries = [...store.entries, entry];
+    await writeWorkflowAnnounceOutboxStore({
+      projectRoot,
+      projectId,
+      entries: nextEntries,
+    });
+  }
   await appendWorkflowRuntimeEvent({
     projectRoot,
     projectId,
@@ -645,6 +849,9 @@ export async function recordWorkflowAnnounceEvent(params: {
     details: {
       deliveryMode: params.deliveryMode,
       childSessionKey: params.childSessionKey,
+      parentSessionKey: entry.parentSessionKey,
+      sessionPatched: reconciled.sessionPatched,
+      queuePatched: reconciled.queuePatched,
     },
   });
   return {

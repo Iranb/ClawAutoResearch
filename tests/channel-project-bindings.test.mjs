@@ -13,7 +13,9 @@ import {
   unbindChannelProjectForWorkflow,
 } from "../tools/workflow-guard.ts";
 import {
+  buildWorkflowSubagentSessionKey,
   buildWorkflowRuntimeSessionBinding,
+  deriveWorkflowSubagentImmediateParentSessionKey,
   normalizeWorkflowSubagentParentSessionKey,
 } from "../tools/workflow-subagent-sessions.ts";
 
@@ -452,4 +454,38 @@ test("workflow bindings persist runtime session lineage metadata without breakin
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
   assert.equal(lookup.binding?.workflowSessionKey, sessionKey);
+});
+
+test("nested workflow runtime bindings keep the immediate parent session while preserving the root thread binding", async () => {
+  const parentSessionKey =
+    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage";
+  const nestedSessionKey =
+    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage:subagent:code-review";
+
+  assert.equal(
+    deriveWorkflowSubagentImmediateParentSessionKey(nestedSessionKey),
+    parentSessionKey
+  );
+  assert.equal(
+    normalizeWorkflowSubagentParentSessionKey(nestedSessionKey),
+    "agent:researcher:discord:group:runtime-room"
+  );
+
+  const binding = buildWorkflowRuntimeSessionBinding({
+    projectRoot: "/tmp/runtime-room",
+    projectId: "runtime-room",
+    role: "researcher",
+    sessionKey: nestedSessionKey,
+  });
+
+  assert.equal(binding.parentSessionKey, parentSessionKey);
+  assert.equal(binding.threadBindingKey, "agent:researcher:discord:group:runtime-room");
+  assert.equal(binding.depth, 2);
+  assert.equal(
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: nestedSessionKey,
+      purpose: "artifact-sync",
+    }),
+    `${nestedSessionKey}:subagent:artifact-sync`
+  );
 });

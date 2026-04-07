@@ -8,6 +8,7 @@ import {
   writeWorkflowAnnounceOutboxStore,
   writeWorkflowBroadcastOutboxStore,
 } from "./workflow-runtime-state.js";
+import { reconcileWorkflowAnnounceRuntimeState } from "./workflow-session-orchestrator.js";
 import type {
   WorkflowRuntimeAnnounceEntry,
   WorkflowRuntimeAnnounceOutboxStore,
@@ -92,8 +93,7 @@ export async function consumeWorkflowAnnounceOutbox(params: {
   let changed = false;
 
   for (let index = 0; index < announceStore.entries.length; index += 1) {
-    const entry = announceStore.entries[index];
-    const parentSessionKey = readString(entry.parentSessionKey);
+    let entry = announceStore.entries[index];
     const isDuplicate = dedupe.has(entry.announceId);
     if (isDuplicate) {
       duplicates.push(entry);
@@ -111,6 +111,19 @@ export async function consumeWorkflowAnnounceOutbox(params: {
     }
 
     dedupe.add(entry.announceId);
+    const reconciled = await reconcileWorkflowAnnounceRuntimeState({
+      projectRoot,
+      projectId,
+      entry,
+    });
+    entry = reconciled.entry;
+    const parentSessionKey = readString(entry.parentSessionKey);
+    if (
+      parentSessionKey !== readString(announceStore.entries[index]?.parentSessionKey)
+    ) {
+      nextEntries[index] = entry;
+      changed = true;
+    }
     const hasParent = parentSessionKey ? parentSessionKeys.has(parentSessionKey) : true;
     if (!hasParent) {
       orphaned.push(entry);

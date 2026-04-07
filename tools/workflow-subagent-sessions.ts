@@ -210,11 +210,25 @@ export function normalizeWorkflowSubagentParentSessionKey(
   if (!raw) {
     return null;
   }
-  const subagentMarker = raw.indexOf(":subagent:");
+  const subagentMarker = raw.toLowerCase().indexOf(":subagent:");
   if (subagentMarker > 0) {
     return raw.slice(0, subagentMarker);
   }
   return raw;
+}
+
+export function deriveWorkflowSubagentImmediateParentSessionKey(
+  sessionKey: string | null | undefined
+): string | null {
+  const raw = readString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const subagentMarker = raw.toLowerCase().lastIndexOf(":subagent:");
+  if (subagentMarker > 0) {
+    return raw.slice(0, subagentMarker);
+  }
+  return null;
 }
 
 export type WorkflowRuntimeSessionBinding = {
@@ -242,14 +256,22 @@ export function buildWorkflowRuntimeSessionBinding(params: {
 }): WorkflowRuntimeSessionBinding {
   const sessionKey = readString(params.sessionKey);
   const parentSessionKey =
-    readString(params.parentSessionKey) ?? normalizeWorkflowSubagentParentSessionKey(sessionKey);
+    readString(params.parentSessionKey) ??
+    deriveWorkflowSubagentImmediateParentSessionKey(sessionKey) ??
+    sessionKey;
   const explicitThreadBindingKey = readString(params.threadBindingKey);
-  const derivedThreadBindingKey = explicitThreadBindingKey ?? parentSessionKey ?? sessionKey;
+  const derivedThreadBindingKey =
+    explicitThreadBindingKey ??
+    normalizeWorkflowSubagentParentSessionKey(sessionKey) ??
+    parentSessionKey ??
+    sessionKey;
+  const derivedDepth =
+    sessionKey?.match(/:subagent:/gi)?.length ?? 0;
   const normalizedDepth =
     readNumber(params.depth) !== null
       ? Math.max(0, Math.floor(readNumber(params.depth) ?? 0))
-      : sessionKey && sessionKey.includes(":subagent:")
-        ? 1
+      : derivedDepth > 0
+        ? derivedDepth
         : null;
 
   return {
@@ -337,7 +359,7 @@ export function buildWorkflowSubagentSessionKey(params: {
   purpose: string;
   segments?: Array<string | null | undefined>;
 }): string | null {
-  const parent = normalizeWorkflowSubagentParentSessionKey(params.parentSessionKey);
+  const parent = readString(params.parentSessionKey);
   if (!parent) {
     return null;
   }
