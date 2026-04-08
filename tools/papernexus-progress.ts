@@ -50,12 +50,33 @@ export type PapernexusProgressCounters = {
   eta_hint: string | null;
 };
 
+export type PapernexusProgressRemoteTask = {
+  percent: number | null;
+  stage_percent: number | null;
+  queue_position: number | null;
+  current_step: string | null;
+  processed_units: number | null;
+  total_units: number | null;
+};
+
+export type PapernexusProgressQueue = {
+  total: number | null;
+  pending: number | null;
+  running: number | null;
+  completed: number | null;
+  failed: number | null;
+  remaining: number | null;
+  overall_percent: number | null;
+};
+
 export type PapernexusProgressSnapshot = {
   updated_at: string;
   phase: PapernexusProgressPhase;
   owner_run: PapernexusProgressOwnerRun | null;
   batch: PapernexusProgressBatch;
   graph_check: PapernexusProgressGraphCheck;
+  remote_task: PapernexusProgressRemoteTask | null;
+  queue_progress: PapernexusProgressQueue | null;
   progress: PapernexusProgressCounters;
   next_action: string | null;
   blocking_reason: string | null;
@@ -142,6 +163,77 @@ function normalizeProgressCounters(value: unknown): PapernexusProgressCounters {
   };
 }
 
+function normalizeRemoteTaskProgress(
+  value: unknown
+): PapernexusProgressRemoteTask | null {
+  const record = asNullableRecord(value) ?? {};
+  const normalized: PapernexusProgressRemoteTask = {
+    percent:
+      typeof record.percent === "number" && Number.isFinite(record.percent)
+        ? Math.max(0, Math.min(100, Math.round(record.percent)))
+        : null,
+    stage_percent:
+      typeof (record.stage_percent ?? record.stagePercent) === "number" &&
+      Number.isFinite(record.stage_percent ?? record.stagePercent)
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round((record.stage_percent ?? record.stagePercent) as number)
+            )
+          )
+        : null,
+    queue_position: normalizeCount(
+      record.queue_position ?? record.queuePosition
+    ),
+    current_step: pickString(record, ["current_step", "currentStep"]),
+    processed_units: normalizeCount(
+      record.processed_units ?? record.processedUnits
+    ),
+    total_units: normalizeCount(record.total_units ?? record.totalUnits),
+  };
+  return normalized.percent !== null ||
+    normalized.stage_percent !== null ||
+    normalized.queue_position !== null ||
+    normalized.current_step !== null ||
+    normalized.processed_units !== null ||
+    normalized.total_units !== null
+    ? normalized
+    : null;
+}
+
+function normalizeQueueProgress(value: unknown): PapernexusProgressQueue | null {
+  const record = asNullableRecord(value) ?? {};
+  const normalized: PapernexusProgressQueue = {
+    total: normalizeCount(record.total),
+    pending: normalizeCount(record.pending),
+    running: normalizeCount(record.running),
+    completed: normalizeCount(record.completed),
+    failed: normalizeCount(record.failed),
+    remaining: normalizeCount(record.remaining),
+    overall_percent:
+      typeof (record.overall_percent ?? record.overallPercent) === "number" &&
+      Number.isFinite(record.overall_percent ?? record.overallPercent)
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round((record.overall_percent ?? record.overallPercent) as number)
+            )
+          )
+        : null,
+  };
+  return normalized.total !== null ||
+    normalized.pending !== null ||
+    normalized.running !== null ||
+    normalized.completed !== null ||
+    normalized.failed !== null ||
+    normalized.remaining !== null ||
+    normalized.overall_percent !== null
+    ? normalized
+    : null;
+}
+
 export function getPapernexusProgressPath(projectRoot: string): string {
   return path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json");
 }
@@ -167,6 +259,10 @@ export async function readPapernexusProgress(
     owner_run: normalizeOwnerRun(record.owner_run ?? record.ownerRun),
     batch: normalizeBatch(record.batch),
     graph_check: normalizeGraphCheck(record.graph_check ?? record.graphCheck),
+    remote_task: normalizeRemoteTaskProgress(record.remote_task ?? record.remoteTask),
+    queue_progress: normalizeQueueProgress(
+      record.queue_progress ?? record.queueProgress
+    ),
     progress: normalizeProgressCounters(record.progress),
     next_action: pickString(record, ["next_action", "nextAction"]),
     blocking_reason: pickString(record, ["blocking_reason", "blockingReason"]),
@@ -390,6 +486,76 @@ function buildOwnerRun(params: {
   return next.run_id || next.session_key || next.queue_key || next.wrapper ? next : null;
 }
 
+function buildRemoteTaskSnapshot(params: {
+  state: ReturnType<typeof normalizePaperIngestionState>;
+  previous: PapernexusProgressSnapshot | null;
+}): PapernexusProgressRemoteTask | null {
+  const activeRequest =
+    params.state.queuedRequests.find((entry) =>
+      ["launching", "running"].includes(entry.status)
+    ) ??
+    params.state.queuedRequests.find((entry) => entry.status === "queued") ??
+    null;
+  if (!activeRequest) {
+    return null;
+  }
+  const activeProgress = normalizeRemoteTaskProgress(activeRequest?.progress);
+  if (activeProgress) {
+    return activeProgress;
+  }
+  return params.previous?.remote_task ?? null;
+}
+
+function buildQueueProgressSnapshot(params: {
+  state: ReturnType<typeof normalizePaperIngestionState>;
+  batch: PapernexusProgressBatch;
+  previous: PapernexusProgressSnapshot | null;
+}): PapernexusProgressQueue | null {
+  const activeRequest =
+    params.state.queuedRequests.find((entry) =>
+      ["queued", "launching", "running"].includes(entry.status)
+    ) ?? null;
+  const fromRequest = normalizeQueueProgress(activeRequest?.queueProgress);
+  if (fromRequest) {
+    return fromRequest;
+  }
+  if (
+    params.batch.total_items !== null ||
+    params.batch.pending_items > 0 ||
+    params.batch.running_items > 0 ||
+    params.batch.synced_items > 0 ||
+    params.batch.failed_items > 0
+  ) {
+    const total = params.batch.total_items;
+    const remaining =
+      total !== null
+        ? Math.max(0, total - params.batch.synced_items - params.batch.failed_items)
+        : params.batch.pending_items + params.batch.running_items;
+    const overallPercent =
+      total !== null && total > 0
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round(
+                ((params.batch.synced_items + params.batch.failed_items) / total) * 100
+              )
+            )
+          )
+        : null;
+    return {
+      total,
+      pending: params.batch.pending_items,
+      running: params.batch.running_items,
+      completed: params.batch.synced_items,
+      failed: params.batch.failed_items,
+      remaining,
+      overall_percent: overallPercent,
+    };
+  }
+  return activeRequest ? params.previous?.queue_progress ?? null : null;
+}
+
 function derivePhase(params: {
   state: ReturnType<typeof normalizePaperIngestionState>;
   paperIngestionRecord: Record<string, unknown>;
@@ -455,7 +621,28 @@ function buildEtaHint(params: {
   batch: PapernexusProgressBatch;
   graphCheck: PapernexusProgressGraphCheck;
   importTaskCount: number;
+  remoteTask: PapernexusProgressRemoteTask | null;
+  queueProgress: PapernexusProgressQueue | null;
 }): string | null {
+  if (params.remoteTask?.current_step) {
+    const pieces = [params.remoteTask.current_step];
+    if (params.remoteTask.queue_position !== null) {
+      pieces.push(`queue ${params.remoteTask.queue_position}`);
+    }
+    if (
+      params.remoteTask.processed_units !== null &&
+      params.remoteTask.total_units !== null &&
+      params.remoteTask.total_units > 0
+    ) {
+      pieces.push(
+        `${params.remoteTask.processed_units}/${params.remoteTask.total_units} units`
+      );
+    }
+    if (params.queueProgress?.remaining != null) {
+      pieces.push(`${params.queueProgress.remaining} remaining`);
+    }
+    return pieces.join(", ");
+  }
   switch (params.phase) {
     case "staging":
       return "launch the queued PaperNexus wrapper";
@@ -464,6 +651,13 @@ function buildEtaHint(params: {
     case "uploading":
       return "uploading staged sources to PaperNexus";
     case "waiting_import": {
+      if (params.queueProgress?.remaining != null) {
+        const suffix =
+          params.queueProgress.overall_percent != null
+            ? ` (${params.queueProgress.overall_percent}%)`
+            : "";
+        return `${params.queueProgress.remaining} items remaining${suffix}`;
+      }
       if (
         params.batch.total_items !== null &&
         params.batch.total_items > 0 &&
@@ -594,23 +788,42 @@ export function derivePapernexusProgressSnapshot(params: {
           paperIngestionRecord.graphPresenceStatus
       ) ?? null,
   };
+  const remoteTask = buildRemoteTaskSnapshot({
+    state,
+    previous: params.previous ?? null,
+  });
+  const queueProgress = buildQueueProgressSnapshot({
+    state,
+    batch,
+    previous: params.previous ?? null,
+  });
   const completedRatio =
-    batch.total_items && batch.total_items > 0
-      ? Number((batch.synced_items / batch.total_items).toFixed(4))
-      : phase === "ready"
-        ? 1
-        : phase === "failed" || phase === "needs_repair"
-          ? 0
-          : null;
+    remoteTask?.percent != null
+      ? Number((remoteTask.percent / 100).toFixed(4))
+      : queueProgress?.overall_percent != null
+        ? Number((queueProgress.overall_percent / 100).toFixed(4))
+        : batch.total_items && batch.total_items > 0
+          ? Number((batch.synced_items / batch.total_items).toFixed(4))
+          : phase === "ready"
+            ? 1
+            : phase === "failed" || phase === "needs_repair"
+              ? 0
+              : null;
   const progress: PapernexusProgressCounters = {
     completed_ratio: completedRatio,
     percent:
-      completedRatio === null ? null : Math.max(0, Math.min(100, Math.round(completedRatio * 100))),
+      remoteTask?.percent ??
+      queueProgress?.overall_percent ??
+      (completedRatio === null
+        ? null
+        : Math.max(0, Math.min(100, Math.round(completedRatio * 100)))),
     eta_hint: buildEtaHint({
       phase,
       batch,
       graphCheck,
       importTaskCount: state.importTaskIds.length,
+      remoteTask,
+      queueProgress,
     }),
   };
   return {
@@ -619,6 +832,8 @@ export function derivePapernexusProgressSnapshot(params: {
     owner_run: ownerRun,
     batch,
     graph_check: graphCheck,
+    remote_task: remoteTask,
+    queue_progress: queueProgress,
     progress,
     next_action:
       params.nextActionOverride ??
@@ -695,14 +910,26 @@ export function summarizePapernexusProgress(
   const expected = progress.graph_check.expected_papers;
   const present = progress.graph_check.present_papers;
   const progressText =
-    total !== null && total > 0
-      ? `${synced}/${total} synced`
-      : progress.progress.percent !== null
-        ? `${progress.progress.percent}%`
+    progress.remote_task?.percent != null
+      ? `${progress.progress.percent}%`
+      : total !== null && total > 0
+        ? `${synced}/${total} synced`
+        : progress.queue_progress?.overall_percent != null
+          ? `${progress.queue_progress.overall_percent}%`
         : progress.progress.eta_hint ?? "unknown";
   const graphText =
     expected !== null && expected > 0
       ? `${present ?? 0}/${expected} present`
       : progress.graph_check.status ?? "unknown";
-  return `phase=${progress.phase}, progress=${progressText}, graph=${graphText}, next=${progress.next_action ?? "wait"}`;
+  const extra: string[] = [];
+  if (progress.remote_task?.current_step) {
+    extra.push(`step=${progress.remote_task.current_step}`);
+  }
+  if (progress.remote_task?.queue_position != null) {
+    extra.push(`queue=${progress.remote_task.queue_position}`);
+  }
+  if (progress.queue_progress?.remaining != null) {
+    extra.push(`remaining=${progress.queue_progress.remaining}`);
+  }
+  return `phase=${progress.phase}, progress=${progressText}, graph=${graphText}${extra.length > 0 ? `, ${extra.join(", ")}` : ""}, next=${progress.next_action ?? "wait"}`;
 }

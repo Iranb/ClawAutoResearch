@@ -120,6 +120,89 @@ test("workflow snapshot suppresses local PaperNexus defaults when remote access 
   assert.equal(snapshot.papernexusApiBaseUrl, "https://papernexus.example/api");
 });
 
+test("legacy subagent-scoped channel bindings still resolve against the root workflow channel", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "legacy-track");
+  const rootSessionKey = "agent:researcher:discord:group:paper-lab";
+  const subagentSessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:task:legacy-track";
+  const storePath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "channel-project-bindings.json"
+  );
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-08T00:00:00.000Z",
+        bindings: [
+          {
+            channelKey: "discord:group:paper-lab:subagent:papernexus-skill:task:legacy-track",
+            projectRoot,
+            projectId: "legacy-track",
+            messageChannel: "discord",
+            sessionKeySample: subagentSessionKey,
+            sessionId: "session-legacy-track",
+            boundAt: "2026-04-08T00:00:00.000Z",
+            updatedAt: "2026-04-08T00:00:00.000Z",
+            boundByAgent: "researcher",
+            workflowRole: "researcher",
+            workflowSessionKey: subagentSessionKey,
+            workflowSessionId: "session-legacy-track",
+            parentWorkflowSessionKey: rootSessionKey,
+            threadBindingKey: rootSessionKey,
+            depth: 1,
+            lineageKey: `legacy-track:researcher:${rootSessionKey}:${subagentSessionKey}`,
+            workflowBindingMode: "derived_thread",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const rootSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey: rootSessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(rootSnapshot.projectRoot, projectRoot);
+  assert.equal(rootSnapshot.projectResolutionSource, "channel_binding");
+  assert.equal(rootSnapshot.channelProjectBindingKey, "discord:group:paper-lab");
+
+  const subagentSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey: subagentSessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(subagentSnapshot.projectRoot, projectRoot);
+  assert.equal(subagentSnapshot.projectResolutionSource, "channel_binding");
+  assert.equal(subagentSnapshot.channelProjectBindingKey, "discord:group:paper-lab");
+});
+
 test("research memory paths follow the current channel binding", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "vision-track");

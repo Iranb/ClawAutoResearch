@@ -1071,6 +1071,25 @@ export type PaperIngestionBatchRun = {
   detail: string | null;
 };
 
+export type PaperIngestionRemoteTaskProgress = {
+  percent: number | null;
+  stagePercent: number | null;
+  queuePosition: number | null;
+  currentStep: string | null;
+  processedUnits: number | null;
+  totalUnits: number | null;
+};
+
+export type PaperIngestionQueueProgress = {
+  total: number | null;
+  pending: number | null;
+  running: number | null;
+  completed: number | null;
+  failed: number | null;
+  remaining: number | null;
+  overallPercent: number | null;
+};
+
 export type PaperIngestionBatchItem = {
   manifestPath: string | null;
   paperId: string | null;
@@ -1105,6 +1124,8 @@ export type PaperIngestionQueuedRequest = {
   lastError: string | null;
   detail: string | null;
   triggerKind: string | null;
+  progress: PaperIngestionRemoteTaskProgress | null;
+  queueProgress: PaperIngestionQueueProgress | null;
 };
 
 type PaperQcState = {

@@ -15,9 +15,11 @@
     "ICCV",
     "ECCV",
     "NeurIPS",
+    "ICML",
     "ICLR",
     "TPAMI",
-    "arXiv"
+    "arXiv",
+    "AAAI", "ACL"
   ],
   "max_papers_per_cycle": 8,
   "cooldown_minutes": 20,

@@ -136,6 +136,8 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
   });
 
   assert.equal(launch.started, true);
+  assert.match(launch.sessionKey ?? "", /^agent:researcher:discord:group:paper-room:subagent:papernexus-skill:/);
+  assert.doesNotMatch(launch.sessionKey ?? "", /:paper-sync-project\b/);
   const projectRoot = path.join(projectsRoot, "paper-sync-project");
   await setPaperIngestionState({
     projectRoot,

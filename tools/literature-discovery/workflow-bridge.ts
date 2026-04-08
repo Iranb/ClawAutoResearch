@@ -7,6 +7,7 @@ import {
   normalizePaperIngestionState,
   serializePaperIngestionState,
 } from "../workflow-guard-state/paper-ingestion";
+import { resolveWorkflowSharedPapernexusCorpus } from "../papernexus-shared-corpus";
 
 function sanitizeIdFragment(value: string | null | undefined): string {
   const normalized = String(value ?? "")
@@ -241,11 +242,17 @@ export async function queueLiteratureDiscoveryRequisition(params: {
     (await readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, "graph/PAPERNEXUS_STATUS.json") ?? ""
     )) ?? null;
-  const sharedCorpus =
-    params.sharedCorpus ??
-    pickString(graphStatus ?? {}, ["corpus_name", "corpusName"]) ??
-    paperIngestion.repairTargetCorpus ??
-    null;
+  const projectId =
+    pickString(manifest, ["project_id", "projectId"]) ?? path.basename(projectRoot);
+  const sharedCorpus = resolveWorkflowSharedPapernexusCorpus({
+    candidates: [
+      params.sharedCorpus,
+      pickString(graphStatus ?? {}, ["corpus_name", "corpusName"]),
+      paperIngestion.repairTargetCorpus,
+    ],
+    projectId,
+    projectRoot,
+  });
   const batchManifestRelativePath = path.join(
     "researcher",
     "literature-discovery",

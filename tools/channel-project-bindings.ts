@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
   buildWorkflowRuntimeSessionBinding,
+  normalizeWorkflowSubagentParentSessionKey,
   type WorkflowRuntimeSessionBinding,
 } from "./workflow-subagent-sessions";
 import {
@@ -106,8 +107,19 @@ function normalizeChannelKey(value: string | null): string | null {
   return value ? value.trim().toLowerCase() : null;
 }
 
+function normalizeBindingChannelKey(value: string | null): string | null {
+  const normalized = normalizeChannelKey(value);
+  if (!normalized) {
+    return null;
+  }
+  const subagentMarker = normalized.indexOf(":subagent:");
+  return subagentMarker > 0 ? normalized.slice(0, subagentMarker) : normalized;
+}
+
 function sessionKeyToChannelKey(sessionKey: string | null): string | null {
-  const normalized = normalizeChannelKey(sessionKey);
+  const normalized = normalizeChannelKey(
+    normalizeWorkflowSubagentParentSessionKey(sessionKey) ?? sessionKey
+  );
   if (!normalized) {
     return null;
   }
@@ -171,7 +183,7 @@ async function listCandidateProjectBindingStorePaths(
 }
 
 function normalizeRecord(record: Partial<ChannelProjectBindingRecord>): ChannelProjectBindingRecord | null {
-  const channelKey = normalizeChannelKey(asString(record.channelKey) ?? null);
+  const channelKey = normalizeBindingChannelKey(asString(record.channelKey) ?? null);
   const projectRoot = asString(record.projectRoot);
   if (!channelKey || !projectRoot) {
     return null;
@@ -270,7 +282,7 @@ export function resolveChannelProjectKey(
   if (!context) {
     return null;
   }
-  const explicit = normalizeChannelKey(asString(context.channelKey) ?? null);
+  const explicit = normalizeBindingChannelKey(asString(context.channelKey) ?? null);
   if (explicit) {
     return explicit;
   }

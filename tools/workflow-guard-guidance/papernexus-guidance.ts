@@ -28,6 +28,9 @@ export function buildPapernexusGuidance(
     prepend.push(
       `Paper ingestion is waiting on remote import completion${paperIngestionState.waitingReason ? `: ${paperIngestionState.waitingReason}` : "."} Continue only bounded non-novelty work until the import tasks finish.`
     );
+    prepend.push(
+      "Upload-progress rule: never guess PaperNexus status from elapsed time. Poll `import_workflow` status/wait (or `pn_import_queue.py status` / `pn_batch_import.py status` in compatibility mode), then persist the returned `progress` and `queue_progress` fields through `research_workflow.set_paper_ingestion` so `PAPERNEXUS_PROGRESS.json` stays truthful."
+    );
   }
   if (params.role === "researcher" && paperIngestionState.runtimeStatus === "waiting_graph") {
     prepend.push(

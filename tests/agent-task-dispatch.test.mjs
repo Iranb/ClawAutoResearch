@@ -219,11 +219,13 @@ test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for Paper
     result.sessionKey ?? "",
     /^agent:analyzer:discord:group:paper-lab:subagent:papernexus-skill:/
   );
+  assert.doesNotMatch(result.sessionKey ?? "", /:demo-project\b/);
   assert.equal(calls.length, 1);
   assert.match(
     calls[0].sessionKey,
     /^agent:analyzer:discord:group:paper-lab:subagent:papernexus-skill:/
   );
+  assert.doesNotMatch(calls[0].sessionKey, /:demo-project\b/);
 });
 
 test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as heavy work", async () => {
@@ -252,11 +254,13 @@ test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as 
     result.sessionKey ?? "",
     /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:brainstorm-brief/
   );
+  assert.doesNotMatch(result.sessionKey ?? "", /:demo-project\b/);
   assert.equal(calls.length, 1);
   assert.match(
     calls[0].sessionKey,
     /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:brainstorm-brief/
   );
+  assert.doesNotMatch(calls[0].sessionKey, /:demo-project\b/);
 });
 
 test("dispatchWorkflowTaskToAgent treats wrapper-based PaperNexus chains as heavy work", async () => {
@@ -285,5 +289,7 @@ test("dispatchWorkflowTaskToAgent treats wrapper-based PaperNexus chains as heav
     result.sessionKey ?? "",
     /^agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:evidence-chain/
   );
+  assert.doesNotMatch(result.sessionKey ?? "", /:demo-project\b/);
   assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].sessionKey, /:demo-project\b/);
 });

@@ -82,6 +82,8 @@ type ProjectsStateLike = {
   projects?: unknown[];
 };
 
+const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
+
 type AutoIteratorDeps = {
   normalizePolicy: (value: Record<string, unknown> | undefined) => WorkflowGuardPolicy;
   loadExperimentLedgerIfExists: (
@@ -105,6 +107,9 @@ type AutoIteratorDeps = {
     updateManifest: boolean;
     remoteAccess: {
       apiBaseUrl?: string;
+      mcpUrl?: string;
+      mcpTransport?: string;
+      mcpTimeoutMs?: number;
       tokenSource?: string;
       tokenEnv?: string;
       tokenService?: string;
@@ -256,6 +261,45 @@ type AutoIteratorDeps = {
 
 const MAX_REGRESSION_DEPTH = 3;
 
+function readIsoTimestamp(value: unknown): number | null {
+  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function shouldRefreshGraphPresenceDuringAutoIterator(params: {
+  manifest: ManifestLike;
+  stage: string;
+  nowIso: string;
+}): boolean {
+  if (!["graph_build", "frontier_mapping", "idea"].includes(params.stage)) {
+    return false;
+  }
+  const paperIngestion = asRecord(params.manifest.paper_ingestion);
+  const graphPresenceStatus = normalizeGraphPresenceStatus(
+    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
+  );
+  const refreshRequired =
+    paperIngestion?.refresh_required === true || paperIngestion?.refreshRequired === true;
+  const checkedAtMs = readIsoTimestamp(
+    pickString(paperIngestion ?? {}, [
+      "graph_presence_checked_at",
+      "graphPresenceCheckedAt",
+    ])
+  );
+  const nowMs = readIsoTimestamp(params.nowIso) ?? Date.now();
+  const recentlyChecked =
+    checkedAtMs !== null &&
+    nowMs - checkedAtMs < AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS;
+
+  if (graphPresenceStatus === "ready" && !refreshRequired) {
+    return false;
+  }
+  if (recentlyChecked && !refreshRequired) {
+    return false;
+  }
+  return graphPresenceStatus !== "ready" || refreshRequired || checkedAtMs === null;
+}
+
 export async function runWorkflowAutoIteratorImpl(
   params: {
     projectRoot: string;
@@ -335,12 +379,21 @@ export async function runWorkflowAutoIteratorImpl(
   }
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
-  if (["graph_build", "frontier_mapping", "idea"].includes(stageBefore)) {
+  if (
+    shouldRefreshGraphPresenceDuringAutoIterator({
+      manifest,
+      stage: stageBefore,
+      nowIso: now,
+    })
+  ) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
       projectRoot,
       updateManifest: true,
       remoteAccess: {
         apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+        mcpUrl: workflowPolicy.papernexusMcpUrl,
+        mcpTransport: workflowPolicy.papernexusMcpTransport,
+        mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
         tokenSource: workflowPolicy.papernexusApiTokenSource,
         tokenEnv: workflowPolicy.papernexusApiTokenEnv,
         tokenService: workflowPolicy.papernexusApiTokenService,

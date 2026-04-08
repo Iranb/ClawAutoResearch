@@ -562,6 +562,100 @@ test("research_workflow get_papernexus_progress returns raw progress JSON and a 
   assert.match(progress.summary, /graph=2\/4 present/i);
 });
 
+test("research_workflow get_papernexus_progress prefers remote queue snapshots over guessed local timing", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    next_action: "Poll the remote import queue until the batch completes.",
+    blocking_reason: "Batch import is still materializing markdown.",
+    idle_research: { enabled: false },
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Remote queue is still materializing markdown.",
+      graph_presence_status: "missing_papers",
+      graph_presence_checked_at: "2026-04-08T09:00:00.000Z",
+      graph_presence_expected_papers: 4,
+      graph_presence_present_papers: 1,
+      graph_presence_missing_papers: [
+        { canonical_id: "paper-2", title: "Paper 2" },
+        { canonical_id: "paper-3", title: "Paper 3" },
+        { canonical_id: "paper-4", title: "Paper 4" },
+      ],
+      active_batches: [
+        {
+          manifest_path: "graph/batch-import.json",
+          status: "running",
+          total: 4,
+          running: 1,
+          pending: 2,
+          completed: 1,
+          failed: 0,
+          submit_failed: 0,
+        },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-progress-remote-1",
+          wrapper: "pn_batch_import.py",
+          command_text: "python3 scripts/pn_batch_import.py --manifest graph/batch-import.json status",
+          status: "running",
+          updated_at: "2026-04-08T09:05:00.000Z",
+          progress: {
+            percent: 68,
+            stage_percent: 35,
+            queue_position: 2,
+            current_step: "llm-optimize",
+            processed_units: 17,
+            total_units: 25,
+          },
+          queue_progress: {
+            total: 4,
+            pending: 2,
+            running: 1,
+            completed: 1,
+            failed: 0,
+            remaining: 3,
+            overall_percent: 68,
+          },
+        },
+      ],
+    },
+  });
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const progress = await executeWorkflowTool(tool, {
+    action: "get_papernexus_progress",
+  });
+
+  assert.equal(progress.progress.phase, "waiting_import");
+  assert.equal(progress.progress.queue_progress.overall_percent, 68);
+  assert.equal(progress.progress.queue_progress.remaining, 3);
+  assert.equal(progress.progress.remote_task.percent, 68);
+  assert.equal(progress.progress.remote_task.stage_percent, 35);
+  assert.equal(progress.progress.remote_task.queue_position, 2);
+  assert.equal(progress.progress.remote_task.current_step, "llm-optimize");
+  assert.equal(progress.progress.remote_task.processed_units, 17);
+  assert.equal(progress.progress.remote_task.total_units, 25);
+  assert.equal(progress.progress.progress.percent, 68);
+  assert.match(progress.summary, /68%/i);
+  assert.match(progress.summary, /llm-optimize/i);
+  assert.match(progress.summary, /queue=2/i);
+});
+
 test("research_workflow queue_literature_discovery_requisition bridges a structured discovery packet into durable paper_ingestion queued requests", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

@@ -11,8 +11,10 @@ import type {
   PaperIngestionBatchItem,
   PaperIngestionBatchRun,
   PaperIngestionCompletedPaper,
+  PaperIngestionQueueProgress,
   PaperIngestionPaperOperation,
   PaperIngestionQueuedRequest,
+  PaperIngestionRemoteTaskProgress,
   PaperIngestionState,
 } from "../workflow-guard.js";
 
@@ -29,6 +31,152 @@ export function normalizePaperIngestionRuntimeStatus(value: unknown): string {
     default:
       return "idle";
   }
+}
+
+function normalizeOptionalCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : null;
+}
+
+function normalizeOptionalPercent(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(100, Math.round(value)))
+    : null;
+}
+
+function normalizePaperIngestionRemoteTaskProgress(
+  value: unknown
+): PaperIngestionRemoteTaskProgress | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const normalized: PaperIngestionRemoteTaskProgress = {
+    percent: normalizeOptionalPercent(record.percent),
+    stagePercent: normalizeOptionalPercent(
+      record.stagePercent ?? record.stage_percent
+    ),
+    queuePosition: normalizeOptionalCount(
+      record.queuePosition ?? record.queue_position
+    ),
+    currentStep: pickString(record, ["currentStep", "current_step"]),
+    processedUnits: normalizeOptionalCount(
+      record.processedUnits ?? record.processed_units
+    ),
+    totalUnits: normalizeOptionalCount(record.totalUnits ?? record.total_units),
+  };
+  return normalized.percent !== null ||
+    normalized.stagePercent !== null ||
+    normalized.queuePosition !== null ||
+    normalized.currentStep !== null ||
+    normalized.processedUnits !== null ||
+    normalized.totalUnits !== null
+    ? normalized
+    : null;
+}
+
+function serializePaperIngestionRemoteTaskProgress(
+  value: PaperIngestionRemoteTaskProgress | null
+): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  return {
+    percent: value.percent,
+    stage_percent: value.stagePercent,
+    queue_position: value.queuePosition,
+    current_step: value.currentStep,
+    processed_units: value.processedUnits,
+    total_units: value.totalUnits,
+  };
+}
+
+function mergePaperIngestionRemoteTaskProgress(
+  current: PaperIngestionRemoteTaskProgress | null,
+  patch: PaperIngestionRemoteTaskProgress | null
+): PaperIngestionRemoteTaskProgress | null {
+  if (!current) {
+    return patch;
+  }
+  if (!patch) {
+    return current;
+  }
+  return {
+    percent: patch.percent ?? current.percent,
+    stagePercent: patch.stagePercent ?? current.stagePercent,
+    queuePosition: patch.queuePosition ?? current.queuePosition,
+    currentStep: patch.currentStep ?? current.currentStep,
+    processedUnits: patch.processedUnits ?? current.processedUnits,
+    totalUnits: patch.totalUnits ?? current.totalUnits,
+  };
+}
+
+function normalizePaperIngestionQueueProgress(
+  value: unknown
+): PaperIngestionQueueProgress | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const normalized: PaperIngestionQueueProgress = {
+    total: normalizeOptionalCount(record.total),
+    pending: normalizeOptionalCount(record.pending),
+    running: normalizeOptionalCount(record.running),
+    completed: normalizeOptionalCount(record.completed),
+    failed: normalizeOptionalCount(record.failed),
+    remaining: normalizeOptionalCount(record.remaining),
+    overallPercent: normalizeOptionalPercent(
+      record.overallPercent ?? record.overall_percent
+    ),
+  };
+  return normalized.total !== null ||
+    normalized.pending !== null ||
+    normalized.running !== null ||
+    normalized.completed !== null ||
+    normalized.failed !== null ||
+    normalized.remaining !== null ||
+    normalized.overallPercent !== null
+    ? normalized
+    : null;
+}
+
+function serializePaperIngestionQueueProgress(
+  value: PaperIngestionQueueProgress | null
+): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  return {
+    total: value.total,
+    pending: value.pending,
+    running: value.running,
+    completed: value.completed,
+    failed: value.failed,
+    remaining: value.remaining,
+    overall_percent: value.overallPercent,
+  };
+}
+
+function mergePaperIngestionQueueProgress(
+  current: PaperIngestionQueueProgress | null,
+  patch: PaperIngestionQueueProgress | null
+): PaperIngestionQueueProgress | null {
+  if (!current) {
+    return patch;
+  }
+  if (!patch) {
+    return current;
+  }
+  return {
+    total: patch.total ?? current.total,
+    pending: patch.pending ?? current.pending,
+    running: patch.running ?? current.running,
+    completed: patch.completed ?? current.completed,
+    failed: patch.failed ?? current.failed,
+    remaining: patch.remaining ?? current.remaining,
+    overallPercent: patch.overallPercent ?? current.overallPercent,
+  };
 }
 
 function normalizePaperIngestionOperationPhase(
@@ -439,9 +587,7 @@ function normalizePaperIngestionBatchRun(
     return null;
   }
   const normalizeCount = (count: number | null) =>
-    typeof count === "number" && Number.isFinite(count)
-      ? Math.max(0, Math.floor(count))
-      : null;
+    normalizeOptionalCount(count);
   return {
     manifestPath,
     status: normalizePaperIngestionBatchStatus(record.status),
@@ -621,13 +767,19 @@ export function normalizePaperIngestionQueuedRequest(
   const status = normalizePaperIngestionQueuedRequestStatus(record.status);
   const detail = pickString(record, ["detail"]);
   const triggerKind = pickString(record, ["triggerKind", "trigger_kind"]);
+  const progress = normalizePaperIngestionRemoteTaskProgress(record.progress);
+  const queueProgress = normalizePaperIngestionQueueProgress(
+    record.queueProgress ?? record.queue_progress
+  );
   const argsRaw = record.args;
   const args = Array.isArray(argsRaw)
     ? argsRaw
         .map((item) => asString(item))
         .filter((item): item is string => Boolean(item))
     : [];
-  const hasSparsePatchPayload = Boolean(detail || triggerKind || record.status != null);
+  const hasSparsePatchPayload = Boolean(
+    detail || triggerKind || record.status != null || progress || queueProgress
+  );
   if (
     !requestId ||
     (!wrapper && !commandText && !manifestPath && !summary && !hasSparsePatchPayload)
@@ -656,6 +808,8 @@ export function normalizePaperIngestionQueuedRequest(
     lastError: pickString(record, ["lastError", "last_error"]),
     detail,
     triggerKind,
+    progress,
+    queueProgress,
   };
 }
 
@@ -708,6 +862,8 @@ export function serializePaperIngestionQueuedRequest(
     last_error: value.lastError,
     detail: value.detail,
     trigger_kind: value.triggerKind,
+    progress: serializePaperIngestionRemoteTaskProgress(value.progress),
+    queue_progress: serializePaperIngestionQueueProgress(value.queueProgress),
   };
 }
 
@@ -734,6 +890,14 @@ function mergePaperIngestionQueuedRequestValues(
     lastError: patch.lastError ?? current.lastError,
     detail: patch.detail ?? current.detail,
     triggerKind: patch.triggerKind ?? current.triggerKind,
+    progress: mergePaperIngestionRemoteTaskProgress(
+      current.progress,
+      patch.progress
+    ),
+    queueProgress: mergePaperIngestionQueueProgress(
+      current.queueProgress,
+      patch.queueProgress
+    ),
   };
 }
 

@@ -107,3 +107,37 @@ Output:
 - Experiment memory: [updated / not applicable]
 Next heartbeat: follow the configured cadence in `openclaw.json`.
 ```
+
+## Step 7: Dispatch Recommended Action (autoMode only)
+
+Read `autoMode` from `PROJECT_MANIFEST.json` (via `normalizeWorkflowAutoMode()`).
+If `autoMode` is `"off"`, skip this step entirely.
+
+1. Read the `recommendedActions` array from Step 0's auto-iterator result.
+2. Inspect `recommendedActions[0]`:
+   - If `kind === "drive_stage"`:
+     - Call `research_workflow.handoff_workflow_task` with:
+       - `toRole`: the action's `owner` field (e.g. `"researcher"`, `"orchestrator"`, `"coder"`)
+       - `summary`: the action's `summary` field
+       - `command`: the action's `command` field
+       - `stage`: the action's `stage` field
+     - This invokes `handoffWorkflowTaskToAgent()` which tries the Lobster pipeline first (`lobster/workflows/workflow-agent-dispatch.lobster`), then falls back to native `dispatchWorkflowTaskToAgent()` if Lobster is unavailable.
+     - Log the dispatch result to the daily log (Step 2 format).
+   - If `kind === "wait_human"`:
+     - Do NOT dispatch. The gate requires human confirmation.
+     - Ensure the blocking reason is visible in `{PROJ}/orchestrator/TODOS.md` (Step 1 should already cover this).
+   - If `kind === "background"`:
+     - These are non-blocking background tasks (e.g., PaperNexus graph sync, idle research).
+     - If `autoMode === "aggressive"`, dispatch background actions to the `researcher` role.
+     - If `autoMode === "conservative"`, log the background action to TODOS.md but do not dispatch.
+   - If `kind === "switch_project"`:
+     - Log the project switch recommendation to TODOS.md.
+     - Do NOT auto-switch; the user must confirm project changes.
+3. If dispatch was attempted, output:
+   ```
+   ## Auto-Dispatch — HH:MM
+   - Action: [drive_stage / background]
+   - Target: [role] @ [stage]
+   - Backend: [lobster / native / skipped]
+   - Result: [dispatched / fallback / error]
+   ```

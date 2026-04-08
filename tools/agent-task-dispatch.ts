@@ -373,10 +373,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
             targetRole: params.toRole,
           }),
           purpose: "papernexus-skill",
-          segments: [
-            derivePapernexusTaskLabel(params.command ?? params.summary),
-            params.projectId,
-          ],
+          segments: [derivePapernexusTaskLabel(params.command ?? params.summary)],
         })
       : null;
   const candidates =

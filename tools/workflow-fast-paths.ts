@@ -2714,7 +2714,7 @@ export async function startBackgroundWorkflowRun(params: {
       segments:
         isPapernexusBackgroundKind(normalizedKind) &&
         looksLikePapernexusHeavyCommand(commandText)
-          ? [derivePapernexusTaskLabel(commandText), resolvedProjectId]
+          ? [derivePapernexusTaskLabel(commandText)]
           : [resolvedProjectId, topic],
     }) ?? params.agentCtx.sessionKey;
   const continuationSystemPrompt = buildBackgroundWorkflowContinuationSystemPrompt({
