@@ -113,6 +113,44 @@ test("non-workflow agents do not inherit project workflow bindings from the shar
   assert.equal(snapshot.projectResolutionSource, "none");
 });
 
+test("workflow snapshot does not inherit channel project bindings when agent identity is missing", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "missing-agent-track");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+
+  assert.equal(snapshot.projectRoot, null);
+  assert.equal(snapshot.projectId, null);
+  assert.equal(snapshot.projectResolutionSource, "none");
+});
+
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");

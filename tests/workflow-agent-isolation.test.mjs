@@ -35,6 +35,35 @@ test("workflow isolation defaults only expose bindings to project workflow agent
     }),
     false
   );
+  assert.equal(
+    isWorkflowBindingVisibleToAgent({
+      binding,
+      agentId: "worker",
+    }),
+    false
+  );
+  assert.equal(
+    isWorkflowBindingVisibleToAgent({
+      binding,
+      agentId: "unknown",
+    }),
+    false
+  );
+  assert.equal(
+    isWorkflowBindingVisibleToAgent({
+      binding,
+      agentId: null,
+    }),
+    false
+  );
+  assert.equal(
+    isWorkflowBindingVisibleToAgent({
+      binding,
+      agentId: null,
+      sessionKey: "agent:researcher:discord:group:paper-lab",
+    }),
+    true
+  );
 });
 
 test("resolveWorkflowBroadcastSessionKey prefers workflow-owned session over generic sample", () => {

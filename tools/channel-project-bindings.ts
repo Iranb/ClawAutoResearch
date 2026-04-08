@@ -517,6 +517,7 @@ export function resolveProjectContext(params: {
       isWorkflowBindingVisibleToAgent({
         binding: bindingLookup.binding,
         agentId: asString(params.context?.role),
+        sessionKey: asString(params.context?.sessionKey),
       })
     ) {
       return {

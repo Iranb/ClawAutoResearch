@@ -106,6 +106,7 @@ export function isProjectWorkflowAgentId(
 export function isWorkflowBindingVisibleToAgent(params: {
   binding: WorkflowBindingIsolationShape | null | undefined;
   agentId?: string | null;
+  sessionKey?: string | null;
 }): boolean {
   if (!params.binding) {
     return false;
@@ -114,9 +115,11 @@ export function isWorkflowBindingVisibleToAgent(params: {
   if (mode === "channel_shared") {
     return true;
   }
-  const normalizedAgentId = normalizeWorkflowActorId(params.agentId);
+  const normalizedAgentId =
+    normalizeWorkflowActorId(params.agentId) ??
+    extractAgentIdFromSessionKey(params.sessionKey);
   if (!normalizedAgentId) {
-    return true;
+    return false;
   }
   return isProjectWorkflowAgentId(
     normalizedAgentId,
