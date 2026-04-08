@@ -231,6 +231,99 @@ export function shouldRouteIdeaCatalystToGraphBuild(params: {
   });
 }
 
+function normalizeIdeaCatalystRequisitionStatus(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return pickString(record, ["status", "requisition_status", "requisitionStatus"])
+    ?.trim()
+    .toLowerCase() ?? null;
+}
+
+export function isTerminalIdeaCatalystRequisitionStatus(value: unknown): boolean {
+  const status = normalizeIdeaCatalystRequisitionStatus(value);
+  return ["satisfied", "completed", "not_required", "not-required"].includes(
+    status ?? ""
+  );
+}
+
+export async function reconcileSatisfiedIdeaCatalystRequisition(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+}): Promise<{
+  updated: boolean;
+  manifest: Record<string, unknown>;
+  state: ReturnType<typeof normalizeIdeaCatalystState>;
+  requisitionStatus: string | null;
+}> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const manifestPath =
+    resolveProjectArtifactPath(projectRoot, "PROJECT_MANIFEST.json") ??
+    path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = params.manifest;
+  const current = normalizeIdeaCatalystState(manifest.idea_catalyst);
+  if (!current.requisitionRequired && current.status !== "requisition") {
+    return {
+      updated: false,
+      manifest,
+      state: current,
+      requisitionStatus: null,
+    };
+  }
+
+  const paperIngestion = normalizePaperIngestionState(manifest.paper_ingestion);
+  if (
+    hasActiveIdeaCatalystRequisitionRequest({
+      ideaCatalyst: current,
+      paperIngestion,
+    })
+  ) {
+    return {
+      updated: false,
+      manifest,
+      state: current,
+      requisitionStatus: null,
+    };
+  }
+
+  const requisitionPath = resolveProjectArtifactPath(
+    projectRoot,
+    current.investigationRequisitionPath
+  );
+  const requisition =
+    requisitionPath
+      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
+      : null;
+  const requisitionStatus = normalizeIdeaCatalystRequisitionStatus(requisition);
+  if (!isTerminalIdeaCatalystRequisitionStatus(requisition)) {
+    return {
+      updated: false,
+      manifest,
+      state: current,
+      requisitionStatus,
+    };
+  }
+
+  const next = normalizeIdeaCatalystState({
+    ...serializeIdeaCatalystState(current),
+    status: "pending",
+    micro_stage: "gatekeeping",
+    requisition_required: false,
+    requisition_saturated: false,
+    pending_reason: null,
+    last_updated_at: new Date().toISOString(),
+  });
+  manifest.idea_catalyst = serializeIdeaCatalystState(next);
+  await writeJsonEnsured(manifestPath, manifest);
+  return {
+    updated: true,
+    manifest,
+    state: next,
+    requisitionStatus,
+  };
+}
+
 export async function queueIdeaCatalystRequisition(params: {
   projectRoot: string;
   trigger?: string | null;

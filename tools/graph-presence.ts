@@ -93,6 +93,14 @@ export type GraphPresenceCheckResult = {
   manifestUpdated: boolean;
 };
 
+type ResolvedExpectedPapers = {
+  papers: ExpectedPaper[];
+  paperSourceIndexPath: string | null;
+  usedPaperSourceIndex: boolean;
+  expectedPaperCountHint: number | null;
+  summaryOnly: boolean;
+};
+
 const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
   "papers",
   "entries",
@@ -169,6 +177,31 @@ function pickCount(
     if (typeof value === "number" && Number.isFinite(value)) {
       return Math.max(0, Math.floor(value));
     }
+  }
+  return null;
+}
+
+function resolvePaperSourceIndexCountHint(raw: unknown): number | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const sourceMode = pickString(record, ["source_mode", "sourceMode"])?.toLowerCase();
+  const graphMode = pickString(record, ["graph_mode", "graphMode"])?.toLowerCase();
+  const candidateCount =
+    pickCount(record, [
+      "graph_presence_expected",
+      "graphPresenceExpected",
+      "paper_count",
+      "paperCount",
+      "graph_presence_present",
+      "graphPresencePresent",
+    ]) ?? null;
+  if (!candidateCount || candidateCount <= 0) {
+    return null;
+  }
+  if (sourceMode === "remote_corpus" || graphMode === "remote_papernexus") {
+    return candidateCount;
   }
   return null;
 }
@@ -831,11 +864,7 @@ async function resolveExpectedPapers(params: {
   projectRoot: string;
   manifest: ManifestLike;
   projectId: string | null;
-}): Promise<{
-  papers: ExpectedPaper[];
-  paperSourceIndexPath: string | null;
-  usedPaperSourceIndex: boolean;
-}> {
+}): Promise<ResolvedExpectedPapers> {
   const paperSourceIndexPath = path.join(
     params.projectRoot,
     "researcher",
@@ -848,15 +877,27 @@ async function resolveExpectedPapers(params: {
       papers: indexedPapers,
       paperSourceIndexPath,
       usedPaperSourceIndex: true,
+      expectedPaperCountHint: indexedPapers.length,
+      summaryOnly: false,
     };
   }
+  const summaryCountHint = resolvePaperSourceIndexCountHint(paperSourceIndex);
   return {
     papers: [],
     paperSourceIndexPath: await pathExists(paperSourceIndexPath)
       ? paperSourceIndexPath
       : null,
-    usedPaperSourceIndex: false,
+    usedPaperSourceIndex: summaryCountHint !== null,
+    expectedPaperCountHint: summaryCountHint,
+    summaryOnly: summaryCountHint !== null,
   };
+}
+
+function resolveExpectedPaperCount(expected: ResolvedExpectedPapers): number {
+  if (expected.papers.length > 0) {
+    return expected.papers.length;
+  }
+  return Math.max(0, expected.expectedPaperCountHint ?? 0);
 }
 
 async function resolveCorpusRoot(params: {
@@ -1553,6 +1594,7 @@ function buildRemoteStatusRecordFromSources(params: {
   mode: "remote_api" | "remote_mcp";
   checkedAt: string;
   expectedPapers: ExpectedPaper[];
+  expectedPaperCountHint?: number | null;
   remoteEndpoint: string | null;
   preferredCorpusName: string | null;
   preferredCorpusRoot: string | null;
@@ -1567,6 +1609,23 @@ function buildRemoteStatusRecordFromSources(params: {
   const corpusEntries = sources.map((entry) => buildCorpusPaper(entry));
   const presentPapers: GraphPresenceMatch[] = [];
   const missingPapers: GraphPresenceMissingPaper[] = [];
+  const expectedPaperCount =
+    params.expectedPapers.length > 0
+      ? params.expectedPapers.length
+      : Math.max(0, params.expectedPaperCountHint ?? 0);
+  const summaryReportedPaperCount =
+    pickCount(meta, ["paperCount", "paper_count", "activePaperCount", "active_paper_count"]) ??
+    pickCount(manifest, [
+      "paperCount",
+      "paper_count",
+      "activePaperCount",
+      "active_paper_count",
+      "activeSourceCount",
+      "active_source_count",
+      "sourceCount",
+      "source_count",
+    ]) ??
+    sources.filter((entry) => entry.activeInGraph !== false).length;
 
   for (const paper of params.expectedPapers) {
     const match = matchExpectedPaper(paper, corpusEntries);
@@ -1577,10 +1636,17 @@ function buildRemoteStatusRecordFromSources(params: {
     }
   }
 
+  const summaryOnly = params.expectedPapers.length === 0 && expectedPaperCount > 0;
+  const presentPaperCount = summaryOnly
+    ? Math.min(summaryReportedPaperCount, expectedPaperCount)
+    : presentPapers.length;
+  const missingPaperCount = summaryOnly
+    ? Math.max(0, expectedPaperCount - presentPaperCount)
+    : missingPapers.length;
   const status: GraphPresenceStatus =
-    params.expectedPapers.length === 0
+    expectedPaperCount === 0
       ? "missing_sources"
-      : missingPapers.length > 0
+      : missingPaperCount > 0
         ? "missing_papers"
         : "ready";
 
@@ -1598,9 +1664,9 @@ function buildRemoteStatusRecordFromSources(params: {
       sanitizeCorpusRootValue(pickString(manifest, ["rootPath", "root_path"])) ??
       sanitizeCorpusRootValue(pickString(meta, ["rootPath", "root_path"])) ??
       params.preferredCorpusRoot,
-    expected_paper_count: params.expectedPapers.length,
-    present_paper_count: presentPapers.length,
-    missing_paper_count: missingPapers.length,
+    expected_paper_count: expectedPaperCount,
+    present_paper_count: presentPaperCount,
+    missing_paper_count: missingPaperCount,
     missing_papers: serializeMissingPapers(missingPapers),
     present_papers: serializePresentPapers(presentPapers),
     refresh_required: status !== "ready",
@@ -1610,7 +1676,7 @@ function buildRemoteStatusRecordFromSources(params: {
         : buildBlockingReason(
             "missing_papers",
             missingPapers,
-            params.expectedPapers.length,
+            expectedPaperCount,
             sanitizeCorpusRootValue(
               pickString(params.payload, ["rootPath", "root_path"])
             ) ??
@@ -1625,6 +1691,7 @@ async function refreshRemoteStatusRecord(params: {
   manifest: ManifestLike;
   checkedAt: string;
   expectedPapers: ExpectedPaper[];
+  expectedPaperCountHint?: number | null;
   remoteAccess: PapernexusRemoteAccessConfig;
   remoteInspection: Awaited<ReturnType<typeof inspectPapernexusRemoteAccess>>;
   cachedStatusRecord: Record<string, unknown> | null;
@@ -1663,6 +1730,7 @@ async function refreshRemoteStatusRecord(params: {
         mode: "remote_mcp",
         checkedAt: params.checkedAt,
         expectedPapers: params.expectedPapers,
+        expectedPaperCountHint: params.expectedPaperCountHint,
         remoteEndpoint,
         preferredCorpusName,
         preferredCorpusRoot,
@@ -1690,6 +1758,7 @@ async function refreshRemoteStatusRecord(params: {
         mode: "remote_api",
         checkedAt: params.checkedAt,
         expectedPapers: params.expectedPapers,
+        expectedPaperCountHint: params.expectedPaperCountHint,
         remoteEndpoint,
         preferredCorpusName,
         preferredCorpusRoot,
@@ -1715,11 +1784,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   projectId: string | null;
   checkedAt: string;
   reportPath: string;
-  expected: {
-    papers: ExpectedPaper[];
-    paperSourceIndexPath: string | null;
-    usedPaperSourceIndex: boolean;
-  };
+  expected: ResolvedExpectedPapers;
   remoteAccess: PapernexusRemoteAccessConfig;
   sharedCorpus: string | null;
 }): Promise<GraphPresenceCheckResult> {
@@ -1746,6 +1811,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         manifest: params.manifest,
         checkedAt: params.checkedAt,
         expectedPapers: params.expected.papers,
+        expectedPaperCountHint: params.expected.expectedPaperCountHint,
         remoteAccess: params.remoteAccess,
         remoteInspection,
         cachedStatusRecord,
@@ -1759,10 +1825,11 @@ async function checkGraphPresenceViaRemoteStatus(params: {
 
   let status: GraphPresenceStatus = "ready";
   let refreshReason: string | null = null;
-  let presentPaperCount = params.expected.papers.length;
+  const expectedPaperCount = resolveExpectedPaperCount(params.expected);
+  let presentPaperCount = expectedPaperCount;
   let missingPapers: GraphPresenceMissingPaper[] = [];
 
-  if (params.expected.papers.length === 0) {
+  if (expectedPaperCount === 0) {
     status = "missing_sources";
   } else if (!remoteInspection.tokenAvailable) {
     status = "missing_corpus";
@@ -1776,7 +1843,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     refreshReason = paperIngestionProgress.inFlight
       ? buildInFlightRemoteRefreshReason({
           remoteEndpoint,
-          expectedPaperCount: params.expected.papers.length,
+          expectedPaperCount,
           presentPaperCount: 0,
           paperIngestion: paperIngestionProgress,
         })
@@ -1788,7 +1855,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   } else {
     const statusExpectedCount =
       pickCount(statusRecord, ["expected_paper_count", "expectedPaperCount"]) ??
-      params.expected.papers.length;
+      expectedPaperCount;
     presentPaperCount =
       pickCount(statusRecord, ["present_paper_count", "presentPaperCount"]) ?? 0;
     missingPapers = mergeRemoteMissingPapers({
@@ -1802,19 +1869,19 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     const statusRefreshReason =
       pickString(statusRecord, ["refresh_reason", "refreshReason"]) ?? null;
 
-    if (statusExpectedCount !== params.expected.papers.length) {
+    if (statusExpectedCount !== expectedPaperCount) {
       status = "missing_corpus";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
             remoteEndpoint,
-            expectedPaperCount: params.expected.papers.length,
+            expectedPaperCount,
             presentPaperCount,
             paperIngestion: paperIngestionProgress,
           })
         : `Remote PaperNexus graph status is stale for ${remoteEndpoint ?? "the configured endpoint"}: ` +
-          `expected ${params.expected.papers.length} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
+          `expected ${expectedPaperCount} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
           "Rerun /graph-build to refresh readiness metadata and brainstorm grounding before frontier mapping or ideation.";
-      presentPaperCount = Math.min(presentPaperCount, params.expected.papers.length);
+      presentPaperCount = Math.min(presentPaperCount, expectedPaperCount);
     } else if (normalizedStatus === "missing_corpus") {
       status = "missing_corpus";
       refreshReason =
@@ -1822,19 +1889,19 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         buildBlockingReason(
           "missing_corpus",
           [],
-          params.expected.papers.length,
+          expectedPaperCount,
           remoteEndpoint
         );
     } else if (
       normalizedStatus === "missing_papers" ||
       missingPapers.length > 0 ||
-      presentPaperCount < params.expected.papers.length
+      presentPaperCount < expectedPaperCount
     ) {
       status = "missing_papers";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
             remoteEndpoint,
-            expectedPaperCount: params.expected.papers.length,
+            expectedPaperCount,
             presentPaperCount,
             paperIngestion: paperIngestionProgress,
           })
@@ -1842,12 +1909,12 @@ async function checkGraphPresenceViaRemoteStatus(params: {
           buildBlockingReason(
             "missing_papers",
             missingPapers,
-            params.expected.papers.length,
+            expectedPaperCount,
             remoteEndpoint
           );
     } else {
       status = "ready";
-      presentPaperCount = params.expected.papers.length;
+      presentPaperCount = expectedPaperCount;
       refreshReason = null;
     }
   }
@@ -1861,7 +1928,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   });
   const repairRequired = shouldRequireGraphImportRepair({
     status,
-    expectedPaperCount: params.expected.papers.length,
+    expectedPaperCount,
     presentPaperCount,
     paperIngestion: paperIngestionProgress,
     canRepair: remoteInspection.tokenAvailable,
@@ -1869,7 +1936,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const repairReason = repairRequired
     ? buildGraphImportRepairReason({
         corpusName: repairTargetCorpus,
-        expectedPaperCount: params.expected.papers.length,
+        expectedPaperCount,
         presentPaperCount,
         refreshReason,
       })
@@ -1884,7 +1951,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     reportPath: params.reportPath,
     paperSourceIndexPath: params.expected.paperSourceIndexPath,
     usedPaperSourceIndex: params.expected.usedPaperSourceIndex,
-    expectedPaperCount: params.expected.papers.length,
+    expectedPaperCount,
     presentPaperCount,
     missingPaperCount:
       status === "ready"
@@ -1893,7 +1960,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
             0,
             missingPapers.length > 0
               ? missingPapers.length
-              : params.expected.papers.length - presentPaperCount
+              : expectedPaperCount - presentPaperCount
           ),
     corpusRoot:
       sanitizeCorpusRootValue(

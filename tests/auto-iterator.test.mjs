@@ -2290,6 +2290,119 @@ test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps w
   assert.equal(report.missing_paper_count, 0);
 });
 
+test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDEX metadata when remote counts match", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    requests.push({
+      method: request.method,
+      pathname: url.pathname,
+      corpus: url.searchParams.get("name"),
+      authorization: request.headers.authorization ?? null,
+    });
+    const payload = {
+      rootPath: "/remote/corpora/GCD",
+      meta: {
+        name: "GCD",
+        rootPath: "/remote/corpora/GCD",
+        paperCount: 198,
+        sourceCount: 198,
+      },
+      manifest: {
+        corpusName: "GCD",
+        paperCount: 198,
+        activePaperCount: 198,
+        sourceCount: 198,
+        activeSourceCount: 198,
+      },
+      sources: [],
+      generatedAt: "2026-04-08T08:20:25.000Z",
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8");
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": encoded.length,
+    });
+    response.end(encoded);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
+
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "idea");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.papernexus_corpus = "GCD";
+  manifest.papernexus_root = "~/.papernexus/GCD/index";
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    corpus_name: "GCD",
+    corpus_root: "~/.papernexus/GCD/index",
+    indexed_at: "2026-04-08T08:12:47.092593Z",
+    paper_count: 198,
+    source_mode: "remote_corpus",
+    graph_mode: "remote_papernexus",
+    papers: [],
+    graph_presence_status: "ready",
+    graph_presence_expected: 198,
+    graph_presence_present: 198,
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: `http://127.0.0.1:${port}`,
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.expectedPaperCount, 198);
+  assert.equal(result.presentPaperCount, 198);
+  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.usedPaperSourceIndex, true);
+  assert.equal(result.corpusName, "GCD");
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0], {
+    method: "GET",
+    pathname: "/api/corpus-sources",
+    corpus: "GCD",
+    authorization: "Bearer test-token",
+  });
+
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(report.status, "ready");
+  assert.equal(report.expected_paper_count, 198);
+  assert.equal(report.present_paper_count, 198);
+
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.expected_paper_count, 198);
+  assert.equal(refreshedStatus.present_paper_count, 198);
+});
+
 test("graph presence check does not fall back to local corpus files when remote PaperNexus access is configured", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
