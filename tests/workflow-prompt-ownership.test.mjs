@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 
 import {
   formatWorkflowSnapshotForPrompt,
@@ -276,6 +278,27 @@ test("formatWorkflowSnapshotForPrompt teaches researcher MCP-first graph work wi
   assert.match(prompt, /research_lookup|research_briefing|idea_catalyst|import_workflow/i);
   assert.match(prompt, /pn_import_submit\.py/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
+});
+
+test("formatWorkflowSnapshotForPrompt renders local PaperNexus home paths with ~", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "graph_build",
+      currentMicroStage: "graph_refresh_requested",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      paperSourceDir: path.join(os.homedir(), ".papernexus", "papers"),
+      graphSourceDir: path.join(os.homedir(), ".papernexus", "index-store"),
+      defaultPapernexusSourceDir: path.join(os.homedir(), ".papernexus", "papers"),
+      defaultPapernexusIndexRoot: path.join(os.homedir(), ".papernexus", "index-store"),
+    },
+  });
+
+  assert.match(prompt, /PaperNexus: paper_source=~\/\.papernexus\/papers, graph_source=~\/\.papernexus\/index-store/);
+  assert.match(prompt, /PaperNexus local defaults: papers=~\/\.papernexus\/papers, index=~\/\.papernexus\/index-store/);
+  assert.doesNotMatch(prompt, new RegExp(`${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/\\.papernexus/`));
 });
 
 test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () => {

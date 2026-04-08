@@ -1,3 +1,4 @@
+import os from "node:os";
 import { normalizeStage } from "./workflow-guard-core/coercion";
 
 type SnapshotLike = Record<string, any>;
@@ -40,6 +41,22 @@ export function shouldApplySharedWritingConstitutionImpl(snapshot: SnapshotLike)
     stage === "write" ||
     stage === "review"
   );
+}
+
+function formatPromptPath(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return "unset";
+  }
+  const raw = value.trim();
+  const normalized = raw.replace(/\\/g, "/");
+  const home = os.homedir().replace(/\\/g, "/");
+  if (normalized === home) {
+    return "~";
+  }
+  if (normalized.startsWith(`${home}/`)) {
+    return `~/${normalized.slice(home.length + 1)}`;
+  }
+  return raw;
 }
 
 export function buildFocusedPromptAssemblyImpl(
@@ -448,7 +465,7 @@ export function formatWorkflowSnapshotForPromptImpl(
     snapshot.papernexusMineruHttpUrl
   ) {
     lines.push(
-      `PaperNexus: paper_source=${snapshot.paperSourceDir ?? "unset"}, graph_source=${snapshot.graphSourceDir ?? "unset"}, refresh_required=${snapshot.graphRefreshRequired ? "true" : "false"}`
+      `PaperNexus: paper_source=${formatPromptPath(snapshot.paperSourceDir)}, graph_source=${formatPromptPath(snapshot.graphSourceDir)}, refresh_required=${snapshot.graphRefreshRequired ? "true" : "false"}`
     );
     if (snapshot.papernexusProgressSummary) {
       lines.push(`PaperNexus progress: ${snapshot.papernexusProgressSummary}`);
@@ -552,7 +569,7 @@ export function formatWorkflowSnapshotForPromptImpl(
       }
     } else {
       lines.push(
-        `PaperNexus local defaults: papers=${snapshot.defaultPapernexusSourceDir ?? "unset"}, index=${snapshot.defaultPapernexusIndexRoot ?? "unset"}`
+        `PaperNexus local defaults: papers=${formatPromptPath(snapshot.defaultPapernexusSourceDir)}, index=${formatPromptPath(snapshot.defaultPapernexusIndexRoot)}`
       );
     }
   }
