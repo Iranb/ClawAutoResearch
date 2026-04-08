@@ -483,6 +483,144 @@ test("research_workflow get_snapshot reconciles finished uploads and refreshes g
   assert.equal(graphPresence.status, "ready");
 });
 
+test("research_workflow get_snapshot honors the plugin-configured shared corpus for remote graph refresh", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const corpusName = url.searchParams.get("name");
+    requests.push({
+      method: request.method,
+      url: request.url,
+      corpus: corpusName,
+      authorization: request.headers.authorization ?? null,
+    });
+    response.writeHead(200, { "Content-Type": "application/json" });
+    if (corpusName === "GCD") {
+      response.end(
+        JSON.stringify({
+          rootPath: "/remote/corpora/GCD",
+          meta: {
+            name: "GCD",
+            rootPath: "/remote/corpora/GCD",
+          },
+          manifest: {
+            corpusName: "GCD",
+            rootPath: "/remote/corpora/GCD",
+          },
+          sources: [
+            {
+              sourceKey: "/remote/corpora/GCD/md/2603.08076--plugin-config-paper.md",
+              inputPath: "/remote/corpora/GCD/md/2603.08076--plugin-config-paper.md",
+              paperId: "paper:2603.08076",
+              paperTitle: "Plugin Config Paper",
+              activeInGraph: true,
+            },
+          ],
+        })
+      );
+      return;
+    }
+    response.end(
+      JSON.stringify({
+        rootPath: `/remote/corpora/${corpusName ?? "unknown"}`,
+        meta: {
+          name: corpusName,
+          rootPath: `/remote/corpora/${corpusName ?? "unknown"}`,
+        },
+        manifest: {
+          corpusName,
+          rootPath: `/remote/corpora/${corpusName ?? "unknown"}`,
+        },
+        sources: [],
+      })
+    );
+  });
+
+  t.after(async () => {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "2603.08076",
+      title: "Plugin Config Paper",
+      arxiv_id: "2603.08076",
+      source_path: "/remote/corpora/GCD/md/2603.08076--plugin-config-paper.md",
+    },
+  ]);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-confirmation-bias-mitigation",
+    current_stage: "graph_build",
+    current_micro_stage: "verifying",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+    paper_ingestion: {
+      corpus_name: "gcd-confirmation-bias-mitigation",
+      graph_presence_status: "missing_papers",
+      graph_presence_checked_at: "2026-04-08T00:00:00.000Z",
+      refresh_required: true,
+      refresh_reason: "Graph presence is stale.",
+    },
+  });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    checked_at: "2026-04-08T00:00:00.000Z",
+    status: "missing_papers",
+    mode: "remote_api",
+    corpus_name: "gcd-confirmation-bias-mitigation",
+    corpus_root: `http://127.0.0.1:${address.port}`,
+    expected_paper_count: 1,
+    present_paper_count: 0,
+    missing_paper_count: 1,
+    missing_papers: [{ canonical_id: "2603.08076", title: "Plugin Config Paper" }],
+    refresh_required: true,
+    refresh_reason: "Remote graph is not ready.",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      papernexusApiBaseUrl: `http://127.0.0.1:${address.port}`,
+      papernexusSharedCorpus: "GCD",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+
+  assert.equal(snapshot.graphPresenceStatus, "ready");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].corpus, "GCD");
+
+  const graphPresence = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(graphPresence.corpus_name, "GCD");
+});
+
 test("research_workflow get_papernexus_progress returns raw progress JSON and a compact summary", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

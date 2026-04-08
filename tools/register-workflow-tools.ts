@@ -872,6 +872,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   graphPresenceCheck?.update_manifest === false
                     ? false
                     : true,
+                sharedCorpus: workflowPolicy.papernexusSharedCorpus,
                 remoteAccess: {
                   apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
                   mcpUrl: workflowPolicy.papernexusMcpUrl,

@@ -70,6 +70,7 @@ export async function maybeRefreshGraphPresenceForSnapshot(params: {
   const result = await checkGraphPresenceForWorkflow({
     projectRoot: snapshot.projectRoot,
     updateManifest: true,
+    sharedCorpus: workflowPolicy.papernexusSharedCorpus,
     remoteAccess: {
       apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
       mcpUrl: workflowPolicy.papernexusMcpUrl,

@@ -863,6 +863,7 @@ async function resolveCorpusRoot(params: {
   projectRoot: string;
   manifest: ManifestLike;
   projectId: string | null;
+  sharedCorpus: string | null;
 }): Promise<{ corpusRoot: string | null; corpusName: string | null }> {
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
   const status = await readJsonIfExists<Record<string, unknown>>(statusPath);
@@ -876,6 +877,7 @@ async function resolveCorpusRoot(params: {
         "sharedCorpus",
       ]),
       pickString(params.manifest, ["papernexus_corpus"]),
+      params.sharedCorpus,
       pickString(status, ["corpus_name", "corpusName"]),
     ],
     projectId: params.projectId,
@@ -927,6 +929,7 @@ function resolvePreferredPapernexusCorpusName(params: {
   statusRecord?: Record<string, unknown> | null;
   projectId: string | null;
   projectRoot: string;
+  sharedCorpus: string | null;
 }): string | null {
   const paperIngestion = asRecord(params.manifest.paper_ingestion);
   return resolveWorkflowSharedPapernexusCorpus({
@@ -938,6 +941,7 @@ function resolvePreferredPapernexusCorpusName(params: {
         "sharedCorpus",
       ]),
       pickString(params.manifest, ["papernexus_corpus"]),
+      params.sharedCorpus,
       pickString(params.statusRecord ?? null, ["corpus_name", "corpusName"]),
     ],
     projectId: params.projectId,
@@ -1260,12 +1264,14 @@ function resolveGraphRepairTargetCorpus(params: {
   corpusName: string | null;
   projectId: string | null;
   projectRoot: string;
+  sharedCorpus: string | null;
 }): string | null {
   return resolvePreferredPapernexusCorpusName({
     manifest: params.manifest,
     statusRecord: params.corpusName ? { corpus_name: params.corpusName } : null,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
+    sharedCorpus: params.sharedCorpus,
   });
 }
 
@@ -1622,6 +1628,7 @@ async function refreshRemoteStatusRecord(params: {
   remoteAccess: PapernexusRemoteAccessConfig;
   remoteInspection: Awaited<ReturnType<typeof inspectPapernexusRemoteAccess>>;
   cachedStatusRecord: Record<string, unknown> | null;
+  sharedCorpus: string | null;
 }): Promise<{
   statusRecord: Record<string, unknown> | null;
   refreshError: string | null;
@@ -1632,6 +1639,7 @@ async function refreshRemoteStatusRecord(params: {
     statusRecord: params.cachedStatusRecord,
     projectId: pickString(params.manifest, ["project_id", "projectId"]),
     projectRoot: params.projectRoot,
+    sharedCorpus: params.sharedCorpus,
   });
   const preferredCorpusRoot = resolvePreferredPapernexusCorpusRoot({
     manifest: params.manifest,
@@ -1713,6 +1721,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     usedPaperSourceIndex: boolean;
   };
   remoteAccess: PapernexusRemoteAccessConfig;
+  sharedCorpus: string | null;
 }): Promise<GraphPresenceCheckResult> {
   const remoteInspection = await inspectPapernexusRemoteAccess(params.remoteAccess);
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
@@ -1722,6 +1731,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     statusRecord: cachedStatusRecord,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
+    sharedCorpus: params.sharedCorpus,
   });
   const preferredCorpusRoot = resolvePreferredPapernexusCorpusRoot({
     manifest: params.manifest,
@@ -1739,6 +1749,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         remoteAccess: params.remoteAccess,
         remoteInspection,
         cachedStatusRecord,
+        sharedCorpus: params.sharedCorpus,
       })
     : {
         statusRecord: cachedStatusRecord,
@@ -1846,6 +1857,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     corpusName: preferredCorpusName,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
+    sharedCorpus: params.sharedCorpus,
   });
   const repairRequired = shouldRequireGraphImportRepair({
     status,
@@ -1938,11 +1950,13 @@ async function checkGraphPresenceViaRemoteStatus(params: {
 export async function checkGraphPresenceForWorkflow(params: {
   projectRoot: string;
   updateManifest?: boolean;
+  sharedCorpus?: string | null;
   remoteAccess?: PapernexusRemoteAccessConfig | null;
 }): Promise<GraphPresenceCheckResult> {
   const projectRoot = path.resolve(params.projectRoot);
   const manifest = await readManifest(projectRoot);
   const projectId = inferProjectId(projectRoot, manifest);
+  const sharedCorpus = asString(params.sharedCorpus);
   const checkedAt = new Date().toISOString();
   const reportPath = getGraphPresenceReportPath(projectRoot);
   if (params.updateManifest !== false) {
@@ -1971,6 +1985,7 @@ export async function checkGraphPresenceForWorkflow(params: {
       checkedAt,
       reportPath,
       expected,
+      sharedCorpus,
       remoteAccess: params.remoteAccess ?? {},
     });
 
@@ -2006,6 +2021,7 @@ export async function checkGraphPresenceForWorkflow(params: {
     projectRoot,
     manifest,
     projectId,
+    sharedCorpus,
   });
   const corpusManifestPath = corpusResolution.corpusRoot
     ? path.join(corpusResolution.corpusRoot, ".papernexus", "sources.json")
@@ -2076,6 +2092,7 @@ export async function checkGraphPresenceForWorkflow(params: {
       pickString(corpusMeta, ["name", "corpusName", "corpus_name"]),
     projectId,
     projectRoot,
+    sharedCorpus,
   });
   const repairRequired = shouldRequireGraphImportRepair({
     status,

@@ -104,6 +104,11 @@
         "default": "",
         "description": "Optional remote PaperNexus Web/API base URL. When configured, workflow prompts steer graph-heavy tasks toward the remote PaperNexus service instead of assuming local-only access."
       },
+      "papernexusSharedCorpus": {
+        "type": "string",
+        "default": "",
+        "description": "Optional plugin-wide shared PaperNexus corpus name. When configured, graph presence checks and workflow-owned repair/import passes prefer this shared corpus instead of falling back to project-scoped or internal default corpus names."
+      },
       "papernexusMcpUrl": {
         "type": "string",
         "default": "",
@@ -339,6 +344,9 @@
     },
     "papernexusApiBaseUrl": {
       "label": "PaperNexus API Base URL"
+    },
+    "papernexusSharedCorpus": {
+      "label": "PaperNexus Shared Corpus"
     },
     "papernexusMcpUrl": {
       "label": "PaperNexus MCP URL"

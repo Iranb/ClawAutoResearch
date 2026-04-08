@@ -2098,6 +2098,135 @@ test("remote graph presence prefers PROJECT_MANIFEST corpus settings and never s
   assert.equal(refreshedStatus.corpus_root, "/data/shared/.papernexus/index-store");
 });
 
+test("auto iterator refreshes remote graph presence with the plugin-configured shared corpus when project-scoped hints are stale", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const corpusName = url.searchParams.get("name");
+    requests.push({
+      method: request.method,
+      url: request.url,
+      corpus: corpusName,
+      authorization: request.headers.authorization ?? null,
+    });
+    response.writeHead(200, { "Content-Type": "application/json" });
+    if (corpusName === "GCD") {
+      response.end(
+        JSON.stringify({
+          meta: {
+            paperCount: 1,
+            sourceCount: 1,
+          },
+          manifest: {
+            corpusName: "GCD",
+            sourceCount: 1,
+            activeSourceCount: 1,
+          },
+          sources: [
+            {
+              sourceKey: "/remote/corpora/GCD/md/2501.00015--plugin-config-paper.md",
+              inputPath: "/remote/corpora/GCD/md/2501.00015--plugin-config-paper.md",
+              paperId: "paper:plugin-config",
+              paperTitle: "Plugin Config Paper",
+              activeInGraph: true,
+            },
+          ],
+        })
+      );
+      return;
+    }
+    response.end(
+      JSON.stringify({
+        meta: {
+          paperCount: 0,
+          sourceCount: 0,
+        },
+        manifest: {
+          corpusName,
+          sourceCount: 0,
+          activeSourceCount: 0,
+        },
+        sources: [],
+      })
+    );
+  });
+
+  t.after(async () => {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00015",
+      arxiv_id: "2501.00015",
+      title: "Plugin Config Paper",
+      source_kind: "markdown",
+      source_provider: "hf",
+      retrieval_providers: ["papers-cool"],
+      source_path: "/remote/corpora/GCD/md/2501.00015--plugin-config-paper.md",
+    },
+  ]);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.project_id = "gcd-confirmation-bias-mitigation";
+  manifest.title = "GCD Confirmation Bias Mitigation";
+  manifest.paper_ingestion = {
+    corpus_name: "gcd-confirmation-bias-mitigation",
+    graph_presence_status: "missing_papers",
+    refresh_required: true,
+  };
+  await writeJson(manifestPath, manifest);
+  await seedRemoteGraphStatus(projectRoot, {
+    corpusName: "gcd-confirmation-bias-mitigation",
+    corpusRoot: `http://127.0.0.1:${address.port}`,
+    status: "missing_papers",
+    expectedPaperCount: 1,
+    presentPaperCount: 0,
+    missingPapers: [{ canonical_id: "arxiv:2501.00015", title: "Plugin Config Paper" }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusApiBaseUrl: `http://127.0.0.1:${address.port}`,
+      papernexusSharedCorpus: "GCD",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].corpus, "GCD");
+  assert.equal(result.graphPresenceCheck?.status, "ready");
+  assert.equal(result.graphPresenceCheck?.corpusName, "GCD");
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
+
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.corpus_name, "GCD");
+});
+
 test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps without treating metadata keys as papers", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;

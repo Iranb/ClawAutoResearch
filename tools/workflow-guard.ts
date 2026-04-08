@@ -324,6 +324,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
   papernexusApiBaseUrl?: string;
+  papernexusSharedCorpus?: string;
   papernexusMcpUrl?: string;
   papernexusMcpTransport?: string;
   papernexusMcpTimeoutMs?: number;
@@ -1605,6 +1606,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
   papernexusApiBaseUrl: "",
+  papernexusSharedCorpus: "",
   papernexusMcpUrl: "",
   papernexusMcpTransport: "streamable-http",
   papernexusMcpTimeoutMs: 30000,
@@ -2166,6 +2168,9 @@ function normalizePolicy(
     papernexusApiBaseUrl:
       asString(config?.papernexusApiBaseUrl) ??
       DEFAULT_POLICY.papernexusApiBaseUrl,
+    papernexusSharedCorpus:
+      asString(config?.papernexusSharedCorpus) ??
+      DEFAULT_POLICY.papernexusSharedCorpus,
     papernexusMcpUrl:
       asString((config as Record<string, unknown> | null)?.papernexusMcpUrl) ??
       DEFAULT_POLICY.papernexusMcpUrl,

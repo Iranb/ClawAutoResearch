@@ -105,6 +105,7 @@ type AutoIteratorDeps = {
   checkGraphPresenceForWorkflow: (params: {
     projectRoot: string;
     updateManifest: boolean;
+    sharedCorpus?: string | null;
     remoteAccess: {
       apiBaseUrl?: string;
       mcpUrl?: string;
@@ -389,6 +390,7 @@ export async function runWorkflowAutoIteratorImpl(
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
       projectRoot,
       updateManifest: true,
+      sharedCorpus: workflowPolicy.papernexusSharedCorpus,
       remoteAccess: {
         apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
         mcpUrl: workflowPolicy.papernexusMcpUrl,
