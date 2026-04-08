@@ -2255,7 +2255,7 @@ function getDefaultPapernexusSourceDir(projectId: string | null): string | null 
   if (!projectId) {
     return null;
   }
-  return path.join(os.homedir(), ".papernexus", "papers", projectId);
+  return path.join(os.homedir(), ".papernexus", "papers");
 }
 
 function getDefaultPapernexusIndexRoot(): string {

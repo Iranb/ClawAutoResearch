@@ -159,6 +159,48 @@ test("workflow snapshot suppresses local PaperNexus defaults when remote access 
   assert.equal(snapshot.papernexusApiBaseUrl, "https://papernexus.example/api");
 });
 
+test("workflow snapshot uses the shared PaperNexus source root in local mode", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "shared-root-track");
+  const sessionKey = "agent:researcher:discord:group:shared-root-room";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+
+  assert.equal(snapshot.projectRoot, projectRoot);
+  assert.equal(
+    snapshot.defaultPapernexusSourceDir,
+    path.join(os.homedir(), ".papernexus", "papers")
+  );
+  assert.equal(snapshot.defaultPapernexusIndexRoot, path.join(os.homedir(), ".papernexus", "index-store"));
+});
+
 test("legacy subagent-scoped channel bindings still resolve against the root workflow channel", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
