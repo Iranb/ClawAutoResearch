@@ -1139,10 +1139,52 @@ test("control-plane runtime states persist through workflow tool actions and sum
           exit_criteria: ["baseline is specified"],
         },
       ],
+      plan_alternatives: [
+        {
+          option_id: "plan-graph-router",
+          linked_track_id: "track-main",
+          source_direction_id: "dir-graph-router",
+          title: "Graph-grounded router plan",
+          status: "selected",
+          summary:
+            "Keep graph evidence routing in the loop from ideation through writing.",
+          graph_evidence_paths: [
+            "graph/LIMITATION_FRONTIER.md",
+            "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+          ],
+          key_risks: ["Implementation complexity may slow the first baseline round."],
+        },
+        {
+          option_id: "plan-prompt-only",
+          linked_track_id: null,
+          source_direction_id: "dir-prompt-only",
+          title: "Prompt-only fallback plan",
+          status: "rejected",
+          summary:
+            "Keep the drafting pipeline lightweight but lose graph-backed routing guarantees.",
+          graph_evidence_paths: ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md"],
+          key_risks: ["Unsupported-claim risk remains too high without graph routing."],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "plan-graph-router",
+        selected_track_id: "track-main",
+        compared_option_ids: ["plan-graph-router", "plan-prompt-only"],
+        rationale:
+          "Graph-backed routing is the only option that closes the frontier support gap while preserving a credible fallback path.",
+        decisive_graph_evidence_paths: [
+          "graph/LIMITATION_FRONTIER.md",
+          "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+        ],
+        fallback_option_ids: ["plan-prompt-only"],
+        last_compared_at: "2026-03-26T10:00:00.000Z",
+      },
     },
   });
   assert.equal(researchProgram.state.status, "approved");
   assert.equal(researchProgram.state.tracks.length, 1);
+  assert.equal(researchProgram.state.planAlternatives.length, 2);
+  assert.equal(researchProgram.state.planSelection.selectedTrackId, "track-main");
 
   const orchestrationState = await executeWorkflowTool(tool, {
     action: "set_orchestration_state",
@@ -1196,6 +1238,11 @@ test("control-plane runtime states persist through workflow tool actions and sum
   });
 
   assert.equal(researchProgramSummary.state.status, "approved");
+  assert.equal(researchProgramSummary.state.planAlternatives.length, 2);
+  assert.equal(
+    researchProgramSummary.state.planSelection.selectedOptionId,
+    "plan-graph-router"
+  );
   assert.equal(orchestrationSummary.state.nextTransitionCandidate, "code");
   assert.equal(writePackageSummary.state.status, "ready");
 
@@ -1375,6 +1422,16 @@ test("auto iterator enforces research program semantics, experiment-search readi
   assert.ok(
     result.missingStageSignals.some((signal) => signal.includes("baseline"))
   );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      signal.includes("research_program.plan_alternatives")
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      signal.includes("research_program.plan_selection")
+    )
+  );
 
   await setResearchProgramState({
     projectRoot,
@@ -1425,6 +1482,44 @@ test("auto iterator enforces research program semantics, experiment-search readi
           exit_criteria: ["plan ready"],
         },
       ],
+      plan_alternatives: [
+        {
+          option_id: "plan-main",
+          linked_track_id: "track-main",
+          source_direction_id: "dir-main",
+          title: "Graph-grounded main plan",
+          status: "selected",
+          summary: "Advance the graph-grounded routing track into code and experiment.",
+          graph_evidence_paths: [
+            "graph/LIMITATION_FRONTIER.md",
+            "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+          ],
+          key_risks: ["Graph packet integration increases implementation scope."],
+        },
+        {
+          option_id: "plan-fallback",
+          linked_track_id: null,
+          source_direction_id: "dir-fallback",
+          title: "Prompt-only fallback",
+          status: "rejected",
+          summary: "Keep the workflow lightweight at the cost of weaker evidence binding.",
+          graph_evidence_paths: ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md"],
+          key_risks: ["Weakens novelty defense and claim support precision."],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "plan-main",
+        selected_track_id: "track-main",
+        compared_option_ids: ["plan-main", "plan-fallback"],
+        rationale:
+          "The graph-grounded option best matches the selected ideation contract and closes the support-precision gap.",
+        decisive_graph_evidence_paths: [
+          "graph/LIMITATION_FRONTIER.md",
+          "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+        ],
+        fallback_option_ids: ["plan-fallback"],
+        last_compared_at: "2026-03-26T10:10:00.000Z",
+      },
     },
   });
 

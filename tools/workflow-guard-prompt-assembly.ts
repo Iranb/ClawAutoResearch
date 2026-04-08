@@ -119,6 +119,17 @@ export function buildFocusedPromptAssemblyImpl(
       `orchestration=${snapshot.orchestrationStatus ?? "unknown"} -> ${snapshot.orchestrationNextTransitionCandidate ?? "unset"}`
     );
   }
+  if (snapshot.currentStage === "plan" || snapshot.role === "orchestrator") {
+    layer2Lines.push(
+      "Plan contract rule: PLAN.md, TODOS.md, and PLAN_AUDIT.md are human-readable derivatives. The durable source of truth is PROJECT_MANIFEST.json.research_program, and plan stage is not complete until it records graph-grounded multi-option comparison plus a locked selection."
+    );
+    layer2Lines.push(
+      "Planner rigor rule: research_program.plan_alternatives must compare at least two options, and research_program.plan_selection must record the selected option/track, compared option ids, decisive graph evidence, and rationale before handing work to Coder."
+    );
+    layer2Lines.push(
+      "Evo-style planning rule: after choosing the winning option, express the selected track as staged tasks with success signals, baseline/ablation coverage, expected artifacts, retry budget, and fallback path."
+    );
+  }
   layer2Lines.push(
     "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
   );
@@ -600,6 +611,11 @@ export function formatWorkflowSnapshotForPromptImpl(
     lines.push(
       `Research program: status=${snapshot.researchProgramStatus}, onboarding=${snapshot.researchProgramOnboardingStatus ?? "unknown"}, goal=${snapshot.researchProgramPrimaryGoal ?? "unset"}, baseline=${snapshot.researchProgramBaselineReference ?? "unset"}, primary_metric=${snapshot.researchProgramPrimaryMetricName ?? "unset"}, datasets=${snapshot.researchProgramDatasetCount ?? 0}, success_criteria=${snapshot.researchProgramSuccessCriteriaCount ?? 0}, active_tracks=${snapshot.researchProgramActiveTrackCount ?? 0}/${snapshot.researchProgramTrackCount ?? 0}`
     );
+    if (snapshot.currentStage === "plan" || snapshot.role === "orchestrator") {
+      lines.push(
+        `Plan selection: alternatives=${snapshot.researchProgramPlanAlternativeCount ?? 0}, compared=${snapshot.researchProgramPlanComparedOptionCount ?? 0}, selected_option=${snapshot.researchProgramPlanSelectedOptionId ?? "unset"}, selected_track=${snapshot.researchProgramPlanSelectedTrackId ?? "unset"}, selection_ready=${snapshot.researchProgramPlanSelectionReady ? "true" : "false"}`
+      );
+    }
     if (snapshot.researchProgramZoteroProjectPath) {
       lines.push(`Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`);
     }

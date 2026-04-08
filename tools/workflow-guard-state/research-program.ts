@@ -7,6 +7,8 @@ import {
   pickString,
 } from "../workflow-guard-core/coercion";
 import type {
+  ResearchProgramPlanAlternative,
+  ResearchProgramPlanSelection,
   ResearchProgramGlobalConstraints,
   ResearchProgramState,
   ResearchProgramTask,
@@ -59,6 +61,91 @@ function serializeResearchProgramTrackWriteScope(
   return {
     allowed_claim_ids: value.allowedClaimIds,
     allowed_figure_ids: value.allowedFigureIds,
+  };
+}
+
+function normalizeResearchProgramPlanAlternativeStatus(value: unknown): string {
+  return typeof value === "string" && value.trim()
+    ? value.trim().toLowerCase()
+    : "candidate";
+}
+
+function normalizeResearchProgramPlanAlternative(
+  value: unknown
+): ResearchProgramPlanAlternative {
+  const record = asRecord(value) ?? {};
+  return {
+    optionId:
+      pickString(record, ["optionId", "option_id"]) ??
+      `plan-option-${Math.random().toString(36).slice(2, 8)}`,
+    linkedTrackId: pickString(record, ["linkedTrackId", "linked_track_id"]),
+    sourceDirectionId: pickString(record, [
+      "sourceDirectionId",
+      "source_direction_id",
+    ]),
+    title: pickString(record, ["title"]),
+    status: normalizeResearchProgramPlanAlternativeStatus(record.status),
+    summary: pickString(record, ["summary"]),
+    graphEvidencePaths: asStringArray(
+      record.graphEvidencePaths ?? record.graph_evidence_paths
+    ),
+    keyRisks: asStringArray(record.keyRisks ?? record.key_risks),
+  };
+}
+
+function serializeResearchProgramPlanAlternative(
+  value: ResearchProgramPlanAlternative
+): Record<string, unknown> {
+  return {
+    option_id: value.optionId,
+    linked_track_id: value.linkedTrackId,
+    source_direction_id: value.sourceDirectionId,
+    title: value.title,
+    status: value.status,
+    summary: value.summary,
+    graph_evidence_paths: value.graphEvidencePaths,
+    key_risks: value.keyRisks,
+  };
+}
+
+function normalizeResearchProgramPlanSelection(
+  value: unknown
+): ResearchProgramPlanSelection {
+  const record = asRecord(value) ?? {};
+  return {
+    selectedOptionId: pickString(record, [
+      "selectedOptionId",
+      "selected_option_id",
+    ]),
+    selectedTrackId: pickString(record, [
+      "selectedTrackId",
+      "selected_track_id",
+    ]),
+    comparedOptionIds: asStringArray(
+      record.comparedOptionIds ?? record.compared_option_ids
+    ),
+    rationale: pickString(record, ["rationale"]),
+    decisiveGraphEvidencePaths: asStringArray(
+      record.decisiveGraphEvidencePaths ?? record.decisive_graph_evidence_paths
+    ),
+    fallbackOptionIds: asStringArray(
+      record.fallbackOptionIds ?? record.fallback_option_ids
+    ),
+    lastComparedAt: pickString(record, ["lastComparedAt", "last_compared_at"]),
+  };
+}
+
+function serializeResearchProgramPlanSelection(
+  value: ResearchProgramPlanSelection
+): Record<string, unknown> {
+  return {
+    selected_option_id: value.selectedOptionId,
+    selected_track_id: value.selectedTrackId,
+    compared_option_ids: value.comparedOptionIds,
+    rationale: value.rationale,
+    decisive_graph_evidence_paths: value.decisiveGraphEvidencePaths,
+    fallback_option_ids: value.fallbackOptionIds,
+    last_compared_at: value.lastComparedAt,
   };
 }
 
@@ -192,6 +279,11 @@ export function normalizeResearchProgramState(value: unknown): ResearchProgramSt
   const taskGraphEntries = Array.isArray(record.taskGraph ?? record.task_graph)
     ? ((record.taskGraph ?? record.task_graph) as unknown[])
     : [];
+  const planAlternativeEntries = Array.isArray(
+    record.planAlternatives ?? record.plan_alternatives
+  )
+    ? ((record.planAlternatives ?? record.plan_alternatives) as unknown[])
+    : [];
   return {
     programVersion: Math.max(
       1,
@@ -222,6 +314,12 @@ export function normalizeResearchProgramState(value: unknown): ResearchProgramSt
     tracks: Array.isArray(record.tracks)
       ? record.tracks.map((entry) => normalizeResearchProgramTrack(entry))
       : [],
+    planAlternatives: planAlternativeEntries.map((entry: unknown) =>
+      normalizeResearchProgramPlanAlternative(entry)
+    ),
+    planSelection: normalizeResearchProgramPlanSelection(
+      record.planSelection ?? record.plan_selection
+    ),
     globalConstraints: normalizeResearchProgramGlobalConstraints(
       record.globalConstraints ?? record.global_constraints
     ),
@@ -248,6 +346,10 @@ export function serializeResearchProgramState(
     success_criteria: value.successCriteria,
     zotero_project_path: value.zoteroProjectPath,
     tracks: value.tracks.map((entry) => serializeResearchProgramTrack(entry)),
+    plan_alternatives: value.planAlternatives.map((entry) =>
+      serializeResearchProgramPlanAlternative(entry)
+    ),
+    plan_selection: serializeResearchProgramPlanSelection(value.planSelection),
     global_constraints: serializeResearchProgramGlobalConstraints(
       value.globalConstraints
     ),

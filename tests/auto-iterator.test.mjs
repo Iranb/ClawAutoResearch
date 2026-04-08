@@ -717,6 +717,46 @@ async function seedProjectReadyForCode(projectRoot) {
           },
         },
       ],
+      plan_alternatives: [
+        {
+          option_id: "plan-main",
+          linked_track_id: trackId,
+          source_direction_id: "dir-1",
+          title: "Graph-grounded main plan",
+          status: "selected",
+          summary:
+            "Advance the graph-grounded evidence-routing track into code and experiment.",
+          graph_evidence_paths: [
+            "graph/GRAPH_BUILD_REPORT.md",
+            "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+          ],
+          key_risks: ["Graph packet integration increases the first implementation scope."],
+        },
+        {
+          option_id: "plan-fallback",
+          linked_track_id: null,
+          source_direction_id: "dir-fallback",
+          title: "Prompt-only fallback",
+          status: "rejected",
+          summary:
+            "Keep the workflow lightweight but accept weaker evidence binding and reviewer defense.",
+          graph_evidence_paths: ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md"],
+          key_risks: ["Leaves unsupported-claim pressure too high for later stages."],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "plan-main",
+        selected_track_id: trackId,
+        compared_option_ids: ["plan-main", "plan-fallback"],
+        rationale:
+          "The selected track best matches the ideation contract and keeps graph evidence in the main execution loop.",
+        decisive_graph_evidence_paths: [
+          "graph/GRAPH_BUILD_REPORT.md",
+          "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+        ],
+        fallback_option_ids: ["plan-fallback"],
+        last_compared_at: now,
+      },
       task_graph: [
         {
           task_id: "plan-main",

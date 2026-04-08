@@ -49,6 +49,18 @@ export function buildDynamicTasksImpl(
   }
 
   if (
+    (params.role === "researcher" || params.role === "orchestrator") &&
+    params.currentStage === "plan"
+  ) {
+    tasks.unshift(
+      "Treat research_program as the plan-stage source of truth: compare at least two graph-grounded options in research_program.plan_alternatives, then lock the selected option/track plus rationale and decisive graph evidence in research_program.plan_selection."
+    );
+    tasks.unshift(
+      "Mirror the winning option into a runnable task graph: every selected track should carry success signals, baseline/ablation coverage, expected artifacts, and retry/rollback rules before CODE begins."
+    );
+  }
+
+  if (
     params.role === "researcher" &&
     params.currentStage &&
     ["plan", "code", "experiment", "analyze", "review", "write"].includes(params.currentStage)

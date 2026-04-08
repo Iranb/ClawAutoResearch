@@ -96,6 +96,16 @@
     "success_criteria": [],
     "zotero_project_path": null,
     "tracks": [],
+    "plan_alternatives": [],
+    "plan_selection": {
+      "selected_option_id": null,
+      "selected_track_id": null,
+      "compared_option_ids": [],
+      "rationale": null,
+      "decisive_graph_evidence_paths": [],
+      "fallback_option_ids": [],
+      "last_compared_at": null
+    },
     "global_constraints": {
       "max_active_tracks": null,
       "must_run_multi_seed_before_analysis": true,
