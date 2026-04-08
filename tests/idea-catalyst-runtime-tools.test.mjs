@@ -461,6 +461,80 @@ test("stage preflight materializes idea_catalyst after ideation_contract becomes
   assert.ok(result.materializedContracts.includes("idea_catalyst"));
 });
 
+test("stage preflight reconciles a satisfied IDEA-CATALYST requisition before deciding whether to requeue or block idea", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.idea_catalyst = {
+    ...(manifest.idea_catalyst ?? {}),
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason:
+      "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding.",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+    {
+      schema_version: 1,
+      generated_at: "2026-04-08T07:45:00.000Z",
+      project_id: "idea-catalyst-demo",
+      status: "satisfied",
+      requisition_type: "cross_domain_papers",
+      requested_papers: [],
+      import_queue_status: "not_required",
+      graph_build_status: "completed",
+      frontier_refresh_status: "completed",
+      satisfied_at: "2026-04-08T08:14:44.036091Z",
+      satisfied_by: "researcher",
+      rationale:
+        "All required papers are already present in the configured corpus; no additional imports required.",
+    }
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  let materialized = 0;
+  let queued = 0;
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "idea",
+    agentId: "researcher",
+    trigger: "test",
+    deps: {
+      materializeIdeationContract: async () => ({ ok: true }),
+      materializePaperStoryState: async () => ({ ok: true }),
+      materializeReviewPressurePacket: async () => ({ ok: true }),
+      materializeLiteratureDiscoveryPacket: async () => ({ ok: true }),
+      queueLiteratureDiscoveryRequisition: async () => ({ ok: true }),
+      materializeIdeaCatalystState: async () => {
+        materialized += 1;
+        const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+        await executeWorkflowTool(tool, {
+          action: "materialize_idea_catalyst_state",
+          ideaCatalystMaterialization: { basis_stage: "idea" },
+        });
+        return { ok: true };
+      },
+      queueIdeaCatalystRequisition: async () => {
+        queued += 1;
+        return { ok: true };
+      },
+    },
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(queued, 0);
+  assert.equal(materialized, 1);
+  assert.ok(result.materializedContracts.includes("idea_catalyst"));
+  assert.notEqual(updatedManifest.idea_catalyst.status, "requisition");
+  assert.equal(updatedManifest.idea_catalyst.requisition_required, false);
+});
+
 test("research_workflow materialize_idea_catalyst_state emits a structured requisition when graph bridge evidence is insufficient", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

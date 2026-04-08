@@ -6,7 +6,10 @@ import { normalizePaperIngestionState } from "../workflow-guard-state/paper-inge
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
-import { hasActiveIdeaCatalystRequisitionRequest } from "../idea-catalyst/workflow-bridge";
+import {
+  hasActiveIdeaCatalystRequisitionRequest,
+  reconcileSatisfiedIdeaCatalystRequisition,
+} from "../idea-catalyst/workflow-bridge";
 import {
   DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
   needsStoryGapLiteratureDiscovery,
@@ -492,6 +495,15 @@ export async function maybePrepareWorkflowStageContracts(params: {
   const materializedContracts: string[] = [];
   const errors: Array<{ contract: string; message: string }> = [];
   const trigger = params.trigger ?? "stage_preflight";
+
+  const ideaCatalystReconciliation = await reconcileSatisfiedIdeaCatalystRequisition({
+    projectRoot,
+    manifest,
+  });
+  if (ideaCatalystReconciliation.updated) {
+    manifest = ideaCatalystReconciliation.manifest;
+    materializedContracts.push("idea_catalyst_requisition_reconciled");
+  }
 
   const runStep = async (
     contract: string,
