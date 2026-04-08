@@ -15,6 +15,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "prepare": "npm run build",
     "lint": "eslint index.ts tools/",
     "test": "node --test tests/*.test.mjs",
@@ -56,7 +59,8 @@
   ],
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitepress": "^1.6.3"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24"

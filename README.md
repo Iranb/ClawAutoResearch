@@ -1,15 +1,22 @@
 # ClawAutoResearch
 
-介绍性文档已经统一收口到 [`DOC/`](./DOC/README.md)。
+系统介绍文档现在统一收口到 [`docs/`](./docs/README.md)。
 
-如果你现在最想快速理解“这套自动化科研系统到底怎么工作”，建议直接先打开新的网页总手册：
+新的 `VitePress` 统一文档站覆盖：
 
-- [Workflow Web Handbook / 系统工作流网页总手册](./DOC/web/workflow-handbook.html)
+- 系统总览与模块分层
+- 工作流控制平面与 `auto_iterator_tick`
+- PaperNexus 图谱、shared corpus 与项目记忆
+- Agent / Skill 边界
+- `research_workflow` / `research_memory` 接口
+- 状态合同、模块地图、开发运维与 GitHub Pages 部署
 
-推荐从这里开始：
+建议从这里开始：
 
-- [Documentation Hub](./DOC/README.md)
-- [Workflow Web Handbook / 系统工作流网页总手册](./DOC/web/workflow-handbook.html)
-- [Overview (English)](./DOC/overview.md)
-- [概览（中文）](./DOC/overview_zh.md)
-- [新手快速开始（中文）](./DOC/beginner_zh.md)
+- [Docs Portal Source](./docs/index.md)
+- [Docs Map](./docs/README.md)
+- [Workflow Control Plane](./docs/architecture/workflow-control-plane.md)
+- [Graph & Memory](./docs/architecture/graph-memory.md)
+- [Commands & Tools](./docs/reference/commands-and-tools.md)
+
+旧的 [`DOC/`](./DOC/README.md) 现在只保留兼容入口和历史说明。

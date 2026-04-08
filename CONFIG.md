@@ -1,7 +1,7 @@
 # CONFIG.md — ClawAutoResearch Configuration
 
 > This file is a path and configuration cheat sheet.
-> For the full narrative configuration guide, see [DOC/reference/configuration.md](./DOC/reference/configuration.md).
+> For the full narrative configuration guide, see the VitePress docs portal at [docs/reference/configuration.md](./docs/reference/configuration.md).
 
 ## Path Variables
 

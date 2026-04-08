@@ -4,7 +4,7 @@
 > Every agent MUST read this file and follow its ownership rules.
 > Rule summary: **write only to your own folder; read from any folder**.
 > Project directories are separate from agent workspaces and live under the configurable `projectsRoot`, accessible to all agents.
-> For the onboarding overview and reading map, start from [README.md](./README.md) and [DOC/README.md](./DOC/README.md).
+> For the onboarding overview and reading map, start from [README.md](./README.md) and the unified VitePress docs portal at [docs/README.md](./docs/README.md).
 
 ---
 
