@@ -44,6 +44,7 @@ import {
   orchestrateWorkflowTransition,
   resumeWorkflowTransition,
 } from "./workflow-session-orchestrator.js";
+import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
@@ -1281,22 +1282,30 @@ async function pruneBackgroundRunRegistry(params: {
   });
   const kept: BackgroundRunRegistryEntry[] = [];
   for (const entry of current) {
+    const checkedAt = new Date(now).toISOString();
     const freshnessReference =
       entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
     const freshnessMs = Date.parse(freshnessReference);
     if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
       if (entry.status === "active") {
+        await reconcileBackgroundRunTerminalState({
+          entry,
+          terminalStatus: "needs_repair",
+          finishedAt: checkedAt,
+          error: "Background workflow session exceeded the stale runtime threshold and needs repair.",
+        });
         kept.push({
           ...entry,
           status: "needs_repair",
-          lastCheckedAt: new Date(now).toISOString(),
+          lastCheckedAt: checkedAt,
+          lastFinishedAt: checkedAt,
         });
       }
       continue;
     }
     let nextEntry: BackgroundRunRegistryEntry = {
       ...entry,
-      lastCheckedAt: new Date(now).toISOString(),
+      lastCheckedAt: checkedAt,
     };
     if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
       try {
@@ -1305,16 +1314,29 @@ async function pruneBackgroundRunRegistry(params: {
           timeoutMs: 1,
         });
         if (waited.status === "ok" || waited.status === "error") {
+          await reconcileBackgroundRunTerminalState({
+            entry,
+            terminalStatus: waited.status === "ok" ? "completed" : "failed",
+            finishedAt: checkedAt,
+            error: waited.status === "error" ? waited.error ?? "Background workflow run failed." : null,
+          });
           nextEntry = {
             ...nextEntry,
             status: "idle",
-            lastFinishedAt: new Date(now).toISOString(),
+            lastFinishedAt: checkedAt,
           };
         }
       } catch {
+        await reconcileBackgroundRunTerminalState({
+          entry,
+          terminalStatus: "needs_repair",
+          finishedAt: checkedAt,
+          error: "Background workflow runtime state could not be refreshed and needs repair.",
+        });
         kept.push({
           ...nextEntry,
           status: "needs_repair",
+          lastFinishedAt: checkedAt,
         });
         continue;
       }
@@ -2303,7 +2325,7 @@ function isPaperIngestionStateInFlight(state: {
   activeBatches: Array<{ status: string }>;
   batchItems: Array<{ status: string | null }>;
 }): boolean {
-  if (["waiting_import", "waiting_graph", "reconciling"].includes(state.runtimeStatus)) {
+  if (["waiting_import", "reconciling"].includes(state.runtimeStatus)) {
     return true;
   }
   if (state.paperOperations.some((entry) => ["queued", "running"].includes(entry.status))) {

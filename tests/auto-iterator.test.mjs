@@ -2211,6 +2211,76 @@ test("graph presence check reports remote PaperNexus reconciliation in progress 
   assert.match(result.blockingReason ?? "", /active_operations=1/i);
 });
 
+test("graph presence check treats waiting_graph without active upload work as verification, not active sync", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2603.08075",
+      arxiv_id: "2603.08075",
+      title: "TALON: Test-time Adaptive Learning for On-the-Fly Category Discovery",
+      source_provider: "hugging-face-paper-pages",
+      retrieval_providers: ["papers-cool"],
+    },
+  ]);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    title: "Demo Project",
+    current_stage: "graph_build",
+    paper_ingestion: {
+      runtime_status: "waiting_graph",
+      waiting_reason: "Upload finished; waiting for a fresh graph presence check.",
+      import_task_ids: [],
+      completed_papers: [],
+      paper_operations: [],
+      active_batches: [],
+      batch_items: [],
+      queued_requests: [],
+      graph_presence_status: "missing_papers",
+    },
+    idle_research: { enabled: false },
+  });
+  await seedRemoteGraphStatus(projectRoot, {
+    status: "missing_papers",
+    expectedPaperCount: 1,
+    presentPaperCount: 0,
+    missingPapers: [
+      {
+        canonicalId: "arxiv:2603.08075",
+        arxivId: "2603.08075",
+        title: "TALON: Test-time Adaptive Learning for On-the-Fly Category Discovery",
+      },
+    ],
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: "https://papernexus.example/api",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "missing_papers");
+  assert.doesNotMatch(
+    result.blockingReason ?? "",
+    /automatic graph catch-up is still running/i
+  );
+  assert.doesNotMatch(result.blockingReason ?? "", /paper_ingestion reports status=/i);
+});
+
 test("auto iterator uses remote graph status for graph_build when remote PaperNexus access is configured", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;

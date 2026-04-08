@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeWorkflowSubagentParentSessionKey } from "./workflow-subagent-sessions";
 import {
+  inferBackgroundRunTerminalStateFromDurableState,
+  reconcileBackgroundRunTerminalState,
+} from "./workflow-background-run-reconcile.js";
+import {
   appendWorkflowRuntimeEvent,
   listWorkflowRuntimeProjectRoots,
   migrateWorkflowRuntimeState,
@@ -22,6 +26,7 @@ function normalizeAgentId(value: unknown): string | null {
 
 const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
 const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS = 15 * 1000;
 const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
 
 export type BackgroundRuntimeScope = {
@@ -400,22 +405,49 @@ async function pruneBackgroundRunRegistry(params: {
   });
   const kept: BackgroundRunRegistryEntry[] = [];
   for (const entry of current) {
+    const checkedAt = new Date(now).toISOString();
     const freshnessReference =
       entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
     const freshnessMs = Date.parse(freshnessReference);
+    const canAttemptDurableReconcile =
+      Number.isFinite(freshnessMs) &&
+      now - freshnessMs >= BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS;
     if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
       if (entry.status === "active") {
+        await reconcileBackgroundRunTerminalState({
+          entry,
+          terminalStatus: "needs_repair",
+          finishedAt: checkedAt,
+          error: "Background workflow session exceeded the stale runtime threshold and needs repair.",
+        });
         kept.push({
           ...entry,
           status: "needs_repair",
-          lastCheckedAt: new Date(now).toISOString(),
+          lastCheckedAt: checkedAt,
+          lastFinishedAt: checkedAt,
         });
       }
       continue;
     }
     let nextEntry: BackgroundRunRegistryEntry = {
       ...entry,
-      lastCheckedAt: new Date(now).toISOString(),
+      lastCheckedAt: checkedAt,
+    };
+    const markEntryTerminal = async (
+      terminalStatus: "completed" | "failed" | "needs_repair",
+      error: string | null
+    ): Promise<BackgroundRunRegistryEntry> => {
+      await reconcileBackgroundRunTerminalState({
+        entry,
+        terminalStatus,
+        finishedAt: checkedAt,
+        error,
+      });
+      return {
+        ...nextEntry,
+        status: terminalStatus === "needs_repair" ? "needs_repair" : "idle",
+        lastFinishedAt: checkedAt,
+      };
     };
     if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
       try {
@@ -424,18 +456,38 @@ async function pruneBackgroundRunRegistry(params: {
           timeoutMs: 1,
         });
         if (waited.status === "ok" || waited.status === "error") {
-          nextEntry = {
-            ...nextEntry,
-            status: "idle",
-            lastFinishedAt: new Date(now).toISOString(),
-          };
+          nextEntry = await markEntryTerminal(
+            waited.status === "ok" ? "completed" : "failed",
+            waited.status === "error" ? waited.error ?? "Background workflow run failed." : null
+          );
+        } else if (canAttemptDurableReconcile) {
+          const durableState = await inferBackgroundRunTerminalStateFromDurableState({
+            entry,
+          });
+          if (durableState) {
+            nextEntry = await markEntryTerminal(
+              durableState.terminalStatus,
+              durableState.error
+            );
+          }
         }
       } catch {
-        kept.push({
-          ...nextEntry,
-          status: "needs_repair",
-        });
+        nextEntry = await markEntryTerminal(
+          "needs_repair",
+          "Background workflow runtime state could not be refreshed and needs repair."
+        );
+        kept.push(nextEntry);
         continue;
+      }
+    } else if (entry.status === "active" && canAttemptDurableReconcile) {
+      const durableState = await inferBackgroundRunTerminalStateFromDurableState({
+        entry,
+      });
+      if (durableState) {
+        nextEntry = await markEntryTerminal(
+          durableState.terminalStatus,
+          durableState.error
+        );
       }
     }
     kept.push(nextEntry);

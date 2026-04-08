@@ -49,6 +49,10 @@ import {
   enqueueWorkflowTask,
 } from "./workflow-coordination";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
+import {
+  maybeRefreshGraphPresenceForSnapshot,
+  reconcileBackgroundWorkflowStateForSnapshot,
+} from "./workflow-runtime-refresh.js";
 
 function collectStringFragments(value: unknown, acc: string[], depth = 0): void {
   if (depth > 4 || value == null) {
@@ -107,14 +111,30 @@ async function resolveWorkflowSnapshotForAgentContext(params: {
   autoBind?: boolean;
 }) {
   const workflowPolicy = params.plugin.getWorkflowPolicy();
-  const snapshot = await buildWorkflowSnapshot({
-    policy: workflowPolicy,
-    agentId: params.agentCtx.agentId,
-    workspaceDir: params.agentCtx.workspaceDir,
-    sessionKey: params.agentCtx.sessionKey,
-    sessionId: params.agentCtx.sessionId,
-    messageChannel: params.agentCtx.messageChannel,
+  const buildSnapshot = () =>
+    buildWorkflowSnapshot({
+      policy: workflowPolicy,
+      agentId: params.agentCtx.agentId,
+      workspaceDir: params.agentCtx.workspaceDir,
+      sessionKey: params.agentCtx.sessionKey,
+      sessionId: params.agentCtx.sessionId,
+      messageChannel: params.agentCtx.messageChannel,
+    });
+  let snapshot = await buildSnapshot();
+  await reconcileBackgroundWorkflowStateForSnapshot({
+    snapshot,
+    workflowPolicy,
+    runtimeSubagent: params.plugin.api.runtime?.subagent,
   });
+  snapshot = await buildSnapshot();
+  if (
+    await maybeRefreshGraphPresenceForSnapshot({
+      snapshot,
+      workflowPolicy,
+    })
+  ) {
+    snapshot = await buildSnapshot();
+  }
   if (params.autoBind !== false) {
     await maybeAutoBindChannelProject({
       policy: workflowPolicy,

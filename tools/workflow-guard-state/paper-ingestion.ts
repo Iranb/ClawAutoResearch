@@ -145,7 +145,7 @@ export function hasActiveWorkflowOwnedPaperUpload(
   state: PaperIngestionState
 ): boolean {
   if (
-    ["waiting_import", "waiting_graph", "reconciling"].includes(
+    ["waiting_import", "reconciling"].includes(
       normalizePaperIngestionRuntimeStatus(state.runtimeStatus) ?? ""
     )
   ) {

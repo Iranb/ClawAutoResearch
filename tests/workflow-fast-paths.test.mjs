@@ -17,6 +17,8 @@ import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
   getChannelProjectBindingForWorkflow,
+  getPaperIngestionStateSummary,
+  setPaperIngestionState,
 } from "../tools/workflow-guard.ts";
 import {
   readWorkflowRuntimeEvents,
@@ -85,6 +87,115 @@ test("background queue refuses ephemeral fallback without project scope", async 
       delete process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
     }
   }
+});
+
+test("finished papernexus wrapper runs reconcile runtime queue and durable paper_ingestion state", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const completedRunIds = new Set();
+  const runtimeSubagent = {
+    async run() {
+      return { runId: "bg-run-paper-1" };
+    },
+    async waitForRun(params) {
+      return completedRunIds.has(params.runId)
+        ? { status: "ok" }
+        : { status: "timeout" };
+    },
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const launch = await startBackgroundWorkflowRun({
+    runtimeSubagent,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:paper-room",
+      sessionId: "session-paper-room-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      projectId: "paper-sync-project",
+      commandText:
+        "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
+    },
+  });
+
+  assert.equal(launch.started, true);
+  const projectRoot = path.join(projectsRoot, "paper-sync-project");
+  await setPaperIngestionState({
+    projectRoot,
+    paperIngestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Batch import is still running.",
+      queued_requests: [
+        {
+          request_id: "req-paper-sync-1",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
+          status: "running",
+          last_run_id: launch.runId,
+          last_session_key: launch.sessionKey,
+          updated_at: "2026-04-08T01:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    graph_presence_status: "missing_papers",
+    refresh_required: true,
+    refresh_reason: "Graph presence has not been rechecked yet.",
+  };
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  completedRunIds.add(String(launch.runId));
+  const inventory = await listBackgroundWorkflowRuns({
+    runtimeSubagent,
+    ownerAgent: "researcher",
+    projectId: "paper-sync-project",
+    projectRoot,
+    projectsRoot,
+  });
+
+  assert.equal(inventory.entries.length, 1);
+  assert.equal(inventory.entries[0].status, "idle");
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const queueEntry = queueStore.entries.find(
+    (entry) => entry.queueKey === launch.queueKey
+  );
+  assert.equal(queueEntry?.status, "completed");
+
+  const ingestionSummary = await getPaperIngestionStateSummary({ projectRoot });
+  assert.equal(ingestionSummary.state.queuedRequests[0]?.status, "completed");
+  assert.equal(ingestionSummary.state.runtimeStatus, "waiting_graph");
+  assert.match(
+    ingestionSummary.state.waitingReason ?? "",
+    /waiting for graph presence verification/i
+  );
 });
 
 test("ensureWorkflowProjectRoot creates a project from configured projectsRoot and topic", async (t) => {

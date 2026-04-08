@@ -99,6 +99,10 @@ import {
   type PapernexusWrapperRunRequest,
 } from "./workflow-fast-paths";
 import {
+  maybeRefreshGraphPresenceForSnapshot,
+  reconcileBackgroundWorkflowStateForSnapshot,
+} from "./workflow-runtime-refresh.js";
+import {
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   retireBackgroundWorkflowRuns,
@@ -263,15 +267,31 @@ async function resolveWorkflowToolState(params: {
 }): Promise<WorkflowToolState> {
   const workflowPolicy = params.plugin.getWorkflowPolicy();
   const channelBinding = asObject(params.rawParams.channelBinding);
-  const snapshot = await buildWorkflowSnapshot({
-    policy: workflowPolicy,
-    agentId: params.agentCtx.agentId,
-    workspaceDir: params.agentCtx.workspaceDir,
-    sessionKey: params.agentCtx.sessionKey,
-    sessionId: params.agentCtx.sessionId,
-    messageChannel: params.agentCtx.messageChannel,
-    channelKey: readString(channelBinding?.channelKey),
+  const buildSnapshot = () =>
+    buildWorkflowSnapshot({
+      policy: workflowPolicy,
+      agentId: params.agentCtx.agentId,
+      workspaceDir: params.agentCtx.workspaceDir,
+      sessionKey: params.agentCtx.sessionKey,
+      sessionId: params.agentCtx.sessionId,
+      messageChannel: params.agentCtx.messageChannel,
+      channelKey: readString(channelBinding?.channelKey),
+    });
+  let snapshot = await buildSnapshot();
+  await reconcileBackgroundWorkflowStateForSnapshot({
+    snapshot,
+    workflowPolicy,
+    runtimeSubagent: params.plugin.api.runtime?.subagent,
   });
+  snapshot = await buildSnapshot();
+  if (
+    await maybeRefreshGraphPresenceForSnapshot({
+      snapshot,
+      workflowPolicy,
+    })
+  ) {
+    snapshot = await buildSnapshot();
+  }
   if (params.autoBind !== false) {
     await maybeAutoBindChannelProject({
       policy: workflowPolicy,

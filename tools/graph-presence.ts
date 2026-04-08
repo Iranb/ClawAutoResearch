@@ -1111,7 +1111,6 @@ function summarizePaperIngestionProgress(
     .filter((value): value is Record<string, unknown> => Boolean(value)).length;
   const inFlight =
     runtimeStatus === "waiting_import" ||
-    runtimeStatus === "waiting_graph" ||
     runtimeStatus === "reconciling" ||
     activeBatchCount > 0 ||
     pendingBatchItemCount > 0 ||

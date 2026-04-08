@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -79,4 +80,70 @@ test("workflow background pool refuses ephemeral registry fallback without proje
       delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
     }
   }
+});
+
+test("workflow background pool reconciles stale active PaperNexus import sessions from durable state", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "workflow-background-pool-project-")
+  );
+  const projectRoot = path.join(workspaceRoot, "demo-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "graph_build",
+        paper_ingestion: {
+          runtime_status: "idle",
+          graph_presence_status: "missing_papers",
+          queued_requests: [],
+          active_batches: [],
+          batch_items: [],
+          paper_operations: [],
+          import_task_ids: [],
+          completed_papers: [],
+        },
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:channel:test-room",
+    requesterSessionKey: "agent:researcher:discord:channel:test-room",
+    backgroundSessionKey:
+      "agent:researcher:discord:channel:test-room:subagent:papernexus-skill:corpus:demo-project",
+    runId: "run:papernexus-import",
+    queueKey:
+      "background-run:agent:researcher:discord:channel:test-room:papernexus:papernexus_wrapper:demo-project:python3 scripts/pn_batch_import.py --shared-corpus 'GCD' --refresh",
+    family: "papernexus",
+    kind: "papernexus_wrapper",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const sessionsPath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "workflow-runtime-sessions.json"
+  );
+  const sessionsStore = JSON.parse(await fs.readFile(sessionsPath, "utf8"));
+  sessionsStore.entries[0].startedAt = new Date(Date.now() - 20_000).toISOString();
+  await fs.writeFile(sessionsPath, `${JSON.stringify(sessionsStore, null, 2)}\n`, "utf8");
+
+  const listed = await listBackgroundWorkflowRuns({
+    ownerAgent: "researcher",
+    projectId: "demo-project",
+    projectRoot,
+  });
+  assert.equal(listed.entries.length, 1);
+  assert.equal(listed.entries[0].status, "idle");
 });

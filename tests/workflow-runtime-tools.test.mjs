@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -79,6 +80,12 @@ async function executeWorkflowTool(tool, params) {
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function seedPaperSourceIndex(projectRoot, papers) {
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers,
+  });
 }
 
 async function writeText(targetPath, value) {
@@ -280,6 +287,151 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   });
   assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+});
+
+test("research_workflow get_snapshot reconciles finished uploads and refreshes graph presence during graph_build", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const completedRunIds = new Set(["bg-run-snapshot-1"]);
+  const server = http.createServer(async (request, response) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization ?? null,
+    });
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        rootPath: "/remote/corpora/shared-global-graph",
+        meta: {
+          name: "shared-global-graph",
+          rootPath: "/remote/corpora/shared-global-graph",
+        },
+        manifest: {
+          corpusName: "shared-global-graph",
+          rootPath: "/remote/corpora/shared-global-graph",
+        },
+        sources: [
+          {
+            sourceKey: "/remote/corpora/shared-global-graph/md/2603.08075--demo-paper.md",
+            inputPath: "/remote/corpora/shared-global-graph/md/2603.08075--demo-paper.md",
+            paperId: "paper:2603.08075",
+            paperTitle: "Demo Paper",
+            activeInGraph: true,
+          },
+        ],
+      })
+    );
+  });
+
+  t.after(async () => {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "2603.08075",
+      title: "Demo Paper",
+      arxiv_id: "2603.08075",
+      source_path: path.join(projectRoot, "researcher", "paper-staging", "2603.08075.md"),
+    },
+  ]);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    current_micro_stage: "verifying",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Background upload still appears to be active.",
+      graph_presence_status: "missing_papers",
+      graph_presence_checked_at: "2026-04-08T00:00:00.000Z",
+      refresh_required: true,
+      refresh_reason: "Graph presence is stale.",
+      queued_requests: [
+        {
+          request_id: "req-graph-refresh-1",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
+          status: "running",
+          last_run_id: "bg-run-snapshot-1",
+          last_session_key:
+            "agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:corpus:demo-project",
+          updated_at: "2026-04-08T00:00:00.000Z",
+        },
+      ],
+    },
+  });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey:
+      "agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:corpus:demo-project",
+    runId: "bg-run-snapshot-1",
+    queueKey: "background:papernexus:demo-project:upload",
+    kind: "papernexus_wrapper",
+    family: "papernexus",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    runtime: {
+      subagent: {
+        async waitForRun(params) {
+          return completedRunIds.has(params.runId)
+            ? { status: "ok" }
+            : { status: "timeout" };
+        },
+      },
+    },
+    pluginConfig: {
+      papernexusApiBaseUrl: `http://127.0.0.1:${address.port}`,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+
+  assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+  assert.equal(snapshot.paperIngestionRuntimeStatus, "ready");
+  assert.equal(snapshot.graphPresenceStatus, "ready");
+  assert.equal(snapshot.graphRefreshRequired, false);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "GET");
+  assert.match(requests[0].url ?? "", /\/api\/corpus-sources\?name=shared-global-graph$/);
+
+  const graphPresence = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(graphPresence.status, "ready");
 });
 
 test("research_workflow queue_literature_discovery_requisition bridges a structured discovery packet into durable paper_ingestion queued requests", async (t) => {
