@@ -25,6 +25,8 @@ allowed-tools:
 - 抽象必须描述 mechanism，不只是更简单的字面表达
 - 为每个 challenge 写 2-3 个 `mechanism_signature`
 - 如果图里已经有 mechanism / bridge 提示，要尽量对齐，而不是重新发明一套词
+- 必须显式消费 decomposition packet 里的 `target-domain analysis`
+- 要保留 `remaining challenges` 和 `overall assessment`，不要在翻译时把这些 target-domain analysis 信号丢掉
 
 ## Durable 输出
 

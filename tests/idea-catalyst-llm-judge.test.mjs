@@ -49,9 +49,10 @@ test("llm judge parser accepts structured JSON responses", () => {
       reasoning:
         "Fragment B integrates a more explicit control mechanism into the target domain.",
       dimensions: {
-        interdisciplinary_novelty: "b",
-        interdisciplinary_usefulness: "b",
         depth_of_integration: "b",
+        multi_stage_disciplinary_engagement: "b",
+        innovation_payoff: "b",
+        novelty_feasibility: "b",
       },
     })
   );
@@ -94,9 +95,10 @@ test("rankIdeaCatalystFragments incorporates optional llm pairwise judgments", (
           reasoning:
             "Fragment B shows deeper interdisciplinary integration despite lower base novelty.",
           dimensions: {
-            interdisciplinary_novelty: "a",
-            interdisciplinary_usefulness: "b",
             depth_of_integration: "b",
+            multi_stage_disciplinary_engagement: "b",
+            innovation_payoff: "b",
+            novelty_feasibility: "b",
           },
         },
       ],

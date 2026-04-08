@@ -225,22 +225,28 @@ export function rankIdeaCatalystFragments(
     const winner = judgment.preferred === "a" ? left : right;
     const loser = winner.fragment_id === left.fragment_id ? right : left;
     const dimensionVotes = {
-      interdisciplinary_novelty:
-        judgment.dimensions.interdisciplinary_novelty === "a"
-          ? left.fragment_id
-          : judgment.dimensions.interdisciplinary_novelty === "b"
-            ? right.fragment_id
-            : "tie",
-      interdisciplinary_usefulness:
-        judgment.dimensions.interdisciplinary_usefulness === "a"
-          ? left.fragment_id
-          : judgment.dimensions.interdisciplinary_usefulness === "b"
-            ? right.fragment_id
-            : "tie",
       depth_of_integration:
         judgment.dimensions.depth_of_integration === "a"
           ? left.fragment_id
           : judgment.dimensions.depth_of_integration === "b"
+            ? right.fragment_id
+            : "tie",
+      multi_stage_disciplinary_engagement:
+        judgment.dimensions.multi_stage_disciplinary_engagement === "a"
+          ? left.fragment_id
+          : judgment.dimensions.multi_stage_disciplinary_engagement === "b"
+            ? right.fragment_id
+            : "tie",
+      innovation_payoff:
+        judgment.dimensions.innovation_payoff === "a"
+          ? left.fragment_id
+          : judgment.dimensions.innovation_payoff === "b"
+            ? right.fragment_id
+            : "tie",
+      novelty_feasibility:
+        judgment.dimensions.novelty_feasibility === "a"
+          ? left.fragment_id
+          : judgment.dimensions.novelty_feasibility === "b"
             ? right.fragment_id
             : "tie",
     };
@@ -252,7 +258,7 @@ export function rankIdeaCatalystFragments(
     ).length;
     const margin = Number(
       (
-        Math.abs(leftVotes - rightVotes) / 3 +
+        Math.abs(leftVotes - rightVotes) / 4 +
         (dimensionVotes.depth_of_integration === winner.fragment_id ? 0.35 : 0)
       ).toFixed(4)
     );

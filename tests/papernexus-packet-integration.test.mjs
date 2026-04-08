@@ -25,6 +25,260 @@ async function writeText(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
 }
 
+function buildIdeaCatalystPacketBundleFixture() {
+  return {
+    contractVersion: "idea-catalyst-packet-bundle-v1",
+    decomposition: {
+      coarse_grained_domain: "Computer Science",
+      fine_grained_domain: "Generalized Category Discovery",
+      core_challenge: "preserve evidence anchors under open-world shift",
+      research_questions: [
+        {
+          question_id: "rq-1",
+          domain_specific_question:
+            "How can GCD preserve evidence anchors under open-world shift?",
+          domain_agnostic_question:
+            "How can a learning system preserve support evidence while adapting under shifting environments?",
+          rationale:
+            "Current graph evidence shows strong adaptation methods but weak support-preservation mechanisms.",
+          target_domain_queries: [
+            "Generalized Category Discovery preserve evidence anchors",
+            "GCD support preservation under open-world shift",
+            "open-world category discovery support evidence mechanism",
+          ],
+        },
+      ],
+      questions: [
+        {
+          question_id: "rq-1",
+          domain_specific_question:
+            "How can GCD preserve evidence anchors under open-world shift?",
+          domain_agnostic_question:
+            "How can a learning system preserve support evidence while adapting under shifting environments?",
+          rationale:
+            "Current graph evidence shows strong adaptation methods but weak support-preservation mechanisms.",
+          target_domain_queries: [
+            "Generalized Category Discovery preserve evidence anchors",
+            "GCD support preservation under open-world shift",
+            "open-world category discovery support evidence mechanism",
+          ],
+        },
+      ],
+    },
+    target_domain_analysis: [
+      {
+        target_domain: "Computer Science",
+        fine_grained_domain: "Generalized Category Discovery",
+        addressed_aspects: [
+          {
+            sub_question:
+              "How can GCD preserve evidence anchors under open-world shift?",
+            evidence:
+              "Existing GCD methods partially address adaptation but not explicit support preservation.",
+          },
+        ],
+        remaining_challenges: [
+          {
+            challenge_id: "challenge-1",
+            domain_specific_challenge_question:
+              "How can GCD preserve evidence anchors under open-world shift?",
+            domain_agnostic_challenge_question:
+              "How can a learning system preserve support evidence while adapting under shifting environments?",
+            why_unaddressed:
+              "The graph shows no stable bridge between adaptation quality and support-evidence retention.",
+            importance: "high",
+          },
+        ],
+        overall_assessment: "partially addressed",
+      },
+    ],
+    cross_domain_queries: [
+      {
+        domain: "Psychology",
+        domain_rationale:
+          "Psychology provides metacontrol theories for preserving vs adapting behavior.",
+        queries: [
+          "Psychology metacontrol support preservation adaptation",
+          "metacontrol flexibility persistence evidence retention",
+        ],
+        shared_mechanisms: ["metacontrol policy"],
+        supporting_papers: ["Belief Updating Under Uncertainty"],
+      },
+      {
+        domain: "Robotics",
+        domain_rationale:
+          "Robotics contributes curriculum relay strategies for staged transfer.",
+        queries: [
+          "Robotics curriculum relay transfer support preservation",
+          "curriculum relay staged adaptation stability",
+        ],
+        shared_mechanisms: ["curriculum relay"],
+        supporting_papers: ["Curriculum Relay for Staged Transfer"],
+      },
+    ],
+    cross_domain_searches: [
+      {
+        domain: "Psychology",
+        domain_rationale:
+          "Psychology provides metacontrol theories for preserving vs adapting behavior.",
+        queries: [
+          "Psychology metacontrol support preservation adaptation",
+          "metacontrol flexibility persistence evidence retention",
+        ],
+        shared_mechanisms: ["metacontrol policy"],
+        supporting_papers: ["Belief Updating Under Uncertainty"],
+      },
+      {
+        domain: "Robotics",
+        domain_rationale:
+          "Robotics contributes curriculum relay strategies for staged transfer.",
+        queries: [
+          "Robotics curriculum relay transfer support preservation",
+          "curriculum relay staged adaptation stability",
+        ],
+        shared_mechanisms: ["curriculum relay"],
+        supporting_papers: ["Curriculum Relay for Staged Transfer"],
+      },
+    ],
+    source_domain_analyses: [
+      {
+        source_domain: "Psychology",
+        domain_rationale:
+          "Psychology provides metacontrol theories for preserving vs adapting behavior.",
+        shared_mechanisms: ["metacontrol policy"],
+        supporting_papers: ["Belief Updating Under Uncertainty"],
+        takeaways: [
+          {
+            concept: "metacontrol policy",
+            source_domain_formulation:
+              "Metacontrol balances persistence and flexibility under uncertainty.",
+            mechanism_explanation:
+              "A controller chooses when to preserve prior evidence versus adapt to new signals.",
+            selection_rationale:
+              "Selected because it directly matches the support-preservation vs adaptation tradeoff.",
+            relevance_to_challenge:
+              "Maps onto deciding when GCD should preserve support anchors.",
+            supporting_papers: ["Belief Updating Under Uncertainty"],
+            kg_node_id: "bridge-psy",
+          },
+        ],
+        domain_distance: 0.81,
+        interdisciplinary_potential: 0.92,
+        selection_rationale:
+          "Metacontrol is the strongest graph-backed bridge for support-preserving adaptation.",
+      },
+      {
+        source_domain: "Robotics",
+        domain_rationale:
+          "Robotics contributes curriculum relay strategies for staged transfer.",
+        shared_mechanisms: ["curriculum relay"],
+        supporting_papers: ["Curriculum Relay for Staged Transfer"],
+        takeaways: [
+          {
+            concept: "curriculum relay",
+            source_domain_formulation:
+              "Curriculum relay stages stable subskills before harder transfer.",
+            mechanism_explanation:
+              "Transfer is stabilized by relaying progressively harder support conditions.",
+            selection_rationale:
+              "Selected because staged relay offers a second bridge for preserving support quality.",
+            relevance_to_challenge:
+              "Suggests a staged route for preserving anchors before full adaptation.",
+            supporting_papers: ["Curriculum Relay for Staged Transfer"],
+            kg_node_id: "bridge-robotics",
+          },
+        ],
+        domain_distance: 0.74,
+        interdisciplinary_potential: 0.84,
+        selection_rationale:
+          "Curriculum relay complements metacontrol with staged transfer structure.",
+      },
+    ],
+    cross_domain_analysis: [
+      {
+        source_domain: "Psychology",
+        domain_rationale:
+          "Psychology provides metacontrol theories for preserving vs adapting behavior.",
+        shared_mechanisms: ["metacontrol policy"],
+        supporting_papers: ["Belief Updating Under Uncertainty"],
+        takeaways: [
+          {
+            concept: "metacontrol policy",
+            source_domain_formulation:
+              "Metacontrol balances persistence and flexibility under uncertainty.",
+            mechanism_explanation:
+              "A controller chooses when to preserve prior evidence versus adapt to new signals.",
+            selection_rationale:
+              "Selected because it directly matches the support-preservation vs adaptation tradeoff.",
+            relevance_to_challenge:
+              "Maps onto deciding when GCD should preserve support anchors.",
+            supporting_papers: ["Belief Updating Under Uncertainty"],
+            kg_node_id: "bridge-psy",
+          },
+        ],
+        domain_distance: 0.81,
+        interdisciplinary_potential: 0.92,
+        selection_rationale:
+          "Metacontrol is the strongest graph-backed bridge for support-preserving adaptation.",
+      },
+    ],
+    idea_fragments: [
+      {
+        rank: 1,
+        title: "Psychology bridge for Computer Science",
+        source_domain: "Psychology",
+        target_challenge: "preserve evidence anchors under open-world shift",
+        core_insight:
+          "Metacontrol can decide when to preserve support anchors versus adapt to new evidence.",
+        integration_mechanism: "metacontrol policy",
+        challenge_resolution:
+          "Use metacontrol to route preservation vs adaptation decisions inside GCD.",
+        concrete_realization:
+          "Operationalize metacontrol as a support router over anchor updates.",
+        source_takeaways: ["metacontrol policy"],
+        supporting_papers: ["Belief Updating Under Uncertainty"],
+        ranking_signals: {
+          interdisciplinary_potential: 0.92,
+        },
+        idea_fragment: {
+          title: "Psychology bridge for Computer Science",
+          core_insight:
+            "Metacontrol can decide when to preserve support anchors versus adapt to new evidence.",
+          integration_mechanism: "metacontrol policy",
+          challenge_resolution:
+            "Use metacontrol to route preservation vs adaptation decisions inside GCD.",
+          concrete_realization:
+            "Operationalize metacontrol as a support router over anchor updates.",
+        },
+      },
+    ],
+    interdisciplinary_ranking: {
+      ranking_criteria: [
+        "DEPTH OF INTEGRATION",
+        "MULTI-STAGE DISCIPLINARY ENGAGEMENT",
+        "INNOVATION PAYOFF",
+        "NOVELTY + FEASIBILITY",
+      ],
+      ranked_candidates: [
+        {
+          rank: 1,
+          source_domain: "Psychology",
+          interdisciplinary_potential: 0.92,
+          depth_of_integration: 0.88,
+          multi_stage_disciplinary_engagement: 0.86,
+          innovation_payoff: 0.9,
+          novelty_plus_feasibility: 0.83,
+          supporting_papers: ["Belief Updating Under Uncertainty"],
+          shared_mechanisms: ["metacontrol policy"],
+          rationale:
+            "Psychology provides the strongest bridge for the target challenge.",
+        },
+      ],
+    },
+    requisition_report: null,
+  };
+}
+
 function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
   const api = {
@@ -435,6 +689,127 @@ test("stage preflight syncs PaperNexus packets and queues a packet-backed litera
       (entry) =>
         entry.trigger_kind === "idea_catalyst_requisition" &&
         /disc-001/i.test(entry.request_id)
+    ),
+    true
+  );
+});
+
+test("research_workflow materialize_papernexus_packet_contracts accepts a PaperNexus idea-catalyst packet bundle as the upstream source of truth", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  await fs.rm(
+    path.join(projectRoot, "researcher", "papernexus", "MECHANISM_BRIDGE_PACKET.json"),
+    { force: true }
+  );
+  await fs.rm(
+    path.join(projectRoot, "researcher", "papernexus", "CHALLENGE_INSIGHT_PACKET.json"),
+    { force: true }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "bundle-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.ideaCatalystPacketBundleReady, true);
+  assert.equal(result.state.mechanismBridgePacketReady, true);
+  assert.equal(result.state.challengeInsightPacketReady, true);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    manifest.ideation_contract.graph_ideation_indices.candidate_source_domains.includes(
+      "Psychology"
+    ),
+    true
+  );
+  assert.equal(
+    manifest.ideation_contract.graph_ideation_indices.selected_source_domains.includes(
+      "Psychology"
+    ),
+    true
+  );
+  assert.equal(
+    manifest.ideation_contract.graph_ideation_indices.transfer_bridges.some((entry) =>
+      /Psychology:metacontrol policy/i.test(entry)
+    ),
+    true
+  );
+
+  const derivedMechanismPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "papernexus", "MECHANISM_BRIDGE_PACKET.json"),
+      "utf8"
+    )
+  );
+  const derivedChallengePacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "papernexus", "CHALLENGE_INSIGHT_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(derivedMechanismPacket.selected_domains.includes("Psychology"), true);
+  assert.equal(derivedChallengePacket.challenge_clusters.length >= 1, true);
+  assert.equal(derivedChallengePacket.insight_clusters.length >= 1, true);
+});
+
+test("stage preflight detects a packet bundle even when split PaperNexus packets are absent", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  await writeJson(manifestPath, manifest);
+  await fs.rm(
+    path.join(projectRoot, "researcher", "papernexus", "MECHANISM_BRIDGE_PACKET.json"),
+    { force: true }
+  );
+  await fs.rm(
+    path.join(projectRoot, "researcher", "papernexus", "CHALLENGE_INSIGHT_PACKET.json"),
+    { force: true }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "idea",
+    trigger: "bundle-preflight",
+    agentId: "researcher",
+    deps: {
+      materializeIdeationContract,
+      materializePaperStoryState,
+      materializeReviewPressurePacket,
+      materializeIdeaCatalystState,
+      materializeLiteratureDiscoveryPacket,
+      materializePapernexusPacketContracts,
+      queueIdeaCatalystRequisition,
+      queueLiteratureDiscoveryRequisition,
+    },
+  });
+
+  assert.equal(result.errors.length, 0);
+  assert.ok(result.materializedContracts.includes("papernexus_packet_contracts"));
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    refreshedManifest.ideation_contract.graph_ideation_indices.selected_source_domains.includes(
+      "Psychology"
     ),
     true
   );

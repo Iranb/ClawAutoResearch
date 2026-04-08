@@ -6,7 +6,7 @@ import { buildIdeaCatalystAbstractionPacket } from "../tools/idea-catalyst/trans
 import { deriveIdeaCatalystScoutReport } from "../tools/idea-catalyst/scout-adapter.ts";
 import { buildIdeaCatalystIdeaFragments } from "../tools/idea-catalyst/integrator.ts";
 
-test("decomposer produces dual-representation questions and structured remaining challenges", () => {
+test("decomposition packet carries public-repo question metadata and rubric-backed target analysis", () => {
   const packet = buildIdeaCatalystDecompositionPacket({
     targetDomain: "Computer Science",
     longTermGoal: "Build stronger cross-domain research ideation.",
@@ -23,11 +23,18 @@ test("decomposer produces dual-representation questions and structured remaining
 
   assert.ok(Array.isArray(packet.questions));
   assert.equal(packet.questions.length, 2);
+  assert.equal(packet.coarse_grained_domain, "Computer Science");
+  assert.equal(packet.fine_grained_domain, "Computer Science");
   assert.ok(
     packet.questions.every(
       (question) =>
         typeof question.domain_agnostic_question === "string" &&
-        question.domain_agnostic_question.trim().length > 0
+        question.domain_agnostic_question.trim().length > 0 &&
+        Array.isArray(question.target_domain_queries) &&
+        question.target_domain_queries.length >= 3 &&
+        ["largely unaddressed", "partially addressed", "substantially addressed"].includes(
+          question.target_domain_analysis?.overall_assessment
+        )
     )
   );
 
@@ -148,6 +155,9 @@ test("scout-adapter consumes domain distance matrices and emits structured takea
 
   const psychology = report.candidate_domains.find((entry) => entry.domain === "Psychology");
   assert.equal(psychology.domain_distance, 0.91);
+  assert.equal(Array.isArray(report.cross_domain_searches), true);
+  assert.equal(report.cross_domain_searches[0].queries.length >= 1, true);
+  assert.equal(typeof report.cross_domain_searches[0].domain_rationale, "string");
   assert.equal(psychology.takeaways.length >= 1, true);
   assert.equal(
     typeof psychology.takeaways[0].source_domain_formulation === "string",
@@ -165,6 +175,7 @@ test("scout-adapter consumes domain distance matrices and emits structured takea
     typeof psychology.takeaways[0].relevance_to_challenge === "string",
     true
   );
+  assert.equal(Array.isArray(psychology.takeaways[0].supporting_papers), true);
 });
 
 test("integrator builds graph-grounded fragments from scouting takeaways and decomposition questions", () => {
@@ -230,6 +241,8 @@ test("integrator builds graph-grounded fragments from scouting takeaways and dec
   assert.equal(packet.fragments.length, 1);
   const fragment = packet.fragments[0];
   assert.equal(fragment.source_domain, "Psychology");
+  assert.equal(typeof fragment.idea_fragment.title, "string");
+  assert.equal(typeof fragment.idea_fragment.core_insight, "string");
   assert.equal(Array.isArray(fragment.integration_mechanism.selected_takeaways), true);
   assert.equal(fragment.integration_mechanism.selected_takeaways.length >= 1, true);
   assert.equal(

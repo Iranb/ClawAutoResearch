@@ -90,9 +90,13 @@ Cross-repository alignment assessment as of 2026-04-08:
   - four-criterion ranking dimensions
   - staged packet output mode
 - The main remaining distinction is architectural rather than semantic:
-  - `openclaw-research` still materializes and owns the downstream decomposition/scouting/integration workflow packets
-  - `PaperNexus` now exposes an upstream packet bundle that is direct-consumption-ready, but `openclaw-research` has not yet been simplified to consume that bundle as its only source of truth end-to-end
-- This means the system is aligned and interoperable today, but not yet reduced to a single shared durable packet contract at runtime.
+  - `PaperNexus` remains the upstream packet provider
+  - `openclaw-research` still owns the downstream workflow-local durable packets
+  - but `openclaw-research` now accepts `IDEA_CATALYST_PACKET_BUNDLE.json` as an upstream source of truth and automatically derives / refreshes the workflow-local bridge + challenge packet layer from it
+- This means the system is now aligned and interoperable in both directions:
+  - legacy split packets still work
+  - bundle-first upstream delivery also works
+  - a future cleanup pass can still reduce the runtime to a thinner single-bundle consumer if desired
 
 ---
 

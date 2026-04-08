@@ -9,6 +9,9 @@ import {
   buildQuestionGenerationPrompt,
   parseGeneratedQuestions,
 } from "../tools/idea-catalyst/llm-question-generator.ts";
+import {
+  getIdeaCatalystPromptContract,
+} from "../tools/idea-catalyst/prompt-contracts.ts";
 import { buildIdeaCatalystGateDecision } from "../tools/idea-catalyst/gatekeeper.ts";
 import { buildIdeaCatalystDecompositionPacket } from "../tools/idea-catalyst/decomposer.ts";
 
@@ -88,15 +91,25 @@ test("llm question generator prompt and parser support decomposition augmentatio
   });
   assert.match(prompt, /Computer Science/i);
   assert.match(prompt, /memory preservation under domain shift/i);
+  assert.match(prompt, /coarse_grained_domain/i);
+  assert.match(prompt, /target_domain_queries/i);
 
   const generated = parseGeneratedQuestions(
     JSON.stringify({
       questions: [
         {
+          coarse_grained_domain: "Computer Science",
+          fine_grained_domain: "Generalized Category Discovery",
+          core_challenge: "memory-preserving adaptation",
           domain_specific_question: "collaborative uncertainty-aware prototype regulation",
           domain_agnostic_question:
             "How can a system regulate uncertainty-aware state updates across collaborators?",
           rationale: "Adds a non-incremental collaboration angle missing from the base graph.",
+          target_domain_queries: [
+            "Generalized Category Discovery collaborative uncertainty-aware prototype regulation",
+            "GCD collaborative uncertainty-aware prototype regulation baseline limitation",
+            "GCD collaborative uncertainty-aware prototype regulation mechanism"
+          ]
         },
       ],
     })
@@ -123,10 +136,19 @@ test("llm question generator prompt and parser support decomposition augmentatio
     packet.questions.some(
       (entry) =>
         entry.source === "llm_generated" &&
-        /collaborative uncertainty-aware prototype regulation/i.test(
-          entry.domain_specific_question
-        )
+        /collaborative uncertainty-aware prototype regulation/i.test(entry.domain_specific_question)
     ),
     true
   );
+  const generatedQuestion = packet.questions.find((entry) => entry.source === "llm_generated");
+  assert.equal(generatedQuestion.coarse_grained_domain, "Computer Science");
+  assert.ok(Array.isArray(generatedQuestion.target_domain_queries));
+  assert.ok(generatedQuestion.target_domain_queries.length >= 3);
+});
+
+test("prompt contract exposes staged public repo fields", () => {
+  const contract = getIdeaCatalystPromptContract();
+  assert.ok(contract.initial_decomposition.required_fields.includes("coarse_grained_domain"));
+  assert.ok(contract.target_domain_analysis.required_fields.includes("overall_assessment"));
+  assert.ok(contract.cross_domain_queries.required_fields.includes("cross_domain_searches"));
 });

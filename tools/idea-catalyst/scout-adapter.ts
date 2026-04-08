@@ -117,6 +117,15 @@ function buildStructuredTakeaway(params: {
   const mechanismExplanation =
     pickString(properties, ["evidenceText", "abstract", "text", "description"]) ??
     `${params.mechanism} helps regulate ${relevantChallenge} under changing conditions.`;
+  const supportingPapers = uniqueStrings([
+    ...asStringArray(
+      properties?.supporting_papers ??
+        properties?.supportingPapers ??
+        properties?.paper_ids ??
+        properties?.paperIds
+    ),
+    pickString(properties, ["paper_id", "paperId"]) ?? "",
+  ]).slice(0, 5);
   return {
     takeaway_id: `${params.nodeId}-takeaway`,
     concept: params.concept,
@@ -126,6 +135,7 @@ function buildStructuredTakeaway(params: {
     mechanism_explanation: mechanismExplanation,
     relevance_to_challenge: relevantChallenge,
     selection_rationale: `Selected because ${params.domain ?? "the source domain"} offers transferable evidence for "${relevantChallenge}".`,
+    supporting_papers: supportingPapers,
   };
 }
 
@@ -183,12 +193,11 @@ function buildDomainSearchQueries(params: {
   domain: string;
   targetDomain: string | null;
   challengeClusters: string[];
-}): Array<{ domain: string; query: string; rationale: string }> {
+}): Array<{ query: string; rationale: string }> {
   const challengeTerms = uniqueStrings(params.challengeClusters).slice(0, 3);
   if (challengeTerms.length === 0) {
     return [
       {
-        domain: params.domain,
         query: `${params.domain} transferable principle for ${params.targetDomain ?? "target-domain"} innovation`,
         rationale:
           "Fallback cross-domain scouting query when no explicit challenge cluster is available.",
@@ -196,7 +205,6 @@ function buildDomainSearchQueries(params: {
     ];
   }
   return challengeTerms.map((challenge) => ({
-    domain: params.domain,
     query: `${params.domain} ${challenge} transferable principle ${params.targetDomain ?? "target-domain"}`.trim(),
     rationale: `Acquire source-domain evidence for the target challenge "${challenge}".`,
   }));
@@ -322,10 +330,16 @@ export function deriveIdeaCatalystScoutReport(params: {
       : bridgeNodes.length >= 1 && selectedSourceDomains.length >= 1
         ? "moderate"
         : "weak";
+  const crossDomainSearches = candidateDomainEntries.map((entry) => ({
+    domain: entry.domain,
+    domain_rationale: entry.rationale,
+    queries: entry.search_queries.map((queryEntry) => queryEntry.query),
+  }));
 
   return {
     target_domain: targetDomain,
     challenge_clusters: uniqueStrings(params.challengeClusters),
+    cross_domain_searches: crossDomainSearches,
     candidate_domains: candidateDomainEntries,
     selected_source_domains: selectedSourceDomains,
     pruned_domains: prunedDomains,

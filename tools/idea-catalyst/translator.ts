@@ -1,7 +1,25 @@
 type DecompositionQuestion = {
   question_id?: string | null;
+  coarse_grained_domain?: string | null;
+  fine_grained_domain?: string | null;
+  core_challenge?: string | null;
   domain_specific_question?: string | null;
   domain_agnostic_question?: string | null;
+  rationale?: string | null;
+  target_domain_queries?: string[] | null;
+  target_domain_analysis?: {
+    addressed_aspects?: Array<{ sub_question?: string | null; evidence?: string | null }> | null;
+    remaining_challenges?:
+      | Array<{
+          challenge_id?: string | null;
+          domain_specific_challenge_question?: string | null;
+          domain_agnostic_challenge_question?: string | null;
+          why_unaddressed?: string | null;
+          importance?: string | null;
+        }>
+      | null;
+    overall_assessment?: string | null;
+  } | null;
   coverage_status?: string | null;
   coverage_evidence?: {
     graph_signal_matches?: string[] | null;
@@ -34,6 +52,17 @@ function uniqueStrings(values: string[]) {
   return result;
 }
 
+function mapAssessmentToCoverage(assessment: string | null | undefined) {
+  const normalized = String(assessment ?? "").trim().toLowerCase();
+  if (normalized === "substantially addressed") {
+    return "resolved";
+  }
+  if (normalized === "largely unaddressed") {
+    return "unexplored";
+  }
+  return "partial";
+}
+
 function deriveMechanismHypothesis(question: DecompositionQuestion) {
   const domainSpecificQuestion =
     question.domain_specific_question ?? "the target challenge";
@@ -62,13 +91,20 @@ function extractChallengeAgnosticConstraints(question: DecompositionQuestion) {
     .filter((entry): entry is string => Boolean(entry));
 }
 
-function buildCoverageAwareAbstraction(question: DecompositionQuestion, index: number) {
+function buildCoverageAwareAbstraction(
+  question: DecompositionQuestion,
+  index: number,
+  targetDomain: string
+) {
   const domainSpecificQuestion =
     question.domain_specific_question ?? `challenge ${index + 1}`;
   const domainAgnosticQuestion =
     question.domain_agnostic_question ??
     `How can a system address ${String(domainSpecificQuestion).toLowerCase()} under changing collaborators, constraints, and environments?`;
-  const coverageStatus = question.coverage_status ?? "partial";
+  const coverageStatus =
+    question.coverage_status ??
+    mapAssessmentToCoverage(question.target_domain_analysis?.overall_assessment) ??
+    "partial";
   const transferAxes = uniqueStrings([
     ...(question.coverage_evidence?.graph_signal_matches ?? []),
     ...(question.coverage_evidence?.transfer_bridge_matches ?? []),
@@ -78,9 +114,16 @@ function buildCoverageAwareAbstraction(question: DecompositionQuestion, index: n
   if (coverageStatus === "unexplored") {
     return {
       question_id: question.question_id ?? `q${index + 1}`,
+      coarse_grained_domain: question.coarse_grained_domain ?? targetDomain,
+      fine_grained_domain: question.fine_grained_domain ?? targetDomain,
+      core_challenge: question.core_challenge ?? domainSpecificQuestion,
       domain_specific_question: domainSpecificQuestion,
       coverage_status: coverageStatus,
       domain_agnostic_question: domainAgnosticQuestion,
+      target_domain_queries: Array.isArray(question.target_domain_queries)
+        ? question.target_domain_queries
+        : [],
+      target_domain_analysis: question.target_domain_analysis ?? null,
       mechanism_hypothesis: null,
       transfer_axes: [],
       unresolved_constraints: unresolvedConstraints,
@@ -91,9 +134,16 @@ function buildCoverageAwareAbstraction(question: DecompositionQuestion, index: n
   if (coverageStatus === "partial") {
     return {
       question_id: question.question_id ?? `q${index + 1}`,
+      coarse_grained_domain: question.coarse_grained_domain ?? targetDomain,
+      fine_grained_domain: question.fine_grained_domain ?? targetDomain,
+      core_challenge: question.core_challenge ?? domainSpecificQuestion,
       domain_specific_question: domainSpecificQuestion,
       coverage_status: coverageStatus,
       domain_agnostic_question: domainAgnosticQuestion,
+      target_domain_queries: Array.isArray(question.target_domain_queries)
+        ? question.target_domain_queries
+        : [],
+      target_domain_analysis: question.target_domain_analysis ?? null,
       mechanism_hypothesis: deriveMechanismHypothesis(question),
       transfer_axes: transferAxes,
       unresolved_constraints: unresolvedConstraints,
@@ -103,9 +153,16 @@ function buildCoverageAwareAbstraction(question: DecompositionQuestion, index: n
 
   return {
     question_id: question.question_id ?? `q${index + 1}`,
+    coarse_grained_domain: question.coarse_grained_domain ?? targetDomain,
+    fine_grained_domain: question.fine_grained_domain ?? targetDomain,
+    core_challenge: question.core_challenge ?? domainSpecificQuestion,
     domain_specific_question: domainSpecificQuestion,
     coverage_status: coverageStatus,
     domain_agnostic_question: domainAgnosticQuestion,
+    target_domain_queries: Array.isArray(question.target_domain_queries)
+      ? question.target_domain_queries
+      : [],
+    target_domain_analysis: question.target_domain_analysis ?? null,
     mechanism_hypothesis: transferAxes.length
       ? `Leverage the already-supported mechanisms behind ${transferAxes[0]} to preserve the current target-domain advantage.`
       : null,
@@ -126,7 +183,7 @@ export function buildIdeaCatalystAbstractionPacket(
     version: 2,
     target_domain: targetDomain,
     abstractions: questions.map((question, index) =>
-      buildCoverageAwareAbstraction(question, index)
+      buildCoverageAwareAbstraction(question, index, targetDomain)
     ),
   };
 }

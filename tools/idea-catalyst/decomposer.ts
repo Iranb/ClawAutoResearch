@@ -10,9 +10,24 @@ type DecompositionPacketParams = {
 };
 
 type GeneratedCatalystQuestion = {
+  coarse_grained_domain?: string | null;
+  fine_grained_domain?: string | null;
+  core_challenge?: string | null;
   domain_specific_question: string;
   domain_agnostic_question?: string | null;
   rationale?: string | null;
+  target_domain_queries?: string[] | null;
+};
+
+type NormalizedQuestionInput = {
+  coarse_grained_domain: string | null;
+  fine_grained_domain: string | null;
+  core_challenge: string | null;
+  domainSpecificQuestion: string;
+  domainAgnosticQuestion: string | null;
+  rationale: string | null;
+  target_domain_queries: string[];
+  source: "graph_seed" | "llm_generated";
 };
 
 function uniqueStrings(values: string[]) {
@@ -94,6 +109,86 @@ function buildDomainAgnosticQuestion(challenge: string, targetDomain: string) {
   return `How can a system address ${question.toLowerCase()} across changing collaborators, constraints, and environments?`;
 }
 
+function inferCoarseDomain(targetDomain: string) {
+  const normalized = String(targetDomain || "").trim().toLowerCase();
+  if (!normalized) {
+    return "Unknown";
+  }
+  if (/category discovery|computer science|machine learning|vision|nlp/.test(normalized)) {
+    return "Computer Science";
+  }
+  if (/biology|medicine|genomics/.test(normalized)) {
+    return "Life Sciences";
+  }
+  if (/economics|market|finance/.test(normalized)) {
+    return "Economics";
+  }
+  return String(targetDomain || "").trim();
+}
+
+function buildTargetDomainQueries(params: {
+  targetDomain: string;
+  challenge: string;
+  longTermGoal: string | null;
+  problemStatement: string | null;
+  llmQueries?: string[] | null;
+}) {
+  const seeded = Array.isArray(params.llmQueries) ? params.llmQueries : [];
+  const fallback = [
+    `${params.targetDomain} ${params.challenge}`,
+    `${params.targetDomain} ${params.challenge} baseline limitation`,
+    `${params.targetDomain} ${params.challenge} mechanism`,
+    params.problemStatement
+      ? `${params.targetDomain} ${params.problemStatement}`
+      : null,
+    params.longTermGoal ? `${params.targetDomain} ${params.longTermGoal}` : null,
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .slice(0, 5);
+  return uniqueStrings([...seeded, ...fallback]).slice(0, 5);
+}
+
+function buildTargetDomainAnalysis(params: {
+  challenge: string;
+  targetDomain: string;
+  graphSignalMatches: string[];
+  occupiedMatches: string[];
+  transferBridgeMatches: string[];
+}) {
+  const addressedAspects = uniqueStrings([
+    ...params.graphSignalMatches.map(
+      (entry) => `${params.targetDomain} already touches ${entry} for ${params.challenge}.`
+    ),
+    ...params.transferBridgeMatches.map(
+      (entry) => `Bridge evidence suggests ${entry} could partially address ${params.challenge}.`
+    ),
+  ]).slice(0, 3);
+  const overallAssessment = params.occupiedMatches.length
+    ? "substantially addressed"
+    : params.graphSignalMatches.length || params.transferBridgeMatches.length
+      ? "partially addressed"
+      : "largely unaddressed";
+  return {
+    addressed_aspects: addressedAspects.map((entry, index) => ({
+      sub_question: `addressed-${index + 1}`,
+      evidence: entry,
+    })),
+    remaining_challenges: describeRemainingChallenges(params.challenge, params.targetDomain).map(
+      (entry, index) => ({
+        challenge_id: `remaining-${index + 1}`,
+        domain_specific_challenge_question: entry.challenge_specific,
+        domain_agnostic_challenge_question: entry.challenge_agnostic,
+        why_unaddressed:
+          overallAssessment === "partially addressed"
+            ? "Current graph evidence only covers part of the challenge."
+            : "Current graph evidence does not yet close this challenge.",
+        importance: "high",
+      })
+    ),
+    overall_assessment: overallAssessment,
+  };
+}
+
 function describeRemainingChallenges(challenge: string, targetDomain: string) {
   const domainAgnostic = buildDomainAgnosticQuestion(challenge, targetDomain).replace(
     /\?$/,
@@ -126,15 +221,35 @@ export function buildIdeaCatalystDecompositionPacket(
     })
   );
 
-  const seededQuestions = uniqueStrings(params.challengeClusters).map((challenge) => ({
+  const seededQuestions: NormalizedQuestionInput[] = uniqueStrings(
+    params.challengeClusters
+  ).map((challenge) => ({
+    coarse_grained_domain: null,
+    fine_grained_domain: null,
+    core_challenge: null,
     domainSpecificQuestion: challenge,
     domainAgnosticQuestion: null,
     rationale: null,
+    target_domain_queries: [],
     source: "graph_seed" as const,
   }));
-  const llmGeneratedQuestions = Array.isArray(options?.llmGeneratedQuestions)
+  const llmGeneratedQuestions: NormalizedQuestionInput[] = Array.isArray(
+    options?.llmGeneratedQuestions
+  )
     ? options.llmGeneratedQuestions
         .map((entry) => ({
+          coarse_grained_domain:
+            entry?.coarse_grained_domain == null
+              ? null
+              : String(entry.coarse_grained_domain).trim() || null,
+          fine_grained_domain:
+            entry?.fine_grained_domain == null
+              ? null
+              : String(entry.fine_grained_domain).trim() || null,
+          core_challenge:
+            entry?.core_challenge == null
+              ? null
+              : String(entry.core_challenge).trim() || null,
           domainSpecificQuestion: String(entry?.domain_specific_question ?? "").trim(),
           domainAgnosticQuestion:
             entry?.domain_agnostic_question == null
@@ -142,6 +257,11 @@ export function buildIdeaCatalystDecompositionPacket(
               : String(entry.domain_agnostic_question).trim() || null,
           rationale:
             entry?.rationale == null ? null : String(entry.rationale).trim() || null,
+          target_domain_queries: Array.isArray(entry?.target_domain_queries)
+            ? entry.target_domain_queries
+                .map((query) => String(query ?? "").trim())
+                .filter(Boolean)
+            : [],
           source: "llm_generated" as const,
         }))
         .filter((entry) => entry.domainSpecificQuestion.length > 0)
@@ -157,8 +277,12 @@ export function buildIdeaCatalystDecompositionPacket(
   });
 
   return {
-    version: 2,
+    version: 3,
     target_domain: params.targetDomain,
+    coarse_grained_domain: inferCoarseDomain(params.targetDomain),
+    fine_grained_domain: params.targetDomain,
+    core_challenge:
+      questionInputs[0]?.domainSpecificQuestion ?? params.problemStatement ?? params.targetDomain,
     long_term_goal: params.longTermGoal,
     problem_statement: params.problemStatement,
     selected_track_id: params.selectedTrackId,
@@ -172,27 +296,50 @@ export function buildIdeaCatalystDecompositionPacket(
         : graphSignalMatches.length || transferBridgeMatches.length
           ? "partial"
           : "unexplored";
+      const targetDomainAnalysis = buildTargetDomainAnalysis({
+        challenge,
+        targetDomain: params.targetDomain,
+        graphSignalMatches,
+        occupiedMatches,
+        transferBridgeMatches,
+      });
 
       return {
         question_id: `q${index + 1}`,
         priority: index + 1,
+        coarse_grained_domain:
+          questionInput.coarse_grained_domain ?? inferCoarseDomain(params.targetDomain),
+        fine_grained_domain: questionInput.fine_grained_domain ?? params.targetDomain,
+        core_challenge:
+          questionInput.core_challenge ?? challenge,
         domain_specific_question: challenge,
         domain_agnostic_question:
           questionInput.domainAgnosticQuestion ??
           buildDomainAgnosticQuestion(challenge, params.targetDomain),
+        rationale: questionInput.rationale ?? null,
         source: questionInput.source,
         generation_rationale:
           questionInput.source === "llm_generated" ? questionInput.rationale : null,
+        target_domain_queries: buildTargetDomainQueries({
+          targetDomain: params.targetDomain,
+          challenge,
+          longTermGoal: params.longTermGoal,
+          problemStatement: params.problemStatement,
+          llmQueries: questionInput.target_domain_queries ?? [],
+        }),
+        target_domain_analysis: targetDomainAnalysis,
         coverage_status: coverageStatus,
         coverage_evidence: {
           graph_signal_matches: graphSignalMatches,
           occupied_solution_matches: occupiedMatches,
           transfer_bridge_matches: transferBridgeMatches,
         },
-        remaining_non_incremental_challenges:
-          coverageStatus === "resolved"
-            ? []
-            : describeRemainingChallenges(challenge, params.targetDomain),
+        remaining_non_incremental_challenges: targetDomainAnalysis.remaining_challenges.map(
+          (entry) => ({
+            challenge_specific: entry.domain_specific_challenge_question,
+            challenge_agnostic: entry.domain_agnostic_challenge_question,
+          })
+        ),
       };
     }),
   };

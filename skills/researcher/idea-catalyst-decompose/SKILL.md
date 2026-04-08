@@ -23,12 +23,30 @@ allowed-tools:
 ## 你要做什么
 
 1. 从当前 active track、`RESEARCH_PROPOSAL.md`、`GRAPH_IDEATION_PACKET.json`、frontier files 中抽取 2-6 个关键问题。
-2. 对每个问题保留目标领域表述，并判断它更接近：
+2. 每个问题都必须同时保留：
+   - `domain-specific question`
+   - `domain-agnostic question`
+   - `coarse-grained domain`
+   - `fine-grained domain`
+   - `core challenge`
+3. 对每个问题保留目标领域表述，并判断它更接近：
    - `resolved`
    - `partial`
    - `unexplored`
-3. 为 `partial` / `unexplored` 问题写出 remaining challenges。
-4. 给出优先级，优先保留真正值得跨域探索的挑战。
+4. 为每个问题生成 3 条以上 `target_domain_queries`，用于后续 target-domain analysis 和 cross-domain 检索。
+5. 为 `partial` / `unexplored` 问题写出 structured remaining challenges。
+6. 给出优先级，优先保留真正值得跨域探索的挑战。
+
+## 额外要求
+
+- `target_domain_analysis` 需要至少包含：
+  - `addressed_aspects`
+  - `remaining_challenges`
+  - `overall_assessment`
+- `overall_assessment` 应明确是：
+  - `largely unaddressed`
+  - `partially addressed`
+  - `substantially addressed`
 
 ## Durable 输出
 

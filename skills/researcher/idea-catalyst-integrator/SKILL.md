@@ -22,6 +22,7 @@ allowed-tools:
 
 ## 每个 fragment 至少要有
 
+- `idea_fragment`
 - `core_insight`
 - `integration_mechanism`
 - `challenge_resolution`

@@ -92,6 +92,8 @@ allowed-tools:
 /idea-generator "$ARGUMENTS"
 ```
 
+在生成新创新点之前，先检查当前 graph grounding 是否足够，并确认 IDEA-CATALYST sub-pipeline 所需 packet 已准备好。
+
 在生成新创新点之前，先检查：
 
 ```json
@@ -109,6 +111,14 @@ allowed-tools:
 执行 graph-grounded dialectic loop：
 1. 基于 `LITERATURE.md` + `FRONTIER_REPORT.md` + `{PROJ}/graph/*.md` frontier files 做一次 **diverge**，生成 4-8 个 typed tracks
 1a. 在 graph-grounded brainstorm bundle 已就绪的前提下，先运行一轮 `/scientific-brainstorming`，专门做假设反转、跨领域迁移和 falsifier 设计；不要用它替代前面的 graph grounding
+1b. 对 surviving tracks 启动 IDEA-CATALYST sub-pipeline：
+   - decompose
+   - translate
+   - scout
+   - gatekeeper
+   - integrator
+   - judge
+   其中跨域搜索和 integration 必须优先复用知识图谱中的 bridge / domain / mechanism 信号，而不是脱离 graph 自由发挥
 2. 如果存在 `{PROJ}/researcher/INNOVATION_REFLECTION.md`，把其中的：
    - do-not-repeat constraints
    - transferable lessons

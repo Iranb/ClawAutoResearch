@@ -13,7 +13,10 @@ import {
 } from "../literature-discovery/materializer";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
 import { materializeCycleMemory } from "../research-memory-cycle";
-import { materializePapernexusPacketContracts } from "../papernexus-packets/materializer";
+import {
+  DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH,
+  materializePapernexusPacketContracts,
+} from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
@@ -413,10 +416,15 @@ async function shouldMaterializePapernexusPacketContracts(params: {
     params.projectRoot,
     "researcher/papernexus/GRAPH_STORYLINE_PACKET.json"
   );
+  const ideaCatalystBundlePath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH
+  );
   if (
     (mechanismPacketPath && (await pathExists(mechanismPacketPath))) ||
     (challengePacketPath && (await pathExists(challengePacketPath))) ||
-    (storylinePacketPath && (await pathExists(storylinePacketPath)))
+    (storylinePacketPath && (await pathExists(storylinePacketPath))) ||
+    (ideaCatalystBundlePath && (await pathExists(ideaCatalystBundlePath)))
   ) {
     return true;
   }

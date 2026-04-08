@@ -1688,6 +1688,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await materializePapernexusPacketContracts({
                 projectRoot: resolvedProjectRoot,
+                packetPaths: requireObject(
+                  params.packetPaths ?? {},
+                  "packetPaths"
+                ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
               });

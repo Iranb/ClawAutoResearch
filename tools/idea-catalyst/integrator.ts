@@ -19,6 +19,7 @@ type ScoutingTakeaway = {
   mechanism_explanation?: string | null;
   relevance_to_challenge?: string | null;
   selection_rationale?: string | null;
+  supporting_papers?: string[] | null;
 };
 
 type ScoutingDomainEntry = {
@@ -211,6 +212,9 @@ export function buildIdeaCatalystIdeaFragments(params: IntegratorParams) {
         selection_rationale:
           takeaway.selection_rationale ??
           `Selected because ${domain} contains graph-supported takeaways relevant to the target challenge.`,
+        supporting_papers: Array.isArray(takeaway.supporting_papers)
+          ? takeaway.supporting_papers
+          : [],
       }));
       const targetDomainElements = buildTargetDomainElements({
         question,
@@ -223,7 +227,7 @@ export function buildIdeaCatalystIdeaFragments(params: IntegratorParams) {
         problemStatement: params.problemStatement,
       });
 
-      return {
+      const fragment = {
         fragment_id: `${candidate.direction_id || `dir-${index + 1}`}-${domainIndex + 1}`,
         track_id: candidate.track_id ?? params.selectedTrackId ?? null,
         direction_id: candidate.direction_id ?? null,
@@ -261,6 +265,16 @@ export function buildIdeaCatalystIdeaFragments(params: IntegratorParams) {
         relevance: Number(candidate.relevance ?? 0.8),
         clarity: Number(candidate.clarity ?? 0.78),
         interdisciplinary_potential: Number(candidate.composite_score ?? 0.78),
+      };
+      return {
+        ...fragment,
+        idea_fragment: {
+          title: fragment.title,
+          core_insight: fragment.core_insight,
+          integration_mechanism: fragment.integration_mechanism,
+          challenge_resolution: fragment.challenge_resolution,
+          concrete_realization: fragment.concrete_realization,
+        },
       };
     });
   });

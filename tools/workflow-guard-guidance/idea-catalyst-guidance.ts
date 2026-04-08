@@ -20,7 +20,7 @@ export function buildIdeaCatalystGuidance(
     (ideaCatalyst.requisitionRequired || ideaCatalyst.status === "requisition")
   ) {
     prepend.push(
-      `IDEA-CATALYST requisition is active; satisfy {PROJ}/${ideaCatalyst.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA integration.`
+      `IDEA-CATALYST investigation requisition is active; read {PROJ}/${ideaCatalyst.investigationRequisitionPath}, treat it as the decision boundary for sufficiency, collect the requested cross-domain papers and bridge evidence, queue imports with research_workflow.queue_paper_ingestion, rerun /graph-build, then resume the graph-grounded IDEA-CATALYST sub-pipeline before advancing to PLAN.`
     );
   }
 

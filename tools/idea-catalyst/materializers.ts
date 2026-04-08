@@ -85,16 +85,18 @@ function normalizePairwiseJudgments(value: unknown): PairwiseJudgment[] {
         reasoning:
           pickString(entry, ["reasoning"]) ?? "No explicit LLM reasoning provided.",
         dimensions: {
-          interdisciplinary_novelty: normalizePairwiseVote(
-            dimensions.interdisciplinary_novelty ??
-              dimensions.interdisciplinaryNovelty
-          ),
-          interdisciplinary_usefulness: normalizePairwiseVote(
-            dimensions.interdisciplinary_usefulness ??
-              dimensions.interdisciplinaryUsefulness
-          ),
           depth_of_integration: normalizePairwiseVote(
             dimensions.depth_of_integration ?? dimensions.depthOfIntegration
+          ),
+          multi_stage_disciplinary_engagement: normalizePairwiseVote(
+            dimensions.multi_stage_disciplinary_engagement ??
+              dimensions.multiStageDisciplinaryEngagement
+          ),
+          innovation_payoff: normalizePairwiseVote(
+            dimensions.innovation_payoff ?? dimensions.innovationPayoff
+          ),
+          novelty_feasibility: normalizePairwiseVote(
+            dimensions.novelty_feasibility ?? dimensions.noveltyFeasibility
           ),
         },
       };

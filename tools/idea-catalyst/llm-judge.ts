@@ -1,4 +1,5 @@
 import type { IdeaFragment } from "./ranking";
+import { getIdeaCatalystRankingCriteria } from "./prompt-contracts";
 
 export type PairwiseVote = "a" | "b" | "tie";
 
@@ -8,9 +9,10 @@ export type PairwiseJudgment = {
   preferred: PairwiseVote;
   reasoning: string;
   dimensions: {
-    interdisciplinary_novelty: PairwiseVote;
-    interdisciplinary_usefulness: PairwiseVote;
     depth_of_integration: PairwiseVote;
+    multi_stage_disciplinary_engagement: PairwiseVote;
+    innovation_payoff: PairwiseVote;
+    novelty_feasibility: PairwiseVote;
   };
 };
 
@@ -51,6 +53,7 @@ export function buildPairwiseComparisonPrompt(params: {
   fragmentA: IdeaFragment;
   fragmentB: IdeaFragment;
 }) {
+  const criteria = getIdeaCatalystRankingCriteria();
   return `You are evaluating two IDEA-CATALYST fragments for interdisciplinary research design.
 
 Research problem:
@@ -64,11 +67,9 @@ ${serializeFragment("Fragment A", params.fragmentA)}
 ${serializeFragment("Fragment B", params.fragmentB)}
 
 Judge the fragments along these dimensions:
-- interdisciplinary_novelty
-- interdisciplinary_usefulness
-- depth_of_integration
+${criteria.map((entry) => `- ${entry}`).join("\n")}
 
-In plain language, focus on which fragment shows deeper depth of integration into the target-domain problem, not just higher novelty.
+In plain language, focus on which fragment shows deeper target-domain integration, broader multi-stage disciplinary engagement, higher innovation payoff, and the stronger combined novelty + feasibility balance.
 
 Return strict JSON with this schema:
 {
@@ -77,9 +78,10 @@ Return strict JSON with this schema:
   "preferred": "a|b|tie",
   "reasoning": "short justification",
   "dimensions": {
-    "interdisciplinary_novelty": "a|b|tie",
-    "interdisciplinary_usefulness": "a|b|tie",
-    "depth_of_integration": "a|b|tie"
+    "depth_of_integration": "a|b|tie",
+    "multi_stage_disciplinary_engagement": "a|b|tie",
+    "innovation_payoff": "a|b|tie",
+    "novelty_feasibility": "a|b|tie"
   }
 }`;
 }
@@ -103,9 +105,10 @@ export function parsePairwiseJudgment(raw: string): PairwiseJudgment {
       preferred: normalizeVote(preferredMatch?.[1] ?? "tie"),
       reasoning: text || "No explicit reasoning provided.",
       dimensions: {
-        interdisciplinary_novelty: "tie",
-        interdisciplinary_usefulness: "tie",
         depth_of_integration: "tie",
+        multi_stage_disciplinary_engagement: "tie",
+        innovation_payoff: "tie",
+        novelty_feasibility: "tie",
       },
     };
   }
@@ -117,15 +120,18 @@ export function parsePairwiseJudgment(raw: string): PairwiseJudgment {
     preferred: normalizeVote(parsed.preferred),
     reasoning: String(parsed.reasoning ?? "No explicit reasoning provided."),
     dimensions: {
-      interdisciplinary_novelty: normalizeVote(
-        dimensions?.interdisciplinary_novelty ?? dimensions?.interdisciplinaryNovelty
-      ),
-      interdisciplinary_usefulness: normalizeVote(
-        dimensions?.interdisciplinary_usefulness ??
-          dimensions?.interdisciplinaryUsefulness
-      ),
       depth_of_integration: normalizeVote(
         dimensions?.depth_of_integration ?? dimensions?.depthOfIntegration
+      ),
+      multi_stage_disciplinary_engagement: normalizeVote(
+        dimensions?.multi_stage_disciplinary_engagement ??
+          dimensions?.multiStageDisciplinaryEngagement
+      ),
+      innovation_payoff: normalizeVote(
+        dimensions?.innovation_payoff ?? dimensions?.innovationPayoff
+      ),
+      novelty_feasibility: normalizeVote(
+        dimensions?.novelty_feasibility ?? dimensions?.noveltyFeasibility
       ),
     },
   };

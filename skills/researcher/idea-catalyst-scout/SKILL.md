@@ -23,6 +23,7 @@ allowed-tools:
 - 候选 source domains
 - domain distance / selection basis
 - bridge nodes / takeaways
+- `cross-domain searches`
 - relevance pruning 结果
 
 ## 协议
@@ -30,7 +31,13 @@ allowed-tools:
 1. 先复用图里的 domain / transfer / bridge 线索。
 2. 优先用 graph-first traversal 和现有 `GRAPH_IDEATION_PACKET.json`。
 3. 只有图证据不足时，才做 LLM-assisted fallback。
-4. 保留为什么选这些 domain，而不是只给结果。
+4. 保留为什么选这些 source-domain，而不是只给结果。
+5. 每个 takeaways 都应尽量包含：
+   - `source_domain_formulation`
+   - `mechanism_explanation`
+   - `selection_rationale`
+   - `relevance_to_challenge`
+   - `supporting_papers`
 
 ## Durable 输出
 

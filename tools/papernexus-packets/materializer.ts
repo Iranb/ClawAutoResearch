@@ -46,6 +46,8 @@ export const DEFAULT_MECHANISM_BRIDGE_PACKET_PATH =
   "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json";
 export const DEFAULT_CHALLENGE_INSIGHT_PACKET_PATH =
   "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json";
+export const DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH =
+  "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json";
 export const DEFAULT_GRAPH_STORYLINE_PACKET_SOURCE_PATH =
   "researcher/papernexus/GRAPH_STORYLINE_PACKET.json";
 export const DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH =
@@ -92,6 +94,304 @@ function readStringListFromObjects(
       })
       .filter((entry): entry is string => Boolean(entry))
   );
+}
+
+function readRecordList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function unwrapPacketBundle(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return (
+    asRecord(record.packet_bundle) ??
+    asRecord(record.packetBundle) ??
+    record
+  );
+}
+
+function deriveBridgeEvidenceTierFromBundle(bundle: Record<string, unknown>) {
+  const ideaFragments = readRecordList(bundle.idea_fragments);
+  const analyses = readRecordList(
+    bundle.source_domain_analyses ?? bundle.cross_domain_analysis
+  );
+  const supportingPaperCount = analyses.reduce((sum, analysis) => {
+    const direct = readPacketList(analysis, ["supporting_papers", "supportingPapers"]).length;
+    const takeawayPapers = readRecordList(analysis.takeaways).reduce((inner, takeaway) => {
+      return inner + readPacketList(takeaway, ["supporting_papers", "supportingPapers"]).length;
+    }, 0);
+    return sum + direct + takeawayPapers;
+  }, 0);
+  if (ideaFragments.length >= 2 || supportingPaperCount >= 6) {
+    return "strong";
+  }
+  if (ideaFragments.length >= 1 || supportingPaperCount >= 2 || analyses.length >= 1) {
+    return "moderate";
+  }
+  return "weak";
+}
+
+function deriveMechanismBridgePacketFromBundle(bundle: Record<string, unknown>) {
+  const decomposition = asRecord(bundle.decomposition) ?? {};
+  const crossDomainQueries = readRecordList(
+    bundle.cross_domain_searches ?? bundle.cross_domain_queries
+  );
+  const sourceDomainAnalyses = readRecordList(
+    bundle.source_domain_analyses ?? bundle.cross_domain_analysis
+  );
+  const ideaFragments = readRecordList(bundle.idea_fragments);
+  const candidateDomains = uniqueStrings([
+    ...crossDomainQueries
+      .map((entry) => pickString(entry, ["domain", "source_domain", "sourceDomain"]))
+      .filter((entry): entry is string => Boolean(entry)),
+    ...sourceDomainAnalyses
+      .map((entry) => pickString(entry, ["source_domain", "sourceDomain", "domain"]))
+      .filter((entry): entry is string => Boolean(entry)),
+  ]);
+  const selectedDomains = uniqueStrings(
+    sourceDomainAnalyses
+      .filter((entry) => {
+        const takeaways = readRecordList(entry.takeaways);
+        const supportingPapers = readPacketList(entry, ["supporting_papers", "supportingPapers"]);
+        return takeaways.length > 0 || supportingPapers.length > 0;
+      })
+      .map((entry) => pickString(entry, ["source_domain", "sourceDomain", "domain"]))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const prunedDomains = uniqueStrings(
+    candidateDomains.filter((domain) => !selectedDomains.includes(domain))
+  );
+  const transferBridges = uniqueStrings([
+    ...sourceDomainAnalyses.flatMap((entry) => {
+      const domain =
+        pickString(entry, ["source_domain", "sourceDomain", "domain"]) ?? "external";
+      const sharedMechanisms = readPacketList(entry, [
+        "shared_mechanisms",
+        "sharedMechanisms",
+      ]).map((mechanism) => `${domain}:${mechanism}`);
+      const takeawayConcepts = readRecordList(entry.takeaways)
+        .map(
+          (takeaway) =>
+            pickString(takeaway, [
+              "concept",
+              "mechanism",
+              "mechanism_explanation",
+              "source_domain_formulation",
+            ]) ?? null
+        )
+        .filter((value): value is string => Boolean(value))
+        .map((value) => `${domain}:${value}`);
+      return [...sharedMechanisms, ...takeawayConcepts];
+    }),
+    ...ideaFragments
+      .map((entry) => {
+        const domain =
+          pickString(entry, ["source_domain", "sourceDomain"]) ?? "external";
+        const ideaFragmentRecord = asRecord(entry.idea_fragment);
+        const mechanism =
+          pickString(entry, ["integration_mechanism", "integrationMechanism"]) ??
+          pickString(ideaFragmentRecord ?? {}, [
+            "integration_mechanism",
+            "integrationMechanism",
+          ]);
+        return mechanism ? `${domain}:${mechanism}` : null;
+      })
+      .filter((value): value is string => Boolean(value)),
+  ]);
+  const bridgeNodes = sourceDomainAnalyses.flatMap((entry, analysisIndex) => {
+    const domain =
+      pickString(entry, ["source_domain", "sourceDomain", "domain"]) ?? "external";
+    return readRecordList(entry.takeaways).map((takeaway, takeawayIndex) => ({
+      node_id:
+        pickString(takeaway, ["kg_node_id", "kgNodeId", "node_id", "nodeId"]) ??
+        `bundle-${analysisIndex + 1}-${takeawayIndex + 1}`,
+      node_name:
+        pickString(takeaway, [
+          "concept",
+          "source_domain_formulation",
+          "mechanism",
+          "mechanism_explanation",
+        ]) ?? `${domain} bridge takeaway`,
+      domain,
+      mechanism:
+        pickString(takeaway, ["mechanism", "mechanism_explanation"]) ??
+        readPacketList(entry, ["shared_mechanisms", "sharedMechanisms"])[0] ??
+        null,
+      properties: {
+        abstract:
+          pickString(takeaway, [
+            "source_domain_formulation",
+            "mechanism_explanation",
+            "selection_rationale",
+          ]) ?? null,
+        evidenceText:
+          pickString(takeaway, ["selection_rationale"]) ??
+          pickString(entry, ["selection_rationale", "selectionRationale"]) ??
+          pickString(entry, ["domain_rationale", "domainRationale"]) ??
+          null,
+        supporting_papers: readPacketList(takeaway, [
+          "supporting_papers",
+          "supportingPapers",
+        ]),
+      },
+    }));
+  });
+
+  return {
+    target_domain:
+      pickString(decomposition, ["fine_grained_domain", "fineGrainedDomain"]) ??
+      pickString(bundle, ["target_domain", "targetDomain"]) ??
+      null,
+    candidate_domains: candidateDomains,
+    selected_domains: selectedDomains,
+    pruned_domains: prunedDomains,
+    bridge_evidence_tier: deriveBridgeEvidenceTierFromBundle(bundle),
+    transfer_bridges: transferBridges,
+    bridge_nodes: bridgeNodes,
+  };
+}
+
+function deriveChallengeInsightPacketFromBundle(bundle: Record<string, unknown>) {
+  const decomposition = asRecord(bundle.decomposition) ?? {};
+  const targetDomainAnalyses = readRecordList(bundle.target_domain_analysis);
+  const sourceDomainAnalyses = readRecordList(
+    bundle.source_domain_analyses ?? bundle.cross_domain_analysis
+  );
+  const ideaFragments = readRecordList(bundle.idea_fragments);
+  const challengeClusters = uniqueStrings([
+    ...readRecordList(decomposition.questions ?? decomposition.research_questions)
+      .map((entry) =>
+        pickString(entry, [
+          "domain_specific_question",
+          "domainSpecificQuestion",
+          "question",
+        ])
+      )
+      .filter((entry): entry is string => Boolean(entry)),
+    ...targetDomainAnalyses.flatMap((entry) =>
+      readRecordList(entry.remaining_challenges).map(
+        (challenge) =>
+          pickString(challenge, [
+            "domain_specific_challenge_question",
+            "domainSpecificChallengeQuestion",
+            "name",
+          ]) ?? null
+      )
+    ).filter((entry): entry is string => Boolean(entry)),
+  ]);
+  const insightClusters = uniqueStrings([
+    ...ideaFragments
+      .map((entry) => {
+        const ideaFragmentRecord = asRecord(entry.idea_fragment);
+        return (
+          pickString(entry, ["core_insight", "coreInsight"]) ??
+          pickString(ideaFragmentRecord ?? {}, ["core_insight", "coreInsight"])
+        );
+      })
+      .filter((entry): entry is string => Boolean(entry)),
+    ...sourceDomainAnalyses.flatMap((entry) =>
+      readRecordList(entry.takeaways).map(
+        (takeaway) =>
+          pickString(takeaway, [
+            "source_domain_formulation",
+            "sourceDomainFormulation",
+            "mechanism_explanation",
+            "mechanismExplanation",
+          ]) ?? null
+      )
+    ).filter((entry): entry is string => Boolean(entry)),
+  ]);
+
+  return {
+    target_domain:
+      pickString(decomposition, ["fine_grained_domain", "fineGrainedDomain"]) ??
+      pickString(bundle, ["target_domain", "targetDomain"]) ??
+      null,
+    challenge_clusters: challengeClusters,
+    insight_clusters: insightClusters,
+    occupied_solution_zones: [],
+  };
+}
+
+function mergeMechanismBridgePackets(
+  base: Record<string, unknown> | null,
+  derived: Record<string, unknown> | null
+) {
+  if (!base) return derived;
+  if (!derived) return base;
+  return {
+    ...base,
+    ...derived,
+    target_domain:
+      pickString(derived, ["target_domain", "targetDomain"]) ??
+      pickString(base, ["target_domain", "targetDomain"]) ??
+      null,
+    candidate_domains: uniqueStrings([
+      ...readPacketList(base, ["candidate_domains", "candidateDomains"]),
+      ...readPacketList(derived, ["candidate_domains", "candidateDomains"]),
+    ]),
+    selected_domains: uniqueStrings([
+      ...readPacketList(base, ["selected_domains", "selectedDomains"]),
+      ...readPacketList(derived, ["selected_domains", "selectedDomains"]),
+    ]),
+    pruned_domains: uniqueStrings([
+      ...readPacketList(base, ["pruned_domains", "prunedDomains"]),
+      ...readPacketList(derived, ["pruned_domains", "prunedDomains"]),
+    ]),
+    transfer_bridges: uniqueStrings([
+      ...readPacketList(base, ["transfer_bridges", "transferBridges"]),
+      ...readPacketList(derived, ["transfer_bridges", "transferBridges"]),
+    ]),
+    bridge_evidence_tier:
+      pickString(derived, ["bridge_evidence_tier", "bridgeEvidenceTier"]) ??
+      pickString(base, ["bridge_evidence_tier", "bridgeEvidenceTier"]) ??
+      null,
+    bridge_nodes: [
+      ...readRecordList(base.bridge_nodes),
+      ...readRecordList(derived.bridge_nodes),
+    ],
+  };
+}
+
+function mergeChallengeInsightPackets(
+  base: Record<string, unknown> | null,
+  derived: Record<string, unknown> | null
+) {
+  if (!base) return derived;
+  if (!derived) return base;
+  return {
+    ...base,
+    ...derived,
+    target_domain:
+      pickString(derived, ["target_domain", "targetDomain"]) ??
+      pickString(base, ["target_domain", "targetDomain"]) ??
+      null,
+    challenge_clusters: uniqueStrings([
+      ...readPacketList(base, ["challenge_clusters", "challengeClusters"]),
+      ...readPacketList(derived, ["challenge_clusters", "challengeClusters"]),
+    ]),
+    insight_clusters: uniqueStrings([
+      ...readPacketList(base, ["insight_clusters", "insightClusters"]),
+      ...readPacketList(derived, ["insight_clusters", "insightClusters"]),
+    ]),
+    occupied_solution_zones: uniqueStrings([
+      ...readPacketList(base, [
+        "occupied_solution_zones",
+        "occupiedSolutionZones",
+      ]),
+      ...readPacketList(derived, [
+        "occupied_solution_zones",
+        "occupiedSolutionZones",
+      ]),
+    ]),
+  };
 }
 
 function deriveTransferBridges(packet: Record<string, unknown>): string[] {
@@ -183,6 +483,7 @@ export async function materializePapernexusPacketContracts(params: {
   const manifest =
     (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
   const packetPaths = asRecord(params.packetPaths) ?? {};
+  const generatedFiles: string[] = [];
 
   const mechanismBridgePacketPath =
     resolveProjectArtifactPath(
@@ -202,13 +503,46 @@ export async function materializePapernexusPacketContracts(params: {
       pickString(packetPaths, ["graphStorylinePacketPath", "graph_storyline_packet_path"]) ??
         DEFAULT_GRAPH_STORYLINE_PACKET_SOURCE_PATH
     ) ?? path.join(projectRoot, DEFAULT_GRAPH_STORYLINE_PACKET_SOURCE_PATH);
+  const ideaCatalystPacketBundlePath =
+    resolveProjectArtifactPath(
+      projectRoot,
+      pickString(packetPaths, [
+        "ideaCatalystPacketBundlePath",
+        "idea_catalyst_packet_bundle_path",
+      ]) ?? DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH
+    ) ?? path.join(projectRoot, DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH);
 
-  const [mechanismBridgePacket, challengeInsightPacket, graphStorylinePacket] =
+  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath),
       readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath),
       readJsonIfExists<Record<string, unknown>>(graphStorylinePacketSourcePath),
+      readJsonIfExists<Record<string, unknown>>(ideaCatalystPacketBundlePath),
     ]);
+  const ideaCatalystPacketBundle = unwrapPacketBundle(rawIdeaCatalystPacketBundle);
+  const derivedMechanismBridgePacket = ideaCatalystPacketBundle
+    ? deriveMechanismBridgePacketFromBundle(ideaCatalystPacketBundle)
+    : null;
+  const derivedChallengeInsightPacket = ideaCatalystPacketBundle
+    ? deriveChallengeInsightPacketFromBundle(ideaCatalystPacketBundle)
+    : null;
+  const mechanismBridgePacket = mergeMechanismBridgePackets(
+    rawMechanismBridgePacket,
+    derivedMechanismBridgePacket
+  );
+  const challengeInsightPacket = mergeChallengeInsightPackets(
+    rawChallengeInsightPacket,
+    derivedChallengeInsightPacket
+  );
+
+  if (ideaCatalystPacketBundle && mechanismBridgePacket) {
+    await writeJsonEnsured(mechanismBridgePacketPath, mechanismBridgePacket);
+    generatedFiles.push(path.relative(projectRoot, mechanismBridgePacketPath));
+  }
+  if (ideaCatalystPacketBundle && challengeInsightPacket) {
+    await writeJsonEnsured(challengeInsightPacketPath, challengeInsightPacket);
+    generatedFiles.push(path.relative(projectRoot, challengeInsightPacketPath));
+  }
 
   const currentIdeation = normalizeIdeationContractState(manifest.ideation_contract);
   const currentWriting = normalizeWritingContractState(manifest.writing_contract);
@@ -220,8 +554,6 @@ export async function materializePapernexusPacketContracts(params: {
   const currentReviewPressure = normalizeReviewPressurePacketState(
     manifest.review_pressure_packet
   );
-
-  const generatedFiles: string[] = [];
 
   const transferBridges = mechanismBridgePacket
     ? deriveTransferBridges(mechanismBridgePacket)
@@ -440,6 +772,7 @@ export async function materializePapernexusPacketContracts(params: {
       mechanismBridgePacketReady: Boolean(mechanismBridgePacket),
       challengeInsightPacketReady: Boolean(challengeInsightPacket),
       graphStorylinePacketReady: Boolean(graphStorylinePacket),
+      ideaCatalystPacketBundleReady: Boolean(ideaCatalystPacketBundle),
       transferBridgeCount: transferBridges.length,
       selectedSourceDomainCount: selectedSourceDomains.length,
       bridgeEvidenceTier,

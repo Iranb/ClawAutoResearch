@@ -28,6 +28,7 @@ allowed-tools:
 - 至少评估 sufficiency、relevance、bridge quality
 - 如果证据不足，必须输出结构化 requisition，而不是模糊建议
 - 这一阶段允许阻塞后续 Integrator / Judge
+- 明确写出 `decision boundary`：什么条件下继续 `BRAINSTORM`，什么条件下必须进入 `INVESTIGATION_REQUISITION`
 
 ## Durable 输出
 
