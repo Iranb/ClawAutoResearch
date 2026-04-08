@@ -819,6 +819,27 @@ export type ResearchProgramTrackWriteScope = {
   allowedFigureIds: string[];
 };
 
+export type ResearchProgramPlanAlternative = {
+  optionId: string;
+  linkedTrackId: string | null;
+  sourceDirectionId: string | null;
+  title: string | null;
+  status: string;
+  summary: string | null;
+  graphEvidencePaths: string[];
+  keyRisks: string[];
+};
+
+export type ResearchProgramPlanSelection = {
+  selectedOptionId: string | null;
+  selectedTrackId: string | null;
+  comparedOptionIds: string[];
+  rationale: string | null;
+  decisiveGraphEvidencePaths: string[];
+  fallbackOptionIds: string[];
+  lastComparedAt: string | null;
+};
+
 export type ResearchProgramTrack = {
   trackId: string;
   priority: number | null;
@@ -867,6 +888,8 @@ export type ResearchProgramState = {
   successCriteria: string[];
   zoteroProjectPath: string | null;
   tracks: ResearchProgramTrack[];
+  planAlternatives: ResearchProgramPlanAlternative[];
+  planSelection: ResearchProgramPlanSelection;
   globalConstraints: ResearchProgramGlobalConstraints;
   taskGraph: ResearchProgramTask[];
   lastUpdatedAt: string | null;
@@ -1334,6 +1357,11 @@ export type WorkflowSnapshot = {
   researchProgramStatus: string | null;
   researchProgramTrackCount: number | null;
   researchProgramActiveTrackCount: number | null;
+  researchProgramPlanAlternativeCount: number | null;
+  researchProgramPlanComparedOptionCount: number | null;
+  researchProgramPlanSelectedOptionId: string | null;
+  researchProgramPlanSelectedTrackId: string | null;
+  researchProgramPlanSelectionReady: boolean;
   researchProgramPrimaryGoal: string | null;
   researchProgramOnboardingStatus: string | null;
   researchProgramOnboardingMissing: string[];
@@ -3315,6 +3343,120 @@ function getResearchProgramValidationErrors(
       );
     }
   }
+  if (
+    state.planSelection.selectedTrackId &&
+    !state.tracks.some((track) => track.trackId === state.planSelection.selectedTrackId)
+  ) {
+    errors.push(
+      `research_program.plan_selection.selected_track_id (${state.planSelection.selectedTrackId}) must reference a declared track`
+    );
+  }
+  if (
+    state.planSelection.selectedOptionId &&
+    !state.planAlternatives.some(
+      (option) => option.optionId === state.planSelection.selectedOptionId
+    )
+  ) {
+    errors.push(
+      `research_program.plan_selection.selected_option_id (${state.planSelection.selectedOptionId}) must reference research_program.plan_alternatives`
+    );
+  }
+  return errors;
+}
+
+function getResearchProgramPlanValidationErrors(params: {
+  state: ResearchProgramState;
+  ideationContract?: IdeationContractState | null;
+}): string[] {
+  const errors: string[] = [];
+  const comparedOptionIds = [...new Set(params.state.planSelection.comparedOptionIds)];
+  if (params.state.planAlternatives.length < 2) {
+    errors.push(
+      "PROJECT_MANIFEST.json.research_program.plan_alternatives must compare at least two graph-grounded options"
+    );
+  }
+  if (!params.state.planSelection.selectedOptionId) {
+    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_option_id is required");
+  }
+  if (!params.state.planSelection.selectedTrackId) {
+    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_track_id is required");
+  }
+  if (comparedOptionIds.length < 2) {
+    errors.push(
+      "PROJECT_MANIFEST.json.research_program.plan_selection.compared_option_ids must record at least two compared options"
+    );
+  }
+  if (
+    params.state.planSelection.selectedOptionId &&
+    comparedOptionIds.length > 0 &&
+    !comparedOptionIds.includes(params.state.planSelection.selectedOptionId)
+  ) {
+    errors.push(
+      "research_program.plan_selection.selected_option_id must also appear in compared_option_ids"
+    );
+  }
+  if (!params.state.planSelection.rationale) {
+    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.rationale is required");
+  }
+  if (params.state.planSelection.decisiveGraphEvidencePaths.length === 0) {
+    errors.push(
+      "PROJECT_MANIFEST.json.research_program.plan_selection.decisive_graph_evidence_paths must cite graph-backed evidence"
+    );
+  }
+  if (
+    params.state.planSelection.selectedTrackId &&
+    params.ideationContract?.selectedTrackId &&
+    params.state.planSelection.selectedTrackId !== params.ideationContract.selectedTrackId
+  ) {
+    errors.push(
+      `research_program.plan_selection.selected_track_id should stay aligned with ideation_contract.selected_track_id (${params.ideationContract.selectedTrackId})`
+    );
+  }
+
+  const selectedOption = params.state.planSelection.selectedOptionId
+    ? params.state.planAlternatives.find(
+        (option) => option.optionId === params.state.planSelection.selectedOptionId
+      ) ?? null
+    : null;
+  if (selectedOption) {
+    if (selectedOption.status !== "selected") {
+      errors.push(
+        `research_program.plan_alternatives option ${selectedOption.optionId} must have status=selected`
+      );
+    }
+    if (
+      selectedOption.linkedTrackId &&
+      params.state.planSelection.selectedTrackId &&
+      selectedOption.linkedTrackId !== params.state.planSelection.selectedTrackId
+    ) {
+      errors.push(
+        `research_program.plan_alternatives option ${selectedOption.optionId} should point at selected_track_id=${params.state.planSelection.selectedTrackId}`
+      );
+    }
+  }
+
+  for (const optionId of comparedOptionIds) {
+    const option =
+      params.state.planAlternatives.find((entry) => entry.optionId === optionId) ?? null;
+    if (!option) {
+      errors.push(
+        `research_program.plan_selection.compared_option_ids references missing option ${optionId}`
+      );
+      continue;
+    }
+    if (!option.title) {
+      errors.push(`research_program.plan_alternatives option ${option.optionId} missing title`);
+    }
+    if (!option.summary) {
+      errors.push(`research_program.plan_alternatives option ${option.optionId} missing summary`);
+    }
+    if (option.graphEvidencePaths.length === 0) {
+      errors.push(
+        `research_program.plan_alternatives option ${option.optionId} must cite graph_evidence_paths`
+      );
+    }
+  }
+
   return errors;
 }
 
@@ -5411,6 +5553,7 @@ async function getMissingStageSignals(params: {
           getBrainstormCycleMissingSignals,
           normalizeResearchProgramState,
           getResearchProgramValidationErrors,
+          getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           getCodeStageBundleMissingSignals,
@@ -5439,6 +5582,7 @@ async function getMissingStageSignals(params: {
           getBrainstormCycleMissingSignals,
           normalizeResearchProgramState,
           getResearchProgramValidationErrors,
+          getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           getCodeStageBundleMissingSignals,
@@ -5466,6 +5610,7 @@ async function getMissingStageSignals(params: {
           getBrainstormCycleMissingSignals,
           normalizeResearchProgramState,
           getResearchProgramValidationErrors,
+          getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           getCodeStageBundleMissingSignals,
@@ -6105,6 +6250,16 @@ export async function buildWorkflowSnapshot(params: {
     researchProgramActiveTrackCount: researchProgram.tracks.filter(
       (track) => normalizeStage(track.status) === "active"
     ).length,
+    researchProgramPlanAlternativeCount: researchProgram.planAlternatives.length,
+    researchProgramPlanComparedOptionCount:
+      researchProgram.planSelection.comparedOptionIds.length,
+    researchProgramPlanSelectedOptionId: researchProgram.planSelection.selectedOptionId,
+    researchProgramPlanSelectedTrackId: researchProgram.planSelection.selectedTrackId,
+    researchProgramPlanSelectionReady:
+      getResearchProgramPlanValidationErrors({
+        state: researchProgram,
+        ideationContract,
+      }).length === 0,
     researchProgramPrimaryGoal: researchProgram.goal,
     researchProgramOnboardingStatus: getResearchProgramOnboardingStatus({
       state: researchProgram,

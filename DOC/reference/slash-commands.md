@@ -77,7 +77,8 @@
 ## 5. 计划、实现、实验
 
 - `/plan-phase` 或 Orchestrator 相关 planning skills  
-  生成 `PLAN.md`、`TODOS.md`、`PLAN_AUDIT.md`。
+  生成 `PLAN.md`、`TODOS.md`、`PLAN_AUDIT.md`，并把 `PROJECT_MANIFEST.json.research_program` 补全为 plan 阶段的 durable source-of-truth。
+  其中 `research_program.plan_alternatives` 必须保留多方案对比，`research_program.plan_selection` 必须明确最终选型、图谱证据和选择理由；`PLAN.md` 只是人类可读派生物，不再单独代表 plan 完成。
 
 - `/implement-experiment`  
   Coder 实现实验代码与复现结构。

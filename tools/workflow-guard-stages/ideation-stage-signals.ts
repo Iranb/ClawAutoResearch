@@ -39,6 +39,10 @@ export interface IdeationStageDeps {
   }) => Promise<string[]>;
   normalizeResearchProgramState: (value: unknown) => any;
   getResearchProgramValidationErrors: (state: any) => string[];
+  getResearchProgramPlanValidationErrors: (params: {
+    state: any;
+    ideationContract?: any;
+  }) => string[];
   normalizeOrchestrationState: (value: unknown) => any;
   getOrchestrationStateValidationErrors: (
     state: any,
@@ -237,6 +241,12 @@ export async function collectPlanStageMissingSignals(
 
   const ideationContract = deps.normalizeIdeationContractState(
     ctx.manifest?.ideation_contract
+  );
+  missing.push(
+    ...deps.getResearchProgramPlanValidationErrors({
+      state: researchProgram,
+      ideationContract,
+    })
   );
   missing.push(...deps.getIdeationContractValidationErrors(ideationContract));
   const proposalPath = deps.resolveProjectArtifactPath(

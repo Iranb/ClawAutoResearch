@@ -160,7 +160,8 @@ graph/
 ```text
 orchestrator/
 ├── PLAN.md
-└── TODOS.md
+├── TODOS.md
+└── PLAN_AUDIT.md
 ```
 
 ### `{PROJ}/coder/` … `{PROJ}/cross-reviewer/`
