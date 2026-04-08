@@ -124,12 +124,35 @@ Researcher Agent 自我反思当前工作：
 
 - 再把 reject-first simulation、novelty attack、unsupported-claim audit、reverse outline、figure/table QC、limitation audit 写成 durable artifacts，而不是只留在评论里
 
+在正式汇总结论前，必须从三个镜头做判断：
+
+- `Internal Validity`: 证据是否真的支撑 claim，是否存在 linchpin evidence
+- `External Validity`: scope / population / setting 的外推是否过头
+- `Contribution`: 这篇工作让读者比之前多知道了什么，delta 是否有意义
+
+并且显式覆盖五个校准维度：
+
+- originality
+- methodological rigor
+- evidence sufficiency
+- argument coherence
+- writing quality
+
+不要把这些维度混成一句“整体不错/一般”。需要指出哪个维度决定了最终 verdict。
+
 #### Phase C: Parse & Decide
 
 解析 Reviewer 返回的审稿意见：
 - 提取 score、verdict、action items
+- 对 headline claims 做 claim verification：
+  - `VERIFIED`
+  - `MINOR_DISTORTION`
+  - `MAJOR_DISTORTION`
+  - `UNVERIFIABLE`
 - **STOP CONDITION**: score ≥ 6、verdict 包含 "ready"，主 claim 无 `UNSUPPORTED` 项，且 reviewer 未要求继续扩 scope → 停止，记录最终状态
 - `Theory: RED` 只作为写作提示，不单独触发继续补实验
+
+如果存在 `MAJOR_DISTORTION` 或 `UNVERIFIABLE` 的 headline claim，不得 handoff 到 WRITE。
 
 #### Phase D: Implement Fixes（如未通过）
 

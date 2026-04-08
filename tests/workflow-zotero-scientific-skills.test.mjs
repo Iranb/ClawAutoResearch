@@ -95,6 +95,9 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(paperPlan, /PREWRITE_REJECTION_SIMULATION\.md/i);
   assert.match(paperPlan, /CONTRIBUTION_TO_STORY_BRIDGE\.md/i);
   assert.match(paperPlan, /FIGURE_ANCHOR_PLAN\.md/i);
+  assert.match(paperPlan, /thesis crystallization|thesis statement/i);
+  assert.match(paperPlan, /so what/i);
+  assert.match(paperPlan, /what did we know before|delta/i);
 
   const paperWrite = await fs.readFile(
     path.join(repoRoot, "skills", "academic_writer", "paper-write", "SKILL.md"),
@@ -104,6 +107,9 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(paperWrite, /FALLBACK_ACTIVATION\.json/i);
   assert.match(paperWrite, /PAPER_REVISION_STATE\.json/i);
   assert.match(paperWrite, /self-attack/i);
+  assert.match(paperWrite, /writing quality|AI-typical|burstiness/i);
+  assert.match(paperWrite, /reader'?s journey|where am i\?|load-bearing paragraph|clarity test/i);
+  assert.match(paperWrite, /claim verification|major distortion|unverifiable/i);
 
   const researchPaperWriting = await fs.readFile(
     path.join(repoRoot, "skills", "academic_writer", "research-paper-writing", "SKILL.md"),
@@ -113,6 +119,9 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(researchPaperWriting, /story-planning-rules\.md/i);
   assert.match(researchPaperWriting, /self-attack-protocol\.md/i);
   assert.match(researchPaperWriting, /figure-centric-writing\.md/i);
+  assert.match(researchPaperWriting, /writing-quality-check\.md/i);
+  assert.match(researchPaperWriting, /writing-judgment-framework\.md/i);
+  assert.match(researchPaperWriting, /thesis-crystallization\.md/i);
 
   const reviewerDocs = [
     path.join(repoRoot, "agents", "reviewer", "AGENTS.md"),
@@ -125,6 +134,25 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     assert.match(content, /scholar-evaluation/i);
     assert.match(content, /peer-review/i);
   }
+  const reviewPhase = await fs.readFile(
+    path.join(repoRoot, "skills", "reviewer", "review-phase", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(reviewPhase, /internal validity|external validity|contribution/i);
+  assert.match(
+    reviewPhase,
+    /originality|methodological rigor|evidence sufficiency|argument coherence|writing quality/i
+  );
+
+  const paperReview = await fs.readFile(
+    path.join(repoRoot, "skills", "reviewer", "paper-review", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(paperReview, /internal validity|external validity|contribution/i);
+  assert.match(
+    paperReview,
+    /claim verification|major distortion|unverifiable|three lenses/i
+  );
   const reviewResponse = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "review-response", "SKILL.md"),
     "utf8"

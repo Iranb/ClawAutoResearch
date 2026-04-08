@@ -122,6 +122,7 @@ Before writing full prose, treat the durable story contract as authoritative:
 - `PAPER_REVISION_STATE.json` defines which revision pass is active
 - `PREWRITE_REJECTION_SIMULATION.md`, `CONTRIBUTION_TO_STORY_BRIDGE.md`, and `FIGURE_ANCHOR_PLAN.md` define the story-first, figure-first, and skeptic-first constraints for the current draft
 - `VENUE_ROUTING_PLAN.md` defines whether the draft should stay venue-facing or switch to a narrower risk-limited route
+- The reference bundle must surface `thesis-crystallization.md`, `writing-quality-check.md`, `writing-judgment-framework.md`, and `claim-verification-protocol.md` when they apply; treat them as execution inputs, not optional reading
 
 If the story packet is missing or stale relative to the current plan / ideation basis, regenerate it through workflow first:
 
@@ -136,6 +137,10 @@ If the story packet is missing or stale relative to the current plan / ideation 
 - Claims from parked / killed tracks must not quietly re-enter the paper as if they were winning contributions
 - If `THEORY_SUPPORT_NOTE.md` marks a claim or overall paper `RED`, keep the language empirical / mechanistic and avoid theorem-like phrasing
 - Run a self-attack pass while drafting: novelty attack, overclaim check, and claim-evidence drift check must happen before a section is considered stable
+- Run the claim verification protocol on every headline sentence in Abstract, Introduction, and Results:
+  - `VERIFIED` can stay
+  - `MINOR_DISTORTION` must be softened
+  - `MAJOR_DISTORTION` and `UNVERIFIABLE` must leave the headline arc
 
 **Citation rule**: Fetch every citation from real APIs — do not invent BibTeX:
 ```
@@ -165,6 +170,21 @@ Respect `allowed_placeholder_count` from citation integrity state. If the budget
 - each paragraph should build on the previous paragraph with a smooth transition that makes the next move feel necessary
 - the final sentence should bridge to the next paragraph or section when possible
 - if a paragraph cannot be reverse-outlined cleanly, rewrite it before sending to Cross-Reviewer
+- run the Clarity Test:
+  - if removing the paragraph changes nothing important, delete it
+  - if it only carries context, keep it short
+  - if the argument breaks, treat it as a load-bearing paragraph and rewrite it carefully
+- keep the Reader's Journey visible in each section:
+  - where am I?
+  - why am I here?
+  - what should I take away?
+  - where am I going next?
+
+**Writing quality rule**:
+- run a writing-quality sweep before section sign-off
+- cut throat-clearing sentences and templated academic filler
+- avoid suspiciously uniform paragraph lengths and sentence rhythm
+- prefer precise domain terms over vague intensity words
 
 **Proof-writing rule**:
 - keep the main body concise: theorem / lemma statements, intuition, and takeaways

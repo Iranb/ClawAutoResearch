@@ -12,12 +12,14 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 ## Core Workflow
 
 1. Clarify the paper story before sentence-level edits.
-2. If the user has provided a paper template, read it first and preserve its section logic before adapting the wording.
-3. Use section-specific guidance in `references/`, plus the workflow-owned `WRITING_REFERENCE_BUNDLE.json` when it exists.
-4. Rewrite paragraph-by-paragraph with one message per paragraph.
-5. Run reverse outlining after writing each section.
-6. Check every major claim in Abstract/Introduction against experimental evidence.
-7. Run final-paper adversarial review with `references/paper-review.md`.
+2. If planning is still loose, run a thesis crystallization pass before polishing prose.
+3. If the user has provided a paper template, read it first and preserve its section logic before adapting the wording.
+4. Use section-specific guidance in `references/`, plus the workflow-owned `WRITING_REFERENCE_BUNDLE.json` when it exists.
+5. Rewrite paragraph-by-paragraph with one message per paragraph.
+6. Run reverse outlining after writing each section.
+7. Run a writing-quality sweep and a writing-judgment sweep before calling the section stable.
+8. Check every major claim in Abstract/Introduction against experimental evidence.
+9. Run final-paper adversarial review with `references/paper-review.md`.
 
 ## Global Principles
 
@@ -34,6 +36,9 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 11. Use formal academic tone and precise terminology throughout.
 12. Keep terminology consistent and define new terms before reuse.
 13. Final manuscript sections should be proper paragraphs, not bullet dumps, unless the user explicitly asks for outline form.
+14. Apply the Clarity Test: identify load-bearing paragraphs and rewrite them more carefully than supporting paragraphs.
+15. Keep the Reader's Journey visible: the reader should know where they are, why they are here, what to take away, and what comes next.
+16. Run the writing quality check before finalizing: cut throat-clearing, weaken inflated wording, and break templated rhythm.
 
 ## Paragraph Clarity Check (Important)
 
@@ -68,10 +73,15 @@ Load only the needed section file:
 - Conclusion: `references/conclusion.md`
 - Paper review (Paper Rview): `references/paper-review.md`
 - Paragraph clarity source: `references/does-my-writing-flow-source.md`
+- Thesis crystallization: `references/thesis-crystallization.md`
 - Counterintuitive writing rules: `references/counterintuitive-writing.md`
 - Story planning rules: `references/story-planning-rules.md`
 - Self-attack protocol: `references/self-attack-protocol.md`
 - Figure-centric writing: `references/figure-centric-writing.md`
+- Writing quality check: `references/writing-quality-check.md`
+- Writing judgment framework: `references/writing-judgment-framework.md`
+- Review quality lenses: `references/review-quality-lenses.md`
+- Claim verification protocol: `references/claim-verification-protocol.md`
 - Example bank index: `references/examples/index.md`
 
 ## Paper Review Core Points
@@ -88,6 +98,7 @@ Use `references/paper-review.md` for the full checklist and workflow.
 3. Perform adversarial writing: review as a skeptical reviewer and resolve every high-risk question.
 4. Revise until major rejection risks are explicitly addressed.
 5. If the workflow has materialized `PREWRITE_REJECTION_SIMULATION.md`, `CONTRIBUTION_TO_STORY_BRIDGE.md`, or `FIGURE_ANCHOR_PLAN.md`, treat them as execution inputs rather than optional notes.
+6. Treat `writing-quality-check.md`, `writing-judgment-framework.md`, and `claim-verification-protocol.md` as mandatory execution references when the current section carries headline claims.
 
 ## Execution Rules
 
@@ -99,6 +110,8 @@ Use `references/paper-review.md` for the full checklist and workflow.
 6. Before finalizing, append and answer a five-dimension self-review question list, then revise the paper based on unresolved items.
 7. Do not load all section references (Introduction/Abstract/Related Work/Method/Experiments/Conclusion) at once; load only the specific section guide needed for the current edit target.
 8. Make paragraph-to-paragraph flow explicit: each paragraph should build on the previous one and use transitions that make the next paragraph feel necessary.
+9. Before planning or rewriting an introduction, crystallize the thesis, skeptic response, and contribution delta in one sentence each.
+10. Before finalizing any results-facing section, run the claim verification protocol and downgrade any `MAJOR_DISTORTION` or `UNVERIFIABLE` claim.
 
 ## Output Contract
 
@@ -106,5 +119,5 @@ When asked to rewrite or draft sections, return:
 
 1. A compact section outline (3-7 bullets).
 2. Revised paragraphs with explicit paragraph roles (opening/challenge/method/advantage/evidence/limitation).
-3. A short self-review checklist covering clarity, flow, terminology consistency, unsupported claims, and missing evidence.
+3. A short self-review checklist covering clarity, flow, terminology consistency, unsupported claims, missing evidence, and writing-quality warnings.
 4. A claim-evidence map for each major claim in the revised text using `Claim: ... | Evidence: ... | Status: supported/needs evidence`.

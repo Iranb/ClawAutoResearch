@@ -109,6 +109,28 @@ Also inspect these proof-writing fields from the contract:
 - which sections are reused, merged, dropped, or newly added
 - any paragraph-pattern rules the writer should preserve
 
+### 0.5 Thesis Crystallization
+
+Before extracting claims or locking the section outline, run a thesis crystallization mini-pass.
+Use the local writing references and answer these explicitly:
+
+- What is the thesis statement in one sentence?
+- What is the likely skeptical reviewer response?
+- What did the field know before this paper?
+- What does the reader know after this paper?
+- What is the contribution delta in one sentence?
+
+Also answer a chapter-level "so what" question for each major section:
+
+- Introduction: why should the reader care now?
+- Related work: what unresolved gap does the literature leave?
+- Method: why is this mechanism necessary?
+- Results: what is the one finding that matters?
+- Discussion: what changes for the field?
+- Conclusion: what survives after scope narrowing?
+
+If any section cannot answer "so what?", the outline is still too loose.
+
 ### 1. Extract Claims
 
 Start from `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, not from free-form memory:
@@ -127,6 +149,7 @@ Start from `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, not from free-form memory
 ```
 
 Flag any claim without evidence — either find evidence, downgrade the wording, or remove the claim.
+Do not let a section survive planning if you cannot state its contribution delta relative to prior work.
 
 ### 2. Storyline Sketch
 

@@ -179,7 +179,22 @@ test("writing reference bundle materializes section and stage bundles with wisdo
   );
   assert.ok(
     result.bundle.stageBundles.plan.referencePaths.some((entry) =>
+      /thesis-crystallization\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    result.bundle.stageBundles.plan.referencePaths.some((entry) =>
       /counterintuitive-writing\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    result.bundle.stageBundles.write.referencePaths.some((entry) =>
+      /writing-quality-check\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    result.bundle.stageBundles.write.referencePaths.some((entry) =>
+      /writing-judgment-framework\.md$/i.test(entry)
     )
   );
   assert.ok(
@@ -204,6 +219,16 @@ test("writing reference bundle materializes section and stage bundles with wisdo
   );
   assert.ok(
     result.bundle.stageBundles.review.referencePaths.some((entry) =>
+      /review-quality-lenses\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    result.bundle.stageBundles.review.referencePaths.some((entry) =>
+      /claim-verification-protocol\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    result.bundle.stageBundles.review.referencePaths.some((entry) =>
       /paper-review\.md$/i.test(entry)
     )
   );
@@ -212,6 +237,16 @@ test("writing reference bundle materializes section and stage bundles with wisdo
     await fs.readFile(path.join(projectRoot, DEFAULT_WRITING_REFERENCE_BUNDLE_PATH), "utf8")
   );
   assert.equal(persisted.status, "ready");
+  assert.ok(
+    persisted.globalReferencePaths.some((entry) =>
+      /writing-quality-check\.md$/i.test(entry)
+    )
+  );
+  assert.ok(
+    persisted.globalReferencePaths.some((entry) =>
+      /writing-judgment-framework\.md$/i.test(entry)
+    )
+  );
 });
 
 test("fallback activation switches to fallback mode when story support and review pressure indicate risk", async (t) => {
@@ -314,9 +349,13 @@ test("prewrite rejection, figure anchor, story bridge, and revision cycle are ma
   assert.equal(revision.state.passes.section_pass.status, "required");
   assert.equal(revision.state.passes.intro_method_consistency_pass.status, "pending");
   assert.equal(revision.state.passes.full_paper_adversarial_pass.status, "pending");
+  assert.equal(revision.state.passes.writing_quality_pass.status, "pending");
+  assert.equal(revision.state.passes.claim_verification_pass.status, "pending");
 
   const revisionState = JSON.parse(
     await fs.readFile(path.join(projectRoot, DEFAULT_PAPER_REVISION_STATE_PATH), "utf8")
   );
   assert.equal(revisionState.stage, "write");
+  assert.ok(revisionState.passes.writing_quality_pass);
+  assert.ok(revisionState.passes.claim_verification_pass);
 });

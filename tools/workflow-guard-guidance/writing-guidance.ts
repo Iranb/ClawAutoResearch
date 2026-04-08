@@ -72,6 +72,9 @@ export function buildWritingGuidance(
       append.push(
         `Keep the revision scaffold current via ${deps.asString(paperStory.revision_cycle_path) ?? "academic_writer/PAPER_REVISION_STATE.json"} so section pass, intro-method consistency, and full-paper adversarial review stay explicit.`
       );
+      append.push(
+        "Treat the writing-quality sweep, reader-journey check, and claim-verification sweep as mandatory before section sign-off, not optional polish."
+      );
     }
     if (reviewPressure && deps.asString(reviewPressure.status) === "ready") {
       append.push(

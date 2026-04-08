@@ -59,8 +59,13 @@ export async function materializeWritingReferenceBundle(params: {
     globalReferencePaths: uniqueStrings([
       refPath("counterintuitive-writing.md"),
       refPath("story-planning-rules.md"),
+      refPath("thesis-crystallization.md"),
       refPath("self-attack-protocol.md"),
       refPath("figure-centric-writing.md"),
+      refPath("writing-quality-check.md"),
+      refPath("writing-judgment-framework.md"),
+      refPath("review-quality-lenses.md"),
+      refPath("claim-verification-protocol.md"),
       refPath("paper-review.md"),
       refPath("does-my-writing-flow-source.md"),
     ]),
@@ -68,6 +73,8 @@ export async function materializeWritingReferenceBundle(params: {
       plan: {
         referencePaths: uniqueStrings([
           refPath("story-planning-rules.md"),
+          refPath("thesis-crystallization.md"),
+          refPath("writing-judgment-framework.md"),
           refPath("counterintuitive-writing.md"),
           refPath("figure-centric-writing.md"),
           refPath("paper-review.md"),
@@ -83,6 +90,9 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("story-planning-rules.md"),
           refPath("self-attack-protocol.md"),
           refPath("figure-centric-writing.md"),
+          refPath("writing-quality-check.md"),
+          refPath("writing-judgment-framework.md"),
+          refPath("claim-verification-protocol.md"),
           refPath("abstract.md"),
           refPath("introduction.md"),
           refPath("related-work.md"),
@@ -98,6 +108,8 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("paper-review.md"),
           refPath("self-attack-protocol.md"),
           refPath("counterintuitive-writing.md"),
+          refPath("review-quality-lenses.md"),
+          refPath("claim-verification-protocol.md"),
           refPath("does-my-writing-flow-source.md"),
           "reviewer/rebuttal_{date}.md",
         ]),
@@ -107,6 +119,8 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("paper-review.md"),
           refPath("counterintuitive-writing.md"),
           refPath("figure-centric-writing.md"),
+          refPath("review-quality-lenses.md"),
+          refPath("claim-verification-protocol.md"),
           refPath("does-my-writing-flow-source.md"),
           "academic_writer/VENUE_ROUTING_PLAN.md",
           "reviewer/rebuttal_{date}.md",
@@ -118,14 +132,17 @@ export async function materializeWritingReferenceBundle(params: {
         referencePaths: uniqueStrings([
           refPath("abstract.md"),
           refPath("counterintuitive-writing.md"),
+          refPath("writing-quality-check.md"),
           refPath("self-attack-protocol.md"),
         ]),
       },
       introduction: {
         referencePaths: uniqueStrings([
           refPath("introduction.md"),
+          refPath("thesis-crystallization.md"),
           refPath("story-planning-rules.md"),
           refPath("counterintuitive-writing.md"),
+          refPath("writing-judgment-framework.md"),
           refPath("does-my-writing-flow-source.md"),
         ]),
       },
@@ -139,6 +156,7 @@ export async function materializeWritingReferenceBundle(params: {
         referencePaths: uniqueStrings([
           refPath("method.md"),
           refPath("figure-centric-writing.md"),
+          refPath("writing-judgment-framework.md"),
           refPath("does-my-writing-flow-source.md"),
         ]),
       },
@@ -146,6 +164,7 @@ export async function materializeWritingReferenceBundle(params: {
         referencePaths: uniqueStrings([
           refPath("experiments.md"),
           refPath("self-attack-protocol.md"),
+          refPath("claim-verification-protocol.md"),
           refPath("paper-review.md"),
         ]),
       },
@@ -154,6 +173,7 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("paper-review.md"),
           refPath("counterintuitive-writing.md"),
           refPath("self-attack-protocol.md"),
+          refPath("writing-judgment-framework.md"),
         ]),
       },
       conclusion: {
