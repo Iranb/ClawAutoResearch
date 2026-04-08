@@ -329,12 +329,13 @@ export async function runWorkflowAutoIteratorImpl(
     Number.isFinite(workflowPolicy.agentContactCooldownSeconds)
       ? Math.max(0, Math.floor(workflowPolicy.agentContactCooldownSeconds))
       : 300;
-  const [manifestRaw, trackRegistry, experimentLedger] = await Promise.all([
+  const [manifestRaw, initialTrackRegistry, experimentLedger] = await Promise.all([
     readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json")),
     readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json")),
     deps.loadExperimentLedgerIfExists(projectRoot),
   ]);
   let manifest = { ...(manifestRaw ?? {}) };
+  let trackRegistry = initialTrackRegistry;
   const gateState = await deps.readGateState(projectRoot);
   const actorRole = deps.normalizeRole(params.agentId);
   const now = params.now ?? new Date().toISOString();
@@ -360,6 +361,9 @@ export async function runWorkflowAutoIteratorImpl(
     },
   });
   manifest = stagePreflight.manifest;
+  trackRegistry =
+    (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
+    trackRegistry;
   const writePackageBefore = deps.normalizeWritePackageState(manifest.write_package);
   if (
     workflowPolicy.autoMode === "aggressive" &&

@@ -1170,7 +1170,7 @@ async function seedProjectReadyForSubmit(projectRoot) {
   });
 }
 
-test("auto iterator keeps idea stage blocked when active tracks lack materialized reasoning evidence", async (t) => {
+test("auto iterator auto-heals sparse active-track reasoning state before advancing idea", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -1302,16 +1302,15 @@ test("auto iterator keeps idea stage blocked when active tracks lack materialize
   });
 
   assert.equal(result.stageBefore, "idea");
-  assert.equal(result.stageAfter, "idea");
-  assert.ok(
-    result.missingStageSignals.some((signal) => /graph-backed innovation evidence/i.test(signal))
-  );
-  assert.ok(
-    result.missingStageSignals.some((signal) => /reasoning packet/i.test(signal))
-  );
+  assert.equal(result.stageAfter, "plan");
+  const refreshedTrackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
+  assert.ok(refreshedTrackRegistry.tracks[0].evidence_pointers.length >= 1);
+  assert.ok(refreshedTrackRegistry.tracks[0].reasoning_packet_dir);
+  assert.ok(refreshedTrackRegistry.tracks[0].working_memory_path);
+  assert.ok(refreshedTrackRegistry.tracks[0].synthesis_packet_path);
 });
 
-test("auto iterator keeps idea stage blocked when the ideation contract is missing", async (t) => {
+test("auto iterator auto-materializes the ideation contract during idea before advancing", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -1334,12 +1333,64 @@ test("auto iterator keeps idea stage blocked when the ideation contract is missi
   });
 
   assert.equal(result.stageBefore, "idea");
-  assert.equal(result.stageAfter, "idea");
+  assert.equal(result.stageAfter, "plan");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.ideation_contract.status, "ready");
+});
+
+test("auto iterator reloads preflight-reconciled track registry and advances idea to plan", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+  await seedReadyIdeaCatalystState(projectRoot, { microStage: "judging" });
+
+  const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+  await writeJson(trackRegistryPath, {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+      },
+    ],
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "judging";
+  delete manifest.ideation_contract;
+  manifest.orchestration_state = {
+    status: "ready",
+    current_owner: "researcher",
+    next_owner: "orchestrator",
+    next_transition_candidate: "plan",
+    retry_budget_remaining: 2,
+    last_contract_eval_result: "pass",
+    last_updated_at: "2026-03-22T12:10:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "plan");
+  assert.equal(result.regressed, false);
   assert.ok(
-    result.missingStageSignals.some((signal) =>
-      /PROJECT_MANIFEST\.json\.ideation_contract\.status = ready/i.test(signal)
-    )
+    !result.missingStageSignals.some((signal) => /TRACK_REGISTRY\.json with 1-2 active tracks/i.test(signal))
   );
+
+  const updatedTrackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
+  assert.ok(updatedTrackRegistry.tracks[0].reasoning_packet_dir);
+  assert.ok(updatedTrackRegistry.tracks[0].working_memory_path);
+  assert.ok(updatedTrackRegistry.tracks[0].synthesis_packet_path);
 });
 
 test("auto iterator auto-materializes the ideation contract when plan needs a repaired proposal packet", async (t) => {

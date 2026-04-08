@@ -99,6 +99,7 @@ const PAPERNEXUS_PACKET_PREP_STAGES = new Set([
   "submit",
 ]);
 const IDEATION_PREP_STAGES = new Set([
+  "idea",
   "plan",
   "code",
   "experiment",
@@ -184,6 +185,105 @@ async function latestArtifactMtimeMs(
   return latest;
 }
 
+function normalizeStageValue(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): string[] {
+  const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+  return tracks
+    .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter((track) => normalizeStageValue(track.status) === "active")
+    .map((track) => {
+      const trackId = track.track_id ?? track.trackId;
+      return typeof trackId === "string" && trackId.trim().length > 0 ? trackId.trim() : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function activeTrackNeedsIdeationScaffold(track: Record<string, unknown>): boolean {
+  const evidencePointers = Array.isArray(track.evidence_pointers)
+    ? track.evidence_pointers
+    : Array.isArray(track.evidencePointers)
+      ? track.evidencePointers
+      : [];
+  const linkedGraphNodes = Array.isArray(track.linked_graph_nodes)
+    ? track.linked_graph_nodes
+    : Array.isArray(track.linkedGraphNodes)
+      ? track.linkedGraphNodes
+      : [];
+  const relationPatterns = Array.isArray(track.relation_patterns)
+    ? track.relation_patterns
+    : Array.isArray(track.relationPatterns)
+      ? track.relationPatterns
+      : [];
+  const hasGraphEvidence =
+    evidencePointers.length > 0 || linkedGraphNodes.length > 0 || relationPatterns.length > 0;
+  if (!hasGraphEvidence) {
+    return true;
+  }
+  return !(
+    typeof track.reasoning_packet_dir === "string" &&
+    track.reasoning_packet_dir.trim().length > 0 &&
+    typeof track.working_memory_path === "string" &&
+    track.working_memory_path.trim().length > 0 &&
+    typeof track.synthesis_packet_path === "string" &&
+    track.synthesis_packet_path.trim().length > 0
+  );
+}
+
+async function ideationTrackRegistryNeedsRefresh(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<boolean> {
+  const trackRegistry =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(params.projectRoot, "TRACK_REGISTRY.json") ?? ""
+    )) ?? null;
+  const activeTrackIds = collectActiveTrackIds(trackRegistry);
+  if (activeTrackIds.length < 1 || activeTrackIds.length > 2) {
+    return true;
+  }
+  const researchProgram = params.manifest.research_program;
+  const programTracks = Array.isArray(
+    researchProgram && typeof researchProgram === "object"
+      ? (researchProgram as Record<string, unknown>).tracks
+      : null
+  )
+    ? ((researchProgram as Record<string, unknown>).tracks as unknown[])
+    : [];
+  const expectedActiveTrackIds = programTracks
+    .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter((track) => normalizeStageValue(track.status) === "active")
+    .map((track) => {
+      const trackId = track.track_id ?? track.trackId;
+      return typeof trackId === "string" && trackId.trim().length > 0 ? trackId.trim() : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (
+    expectedActiveTrackIds.length > 0 &&
+    expectedActiveTrackIds.some((trackId) => !activeTrackIds.includes(trackId))
+  ) {
+    return true;
+  }
+  const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+  return tracks.some((entry) => {
+    const track = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+    if (!track) {
+      return false;
+    }
+    return (
+      normalizeStageValue(track.status) === "active" && activeTrackNeedsIdeationScaffold(track)
+    );
+  });
+}
+
 async function shouldMaterializeIdeationContract(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -196,7 +296,7 @@ async function shouldMaterializeIdeationContract(params: {
   if (state.status !== "ready") {
     return true;
   }
-  return anyArtifactMissing(params.projectRoot, [
+  const artifactsMissing = await anyArtifactMissing(params.projectRoot, [
     state.graphIdeationPacketPath,
     state.ideaTreePath,
     state.noveltyTreePath,
@@ -210,6 +310,13 @@ async function shouldMaterializeIdeationContract(params: {
     state.top3SummaryPath,
     state.researchProposalPath,
   ]);
+  if (artifactsMissing) {
+    return true;
+  }
+  return await ideationTrackRegistryNeedsRefresh({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+  });
 }
 
 async function shouldMaterializeIdeaCatalyst(params: {

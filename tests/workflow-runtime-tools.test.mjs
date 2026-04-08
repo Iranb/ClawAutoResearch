@@ -1400,6 +1400,217 @@ test("research_workflow materialize_ideation_contract scaffolds graph-first idea
   assert.equal(updatedTrackRegistry.tracks[0].research_proposal_path, "researcher/ideation/RESEARCH_PROPOSAL.md");
 });
 
+test("research_workflow materialize_ideation_contract reconciles sparse root track registry with active research program tracks", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "# Anchor Index\n- anchor: bias-router\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+    "# Limitation Frontier\n- baseline calibration still leaks confirmation bias\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+    "# Transfer Frontier\n- import consistent alignment into GCD debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "# Frontier Report\n\n## Challenge clusters\n- confirmation bias persists in pseudo-labeling\n\n## Insight clusters\n- alignment-aware debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "INNOVATION_REFLECTION.md"),
+    "# Innovation Reflection\nKeep the frequency-debiased track and a TALON-inspired fallback.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic Chain\n1. Challenge: pseudo-label bias\n2. Insight: graph-grounded debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence Chain\n- frontier packets show calibration failures\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n- how to stabilize debiasing across seeds?\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+    "# Synthesis\n- favor frequency-debiased routing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"),
+    `${JSON.stringify({ selected_track_id: "fd-gcd-freq-debiased" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  await fs.writeFile(
+    path.join(projectRoot, "TRACK_REGISTRY.json"),
+    `${JSON.stringify(
+      {
+        tracks: [
+          {
+            track_id: "fd-gcd-freq-debiased",
+            status: "active",
+            name: "Frequency-Debiased GCD",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.active_track_ids = ["talon-gcd-bias", "part-level-gcd"];
+  manifest.primary_track_id = "talon-gcd-bias";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Reduce confirmation bias in GCD with graph-grounded debiasing.",
+    problem_statement: "Known-class bias dominates the pseudo-label loop in GCD.",
+    baseline_reference: "SimGCD",
+    primary_metric: "All Accuracy (ACC)",
+    datasets: ["CUB-200"],
+    success_criteria: ["All ACC > 53.4% on C-GCD"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [
+      {
+        track_id: "fd-gcd-freq-debiased",
+        status: "active",
+        hypothesis:
+          "Frequency-domain debiasing plus alignment reduces confirmation bias in pseudo-labeling.",
+        novelty_basis: "Compose DEBGCD, FREE, and consistent alignment into a graph-backed track.",
+        required_baselines: ["SimGCD"],
+      },
+      {
+        track_id: "talon-gcd-bias",
+        status: "active",
+        hypothesis:
+          "Margin-aware TALON-style calibration reduces confirmation bias in the novel-class tail.",
+        novelty_basis: "Compose TALON-style calibration with GCD pseudo-label control.",
+        required_baselines: ["SimGCD"],
+      },
+    ],
+  };
+  manifest.innovation_reflection = {
+    status: "fresh",
+    last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      topic: "Frequency-debiased GCD",
+      basis_stage: "experiment_analysis",
+      track_id: "fd-gcd-freq-debiased",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      graph_version_seen: "GCD-2026-04-06",
+      contract_version: 1,
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "converge",
+          status: "completed",
+          options: [
+            {
+              option_id: "dir-main",
+              title: "Frequency-debiased pseudo-label routing",
+              score: 0.93,
+              summary: "Use graph-backed debiasing signals to stabilize GCD pseudo-labels.",
+              logic_chain: "# Logic Main\nChallenge -> debiasing -> evidence\n",
+              evidence_chain: "# Evidence Main\nCalibration failures + transfer evidence\n",
+              reasoning_trace: [
+                {
+                  step: "inspect-calibration-gap",
+                  conclusion: "need a graph-backed debiasing route",
+                },
+              ],
+              question_packet: "# Questions Main\n",
+              working_memory: {
+                surviving_direction: "frequency-debiased pseudo-label routing",
+              },
+              synthesis_packet: "# Synthesis Main\n",
+              reflection_chain: {
+                keep: ["frequency-debiased pseudo-label routing"],
+              },
+              storyline_brief: {
+                thesis: "Challenge -> debiasing -> evidence-backed stability",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "materialize_ideation_contract",
+    ideationMaterialization: {
+      basis_stage: "experiment_analysis",
+    },
+  });
+
+  const updatedTrackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  const trackIds = updatedTrackRegistry.tracks.map((track) => track.track_id).sort();
+  assert.deepEqual(trackIds, ["fd-gcd-freq-debiased", "talon-gcd-bias"]);
+  assert.equal(updatedTrackRegistry.active_tracks, 2);
+  for (const track of updatedTrackRegistry.tracks) {
+    assert.equal(track.status, "active");
+    assert.ok(Array.isArray(track.evidence_pointers));
+    assert.ok(track.evidence_pointers.length >= 1);
+    assert.ok(typeof track.reasoning_packet_dir === "string" && track.reasoning_packet_dir.length > 0);
+    assert.ok(typeof track.working_memory_path === "string" && track.working_memory_path.length > 0);
+    assert.ok(typeof track.synthesis_packet_path === "string" && track.synthesis_packet_path.length > 0);
+    await fs.access(path.join(projectRoot, track.working_memory_path));
+    await fs.access(path.join(projectRoot, track.synthesis_packet_path));
+  }
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.deepEqual(refreshedManifest.active_track_ids, [
+    "fd-gcd-freq-debiased",
+    "talon-gcd-bias",
+  ]);
+  assert.equal(refreshedManifest.primary_track_id, "fd-gcd-freq-debiased");
+  assert.equal(refreshedManifest.track_registry?.active_tracks, 2);
+});
+
 test("research_workflow materializes paper story and review pressure contracts from ideation outputs", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

@@ -46,6 +46,7 @@ type BrainstormSummary = {
     selectedOptionId: string | null;
     basisStage: string | null;
     workingMemoryPath: string | null;
+    synthesisPacketPath: string | null;
     reflectionChainPath: string | null;
     rounds: BrainstormRound[];
   };
@@ -107,6 +108,34 @@ function clampUnitScore(value: number | null | undefined, fallback: number): num
   return Math.max(0, Math.min(1, candidate));
 }
 
+function getTrackReasoningRootRelativeDir(trackId: string | null): string {
+  const normalizedTrackId = trackId?.trim().replace(/[\\/]/g, "_") ?? null;
+  if (normalizedTrackId) {
+    return `researcher/reasoning/${normalizedTrackId}`;
+  }
+  return "researcher/brainstorm-cycle";
+}
+
+function getTrackScaffoldPaths(trackId: string | null): {
+  reasoningPacketDir: string;
+  workingMemoryPath: string;
+  synthesisPacketPath: string;
+} {
+  const root = getTrackReasoningRootRelativeDir(trackId);
+  return {
+    reasoningPacketDir: root,
+    workingMemoryPath: `${root}/WORKING_MEMORY.json`,
+    synthesisPacketPath: `${root}/SYNTHESIS_PACKET.md`,
+  };
+}
+
+function ensureTrackEvidencePointers(track: Record<string, unknown>, fallbackPaths: string[]): string[] {
+  return uniqueStrings([
+    ...asStringArray(track.evidence_pointers ?? track.evidencePointers),
+    ...fallbackPaths.filter((entry): entry is string => Boolean(entry && entry.trim().length > 0)),
+  ]).slice(0, 8);
+}
+
 export async function materializeIdeationContractImpl(
   params: {
     projectRoot: string;
@@ -145,6 +174,7 @@ export async function materializeIdeationContractImpl(
     activeTracks.find(
       (track) => pickString(track, ["track_id", "trackId"]) === selectedTrackId
     ) ?? null;
+  const researchProgramState = normalizeResearchProgramState(manifest.research_program);
   const selectedProgramTrack = deps.resolveResearchProgramTrack(manifest, selectedTrackId);
   const graphBasisPaths = normalizeIdeationGraphBasisPaths(
     asRecord(patch.graphBasisPaths ?? patch.graph_basis_paths) ??
@@ -296,12 +326,12 @@ export async function materializeIdeationContractImpl(
   const longTermGoal =
     pickString(patch, ["longTermGoal", "long_term_goal"]) ??
     current.longTermGoal ??
-    normalizeResearchProgramState(manifest.research_program).goal ??
+    researchProgramState.goal ??
     "Produce a graph-grounded research direction with auditable novelty and evidence chains.";
   const problemScope =
     pickString(patch, ["problemScope", "problem_scope"]) ??
     current.problemScope ??
-    normalizeResearchProgramState(manifest.research_program).problemStatement ??
+    researchProgramState.problemStatement ??
     (selectedTrack ? pickString(selectedTrack, ["question"]) : null) ??
     "Identify a graph-grounded research direction with explicit challenge, insight, and evidence support.";
   const basisStage =
@@ -367,7 +397,7 @@ export async function materializeIdeationContractImpl(
     );
 
   const baselineReference =
-    normalizeResearchProgramState(manifest.research_program).baselineReference ??
+    researchProgramState.baselineReference ??
     (selectedProgramTrack
       ? pickString(selectedProgramTrack, ["baseline_reference", "baselineReference"])
       : null) ??
@@ -852,8 +882,8 @@ ${deps.quoteMarkdownText(
 
 ## Experiment Plan
 ${deps.renderMarkdownBulletList([
-  `Baseline: ${deps.quoteMarkdownText(normalizeResearchProgramState(manifest.research_program).baselineReference)}`,
-  `Primary metric: ${deps.quoteMarkdownText(normalizeResearchProgramState(manifest.research_program).primaryMetric)}`,
+  `Baseline: ${deps.quoteMarkdownText(researchProgramState.baselineReference)}`,
+  `Primary metric: ${deps.quoteMarkdownText(researchProgramState.primaryMetric)}`,
   "Stage 1: baseline reproduction with unchanged protocol.",
   "Stage 2: selected graph-grounded innovation delta only.",
   "Stage 3: ablation and boundary checks tied to the claim map.",
@@ -987,29 +1017,183 @@ ${deps.renderMarkdownBulletList([
     })
   );
 
-  if (trackRegistry && Array.isArray(trackRegistry.tracks)) {
-    let changed = false;
-    for (const entry of trackRegistry.tracks) {
-      const track = asRecord(entry);
-      if (!track) {
-        continue;
+  const activeProgramTracks = researchProgramState.tracks.filter(
+    (track) => normalizeStage(track.status) === "active"
+  );
+  const desiredActiveTrackIds = uniqueStrings([
+    ...activeProgramTracks
+      .map((track) => pickString(track, ["track_id", "trackId"]))
+      .filter((entry): entry is string => Boolean(entry)),
+    ...(selectedTrackId ? [selectedTrackId] : []),
+    ...activeTracks
+      .map((track) => pickString(track, ["track_id", "trackId"]))
+      .filter((entry): entry is string => Boolean(entry)),
+  ]);
+  const existingTracks = Array.isArray(trackRegistry?.tracks)
+    ? trackRegistry.tracks
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const existingTrackById = new Map(
+    existingTracks
+      .map((track) => [pickString(track, ["track_id", "trackId"]), track] as const)
+      .filter((entry): entry is [string, Record<string, unknown>] => Boolean(entry[0]))
+  );
+  const reconciledTracks: Record<string, unknown>[] = [];
+  const graphEvidenceFallbacks = uniqueStrings(
+    [
+      nextState.graphIdeationPacketPath,
+      nextState.researchProposalPath,
+      graphBasisPaths.frontierReportPath,
+      graphBasisPaths.logicChainPath,
+      graphBasisPaths.evidenceChainPath,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+  ).slice(0, 8);
+
+  for (const trackId of desiredActiveTrackIds) {
+    const existingTrack = { ...(existingTrackById.get(trackId) ?? {}) };
+    const programTrack =
+      activeProgramTracks.find(
+        (track) => pickString(track, ["track_id", "trackId"]) === trackId
+      ) ?? null;
+    const scaffoldPaths = getTrackScaffoldPaths(trackId);
+    const reasoningPacketDir =
+      pickString(existingTrack, ["reasoning_packet_dir", "reasoningPacketDir"]) ??
+      scaffoldPaths.reasoningPacketDir;
+    const workingMemoryPath =
+      pickString(existingTrack, ["working_memory_path", "workingMemoryPath"]) ??
+      (trackId === selectedTrackId && brainstormState.workingMemoryPath
+        ? brainstormState.workingMemoryPath
+        : scaffoldPaths.workingMemoryPath);
+    const synthesisPacketPath =
+      pickString(existingTrack, ["synthesis_packet_path", "synthesisPacketPath"]) ??
+      (trackId === selectedTrackId && brainstormState.synthesisPacketPath
+        ? brainstormState.synthesisPacketPath
+        : scaffoldPaths.synthesisPacketPath);
+    const evidencePointers = ensureTrackEvidencePointers(existingTrack, graphEvidenceFallbacks);
+    const linkedGraphNodes = asStringArray(
+      existingTrack.linked_graph_nodes ?? existingTrack.linkedGraphNodes
+    );
+    const relationPatterns = asStringArray(
+      existingTrack.relation_patterns ?? existingTrack.relationPatterns
+    );
+    const title =
+      pickString(existingTrack, ["name", "title"]) ??
+      (trackId === selectedTrackId ? selectedDirection?.title ?? null : null) ??
+      `Track ${trackId}`;
+    const hypothesis =
+      pickString(existingTrack, ["hypothesis"]) ??
+      (programTrack ? pickString(programTrack, ["hypothesis"]) : null) ??
+      (trackId === selectedTrackId ? selectedDirection?.summary ?? null : null);
+    const noveltyBasis =
+      pickString(existingTrack, ["novelty_basis", "noveltyBasis"]) ??
+      (programTrack ? pickString(programTrack, ["novelty_basis", "noveltyBasis"]) : null) ??
+      (trackId === selectedTrackId ? selectedDirection?.summary ?? null : null);
+
+    const nextTrack: Record<string, unknown> = {
+      ...existingTrack,
+      track_id: trackId,
+      name: title,
+      status: "active",
+      hypothesis,
+      novelty_basis: noveltyBasis,
+      evidence_pointers: evidencePointers,
+      linked_graph_nodes: linkedGraphNodes,
+      relation_patterns: relationPatterns,
+      reasoning_packet_dir: reasoningPacketDir,
+      working_memory_path: workingMemoryPath,
+      synthesis_packet_path: synthesisPacketPath,
+      selected_direction_id:
+        trackId === selectedTrackId
+          ? resolvedSelectedDirectionId
+          : pickString(existingTrack, ["selected_direction_id", "selectedDirectionId"]),
+      graph_ideation_packet_path: nextState.graphIdeationPacketPath,
+      idea_tree_path: nextState.ideaTreePath,
+      ranking_history_path: nextState.rankingHistoryPath,
+      research_proposal_path: nextState.researchProposalPath,
+      top3_summary_path: nextState.top3SummaryPath,
+    };
+    reconciledTracks.push(nextTrack);
+
+    const reasoningDirResolved = resolveProjectArtifactPath(projectRoot, reasoningPacketDir);
+    if (reasoningDirResolved) {
+      const reasoningSummaryPath = path.join(reasoningDirResolved, "SUMMARY.md");
+      const currentReasoningSummary = await readTextIfExists(reasoningSummaryPath);
+      if (!currentReasoningSummary || currentReasoningSummary.trim().length === 0) {
+        await writeTextEnsured(
+          reasoningSummaryPath,
+          [
+            `# ${title}`,
+            "",
+            hypothesis ? `- Hypothesis: ${hypothesis}` : null,
+            noveltyBasis ? `- Novelty basis: ${noveltyBasis}` : null,
+            evidencePointers.length > 0
+              ? `- Graph evidence: ${evidencePointers.join(", ")}`
+              : null,
+          ]
+            .filter((entry): entry is string => Boolean(entry))
+            .join("\n") + "\n"
+        );
       }
-      const trackId = pickString(track, ["track_id", "trackId"]);
-      if (!trackId || trackId !== selectedTrackId) {
-        continue;
-      }
-      track.selected_direction_id = resolvedSelectedDirectionId;
-      track.graph_ideation_packet_path = nextState.graphIdeationPacketPath;
-      track.idea_tree_path = nextState.ideaTreePath;
-      track.ranking_history_path = nextState.rankingHistoryPath;
-      track.research_proposal_path = nextState.researchProposalPath;
-      track.top3_summary_path = nextState.top3SummaryPath;
-      changed = true;
     }
-    if (changed) {
-      await writeJsonEnsured(path.join(projectRoot, "TRACK_REGISTRY.json"), trackRegistry);
+
+    const workingMemoryResolved = resolveProjectArtifactPath(projectRoot, workingMemoryPath);
+    const currentWorkingMemory = await readTextIfExists(workingMemoryResolved);
+    if (workingMemoryResolved && (!currentWorkingMemory || currentWorkingMemory.trim().length === 0)) {
+      await writeJsonEnsured(workingMemoryResolved, {
+        track_id: trackId,
+        selected_direction_id:
+          trackId === selectedTrackId ? resolvedSelectedDirectionId : null,
+        title,
+        hypothesis,
+        graph_evidence_paths: evidencePointers,
+        generated_by: "materialize_ideation_contract",
+      });
+    }
+
+    const synthesisResolved = resolveProjectArtifactPath(projectRoot, synthesisPacketPath);
+    const currentSynthesis = await readTextIfExists(synthesisResolved);
+    if (synthesisResolved && (!currentSynthesis || currentSynthesis.trim().length === 0)) {
+      await writeTextEnsured(
+        synthesisResolved,
+        [
+          `# Synthesis Packet — ${title}`,
+          "",
+          hypothesis ? `Hypothesis: ${hypothesis}` : null,
+          noveltyBasis ? `Novelty basis: ${noveltyBasis}` : null,
+          evidencePointers.length > 0
+            ? `Graph evidence: ${evidencePointers.join(", ")}`
+            : null,
+        ]
+          .filter((entry): entry is string => Boolean(entry))
+          .join("\n") + "\n"
+      );
     }
   }
+
+  const remainingTracks = existingTracks.filter((track) => {
+    const trackId = pickString(track, ["track_id", "trackId"]);
+    return !trackId || !desiredActiveTrackIds.includes(trackId);
+  });
+  const nextTrackRegistry: Record<string, unknown> = {
+    ...(trackRegistry ?? {}),
+    active_tracks: desiredActiveTrackIds.length,
+    tracks: [...reconciledTracks, ...remainingTracks],
+    updated_at: new Date().toISOString(),
+  };
+  await writeJsonEnsured(path.join(projectRoot, "TRACK_REGISTRY.json"), nextTrackRegistry);
+
+  manifest.active_track_ids = desiredActiveTrackIds;
+  manifest.primary_track_id =
+    selectedTrackId && desiredActiveTrackIds.includes(selectedTrackId)
+      ? selectedTrackId
+      : desiredActiveTrackIds[0] ?? null;
+  manifest.track_registry = {
+    status: desiredActiveTrackIds.length > 0 ? "ready" : "missing",
+    active_tracks: desiredActiveTrackIds.length,
+    track_ids: desiredActiveTrackIds,
+    last_updated_at: new Date().toISOString(),
+  };
 
   const currentInnovationReflection = deps.normalizeInnovationReflectionState(
     manifest.innovation_reflection
