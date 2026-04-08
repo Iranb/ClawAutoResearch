@@ -15,12 +15,17 @@
 
 | 路径 | 重点 |
 | --- | --- |
-| `tools/workflow-guard.ts` | facade、入口胶水、state normalization |
+| `tools/workflow-guard.ts` | 公共 facade、兼容导出、有限 glue；不再承载大块 project/policy/setter 逻辑 |
+| `tools/workflow-guard-project/` | project root 解析、gate state、projects state、snapshot builder |
+| `tools/workflow-guard-policies/` | role policy、tool guards、handoff mention sanitization |
+| `tools/workflow-guard-writing/` | writing/review/theory/citation 的 readiness 与 quality evaluation |
+| `tools/workflow-guard-setters/` | `set*State(...)` 家族，负责 manifest/runtime 持久化 |
 | `tools/workflow-guard-state/` | durable state schema 与辅助处理 |
 | `tools/workflow-guard-stages/` | stage-specific gate 和 signals |
 | `tools/workflow-guard-materializers/` | `research_program`、story、review packet 等合同生成 |
 | `tools/workflow-guard-guidance/` | prompt-layer guidance 与 dynamic tasks |
 | `tools/workflow-guard-runtime/` | auto iterator、background continuation、session orchestration |
+| `tools/workflow-guard-recorders/` | experiment/review/writing 等 runtime recorder 与 append-only 写入 |
 
 ## 3. graph / PaperNexus family
 
@@ -48,6 +53,23 @@
 - `tests/workflow-web-doc.test.mjs`
 
 它们分别守住推进器、工具接口、控制平面阶段约束和文档站结构。
+
+新增的 decomposition-focused 套件：
+
+- `tests/workflow-guard-project-context.test.mjs`
+- `tests/workflow-guard-gate-state.test.mjs`
+- `tests/workflow-guard-projects-state.test.mjs`
+- `tests/workflow-guard-snapshot-builder.test.mjs`
+- `tests/workflow-guard-policies.test.mjs`
+- `tests/workflow-guard-handoff-rules.test.mjs`
+- `tests/workflow-guard-tool-guards.test.mjs`
+- `tests/workflow-guard-writing-eval.test.mjs`
+- `tests/workflow-guard-paper-quality-eval.test.mjs`
+- `tests/workflow-guard-citation-theory-eval.test.mjs`
+- `tests/workflow-guard-setters.test.mjs`
+- `tests/workflow-guard-setters-split.test.mjs`
+- `tests/workflow-guard-review-state-setters.test.mjs`
+- `tests/workflow-guard-ingestion-state-setters.test.mjs`
 
 ## 6. agents 和 skills 所在位置
 

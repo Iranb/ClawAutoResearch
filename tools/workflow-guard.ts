@@ -301,6 +301,112 @@ import {
   formatWorkflowSnapshotForPromptImpl,
   shouldUseFocusedWorkflowPromptImpl,
 } from "./workflow-guard-prompt-assembly";
+
+// Facade-decomposition families:
+// - workflow-guard-project/* owns project resolution, gate state, and snapshot assembly
+// - workflow-guard-policies/* owns role policy, tool guards, and handoff normalization
+// - workflow-guard-writing/* owns quality/readiness evaluation helpers
+// - workflow-guard-setters/* owns manifest/runtime state mutation helpers
+import {
+  buildIdleResearchTemplateForBootstrap as buildIdleResearchTemplateForBootstrapFromModule,
+  defaultResearchProgramZoteroProjectPath as defaultResearchProgramZoteroProjectPathFromModule,
+  ensureWorkflowProjectRoot as ensureWorkflowProjectRootFromModule,
+  getWorkflowProjectRoot as getProjectRootFromModule,
+  inferWorkflowProjectId as inferProjectIdFromModule,
+  loadWorkflowProjectState as loadProjectStateFromModule,
+} from "./workflow-guard-project/project-context";
+import {
+  computeWorkflowGateConfirmationDeadline as computeGateConfirmationDeadlineFromModule,
+  getWorkflowGateStatePath as getGateStatePathFromModule,
+  getWorkflowGateStateSummary as getGateStateSummaryFromModule,
+  hasWorkflowTimedDefaultGateExpired as hasTimedDefaultGateExpiredFromModule,
+  normalizeWorkflowGateState as normalizeGateStateFromModule,
+  readWorkflowGateState as readGateStateFromModule,
+  saveWorkflowGateState as saveGateStateFromModule,
+  serializeWorkflowGateState as serializeGateStateFromModule,
+  setWorkflowGateStateForWorkflow as setGateStateForWorkflowFromModule,
+} from "./workflow-guard-project/gate-state";
+import {
+  buildGraphImportRepairGuidance,
+  buildWorkflowSnapshotFromProjectState,
+  summarizeGraphPresenceMissing,
+} from "./workflow-guard-project/snapshot-builder";
+import {
+  formatWorkflowProjectDirEntry as formatProjectDirEntryFromModule,
+  getWorkflowProjectsStatePath as getProjectsStatePathFromModule,
+  readWorkflowProjectsStateRaw as readProjectsStateRawFromModule,
+  syncWorkflowProjectsStateEntry as syncProjectsStateEntryFromModule,
+  workflowDateOnly as dateOnlyFromModule,
+} from "./workflow-guard-project/projects-state";
+import {
+  canRoleContact as canRoleContactFromModule,
+  canRoleContactInWorkflow as canRoleContactInWorkflowFromModule,
+  canRoleSpawn as canRoleSpawnFromModule,
+  canRoleSpawnInWorkflow as canRoleSpawnInWorkflowFromModule,
+  canRoleUseForwardStageHandoff as canRoleUseForwardStageHandoffFromModule,
+  getForwardStageHandoffTargetRole as getForwardStageHandoffTargetRoleFromModule,
+  inferTargetRoleFromToolParams as inferTargetRoleFromToolParamsFromModule,
+  normalizeWorkflowRole as normalizeWorkflowRoleFromModule,
+  ROLE_POLICIES as WORKFLOW_ROLE_POLICIES,
+  STAGE_REQUIREMENTS as WORKFLOW_STAGE_REQUIREMENTS,
+} from "./workflow-guard-policies/role-policy";
+import {
+  hasAgentMention as hasAgentMentionFromModule,
+  isWorkflowChannelHandoffMessage as isWorkflowChannelHandoffMessageFromModule,
+  normalizeWorkflowChannelMentions as normalizeWorkflowChannelMentionsFromModule,
+  sanitizeAgentMentions as sanitizeAgentMentionsFromModule,
+  sanitizeMessageToolParams as sanitizeMessageToolParamsFromModule,
+} from "./workflow-guard-policies/handoff-rules";
+import {
+  shouldBlockCoderDatasetMutation as shouldBlockCoderDatasetMutationFromModule,
+  shouldBlockInnovationWrite as shouldBlockInnovationWriteFromModule,
+  shouldBlockPapernexusDestructiveOperation as shouldBlockPapernexusDestructiveOperationFromModule,
+  shouldBlockPapernexusInlineExecution as shouldBlockPapernexusInlineExecutionFromModule,
+  shouldBlockPapernexusLiveGraphCliRead as shouldBlockPapernexusLiveGraphCliReadFromModule,
+  shouldBlockPapernexusLocalGraphProcessing as shouldBlockPapernexusLocalGraphProcessingFromModule,
+  shouldBlockPapernexusLocalStorageUsage as shouldBlockPapernexusLocalStorageUsageFromModule,
+  shouldBlockPapernexusLongWaitImportCommand as shouldBlockPapernexusLongWaitImportCommandFromModule,
+  shouldBlockPapernexusMultiPaperImport as shouldBlockPapernexusMultiPaperImportFromModule,
+  shouldBlockPapernexusRawHttpUsage as shouldBlockPapernexusRawHttpUsageFromModule,
+  shouldBlockProjectWrite as shouldBlockProjectWriteFromModule,
+  shouldBlockResearchGraphForce as shouldBlockResearchGraphForceFromModule,
+  shouldBlockWriterTemplateWrite as shouldBlockWriterTemplateWriteFromModule,
+} from "./workflow-guard-policies/tool-guards";
+import {
+  getCitationCollectionStateSummary as getCitationCollectionStateSummaryFromModule,
+  getCitationIntegrityStateSummary as getCitationIntegrityStateSummaryFromModule,
+  getTheoryStateSummary as getTheoryStateSummaryFromModule,
+} from "./workflow-guard-writing/citation-theory-eval";
+import {
+  getFigureQcStateSummary as getFigureQcStateSummaryFromModule,
+  getPaperQcStateSummary as getPaperQcStateSummaryFromModule,
+  getReviewIssueTrackerStateSummary as getReviewIssueTrackerStateSummaryFromModule,
+} from "./workflow-guard-writing/paper-quality-eval";
+import {
+  setBrainstormCycleState as setBrainstormCycleStateFromModule,
+  setIdeationContractState as setIdeationContractStateFromModule,
+  setIdleResearchState as setIdleResearchStateFromModule,
+  setOrchestrationState as setOrchestrationStateFromModule,
+  setPaperStoryState as setPaperStoryStateFromModule,
+  setResearchProgramState as setResearchProgramStateFromModule,
+  setReviewPressurePacketState as setReviewPressurePacketStateFromModule,
+  setWritePackageState as setWritePackageStateFromModule,
+} from "./workflow-guard-setters/research-state-setters";
+import {
+  setCitationCollectionState as setCitationCollectionStateFromModule,
+  setExperimentSearchState as setExperimentSearchStateFromModule,
+  setFigureQcState as setFigureQcStateFromModule,
+  setPaperIngestionState as setPaperIngestionStateFromModule,
+  setPaperQcState as setPaperQcStateFromModule,
+} from "./workflow-guard-setters/ingestion-state-setters";
+import { setReviewIssueTrackerState as setReviewIssueTrackerStateFromModule } from "./workflow-guard-setters/review-state-setters";
+import {
+  setExternalReviewState as setExternalReviewStateFromModule,
+  setGraphGuidedWritingState as setGraphGuidedWritingStateFromModule,
+  setReviewSessionState as setReviewSessionStateFromModule,
+  setWritingContractState as setWritingContractStateFromModule,
+  setWritingSessionState as setWritingSessionStateFromModule,
+} from "./workflow-guard-setters/writing-state-setters";
 import {
   getExperimentMemorySummaryImpl,
   recordCitationVerificationImpl,
@@ -392,21 +498,6 @@ type WorkflowRole =
 
 type ManifestLike = Record<string, unknown>;
 type TrackRegistryLike = Record<string, unknown>;
-
-type RolePolicy = {
-  allowedContacts: WorkflowRole[];
-  allowedSpawns: WorkflowRole[];
-  allowedProjectDirs: string[];
-  allowedProjectFiles: string[];
-  allowProjectsStateWrite?: boolean;
-  writeScopeLabels: string[];
-  backgroundTasks: string[];
-};
-
-type StageRequirement = {
-  owner: WorkflowRole;
-  nextStage: string;
-};
 
 type ProjectState = {
   projectRoot: string | null;
@@ -1843,136 +1934,8 @@ const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
   },
 };
 
-const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
-  researcher: {
-    allowedContacts: [
-      "orchestrator",
-      "coder",
-      "analyzer",
-      "academic_writer",
-      "reviewer",
-      "cross-reviewer",
-    ],
-    allowedSpawns: [
-      "orchestrator",
-      "coder",
-      "analyzer",
-      "academic_writer",
-      "reviewer",
-      "cross-reviewer",
-    ],
-    allowedProjectDirs: ["researcher", "graph", "memory", "reviewer", "cross-reviewer"],
-    allowedProjectFiles: ["PROJECT_MANIFEST.json", "TRACK_REGISTRY.json", "CLAIM_POLICY.md", "README.md"],
-    allowProjectsStateWrite: true,
-    writeScopeLabels: [
-      "{PROJ}/PROJECT_MANIFEST.json",
-      "{PROJ}/TRACK_REGISTRY.json",
-      "{PROJ}/CLAIM_POLICY.md",
-      "{PROJ}/README.md",
-      "{PROJ}/researcher/",
-      "{PROJ}/graph/",
-      "{PROJ}/memory/",
-      "{PROJ}/reviewer/",
-      "{PROJ}/cross-reviewer/",
-      "{PROJECTS_ROOT}/PROJECTS_STATE.json",
-    ],
-    backgroundTasks: [
-      "Continue literature survey and venue sweeps with /research-lit or /papers-cool; if PASA is responsive, use /pasa-paper-search as a second retrieval source and merge by canonical identity.",
-      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md-api for arXiv papers, then arxiv2md as the legacy webpage fallback, and use papers-cool PDF fallback only if all Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
-      "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
-      "Keep reasoning packets and manifest next_action/resume_action current.",
-    ],
-  },
-  orchestrator: {
-    allowedContacts: ["researcher"],
-    allowedSpawns: [],
-    allowedProjectDirs: ["orchestrator"],
-    allowedProjectFiles: [],
-    writeScopeLabels: ["{PROJ}/orchestrator/"],
-    backgroundTasks: [
-      "Tighten compute estimates, ablation coverage, and rollback rules under {PROJ}/orchestrator/.",
-      "Refine risk registers and blocked-task notes without changing active tracks.",
-    ],
-  },
-  coder: {
-    allowedContacts: ["researcher"],
-    allowedSpawns: [],
-    allowedProjectDirs: ["coder"],
-    allowedProjectFiles: ["orchestrator/TODOS.md"],
-    writeScopeLabels: [
-      "{PROJ}/coder/",
-      "{PROJ}/orchestrator/TODOS.md (append-only)",
-      "Datasets are read-only inputs for Coder. Never mutate /data/datasets/ or project dataset roots.",
-    ],
-    backgroundTasks: [
-      "Strengthen smoke tests, reproducibility notes, and launch scripts inside {PROJ}/coder/.",
-      "Keep experiment bundles legible: one folder per experiment, one manifest per bundle, and a top-level coder/EXPERIMENT_INDEX.md mapping folders to tracks and questions.",
-      "Treat dataset roots as read-only. Put derived caches, converted shards, and temporary files under {PROJ}/coder/ or remote scratch/results, not back into datasets/.",
-      "Do not launch unassigned experiments or broaden scope on your own.",
-    ],
-  },
-  analyzer: {
-    allowedContacts: ["researcher"],
-    allowedSpawns: [],
-    allowedProjectDirs: ["analyzer"],
-    allowedProjectFiles: ["orchestrator/TODOS.md"],
-    writeScopeLabels: ["{PROJ}/analyzer/", "{PROJ}/orchestrator/TODOS.md (append-only)"],
-    backgroundTasks: [
-      "Prepare figure/table skeletons and claim-evidence extraction stubs in {PROJ}/analyzer/.",
-      "Compare partial results against the latest synthesis packet before promoting claims.",
-    ],
-  },
-  academic_writer: {
-    allowedContacts: ["researcher", "cross-reviewer"],
-    allowedSpawns: [],
-    allowedProjectDirs: ["academic_writer"],
-    allowedProjectFiles: ["orchestrator/TODOS.md"],
-    writeScopeLabels: [
-      "{PROJ}/academic_writer/",
-      "{PROJ}/orchestrator/TODOS.md (append-only)",
-    ],
-    backgroundTasks: [
-      "Tighten KG-grounded outline structure, citation queues, and conservative wording in {PROJ}/academic_writer/.",
-      "Keep WRITING_SIGNALS.md current and do not invent unsupported claims.",
-      "Respect the configured writing template and run paragraph-logic checks before finalizing prose.",
-    ],
-  },
-  reviewer: {
-    allowedContacts: ["researcher"],
-    allowedSpawns: [],
-    allowedProjectDirs: ["reviewer"],
-    allowedProjectFiles: [],
-    writeScopeLabels: ["{PROJ}/reviewer/"],
-    backgroundTasks: [
-      "Maintain isolated review rubrics and general review heuristics.",
-      "Do not browse hidden project context without an explicit review packet.",
-    ],
-  },
-  "cross-reviewer": {
-    allowedContacts: [],
-    allowedSpawns: [],
-    allowedProjectDirs: [],
-    allowedProjectFiles: [],
-    writeScopeLabels: ["No project writes; respond with review text only."],
-    backgroundTasks: ["No proactive background duties. Stay stateless until explicitly invoked."],
-  },
-};
-
-const STAGE_REQUIREMENTS: Record<string, StageRequirement> = {
-  setup: { owner: "researcher", nextStage: "graph_build" },
-  graph_build: { owner: "researcher", nextStage: "frontier_mapping" },
-  frontier_mapping: { owner: "researcher", nextStage: "idea" },
-  idea: { owner: "researcher", nextStage: "plan" },
-  plan: { owner: "orchestrator", nextStage: "code" },
-  code: { owner: "coder", nextStage: "experiment" },
-  experiment: { owner: "researcher", nextStage: "analyze" },
-  analyze: { owner: "analyzer", nextStage: "review" },
-  review: { owner: "reviewer", nextStage: "write" },
-  write: { owner: "academic_writer", nextStage: "submit" },
-  submit: { owner: "reviewer", nextStage: "done" },
-  revise: { owner: "researcher", nextStage: "write" },
-  done: { owner: "researcher", nextStage: "done" },
-};
+const ROLE_POLICIES = WORKFLOW_ROLE_POLICIES;
+const STAGE_REQUIREMENTS = WORKFLOW_STAGE_REQUIREMENTS;
 
 const STAGE_ENTRY_MICRO_STAGES: Record<string, string> = {
   setup: "state_reconciled",
@@ -2087,29 +2050,6 @@ const PREVIOUS_STAGE: Record<string, string> = Object.entries(STAGE_REQUIREMENTS
   },
   {} as Record<string, string>
 );
-
-const PROJECT_ROOT_FILE_SET = new Set([
-  "PROJECT_MANIFEST.json",
-  "TRACK_REGISTRY.json",
-  "CLAIM_POLICY.md",
-  "README.md",
-]);
-
-const PROJECT_DIR_HINTS = [
-  "researcher/",
-  "orchestrator/",
-  "coder/",
-  "analyzer/",
-  "academic_writer/",
-  "reviewer/",
-  "cross-reviewer/",
-  "graph/",
-  "memory/",
-  ".openclaw-research/",
-];
-
-const AGENT_MENTION_REGEX =
-  /(^|[\s([{"'`|])@(researcher|orchestrator|coder|analyzer|academic[_-]?writer|writer|reviewer|cross[_-]?reviewer|openclaw)\b/gi;
 
 function normalizePolicy(
   config: Record<string, unknown> | undefined
@@ -2234,21 +2174,7 @@ function normalizePolicy(
 }
 
 function normalizeRole(value: string | null | undefined): WorkflowRole | null {
-  if (!value) {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, "_");
-  if (normalized.includes("cross-reviewer") || normalized.includes("cross_reviewer")) {
-    return "cross-reviewer";
-  }
-  if (
-    normalized.includes("academic_writer") ||
-    normalized.includes("academic-writer") ||
-    normalized === "writer"
-  ) {
-    return "academic_writer";
-  }
-  return WORKFLOW_ROLE_ORDER.find((role) => normalized.includes(role)) ?? null;
+  return normalizeWorkflowRoleFromModule(value) as WorkflowRole | null;
 }
 
 function getDefaultPapernexusSourceDir(projectId: string | null): string | null {
@@ -2294,7 +2220,7 @@ function buildIdleResearchTemplateForBootstrap(params: {
   title: string;
   topic?: string | null;
 }): Record<string, unknown> {
-  return buildIdleResearchTemplateForBootstrapImpl(params);
+  return buildIdleResearchTemplateForBootstrapFromModule(params);
 }
 
 export async function ensureWorkflowProjectRoot(params: {
@@ -2309,15 +2235,7 @@ export async function ensureWorkflowProjectRoot(params: {
   title?: string | null;
   topic?: string | null;
 }): Promise<EnsuredWorkflowProject> {
-  return (await ensureWorkflowProjectRootImpl(
-    params,
-    {
-      templatesRoot: getTemplatesRoot(),
-      readJsonIfExists,
-      writeJsonEnsured,
-      getExperimentLedgerPath,
-    }
-  )) as EnsuredWorkflowProject;
+  return (await ensureWorkflowProjectRootFromModule(params)) as EnsuredWorkflowProject;
 }
 
 function isBundledWritingModeTemplatePath(templatePath: string | null): boolean {
@@ -2341,23 +2259,6 @@ function getGraphPresenceMissingEntries(
     .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
-function summarizeGraphPresenceMissing(
-  paperIngestion: Record<string, unknown> | null
-): string | null {
-  const entries = getGraphPresenceMissingEntries(paperIngestion);
-  if (entries.length === 0) {
-    return null;
-  }
-  const preview = entries
-    .slice(0, 3)
-    .map((entry) =>
-      pickString(entry, ["arxiv_id", "arxivId", "title", "canonical_id", "canonicalId"]) ??
-      "unknown-paper"
-    )
-    .join("; ");
-  return `${preview}${entries.length > 3 ? "; ..." : ""}`;
-}
-
 function getProjectRoot(options?: {
   workspaceDir?: string;
   sessionKey?: string;
@@ -2367,18 +2268,11 @@ function getProjectRoot(options?: {
   role?: string;
   policy?: WorkflowGuardPolicy;
 }): string | null {
-  return resolveProjectContext({
-    policy: options?.policy,
-    context: options,
-  }).projectRoot;
+  return getProjectRootFromModule(options);
 }
 
 function inferProjectId(projectRoot: string | null, manifest: ManifestLike | null): string | null {
-  const manifestId = asString(manifest?.project_id);
-  if (manifestId) {
-    return manifestId;
-  }
-  return projectRoot ? path.basename(projectRoot) : null;
+  return inferProjectIdFromModule(projectRoot, manifest);
 }
 
 function getMailboxPath(projectRoot: string): string {
@@ -2583,26 +2477,26 @@ async function scaffoldMarkdownArtifactIfMissing(
 }
 
 function getGateStatePath(projectRoot: string): string {
-  return getGateStatePathImpl(projectRoot);
+  return getGateStatePathFromModule(projectRoot);
 }
 
 function normalizeGateState(value: unknown): GateState {
-  return normalizeGateStateImpl(value) as GateState;
+  return normalizeGateStateFromModule(value) as GateState;
 }
 
 function serializeGateState(state: GateState): Record<string, unknown> {
-  return serializeGateStateImpl(state);
+  return serializeGateStateFromModule(state);
 }
 
 async function readGateState(projectRoot: string): Promise<GateState> {
-  return (await readGateStateImpl({
+  return (await readGateStateFromModule({
     projectRoot,
     readJsonIfExists,
   })) as GateState;
 }
 
 async function saveGateState(projectRoot: string, gateState: GateState): Promise<void> {
-  await saveGateStateImpl({
+  await saveGateStateFromModule({
     projectRoot,
     gateState,
     writeJsonEnsured,
@@ -2610,7 +2504,7 @@ async function saveGateState(projectRoot: string, gateState: GateState): Promise
 }
 
 function computeGateConfirmationDeadline(state: GateState): string | null {
-  return computeGateConfirmationDeadlineImpl(state);
+  return computeGateConfirmationDeadlineFromModule(state);
 }
 
 function isTimedDefaultGate(state: GateState): boolean {
@@ -2618,7 +2512,7 @@ function isTimedDefaultGate(state: GateState): boolean {
 }
 
 function hasTimedDefaultGateExpired(state: GateState, now: string): boolean {
-  return hasTimedDefaultGateExpiredImpl(state, now);
+  return hasTimedDefaultGateExpiredFromModule(state, now);
 }
 
 export async function getGateStateSummary(params: {
@@ -2630,7 +2524,7 @@ export async function getGateStateSummary(params: {
   timedDefaultExpired: boolean;
   confirmationDeadlineAt: string | null;
 }> {
-  return (await getGateStateSummaryImpl({
+  return (await getGateStateSummaryFromModule({
     ...params,
     readJsonIfExists,
   })) as {
@@ -2650,7 +2544,7 @@ export async function setGateStateForWorkflow(params: {
   timedDefaultExpired: boolean;
   confirmationDeadlineAt: string | null;
 }> {
-  return (await setGateStateForWorkflowImpl({
+  return (await setGateStateForWorkflowFromModule({
     ...params,
     readJsonIfExists,
     writeJsonEnsured,
@@ -2663,22 +2557,22 @@ export async function setGateStateForWorkflow(params: {
 }
 
 function getProjectsStatePath(projectRoot: string): string {
-  return getProjectsStatePathImpl(projectRoot);
+  return getProjectsStatePathFromModule(projectRoot);
 }
 
 async function readProjectsStateRaw(projectRoot: string): Promise<Record<string, unknown>> {
-  return await readProjectsStateRawImpl({
+  return await readProjectsStateRawFromModule({
     projectRoot,
     readJsonIfExists,
   });
 }
 
 function formatProjectDirEntry(projectId: string | null): string | null {
-  return formatProjectDirEntryImpl(projectId);
+  return formatProjectDirEntryFromModule(projectId);
 }
 
 function dateOnly(isoTs: string): string {
-  return dateOnlyImpl(isoTs);
+  return dateOnlyFromModule(isoTs);
 }
 
 function formatStageCommand(stage: string | null): string | null {
@@ -2703,17 +2597,6 @@ function buildGraphImportRepairSlashCommand(
     (normalizedCorpus
       ? ` --shared-corpus ${formatWorkflowShellArgument(normalizedCorpus)}`
       : "")
-  );
-}
-
-function buildGraphImportRepairGuidance(
-  targetCorpus: string | null | undefined
-): string {
-  return (
-    `Run ${buildGraphImportRepairSlashCommand(targetCorpus)} to regenerate a bounded ` +
-    "PaperNexus batch import repair pass against the locked shared corpus, persist progress " +
-    "through research_workflow.set_paper_ingestion, and refresh graph readiness metadata " +
-    "before frontier mapping or ideation."
   );
 }
 
@@ -2818,7 +2701,7 @@ async function syncProjectsStateEntry(params: {
   nextAction: string | null;
   blockingReason: string | null;
 }): Promise<boolean> {
-  return await syncProjectsStateEntryImpl(params, {
+  return await syncProjectsStateEntryFromModule(params, {
     readJsonIfExists,
     writeJsonEnsured,
     getActiveTracks,
@@ -4753,45 +4636,7 @@ async function loadProjectState(options?: {
   role?: string;
   policy?: WorkflowGuardPolicy;
 }): Promise<ProjectState> {
-  const resolvedProject = resolveProjectContext({
-    policy: options?.policy,
-    context: options,
-  });
-  const projectRoot = resolvedProject.projectRoot;
-  if (!projectRoot) {
-    return {
-      projectRoot: null,
-      projectId: null,
-      projectResolutionSource: resolvedProject.source,
-      channelBindingKey: resolvedProject.channelKey,
-      channelBindingStorePath: resolvedProject.storePath,
-      channelBinding: resolvedProject.binding,
-      manifest: null,
-      trackRegistry: null,
-      mailbox: null,
-      experimentLedger: null,
-    };
-  }
-
-  const [manifest, trackRegistry, mailbox, experimentLedger] = await Promise.all([
-    readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json")),
-    readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json")),
-    readMailbox(projectRoot),
-    loadExperimentLedgerIfExists(projectRoot),
-  ]);
-
-  return {
-    projectRoot,
-    projectId: inferProjectId(projectRoot, manifest),
-    projectResolutionSource: resolvedProject.source,
-    channelBindingKey: resolvedProject.channelKey,
-    channelBindingStorePath: resolvedProject.storePath,
-    channelBinding: resolvedProject.binding,
-    manifest,
-    trackRegistry,
-    mailbox,
-    experimentLedger,
-  };
+  return (await loadProjectStateFromModule(options)) as ProjectState;
 }
 
 function getTracks(trackRegistry: TrackRegistryLike | null): Array<Record<string, unknown>> {
@@ -5856,608 +5701,23 @@ export async function buildWorkflowSnapshot(params: {
     channelKey: params.channelKey,
     role: params.agentId,
   });
-  const role = normalizeRole(params.agentId);
-  const currentStage = normalizeStage(projectState.manifest?.current_stage);
-  const missingStageSignals =
-    projectState.projectRoot && currentStage
-      ? await getMissingStageSignals({
-          projectRoot: projectState.projectRoot,
-          manifest: projectState.manifest,
-          trackRegistry: projectState.trackRegistry,
-          experimentLedger: projectState.experimentLedger,
-          currentStage,
-        })
-      : [];
-  const unreadMailbox = inboxForRole({
-    mailbox: projectState.mailbox,
-    role,
-    limit: policy.maxWorkflowInboxMessages,
-  });
-  const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
-  const paperIngestionState = normalizePaperIngestionState(paperIngestion);
-  const papernexusProgress = projectState.projectRoot
-    ? await loadPapernexusProgress({
-        projectRoot: projectState.projectRoot,
-        manifest: projectState.manifest,
-        writeIfMissing: false,
-      })
-    : null;
-  const papernexusProgressSummary = summarizePapernexusProgress(papernexusProgress);
-  const paperIngestionActiveOperationCount = paperIngestionState.paperOperations.filter(
-    (entry) => entry.status === "queued" || entry.status === "running"
-  ).length;
-  const paperIngestionTimedOutOperationCount = paperIngestionState.paperOperations.filter(
-    (entry) => entry.status === "timed_out"
-  ).length;
-  const paperIngestionFailedOperationCount = paperIngestionState.paperOperations.filter(
-    (entry) => entry.status === "failed"
-  ).length;
-  const paperIngestionBatchCount = paperIngestionState.activeBatches.length;
-  const paperIngestionActiveBatchCount = paperIngestionState.activeBatches.filter(
-    (entry) => entry.status === "queued" || entry.status === "running"
-  ).length;
-  const paperIngestionPendingBatchItemCount = paperIngestionState.batchItems.filter(
-    (entry) => entry.status === "pending" || entry.status === "running"
-  ).length;
-  const paperIngestionSyncedBatchItemCount = paperIngestionState.batchItems.filter(
-    (entry) => entry.synced === true || entry.status === "completed"
-  ).length;
-  const paperIngestionFailedBatchItemCount = paperIngestionState.batchItems.filter(
-    (entry) => entry.status === "failed" || entry.status === "submit_failed"
-  ).length;
-  const paperIngestionQueuedRequestCount = paperIngestionState.queuedRequests.filter(
-    (entry) => entry.status === "queued" || entry.status === "needs_repair"
-  ).length;
-  const paperIngestionRunningRequestCount = paperIngestionState.queuedRequests.filter(
-    (entry) => entry.status === "launching" || entry.status === "running"
-  ).length;
-  const experimentMemory = asRecord(projectState.manifest?.experiment_memory);
-  const idleResearch = normalizeIdleResearchState(
-    asRecord(projectState.manifest?.idle_research)
-  );
-  const innovationReflection = normalizeInnovationReflectionState(
-    asRecord(projectState.manifest?.innovation_reflection)
-  );
-  const brainstormCycle = normalizeBrainstormCycleState(
-    asRecord(projectState.manifest?.brainstorm_cycle)
-  );
-  const ideationContract = normalizeIdeationContractState(
-    asRecord(projectState.manifest?.ideation_contract)
-  );
-  const ideaCatalyst = normalizeIdeaCatalystState(
-    asRecord(projectState.manifest?.idea_catalyst)
-  );
-  const experimentSearch = projectState.projectRoot
-    ? await loadExperimentSearchState({
-        projectRoot: projectState.projectRoot,
-        manifest: projectState.manifest,
-      })
-    : normalizeExperimentSearchState(asRecord(projectState.manifest?.experiment_search));
-  const researchProgram = normalizeResearchProgramState(
-    asRecord(projectState.manifest?.research_program)
-  );
-  const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
-    state: researchProgram,
-    projectId: projectState.projectId,
-  });
-  const orchestrationState = normalizeOrchestrationState(
-    asRecord(projectState.manifest?.orchestration_state)
-  );
-  const writePackage = normalizeWritePackageState(
-    asRecord(projectState.manifest?.write_package)
-  );
-  const theorySupport = normalizeTheorySupportState(
-    asRecord(projectState.manifest?.theory_state)
-  );
-  const writingContract = normalizeWritingContractState(
-    asRecord(projectState.manifest?.writing_contract)
-  );
-  const citationIntegrity = normalizeCitationIntegrityState(
-    asRecord(projectState.manifest?.citation_integrity)
-  );
-  const writingSession = normalizeWritingSessionState(
-    asRecord(projectState.manifest?.writing_session)
-  );
-  const reviewSession = normalizeReviewSessionState(
-    asRecord(projectState.manifest?.review_session)
-  );
-  const graphGuidedWriting = normalizeGraphGuidedWritingState(
-    asRecord(projectState.manifest?.graph_guided_writing)
-  );
-  const paperStoryState = normalizePaperStoryState(
-    asRecord(projectState.manifest?.paper_story_state)
-  );
-  const reviewPressurePacket = normalizeReviewPressurePacketState(
-    asRecord(projectState.manifest?.review_pressure_packet)
-  );
-  const paperQc = normalizePaperQcState(asRecord(projectState.manifest?.paper_qc));
-  const figureQc = normalizeFigureQcState(asRecord(projectState.manifest?.figure_qc));
-  const citationCollection = normalizeCitationCollectionState(
-    asRecord(projectState.manifest?.citation_collection)
-  );
-  const reviewIssueTracker = projectState.projectRoot
-    ? await hydrateReviewIssueTrackerState({
-        projectRoot: projectState.projectRoot,
-        value: asRecord(projectState.manifest?.review_issue_tracker),
-      })
-    : normalizeReviewIssueTrackerState(
-        asRecord(projectState.manifest?.review_issue_tracker)
-      );
-  const externalReview = normalizeExternalReviewState(
-    asRecord(projectState.manifest?.external_review_state)
-  );
-  const reviewIssueLaneCounts = countReviewIssueLanes(reviewIssueTracker.issues);
-  const recommendedOwner = currentStage ? STAGE_REQUIREMENTS[currentStage]?.owner ?? null : null;
-  const recentExperiments = buildExperimentMemoryDigest(projectState.experimentLedger, 5);
-  const experimentSyncRequired =
-    projectState.experimentLedger?.summary.papernexusSyncRequired === true ||
-    experimentMemory?.papernexus_sync_required === true;
-  const experimentPapernexusSyncStatus =
-    asString(experimentMemory?.papernexus_sync_status) ??
-    (projectState.experimentLedger?.summary.papernexusSyncRequired
-      ? "pending"
-      : projectState.experimentLedger?.summary.papernexusLastSyncAt
-        ? "synced"
-        : null);
-  const innovationReflectionDue = isInnovationReflectionDue({
-    state: innovationReflection,
-    ledger: projectState.experimentLedger,
-  });
-  const writingContractEval = await evaluateWritingContractState({
-    projectRoot: projectState.projectRoot,
-    state: writingContract,
-  });
-  const resolvedCitationBibliographyPath = resolveProjectArtifactPath(
-    projectState.projectRoot,
-    citationIntegrity.bibliographyPath
-  );
-  const resolvedCitationReportPath = resolveProjectArtifactPath(
-    projectState.projectRoot,
-    citationIntegrity.verificationReportPath
-  );
-  const papernexusAccessConfigured =
-    (policy.papernexusApiBaseUrl ?? "").trim().length > 0 ||
-    (policy.papernexusMcpUrl ?? "").trim().length > 0 ||
-    (policy.papernexusApiTokenEnv ?? "").trim().length > 0 ||
-    (policy.papernexusMineruHttpUrl ?? "").trim().length > 0 ||
-    normalizePapernexusApiTokenSource(policy.papernexusApiTokenSource) !==
-      DEFAULT_POLICY.papernexusApiTokenSource ||
-    ((policy.papernexusApiTokenService ?? "").trim().length > 0 &&
-      (policy.papernexusApiTokenService ?? "").trim() !==
-        DEFAULT_POLICY.papernexusApiTokenService) ||
-    ((policy.papernexusApiTokenAccount ?? "").trim().length > 0 &&
-      (policy.papernexusApiTokenAccount ?? "").trim() !==
-        DEFAULT_POLICY.papernexusApiTokenAccount);
-  const papernexusAccess = papernexusAccessConfigured
-    ? summarizePapernexusRemoteAccessConfig({
-        apiBaseUrl: policy.papernexusApiBaseUrl,
-        mcpUrl: policy.papernexusMcpUrl,
-        mcpTransport: policy.papernexusMcpTransport,
-        mcpTimeoutMs: policy.papernexusMcpTimeoutMs,
-        tokenEnv: policy.papernexusApiTokenEnv,
-        tokenSource: policy.papernexusApiTokenSource,
-        tokenService: policy.papernexusApiTokenService,
-        tokenAccount: policy.papernexusApiTokenAccount,
-        mineruHttpUrl: policy.papernexusMineruHttpUrl,
-        tokenLookupTimeoutMs: policy.papernexusApiTokenLookupTimeoutMs,
-      })
-    : null;
-  const remoteOnlyPapernexus = isRemoteOnlyPapernexusWorkflow({
-    apiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
-    mcpUrl: papernexusAccess?.mcpUrl ?? null,
-  });
-  const runtimeBinding = projectState.channelBinding
-    ? buildWorkflowRuntimeSessionBinding({
-        projectRoot: projectState.channelBinding.projectRoot,
-        projectId: projectState.channelBinding.projectId,
-        role: projectState.channelBinding.workflowRole,
-        sessionKey: projectState.channelBinding.workflowSessionKey,
-        sessionId: projectState.channelBinding.workflowSessionId,
-        parentSessionKey: projectState.channelBinding.parentWorkflowSessionKey,
-        threadBindingKey: projectState.channelBinding.threadBindingKey,
-        depth: projectState.channelBinding.depth,
-      })
-    : null;
-  const defaultPapernexusSourceDir = remoteOnlyPapernexus
-    ? null
-    : getDefaultPapernexusSourceDir(projectState.projectId);
-  const defaultPapernexusIndexRoot = remoteOnlyPapernexus
-    ? null
-    : getDefaultPapernexusIndexRoot();
-  const resolvedPaperSourceDir = (() => {
-    const value = asString(projectState.manifest?.paper_source_dir) ?? null;
-    if (remoteOnlyPapernexus && isLocalPapernexusStoragePath(value)) {
-      return null;
-    }
-    return value;
-  })();
-  const resolvedGraphSourceDir = (() => {
-    const value = asString(projectState.manifest?.graph_source_dir) ?? null;
-    if (remoteOnlyPapernexus && isLocalPapernexusStoragePath(value)) {
-      return null;
-    }
-    return value;
-  })();
-
-  return {
-    projectRoot: projectState.projectRoot,
-    projectId: projectState.projectId,
-    projectResolutionSource: projectState.projectResolutionSource,
-    channelProjectBindingsEnabled: policy.enableChannelProjectBindings,
-    channelProjectBindingKey: projectState.channelBindingKey,
-    channelProjectBindingStorePath: projectState.channelBindingStorePath,
-    channelProjectBindingWorkflowRole: runtimeBinding?.role ?? null,
-    channelProjectBindingWorkflowSessionKey: runtimeBinding?.sessionKey ?? null,
-    channelProjectBindingWorkflowSessionId: runtimeBinding?.sessionId ?? null,
-    channelProjectBindingParentSessionKey: runtimeBinding?.parentSessionKey ?? null,
-    channelProjectBindingThreadBindingKey: runtimeBinding?.threadBindingKey ?? null,
-    channelProjectBindingDepth: runtimeBinding?.depth ?? null,
-    channelProjectBindingLineageKey: runtimeBinding?.lineageKey ?? null,
-    channelProjectBindingMode: runtimeBinding?.bindingMode ?? "channel_only",
-    role,
-    currentStage,
-    currentMicroStage: normalizeStage(projectState.manifest?.current_micro_stage),
-    ownerAgent: asString(projectState.manifest?.owner_agent),
-    recommendedOwner,
-    nextAction: asString(projectState.manifest?.next_action),
-    resumeAction: asString(projectState.manifest?.resume_action),
-    blockingReason: asString(projectState.manifest?.blocking_reason),
-    allowedWriteScopes: role ? ROLE_POLICIES[role].writeScopeLabels : [],
-    allowedContacts: role
-      ? Array.from(
-          new Set(
-            [
-              ...ROLE_POLICIES[role].allowedContacts,
-              ...(role === recommendedOwner
-                ? [getForwardStageHandoffTargetRole(currentStage)]
-                : []),
-            ].filter((value): value is WorkflowRole => Boolean(value))
-          )
-        )
-      : [],
-    allowedSpawns: role
-      ? Array.from(
-          new Set(
-            [
-              ...ROLE_POLICIES[role].allowedSpawns,
-              ...(role === recommendedOwner
-                ? [getForwardStageHandoffTargetRole(currentStage)]
-                : []),
-            ].filter((value): value is WorkflowRole => Boolean(value))
-          )
-        )
-      : [],
-    missingStageSignals,
-    graphRefreshRequired: paperIngestion?.refresh_required === true,
-    graphRefreshReason: asString(paperIngestion?.refresh_reason),
-    graphLastBuiltAt: asString(projectState.manifest?.graph_last_built_at),
-    graphPresenceCheckedAt: asString(paperIngestion?.graph_presence_checked_at),
-    graphPresenceStatus: normalizeGraphPresenceStatus(
-      paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
-    ),
-    graphPresenceReportPath: asString(
-      paperIngestion?.graph_presence_report_path ?? paperIngestion?.graphPresenceReportPath
-    ),
-    graphPresenceExpectedPapers: pickNumber(paperIngestion ?? {}, [
-      "graph_presence_expected_papers",
-      "graphPresenceExpectedPapers",
-    ]),
-    graphPresencePresentPapers: pickNumber(paperIngestion ?? {}, [
-      "graph_presence_present_papers",
-      "graphPresencePresentPapers",
-    ]),
-    graphPresenceMissingPapers:
-      getGraphPresenceMissingEntries(paperIngestion).length ||
-      pickNumber(paperIngestion ?? {}, [
-        "graph_presence_missing_count",
-        "graphPresenceMissingCount",
-      ]),
-    paperIngestionRuntimeStatus: paperIngestionState.runtimeStatus,
-    paperIngestionWaitingReason: paperIngestionState.waitingReason,
-    paperIngestionImportTaskCount: paperIngestionState.importTaskIds.length,
-    paperIngestionCompletedPaperCount: paperIngestionState.completedPapers.length,
-    paperIngestionActiveOperationCount,
-    paperIngestionTimedOutOperationCount,
-    paperIngestionFailedOperationCount,
-    paperIngestionBatchCount,
-    paperIngestionActiveBatchCount,
-    paperIngestionPendingBatchItemCount,
-    paperIngestionSyncedBatchItemCount,
-    paperIngestionFailedBatchItemCount,
-    paperIngestionQueuedRequestCount,
-    paperIngestionRunningRequestCount,
-    paperIngestionLastBatchManifestPath: paperIngestionState.lastBatchManifestPath,
-    paperIngestionLastImportStatus: paperIngestionState.lastImportStatus,
-    paperIngestionGraphVersionSeen: paperIngestionState.graphVersionSeen,
-    paperIngestionReconcileRequired: paperIngestionState.reconcileRequired,
-    paperIngestionRepairRequired: paperIngestionState.repairRequired,
-    paperIngestionRepairReason: paperIngestionState.repairReason,
-    paperIngestionRepairTargetCorpus: paperIngestionState.repairTargetCorpus,
-    papernexusProgress,
-    papernexusProgressSummary,
-    paperSourceDir: resolvedPaperSourceDir,
-    graphSourceDir: resolvedGraphSourceDir,
-    defaultPapernexusSourceDir,
-    defaultPapernexusIndexRoot,
-    papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
-    papernexusMcpUrl: papernexusAccess?.mcpUrl ?? null,
-    papernexusMcpTransport: papernexusAccess?.mcpTransport ?? null,
-    papernexusMcpTimeoutMs: papernexusAccess?.mcpTimeoutMs ?? null,
-    papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
-    papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
-    papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
-    papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
-    papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
-    papernexusAccessMode: typeof policy?.papernexusAccessMode === "string" ? policy.papernexusAccessMode : null,
-    idleResearchEnabled: idleResearch.enabled,
-    idleResearchTopic: idleResearch.topic,
-    idleResearchStatus: idleResearch.status,
-    idleResearchDue: isIdleResearchDue(idleResearch),
-    idleResearchCooldownMinutes: idleResearch.cooldownMinutes,
-    idleResearchLastRunAt: idleResearch.lastRunAt,
-    idleResearchNextDueAt: computeIdleResearchNextDueAt(idleResearch),
-    idleResearchDigestPath: idleResearch.lastDigestPath,
-    experimentLedgerPath: projectState.projectRoot
-      ? "researcher/EXPERIMENT_LEDGER.json"
-      : null,
-    experimentLedgerUpdatedAt:
-      projectState.experimentLedger?.updatedAt ??
-      asString(experimentMemory?.last_ledger_update_at),
-    experimentSyncRequired,
-    experimentPapernexusSyncStatus,
-    innovationReflectionStatus: innovationReflection.status,
-    innovationReflectionDue,
-    innovationReflectionLastAt: innovationReflection.lastReflectionAt,
-    innovationReflectionPath: innovationReflection.lastReflectionPath,
-    innovationReflectionPendingReason: innovationReflection.pendingReason,
-    brainstormCycleStatus: brainstormCycle.status,
-    brainstormCycleTopic: brainstormCycle.topic,
-    brainstormCycleBasisStage: brainstormCycle.basisStage,
-    brainstormCycleTrackId: brainstormCycle.trackId,
-    brainstormCycleProvider: brainstormCycle.provider,
-    brainstormCycleProviderMode: brainstormCycle.providerMode,
-    brainstormCycleProviderStatus: brainstormCycle.providerStatus,
-    brainstormCycleContractVersion: brainstormCycle.contractVersion,
-    brainstormCycleGraphVersionSeen: brainstormCycle.graphVersionSeen,
-    brainstormCycleImportTaskCount: brainstormCycle.importTaskIdsSeen.length,
-    brainstormCycleChainBundleReady:
-      isBrainstormCycleReady(brainstormCycle) &&
-      getBrainstormCycleValidationErrors(brainstormCycle).length === 0,
-    brainstormCyclePendingReason: brainstormCycle.pendingReason,
-    ideationContractStatus: ideationContract.status,
-    ideationContractSelectedDirectionId: ideationContract.selectedDirectionId,
-    ideationContractSelectedTrackId: ideationContract.selectedTrackId,
-    ideationContractIdeaTreePath: ideationContract.ideaTreePath,
-    ideationContractResearchProposalPath: ideationContract.researchProposalPath,
-    ideationContractRankingHistoryPath: ideationContract.rankingHistoryPath,
-    ideationContractTournamentScoreboardPath:
-      ideationContract.tournamentScoreboardPath,
-    ideationContractTop3SummaryPath: ideationContract.top3SummaryPath,
-    ideationContractGraphPacketPath: ideationContract.graphIdeationPacketPath,
-    ideationContractBridgeEvidenceTier:
-      ideationContract.graphIdeationIndices.bridgeEvidenceTier,
-    ideationContractCandidateSourceDomainCount:
-      ideationContract.graphIdeationIndices.candidateSourceDomains.length,
-    ideationContractSelectedSourceDomainCount:
-      ideationContract.graphIdeationIndices.selectedSourceDomains.length,
-    ideationContractPendingReason: ideationContract.pendingReason,
-    ideaCatalystStatus: ideaCatalyst.status,
-    ideaCatalystMode: ideaCatalyst.mode,
-    ideaCatalystMicroStage: ideaCatalyst.microStage,
-    ideaCatalystTargetDomain: ideaCatalyst.targetDomain,
-    ideaCatalystSourceDomainCount: ideaCatalyst.sourceDomains.length,
-    ideaCatalystBridgeCount: ideaCatalyst.bridgeCount,
-    ideaCatalystTopFragmentId: ideaCatalyst.topFragmentId,
-    ideaCatalystRequisitionRequired: ideaCatalyst.requisitionRequired,
-    ideaCatalystLastRequisitionCycle: ideaCatalyst.lastRequisitionCycle,
-    ideaCatalystRequisitionRetryBudget: ideaCatalyst.requisitionRetryBudget,
-    ideaCatalystRequisitionSaturated: ideaCatalyst.requisitionSaturated,
-    ideaCatalystPendingReason: ideaCatalyst.pendingReason,
-    researchProgramStatus: researchProgram.status,
-    researchProgramTrackCount: researchProgram.tracks.length,
-    researchProgramActiveTrackCount: researchProgram.tracks.filter(
-      (track) => normalizeStage(track.status) === "active"
-    ).length,
-    researchProgramPlanAlternativeCount: researchProgram.planAlternatives.length,
-    researchProgramPlanComparedOptionCount:
-      researchProgram.planSelection.comparedOptionIds.length,
-    researchProgramPlanSelectedOptionId: researchProgram.planSelection.selectedOptionId,
-    researchProgramPlanSelectedTrackId: researchProgram.planSelection.selectedTrackId,
-    researchProgramPlanSelectionReady:
-      getResearchProgramPlanValidationErrors({
-        state: researchProgram,
-        ideationContract,
-      }).length === 0,
-    researchProgramPrimaryGoal: researchProgram.goal,
-    researchProgramOnboardingStatus: getResearchProgramOnboardingStatus({
-      state: researchProgram,
-      projectId: projectState.projectId,
-    }),
-    researchProgramOnboardingMissing,
-    researchProgramBaselineReference: researchProgram.baselineReference,
-    researchProgramPrimaryMetricName: researchProgram.primaryMetric,
-    researchProgramDatasetCount: researchProgram.datasets.length,
-    researchProgramSuccessCriteriaCount:
-      researchProgram.successCriteria.length,
-    researchProgramZoteroProjectPath:
-      researchProgram.zoteroProjectPath ??
-      defaultResearchProgramZoteroProjectPath(projectState.projectId),
-    orchestrationStatus: orchestrationState.status,
-    orchestrationBlockingCategory: orchestrationState.blockingCategory,
-    orchestrationNextTransitionCandidate:
-      orchestrationState.nextTransitionCandidate,
-    orchestrationRetryBudgetRemaining:
-      orchestrationState.retryBudgetRemaining,
-    orchestrationRollbackTargetStage: orchestrationState.rollbackTargetStage,
-    experimentSearchStatus: experimentSearch.status,
-    experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
-    experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
-    experimentSearchBestNodeId: experimentSearch.bestNodeId,
-    experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
-    experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
-    writePackageStatus: writePackage.status,
-    writePackageAssemblyStatus: writePackage.assemblyStatus,
-    writePackageAssemblyMode: writePackage.assemblyMode,
-    writePackageWinningTrackCount: writePackage.winningTrackIds.length,
-    writePackageDerivedArtifactCount: writePackage.derivedArtifactCount,
-    writePackagePendingReason: writePackage.pendingReason,
-    theorySupportStatus: theorySupport.status,
-    theorySupportSignal: theorySupport.overallSignal,
-    theoryStatePath: theorySupport.theoryStatePath,
-    theoryProofPacketDir: theorySupport.proofPacketDir,
-    theoryAppendixPacketPath: theorySupport.appendixPacketPath,
-    theoryPacketCount: theorySupport.proofPacketCount,
-    theoryBodyReady: theorySupport.bodyReady,
-    theoryPendingReason: theorySupport.pendingReason,
-    writingTemplateRequired: writingContract.templateRequired,
-    writingPaperMode: writingContract.paperMode,
-    writingBodyPageBudget: writingContract.bodyPageBudget,
-    writingReferencePageBudget: writingContract.referencePageBudget,
-    writingBodyWordTargetMin: writingContract.bodyWordTargetMin,
-    writingBodyWordTargetMax: writingContract.bodyWordTargetMax,
-    writingMaxCoreIdeas: writingContract.maxCoreIdeas,
-    writingMaxHeadlineClaims: writingContract.maxHeadlineClaims,
-    writingTemplatePath: writingContractEval.templateResolvedPath,
-    writingProjectTemplatePath: writingContractEval.projectTemplateResolvedPath,
-    writingTemplateStatus: writingContractEval.templateStatus,
-    writingTemplateCopyStatus: writingContractEval.templateCopyStatus,
-    writingTemplateMappingPath: writingContract.templateMappingPath,
-    mainTextProofStyle: writingContract.mainTextProofStyle,
-    proofAppendixRequired: writingContract.proofAppendixRequired,
-    proofAppendixPath: writingContract.proofAppendixPath,
-    proofAppendixStatus: writingContract.proofAppendixStatus,
-    theoryNotePath: writingContract.theoryNotePath,
-    proofChecklist: writingContract.proofChecklist,
-    kgStorylineRequired: writingContract.kgStorylineRequired,
-    kgStorylineStatus: writingContract.kgStorylineStatus,
-    kgStorylinePacketPath: writingContract.kgStorylinePacketPath,
-    storylineSource: writingContract.storylineSource,
-    storylineChecklist: writingContract.storylineChecklist,
-    writingRequiredSections: writingContract.requiredSections,
-    writingSectionOrder: writingContract.sectionOrder,
-    paragraphLogicStatus: writingContract.paragraphLogicStatus,
-    paragraphLogicChecklist: writingContract.paragraphLogicChecklist,
-    writingContractPendingReason:
-      writingContractEval.pendingReason ?? writingContract.pendingReason,
-    citationVerificationRequired:
-      citationIntegrity.enabled && citationIntegrity.verificationRequired,
-    citationVerificationStatus: citationIntegrity.verificationStatus,
-    citationVerificationReportPath: resolvedCitationReportPath,
-    citationBibliographyPath: resolvedCitationBibliographyPath,
-    citationSourceOfTruth: citationIntegrity.sourceOfTruth,
-    citationUnresolvedPlaceholderCount: citationIntegrity.unresolvedPlaceholderCount,
-    citationAllowedPlaceholderCount: citationIntegrity.allowedPlaceholderCount,
-    citationVerifiedCount: citationIntegrity.verifiedCitationCount,
-    citationSuspiciousCount: citationIntegrity.suspiciousCitationCount,
-    citationHallucinatedCount: citationIntegrity.hallucinatedCitationCount,
-    citationPendingReason: citationIntegrity.pendingReason,
-    citationCollectionStatus: citationCollection.status,
-    citationCollectionCandidateCount: citationCollection.candidateCount,
-    citationCollectionVerifiedCount: citationCollection.verifiedCount,
-    citationCollectionSuspiciousCount: citationCollection.suspiciousCount,
-    citationCollectionHallucinatedCount: citationCollection.hallucinatedCount,
-    writingSessionStatus: writingSession.status,
-    writingCurrentSection: writingSession.currentSection,
-    writingDraftOrder: writingSession.draftOrder,
-    writingFinalizedSections: writingSession.finalizedSections,
-    writingCompileSafeSections: writingSession.compileSafeSections,
-    writingSectionPacketsReady: areWritingSectionPacketsReady(writingSession),
-    writingCurrentSectionReviewVerdict: writingSession.currentSection
-      ? writingSession.sectionPackets[writingSession.currentSection]?.reviewVerdict ?? null
-      : null,
-    writingGraphEvidenceCoverageStatus: writingSession.graphEvidenceCoverageStatus,
-    writingGraphEvidenceCoverageSummary: writingSession.graphEvidenceCoverageSummary,
-    paperStoryStatus: paperStoryState.status,
-    paperStoryTrackId: paperStoryState.storylineSourceTrackId,
-    paperStoryStorySpinePath: paperStoryState.storySpinePath,
-    paperStoryClaimToExperimentMapPath: paperStoryState.claimToExperimentMapPath,
-    paperStoryIdeaToClaimMapPath: paperStoryState.ideaToClaimMapPath,
-    paperStoryFallbackNarrativePath: paperStoryState.fallbackNarrativePath,
-    paperStoryClaimSupportStatus: paperStoryState.claimSupportStatus,
-    paperStorySupportedClaimCount: paperStoryState.supportedClaimCount,
-    paperStoryPartialClaimCount: paperStoryState.partialClaimCount,
-    paperStoryUnsupportedClaimCount: paperStoryState.unsupportedClaimCount,
-    paperStoryPendingReason: paperStoryState.pendingReason,
-    reviewSessionStatus: reviewSession.status,
-    reviewSessionStageScope: reviewSession.stageScope,
-    reviewSessionRound: reviewSession.round,
-    reviewSessionVerdict: reviewSession.verdict,
-    reviewSessionSummary: reviewSession.reviewerSummary,
-    reviewRubricSummary: {
-      originality: reviewSession.rubric.originality,
-      quality: reviewSession.rubric.quality,
-      clarity: reviewSession.rubric.clarity,
-      significance: reviewSession.rubric.significance,
-      soundness: reviewSession.rubric.soundness,
-      citationIntegrity: reviewSession.rubric.citationIntegrity,
-      graphGroundedEvidenceSufficiency:
-        reviewSession.rubric.graphGroundedEvidenceSufficiency,
+  return await buildWorkflowSnapshotFromProjectState(
+    {
+      policy,
+      agentId: params.agentId,
+      projectState,
     },
-    graphGuidedWritingStatus: graphGuidedWriting.status,
-    graphGuidedWritingEvidenceCoverageStatus:
-      graphGuidedWriting.evidenceCoverageStatus,
-    graphGuidedWritingMissingEvidenceClaims:
-      graphGuidedWriting.missingEvidenceClaims,
-    graphGuidedWritingScholarReserved:
-      graphGuidedWriting.scholarQueryReserved,
-    graphGuidedWritingScholarSkillSlot:
-      graphGuidedWriting.scholarQuerySkillSlot,
-    paperQcStatus: paperQc.status,
-    paperQcCompileStatus: paperQc.compileStatus,
-    paperQcChktexStatus: paperQc.chktexStatus,
-    paperQcPageBudgetStatus: paperQc.pageBudgetStatus,
-    figureQcStatus: figureQc.status,
-    figureQcDuplicateFigureStatus: figureQc.duplicateFigureStatus,
-    figureQcCaptionAlignmentStatus: figureQc.captionAlignmentStatus,
-    figureQcTextAlignmentStatus: figureQc.textAlignmentStatus,
-    figureQcSelectionStatus: figureQc.selectionStatus,
-    reviewIssueTrackerStatus: reviewIssueTracker.status,
-    reviewIssueCriticalCount: reviewIssueTracker.openCounts.critical,
-    reviewIssueHighCount: reviewIssueTracker.openCounts.high,
-    reviewIssueMediumCount: reviewIssueTracker.openCounts.medium,
-    reviewIssueLowCount: reviewIssueTracker.openCounts.low,
-    reviewIssueSurfaceCount: reviewIssueLaneCounts.surface,
-    reviewIssueSubmissionCount: reviewIssueLaneCounts.submission,
-    reviewPressureStatus: reviewPressurePacket.status,
-    reviewPressureRejectFirstReviewPath:
-      reviewPressurePacket.rejectFirstReviewPath,
-    reviewPressureUnsupportedClaimAuditPath:
-      reviewPressurePacket.unsupportedClaimAuditPath,
-    reviewPressurePendingReason: reviewPressurePacket.statusReason,
-    externalReviewStatus: externalReview.status,
-    externalReviewRecommendation: externalReview.overallRecommendation,
-    externalReviewRequiredAction: externalReview.requiredAction,
-    recentExperiments,
-    unreadMailbox,
-    backgroundTasks: buildDynamicTasks({
-      role,
-      currentStage,
-      manifest: projectState.manifest,
-      missingStageSignals,
-      idleResearch,
-      innovationReflection,
-      innovationReflectionDue,
-      writingContract,
-      writingTemplatePath: writingContractEval.templateResolvedPath,
-      writingTemplateStatus: writingContractEval.templateStatus,
-      paragraphLogicStatus: writingContract.paragraphLogicStatus,
-      writingContractPendingReason:
-        writingContractEval.pendingReason ?? writingContract.pendingReason,
-      citationIntegrity,
-      citationReportPath: resolvedCitationReportPath,
-      recentExperiments,
-      unreadMailbox,
-      papernexusApiBaseUrl: papernexusAccess?.apiBaseUrl ?? null,
-      papernexusMcpUrl: papernexusAccess?.mcpUrl ?? null,
-      papernexusMcpTransport: papernexusAccess?.mcpTransport ?? null,
-      papernexusApiTokenEnv: papernexusAccess?.tokenEnv ?? null,
-      papernexusApiTokenSource: papernexusAccess?.tokenSourceConfigured ?? null,
-      papernexusApiTokenService: papernexusAccess?.tokenService ?? null,
-      papernexusApiTokenAccount: papernexusAccess?.tokenAccount ?? null,
-      papernexusMineruHttpUrl: papernexusAccess?.mineruHttpUrl ?? null,
-      papernexusAccessMode: typeof policy?.papernexusAccessMode === "string" ? policy.papernexusAccessMode : null,
-    }),
-  };
+    {
+      getMissingStageSignals:
+        getMissingStageSignals as Parameters<
+          typeof buildWorkflowSnapshotFromProjectState
+        >[1] extends infer T
+          ? T extends { getMissingStageSignals?: infer U }
+            ? U
+            : never
+          : never,
+    }
+  );
 }
 
 export function buildFocusedPromptAssembly(params: {
@@ -6503,146 +5763,18 @@ function isInside(parentPath: string, childPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function pathContainsDatasetSegment(targetPath: string): boolean {
-  const normalized = path.normalize(targetPath).replace(/\\/g, "/").toLowerCase();
-  return normalized === "datasets" || normalized.includes("/datasets/");
-}
-
-function getToolCommandText(toolParams: Record<string, unknown>): string | null {
-  return (
-    asString(toolParams.command) ??
-    asString(toolParams.cmd) ??
-    asString(toolParams.script) ??
-    asString(toolParams.shellCommand)
-  );
-}
-
-function getToolPayloadText(toolParams: Record<string, unknown>): string | null {
-  const values = uniqueStringList(
-    [
-      getToolCommandText(toolParams),
-      asString(toolParams.message),
-      asString(toolParams.text),
-      asString(toolParams.content),
-      asString(toolParams.body),
-      asString(toolParams.prompt),
-    ].filter((value): value is string => Boolean(value))
-  );
-  if (values.length === 0) {
-    return null;
-  }
-  return values.join("\n");
-}
-
-function commandLikelyMutatesDataset(command: string): boolean {
-  const datasetPathAtEnd =
-    /(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?(?:["'])?\s*$/i;
-  const inPlaceMutation =
-    /\b(?:rm|mkdir|touch|chmod|chown)\b[\s\S]*(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?/i;
-  const inPlacePatch =
-    /\b(?:sed\s+-i|perl\s+-pi)\b[\s\S]*(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?/i;
-  const redirectIntoDataset =
-    /(?:^|[\s])>>?\s*(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?/i;
-  const extractIntoDataset =
-    /\b(?:tar|unzip|zip)\b[\s\S]*(?:-C|-d)\s*(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?/i;
-  const copyLikeIntoDataset =
-    /\b(?:cp|mv|rsync|scp|ln|install)\b[\s\S]*(?:[A-Za-z0-9._-]+:)?\/[^\s"'`|;&]*\/datasets(?:\/[^\s"'`|;&]*)?(?:["'])?\s*$/i;
-
-  return (
-    inPlaceMutation.test(command) ||
-    inPlacePatch.test(command) ||
-    redirectIntoDataset.test(command) ||
-    extractIntoDataset.test(command) ||
-    (copyLikeIntoDataset.test(command) && datasetPathAtEnd.test(command))
-  );
-}
-
-function normalizeProjectScopedPath(
-  rawPath: string,
-  projectRoot: string
-): string | null {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (path.isAbsolute(trimmed)) {
-    return path.normalize(trimmed);
-  }
-  const normalized = trimmed.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (normalized === "PROJECTS_STATE.json") {
-    return path.join(path.dirname(projectRoot), "PROJECTS_STATE.json");
-  }
-  if (
-    PROJECT_ROOT_FILE_SET.has(normalized) ||
-    PROJECT_DIR_HINTS.some((prefix) => normalized.startsWith(prefix))
-  ) {
-    return path.normalize(path.join(projectRoot, normalized));
-  }
-  return null;
-}
-
-function getAllowedAbsolutePaths(params: {
-  projectRoot: string;
-  role: WorkflowRole;
-}): { dirs: string[]; files: string[] } {
-  const policy = ROLE_POLICIES[params.role];
-  const dirs = policy.allowedProjectDirs.map((dir) => path.join(params.projectRoot, dir));
-  const files = policy.allowedProjectFiles.map((file) => path.join(params.projectRoot, file));
-  if (policy.allowProjectsStateWrite) {
-    files.push(path.join(path.dirname(params.projectRoot), "PROJECTS_STATE.json"));
-  }
-  return { dirs, files };
-}
-
 export function canRoleContact(
   fromRole: WorkflowRole | null,
   toRole: WorkflowRole | null
 ): boolean {
-  if (!fromRole || !toRole) {
-    return false;
-  }
-  return ROLE_POLICIES[fromRole].allowedContacts.includes(toRole);
+  return canRoleContactFromModule(fromRole, toRole);
 }
 
 export function canRoleSpawn(
   fromRole: WorkflowRole | null,
   toRole: WorkflowRole | null
 ): boolean {
-  if (!fromRole || !toRole) {
-    return false;
-  }
-  return ROLE_POLICIES[fromRole].allowedSpawns.includes(toRole);
-}
-
-function getForwardStageHandoffTargetRole(
-  currentStage: string | null | undefined
-): WorkflowRole | null {
-  const normalizedStage = normalizeStage(currentStage ?? null);
-  if (!normalizedStage) {
-    return null;
-  }
-  const currentRequirement = STAGE_REQUIREMENTS[normalizedStage];
-  const nextStage = currentRequirement?.nextStage ?? null;
-  if (!nextStage || nextStage === normalizedStage) {
-    return null;
-  }
-  return STAGE_REQUIREMENTS[nextStage]?.owner ?? null;
-}
-
-function canRoleUseForwardStageHandoff(params: {
-  fromRole: WorkflowRole | null;
-  toRole: WorkflowRole | null;
-  currentStage: string | null | undefined;
-}): boolean {
-  const normalizedStage = normalizeStage(params.currentStage ?? null);
-  if (!normalizedStage || !params.fromRole || !params.toRole) {
-    return false;
-  }
-  const currentRequirement = STAGE_REQUIREMENTS[normalizedStage];
-  if (!currentRequirement || currentRequirement.owner !== params.fromRole) {
-    return false;
-  }
-  return getForwardStageHandoffTargetRole(normalizedStage) === params.toRole;
+  return canRoleSpawnFromModule(fromRole, toRole);
 }
 
 export function canRoleContactInWorkflow(params: {
@@ -6650,10 +5782,7 @@ export function canRoleContactInWorkflow(params: {
   toRole: WorkflowRole | null;
   currentStage: string | null | undefined;
 }): boolean {
-  return (
-    canRoleContact(params.fromRole, params.toRole) ||
-    canRoleUseForwardStageHandoff(params)
-  );
+  return canRoleContactInWorkflowFromModule(params);
 }
 
 export function canRoleSpawnInWorkflow(params: {
@@ -6661,17 +5790,13 @@ export function canRoleSpawnInWorkflow(params: {
   toRole: WorkflowRole | null;
   currentStage: string | null | undefined;
 }): boolean {
-  return canRoleSpawn(params.fromRole, params.toRole) || canRoleUseForwardStageHandoff(params);
+  return canRoleSpawnInWorkflowFromModule(params);
 }
 
 export function inferTargetRoleFromToolParams(
   params: Record<string, unknown>
 ): WorkflowRole | null {
-  return (
-    normalizeRole(asString(params.agentId)) ??
-    normalizeRole(asString(params.label)) ??
-    normalizeRole(asString(params.sessionKey))
-  );
+  return inferTargetRoleFromToolParamsFromModule(params);
 }
 
 export function shouldBlockProjectWrite(params: {
@@ -6680,64 +5805,7 @@ export function shouldBlockProjectWrite(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!params.role || !params.projectRoot) {
-    return { block: false };
-  }
-  if (!["write", "edit"].includes(params.toolName)) {
-    return { block: false };
-  }
-
-  const rawPath =
-    asString(params.toolParams.path) ?? asString(params.toolParams.file_path);
-  if (!rawPath) {
-    return { block: false };
-  }
-
-  const absolutePath = normalizeProjectScopedPath(rawPath, params.projectRoot);
-  if (!absolutePath) {
-    return { block: false };
-  }
-
-  const workflowSystemRoot = path.join(params.projectRoot, ".openclaw-research");
-  if (isInside(workflowSystemRoot, absolutePath)) {
-    return {
-      block: true,
-      reason:
-        "Do not edit workflow mailbox/state files directly. Use the research_workflow plugin tool instead.",
-    };
-  }
-
-  if (path.normalize(getExperimentLedgerPath(params.projectRoot)) === absolutePath) {
-    return {
-      block: true,
-      reason:
-        "Do not hand-edit researcher/EXPERIMENT_LEDGER.json. Use research_workflow.upsert_experiment instead.",
-    };
-  }
-
-  if (params.role === "cross-reviewer") {
-    return {
-      block: true,
-      reason: "Cross-reviewer is read-only. Return review text instead of writing project files.",
-    };
-  }
-
-  const allowed = getAllowedAbsolutePaths({
-    projectRoot: params.projectRoot,
-    role: params.role,
-  });
-  const allowedByDir = allowed.dirs.some((dir) => isInside(dir, absolutePath));
-  const allowedByFile = allowed.files.some(
-    (filePath) => path.normalize(filePath) === absolutePath
-  );
-  if (allowedByDir || allowedByFile) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason: `${params.role} cannot write ${absolutePath}. Stay inside your owned project scope.`,
-  };
+  return shouldBlockProjectWriteFromModule(params);
 }
 
 export function shouldBlockCoderDatasetMutation(params: {
@@ -6746,48 +5814,7 @@ export function shouldBlockCoderDatasetMutation(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (params.role !== "coder") {
-    return { block: false };
-  }
-
-  if (["write", "edit"].includes(params.toolName) && params.projectRoot) {
-    const rawPath =
-      asString(params.toolParams.path) ?? asString(params.toolParams.file_path);
-    if (rawPath) {
-      const absolutePath = normalizeProjectScopedPath(rawPath, params.projectRoot);
-      const coderRoot = path.join(params.projectRoot, "coder");
-      if (
-        absolutePath &&
-        pathContainsDatasetSegment(absolutePath) &&
-        !isInside(coderRoot, absolutePath)
-      ) {
-        return {
-          block: true,
-          reason:
-            "Coder must treat dataset directories as read-only. Do not edit files under datasets/; write derived artifacts under {PROJ}/coder/ or remote scratch/results instead.",
-        };
-      }
-    }
-  }
-
-  if (params.toolName !== "bash") {
-    return { block: false };
-  }
-
-  const command = getToolCommandText(params.toolParams);
-  if (!command || !pathContainsDatasetSegment(command)) {
-    return { block: false };
-  }
-
-  if (!commandLikelyMutatesDataset(command)) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason:
-      "Coder must treat dataset directories as read-only. Do not create, delete, patch, chmod, extract, or sync files into datasets/ from bash; use {PROJ}/coder/, logs/, results/, or remote scratch instead.",
-  };
+  return shouldBlockCoderDatasetMutationFromModule(params);
 }
 
 export function shouldBlockResearchGraphForce(params: {
@@ -6796,40 +5823,7 @@ export function shouldBlockResearchGraphForce(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (params.role !== "researcher") {
-    return { block: false };
-  }
-  if (!["graph_build", "frontier_mapping", "idea"].includes(params.currentStage ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText) {
-    return { block: false };
-  }
-
-  const usesGraphBuildForce = /\/graph-build\b[\s\S]*--force\b/i.test(payloadText);
-  const usesPapernexusForce =
-    /\bpapernexus\b[\s\S]*\b(?:analyze|materialize|build-graph|optimize|watch|stage1|stage2|stage3|stage4)\b[\s\S]*--force\b/i.test(
-      payloadText
-    ) ||
-    /src\/cli\/index\.js\b[\s\S]*\b(?:analyze|materialize|build-graph|optimize|watch|stage1|stage2|stage3|stage4)\b[\s\S]*--force\b/i.test(
-      payloadText
-    ) ||
-    /--rebuild-pdf-markdown\b/i.test(payloadText);
-
-  if (!usesGraphBuildForce && !usesPapernexusForce) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason:
-      "During literature graph refresh, do not use --force or --rebuild-pdf-markdown. Keep PaperNexus cache-first and run /graph-build or papernexus analyze without --force; if the graph build still fails, hand the exact cache-first command to the user instead of forcing a rebuild.",
-  };
+  return shouldBlockResearchGraphForceFromModule(params);
 }
 
 export function shouldBlockPapernexusInlineExecution(params: {
@@ -6838,49 +5832,15 @@ export function shouldBlockPapernexusInlineExecution(params: {
   toolParams: Record<string, unknown>;
   sessionKey: string | null | undefined;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (isWorkflowSubagentSessionKey(params.sessionKey)) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!looksLikePapernexusHeavyCommand(payloadText)) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      "PaperNexus-heavy live-graph work must run in a dedicated subagent session to avoid stalling the foreground agent. Prefer the remote HTTP MCP control plane there: `research_lookup`, `research_briefing`, and `idea_catalyst` for graph work, with `import_workflow` or the queued wrappers only for staged import/status flows.",
-  };
+  return shouldBlockPapernexusInlineExecutionFromModule(params);
 }
-
-const PAPERNEXUS_RAW_HTTP_COMMAND_RE =
-  /\b(?:curl|wget|fetch)\b[\s\S]*\/api\/(?:imports|query|context|impact|ideas|brainstorm|path-trace|evidence-chain|reflection-chain|research-brief|brainstorm-brief|theory-brief|storyline-brief|corpus(?:-meta)?|corpora|enhancements|paper-enhancement)(?:\b|\/|\?)/i;
 
 export function shouldBlockPapernexusRawHttpUsage(params: {
   role: WorkflowRole | null;
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText || !PAPERNEXUS_RAW_HTTP_COMMAND_RE.test(payloadText)) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      "Workflow-owned PaperNexus live-graph work must use the remote HTTP MCP control plane instead of hand-written curl/fetch REST calls. Prefer `research_lookup`, `research_briefing`, and `idea_catalyst` for graph reads/writes; use `import_workflow` or the queued wrappers (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) only for staged import/status flows. This avoids route-shape drift and keeps token handling consistent.",
-  };
+  return shouldBlockPapernexusRawHttpUsageFromModule(params);
 }
 
 export function shouldBlockPapernexusLiveGraphCliRead(params: {
@@ -6888,21 +5848,7 @@ export function shouldBlockPapernexusLiveGraphCliRead(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!looksLikePapernexusLiveGraphCliReadCommand(payloadText)) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      "Local papernexus CLI reads against the live shared graph are not allowed in workflow mode. Use the remote HTTP MCP control plane instead (`research_lookup`, `research_briefing`, and `idea_catalyst`), or the authenticated thin wrappers when the workflow is in remote_api compatibility mode.",
-  };
+  return shouldBlockPapernexusLiveGraphCliReadFromModule(params);
 }
 
 export function shouldBlockPapernexusLocalGraphProcessing(params: {
@@ -6912,37 +5858,7 @@ export function shouldBlockPapernexusLocalGraphProcessing(params: {
   remoteApiBaseUrl?: string | null;
   remoteMcpUrl?: string | null;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (
-    !isRemoteOnlyPapernexusWorkflow({
-      apiBaseUrl: params.remoteApiBaseUrl,
-      mcpUrl: params.remoteMcpUrl,
-    })
-  ) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText) {
-    return { block: false };
-  }
-  const usesLocalGraphProcessing =
-    /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:analyze|materialize|build-graph|merge-graph|write-index|llm-optimize|optimize|watch|stage1|stage2|stage3|stage4)\b/i.test(
-      payloadText
-    );
-  if (!usesLocalGraphProcessing) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      `Local PaperNexus graph processing is disabled when remote PaperNexus access is configured (${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "configured remote endpoint"}). ` +
-      "Use the configured remote API or remote MCP endpoint instead of local `papernexus` / `src/cli/index.js` graph-processing commands.",
-  };
+  return shouldBlockPapernexusLocalGraphProcessingFromModule(params);
 }
 
 export function shouldBlockPapernexusLocalStorageUsage(params: {
@@ -6952,45 +5868,7 @@ export function shouldBlockPapernexusLocalStorageUsage(params: {
   remoteApiBaseUrl?: string | null;
   remoteMcpUrl?: string | null;
 }): { block: boolean; reason?: string } {
-  if (
-    !params.role ||
-    !isRemoteOnlyPapernexusWorkflow({
-      apiBaseUrl: params.remoteApiBaseUrl,
-      mcpUrl: params.remoteMcpUrl,
-    })
-  ) {
-    return { block: false };
-  }
-
-  if (["read", "write", "edit", "grep", "glob"].includes(params.toolName)) {
-    const pathCandidates = [
-      asString(params.toolParams.path),
-      asString(params.toolParams.file_path),
-      asString(params.toolParams.cwd),
-      asString(params.toolParams.glob),
-    ].filter((value): value is string => Boolean(value));
-    if (pathCandidates.some((value) => isLocalPapernexusStoragePath(value))) {
-      return {
-        block: true,
-        reason:
-          `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "the configured remote endpoint"}. Do not read or write local shared storage under ~/.papernexus/papers or ~/.papernexus/index-store; use project-local staging files and the configured remote API/MCP path instead.`,
-      };
-    }
-    return { block: false };
-  }
-
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText || !isLocalPapernexusStoragePath(payloadText)) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      `Workflow-owned automation is remote-only for PaperNexus at ${params.remoteApiBaseUrl ?? params.remoteMcpUrl ?? "the configured remote endpoint"}. Do not inspect or depend on ~/.papernexus/papers, ~/.papernexus/index-store, or PAPERNEXUS_ROOT; use project-local staging files plus the configured remote API/MCP path instead.`,
-  };
+  return shouldBlockPapernexusLocalStorageUsageFromModule(params);
 }
 
 export function shouldBlockPapernexusMultiPaperImport(params: {
@@ -6998,27 +5876,7 @@ export function shouldBlockPapernexusMultiPaperImport(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText || !/\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText)) {
-    return { block: false };
-  }
-  const uploadsMultipleFiles =
-    /"files"\s*:\s*\[[\s\S]*?\}\s*,\s*\{/i.test(payloadText) ||
-    /'files'\s*:\s*\[[\s\S]*?\}\s*,\s*\{/i.test(payloadText);
-  if (!uploadsMultipleFiles) {
-    return { block: false };
-  }
-  return {
-    block: true,
-    reason:
-      "Raw `/api/imports` multi-file bodies are not allowed in workflow mode. Submit one paper per raw import task, or switch to `pn_batch_import.py` with one manifest for multi-paper sync so progress stays durable and visible.",
-  };
+  return shouldBlockPapernexusMultiPaperImportFromModule(params);
 }
 
 export function shouldBlockPapernexusLongWaitImportCommand(params: {
@@ -7026,98 +5884,7 @@ export function shouldBlockPapernexusLongWaitImportCommand(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  const usesRawImportApi = /\/api\/imports(?:[/?\s"'`]|$)/i.test(payloadText ?? "");
-  const usesImportQueueWrapper =
-    /\bpython\d?\b[\s\S]*\bscripts\/pn_import_queue\.py\b[\s\S]*\bwait\b/i.test(
-      payloadText ?? ""
-    );
-  const usesBatchImportWrapper =
-    /\bpython\d?\b[\s\S]*\bscripts\/pn_batch_import\.py\b[\s\S]*\bwait\b/i.test(
-      payloadText ?? ""
-    );
-  if (!payloadText || (!usesRawImportApi && !usesImportQueueWrapper && !usesBatchImportWrapper)) {
-    return { block: false };
-  }
-  const usesLoopWithSleep =
-    (/\bwhile\b/i.test(payloadText) ||
-      /\buntil\b/i.test(payloadText) ||
-      /\bfor\b[\s\S]*\bdo\b/i.test(payloadText)) &&
-    /\bsleep\b/i.test(payloadText);
-  if (usesLoopWithSleep) {
-    return {
-      block: true,
-      reason:
-        "Do not long-poll PaperNexus import tasks in a shell loop. Bound each paper to at most 60s total wait, record timeout state, report it, and move on to the next paper instead of waiting indefinitely.",
-    };
-  }
-  if (usesImportQueueWrapper) {
-    const timeoutMatch = payloadText.match(/--timeout(?:=|\s+)(\d+)/i);
-    const timeoutSeconds = timeoutMatch
-      ? Number.parseInt(timeoutMatch[1] ?? "", 10)
-      : Number.NaN;
-    if (!Number.isFinite(timeoutSeconds)) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus queue waits must set `pn_import_queue.py wait --timeout` and keep each paper within a 60s budget.",
-      };
-    }
-    if (timeoutSeconds > 60) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus queue waits must cap each paper at 60s or less. Record timeout state and continue with the next paper instead of waiting longer.",
-      };
-    }
-  }
-  if (usesBatchImportWrapper) {
-    const timeoutMatch = payloadText.match(/--timeout(?:=|\s+)(\d+)/i);
-    const timeoutSeconds = timeoutMatch
-      ? Number.parseInt(timeoutMatch[1] ?? "", 10)
-      : Number.NaN;
-    if (!Number.isFinite(timeoutSeconds)) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus batch waits must set `pn_batch_import.py wait --timeout`, keep each workflow wait pass within 60s, and persist batch summary/items before the next pass.",
-      };
-    }
-    if (timeoutSeconds > 60) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus batch waits must cap each workflow pass at 60s or less. Persist batch summary/items, report progress, and continue on the next status pass instead of waiting longer.",
-      };
-    }
-  }
-  if (usesRawImportApi && /\bcurl\b/i.test(payloadText)) {
-    const maxTimeMatch = payloadText.match(/--max-time(?:=|\s+)(\d+)/i);
-    const maxTimeSeconds = maxTimeMatch
-      ? Number.parseInt(maxTimeMatch[1] ?? "", 10)
-      : Number.NaN;
-    if (!Number.isFinite(maxTimeSeconds)) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus import and import-status requests must set `curl --max-time` and keep each paper within a 60s budget.",
-      };
-    }
-    if (maxTimeSeconds > 60) {
-      return {
-        block: true,
-        reason:
-          "PaperNexus import and import-status requests must cap each paper at 60s or less. Record timeout state and continue with the next paper instead of waiting longer.",
-      };
-    }
-  }
-  return { block: false };
+  return shouldBlockPapernexusLongWaitImportCommandFromModule(params);
 }
 
 export function shouldBlockPapernexusDestructiveOperation(params: {
@@ -7125,36 +5892,7 @@ export function shouldBlockPapernexusDestructiveOperation(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (!["researcher", "analyzer"].includes(params.role ?? "")) {
-    return { block: false };
-  }
-  if (!["bash", "sessions_send"].includes(params.toolName)) {
-    return { block: false };
-  }
-  const payloadText = getToolPayloadText(params.toolParams);
-  if (!payloadText) {
-    return { block: false };
-  }
-
-  const usesBackupCommand =
-    /\b(?:papernexus|src\/cli\/index\.js)\b[\s\S]*\b(?:backup-export|backup-unpack|backup-load)\b/i.test(
-      payloadText
-    );
-  const deletesSharedStorage =
-    /\brm\b[\s\S]*-(?:[A-Za-z]*r[A-Za-z]*f|[A-Za-z]*f[A-Za-z]*r|[A-Za-z]*r|[A-Za-z]*f)\b[\s\S]*(?:~\/|\/)[^\n]*\.papernexus(?:\/[^\s"'`|;&]*)?/i.test(
-      payloadText
-    ) ||
-    /\bfind\b[\s\S]*\.papernexus[\s\S]*\b-delete\b/i.test(payloadText);
-
-  if (!usesBackupCommand && !deletesSharedStorage) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason:
-      "Do not delete shared PaperNexus graph storage or run backup-export, backup-unpack, or backup-load during normal agent operation. Report the need and wait for an explicit human request before destructive or whole-database archive actions.",
-  };
+  return shouldBlockPapernexusDestructiveOperationFromModule(params);
 }
 
 export function shouldBlockInnovationWrite(params: {
@@ -7165,42 +5903,7 @@ export function shouldBlockInnovationWrite(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (
-    !params.projectRoot ||
-    params.role !== "researcher" ||
-    params.currentStage !== "idea" ||
-    !params.innovationReflectionDue ||
-    !["write", "edit"].includes(params.toolName)
-  ) {
-    return { block: false };
-  }
-
-  const rawPath =
-    asString(params.toolParams.path) ?? asString(params.toolParams.file_path);
-  if (!rawPath) {
-    return { block: false };
-  }
-
-  const absolutePath = normalizeProjectScopedPath(rawPath, params.projectRoot);
-  if (!absolutePath) {
-    return { block: false };
-  }
-
-  const blockedTargets = new Set([
-    path.join(params.projectRoot, "researcher", "IDEA_REPORT.md"),
-    path.join(params.projectRoot, "researcher", "IDEA_AUDIT.md"),
-    path.join(params.projectRoot, "TRACK_REGISTRY.json"),
-  ]);
-
-  if (!blockedTargets.has(path.normalize(absolutePath))) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason:
-      "New experiment evidence has not yet been reflected into PaperNexus-backed innovation reflection. Run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before writing idea outputs.",
-  };
+  return shouldBlockInnovationWriteFromModule(params);
 }
 
 export function shouldBlockWriterTemplateWrite(params: {
@@ -7212,117 +5915,29 @@ export function shouldBlockWriterTemplateWrite(params: {
   toolName: string;
   toolParams: Record<string, unknown>;
 }): { block: boolean; reason?: string } {
-  if (
-    !params.projectRoot ||
-    params.role !== "academic_writer" ||
-    params.currentStage !== "write" ||
-    !params.writingTemplateRequired ||
-    params.writingTemplateStatus !== "missing" ||
-    !["write", "edit"].includes(params.toolName)
-  ) {
-    return { block: false };
-  }
-
-  const rawPath =
-    asString(params.toolParams.path) ?? asString(params.toolParams.file_path);
-  if (!rawPath) {
-    return { block: false };
-  }
-
-  const absolutePath = normalizeProjectScopedPath(rawPath, params.projectRoot);
-  if (!absolutePath) {
-    return { block: false };
-  }
-
-  const academicWriterRoot = path.join(params.projectRoot, "academic_writer");
-  if (!isInside(academicWriterRoot, path.normalize(absolutePath))) {
-    return { block: false };
-  }
-
-  return {
-    block: true,
-    reason:
-      "Writer is required to follow a user-provided template, but the configured template is missing. Restore it with research_workflow.set_writing_contract before editing PAPER_PLAN.md or paper sections.",
-  };
+  return shouldBlockWriterTemplateWriteFromModule(params);
 }
 
 export function sanitizeAgentMentions(text: string): string {
-  return text.replace(
-    AGENT_MENTION_REGEX,
-    (_match, prefix: string, roleName: string) => {
-      const raw = String(roleName || "").trim().toLowerCase().replace(/_/g, "-");
-      const label =
-        raw === "academic-writer" || raw === "writer"
-          ? "writer"
-          : raw === "cross-reviewer"
-            ? "cross-reviewer"
-            : raw;
-      return `${prefix}[${label}]`;
-    }
-  );
+  return sanitizeAgentMentionsFromModule(text);
 }
 
 export function hasAgentMention(text: string): boolean {
-  AGENT_MENTION_REGEX.lastIndex = 0;
-  return AGENT_MENTION_REGEX.test(text);
+  return hasAgentMentionFromModule(text);
 }
 
 export function isWorkflowChannelHandoffMessage(text: string | null | undefined): boolean {
-  if (!text) {
-    return false;
-  }
-  return (
-    /\[STATUS\]/i.test(text) &&
-    /\[HANDOFF\]/i.test(text) &&
-    /\[ARTIFACTS\]/i.test(text) &&
-    /\[NEXT\]/i.test(text)
-  );
+  return isWorkflowChannelHandoffMessageFromModule(text);
 }
 
 export function normalizeWorkflowChannelMentions(text: string): string {
-  if (!hasAgentMention(text)) {
-    return text;
-  }
-  if (!isWorkflowChannelHandoffMessage(text)) {
-    return sanitizeAgentMentions(text);
-  }
-  let preservedRawMention = false;
-  return text.replace(
-    AGENT_MENTION_REGEX,
-    (match, prefix: string, roleName: string) => {
-      if (!preservedRawMention) {
-        preservedRawMention = true;
-        return match;
-      }
-      const raw = String(roleName || "").trim().toLowerCase().replace(/_/g, "-");
-      const label =
-        raw === "academic-writer" || raw === "writer"
-          ? "writer"
-          : raw === "cross-reviewer"
-            ? "cross-reviewer"
-            : raw;
-      return `${prefix}[${label}]`;
-    }
-  );
+  return normalizeWorkflowChannelMentionsFromModule(text);
 }
 
 export function sanitizeMessageToolParams(
   params: Record<string, unknown>
 ): Record<string, unknown> | null {
-  const nextParams: Record<string, unknown> = { ...params };
-  let changed = false;
-  for (const key of ["text", "content", "message", "caption"]) {
-    if (typeof params[key] !== "string") {
-      continue;
-    }
-    const rawText = params[key] as string;
-    if (!hasAgentMention(rawText)) {
-      continue;
-    }
-    nextParams[key] = normalizeWorkflowChannelMentions(rawText);
-    changed = true;
-  }
-  return changed ? nextParams : null;
+  return sanitizeMessageToolParamsFromModule(params);
 }
 
 export async function queueWorkflowMailboxMessage(params: {
@@ -7670,47 +6285,15 @@ export async function getTheoryStateSummary(params: {
   proofPacketCount: number;
   theoryFile: TheoryStateFile | null;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = normalizeTheorySupportState(manifest.theory_state);
-  const theoryStateResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.theoryStatePath
-  );
-  const sourceTheoryNoteResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.sourceTheoryNotePath
-  );
-  const proofPacketDirResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.proofPacketDir
-  );
-  const theoryStateExists = theoryStateResolvedPath
-    ? await pathExists(theoryStateResolvedPath)
-    : false;
-  const sourceTheoryNoteExists = sourceTheoryNoteResolvedPath
-    ? await pathExists(sourceTheoryNoteResolvedPath)
-    : false;
-  const theoryFile = theoryStateExists
-    ? normalizeTheoryStateFile(await readJsonIfExists(theoryStateResolvedPath!))
-    : null;
-  let proofPacketCount = 0;
-  if (proofPacketDirResolvedPath && (await pathExists(proofPacketDirResolvedPath))) {
-    try {
-      const entries = await fs.readdir(proofPacketDirResolvedPath);
-      proofPacketCount = entries.filter((entry) => entry.endsWith(".json")).length;
-    } catch {
-      proofPacketCount = 0;
-    }
-  }
-  return {
-    state,
-    theoryStateResolvedPath,
-    theoryStateExists,
-    sourceTheoryNoteResolvedPath,
-    sourceTheoryNoteExists,
-    proofPacketDirResolvedPath,
-    proofPacketCount,
-    theoryFile,
+  return (await getTheoryStateSummaryFromModule(params)) as {
+    state: TheorySupportState;
+    theoryStateResolvedPath: string | null;
+    theoryStateExists: boolean;
+    sourceTheoryNoteResolvedPath: string | null;
+    sourceTheoryNoteExists: boolean;
+    proofPacketDirResolvedPath: string | null;
+    proofPacketCount: number;
+    theoryFile: TheoryStateFile | null;
   };
 }
 
@@ -8096,26 +6679,12 @@ export async function getCitationIntegrityStateSummary(params: {
   verificationReportResolvedPath: string | null;
   verificationReportExists: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = normalizeCitationIntegrityState(manifest.citation_integrity);
-  const bibliographyResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.bibliographyPath
-  );
-  const verificationReportResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.verificationReportPath
-  );
-  return {
-    state,
-    bibliographyResolvedPath,
-    bibliographyExists: bibliographyResolvedPath
-      ? await pathExists(bibliographyResolvedPath)
-      : false,
-    verificationReportResolvedPath,
-    verificationReportExists: verificationReportResolvedPath
-      ? await pathExists(verificationReportResolvedPath)
-      : false,
+  return (await getCitationIntegrityStateSummaryFromModule(params)) as {
+    state: CitationIntegrityState;
+    bibliographyResolvedPath: string | null;
+    bibliographyExists: boolean;
+    verificationReportResolvedPath: string | null;
+    verificationReportExists: boolean;
   };
 }
 
@@ -8322,19 +6891,11 @@ export async function getPaperQcStateSummary(params: {
   latestReportExists: boolean;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = normalizePaperQcState(manifest.paper_qc);
-  const latestReportResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.latestReportPath
-  );
-  return {
-    state,
-    latestReportResolvedPath,
-    latestReportExists: latestReportResolvedPath
-      ? await pathExists(latestReportResolvedPath)
-      : false,
-    hardFailure: isPaperQcHardFailure(state),
+  return (await getPaperQcStateSummaryFromModule(params)) as {
+    state: PaperQcState;
+    latestReportResolvedPath: string | null;
+    latestReportExists: boolean;
+    hardFailure: boolean;
   };
 }
 
@@ -8425,23 +6986,13 @@ export async function getCitationCollectionStateSummary(params: {
   cacheBibExists: boolean;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = normalizeCitationCollectionState(manifest.citation_collection);
-  const progressResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.progressPath
-  );
-  const cacheBibResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.cacheBibPath
-  );
-  return {
-    state,
-    progressResolvedPath,
-    progressExists: progressResolvedPath ? await pathExists(progressResolvedPath) : false,
-    cacheBibResolvedPath,
-    cacheBibExists: cacheBibResolvedPath ? await pathExists(cacheBibResolvedPath) : false,
-    hardFailure: isCitationCollectionHardFailure(state),
+  return (await getCitationCollectionStateSummaryFromModule(params)) as {
+    state: CitationCollectionState;
+    progressResolvedPath: string | null;
+    progressExists: boolean;
+    cacheBibResolvedPath: string | null;
+    cacheBibExists: boolean;
+    hardFailure: boolean;
   };
 }
 
@@ -8455,27 +7006,13 @@ export async function getFigureQcStateSummary(params: {
   figureSelectionExists: boolean;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = normalizeFigureQcState(manifest.figure_qc);
-  const figureReviewResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.figureReviewPath
-  );
-  const figureSelectionResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.figureSelectionPath
-  );
-  return {
-    state,
-    figureReviewResolvedPath,
-    figureReviewExists: figureReviewResolvedPath
-      ? await pathExists(figureReviewResolvedPath)
-      : false,
-    figureSelectionResolvedPath,
-    figureSelectionExists: figureSelectionResolvedPath
-      ? await pathExists(figureSelectionResolvedPath)
-      : false,
-    hardFailure: isFigureQcHardFailure(state),
+  return (await getFigureQcStateSummaryFromModule(params)) as {
+    state: FigureQcState;
+    figureReviewResolvedPath: string | null;
+    figureReviewExists: boolean;
+    figureSelectionResolvedPath: string | null;
+    figureSelectionExists: boolean;
+    hardFailure: boolean;
   };
 }
 
@@ -8490,27 +7027,14 @@ export async function getReviewIssueTrackerStateSummary(params: {
   surfaceIssueCount: number;
   submissionIssueCount: number;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const state = await hydrateReviewIssueTrackerState({
-    projectRoot: params.projectRoot,
-    value: manifest.review_issue_tracker,
-  });
-  const laneCounts = countReviewIssueLanes(state.issues);
-  const issueManifestResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.issueManifestPath
-  );
-  return {
-    state,
-    issueManifestResolvedPath,
-    issueManifestExists: issueManifestResolvedPath
-      ? await pathExists(issueManifestResolvedPath)
-      : false,
-    hardBlockersOpen: hasBlockingReviewIssues(state),
-    mediumOrHigherIssuesNeedDisposition:
-      hasUnwaivedMediumOrHigherReviewIssues(state),
-    surfaceIssueCount: laneCounts.surface,
-    submissionIssueCount: laneCounts.submission,
+  return (await getReviewIssueTrackerStateSummaryFromModule(params)) as {
+    state: ReviewIssueTrackerState;
+    issueManifestResolvedPath: string | null;
+    issueManifestExists: boolean;
+    hardBlockersOpen: boolean;
+    mediumOrHigherIssuesNeedDisposition: boolean;
+    surfaceIssueCount: number;
+    submissionIssueCount: number;
   };
 }
 
@@ -8522,93 +7046,7 @@ export async function setIdleResearchState(params: {
   due: boolean;
   nextDueAt: string | null;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeIdleResearchState(manifest.idle_research);
-  const patch = asRecord(params.idleResearch) ?? {};
-  const next: IdleResearchState = {
-    ...current,
-    enabled: pickBoolean(patch, ["enabled"]) ?? current.enabled,
-    topic: pickString(patch, ["topic"]) ?? current.topic,
-    objective: pickString(patch, ["objective"]) ?? current.objective,
-    querySeeds:
-      patch.querySeeds || patch.query_seeds
-        ? asStringArray(patch.querySeeds ?? patch.query_seeds)
-        : current.querySeeds,
-    preferredVenues:
-      patch.preferredVenues || patch.preferred_venues
-        ? asStringArray(patch.preferredVenues ?? patch.preferred_venues)
-        : current.preferredVenues,
-    maxPapersPerCycle:
-      Math.max(
-        1,
-        Math.floor(
-          pickNumber(patch, ["maxPapersPerCycle", "max_papers_per_cycle"]) ??
-            current.maxPapersPerCycle
-        )
-      ),
-    cooldownMinutes:
-      Math.max(
-        0,
-        Math.floor(
-          pickNumber(patch, ["cooldownMinutes", "cooldown_minutes"]) ??
-            current.cooldownMinutes
-        )
-      ),
-    status: normalizeStage(patch.status) ?? current.status,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    nextQueryHint:
-      pickString(patch, ["nextQueryHint", "next_query_hint"]) ??
-      current.nextQueryHint,
-    refreshGraphOnNewCorePapers:
-      pickBoolean(patch, [
-        "refreshGraphOnNewCorePapers",
-        "refresh_graph_on_new_core_papers",
-      ]) ?? current.refreshGraphOnNewCorePapers,
-    lastRunAt:
-      pickString(patch, ["lastRunAt", "last_run_at"]) ?? current.lastRunAt,
-    lastDigestPath:
-      pickString(patch, ["lastDigestPath", "last_digest_path"]) ??
-      current.lastDigestPath,
-    lastSourceUpdateAt:
-      pickString(patch, ["lastSourceUpdateAt", "last_source_update_at"]) ??
-      current.lastSourceUpdateAt,
-    lastRoundNewCanonicalPapers:
-      Math.max(
-        0,
-        Math.floor(
-          pickNumber(patch, [
-            "lastRoundNewCanonicalPapers",
-            "last_round_new_canonical_papers",
-          ]) ?? current.lastRoundNewCanonicalPapers
-        )
-      ),
-    lastRoundNewCorePapers:
-      Math.max(
-        0,
-        Math.floor(
-          pickNumber(patch, [
-            "lastRoundNewCorePapers",
-            "last_round_new_core_papers",
-          ]) ?? current.lastRoundNewCorePapers
-        )
-      ),
-  };
-
-  if (!next.enabled) {
-    next.status = "disabled";
-  } else if (next.topic && next.status === "disabled") {
-    next.status = "pending";
-  }
-
-  manifest.idle_research = serializeIdleResearchState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    due: isIdleResearchDue(next),
-    nextDueAt: computeIdleResearchNextDueAt(next),
-  };
+  return await setIdleResearchStateFromModule(params);
 }
 
 export async function setWritingContractState(params: {
@@ -8626,249 +7064,7 @@ export async function setWritingContractState(params: {
   templateCopyStatus: string;
   paragraphLogicStatus: string;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeWritingContractState(manifest.writing_contract);
-  const patch = asRecord(params.writingContract) ?? {};
-  const requestedMode =
-    normalizeWritingMode(patch.paperMode ?? patch.paper_mode) ?? current.paperMode;
-  const hasKgStorylineRequiredPatch =
-    Object.prototype.hasOwnProperty.call(patch, "kgStorylineRequired") ||
-    Object.prototype.hasOwnProperty.call(patch, "kg_storyline_required");
-  const requestedTemplatePath =
-    patch.templatePath || patch.template_path
-      ? pickString(patch, ["templatePath", "template_path"])
-      : null;
-  let templatePath = requestedTemplatePath ?? current.templatePath;
-  let templateName =
-    pickString(patch, ["templateName", "template_name"]) ?? current.templateName;
-  let requiredSections =
-    patch.requiredSections || patch.required_sections
-      ? asStringArray(patch.requiredSections ?? patch.required_sections)
-      : current.requiredSections;
-  let sectionOrder =
-    patch.sectionOrder || patch.section_order
-      ? asStringArray(patch.sectionOrder ?? patch.section_order)
-      : current.sectionOrder;
-  let bodyPageBudget =
-    pickNumber(patch, ["bodyPageBudget", "body_page_budget"]) ?? current.bodyPageBudget;
-  let referencePageBudget =
-    pickNumber(patch, ["referencePageBudget", "reference_page_budget"]) ??
-    current.referencePageBudget;
-  let bodyWordTargetMin =
-    pickNumber(patch, ["bodyWordTargetMin", "body_word_target_min"]) ??
-    current.bodyWordTargetMin;
-  let bodyWordTargetMax =
-    pickNumber(patch, ["bodyWordTargetMax", "body_word_target_max"]) ??
-    current.bodyWordTargetMax;
-  let maxCoreIdeas =
-    pickNumber(patch, ["maxCoreIdeas", "max_core_ideas"]) ?? current.maxCoreIdeas;
-  let maxHeadlineClaims =
-    pickNumber(patch, ["maxHeadlineClaims", "max_headline_claims"]) ??
-    current.maxHeadlineClaims;
-  let storylineSource =
-    pickString(patch, ["storylineSource", "storyline_source"]) ??
-    current.storylineSource;
-  let mainTextProofStyle =
-    pickString(patch, ["mainTextProofStyle", "main_text_proof_style"]) ??
-    current.mainTextProofStyle;
-  let proofAppendixRequired =
-    pickBoolean(patch, ["proofAppendixRequired", "proof_appendix_required"]) ??
-    current.proofAppendixRequired;
-  let proofAppendixPath =
-    pickString(patch, ["proofAppendixPath", "proof_appendix_path"]) ??
-    current.proofAppendixPath;
-  let proofAppendixStatus =
-    normalizeStage(patch.proofAppendixStatus ?? patch.proof_appendix_status) ??
-    current.proofAppendixStatus;
-  let theoryNotePath =
-    pickString(patch, ["theoryNotePath", "theory_note_path"]) ??
-    current.theoryNotePath;
-  let proofChecklist =
-    patch.proofChecklist || patch.proof_checklist
-      ? asStringArray(patch.proofChecklist ?? patch.proof_checklist)
-      : current.proofChecklist;
-  let kgStorylineRequired =
-    pickBoolean(patch, ["kgStorylineRequired", "kg_storyline_required"]) ??
-    current.kgStorylineRequired;
-  let kgStorylinePacketPath =
-    pickString(patch, ["kgStorylinePacketPath", "kg_storyline_packet_path"]) ??
-    current.kgStorylinePacketPath;
-  let storylineChecklist =
-    patch.storylineChecklist || patch.storyline_checklist
-      ? asStringArray(patch.storylineChecklist ?? patch.storyline_checklist)
-      : current.storylineChecklist;
-
-  if (requestedMode) {
-    const preset = WRITING_MODE_PRESETS[requestedMode];
-    if (!requestedTemplatePath && (!templatePath || isBundledWritingModeTemplatePath(templatePath))) {
-      templatePath =
-        getConfiguredWritingModeTemplatePath(params.policy, requestedMode) ??
-        (await resolveBundledWritingModeTemplatePath(requestedMode));
-    }
-    if (!templateName || templateName === current.templateName) {
-      templateName = preset.templateName;
-    }
-    if (requiredSections.length === 0 || requestedMode !== current.paperMode) {
-      requiredSections = [...preset.requiredSections];
-    }
-    if (sectionOrder.length === 0 || requestedMode !== current.paperMode) {
-      sectionOrder = [...preset.sectionOrder];
-    }
-    bodyPageBudget = bodyPageBudget ?? preset.bodyPageBudget;
-    referencePageBudget = referencePageBudget ?? preset.referencePageBudget;
-    bodyWordTargetMin = bodyWordTargetMin ?? preset.bodyWordTargetMin;
-    bodyWordTargetMax = bodyWordTargetMax ?? preset.bodyWordTargetMax;
-    maxCoreIdeas = maxCoreIdeas ?? preset.maxCoreIdeas;
-    maxHeadlineClaims = maxHeadlineClaims ?? preset.maxHeadlineClaims;
-    storylineSource = storylineSource ?? "papernexus_kg";
-    if (!hasKgStorylineRequiredPatch && requestedMode !== current.paperMode) {
-      kgStorylineRequired = true;
-    }
-    kgStorylinePacketPath =
-      kgStorylinePacketPath ?? DEFAULT_KG_STORYLINE_PACKET_PATH;
-    if (storylineChecklist.length === 0) {
-      storylineChecklist = [...DEFAULT_STORYLINE_CHECKLIST];
-    }
-    if (proofChecklist.length === 0) {
-      proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
-    }
-    mainTextProofStyle = mainTextProofStyle ?? "lemma_result_only";
-    proofAppendixRequired = proofAppendixRequired ?? true;
-    proofAppendixPath =
-      proofAppendixPath ?? "academic_writer/paper/sections/appendix_theory.tex";
-    theoryNotePath = theoryNotePath ?? "analyzer/THEORY_SUPPORT_NOTE.md";
-  }
-
-  let projectTemplatePath =
-    pickString(patch, ["projectTemplatePath", "project_template_path"]) ??
-    current.projectTemplatePath;
-  let templateCopyStatus =
-    normalizeStage(patch.templateCopyStatus ?? patch.template_copy_status) ??
-    current.templateCopyStatus;
-
-  const sourceTemplateResolvedPath = resolveWritingTemplatePath(
-    params.projectRoot,
-    templatePath
-  );
-  if (sourceTemplateResolvedPath && (await pathExists(sourceTemplateResolvedPath))) {
-    const copiedTemplate = await copyWritingTemplateIntoProject({
-      projectRoot: params.projectRoot,
-      sourcePath: sourceTemplateResolvedPath,
-      paperMode: requestedMode,
-    });
-    projectTemplatePath = copiedTemplate.projectTemplatePath;
-    templateCopyStatus = "ready";
-  } else if (templatePath) {
-    projectTemplatePath = current.projectTemplatePath;
-    templateCopyStatus = "missing";
-  }
-
-  const next: WritingContractState = {
-    ...current,
-    paperMode: requestedMode,
-    templateRequired:
-      pickBoolean(patch, ["templateRequired", "template_required"]) ??
-      current.templateRequired,
-    templatePath,
-    projectTemplatePath,
-    templateName,
-    templateStatus:
-      normalizeStage(patch.templateStatus ?? patch.template_status) ??
-      current.templateStatus,
-    templateCopyStatus,
-    bodyPageBudget:
-      bodyPageBudget == null ? null : Math.max(1, Math.floor(bodyPageBudget)),
-    referencePageBudget:
-      referencePageBudget == null ? null : Math.max(1, Math.floor(referencePageBudget)),
-    bodyWordTargetMin:
-      bodyWordTargetMin == null ? null : Math.max(500, Math.floor(bodyWordTargetMin)),
-    bodyWordTargetMax:
-      bodyWordTargetMax == null ? null : Math.max(500, Math.floor(bodyWordTargetMax)),
-    maxCoreIdeas: Math.max(1, Math.floor(maxCoreIdeas ?? current.maxCoreIdeas)),
-    maxHeadlineClaims: Math.max(
-      1,
-      Math.floor(maxHeadlineClaims ?? current.maxHeadlineClaims)
-    ),
-    mainTextProofStyle,
-    proofAppendixRequired,
-    proofAppendixPath,
-    proofAppendixStatus,
-    theoryNotePath,
-    proofChecklist,
-    storylineSource,
-    kgStorylineRequired,
-    kgStorylineStatus:
-      normalizeStage(patch.kgStorylineStatus ?? patch.kg_storyline_status) ??
-      current.kgStorylineStatus,
-    kgStorylinePacketPath,
-    storylineChecklist,
-    requiredSections,
-    sectionOrder,
-    paragraphLogicChecklist:
-      patch.paragraphLogicChecklist || patch.paragraph_logic_checklist
-        ? asStringArray(
-            patch.paragraphLogicChecklist ?? patch.paragraph_logic_checklist
-          )
-        : current.paragraphLogicChecklist,
-    paragraphLogicStatus:
-      normalizeStage(
-        patch.paragraphLogicStatus ?? patch.paragraph_logic_status
-      ) ?? current.paragraphLogicStatus,
-    lastTemplateAppliedAt:
-      pickString(patch, ["lastTemplateAppliedAt", "last_template_applied_at"]) ??
-      current.lastTemplateAppliedAt,
-    lastParagraphLogicAuditAt:
-      pickString(patch, [
-        "lastParagraphLogicAuditAt",
-        "last_paragraph_logic_audit_at",
-      ]) ?? current.lastParagraphLogicAuditAt,
-    templateMappingPath:
-      pickString(patch, ["templateMappingPath", "template_mapping_path"]) ??
-      current.templateMappingPath,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  if (next.requiredSections.length === 0) {
-    next.requiredSections = [...DEFAULT_WRITING_SECTION_ORDER];
-  }
-  if (next.sectionOrder.length === 0) {
-    next.sectionOrder = [...DEFAULT_WRITING_SECTION_ORDER];
-  }
-  if (next.storylineChecklist.length === 0) {
-    next.storylineChecklist = [...DEFAULT_STORYLINE_CHECKLIST];
-  }
-  if (next.proofChecklist.length === 0) {
-    next.proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
-  }
-  if (next.paragraphLogicChecklist.length === 0) {
-    next.paragraphLogicChecklist = [...DEFAULT_PARAGRAPH_LOGIC_CHECKLIST];
-  }
-
-  const evaluation = await evaluateWritingContractState({
-    projectRoot: params.projectRoot,
-    state: next,
-  });
-  next.templateStatus = evaluation.templateStatus;
-  next.templateCopyStatus = evaluation.templateCopyStatus;
-  next.pendingReason = evaluation.pendingReason;
-
-  manifest.writing_contract = serializeWritingContractState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    templateResolvedPath: evaluation.templateResolvedPath,
-    projectTemplateResolvedPath: evaluation.projectTemplateResolvedPath,
-    sourceTemplateResolvedPath: evaluation.sourceTemplateResolvedPath,
-    templateExists: evaluation.templateExists,
-    templateReady:
-      !next.templateRequired ||
-      Boolean(evaluation.templateResolvedPath && evaluation.templateExists),
-    templateStatus: evaluation.templateStatus,
-    templateCopyStatus: evaluation.templateCopyStatus,
-    paragraphLogicStatus: next.paragraphLogicStatus,
-  };
+  return await setWritingContractStateFromModule(params);
 }
 
 export async function setWritingSessionState(params: {
@@ -8879,90 +7075,7 @@ export async function setWritingSessionState(params: {
   currentSectionPacketResolvedPath: string | null;
   readyForSubmit: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeWritingSessionState(manifest.writing_session);
-  const patch = asRecord(params.writingSession) ?? {};
-  const sectionPacketsPatch = asRecord(
-    patch.sectionPackets ?? patch.section_packets
-  );
-  const next: WritingSessionState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    currentSection:
-      normalizeStage(patch.currentSection ?? patch.current_section) ??
-      current.currentSection,
-    draftOrder:
-      patch.draftOrder || patch.draft_order
-        ? asStringArray(patch.draftOrder ?? patch.draft_order)
-            .map((entry) => normalizeStage(entry) ?? entry)
-            .filter(Boolean)
-        : current.draftOrder,
-    finalizedSections:
-      patch.finalizedSections || patch.finalized_sections
-        ? asStringArray(patch.finalizedSections ?? patch.finalized_sections)
-            .map((entry) => normalizeStage(entry) ?? entry)
-            .filter(Boolean)
-        : current.finalizedSections,
-    compileSafeSections:
-      patch.compileSafeSections || patch.compile_safe_sections
-        ? asStringArray(patch.compileSafeSections ?? patch.compile_safe_sections)
-            .map((entry) => normalizeStage(entry) ?? entry)
-            .filter(Boolean)
-        : current.compileSafeSections,
-    sectionPackets: sectionPacketsPatch
-      ? Object.fromEntries(
-          Object.entries(sectionPacketsPatch).map(([key, value]) => [
-            normalizeStage(key) ?? key,
-            normalizeWritingSectionPacketState(key, value),
-          ])
-        )
-      : current.sectionPackets,
-    headlineClaimEvidenceStatus:
-      normalizeStage(
-        patch.headlineClaimEvidenceStatus ?? patch.headline_claim_evidence_status
-      ) ?? current.headlineClaimEvidenceStatus,
-    graphEvidenceCoverageStatus:
-      normalizeStage(
-        patch.graphEvidenceCoverageStatus ?? patch.graph_evidence_coverage_status
-      ) ?? current.graphEvidenceCoverageStatus,
-    graphEvidenceCoverageSummary:
-      pickString(patch, [
-        "graphEvidenceCoverageSummary",
-        "graph_evidence_coverage_summary",
-      ]) ?? current.graphEvidenceCoverageSummary,
-    citationPlanMode:
-      normalizeStage(patch.citationPlanMode ?? patch.citation_plan_mode) ??
-      current.citationPlanMode,
-    externalScholarQueryMode:
-      normalizeStage(
-        patch.externalScholarQueryMode ?? patch.external_scholar_query_mode
-      ) ?? current.externalScholarQueryMode,
-    futureScholarVerificationSkill:
-      pickString(patch, [
-        "futureScholarVerificationSkill",
-        "future_scholar_verification_skill",
-      ]) ?? current.futureScholarVerificationSkill,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  manifest.writing_session = serializeWritingSessionState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  const currentSectionPacket = next.currentSection
-    ? next.sectionPackets[next.currentSection] ?? null
-    : null;
-  return {
-    state: next,
-    currentSectionPacketResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      currentSectionPacket?.packetPath ?? null
-    ),
-    readyForSubmit: isWritingSessionReadyForSubmit(next),
-  };
+  return await setWritingSessionStateFromModule(params);
 }
 
 export async function setReviewSessionState(params: {
@@ -8973,117 +7086,7 @@ export async function setReviewSessionState(params: {
   reviewPacketResolvedPath: string | null;
   latestReviewResolvedPath: string | null;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeReviewSessionState(manifest.review_session);
-  const patch = asRecord(params.reviewSession) ?? {};
-  const next: ReviewSessionState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    stageScope:
-      normalizeStage(patch.stageScope ?? patch.stage_scope) ?? current.stageScope,
-    round: Math.max(
-      0,
-      Math.floor(pickNumber(patch, ["round"]) ?? current.round)
-    ),
-    reviewPacketPath:
-      pickString(patch, ["reviewPacketPath", "review_packet_path"]) ??
-      current.reviewPacketPath,
-    graphEvidenceSummaryPath:
-      pickString(patch, [
-        "graphEvidenceSummaryPath",
-        "graph_evidence_summary_path",
-      ]) ?? current.graphEvidenceSummaryPath,
-    latestReviewPath:
-      pickString(patch, ["latestReviewPath", "latest_review_path"]) ??
-      current.latestReviewPath,
-    verdict: pickString(patch, ["verdict"]) ?? current.verdict,
-    rubric:
-      patch.rubric != null
-        ? normalizeReviewSessionRubric(patch.rubric)
-        : current.rubric,
-    reviewerSummary:
-      pickString(patch, ["reviewerSummary", "reviewer_summary"]) ??
-      current.reviewerSummary,
-    actionItems:
-      patch.actionItems || patch.action_items
-        ? asStringArray(patch.actionItems ?? patch.action_items)
-        : current.actionItems,
-    blockingArtifacts:
-      patch.blockingArtifacts || patch.blocking_artifacts
-        ? asStringArray(patch.blockingArtifacts ?? patch.blocking_artifacts)
-        : current.blockingArtifacts,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  manifest.review_session = serializeReviewSessionState(next);
-  await saveManifest(params.projectRoot, manifest);
-  await writeJsonEnsured(
-    path.join(params.projectRoot, DEFAULT_RESEARCH_REVIEW_STATE_PATH),
-    {
-      round: next.round,
-      status: next.status === "completed" ? "completed" : "in_progress",
-      lastScore: deriveResearchMemoryReviewScore(next),
-      lastVerdict: deriveResearchMemoryReviewVerdict(next.verdict),
-      pendingActions: next.actionItems,
-      timestamp: next.lastUpdatedAt ?? new Date().toISOString(),
-    }
-  );
-  await upsertJsonArtifact(
-    resolveProjectArtifactPath(params.projectRoot, next.reviewPacketPath),
-    {
-      status: next.status,
-      stage_scope: next.stageScope,
-      round: next.round,
-      verdict: next.verdict,
-      rubric: serializeReviewSessionRubric(next.rubric),
-      reviewer_summary: next.reviewerSummary,
-      action_items: next.actionItems,
-      blocking_artifacts: next.blockingArtifacts,
-      updated_at: next.lastUpdatedAt,
-      source: "research_workflow.set_review_session",
-    }
-  );
-  await scaffoldMarkdownArtifactIfMissing(
-    resolveProjectArtifactPath(params.projectRoot, next.graphEvidenceSummaryPath),
-    [
-      "# Graph Evidence Summary",
-      "",
-      `Status: ${next.status}`,
-      `Verdict: ${next.verdict ?? "unset"}`,
-      `Reviewer Summary: ${next.reviewerSummary ?? "none"}`,
-      `Updated At: ${next.lastUpdatedAt ?? "unset"}`,
-    ].join("\n")
-  );
-  await upsertJsonArtifact(
-    path.join(params.projectRoot, DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH),
-    {
-      status: next.status,
-      stage_scope: next.stageScope,
-      round: next.round,
-      verdict: next.verdict,
-      reviewer_summary: next.reviewerSummary,
-      action_items: next.actionItems,
-      blocking_artifacts: next.blockingArtifacts,
-      updated_at: next.lastUpdatedAt,
-      source: "research_workflow.set_review_session",
-    }
-  );
-
-  return {
-    state: next,
-    reviewPacketResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.reviewPacketPath
-    ),
-    latestReviewResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.latestReviewPath
-    ),
-  };
+  return await setReviewSessionStateFromModule(params);
 }
 
 function deriveResearchMemoryReviewVerdict(
@@ -9132,93 +7135,7 @@ export async function setGraphGuidedWritingState(params: {
   anchorIndexResolvedPath: string | null;
   readyForSubmit: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeGraphGuidedWritingState(manifest.graph_guided_writing);
-  const patch = asRecord(params.graphGuidedWriting) ?? {};
-  const next: GraphGuidedWritingState = {
-    ...current,
-    enabled: pickBoolean(patch, ["enabled"]) ?? current.enabled,
-    status: normalizeStage(patch.status) ?? current.status,
-    anchorIndexPath:
-      pickString(patch, ["anchorIndexPath", "anchor_index_path"]) ??
-      current.anchorIndexPath,
-    frontierFiles:
-      patch.frontierFiles || patch.frontier_files
-        ? asStringArray(patch.frontierFiles ?? patch.frontier_files)
-        : current.frontierFiles,
-    literaturePath:
-      pickString(patch, ["literaturePath", "literature_path"]) ??
-      current.literaturePath,
-    claimEvidencePacketPaths:
-      patch.claimEvidencePacketPaths || patch.claim_evidence_packet_paths
-        ? asStringArray(
-            patch.claimEvidencePacketPaths ?? patch.claim_evidence_packet_paths
-          )
-        : current.claimEvidencePacketPaths,
-    requiredEvidencePointerCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, [
-          "requiredEvidencePointerCount",
-          "required_evidence_pointer_count",
-        ]) ?? current.requiredEvidencePointerCount
-      )
-    ),
-    coveredHeadlineClaimCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, [
-          "coveredHeadlineClaimCount",
-          "covered_headline_claim_count",
-        ]) ?? current.coveredHeadlineClaimCount
-      )
-    ),
-    totalHeadlineClaimCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, [
-          "totalHeadlineClaimCount",
-          "total_headline_claim_count",
-        ]) ?? current.totalHeadlineClaimCount
-      )
-    ),
-    evidenceCoverageStatus:
-      normalizeStage(
-        patch.evidenceCoverageStatus ?? patch.evidence_coverage_status
-      ) ?? current.evidenceCoverageStatus,
-    missingEvidenceClaims:
-      patch.missingEvidenceClaims || patch.missing_evidence_claims
-        ? asStringArray(
-            patch.missingEvidenceClaims ?? patch.missing_evidence_claims
-          )
-        : current.missingEvidenceClaims,
-    citationSourceMode:
-      normalizeStage(patch.citationSourceMode ?? patch.citation_source_mode) ??
-      current.citationSourceMode,
-    scholarQueryReserved:
-      pickBoolean(patch, ["scholarQueryReserved", "scholar_query_reserved"]) ??
-      current.scholarQueryReserved,
-    scholarQuerySkillSlot:
-      pickString(patch, ["scholarQuerySkillSlot", "scholar_query_skill_slot"]) ??
-      current.scholarQuerySkillSlot,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  manifest.graph_guided_writing = serializeGraphGuidedWritingState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    anchorIndexResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.anchorIndexPath
-    ),
-    readyForSubmit: isGraphGuidedWritingReadyForSubmit(next),
-  };
+  return await setGraphGuidedWritingStateFromModule(params);
 }
 
 export async function setExternalReviewState(params: {
@@ -9231,99 +7148,7 @@ export async function setExternalReviewState(params: {
   reviewResponseResolvedPath: string | null;
   conclusionReady: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeExternalReviewState(manifest.external_review_state);
-  const patch = asRecord(params.externalReview) ?? {};
-  const next: ExternalReviewState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    provider: pickString(patch, ["provider"]) ?? current.provider,
-    reviewSkill:
-      pickString(patch, ["reviewSkill", "review_skill"]) ?? current.reviewSkill,
-    sourceLabel:
-      pickString(patch, ["sourceLabel", "source_label"]) ?? current.sourceLabel,
-    submissionId:
-      pickString(patch, ["submissionId", "submission_id"]) ?? current.submissionId,
-    submittedPdfPath:
-      pickString(patch, ["submittedPdfPath", "submitted_pdf_path"]) ??
-      current.submittedPdfPath,
-    externalReviewPath:
-      pickString(patch, ["externalReviewPath", "external_review_path"]) ??
-      current.externalReviewPath,
-    reviewResponsePath:
-      pickString(patch, ["reviewResponsePath", "review_response_path"]) ??
-      current.reviewResponsePath,
-    overallRecommendation:
-      pickString(patch, [
-        "overallRecommendation",
-        "overall_recommendation",
-      ]) ?? current.overallRecommendation,
-    requiredAction:
-      pickString(patch, ["requiredAction", "required_action"]) ??
-      current.requiredAction,
-    lastPolledAt:
-      pickString(patch, ["lastPolledAt", "last_polled_at"]) ?? current.lastPolledAt,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  if (isExternalReviewConclusionReady(next)) {
-    next.pendingReason = null;
-  } else if (!next.pendingReason) {
-    next.pendingReason =
-      "Mandatory external Stanford review is not yet concluded. Submit the compiled PDF and persist the review outcome before completion.";
-  }
-
-  manifest.external_review_state = serializeExternalReviewState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  const externalReviewResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    next.externalReviewPath
-  );
-  const reviewResponseResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    next.reviewResponsePath
-  );
-  await scaffoldMarkdownArtifactIfMissing(
-    externalReviewResolvedPath,
-    [
-      "# External Review",
-      "",
-      `Status: ${next.status}`,
-      `Provider: ${next.provider ?? "unset"}`,
-      `Source Label: ${next.sourceLabel ?? "unset"}`,
-      `Overall Recommendation: ${next.overallRecommendation ?? "unset"}`,
-      `Required Action: ${next.requiredAction ?? "unset"}`,
-      `Last Updated At: ${next.lastUpdatedAt ?? "unset"}`,
-      `Pending Reason: ${next.pendingReason ?? "none"}`,
-    ].join("\n")
-  );
-  await scaffoldMarkdownArtifactIfMissing(
-    reviewResponseResolvedPath,
-    [
-      "# Review Response",
-      "",
-      `Status: ${next.status}`,
-      `Overall Recommendation: ${next.overallRecommendation ?? "unset"}`,
-      `Required Action: ${next.requiredAction ?? "unset"}`,
-      `Last Updated At: ${next.lastUpdatedAt ?? "unset"}`,
-    ].join("\n")
-  );
-
-  return {
-    state: next,
-    submittedPdfResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.submittedPdfPath
-    ),
-    externalReviewResolvedPath,
-    reviewResponseResolvedPath,
-    conclusionReady: isExternalReviewConclusionReady(next),
-  };
+  return await setExternalReviewStateFromModule(params);
 }
 
 export async function setBrainstormCycleState(params: {
@@ -9334,96 +7159,7 @@ export async function setBrainstormCycleState(params: {
   validationErrors: string[];
   chainBundleReady: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeBrainstormCycleState(manifest.brainstorm_cycle);
-  const patch = asRecord(params.brainstormCycle) ?? {};
-  const trackId =
-    pickString(patch, ["trackId", "track_id"]) ?? current.trackId;
-  const defaultPaths = getBrainstormCycleDefaultPaths(trackId);
-  const preferScopedDefaults = Boolean(trackId && trackId !== current.trackId);
-  const next = normalizeBrainstormCycleState({
-    ...serializeBrainstormCycleState(current),
-    ...patch,
-    track_id: trackId,
-    provider:
-      pickString(patch, ["provider"]) ?? current.provider ?? "workflow_core_brainstorm",
-    provider_mode:
-      pickString(patch, ["providerMode", "provider_mode"]) ??
-      current.providerMode ??
-      "core",
-    provider_status:
-      normalizeStage(patch.providerStatus ?? patch.provider_status) ??
-      current.providerStatus ??
-      (isBrainstormCycleReady(current) ? "ready" : "pending"),
-    provider_last_run_at:
-      pickString(patch, ["providerLastRunAt", "provider_last_run_at"]) ??
-      current.providerLastRunAt,
-    provider_last_error:
-      pickString(patch, ["providerLastError", "provider_last_error"]) ??
-      current.providerLastError,
-    contract_version:
-      pickNumber(patch, ["contractVersion", "contract_version"]) ??
-      current.contractVersion ??
-      1,
-    topic_summary_path:
-      pickString(patch, ["topicSummaryPath", "topic_summary_path"]) ??
-      (preferScopedDefaults ? defaultPaths.topicSummaryPath : current.topicSummaryPath) ??
-      defaultPaths.topicSummaryPath,
-    research_brief_path:
-      pickString(patch, ["researchBriefPath", "research_brief_path"]) ??
-      (preferScopedDefaults ? defaultPaths.researchBriefPath : current.researchBriefPath) ??
-      defaultPaths.researchBriefPath,
-    brainstorm_brief_path:
-      pickString(patch, ["brainstormBriefPath", "brainstorm_brief_path"]) ??
-      (preferScopedDefaults ? defaultPaths.brainstormBriefPath : current.brainstormBriefPath) ??
-      defaultPaths.brainstormBriefPath,
-    logic_chain_path:
-      pickString(patch, ["logicChainPath", "logic_chain_path"]) ??
-      (preferScopedDefaults ? defaultPaths.logicChainPath : current.logicChainPath) ??
-      defaultPaths.logicChainPath,
-    evidence_chain_path:
-      pickString(patch, ["evidenceChainPath", "evidence_chain_path"]) ??
-      (preferScopedDefaults ? defaultPaths.evidenceChainPath : current.evidenceChainPath) ??
-      defaultPaths.evidenceChainPath,
-    reasoning_trace_path:
-      pickString(patch, ["reasoningTracePath", "reasoning_trace_path"]) ??
-      (preferScopedDefaults ? defaultPaths.reasoningTracePath : current.reasoningTracePath) ??
-      defaultPaths.reasoningTracePath,
-    question_packet_path:
-      pickString(patch, ["questionPacketPath", "question_packet_path"]) ??
-      (preferScopedDefaults ? defaultPaths.questionPacketPath : current.questionPacketPath) ??
-      defaultPaths.questionPacketPath,
-    working_memory_path:
-      pickString(patch, ["workingMemoryPath", "working_memory_path"]) ??
-      (preferScopedDefaults ? defaultPaths.workingMemoryPath : current.workingMemoryPath) ??
-      defaultPaths.workingMemoryPath,
-    synthesis_packet_path:
-      pickString(patch, ["synthesisPacketPath", "synthesis_packet_path"]) ??
-      (preferScopedDefaults ? defaultPaths.synthesisPacketPath : current.synthesisPacketPath) ??
-      defaultPaths.synthesisPacketPath,
-    reflection_chain_path:
-      pickString(patch, ["reflectionChainPath", "reflection_chain_path"]) ??
-      (preferScopedDefaults ? defaultPaths.reflectionChainPath : current.reflectionChainPath) ??
-      defaultPaths.reflectionChainPath,
-    theory_brief_path:
-      pickString(patch, ["theoryBriefPath", "theory_brief_path"]) ??
-      (preferScopedDefaults ? defaultPaths.theoryBriefPath : current.theoryBriefPath) ??
-      defaultPaths.theoryBriefPath,
-    storyline_brief_path:
-      pickString(patch, ["storylineBriefPath", "storyline_brief_path"]) ??
-      (preferScopedDefaults ? defaultPaths.storylineBriefPath : current.storylineBriefPath) ??
-      defaultPaths.storylineBriefPath,
-  });
-  manifest.brainstorm_cycle = serializeBrainstormCycleState(next);
-  await saveManifest(params.projectRoot, manifest);
-  const summary = await getBrainstormCycleStateSummary({
-    projectRoot: params.projectRoot,
-  });
-  return {
-    state: next,
-    validationErrors: summary.validationErrors,
-    chainBundleReady: summary.chainBundleReady,
-  };
+  return await setBrainstormCycleStateFromModule(params);
 }
 
 export async function runBrainstormCycle(params: {
@@ -9728,44 +7464,7 @@ export async function setResearchProgramState(params: {
   onboardingStatus: string;
   onboardingGaps: string[];
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeResearchProgramState(manifest.research_program);
-  const patch = asRecord(params.researchProgram) ?? {};
-  const patchedTaskGraph = Array.isArray(patch.taskGraph ?? patch.task_graph)
-    ? ((patch.taskGraph ?? patch.task_graph) as unknown[])
-    : [];
-  const merged = normalizeResearchProgramState({
-    ...serializeResearchProgramState(current),
-    ...patch,
-    tracks:
-      Array.isArray(patch.tracks) && patch.tracks.length > 0
-        ? patch.tracks
-        : current.tracks.map((track) => serializeResearchProgramTrack(track)),
-    task_graph:
-      patchedTaskGraph.length > 0
-        ? patchedTaskGraph
-        : current.taskGraph.map((task) => serializeResearchProgramTask(task)),
-    global_constraints:
-      asRecord(patch.globalConstraints ?? patch.global_constraints) ?? current.globalConstraints,
-    last_updated_at:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  });
-  manifest.research_program = serializeResearchProgramState(merged);
-  await saveManifest(params.projectRoot, manifest);
-  const projectId = pickString(manifest, ["project_id", "projectId"]);
-  return {
-    state: merged,
-    validationErrors: getResearchProgramValidationErrors(merged),
-    onboardingStatus: getResearchProgramOnboardingStatus({
-      state: merged,
-      projectId,
-    }),
-    onboardingGaps: getResearchProgramOnboardingGaps({
-      state: merged,
-      projectId,
-    }),
-  };
+  return await setResearchProgramStateFromModule(params);
 }
 
 function normalizeMarkdownSignalLine(rawLine: string): string | null {
@@ -9927,35 +7626,7 @@ export async function setIdeationContractState(params: {
   researchProposalResolvedPath: string | null;
   researchProposalExists: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeIdeationContractState(manifest.ideation_contract);
-  const patch = asRecord(params.ideationContract) ?? {};
-  const next = normalizeIdeationContractState({
-    ...serializeIdeationContractState(current),
-    ...patch,
-    graph_basis_paths:
-      asRecord(patch.graphBasisPaths ?? patch.graph_basis_paths) ??
-      serializeIdeationGraphBasisPaths(current.graphBasisPaths),
-    graph_ideation_indices:
-      asRecord(patch.graphIdeationIndices ?? patch.graph_ideation_indices) ??
-      serializeIdeationGraphIndicesState(current.graphIdeationIndices),
-    last_updated_at:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  });
-  manifest.ideation_contract = serializeIdeationContractState(next);
-  await saveManifest(params.projectRoot, manifest);
-  const summary = await getIdeationContractStateSummary({
-    projectRoot: params.projectRoot,
-  });
-  return {
-    state: next,
-    validationErrors: summary.validationErrors,
-    graphIdeationPacketResolvedPath: summary.graphIdeationPacketResolvedPath,
-    graphIdeationPacketExists: summary.graphIdeationPacketExists,
-    researchProposalResolvedPath: summary.researchProposalResolvedPath,
-    researchProposalExists: summary.researchProposalExists,
-  };
+  return await setIdeationContractStateFromModule(params);
 }
 
 export async function materializePaperStoryState(params: {
@@ -10044,30 +7715,7 @@ export async function setPaperStoryState(params: {
   claimToExperimentMapResolvedPath: string | null;
   claimToExperimentMapExists: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizePaperStoryState(manifest.paper_story_state);
-  const patch = asRecord(params.paperStoryState) ?? {};
-  const next = normalizePaperStoryState({
-    ...serializePaperStoryState(current),
-    ...patch,
-    last_updated_at:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  });
-  manifest.paper_story_state = serializePaperStoryState(next);
-  await saveManifest(params.projectRoot, manifest);
-  const summary = await getPaperStoryStateSummary({
-    projectRoot: params.projectRoot,
-  });
-  return {
-    state: next,
-    validationErrors: summary.validationErrors,
-    storySpineResolvedPath: summary.storySpineResolvedPath,
-    storySpineExists: summary.storySpineExists,
-    claimToExperimentMapResolvedPath:
-      summary.claimToExperimentMapResolvedPath,
-    claimToExperimentMapExists: summary.claimToExperimentMapExists,
-  };
+  return await setPaperStoryStateFromModule(params);
 }
 
 export async function setReviewPressurePacketState(params: {
@@ -10081,32 +7729,7 @@ export async function setReviewPressurePacketState(params: {
   unsupportedClaimAuditResolvedPath: string | null;
   unsupportedClaimAuditExists: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeReviewPressurePacketState(
-    manifest.review_pressure_packet
-  );
-  const patch = asRecord(params.reviewPressurePacket) ?? {};
-  const next = normalizeReviewPressurePacketState({
-    ...serializeReviewPressurePacketState(current),
-    ...patch,
-    last_updated_at:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  });
-  manifest.review_pressure_packet = serializeReviewPressurePacketState(next);
-  await saveManifest(params.projectRoot, manifest);
-  const summary = await getReviewPressurePacketStateSummary({
-    projectRoot: params.projectRoot,
-  });
-  return {
-    state: next,
-    validationErrors: summary.validationErrors,
-    rejectFirstReviewResolvedPath: summary.rejectFirstReviewResolvedPath,
-    rejectFirstReviewExists: summary.rejectFirstReviewExists,
-    unsupportedClaimAuditResolvedPath:
-      summary.unsupportedClaimAuditResolvedPath,
-    unsupportedClaimAuditExists: summary.unsupportedClaimAuditExists,
-  };
+  return await setReviewPressurePacketStateFromModule(params);
 }
 
 export async function setOrchestrationState(params: {
@@ -10116,61 +7739,7 @@ export async function setOrchestrationState(params: {
   state: OrchestrationState;
   validationErrors: string[];
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeOrchestrationState(manifest.orchestration_state);
-  const patch = asRecord(params.orchestrationState) ?? {};
-  const next: OrchestrationState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    activeTicketId:
-      pickString(patch, ["activeTicketId", "active_ticket_id"]) ??
-      current.activeTicketId,
-    stageRunId:
-      pickString(patch, ["stageRunId", "stage_run_id"]) ?? current.stageRunId,
-    currentOwner:
-      pickString(patch, ["currentOwner", "current_owner"]) ?? current.currentOwner,
-    nextOwner:
-      pickString(patch, ["nextOwner", "next_owner"]) ?? current.nextOwner,
-    nextTransitionCandidate:
-      pickString(patch, [
-        "nextTransitionCandidate",
-        "next_transition_candidate",
-      ]) ?? current.nextTransitionCandidate,
-    blockingCategory:
-      pickString(patch, ["blockingCategory", "blocking_category"]) ??
-      current.blockingCategory,
-    blockingReason:
-      pickString(patch, ["blockingReason", "blocking_reason"]) ??
-      current.blockingReason,
-    retryBudgetRemaining:
-      pickNumber(patch, ["retryBudgetRemaining", "retry_budget_remaining"]) ??
-      current.retryBudgetRemaining,
-    lastContractEvalAt:
-      pickString(patch, ["lastContractEvalAt", "last_contract_eval_at"]) ??
-      current.lastContractEvalAt,
-    lastContractEvalResult:
-      pickString(patch, [
-        "lastContractEvalResult",
-        "last_contract_eval_result",
-      ]) ?? current.lastContractEvalResult,
-    rollbackTargetStage:
-      pickString(patch, ["rollbackTargetStage", "rollback_target_stage"]) ??
-      current.rollbackTargetStage,
-    resumeCursor:
-      pickString(patch, ["resumeCursor", "resume_cursor"]) ?? current.resumeCursor,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-  manifest.orchestration_state = serializeOrchestrationState(next);
-  await saveManifest(params.projectRoot, manifest);
-  return {
-    state: next,
-    validationErrors: getOrchestrationStateValidationErrors(
-      next,
-      normalizeStage(manifest.current_stage)
-    ),
-  };
+  return await setOrchestrationStateFromModule(params);
 }
 
 export async function setWritePackageState(params: {
@@ -10180,101 +7749,7 @@ export async function setWritePackageState(params: {
   state: WritePackageState;
   validationErrors: string[];
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeWritePackageState(manifest.write_package);
-  const patch = asRecord(params.writePackage) ?? {};
-  const next: WritePackageState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    assemblyStatus:
-      normalizeStage(patch.assemblyStatus ?? patch.assembly_status) ??
-      current.assemblyStatus,
-    assemblyMode:
-      pickString(patch, ["assemblyMode", "assembly_mode"]) ??
-      current.assemblyMode,
-    winningTrackIds:
-      patch.winningTrackIds || patch.winning_track_ids
-        ? asStringArray(patch.winningTrackIds ?? patch.winning_track_ids)
-        : current.winningTrackIds,
-    claimEvidenceMatrixPath:
-      pickString(patch, [
-        "claimEvidenceMatrixPath",
-        "claim_evidence_matrix_path",
-      ]) ?? current.claimEvidenceMatrixPath,
-    narrativeReportPath:
-      pickString(patch, ["narrativeReportPath", "narrative_report_path"]) ??
-      current.narrativeReportPath,
-    trackVerdictsPath:
-      pickString(patch, ["trackVerdictsPath", "track_verdicts_path"]) ??
-      current.trackVerdictsPath,
-    unsupportedClaimsPath:
-      pickString(patch, ["unsupportedClaimsPath", "unsupported_claims_path"]) ??
-      current.unsupportedClaimsPath,
-    baselineSummaryPath:
-      pickString(patch, ["baselineSummaryPath", "baseline_summary_path"]) ??
-      current.baselineSummaryPath,
-    researchSummaryPath:
-      pickString(patch, ["researchSummaryPath", "research_summary_path"]) ??
-      current.researchSummaryPath,
-    ablationSummaryPath:
-      pickString(patch, ["ablationSummaryPath", "ablation_summary_path"]) ??
-      current.ablationSummaryPath,
-    evaluationSummaryPath:
-      pickString(patch, ["evaluationSummaryPath", "evaluation_summary_path"]) ??
-      current.evaluationSummaryPath,
-    figurePackPath:
-      pickString(patch, ["figurePackPath", "figure_pack_path"]) ??
-      current.figurePackPath,
-    tablePackPath:
-      pickString(patch, ["tablePackPath", "table_pack_path"]) ??
-      current.tablePackPath,
-    proofPacketDir:
-      pickString(patch, ["proofPacketDir", "proof_packet_dir"]) ??
-      current.proofPacketDir,
-    citationCandidatesPath:
-      pickString(patch, [
-        "citationCandidatesPath",
-        "citation_candidates_path",
-      ]) ?? current.citationCandidatesPath,
-    packageManifestPath:
-      pickString(patch, ["packageManifestPath", "package_manifest_path"]) ??
-      current.packageManifestPath,
-    assemblyReportPath:
-      pickString(patch, ["assemblyReportPath", "assembly_report_path"]) ??
-      current.assemblyReportPath,
-    sectionAssemblyQueuePath:
-      pickString(patch, [
-        "sectionAssemblyQueuePath",
-        "section_assembly_queue_path",
-      ]) ?? current.sectionAssemblyQueuePath,
-    sourceArtifactCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["sourceArtifactCount", "source_artifact_count"]) ??
-          current.sourceArtifactCount
-      )
-    ),
-    derivedArtifactCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["derivedArtifactCount", "derived_artifact_count"]) ??
-          current.derivedArtifactCount
-      )
-    ),
-    assembledAt:
-      pickString(patch, ["assembledAt", "assembled_at"]) ?? current.assembledAt,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-  manifest.write_package = serializeWritePackageState(next);
-  await saveManifest(params.projectRoot, manifest);
-  return {
-    state: next,
-    validationErrors: getWritePackageValidationErrors(next),
-  };
+  return await setWritePackageStateFromModule(params);
 }
 
 export async function setExperimentSearchState(params: {
@@ -10286,81 +7761,7 @@ export async function setExperimentSearchState(params: {
   stateFileExists: boolean;
   readyForAnalysis: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = await loadExperimentSearchState({
-    projectRoot: params.projectRoot,
-    manifest,
-  });
-  const patch = asRecord(params.experimentSearch) ?? {};
-  const next: ExperimentSearchState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    currentMainStage:
-      normalizeStage(patch.currentMainStage ?? patch.current_main_stage) ??
-      current.currentMainStage,
-    currentSubstage:
-      normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
-      current.currentSubstage,
-    frontierNodeIds:
-      patch.frontierNodeIds || patch.frontier_node_ids
-        ? asStringArray(patch.frontierNodeIds ?? patch.frontier_node_ids)
-        : current.frontierNodeIds,
-    bestNodeId:
-      pickString(patch, ["bestNodeId", "best_node_id"]) ?? current.bestNodeId,
-    completedNodeIds:
-      patch.completedNodeIds || patch.completed_node_ids
-        ? asStringArray(patch.completedNodeIds ?? patch.completed_node_ids)
-        : current.completedNodeIds,
-    failedNodeIds:
-      patch.failedNodeIds || patch.failed_node_ids
-        ? asStringArray(patch.failedNodeIds ?? patch.failed_node_ids)
-        : current.failedNodeIds,
-    triedHyperparams:
-      patch.triedHyperparams || patch.tried_hyperparams
-        ? asStringArray(patch.triedHyperparams ?? patch.tried_hyperparams)
-        : current.triedHyperparams,
-    completedAblations:
-      patch.completedAblations || patch.completed_ablations
-        ? asStringArray(patch.completedAblations ?? patch.completed_ablations)
-        : current.completedAblations,
-    multiSeedStatus:
-      normalizeStage(patch.multiSeedStatus ?? patch.multi_seed_status) ??
-      current.multiSeedStatus,
-    evaluationSummaryPath:
-      pickString(patch, [
-        "evaluationSummaryPath",
-        "evaluation_summary_path",
-      ]) ?? current.evaluationSummaryPath,
-    plotPackStatus:
-      normalizeStage(patch.plotPackStatus ?? patch.plot_pack_status) ??
-      current.plotPackStatus,
-    plotPackPath:
-      pickString(patch, ["plotPackPath", "plot_pack_path"]) ??
-      current.plotPackPath,
-    stageProgressPath:
-      pickString(patch, ["stageProgressPath", "stage_progress_path"]) ??
-      current.stageProgressPath,
-    checkpointPath:
-      pickString(patch, ["checkpointPath", "checkpoint_path"]) ??
-      current.checkpointPath,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-
-  manifest.experiment_search = serializeExperimentSearchState(next);
-  await saveExperimentSearchStateFile(params.projectRoot, next);
-  await saveManifest(params.projectRoot, manifest);
-
-  const stateFilePath = getExperimentSearchPath(params.projectRoot);
-  return {
-    state: next,
-    stateFilePath,
-    stateFileExists: await pathExists(stateFilePath),
-    readyForAnalysis: isExperimentSearchReadyForAnalysis(next),
-  };
+  return await setExperimentSearchStateFromModule(params);
 }
 
 export async function setPaperQcState(params: {
@@ -10371,71 +7772,7 @@ export async function setPaperQcState(params: {
   latestReportResolvedPath: string | null;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizePaperQcState(manifest.paper_qc);
-  const patch = asRecord(params.paperQc) ?? {};
-  const next: PaperQcState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    compileStatus:
-      normalizeStage(patch.compileStatus ?? patch.compile_status) ??
-      current.compileStatus,
-    compileRoundCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["compileRoundCount", "compile_round_count"]) ??
-          current.compileRoundCount
-      )
-    ),
-    chktexStatus:
-      normalizeStage(patch.chktexStatus ?? patch.chktex_status) ??
-      current.chktexStatus,
-    pageBudgetStatus:
-      normalizeStage(patch.pageBudgetStatus ?? patch.page_budget_status) ??
-      current.pageBudgetStatus,
-    referenceStartPage:
-      pickNumber(patch, ["referenceStartPage", "reference_start_page"]) ??
-      current.referenceStartPage,
-    bodyPageCount:
-      pickNumber(patch, ["bodyPageCount", "body_page_count"]) ??
-      current.bodyPageCount,
-    unusedFigureStatus:
-      normalizeStage(patch.unusedFigureStatus ?? patch.unused_figure_status) ??
-      current.unusedFigureStatus,
-    invalidFigureRefStatus:
-      normalizeStage(
-        patch.invalidFigureRefStatus ?? patch.invalid_figure_ref_status
-      ) ?? current.invalidFigureRefStatus,
-    reflectionRoundCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, [
-          "reflectionRoundCount",
-          "reflection_round_count",
-        ]) ?? current.reflectionRoundCount
-      )
-    ),
-    latestReportPath:
-      pickString(patch, ["latestReportPath", "latest_report_path"]) ??
-      current.latestReportPath,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-
-  manifest.paper_qc = serializePaperQcState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    latestReportResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.latestReportPath
-    ),
-    hardFailure: isPaperQcHardFailure(next),
-  };
+  return await setPaperQcStateFromModule(params);
 }
 
 export async function setPaperIngestionState(params: {
@@ -10447,110 +7784,7 @@ export async function setPaperIngestionState(params: {
   newlyTerminalPaperOperations: PaperIngestionPaperOperation[];
   newlyTerminalBatches: PaperIngestionBatchRun[];
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizePaperIngestionState(manifest.paper_ingestion);
-  const patch = asRecord(params.paperIngestion) ?? {};
-  const importTaskIdsRaw = patch.import_task_ids ?? patch.importTaskIds;
-  const completedPapersRaw = patch.completed_papers ?? patch.completedPapers;
-  const paperOperationsRaw = patch.paper_operations ?? patch.paperOperations;
-  const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
-  const batchItemsRaw = patch.batch_items ?? patch.batchItems;
-  const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
-  const completedPaperUpdate = mergeCompletedPaperEntries({
-    current: current.completedPapers,
-    patch: completedPapersRaw,
-  });
-  const paperOperationUpdate = mergePaperIngestionOperations({
-    current: current.paperOperations,
-    patch: paperOperationsRaw,
-  });
-  const batchRunUpdate = mergePaperIngestionBatchRuns({
-    current: current.activeBatches,
-    patch: activeBatchesRaw,
-  });
-  const batchItemUpdate = mergePaperIngestionBatchItems({
-    current: current.batchItems,
-    patch: batchItemsRaw,
-  });
-  const queuedRequestUpdate = mergePaperIngestionQueuedRequests({
-    current: current.queuedRequests,
-    patch: queuedRequestsRaw,
-  });
-  const next: PaperIngestionState = {
-    ...current,
-    runtimeStatus: normalizePaperIngestionRuntimeStatus(
-      patch.runtimeStatus ?? patch.runtime_status ?? current.runtimeStatus
-    ),
-    waitingReason:
-      pickString(patch, ["waitingReason", "waiting_reason"]) ?? current.waitingReason,
-    importTaskIds: Array.isArray(importTaskIdsRaw)
-      ? importTaskIdsRaw
-          .map((entry: unknown) => asString(entry))
-          .filter((entry): entry is string => Boolean(entry))
-      : current.importTaskIds,
-    lastImportTaskId:
-      pickString(patch, ["lastImportTaskId", "last_import_task_id"]) ??
-      current.lastImportTaskId,
-    lastImportStatus:
-      normalizeStage(patch.lastImportStatus ?? patch.last_import_status) ??
-      current.lastImportStatus,
-    completedPapers: completedPaperUpdate.completedPapers,
-    paperOperations: paperOperationUpdate.paperOperations,
-    activeBatches: batchRunUpdate.activeBatches,
-    batchItems: batchItemUpdate.batchItems,
-    queuedRequests: queuedRequestUpdate.queuedRequests,
-    lastBatchManifestPath:
-      pickString(patch, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
-      batchRunUpdate.activeBatches[batchRunUpdate.activeBatches.length - 1]?.manifestPath ??
-      batchItemUpdate.batchItems[batchItemUpdate.batchItems.length - 1]?.manifestPath ??
-      current.lastBatchManifestPath,
-    graphVersionSeen:
-      pickString(patch, ["graphVersionSeen", "graph_version_seen"]) ??
-      current.graphVersionSeen,
-    reconcileRequired:
-      patch.reconcileRequired === true ||
-      patch.reconcile_required === true ||
-      (patch.reconcileRequired === false || patch.reconcile_required === false
-        ? false
-        : current.reconcileRequired),
-    repairRequired:
-      patch.repairRequired === true ||
-      patch.repair_required === true ||
-      (patch.repairRequired === false || patch.repair_required === false
-        ? false
-        : current.repairRequired),
-    repairReason:
-      pickString(patch, ["repairReason", "repair_reason"]) ??
-      (patch.repairRequired === false || patch.repair_required === false
-        ? null
-        : current.repairReason),
-    repairTargetCorpus:
-      pickString(patch, ["repairTargetCorpus", "repair_target_corpus"]) ??
-      (patch.repairRequired === false || patch.repair_required === false
-        ? null
-        : current.repairTargetCorpus),
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-
-  manifest.paper_ingestion = {
-    ...(asRecord(manifest.paper_ingestion) ?? {}),
-    ...serializePaperIngestionState(next),
-  };
-  await saveManifest(params.projectRoot, manifest);
-  await writePapernexusProgressFromManifest({
-    projectRoot: params.projectRoot,
-    manifest,
-    updatedAt: next.lastUpdatedAt,
-  });
-
-  return {
-    state: next,
-    newlyCompletedPapers: completedPaperUpdate.newlyCompletedPapers,
-    newlyTerminalPaperOperations: paperOperationUpdate.newlyTerminalPaperOperations,
-    newlyTerminalBatches: batchRunUpdate.newlyTerminalBatches,
-  };
+  return await setPaperIngestionStateFromModule(params);
 }
 
 export async function setCitationCollectionState(params: {
@@ -10562,68 +7796,7 @@ export async function setCitationCollectionState(params: {
   cacheBibResolvedPath: string | null;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeCitationCollectionState(manifest.citation_collection);
-  const patch = asRecord(params.citationCollection) ?? {};
-  const next: CitationCollectionState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    progressPath:
-      pickString(patch, ["progressPath", "progress_path"]) ??
-      current.progressPath,
-    cacheBibPath:
-      pickString(patch, ["cacheBibPath", "cache_bib_path"]) ??
-      current.cacheBibPath,
-    candidateCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["candidateCount", "candidate_count"]) ??
-          current.candidateCount
-      )
-    ),
-    verifiedCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["verifiedCount", "verified_count"]) ??
-          current.verifiedCount
-      )
-    ),
-    suspiciousCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["suspiciousCount", "suspicious_count"]) ??
-          current.suspiciousCount
-      )
-    ),
-    hallucinatedCount: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["hallucinatedCount", "hallucinated_count"]) ??
-          current.hallucinatedCount
-      )
-    ),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-
-  manifest.citation_collection = serializeCitationCollectionState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    progressResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.progressPath
-    ),
-    cacheBibResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.cacheBibPath
-    ),
-    hardFailure: isCitationCollectionHardFailure(next),
-  };
+  return await setCitationCollectionStateFromModule(params);
 }
 
 export async function setFigureQcState(params: {
@@ -10635,74 +7808,7 @@ export async function setFigureQcState(params: {
   figureSelectionResolvedPath: string | null;
   hardFailure: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = normalizeFigureQcState(manifest.figure_qc);
-  const patch = asRecord(params.figureQc) ?? {};
-  const next: FigureQcState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    figureReviewPath:
-      pickString(patch, ["figureReviewPath", "figure_review_path"]) ??
-      current.figureReviewPath,
-    figureSelectionPath:
-      pickString(patch, ["figureSelectionPath", "figure_selection_path"]) ??
-      current.figureSelectionPath,
-    duplicateFigureStatus:
-      normalizeStage(
-        patch.duplicateFigureStatus ?? patch.duplicate_figure_status
-      ) ?? current.duplicateFigureStatus,
-    captionAlignmentStatus:
-      normalizeStage(
-        patch.captionAlignmentStatus ?? patch.caption_alignment_status
-      ) ?? current.captionAlignmentStatus,
-    textAlignmentStatus:
-      normalizeStage(
-        patch.textAlignmentStatus ?? patch.text_alignment_status
-      ) ?? current.textAlignmentStatus,
-    selectionStatus:
-      normalizeStage(patch.selectionStatus ?? patch.selection_status) ??
-      current.selectionStatus,
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-  };
-
-  manifest.figure_qc = serializeFigureQcState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  const figureReviewResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    next.figureReviewPath
-  );
-  const figureSelectionResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    next.figureSelectionPath
-  );
-  await upsertJsonArtifact(figureReviewResolvedPath, {
-    status: next.status,
-    duplicate_figure_status: next.duplicateFigureStatus,
-    caption_alignment_status: next.captionAlignmentStatus,
-    text_alignment_status: next.textAlignmentStatus,
-    selection_status: next.selectionStatus,
-    updated_at: next.lastUpdatedAt,
-    source: "research_workflow.set_figure_qc",
-  });
-  await upsertJsonArtifact(figureSelectionResolvedPath, {
-    status: next.status,
-    selection_status: next.selectionStatus,
-    duplicate_figure_status: next.duplicateFigureStatus,
-    updated_at: next.lastUpdatedAt,
-    source: "research_workflow.set_figure_qc",
-  });
-
-  return {
-    state: next,
-    figureReviewResolvedPath,
-    figureSelectionResolvedPath,
-    hardFailure: isFigureQcHardFailure(next),
-  };
+  return await setFigureQcStateFromModule(params);
 }
 
 export async function setReviewIssueTrackerState(params: {
@@ -10714,80 +7820,7 @@ export async function setReviewIssueTrackerState(params: {
   hardBlockersOpen: boolean;
   mediumOrHigherIssuesNeedDisposition: boolean;
 }> {
-  const manifest = await readManifestEnsured(params.projectRoot);
-  const current = await hydrateReviewIssueTrackerState({
-    projectRoot: params.projectRoot,
-    value: manifest.review_issue_tracker,
-  });
-  const patch = asRecord(params.reviewIssueTracker) ?? {};
-  const hasScoreRecordPatch =
-    Object.prototype.hasOwnProperty.call(patch, "scoreRecords") ||
-    Object.prototype.hasOwnProperty.call(patch, "score_records");
-  let next: ReviewIssueTrackerState = {
-    ...current,
-    status: normalizeStage(patch.status) ?? current.status,
-    issues: Array.isArray(patch.issues)
-      ? patch.issues.map((issue) => normalizeReviewIssueState(issue))
-      : current.issues,
-    scoreRecords: hasScoreRecordPatch
-      ? normalizeReviewScoreRecords(patch.scoreRecords ?? patch.score_records)
-      : current.scoreRecords,
-    openCounts:
-      patch.openCounts || patch.open_counts
-        ? normalizeReviewIssueCounts(patch.openCounts ?? patch.open_counts)
-        : current.openCounts,
-    issueManifestPath:
-      pickString(patch, ["issueManifestPath", "issue_manifest_path"]) ??
-      current.issueManifestPath,
-    lastReviewRound: Math.max(
-      0,
-      Math.floor(
-        pickNumber(patch, ["lastReviewRound", "last_review_round"]) ??
-          current.lastReviewRound
-      )
-    ),
-    lastUpdatedAt:
-      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
-      new Date().toISOString(),
-    pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
-  };
-
-  if (Array.isArray(patch.issues) && !(patch.openCounts || patch.open_counts)) {
-    next.openCounts = summarizeReviewIssuesFromManifest(next.issues).counts;
-  }
-
-  const issueManifestResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    next.issueManifestPath
-  );
-  if (issueManifestResolvedPath) {
-    await upsertJsonArtifact(issueManifestResolvedPath, {
-      status: next.status,
-      last_review_round: next.lastReviewRound,
-      updated_at: next.lastUpdatedAt,
-      pending_reason: next.pendingReason,
-      open_counts: serializeReviewIssueCounts(next.openCounts),
-      score_records: next.scoreRecords,
-      issues: next.issues.map((issue) => serializeReviewIssueState(issue)),
-    });
-  }
-
-  next = await hydrateReviewIssueTrackerState({
-    projectRoot: params.projectRoot,
-    value: serializeReviewIssueTrackerState(next),
-  });
-
-  manifest.review_issue_tracker = serializeReviewIssueTrackerState(next);
-  await saveManifest(params.projectRoot, manifest);
-
-  return {
-    state: next,
-    issueManifestResolvedPath,
-    hardBlockersOpen: hasBlockingReviewIssues(next),
-    mediumOrHigherIssuesNeedDisposition:
-      hasUnwaivedMediumOrHigherReviewIssues(next),
-  };
+  return await setReviewIssueTrackerStateFromModule(params);
 }
 
 export async function recordCitationVerification(params: {

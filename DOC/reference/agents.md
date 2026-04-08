@@ -218,6 +218,14 @@
   `/workflow-status` 等摘要逻辑。
 - [workflow-guard-guidance/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-guidance/)
   dynamic task 与 concern-specific guidance。
+- [workflow-guard-project/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-project/)
+  project root 解析、gate/projects state、workflow snapshot 装配。
+- [workflow-guard-policies/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-policies/)
+  role policy、tool guard、handoff mention 规则。
+- [workflow-guard-writing/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-writing/)
+  writing/review/theory/citation 的 readiness 和 quality evaluation。
+- [workflow-guard-setters/](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-setters/)
+  `set*State(...)` 的分组实现，统一负责 manifest/runtime mutation。
 
 命令侧也有对应的正式子模块：
 

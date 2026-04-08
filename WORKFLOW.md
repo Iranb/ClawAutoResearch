@@ -153,6 +153,14 @@ The workflow runtime is implemented as a facade plus focused submodules, rather 
   Durable workflow contracts such as `research_program`, `paper_ingestion`, `ideation_contract`, `paper_story_state`, `review_pressure_packet`, and `writing_contract`.
 - `tools/workflow-guard-stages/`
   Stage-specific missing-signal gates for `setup`, `graph_build`, `frontier_mapping`, `idea`, `plan`, `code`, `experiment`, `analyze`, `review`, `write`, and `submit`.
+- `tools/workflow-guard-project/`
+  Project-root resolution, `PROJECTS_STATE`/gate helpers, and workflow snapshot assembly.
+- `tools/workflow-guard-policies/`
+  Role policy tables, tool guards, and channel handoff sanitization.
+- `tools/workflow-guard-writing/`
+  Writing/review/theory/citation readiness and quality evaluation helpers.
+- `tools/workflow-guard-setters/`
+  `set*State(...)` families for research, writing, review, and ingestion/runtime state mutation.
 - `tools/workflow-guard-materializers/`
   Workflow-owned contract generation for ideation, paper story, and review pressure packets.
 - `tools/workflow-guard-summaries/`
