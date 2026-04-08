@@ -14,8 +14,9 @@ For workflow-owned work, the live graph control plane is remote PaperNexus HTTP 
 Prefer these paths, in order:
 
 1. `research_workflow.queue_paper_ingestion`
-2. the remote HTTP MCP tool families: `research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`
-3. the local Python wrappers in `scripts/` as thin adapters over that MCP surface
+2. `research_workflow.get_papernexus_progress`
+3. the remote HTTP MCP tool families: `research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`
+4. the local Python wrappers in `scripts/` as thin adapters over that MCP surface
 
 Use local repo CLI stages only for isolated repository development or fixture debugging, not for a live shared graph.
 
@@ -24,8 +25,10 @@ Use local repo CLI stages only for isolated repository development or fixture de
 When you are inside the OpenClaw research workflow:
 
 - queue uploads with `research_workflow.queue_paper_ingestion`
+- read phase/progress/next-action through `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json`
 - let `/graph-build` or `/resume-pipeline` trigger upload work
 - use the remote HTTP MCP control plane for live graph reads, reasoning, and bounded queue inspection
+- when progress and session inventory disagree, trust `queued_requests` plus `PAPERNEXUS_PROGRESS.json` first and the background-session registry last
 
 The wrappers are MCP-backed adapters:
 

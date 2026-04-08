@@ -53,12 +53,13 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - `write` → `academic_writer/PAPER_PLAN.md`, `paper/sections/`
 4. Reconcile literature source state:
    - read `paper_source_dir`, `graph_last_built_at`, and `paper_ingestion.*` from `PROJECT_MANIFEST.json`
+   - read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` before interpreting wrapper/session state; use that phase/summary as the first PaperNexus resume signal
    - inspect `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` if present
    - count canonical papers added or changed since `paper_ingestion.last_graph_sync_at` or `graph_last_built_at`
    - inspect `paper_ingestion.runtime_status`, `paper_ingestion.import_task_ids`, `paper_ingestion.completed_papers`, `paper_ingestion.paper_operations`, `paper_ingestion.active_batches`, and `paper_ingestion.batch_items` before trusting one stale graph-presence verdict
    - if the project uses frequent paper ingestion, verify whether the remote import queue is moving and whether the latest per-paper wrapper tasks or batch manifest tasks (`pn_import_queue.py status/log/wait` or `pn_batch_import.py status/wait`) completed; if not, rebuild or relaunch the durable upload request through `research_workflow.queue_paper_ingestion` and let this `/resume-pipeline` pass trigger it instead of waiting on stale agent-owned upload work
   - for workflow-owned live graph reads or reasoning checks during resume, use the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) or the thin wrappers backed by it instead of local live-graph CLI commands
-   - if `paper_ingestion.runtime_status` is `waiting_import`, `waiting_graph`, or `reconciling`, treat stale `PAPERNEXUS_STATUS.json` or graph-presence snapshots as possibly in-flight; prefer the wrapper task state and then rerun `/graph-build`
+   - if the PaperNexus progress phase is `submitting`, `uploading`, `waiting_import`, or `verifying_graph`, treat stale `PAPERNEXUS_STATUS.json` or graph-presence snapshots as possibly in-flight; prefer the durable progress snapshot first, then wrapper task state, and then rerun `/graph-build`
    - if `paper_ingestion.refresh_required = true`, schedule `/graph-build` before the next ideation / novelty / revision decision
    - do not add `--force`; if graph build keeps failing, surface the exact cache-first command for the user to run manually
 5. Reconcile idle-research state:

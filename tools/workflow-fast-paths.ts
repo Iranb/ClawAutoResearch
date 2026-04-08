@@ -45,6 +45,8 @@ import {
   resumeWorkflowTransition,
 } from "./workflow-session-orchestrator.js";
 import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
+import { writePapernexusProgressFromManifest } from "./papernexus-progress";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
@@ -2479,6 +2481,21 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
         },
       ],
     },
+  });
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.projectRoot,
+    manifest,
+    ownerRun: {
+      run_id: result.runId,
+      session_key: result.sessionKey,
+      queue_key: result.queueKey,
+      wrapper: queuedCandidate.wrapper,
+    },
+    updatedAt: new Date().toISOString(),
   });
 
   return result;

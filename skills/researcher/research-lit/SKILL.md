@@ -56,6 +56,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 13:** When a workflow-owned PaperNexus import task truly reaches `completed`, the dedicated workflow session must call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
    - **Step 14:** For batch imports, the workflow-owned upload session must also write `active_batches`, `batch_items`, `queued_requests`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
    - **Step 15:** Do not rely on a free-form chat reply as the upload progress signal. `research_workflow.queue_paper_ingestion` plus the later `research_workflow.set_paper_ingestion` updates are the required feedback path for per-paper or per-batch progress
+   - **Step 15a:** Read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` when you need one authoritative status line. Prefer that snapshot before improvising from `paper_ingestion`, wrapper logs, or the background-session registry
    - **Step 16:** If local Zotero MCP is available, sync verified paper identities into `bot/<project-id>/selected` and put baseline-defining papers into `bot/<project-id>/baselines`; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
@@ -263,7 +264,7 @@ Notes:
 - if required papers are missing from the shared graph, record the gap and request or queue automatic graph catch-up rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone
 - if a PaperNexus queued import or remote status / brainstorm refresh pass has not finished within 60 seconds, record a `paper_operations` timeout entry and continue the batch instead of waiting forever
-- if `PAPERNEXUS_STATUS.json` still looks stale but `paper_ingestion.runtime_status` says `waiting_import`, `waiting_graph`, or `reconciling`, treat automatic graph catch-up as in-flight rather than silently claiming the corpus is permanently missing
+- if `PAPERNEXUS_STATUS.json` still looks stale, read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` first; if the phase is `submitting`, `uploading`, `waiting_import`, or `verifying_graph`, treat catch-up as in-flight rather than silently claiming the corpus is permanently missing
 - when checking presence or frontier structure, prefer the MCP-first graph control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) or the thin wrappers backed by it over hand-written REST calls
 - once the required papers are present, refresh `ideas`, `brainstorm`, and `brainstorm-brief` outputs so the literature stage ends with a current graph-grounded brainstorm packet
 

@@ -146,4 +146,9 @@ test("workflow background pool reconciles stale active PaperNexus import session
   });
   assert.equal(listed.entries.length, 1);
   assert.equal(listed.entries[0].status, "idle");
+
+  const progress = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"), "utf8")
+  );
+  assert.equal(progress.phase, "verifying_graph");
 });

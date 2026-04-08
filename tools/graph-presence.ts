@@ -6,6 +6,7 @@ import {
   inspectPapernexusRemoteAccess,
   type PapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
+import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 
 export type GraphPresenceStatus =
   | "ready"
@@ -1826,6 +1827,16 @@ export async function checkGraphPresenceForWorkflow(params: {
   const projectId = inferProjectId(projectRoot, manifest);
   const checkedAt = new Date().toISOString();
   const reportPath = getGraphPresenceReportPath(projectRoot);
+  if (params.updateManifest !== false) {
+    await writePapernexusProgressFromManifest({
+      projectRoot,
+      manifest,
+      phaseOverride: "verifying_graph",
+      nextActionOverride: "rerun graph check",
+      blockingReasonOverride: "Graph presence verification is running.",
+      updatedAt: checkedAt,
+    });
+  }
 
   const expected = await resolveExpectedPapers({
     projectRoot,
@@ -1862,6 +1873,11 @@ export async function checkGraphPresenceForWorkflow(params: {
         repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
       };
       await saveManifest(projectRoot, manifest);
+      await writePapernexusProgressFromManifest({
+        projectRoot,
+        manifest,
+        updatedAt: checkedAt,
+      });
       result.manifestUpdated = true;
     }
 
@@ -2043,6 +2059,11 @@ export async function checkGraphPresenceForWorkflow(params: {
       repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
     };
     await saveManifest(projectRoot, manifest);
+    await writePapernexusProgressFromManifest({
+      projectRoot,
+      manifest,
+      updatedAt: checkedAt,
+    });
     result.manifestUpdated = true;
   }
 

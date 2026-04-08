@@ -213,6 +213,9 @@ export function buildFocusedPromptAssemblyImpl(
       `paper_ingestion=${snapshot.paperIngestionRuntimeStatus ?? "unknown"} import_tasks=${snapshot.paperIngestionImportTaskCount ?? 0} batches=${snapshot.paperIngestionBatchCount ?? 0} active_batches=${snapshot.paperIngestionActiveBatchCount ?? 0} reconcile_required=${snapshot.paperIngestionReconcileRequired ? "true" : "false"}`
     );
   }
+  if (typeof snapshot.papernexusProgressSummary === "string") {
+    layer3Lines.push(`PaperNexus progress: ${snapshot.papernexusProgressSummary}`);
+  }
   if (snapshot.writingCurrentSectionReviewVerdict) {
     layer3Lines.push(`section_review=${snapshot.writingCurrentSectionReviewVerdict}`);
   }
@@ -424,6 +427,7 @@ export function formatWorkflowSnapshotForPromptImpl(
     snapshot.graphRefreshRequired ||
     snapshot.paperSourceDir ||
     snapshot.graphSourceDir ||
+    snapshot.papernexusProgressSummary ||
     snapshot.papernexusApiBaseUrl ||
     snapshot.papernexusMcpUrl ||
     snapshot.papernexusApiTokenEnv ||
@@ -435,6 +439,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     lines.push(
       `PaperNexus: paper_source=${snapshot.paperSourceDir ?? "unset"}, graph_source=${snapshot.graphSourceDir ?? "unset"}, refresh_required=${snapshot.graphRefreshRequired ? "true" : "false"}`
     );
+    if (snapshot.papernexusProgressSummary) {
+      lines.push(`PaperNexus progress: ${snapshot.papernexusProgressSummary}`);
+    }
     lines.push(
       `Graph presence: status=${snapshot.graphPresenceStatus ?? "unknown"}, checked_at=${snapshot.graphPresenceCheckedAt ?? "never"}, expected=${snapshot.graphPresenceExpectedPapers ?? "unknown"}, present=${snapshot.graphPresencePresentPapers ?? "unknown"}, missing=${snapshot.graphPresenceMissingPapers ?? "unknown"}`
     );
