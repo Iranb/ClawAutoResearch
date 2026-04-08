@@ -74,6 +74,45 @@ test("channel-project binding resolves workflow snapshot without OPENCLAW_PROJEC
   assert.equal(snapshot.channelProjectBindingKey, "discord:group:paper-lab");
 });
 
+test("non-workflow agents do not inherit project workflow bindings from the shared channel", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "isolated-track");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    agentId: "designer",
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:designer:discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+
+  assert.equal(snapshot.projectRoot, null);
+  assert.equal(snapshot.projectId, null);
+  assert.equal(snapshot.projectResolutionSource, "none");
+});
+
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");
@@ -537,6 +576,49 @@ test("workflow bindings persist runtime session lineage metadata without breakin
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
   assert.equal(lookup.binding?.workflowSessionKey, sessionKey);
+});
+
+test("non-workflow rebinding preserves the workflow-owned broadcast session", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "workflow-ownership");
+  const researcherSessionKey = "agent:researcher:discord:group:runtime-room";
+  const designerSessionKey = "agent:designer:discord:group:runtime-room";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const initial = await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: researcherSessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const rebound = await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: designerSessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "designer",
+  });
+
+  assert.equal(initial.binding.workflowSessionKey, researcherSessionKey);
+  assert.equal(rebound.binding.workflowSessionKey, researcherSessionKey);
+  assert.equal(rebound.binding.workflowRole, "researcher");
+  assert.equal(rebound.binding.workflowBroadcastSessionKey, researcherSessionKey);
+  assert.equal(rebound.binding.sessionKeySample, designerSessionKey);
 });
 
 test("nested workflow runtime bindings keep the immediate parent session while preserving the root thread binding", async () => {

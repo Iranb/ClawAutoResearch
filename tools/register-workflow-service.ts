@@ -81,6 +81,7 @@ import {
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -414,7 +415,7 @@ function resolveWorkflowRequesterBinding(params: {
         new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
     )[0];
   return {
-    sessionKey: binding?.sessionKeySample ?? null,
+    sessionKey: resolveWorkflowBroadcastSessionKey(binding) ?? null,
     messageChannel: binding?.messageChannel ?? null,
   };
 }

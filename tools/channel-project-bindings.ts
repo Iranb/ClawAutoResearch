@@ -7,6 +7,15 @@ import {
   type WorkflowRuntimeSessionBinding,
 } from "./workflow-subagent-sessions";
 import {
+  isProjectWorkflowAgentId,
+  isWorkflowBindingVisibleToAgent,
+  normalizeWorkflowAllowedAgentIds,
+  normalizeWorkflowAllowedRoles,
+  normalizeWorkflowIsolationMode,
+  resolveWorkflowBroadcastSessionKey,
+  type WorkflowIsolationMode,
+} from "./workflow-agent-isolation.js";
+import {
   assertProjectRootWithinProjectsRoot,
   isProjectRootWithinProjectsRoot,
 } from "./workflow-guard-project-state";
@@ -49,6 +58,10 @@ export interface ChannelProjectBindingRecord {
   depth: number | null;
   lineageKey: string | null;
   workflowBindingMode: "explicit_thread" | "derived_thread" | "channel_only";
+  workflowIsolationMode: WorkflowIsolationMode;
+  workflowAllowedRoles: string[];
+  workflowAllowedAgentIds: string[];
+  workflowBroadcastSessionKey: string | null;
 }
 
 type ChannelProjectBindingsStore = {
@@ -214,6 +227,15 @@ function normalizeRecord(record: Partial<ChannelProjectBindingRecord>): ChannelP
       record.workflowBindingMode === "derived_thread"
         ? record.workflowBindingMode
         : "channel_only",
+    workflowIsolationMode: normalizeWorkflowIsolationMode(record.workflowIsolationMode),
+    workflowAllowedRoles: normalizeWorkflowAllowedRoles(record.workflowAllowedRoles),
+    workflowAllowedAgentIds: normalizeWorkflowAllowedAgentIds(
+      record.workflowAllowedAgentIds
+    ),
+    workflowBroadcastSessionKey:
+      asString(record.workflowBroadcastSessionKey) ??
+      asString(record.workflowSessionKey) ??
+      null,
   };
 }
 
@@ -490,7 +512,13 @@ export function resolveProjectContext(params: {
       policy,
       context: params.context,
     });
-    if (bindingLookup.binding) {
+    if (
+      bindingLookup.binding &&
+      isWorkflowBindingVisibleToAgent({
+        binding: bindingLookup.binding,
+        agentId: asString(params.context?.role),
+      })
+    ) {
       return {
         enabled: true,
         channelKey: bindingLookup.channelKey,
@@ -580,6 +608,12 @@ export async function setChannelProjectBinding(params: {
   const store = readStore(storePath);
   const now = new Date().toISOString();
   const existing = store.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
+  const workflowIsolationMode =
+    existing?.workflowIsolationMode ?? normalizeWorkflowIsolationMode(null);
+  const workflowAllowedRoles =
+    existing?.workflowAllowedRoles ?? normalizeWorkflowAllowedRoles(null);
+  const workflowAllowedAgentIds =
+    existing?.workflowAllowedAgentIds ?? normalizeWorkflowAllowedAgentIds(null);
   const runtimeSession =
     params.runtimeSession ??
     buildWorkflowRuntimeSessionBinding({
@@ -592,6 +626,39 @@ export async function setChannelProjectBinding(params: {
       threadBindingKey: context.threadBindingKey,
       depth: context.depth,
     });
+  const workflowActorId =
+    asString(context.role) ?? asString(params.boundByAgent) ?? null;
+  const actorMayOwnWorkflowBinding =
+    workflowIsolationMode === "channel_shared" ||
+    isProjectWorkflowAgentId(
+      workflowActorId,
+      workflowAllowedRoles,
+      workflowAllowedAgentIds
+    );
+  const workflowSessionKey = actorMayOwnWorkflowBinding
+    ? runtimeSession.sessionKey
+    : existing?.workflowSessionKey ?? null;
+  const workflowSessionId = actorMayOwnWorkflowBinding
+    ? runtimeSession.sessionId
+    : existing?.workflowSessionId ?? null;
+  const workflowRole = actorMayOwnWorkflowBinding
+    ? runtimeSession.role
+    : existing?.workflowRole ?? null;
+  const parentWorkflowSessionKey = actorMayOwnWorkflowBinding
+    ? runtimeSession.parentSessionKey
+    : existing?.parentWorkflowSessionKey ?? null;
+  const threadBindingKey = actorMayOwnWorkflowBinding
+    ? runtimeSession.threadBindingKey
+    : existing?.threadBindingKey ?? null;
+  const depth = actorMayOwnWorkflowBinding
+    ? runtimeSession.depth
+    : existing?.depth ?? null;
+  const lineageKey = actorMayOwnWorkflowBinding
+    ? runtimeSession.lineageKey
+    : existing?.lineageKey ?? null;
+  const workflowBindingMode = actorMayOwnWorkflowBinding
+    ? runtimeSession.bindingMode
+    : existing?.workflowBindingMode ?? "channel_only";
   const binding: ChannelProjectBindingRecord = {
     channelKey,
     projectRoot,
@@ -608,14 +675,20 @@ export async function setChannelProjectBinding(params: {
       existing?.boundByAgent ??
       null,
     notes: asString(params.notes) ?? existing?.notes ?? null,
-    workflowRole: runtimeSession.role,
-    workflowSessionKey: runtimeSession.sessionKey,
-    workflowSessionId: runtimeSession.sessionId,
-    parentWorkflowSessionKey: runtimeSession.parentSessionKey,
-    threadBindingKey: runtimeSession.threadBindingKey,
-    depth: runtimeSession.depth,
-    lineageKey: runtimeSession.lineageKey,
-    workflowBindingMode: runtimeSession.bindingMode,
+    workflowRole,
+    workflowSessionKey,
+    workflowSessionId,
+    parentWorkflowSessionKey,
+    threadBindingKey,
+    depth,
+    lineageKey,
+    workflowBindingMode,
+    workflowIsolationMode,
+    workflowAllowedRoles,
+    workflowAllowedAgentIds,
+    workflowBroadcastSessionKey: actorMayOwnWorkflowBinding
+      ? runtimeSession.sessionKey
+      : resolveWorkflowBroadcastSessionKey(existing),
   };
   store.bindings = [
     ...store.bindings.filter((entry) => entry.channelKey !== channelKey),

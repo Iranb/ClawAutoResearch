@@ -2364,6 +2364,7 @@ function getProjectRoot(options?: {
   sessionId?: string;
   messageChannel?: string;
   channelKey?: string;
+  role?: string;
   policy?: WorkflowGuardPolicy;
 }): string | null {
   return resolveProjectContext({
@@ -4749,6 +4750,7 @@ async function loadProjectState(options?: {
   sessionId?: string;
   messageChannel?: string;
   channelKey?: string;
+  role?: string;
   policy?: WorkflowGuardPolicy;
 }): Promise<ProjectState> {
   const resolvedProject = resolveProjectContext({
@@ -5852,6 +5854,7 @@ export async function buildWorkflowSnapshot(params: {
     sessionId: params.sessionId,
     messageChannel: params.messageChannel,
     channelKey: params.channelKey,
+    role: params.agentId,
   });
   const role = normalizeRole(params.agentId);
   const currentStage = normalizeStage(projectState.manifest?.current_stage);
@@ -11165,6 +11168,7 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
       messageChannel: params.messageChannel,
       channelKey: params.channelKey,
       projectRoot: params.projectRoot ?? undefined,
+      role: params.boundByAgent ?? undefined,
     },
   });
   if (existing.binding) {
@@ -11204,6 +11208,7 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
       messageChannel: params.messageChannel,
       channelKey: params.channelKey,
       projectRoot,
+      role: params.boundByAgent ?? undefined,
     },
     projectRoot,
     projectId: params.projectId,

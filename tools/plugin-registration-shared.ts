@@ -2,6 +2,7 @@ import {
   ensureChannelProjectBindingForWorkflow,
   getWorkflowGuardPolicy,
 } from "./workflow-guard";
+import { isProjectWorkflowAgentId } from "./workflow-agent-isolation.js";
 import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginService,
@@ -175,6 +176,9 @@ export async function maybeAutoBindChannelProject(params: {
     return;
   }
   if (!params.snapshot.projectRoot) {
+    return;
+  }
+  if (!isProjectWorkflowAgentId(params.agentCtx.agentId)) {
     return;
   }
   if (params.snapshot.projectResolutionSource === "channel_binding") {
