@@ -1800,6 +1800,61 @@ test("graph presence check resolves the shared global corpus from registry when 
   assert.match(graphBuildReport, /Present Papers:\s+1/i);
 });
 
+test("graph presence check accepts corpus_root values that point directly at the .papernexus directory", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00005",
+      arxiv_id: "2501.00005",
+      title: "Epsilon Paper",
+      source_kind: "markdown",
+      source_provider: "hf",
+      retrieval_providers: ["papers-cool"],
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00005--epsilon-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00005--epsilon-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00005--epsilon-paper.md"),
+      kind: "markdown",
+      paperId: "paper:epsilon",
+      paperTitle: "Epsilon Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00005--epsilon-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00005--epsilon-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00005--epsilon-paper.md"),
+    },
+  ]);
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "shared-global-graph",
+    corpus_root: path.join(sourceRoot, ".papernexus"),
+  });
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.corpusRoot, sourceRoot);
+});
+
 test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps without treating metadata keys as papers", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;

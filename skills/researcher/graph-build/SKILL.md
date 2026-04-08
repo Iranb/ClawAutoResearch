@@ -168,8 +168,9 @@ Hard rule:
 - do **not** wait indefinitely for one remote paper import, one batch wait, or one status/brainstorm refresh attempt; cap each workflow wait pass at 60 seconds, record durable progress, and continue on the next pass
 - for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; the workflow needs manifest-level progress plus per-item visibility
 - Researcher should stage papers and queue the upload request; `/graph-build` or `/resume-pipeline` is the workflow-owned place that actually launches the queued request and preserves `queued_requests` state across restarts
-- when remote PaperNexus status looks stale, cross-check `PROJECT_MANIFEST.json.paper_ingestion` before declaring a hard missing-corpus failure; `waiting_import`, `waiting_graph`, or `reconciling` means the wrapper-driven catch-up is still in flight
+- when remote PaperNexus status looks stale, read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` before declaring a hard missing-corpus failure; phases `submitting`, `uploading`, `waiting_import`, or `verifying_graph` mean the wrapper-driven catch-up is still in flight
 - every per-paper terminal state, every batch summary/item refresh, and every brainstorm bundle refresh must be reflected through `research_workflow.set_paper_ingestion` or `research_workflow.run_brainstorm_cycle`, because that is what feeds `/workflow-status` and the Discord-visible completion/progress updates
+- stale active background sessions are bookkeeping, not proof of live work; trust `queued_requests` plus `PAPERNEXUS_PROGRESS.json` first, batch/item counters second, and the background-session registry last
 - if the local Zotero MCP server is unavailable, record that explicitly in `{PROJ}/researcher/ZOTERO_PACKET.md` instead of silently skipping bibliography sync
 
 Use these refresh triggers:

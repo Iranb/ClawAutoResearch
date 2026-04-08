@@ -11,6 +11,10 @@ import {
   serializePaperIngestionState,
 } from "./workflow-guard-state/paper-ingestion";
 import { normalizeGraphPresenceStatus } from "./workflow-guard-core/coercion";
+import {
+  readPapernexusProgress,
+  writePapernexusProgressFromManifest,
+} from "./papernexus-progress";
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -42,6 +46,7 @@ export type BackgroundRunDurableTerminalState = {
   error: string | null;
   source:
     | "runtime_queue"
+    | "papernexus_progress"
     | "paper_ingestion_request"
     | "paper_ingestion_idle_import_wrapper";
 };
@@ -310,6 +315,38 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
     };
   }
 
+  const papernexusProgress = await readPapernexusProgress(entry.projectRoot);
+  const ownerRunMatches =
+    (papernexusProgress?.owner_run?.run_id &&
+      papernexusProgress.owner_run.run_id === entry.runId) ||
+    (papernexusProgress?.owner_run?.session_key &&
+      papernexusProgress.owner_run.session_key === entry.backgroundSessionKey) ||
+    (papernexusProgress?.owner_run?.queue_key &&
+      papernexusProgress.owner_run.queue_key === entry.queueKey);
+  if (papernexusProgress && (ownerRunMatches || isImportWrapperQueueKey(entry.queueKey))) {
+    if (papernexusProgress.phase === "ready" || papernexusProgress.phase === "verifying_graph") {
+      return {
+        terminalStatus: "completed",
+        error: null,
+        source: "papernexus_progress",
+      };
+    }
+    if (papernexusProgress.phase === "needs_repair") {
+      return {
+        terminalStatus: "needs_repair",
+        error: papernexusProgress.blocking_reason,
+        source: "papernexus_progress",
+      };
+    }
+    if (papernexusProgress.phase === "failed") {
+      return {
+        terminalStatus: "failed",
+        error: papernexusProgress.blocking_reason,
+        source: "papernexus_progress",
+      };
+    }
+  }
+
   if (
     isImportWrapperQueueKey(entry.queueKey) &&
     !hasDurableInFlightPaperUpload(paperIngestion)
@@ -359,6 +396,7 @@ async function reconcilePaperIngestionTerminalState(params: {
   );
 
   let matched = false;
+  let matchedRequestWrapper: string | null = null;
   const queuedRequests = paperIngestion.queuedRequests.map((request) => {
     const matches =
       (request.lastRunId && request.lastRunId === params.entry.runId) ||
@@ -368,6 +406,7 @@ async function reconcilePaperIngestionTerminalState(params: {
       return request;
     }
     matched = true;
+    matchedRequestWrapper = request.wrapper;
     return {
       ...request,
       status: deriveQueuedRequestTerminalStatus(params.terminalStatus),
@@ -382,14 +421,22 @@ async function reconcilePaperIngestionTerminalState(params: {
     };
   });
 
-  if (!matched) {
+  if (
+    !matched &&
+    (!isImportWrapperQueueKey(params.entry.queueKey) ||
+      hasDurableInFlightPaperUpload(paperIngestion))
+  ) {
     return false;
   }
 
-  const nextState = {
-    ...paperIngestion,
-    queuedRequests,
-  };
+  const nextState = matched
+    ? {
+        ...paperIngestion,
+        queuedRequests,
+      }
+    : {
+        ...paperIngestion,
+      };
   nextState.runtimeStatus = derivePaperIngestionRuntimeStatus({
     paperIngestion: nextState,
     graphPresenceStatus,
@@ -411,6 +458,17 @@ async function reconcilePaperIngestionTerminalState(params: {
     },
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`, "utf8");
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.entry.projectRoot,
+    manifest: nextManifest,
+    ownerRun: {
+      run_id: params.entry.runId,
+      session_key: params.entry.backgroundSessionKey,
+      queue_key: params.entry.queueKey,
+      wrapper: matchedRequestWrapper,
+    },
+    updatedAt: params.finishedAt,
+  });
   return true;
 }
 

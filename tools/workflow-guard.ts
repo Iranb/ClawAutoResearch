@@ -48,6 +48,12 @@ import {
   summarizePapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
 import {
+  loadPapernexusProgress,
+  summarizePapernexusProgress,
+  type PapernexusProgressSnapshot,
+  writePapernexusProgressFromManifest,
+} from "./papernexus-progress";
+import {
   collectFrontierMappingStageMissingSignals,
   collectGraphBuildStageMissingSignals,
   collectSetupStageMissingSignals,
@@ -1234,6 +1240,8 @@ export type WorkflowSnapshot = {
   paperIngestionRepairRequired: boolean;
   paperIngestionRepairReason: string | null;
   paperIngestionRepairTargetCorpus: string | null;
+  papernexusProgress: PapernexusProgressSnapshot | null;
+  papernexusProgressSummary: string | null;
   paperSourceDir: string | null;
   graphSourceDir: string | null;
   defaultPapernexusSourceDir: string | null;
@@ -5693,6 +5701,14 @@ export async function buildWorkflowSnapshot(params: {
   });
   const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
   const paperIngestionState = normalizePaperIngestionState(paperIngestion);
+  const papernexusProgress = projectState.projectRoot
+    ? await loadPapernexusProgress({
+        projectRoot: projectState.projectRoot,
+        manifest: projectState.manifest,
+        writeIfMissing: false,
+      })
+    : null;
+  const papernexusProgressSummary = summarizePapernexusProgress(papernexusProgress);
   const paperIngestionActiveOperationCount = paperIngestionState.paperOperations.filter(
     (entry) => entry.status === "queued" || entry.status === "running"
   ).length;
@@ -5983,6 +5999,8 @@ export async function buildWorkflowSnapshot(params: {
     paperIngestionRepairRequired: paperIngestionState.repairRequired,
     paperIngestionRepairReason: paperIngestionState.repairReason,
     paperIngestionRepairTargetCorpus: paperIngestionState.repairTargetCorpus,
+    papernexusProgress,
+    papernexusProgressSummary,
     paperSourceDir: resolvedPaperSourceDir,
     graphSourceDir: resolvedGraphSourceDir,
     defaultPapernexusSourceDir,
@@ -8145,6 +8163,24 @@ export async function getPaperIngestionStateSummary(params: {
   return summarizePaperIngestionStateFromModule({
     manifest,
   });
+}
+
+export async function getPapernexusProgressSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  progress: PapernexusProgressSnapshot | null;
+  summary: string | null;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const progress = await loadPapernexusProgress({
+    projectRoot: params.projectRoot,
+    manifest,
+    writeIfMissing: true,
+  });
+  return {
+    progress,
+    summary: summarizePapernexusProgress(progress),
+  };
 }
 
 export async function queuePaperIngestionRequest(params: {
@@ -10319,6 +10355,11 @@ export async function setPaperIngestionState(params: {
     ...serializePaperIngestionState(next),
   };
   await saveManifest(params.projectRoot, manifest);
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.projectRoot,
+    manifest,
+    updatedAt: next.lastUpdatedAt,
+  });
 
   return {
     state: next,

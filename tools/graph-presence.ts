@@ -6,6 +6,7 @@ import {
   inspectPapernexusRemoteAccess,
   type PapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
+import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 
 export type GraphPresenceStatus =
   | "ready"
@@ -264,6 +265,21 @@ function extractDois(value: string | null | undefined): string[] {
         .filter((item): item is string => Boolean(item))
     )
   );
+}
+
+function normalizeCorpusRootCandidate(value: string): string {
+  const absolute = path.resolve(value);
+  const basename = path.basename(absolute);
+  if (basename === ".papernexus") {
+    return path.dirname(absolute);
+  }
+  if (basename === "sources.json" || basename === "meta.json") {
+    const parent = path.dirname(absolute);
+    if (path.basename(parent) === ".papernexus") {
+      return path.dirname(parent);
+    }
+  }
+  return absolute;
 }
 
 function normalizeTitle(value: string | null | undefined): string | null {
@@ -856,7 +872,7 @@ async function resolveCorpusRoot(params: {
   ].filter((item): item is string => Boolean(item)));
 
   for (const candidate of candidates) {
-    const absolute = path.resolve(candidate);
+    const absolute = normalizeCorpusRootCandidate(candidate);
     if (await pathExists(absolute)) {
       return {
         corpusRoot: absolute,
@@ -866,7 +882,8 @@ async function resolveCorpusRoot(params: {
   }
 
   return {
-    corpusRoot: candidates.length > 0 ? path.resolve(candidates[0]) : null,
+    corpusRoot:
+      candidates.length > 0 ? normalizeCorpusRootCandidate(candidates[0]) : null,
     corpusName,
   };
 }
@@ -1810,6 +1827,16 @@ export async function checkGraphPresenceForWorkflow(params: {
   const projectId = inferProjectId(projectRoot, manifest);
   const checkedAt = new Date().toISOString();
   const reportPath = getGraphPresenceReportPath(projectRoot);
+  if (params.updateManifest !== false) {
+    await writePapernexusProgressFromManifest({
+      projectRoot,
+      manifest,
+      phaseOverride: "verifying_graph",
+      nextActionOverride: "rerun graph check",
+      blockingReasonOverride: "Graph presence verification is running.",
+      updatedAt: checkedAt,
+    });
+  }
 
   const expected = await resolveExpectedPapers({
     projectRoot,
@@ -1846,6 +1873,11 @@ export async function checkGraphPresenceForWorkflow(params: {
         repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
       };
       await saveManifest(projectRoot, manifest);
+      await writePapernexusProgressFromManifest({
+        projectRoot,
+        manifest,
+        updatedAt: checkedAt,
+      });
       result.manifestUpdated = true;
     }
 
@@ -2027,6 +2059,11 @@ export async function checkGraphPresenceForWorkflow(params: {
       repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
     };
     await saveManifest(projectRoot, manifest);
+    await writePapernexusProgressFromManifest({
+      projectRoot,
+      manifest,
+      updatedAt: checkedAt,
+    });
     result.manifestUpdated = true;
   }
 

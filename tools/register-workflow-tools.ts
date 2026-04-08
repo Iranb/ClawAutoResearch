@@ -19,6 +19,7 @@ import {
   getIdleResearchStateSummary,
   getInnovationReflectionStateSummary,
   getOrchestrationStateSummary,
+  getPapernexusProgressSummary,
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
   materializeIdeationContract,
@@ -125,6 +126,10 @@ import {
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { inspectPapernexusRemoteAccess } from "./papernexus-secret";
+import {
+  isTrackedPapernexusImportWrapper,
+  writePapernexusProgressFromManifest,
+} from "./papernexus-progress";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -174,6 +179,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_snapshot: "buildWorkflowSnapshot",
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
+  get_papernexus_progress: "getPapernexusProgressSummary",
   check_graph_presence: "checkGraphPresenceForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
@@ -494,6 +500,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             enum: [
               "get_snapshot",
               "get_papernexus_remote_access",
+              "get_papernexus_progress",
               "check_graph_presence",
               "auto_iterator_tick",
               "start_background_run",
@@ -848,6 +855,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 )
               );
             }
+            case "get_papernexus_progress": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const progress = await getPapernexusProgressSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(progress, null, 2));
+            }
             case "check_graph_presence": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const graphPresenceCheck = asObject(params.graphPresenceCheck);
@@ -1118,6 +1132,41 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               const resolvedProjectId = result.projectId ?? snapshot.projectId;
               const resolvedProjectRoot = result.projectRoot ?? projectRoot;
+              if (
+                resolvedProjectRoot &&
+                result.started &&
+                isTrackedPapernexusImportWrapper(backgroundRun.wrapper)
+              ) {
+                const phaseOverride =
+                  backgroundRun.wrapper === "pn_stage_sync.py"
+                    ? "uploading"
+                    : backgroundRun.wrapper === "pn_import_queue.py"
+                      ? "waiting_import"
+                      : "submitting";
+                await writePapernexusProgressFromManifest({
+                  projectRoot: resolvedProjectRoot,
+                  manifest: {
+                    project_id: resolvedProjectId,
+                    next_action: snapshot.nextAction,
+                    blocking_reason: snapshot.blockingReason,
+                    paper_ingestion: {},
+                  },
+                  ownerRun: {
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    queue_key: result.queueKey,
+                    wrapper: backgroundRun.wrapper,
+                  },
+                  phaseOverride,
+                  nextActionOverride:
+                    phaseOverride === "uploading"
+                      ? "wait for staged file upload"
+                      : phaseOverride === "waiting_import"
+                        ? "wait for import completion"
+                        : "wait for import task submission",
+                  updatedAt: new Date().toISOString(),
+                });
+              }
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({

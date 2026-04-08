@@ -1663,6 +1663,8 @@ test("focused prompt assembly returns layered payload metadata for current secti
       reviewSessionStatus: "needs_revision",
       reviewSessionRound: 2,
       reviewSessionVerdict: "not_ready",
+      papernexusProgressSummary:
+        "phase=verifying_graph, progress=3/4 synced, graph=3/4 present, next=rerun graph check",
     },
   });
 
@@ -1685,6 +1687,7 @@ test("focused prompt assembly returns layered payload metadata for current secti
   assert.match(assembly.text, /one paragraph = one message|one paragraph for one message/i);
   assert.match(assembly.text, /proper paragraphs/i);
   assert.match(assembly.text, /smooth transitions|bridge to the next paragraph/i);
+  assert.match(assembly.text, /PaperNexus progress: phase=verifying_graph/i);
 });
 
 test("focused prompt assembly gives reviewers the same writing constitution", () => {

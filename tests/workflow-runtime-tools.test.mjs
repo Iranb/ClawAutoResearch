@@ -289,6 +289,55 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
 });
 
+test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.json with staging progress", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      wrapper: "pn_batch_import.py",
+      args: [
+        "--mcp-url",
+        "https://papernexus.example/mcp",
+        "--corpus",
+        "GCD",
+        "--manifest",
+        "/tmp/demo/batch-import.json",
+        "submit",
+      ],
+      summary: "Queue shared-corpus batch import for graph-build.",
+      manifest_path: "/tmp/demo/batch-import.json",
+      shared_corpus: "GCD",
+      paper_count: 4,
+    },
+  });
+
+  const progress = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
+      "utf8"
+    )
+  );
+  assert.equal(progress.phase, "staging");
+  assert.equal(progress.batch.total_items, 4);
+  assert.equal(progress.batch.pending_items, 4);
+  assert.equal(progress.progress.completed_ratio, 0);
+  assert.equal(progress.progress.percent, 0);
+});
+
 test("research_workflow get_snapshot reconciles finished uploads and refreshes graph presence during graph_build", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -432,6 +481,85 @@ test("research_workflow get_snapshot reconciles finished uploads and refreshes g
     await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
   );
   assert.equal(graphPresence.status, "ready");
+});
+
+test("research_workflow get_papernexus_progress returns raw progress JSON and a compact summary", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    next_action: "Wait for the batch import to finish, then rerun graph verification.",
+    blocking_reason: "Batch import is still running.",
+    idle_research: { enabled: false },
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "Batch import is still running.",
+      graph_presence_status: "missing_papers",
+      graph_presence_checked_at: "2026-04-08T09:00:00.000Z",
+      graph_presence_expected_papers: 4,
+      graph_presence_present_papers: 2,
+      graph_presence_missing_papers: [
+        { canonical_id: "paper-3", title: "Paper 3" },
+        { canonical_id: "paper-4", title: "Paper 4" },
+      ],
+      active_batches: [
+        {
+          manifest_path: "graph/batch-import.json",
+          status: "running",
+          total: 4,
+          running: 1,
+          pending: 1,
+          completed: 2,
+          failed: 0,
+          submit_failed: 0,
+        },
+      ],
+      batch_items: [
+        { manifest_path: "graph/batch-import.json", canonical_id: "paper-1", status: "completed", synced: true },
+        { manifest_path: "graph/batch-import.json", canonical_id: "paper-2", status: "completed", synced: true },
+        { manifest_path: "graph/batch-import.json", canonical_id: "paper-3", status: "running", synced: false },
+        { manifest_path: "graph/batch-import.json", canonical_id: "paper-4", status: "pending", synced: false },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-progress-1",
+          wrapper: "pn_batch_import.py",
+          command_text: "python3 scripts/pn_batch_import.py --manifest graph/batch-import.json submit",
+          status: "running",
+          updated_at: "2026-04-08T09:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const progress = await executeWorkflowTool(tool, {
+    action: "get_papernexus_progress",
+  });
+
+  assert.equal(progress.progress.phase, "waiting_import");
+  assert.equal(progress.progress.batch.total_items, 4);
+  assert.equal(progress.progress.batch.synced_items, 2);
+  assert.equal(progress.progress.graph_check.expected_papers, 4);
+  assert.equal(progress.progress.graph_check.present_papers, 2);
+  assert.equal(progress.progress.progress.completed_ratio, 0.5);
+  assert.equal(progress.progress.progress.percent, 50);
+  assert.match(progress.summary, /phase=waiting_import/i);
+  assert.match(progress.summary, /progress=2\/4 synced/i);
+  assert.match(progress.summary, /graph=2\/4 present/i);
 });
 
 test("research_workflow queue_literature_discovery_requisition bridges a structured discovery packet into durable paper_ingestion queued requests", async (t) => {
@@ -2050,6 +2178,68 @@ test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first 
         /\[Workflow Status\]/.test(entry.message) &&
         /typed PaperNexus graph query/i.test(entry.message)
     )
+  );
+});
+
+test("research_workflow run_papernexus_wrapper records owner_run progress for import wrappers", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run() {
+          return { runId: "runtime-run-import-1" };
+        },
+        async waitForRun() {
+          return { status: "timeout" };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_papernexus_wrapper",
+    papernexusWrapper: {
+      wrapper: "pn_batch_import.py",
+      args: [
+        "--mcp-url",
+        "https://papernexus.example/mcp",
+        "--corpus",
+        "demo",
+        "--manifest",
+        "/tmp/demo/batch-import.json",
+        "submit",
+      ],
+      summary: "Queued a workflow-owned batch import.",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, true);
+  const progress = await executeWorkflowTool(tool, {
+    action: "get_papernexus_progress",
+  });
+  assert.equal(progress.progress.phase, "submitting");
+  assert.equal(progress.progress.owner_run.run_id, "runtime-run-import-1");
+  assert.equal(progress.progress.owner_run.wrapper, "pn_batch_import.py");
+  assert.match(
+    progress.progress.owner_run.session_key ?? "",
+    /papernexus-(skill|wrapper)/i
   );
 });
 

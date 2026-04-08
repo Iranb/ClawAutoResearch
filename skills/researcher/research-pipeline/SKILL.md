@@ -163,7 +163,7 @@ Before frontier mapping, the Researcher must first gather papers and full text i
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/LITERATURE.md + {PROJ}/researcher/PAPER_SOURCE_INDEX.json
 /literature-review "$ARGUMENTS"     → {PROJ}/researcher/LITERATURE_REVIEW.md + {PROJ}/researcher/SOTA_MATRIX.md + {PROJ}/researcher/GAP_SYNTHESIS.md (when systematic coverage is needed)
 /research-lit "$ARGUMENTS"          → {PROJ}/researcher/RESEARCH_BRAINSTORM.md
-/graph-build "$ARGUMENTS"           → workflow-owned `uploading -> verifying -> brainstorm_refresh`, {PROJ}/graph/PAPERNEXUS_STATUS.json, refreshed core brainstorm contract, Zotero `bot/<project-id>/selected` / `baselines`, and {PROJ}/researcher/ZOTERO_PACKET.md
+/graph-build "$ARGUMENTS"           → workflow-owned `uploading -> verifying -> brainstorm_refresh`, {PROJ}/graph/PAPERNEXUS_PROGRESS.json, {PROJ}/graph/PAPERNEXUS_STATUS.json, refreshed core brainstorm contract, Zotero `bot/<project-id>/selected` / `baselines`, and {PROJ}/researcher/ZOTERO_PACKET.md
 /frontier-mapping "$ARGUMENTS"      → {PROJ}/researcher/FRONTIER_REPORT.md
 /papernexus-agentic-reasoning "$ARGUMENTS" → {PROJ}/researcher/reasoning/<track-id>/*
 ```
@@ -194,7 +194,7 @@ Rules:
 - Do not use `--force` for these workflow-owned literature graph refreshes; if graph build fails, give the exact cache-first command to the user instead of forcing a rebuild
 - Do not delete shared PaperNexus storage or run `backup-export`, `backup-unpack`, or `backup-load` during normal workflow operation
 - After Stage 0.5, ensure `{PROJ}/PROJECT_MANIFEST.json` points to the latest shared-graph readiness state and frontier report
-- treat `PROJECT_MANIFEST.json.paper_ingestion` as the durable PaperNexus progress ledger; if `runtime_status` is `waiting_import`, `waiting_graph`, or `reconciling`, do not interpret one stale `PAPERNEXUS_STATUS.json` snapshot as final failure
+- treat `research_workflow.get_papernexus_progress` and `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` as the first PaperNexus progress ledger, `PROJECT_MANIFEST.json.paper_ingestion` as the second, and the background-session registry as the last; if the phase is `submitting`, `uploading`, `waiting_import`, or `verifying_graph`, do not interpret one stale `PAPERNEXUS_STATUS.json` snapshot as final failure
 - every wrapper-driven paper upload / parse / queue wait must update `research_workflow.set_paper_ingestion`; for batch imports that includes `active_batches`, `batch_items`, and `last_batch_manifest_path`, not only per-paper terminal states
 
 Graph refresh trigger:
@@ -205,7 +205,7 @@ Graph refresh trigger:
 
 Slash-command observability rule:
 - `/research-pipeline`, `/research-queue`, and `/resume-pipeline` may queue the continuation when gateway-bound runtime access is temporarily unavailable; the durable runtime queue plus `paper_ingestion` state is the recovery path, not a workflow failure by itself
-- `/workflow-status` should be read as a combined view: `Graph refresh` plus `PaperNexus ingestion` together tell you whether the graph is truly missing papers or is still catching up through wrapper tasks
+- `/workflow-status` should be read as a combined view: `Graph refresh` plus `PaperNexus ingestion` together tell you whether the graph is truly missing papers or is still catching up through wrapper tasks, and `research_workflow.get_papernexus_progress` is the bounded way to fetch the compact phase/progress summary
 
 ## Mode A: Single Project Pipeline
 
