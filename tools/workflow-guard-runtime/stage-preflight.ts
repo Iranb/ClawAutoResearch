@@ -259,6 +259,17 @@ async function shouldQueueIdeaCatalystRequisition(params: {
   if (ideaCatalyst.requisitionSaturated) {
     return false;
   }
+  const requisitionPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    ideaCatalyst.investigationRequisitionPath
+  );
+  const requisition =
+    requisitionPath
+      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
+      : null;
+  if (requisition?.actionable === false) {
+    return false;
+  }
   if (hasTerminalIdeaCatalystRequisitionRequest(params.manifest)) {
     return false;
   }

@@ -3504,6 +3504,106 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
   assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
 });
 
+test("auto iterator reconciles non-actionable catalyst requisitions instead of regressing idea back to graph_build", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "gatekeeping";
+  manifest.owner_agent = "researcher";
+  manifest.idea_catalyst = {
+    ...manifest.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason: "Placeholder catalyst requisition should be reconciled.",
+  };
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    runtime_status: "idle",
+    queued_requests: [
+      {
+        request_id: "idea-catalyst-req-placeholder",
+        status: "queued",
+        trigger_kind: "idea_catalyst_requisition",
+        detail: "Placeholder catalyst requisition queued before structured bridge evidence was available.",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "GRAPH_IDEATION_PACKET.json"),
+    {
+      target_domain: "Computer Science",
+      challenge_clusters: ["memory preservation"],
+      transfer_bridges: [],
+      candidate_domains: [],
+      bridge_nodes: [],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"),
+    {
+      target_domain: "Computer Science",
+      candidate_domains: [],
+    }
+  );
+  const resetManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  resetManifest.ideation_contract.graph_ideation_indices.transfer_bridges = [];
+  resetManifest.ideation_contract.graph_ideation_indices.challenge_clusters = [
+    "memory preservation",
+  ];
+  await writeJson(manifestPath, resetManifest);
+
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "idea-catalyst",
+      "INVESTIGATION_REQUISITION.json"
+    ),
+    {
+      actionable: false,
+      requisition_id: "req-placeholder",
+      target_domain: "Computer Science",
+      missing_domains: [],
+      challenge_clusters: ["memory preservation"],
+      coverage_gap_questions: [
+        {
+          question_id: "q1",
+          question: "How should memory be preserved under domain shift?",
+          coverage_status: "unexplored",
+          required_domain_evidence: [],
+        },
+      ],
+      search_queries: [],
+      non_actionable_reason:
+        "No concrete source domains or structured PaperNexus bridge evidence are available to build an actionable requisition yet.",
+    }
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(updatedManifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.doesNotMatch(
+    updatedManifest.blocking_reason ?? "",
+    /workflow-owned PaperNexus ingestion is still active/i
+  );
+  assert.notEqual(updatedManifest.current_micro_stage, "uploading");
+  assert.equal(updatedManifest.ideation_contract.selected_track_id, trackId);
+});
+
 test("auto iterator routes active literature discovery requests back through graph_build before continuing review-time work", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

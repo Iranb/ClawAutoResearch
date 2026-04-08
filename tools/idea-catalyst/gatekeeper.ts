@@ -138,9 +138,10 @@ export function buildIdeaCatalystGateDecision(
   const decision =
     llmOverride?.preferredDecision ?? (thresholdMet ? "brainstorm" : "requisition");
 
-  const requisitionMissingDomains = insufficientDomains.length
-    ? insufficientDomains
-    : ["external-source-domain"];
+  const requisitionMissingDomains =
+    llmOverride?.missingDomains?.length
+      ? llmOverride.missingDomains
+      : insufficientDomains;
   const requisitionSearchQueries = candidateDomains.flatMap((entry) =>
     Array.isArray(entry?.search_queries)
       ? entry.search_queries
@@ -154,13 +155,20 @@ export function buildIdeaCatalystGateDecision(
           .filter((query) => query.domain && query.query)
       : []
   );
+  const actionable =
+    requisitionMissingDomains.length > 0 || requisitionSearchQueries.length > 0;
   const fallbackQueries =
     requisitionSearchQueries.length > 0
       ? requisitionSearchQueries
-      : buildFallbackQueries({
-          missingDomains: requisitionMissingDomains,
-          questionGaps,
-        });
+      : actionable
+        ? buildFallbackQueries({
+            missingDomains: requisitionMissingDomains,
+            questionGaps,
+          })
+        : [];
+  const nonActionableReason = actionable
+    ? null
+    : "No concrete source domains or structured PaperNexus bridge evidence are available to build an actionable IDEA-CATALYST requisition yet.";
   const requisitionId = `req-${(targetDomain ?? "unknown")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -171,8 +179,10 @@ export function buildIdeaCatalystGateDecision(
     rationale:
       llmOverride?.reasoning ??
       (thresholdMet
-        ? "Sufficient cross-domain bridge evidence exists to continue IDEA-CATALYST integration."
-        : "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding."),
+      ? "Sufficient cross-domain bridge evidence exists to continue IDEA-CATALYST integration."
+      : actionable
+        ? "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding."
+        : nonActionableReason),
     evidence: {
       sufficient_domains: sufficientDomains,
       insufficient_domains: insufficientDomains,
@@ -189,23 +199,19 @@ export function buildIdeaCatalystGateDecision(
     requisition: decision === "brainstorm"
       ? null
       : {
+          actionable,
           requisition_id: requisitionId,
           target_domain: targetDomain,
-          missing_domains:
-            llmOverride?.missingDomains?.length
-              ? llmOverride.missingDomains
-              : requisitionMissingDomains,
+          missing_domains: requisitionMissingDomains,
           challenge_clusters: challengeClusters,
           coverage_gap_questions: questionGaps.map((entry) => ({
             question_id: entry.question_id,
             question: entry.question,
             coverage_status: entry.coverage_status,
-            required_domain_evidence:
-              llmOverride?.missingDomains?.length
-                ? llmOverride.missingDomains
-                : requisitionMissingDomains,
+            required_domain_evidence: requisitionMissingDomains,
           })),
           search_queries: fallbackQueries,
+          non_actionable_reason: nonActionableReason,
           minimum_sources_per_domain: 2,
           minimum_bridge_nodes: Math.max(2, Math.min(4, questionGaps.length || 1)),
           retry_budget: llmOverride?.recommendedRetryBudget ?? 2,

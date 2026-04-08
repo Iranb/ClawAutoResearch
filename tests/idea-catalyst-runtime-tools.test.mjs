@@ -634,6 +634,71 @@ test("research_workflow materialize_idea_catalyst_state emits a structured requi
   );
 });
 
+test("research_workflow materialize_idea_catalyst_state downgrades placeholder requisitions to pending when no concrete source domains can be derived", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const graphPacketPath = path.join(
+    projectRoot,
+    "researcher",
+    "ideation",
+    "GRAPH_IDEATION_PACKET.json"
+  );
+  await writeJson(graphPacketPath, {
+    target_domain: "Computer Science",
+    challenge_clusters: ["memory preservation"],
+    transfer_bridges: [],
+    candidate_domains: [],
+    bridge_nodes: [],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"),
+    {
+      target_domain: "Computer Science",
+      candidate_domains: [],
+    }
+  );
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.ideation_contract.graph_ideation_indices.transfer_bridges = [];
+  manifest.ideation_contract.graph_ideation_indices.challenge_clusters = [
+    "memory preservation",
+  ];
+  await writeJson(manifestPath, manifest);
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+
+  assert.equal(result.state.status, "pending");
+  assert.equal(result.state.requisitionRequired, false);
+  assert.match(
+    result.state.pendingReason ?? "",
+    /no concrete source domains|structured papernexus/i
+  );
+
+  const gateDecision = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "GATE_DECISION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(gateDecision.decision, "requisition");
+  assert.equal(gateDecision.requisition.actionable, false);
+  assert.equal(gateDecision.requisition.missing_domains.length, 0);
+});
+
 test("research_workflow queue_idea_catalyst_requisition bridges a catalyst requisition into durable paper_ingestion queued requests", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -696,6 +761,54 @@ test("research_workflow queue_idea_catalyst_requisition bridges a catalyst requi
   );
   assert.equal(updatedManifest.idea_catalyst.requisition_retry_budget, 2);
   assert.equal(updatedManifest.idea_catalyst.requisition_saturated, false);
+});
+
+test("research_workflow queue_idea_catalyst_requisition skips non-actionable placeholder requisitions", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.idea_catalyst = {
+    ...manifest.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason: "Placeholder requisition awaiting reconciliation.",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+    {
+      actionable: false,
+      requisition_id: "req-placeholder",
+      target_domain: "Computer Science",
+      missing_domains: [],
+      search_queries: [],
+      non_actionable_reason:
+        "No concrete source domains or structured PaperNexus bridge evidence are available yet.",
+    }
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_idea_catalyst_requisition",
+  });
+
+  assert.equal(result.created, false);
+  assert.match(result.reason ?? "", /not actionable|no concrete source domains/i);
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.idea_catalyst.status, "pending");
+  assert.equal(updatedManifest.idea_catalyst.requisition_required, false);
+  assert.equal(updatedManifest.paper_ingestion?.queued_requests?.length ?? 0, 0);
 });
 
 test("research_workflow queue_idea_catalyst_requisition decrements retry budget and saturates repeated requisition retries", async (t) => {

@@ -399,6 +399,7 @@ export async function materializeIdeaCatalystState(params: {
     string,
     unknown
   >;
+  const requisitionActionable = requisitionRecord.actionable !== false;
   const shouldIntegrateFragments = gateDecision.decision === "brainstorm";
   const ideaFragmentsPacket = shouldIntegrateFragments
     ? buildIdeaCatalystIdeaFragments({
@@ -419,30 +420,43 @@ export async function materializeIdeaCatalystState(params: {
   const next = normalizeIdeaCatalystState({
     ...serializeIdeaCatalystState(current),
     ...patch,
-    status: gateDecision.decision === "brainstorm" ? "ready" : "requisition",
+    status:
+      gateDecision.decision === "brainstorm"
+        ? "ready"
+        : requisitionActionable
+          ? "requisition"
+          : "pending",
     mode: "graph-first",
-    micro_stage: gateDecision.decision === "brainstorm" ? "judging" : "gatekeeping",
+    micro_stage:
+      gateDecision.decision === "brainstorm" ? "judging" : "gatekeeping",
     target_domain: targetDomain,
     source_domains: sourceDomains,
     bridge_count: bridgeNodeRecords.length,
     top_fragment_id: rankedFragmentsPacket?.ranking?.[0]?.fragment_id ?? null,
-    requisition_required: gateDecision.decision !== "brainstorm",
+    requisition_required:
+      gateDecision.decision !== "brainstorm" && requisitionActionable,
     last_requisition_cycle:
-      gateDecision.decision === "brainstorm"
+      gateDecision.decision === "brainstorm" || !requisitionActionable
         ? current.lastRequisitionCycle
         : pickString(requisitionRecord, [
             "requisition_id",
             "requisitionId",
           ]),
     requisition_retry_budget:
-      gateDecision.decision === "brainstorm"
+      gateDecision.decision === "brainstorm" || !requisitionActionable
         ? current.requisitionRetryBudget
         : pickNumber(requisitionRecord, [
             "retry_budget",
             "retryBudget",
           ]),
     requisition_saturated: false,
-    pending_reason: gateDecision.decision === "brainstorm" ? null : gateDecision.rationale,
+    pending_reason:
+      gateDecision.decision === "brainstorm"
+        ? null
+        : pickString(requisitionRecord, [
+            "non_actionable_reason",
+            "nonActionableReason",
+          ]) ?? gateDecision.rationale,
     last_updated_at: nowIso(),
   });
 

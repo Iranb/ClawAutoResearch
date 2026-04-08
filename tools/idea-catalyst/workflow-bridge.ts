@@ -26,6 +26,32 @@ function isIdeaCatalystQueuedRequestActive(status: string | null | undefined): b
   );
 }
 
+function isIdeaCatalystRequisitionActionable(value: unknown): boolean {
+  const record = asRecord(value);
+  if (!record) {
+    return true;
+  }
+  if (record.actionable === false) {
+    return false;
+  }
+  const missingDomains = Array.isArray(record.missing_domains)
+    ? record.missing_domains
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean)
+    : [];
+  const searchQueries = Array.isArray(record.search_queries)
+    ? record.search_queries
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .map((entry) => ({
+          domain: pickString(entry, ["domain"]),
+          query: pickString(entry, ["query"]),
+        }))
+        .filter((entry) => entry.domain && entry.query)
+    : [];
+  return missingDomains.length > 0 || searchQueries.length > 0;
+}
+
 function buildIdeaCatalystRequisitionRequestId(requisitionId: string | null | undefined): string {
   return `idea-catalyst-${sanitizeIdFragment(requisitionId)}`;
 }
@@ -273,6 +299,62 @@ export async function reconcileSatisfiedIdeaCatalystRequisition(params: {
   }
 
   const paperIngestion = normalizePaperIngestionState(manifest.paper_ingestion);
+  const requisitionPath = resolveProjectArtifactPath(
+    projectRoot,
+    current.investigationRequisitionPath
+  );
+  const requisition =
+    requisitionPath
+      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
+      : null;
+  if (requisition && !isIdeaCatalystRequisitionActionable(requisition)) {
+    const nextPaperIngestion = {
+      ...paperIngestion,
+      queuedRequests: paperIngestion.queuedRequests.map((entry) => {
+        if (
+          entry.triggerKind !== "idea_catalyst_requisition" ||
+          !isIdeaCatalystQueuedRequestActive(entry.status)
+        ) {
+          return entry;
+        }
+        return normalizePaperIngestionQueuedRequest({
+          ...serializePaperIngestionQueuedRequest(entry),
+          status: "completed",
+          updated_at: new Date().toISOString(),
+          detail:
+            pickString(requisition, [
+              "non_actionable_reason",
+              "nonActionableReason",
+            ]) ??
+            "Reconciled non-actionable IDEA-CATALYST placeholder requisition without queueing more graph work.",
+        }) ?? entry;
+      }),
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    const next = normalizeIdeaCatalystState({
+      ...serializeIdeaCatalystState(current),
+      status: "pending",
+      micro_stage: "gatekeeping",
+      requisition_required: false,
+      requisition_saturated: false,
+      pending_reason:
+        pickString(requisition, [
+          "non_actionable_reason",
+          "nonActionableReason",
+        ]) ??
+        "IDEA-CATALYST could not derive a concrete requisition from the current graph evidence.",
+      last_updated_at: new Date().toISOString(),
+    });
+    manifest.paper_ingestion = serializePaperIngestionState(nextPaperIngestion);
+    manifest.idea_catalyst = serializeIdeaCatalystState(next);
+    await writeJsonEnsured(manifestPath, manifest);
+    return {
+      updated: true,
+      manifest,
+      state: next,
+      requisitionStatus: normalizeIdeaCatalystRequisitionStatus(requisition),
+    };
+  }
   if (
     hasActiveIdeaCatalystRequisitionRequest({
       ideaCatalyst: current,
@@ -286,15 +368,6 @@ export async function reconcileSatisfiedIdeaCatalystRequisition(params: {
       requisitionStatus: null,
     };
   }
-
-  const requisitionPath = resolveProjectArtifactPath(
-    projectRoot,
-    current.investigationRequisitionPath
-  );
-  const requisition =
-    requisitionPath
-      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
-      : null;
   const requisitionStatus = normalizeIdeaCatalystRequisitionStatus(requisition);
   if (!isTerminalIdeaCatalystRequisitionStatus(requisition)) {
     return {
@@ -356,8 +429,35 @@ export async function queueIdeaCatalystRequisition(params: {
       `IDEA-CATALYST requisition packet is missing: ${ideaCatalyst.investigationRequisitionPath}`
     );
   }
-
   const paperIngestion = normalizePaperIngestionState(manifest.paper_ingestion);
+  if (!isIdeaCatalystRequisitionActionable(requisition)) {
+    const nextIdeaCatalyst = normalizeIdeaCatalystState({
+      ...serializeIdeaCatalystState(ideaCatalyst),
+      status: "pending",
+      micro_stage: "gatekeeping",
+      requisition_required: false,
+      requisition_saturated: false,
+      pending_reason:
+        pickString(requisition, [
+          "non_actionable_reason",
+          "nonActionableReason",
+        ]) ??
+        "IDEA-CATALYST could not derive a concrete requisition from the current graph evidence.",
+      last_updated_at: new Date().toISOString(),
+    });
+    manifest.idea_catalyst = serializeIdeaCatalystState(nextIdeaCatalyst);
+    await writeJsonEnsured(manifestPath, manifest);
+    return {
+      created: false,
+      reason:
+        nextIdeaCatalyst.pendingReason ??
+        "IDEA-CATALYST requisition is not actionable yet.",
+      state: paperIngestion,
+      request: null,
+      requisitionPath: ideaCatalyst.investigationRequisitionPath,
+      batchManifestPath: null,
+    };
+  }
   const requisitionId =
     pickString(requisition, ["requisition_id", "requisitionId"]) ??
     ideaCatalyst.lastUpdatedAt ??
