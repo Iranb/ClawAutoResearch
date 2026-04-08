@@ -2,6 +2,7 @@ export type WorkflowIsolationMode = "workflow_roles_only" | "channel_shared";
 
 export const DEFAULT_PROJECT_WORKFLOW_ALLOWED_ROLES = [
   "researcher",
+  "planner",
   "orchestrator",
   "coder",
   "analyzer",

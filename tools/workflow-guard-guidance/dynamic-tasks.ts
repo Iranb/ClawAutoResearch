@@ -1,3 +1,4 @@
+import { buildExperimentReviewGuidance } from "./experiment-review-guidance";
 import { buildIdeaCatalystGuidance } from "./idea-catalyst-guidance";
 import { buildPapernexusGuidance } from "./papernexus-guidance";
 import { buildWritingGuidance } from "./writing-guidance";
@@ -35,6 +36,13 @@ export function buildDynamicTasksImpl(
     tasks.unshift(task);
   }
   for (const task of ideaCatalystGuidance.append) {
+    tasks.push(task);
+  }
+  const experimentReviewGuidance = buildExperimentReviewGuidance(params, deps);
+  for (const task of experimentReviewGuidance.prepend) {
+    tasks.unshift(task);
+  }
+  for (const task of experimentReviewGuidance.append) {
     tasks.push(task);
   }
 

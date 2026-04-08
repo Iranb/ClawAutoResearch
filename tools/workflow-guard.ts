@@ -159,6 +159,12 @@ import {
   serializeWritePackageState,
 } from "./workflow-guard-state/execution-state";
 import {
+  normalizeAutonomousExecutionState,
+  normalizeExperimentReviewState,
+  serializeAutonomousExecutionState,
+  serializeExperimentReviewState,
+} from "./workflow-guard-state/experiment-review";
+import {
   deriveGraphBuildMicroStage,
   hasActiveWorkflowOwnedPaperUpload,
   mergeCompletedPaperEntries,
@@ -227,6 +233,7 @@ import { materializeLiteratureDiscoveryPacketImpl } from "./literature-discovery
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeIdeationContractImpl } from "./workflow-guard-materializers/ideation-contract-materializer";
+import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
 import {
@@ -384,6 +391,7 @@ import {
 } from "./workflow-guard-writing/paper-quality-eval";
 import {
   setBrainstormCycleState as setBrainstormCycleStateFromModule,
+  setExperimentReviewState as setExperimentReviewStateFromModule,
   setIdeationContractState as setIdeationContractStateFromModule,
   setIdleResearchState as setIdleResearchStateFromModule,
   setOrchestrationState as setOrchestrationStateFromModule,
@@ -407,6 +415,16 @@ import {
   setWritingContractState as setWritingContractStateFromModule,
   setWritingSessionState as setWritingSessionStateFromModule,
 } from "./workflow-guard-setters/writing-state-setters";
+import {
+  buildExperimentReviewCommand,
+  buildExperimentReviewSummary,
+  deriveExperimentReviewMicroStage,
+  getExperimentReviewStatePath,
+  isReviewedAutoExperimentLaunchEnabled,
+  loadExperimentReviewState,
+  resolveExperimentReviewNextOwner,
+  saveExperimentReviewStateFile,
+} from "./workflow-auto-experiment-review";
 import {
   getExperimentMemorySummaryImpl,
   recordCitationVerificationImpl,
@@ -489,6 +507,7 @@ type WorkflowContactStore = {
 
 type WorkflowRole =
   | "researcher"
+  | "planner"
   | "orchestrator"
   | "coder"
   | "analyzer"
@@ -897,6 +916,42 @@ type ExperimentSearchState = {
   stageProgressPath: string | null;
   checkpointPath: string | null;
   pendingReason: string | null;
+  lastUpdatedAt: string | null;
+};
+
+type AutonomousExecutionState = {
+  experimentLaunchMode: "manual" | "reviewed_auto";
+  maxExperimentReviewRounds: number;
+  requireAnalyzerReview: boolean;
+  requireCrossReview: boolean;
+};
+
+type ExperimentReviewState = {
+  status: string;
+  launchMode: "manual" | "reviewed_auto";
+  microStage: string | null;
+  reviewRound: number;
+  stateFilePath: string | null;
+  packetPath: string | null;
+  plannerPlanPath: string | null;
+  analyzerReportPath: string | null;
+  crossReviewerReportPath: string | null;
+  launchDecisionPath: string | null;
+  packetFingerprint: string | null;
+  targetTrackIds: string[];
+  claimIds: string[];
+  graphPacketPaths: string[];
+  plannerStatus: string;
+  analyzerStatus: string;
+  crossReviewerStatus: string;
+  synthesisStatus: string;
+  analyzerVerdict: string | null;
+  crossReviewerVerdict: string | null;
+  launchApproved: boolean;
+  blockerCount: number;
+  blockers: string[];
+  pendingReason: string | null;
+  lastLaunchApprovedAt: string | null;
   lastUpdatedAt: string | null;
 };
 
@@ -1467,6 +1522,22 @@ export type WorkflowSnapshot = {
   orchestrationNextTransitionCandidate: string | null;
   orchestrationRetryBudgetRemaining: number | null;
   orchestrationRollbackTargetStage: string | null;
+  experimentReviewMode: "manual" | "reviewed_auto";
+  experimentReviewStatus: string | null;
+  experimentReviewMicroStage: string | null;
+  experimentReviewRound: number | null;
+  experimentReviewPlannerStatus: string | null;
+  experimentReviewAnalyzerStatus: string | null;
+  experimentReviewCrossReviewerStatus: string | null;
+  experimentReviewSynthesisStatus: string | null;
+  experimentReviewLaunchApproved: boolean;
+  experimentReviewBlockerCount: number | null;
+  experimentReviewPendingReason: string | null;
+  experimentReviewPacketPath: string | null;
+  experimentReviewPlannerPlanPath: string | null;
+  experimentReviewAnalyzerReportPath: string | null;
+  experimentReviewCrossReviewerReportPath: string | null;
+  experimentReviewLaunchDecisionPath: string | null;
   experimentSearchStatus: string | null;
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
@@ -5477,7 +5548,11 @@ async function getMissingStageSignals(params: {
           manifestFieldExists,
           getExperimentLedgerPath,
           loadExperimentSearchState,
+          loadExperimentReviewState,
           isExperimentSearchReadyForAnalysis,
+          hasActiveExperimentRuns: (ledger) =>
+            hasActiveExperimentRuns(ledger as ExperimentLedger | null),
+          normalizeAutonomousExecutionState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
@@ -5500,7 +5575,11 @@ async function getMissingStageSignals(params: {
           manifestFieldExists,
           getExperimentLedgerPath,
           loadExperimentSearchState,
+          loadExperimentReviewState,
           isExperimentSearchReadyForAnalysis,
+          hasActiveExperimentRuns: (ledger) =>
+            hasActiveExperimentRuns(ledger as ExperimentLedger | null),
+          normalizeAutonomousExecutionState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
@@ -5523,7 +5602,11 @@ async function getMissingStageSignals(params: {
           manifestFieldExists,
           getExperimentLedgerPath,
           loadExperimentSearchState,
+          loadExperimentReviewState,
           isExperimentSearchReadyForAnalysis,
+          hasActiveExperimentRuns: (ledger) =>
+            hasActiveExperimentRuns(ledger as ExperimentLedger | null),
+          normalizeAutonomousExecutionState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
@@ -5636,6 +5719,16 @@ function buildDynamicTasks(params: {
   currentStage: string | null;
   manifest: ManifestLike | null;
   missingStageSignals: string[];
+  experimentReviewMode: "manual" | "reviewed_auto";
+  experimentReviewStatus: string | null;
+  experimentReviewMicroStage: string | null;
+  experimentReviewPendingReason: string | null;
+  experimentReviewPacketPath: string | null;
+  experimentReviewPlannerPlanPath: string | null;
+  experimentReviewAnalyzerReportPath: string | null;
+  experimentReviewCrossReviewerReportPath: string | null;
+  experimentReviewLaunchDecisionPath: string | null;
+  experimentReviewLaunchApproved: boolean;
   idleResearch: IdleResearchState;
   innovationReflection: InnovationReflectionState;
   innovationReflectionDue: boolean;
@@ -6883,6 +6976,82 @@ export async function getExperimentSearchStateSummary(params: {
   };
 }
 
+export async function getExperimentReviewStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ExperimentReviewState;
+  autonomousExecution: AutonomousExecutionState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+  packetResolvedPath: string | null;
+  packetExists: boolean;
+  plannerPlanResolvedPath: string | null;
+  plannerPlanExists: boolean;
+  analyzerReportResolvedPath: string | null;
+  analyzerReportExists: boolean;
+  crossReviewerReportResolvedPath: string | null;
+  crossReviewerReportExists: boolean;
+  launchDecisionResolvedPath: string | null;
+  launchDecisionExists: boolean;
+  reviewedAutoLaunchEnabled: boolean;
+  summary: string;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = (await loadExperimentReviewState({
+    projectRoot: params.projectRoot,
+    manifest,
+  })) as ExperimentReviewState;
+  const autonomousExecution = normalizeAutonomousExecutionState(
+    manifest.autonomous_execution
+  ) as AutonomousExecutionState;
+  const stateFilePath = getExperimentReviewStatePath(params.projectRoot);
+  const packetResolvedPath = resolveProjectArtifactPath(params.projectRoot, state.packetPath);
+  const plannerPlanResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.plannerPlanPath
+  );
+  const analyzerReportResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.analyzerReportPath
+  );
+  const crossReviewerReportResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.crossReviewerReportPath
+  );
+  const launchDecisionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.launchDecisionPath
+  );
+  return {
+    state,
+    autonomousExecution,
+    stateFilePath,
+    stateFileExists: await pathExists(stateFilePath),
+    packetResolvedPath,
+    packetExists: packetResolvedPath ? await pathExists(packetResolvedPath) : false,
+    plannerPlanResolvedPath,
+    plannerPlanExists: plannerPlanResolvedPath
+      ? await pathExists(plannerPlanResolvedPath)
+      : false,
+    analyzerReportResolvedPath,
+    analyzerReportExists: analyzerReportResolvedPath
+      ? await pathExists(analyzerReportResolvedPath)
+      : false,
+    crossReviewerReportResolvedPath,
+    crossReviewerReportExists: crossReviewerReportResolvedPath
+      ? await pathExists(crossReviewerReportResolvedPath)
+      : false,
+    launchDecisionResolvedPath,
+    launchDecisionExists: launchDecisionResolvedPath
+      ? await pathExists(launchDecisionResolvedPath)
+      : false,
+    reviewedAutoLaunchEnabled: isReviewedAutoExperimentLaunchEnabled(
+      manifest.autonomous_execution
+    ),
+    summary: buildExperimentReviewSummary(state),
+  };
+}
+
 export async function getPaperQcStateSummary(params: {
   projectRoot: string;
 }): Promise<{
@@ -7465,6 +7634,36 @@ export async function setResearchProgramState(params: {
   onboardingGaps: string[];
 }> {
   return await setResearchProgramStateFromModule(params);
+}
+
+export async function materializeExperimentReviewState(params: {
+  projectRoot: string;
+  experimentReviewMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  state: ExperimentReviewState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+  packetResolvedPath: string | null;
+  packetExists: boolean;
+  generatedFiles: string[];
+}> {
+  return materializeExperimentReviewStateImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+  });
+}
+
+export async function setExperimentReviewState(params: {
+  projectRoot: string;
+  experimentReview: Record<string, unknown>;
+}): Promise<{
+  state: ExperimentReviewState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+}> {
+  return await setExperimentReviewStateFromModule(params);
 }
 
 function normalizeMarkdownSignalLine(rawLine: string): string | null {
@@ -8063,6 +8262,12 @@ export async function runWorkflowAutoIterator(params: {
     STAGE_REQUIREMENTS,
     stageOwner,
     normalizeExperimentSearchState,
+    normalizeAutonomousExecutionState,
+    loadExperimentReviewState,
+    isReviewedAutoExperimentLaunchEnabled,
+    resolveExperimentReviewNextOwner,
+    deriveExperimentReviewMicroStage,
+    buildExperimentReviewCommand,
     hasActiveExperimentRuns,
     hasFinishedExperimentWorkAwaitingReconciliation,
     buildExperimentMonitorCommand,
@@ -8086,6 +8291,7 @@ export async function runWorkflowAutoIterator(params: {
     queueLiteratureDiscoveryRequisition,
     materializeIdeationContract,
     materializePaperStoryState,
+    materializeExperimentReviewState,
     materializeReviewPressurePacket,
   } as any);
 }

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 type WorkflowRoleLike =
   | "researcher"
+  | "planner"
   | "orchestrator"
   | "coder"
   | "analyzer"

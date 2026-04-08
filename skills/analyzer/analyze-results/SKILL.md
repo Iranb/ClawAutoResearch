@@ -35,6 +35,14 @@ Extract metrics from experiment outputs, generate figures, and summarize finding
 
 Read all result files (JSON / CSV) from `{PROJ}/researcher/artifacts/results/`.
 
+When present, also read the pre-launch reviewed-auto artifacts:
+
+- `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json`
+- `{PROJ}/planner/EXPERIMENT_PLAN.md`
+- `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json`
+
+Use them to verify whether the executed evidence matches the pre-launch promise. If launch drifted from the approved packet, call that out explicitly in `QUALITY_AUDIT.md` and the claim-evidence matrix.
+
 ### 2. Compute Metrics
 
 - compute mean ± standard deviation across seeds

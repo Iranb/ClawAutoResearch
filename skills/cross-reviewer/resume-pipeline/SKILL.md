@@ -24,7 +24,7 @@ Cross-Reviewer is intentionally stateless. Resume means reconstructing a single 
 ## Read First
 
 - explicit request content passed in the invocation
-- or saved files under `{PROJ}/cross-reviewer/novelty/`, `outline/`, or `prose/`
+- or saved files under `{PROJ}/cross-reviewer/novelty/`, `outline/`, `prose/`, or `EXPERIMENT_ATTACK_REPORT.md`
 
 ## Resume Logic
 
@@ -32,6 +32,7 @@ Cross-Reviewer is intentionally stateless. Resume means reconstructing a single 
    - novelty
    - outline
    - prose
+   - experiment_attack
 2. If the request artifact is complete, review it as a fresh single-turn request.
 3. If no explicit request artifact exists, return `no resumable state`.
 
@@ -46,6 +47,6 @@ Return only:
 
 ```markdown
 ## Resume Status
-- **Mode**: [novelty / outline / prose / none]
+- **Mode**: [novelty / outline / prose / experiment_attack / none]
 - **Action**: [review now / no resumable request]
 ```

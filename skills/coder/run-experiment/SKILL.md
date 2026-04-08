@@ -41,6 +41,8 @@ Read `SERVER.md` to obtain:
 Read before launch:
 - `{PROJ}/orchestrator/PLAN.md`
 - `{PROJ}/TRACK_REGISTRY.json`
+- `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json` when reviewed-auto launch is enabled
+- `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json` when reviewed-auto launch is enabled
 - `{PROJ}/coder/<experiment-name>/README.md`
 - `{PROJ}/coder/<experiment-name>/requirements.txt`
 - `{PROJ}/coder/EXPERIMENT_INDEX.md`
@@ -50,6 +52,17 @@ Write after launch:
 - `{PROJ}/coder/<experiment-name>/REMOTE_RUN.json`
 
 ## Steps
+
+### 0. Verify reviewed-auto launch approval
+
+If `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json` exists, require all of the following before launch:
+
+- `launch_approved = true`
+- packet fingerprint still matches the current planner packet
+- one-variable change statement is explicit
+- stop rules and expected artifact targets are explicit
+
+If any of these are missing, stop and hand control back to Researcher instead of guessing.
 
 ### 1. Determine Dataset Path
 
@@ -174,6 +187,8 @@ Coder may not, without Researcher approval:
 - change the primary metric
 - replace the loss/objective with a different research hypothesis
 - expand the sweep to new hyperparameters not in the assigned plan
+
+In reviewed-auto mode, Coder must refuse launch when the approved packet or launch decision is missing, stale, or still mixes multiple hypothesis changes.
 
 ## Error Recovery
 

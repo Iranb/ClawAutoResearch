@@ -12,6 +12,10 @@ import {
   deriveGraphBuildMicroStage,
   normalizePaperIngestionState,
 } from "../workflow-guard-state/paper-ingestion";
+import {
+  normalizeExperimentReviewState,
+  serializeExperimentReviewState,
+} from "../workflow-guard-state/experiment-review";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   deriveIdeaCatalystMicroStage,
@@ -157,6 +161,45 @@ type AutoIteratorDeps = {
   STAGE_REQUIREMENTS: Record<string, { nextStage?: string | null }>;
   stageOwner: (stage: string | null) => AutoIteratorAction["owner"];
   normalizeExperimentSearchState: (value: unknown) => Record<string, unknown>;
+  normalizeAutonomousExecutionState: (
+    value: unknown
+  ) => {
+    experimentLaunchMode: "manual" | "reviewed_auto";
+    maxExperimentReviewRounds: number;
+    requireAnalyzerReview: boolean;
+    requireCrossReview: boolean;
+  };
+  loadExperimentReviewState: (params: {
+    projectRoot: string;
+    manifest: ManifestLike | null;
+  }) => Promise<Record<string, unknown>>;
+  isReviewedAutoExperimentLaunchEnabled: (value: unknown) => boolean;
+  resolveExperimentReviewNextOwner: (params: {
+    state: Record<string, unknown>;
+    autonomousExecution: {
+      experimentLaunchMode: "manual" | "reviewed_auto";
+      maxExperimentReviewRounds: number;
+      requireAnalyzerReview: boolean;
+      requireCrossReview: boolean;
+    };
+    hasActiveRuns: boolean;
+    readyForAnalysis: boolean;
+  }) => AutoIteratorAction["owner"] | null;
+  deriveExperimentReviewMicroStage: (params: {
+    state: Record<string, unknown>;
+    autonomousExecution: {
+      experimentLaunchMode: "manual" | "reviewed_auto";
+      maxExperimentReviewRounds: number;
+      requireAnalyzerReview: boolean;
+      requireCrossReview: boolean;
+    };
+    hasActiveRuns: boolean;
+    readyForAnalysis: boolean;
+  }) => string | null;
+  buildExperimentReviewCommand: (params: {
+    owner: AutoIteratorAction["owner"] | null;
+    state: Record<string, unknown>;
+  }) => string | null;
   hasActiveExperimentRuns: (ledger: ExperimentLedgerLike | null) => boolean;
   hasFinishedExperimentWorkAwaitingReconciliation: (params: {
     ledger: ExperimentLedgerLike | null;
@@ -224,6 +267,12 @@ type AutoIteratorDeps = {
   materializeReviewPressurePacket: (params: {
     projectRoot: string;
     reviewPressureMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeExperimentReviewState: (params: {
+    projectRoot: string;
+    experimentReviewMaterialization?: Record<string, unknown>;
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
@@ -352,6 +401,7 @@ export async function runWorkflowAutoIteratorImpl(
     deps: {
       materializeIdeationContract: deps.materializeIdeationContract,
       materializePaperStoryState: deps.materializePaperStoryState,
+      materializeExperimentReviewState: deps.materializeExperimentReviewState,
       materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
       materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
       materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
@@ -506,7 +556,29 @@ export async function runWorkflowAutoIteratorImpl(
   });
 
   let stageAfter = stageEffective;
+  const experimentSearchStateBeforeAdvance =
+    stageEffective === "experiment"
+      ? deps.normalizeExperimentSearchState(manifest.experiment_search)
+      : null;
+  const experimentReviewStateBeforeAdvance =
+    stageEffective === "experiment"
+      ? await deps.loadExperimentReviewState({
+          projectRoot,
+          manifest,
+        })
+      : null;
+  const reviewedAutoPrelaunch =
+    stageEffective === "experiment" &&
+    deps.isReviewedAutoExperimentLaunchEnabled(manifest.autonomous_execution) &&
+    !deps.hasActiveExperimentRuns(experimentLedger) &&
+    !deps.hasFinishedExperimentWorkAwaitingReconciliation({
+      ledger: experimentLedger,
+      experimentSearch: experimentSearchStateBeforeAdvance ?? {},
+    }) &&
+    normalizeStage(experimentSearchStateBeforeAdvance?.status) !==
+      "ready_for_analysis";
   if (
+    !reviewedAutoPrelaunch &&
     !gateEvaluation.blocking &&
     stageEffective &&
     effectiveMissingSignals.length === 0 &&
@@ -530,13 +602,25 @@ export async function runWorkflowAutoIteratorImpl(
       : effectiveMissingSignals;
 
   const ownerBefore = asString(manifest.owner_agent);
-  const ownerAfter = deps.stageOwner(stageAfter);
   const paperIngestionStateForActions = normalizePaperIngestionState(
     manifest.paper_ingestion
   );
   const experimentSearchState = deps.normalizeExperimentSearchState(
     manifest.experiment_search
   );
+  const autonomousExecutionState = deps.normalizeAutonomousExecutionState(
+    manifest.autonomous_execution
+  );
+  const experimentReviewState =
+    stageAfter === "experiment"
+      ? await deps.loadExperimentReviewState({
+          projectRoot,
+          manifest,
+        })
+      : null;
+  const reviewedAutoExperimentLaunchEnabled =
+    stageAfter === "experiment" &&
+    deps.isReviewedAutoExperimentLaunchEnabled(manifest.autonomous_execution);
   const shouldMonitorExperiments =
     stageAfter === "experiment" &&
     (deps.hasActiveExperimentRuns(experimentLedger) ||
@@ -544,6 +628,29 @@ export async function runWorkflowAutoIteratorImpl(
         ledger: experimentLedger,
         experimentSearch: experimentSearchState,
       }));
+  const experimentReadyForAnalysis =
+    stageAfter === "experiment" &&
+    normalizeStage(experimentSearchState.status) === "ready_for_analysis";
+  const experimentReviewOwner =
+    stageAfter === "experiment" && experimentReviewState
+      ? deps.resolveExperimentReviewNextOwner({
+          state: experimentReviewState,
+          autonomousExecution: autonomousExecutionState,
+          hasActiveRuns: shouldMonitorExperiments,
+          readyForAnalysis: Boolean(experimentReadyForAnalysis),
+        })
+      : null;
+  const experimentReviewCommand =
+    stageAfter === "experiment" &&
+    experimentReviewState &&
+    reviewedAutoExperimentLaunchEnabled &&
+    !shouldMonitorExperiments &&
+    !experimentReadyForAnalysis
+      ? deps.buildExperimentReviewCommand({
+          owner: experimentReviewOwner,
+          state: experimentReviewState,
+        })
+      : null;
   const experimentMonitorCommand = shouldMonitorExperiments
     ? deps.buildExperimentMonitorCommand()
     : null;
@@ -567,9 +674,12 @@ export async function runWorkflowAutoIteratorImpl(
       ideaCatalystStateForActions.status === "requisition")
       ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA.`
       : null;
+  const ownerAfter =
+    (experimentReviewCommand ? experimentReviewOwner : null) ?? deps.stageOwner(stageAfter);
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
     : experimentMonitorCommand ??
+      experimentReviewCommand ??
       graphImportRepairCommand ??
       ideaCatalystRequisitionCommand ??
       setupOnboardingCommand ??
@@ -577,6 +687,7 @@ export async function runWorkflowAutoIteratorImpl(
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
     : experimentMonitorCommand ??
+      experimentReviewCommand ??
       graphImportRepairCommand ??
       ideaCatalystRequisitionCommand ??
       setupOnboardingCommand ??
@@ -597,6 +708,15 @@ export async function runWorkflowAutoIteratorImpl(
                 asRecord(manifest.paper_ingestion)?.graphPresenceStatus
             ) ?? graphPresenceCheck?.status ?? null,
         })
+      : stageAfter === "experiment" &&
+          reviewedAutoExperimentLaunchEnabled &&
+          experimentReviewState
+        ? deps.deriveExperimentReviewMicroStage({
+            state: experimentReviewState,
+            autonomousExecution: autonomousExecutionState,
+            hasActiveRuns: shouldMonitorExperiments,
+            readyForAnalysis: Boolean(experimentReadyForAnalysis),
+          })
       : stageAfter === "idea"
         ? deriveIdeaCatalystMicroStage(asRecord(manifest.idea_catalyst))
       : stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
@@ -611,6 +731,20 @@ export async function runWorkflowAutoIteratorImpl(
   manifest.blocking_reason = blockingReason;
   manifest.last_heartbeat_at = now;
   manifest.current_micro_stage = nextMicroStage;
+  if (stageAfter === "experiment" && experimentReviewState) {
+    const experimentReviewStatus = experimentReadyForAnalysis
+      ? "ready_for_analysis"
+      : shouldMonitorExperiments
+        ? "monitoring"
+        : normalizeStage(experimentReviewState.status) ?? "planning";
+    manifest.experiment_review_state = serializeExperimentReviewState({
+      ...normalizeExperimentReviewState(experimentReviewState),
+      launchMode: autonomousExecutionState.experimentLaunchMode,
+      status: experimentReviewStatus,
+      microStage: nextMicroStage,
+      lastUpdatedAt: now,
+    });
+  }
   if (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed) {
     manifest.last_handoff_at = now;
   }

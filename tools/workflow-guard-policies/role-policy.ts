@@ -2,6 +2,7 @@ import { normalizeStage, asString } from "../workflow-guard-core/coercion";
 
 export type WorkflowRole =
   | "researcher"
+  | "planner"
   | "orchestrator"
   | "coder"
   | "analyzer"
@@ -26,6 +27,7 @@ export interface StageRequirement {
 
 export const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
   "researcher",
+  "planner",
   "orchestrator",
   "coder",
   "analyzer",
@@ -37,6 +39,7 @@ export const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
 export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
   researcher: {
     allowedContacts: [
+      "planner",
       "orchestrator",
       "coder",
       "analyzer",
@@ -45,6 +48,7 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
       "cross-reviewer",
     ],
     allowedSpawns: [
+      "planner",
       "orchestrator",
       "coder",
       "analyzer",
@@ -77,6 +81,23 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
       "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md-api for arXiv papers, then arxiv2md as the legacy webpage fallback, and use papers-cool PDF fallback only if all Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
       "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
       "Keep reasoning packets and manifest next_action/resume_action current.",
+    ],
+  },
+  planner: {
+    allowedContacts: ["researcher"],
+    allowedSpawns: [],
+    allowedProjectDirs: ["planner"],
+    allowedProjectFiles: ["orchestrator/TODOS.md", "PROJECT_MANIFEST.json", "TRACK_REGISTRY.json"],
+    allowProjectsStateWrite: false,
+    writeScopeLabels: [
+      "{PROJ}/planner/",
+      "{PROJ}/orchestrator/TODOS.md (append-only)",
+      "{PROJ}/PROJECT_MANIFEST.json via workflow tools only",
+      "{PROJ}/TRACK_REGISTRY.json via workflow tools only",
+    ],
+    backgroundTasks: [
+      "Tighten the experiment packet, claim-to-experiment alignment, and stop rules in {PROJ}/planner/.",
+      "Keep compute estimates and falsifier coverage explicit before any launch request reaches Coder.",
     ],
   },
   orchestrator: {
@@ -200,6 +221,9 @@ export function normalizeWorkflowRole(value: string | null | undefined): Workflo
     normalized === "writer"
   ) {
     return "academic_writer";
+  }
+  if (normalized.includes("planner")) {
+    return "planner";
   }
   return WORKFLOW_ROLE_ORDER.find((role) => normalized.includes(role)) ?? null;
 }

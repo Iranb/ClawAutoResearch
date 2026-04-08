@@ -5,6 +5,10 @@ import {
 import { normalizePaperIngestionState } from "../workflow-guard-state/paper-ingestion";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
+import {
+  normalizeAutonomousExecutionState,
+  normalizeExperimentReviewState,
+} from "../workflow-guard-state/experiment-review";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   hasActiveIdeaCatalystRequisitionRequest,
@@ -21,6 +25,7 @@ import {
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
+import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 
@@ -42,6 +47,12 @@ type StagePreflightDeps = {
   materializeReviewPressurePacket: (params: {
     projectRoot: string;
     reviewPressureMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeExperimentReviewState: (params: {
+    projectRoot: string;
+    experimentReviewMaterialization?: Record<string, unknown>;
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
@@ -117,6 +128,7 @@ const PAPER_STORY_PREP_STAGES = new Set([
   "write",
   "submit",
 ]);
+const EXPERIMENT_REVIEW_PREP_STAGES = new Set(["experiment"]);
 const REVIEW_PRESSURE_PREP_STAGES = new Set(["review", "write", "submit"]);
 const LITERATURE_DISCOVERY_PREP_STAGES = new Set([
   "idea",
@@ -435,6 +447,63 @@ async function shouldMaterializePaperStory(params: {
   return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
 }
 
+async function shouldMaterializeExperimentReview(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !EXPERIMENT_REVIEW_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const autonomousExecution = normalizeAutonomousExecutionState(
+    params.manifest.autonomous_execution
+  );
+  if (autonomousExecution.experimentLaunchMode !== "reviewed_auto") {
+    return false;
+  }
+  const experimentSearch = params.manifest.experiment_search;
+  const experimentSearchStatus = normalizeStageValue(
+    experimentSearch && typeof experimentSearch === "object"
+      ? (experimentSearch as Record<string, unknown>).status
+      : null
+  );
+  if (experimentSearchStatus === "ready_for_analysis") {
+    return false;
+  }
+  const experimentReview = await loadExperimentReviewState({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+  });
+  if (experimentReview.status === "missing") {
+    return true;
+  }
+  if (
+    await anyArtifactMissing(params.projectRoot, [
+      experimentReview.packetPath,
+      experimentReview.plannerPlanPath,
+      experimentReview.launchDecisionPath,
+    ])
+  ) {
+    return true;
+  }
+  const stateTimestamp = parseTimestampMs(experimentReview.lastUpdatedAt);
+  if (stateTimestamp === null) {
+    return true;
+  }
+  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
+    "TRACK_REGISTRY.json",
+    "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+    "researcher/ideation/GRAPH_IDEATION_PACKET.json",
+    "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json",
+    "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json",
+    "researcher/papernexus/GRAPH_STORYLINE_PACKET.json",
+    experimentReview.analyzerReportPath,
+    experimentReview.crossReviewerReportPath,
+    experimentReview.launchDecisionPath,
+  ]);
+  return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
+}
+
 async function shouldMaterializeReviewPressure(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -685,6 +754,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
       trigger,
       agentId: params.agentId ?? null,
       paperStoryMaterialization: {
+        basis_stage: params.stage,
+      },
+    })
+  );
+  await runStep("experiment_review_state", shouldMaterializeExperimentReview, () =>
+    params.deps.materializeExperimentReviewState({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+      experimentReviewMaterialization: {
         basis_stage: params.stage,
       },
     })

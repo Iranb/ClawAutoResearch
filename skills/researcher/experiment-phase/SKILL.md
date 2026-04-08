@@ -19,6 +19,15 @@ allowed-tools:
 
 Orchestrate full experiment execution: classify dependencies → track-aware dispatch → assign atomic launches to Coder → monitor → decide → analyze.
 
+In `reviewed_auto` mode, EXPERIMENT includes a pre-launch review loop before any remote run starts:
+
+- `planning` — Planner refreshes `planner/EXPERIMENT_REVIEW_PACKET.json` and `planner/EXPERIMENT_PLAN.md`
+- `analyzer_review` — Analyzer audits design reasonableness
+- `cross_review` — Cross-Reviewer attacks novelty/confounds/falsifiers
+- `synthesis` — Researcher records `researcher/EXPERIMENT_LAUNCH_DECISION.json`
+- `launching` — Coder launches only from an approved packet
+- `monitoring` — `/monitor-experiment` takes over once real runs exist
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** when building launch groups; if a run combines multiple hypothesis changes, split it or label it as non-attributable.
@@ -190,6 +199,15 @@ Coder may apply only bounded runtime fixes needed to keep the assigned runs aliv
 - lower evaluation frequency
 
 Coder may not silently change the scientific question, dataset, metric, or core model semantics.
+
+In `reviewed_auto` mode, do not dispatch Coder until these artifacts are durable and aligned:
+
+- `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json`
+- `{PROJ}/planner/EXPERIMENT_PLAN.md`
+- `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json` with `launch_approved: true`
+- required analyzer / cross-reviewer reports
+
+If the review loop returns `revise` or `block`, keep ownership with Researcher, revise the packet, and rerun review instead of launching anyway.
 
 ## Phase 5: Monitor Until Completion
 

@@ -7,6 +7,7 @@ import {
 
 export type DispatchableWorkflowRole =
   | "researcher"
+  | "planner"
   | "orchestrator"
   | "coder"
   | "analyzer"
