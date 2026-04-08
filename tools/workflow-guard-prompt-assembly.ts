@@ -129,9 +129,15 @@ export function buildFocusedPromptAssemblyImpl(
     "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
   );
   layer2Lines.push(
+    "Interruptibility rule: keep the main session interruptible. If a task needs more than a quick turn to scope or execute safely, split it into a bounded packet, delegated branch, or workflow-owned background action instead of monopolizing the thread."
+  );
+  layer2Lines.push(
     "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
   );
   if (snapshot.role === "researcher") {
+    layer2Lines.push(
+      "Bootstrap-vs-guard rule: AGENTS.md only carries stable role policy. Stage-local checklists, queue state, and the next bounded action in this Workflow Guard override memory or stale templates."
+    );
     layer2Lines.push(
       'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
     );
@@ -140,6 +146,26 @@ export function buildFocusedPromptAssemblyImpl(
         'Heartbeat first step: call research_workflow {"action":"auto_iterator_tick","iterator":{"mode":"heartbeat"}} before any manual planning or ad hoc spawning.'
       );
     }
+  }
+  if (snapshot.role === "reviewer") {
+    layer2Lines.push(
+      "Review independence rule: operate only on the explicit review packet or cited paths for this request; do not widen into hidden project context or implementation help."
+    );
+  }
+  if (snapshot.role === "cross-reviewer") {
+    layer2Lines.push(
+      "Cross-review rule: stay stateless and finish standard novelty/outline/prose packets inline; if the request turns into multi-step evidence gathering, stop and hand it back to the caller."
+    );
+  }
+  if (snapshot.role === "academic_writer") {
+    layer2Lines.push(
+      "Writing helper rule: use citation-management and venue-templates when bibliography or template constraints become the blocker, and keep TEMPLATE_MAPPING.md aligned with the active template."
+    );
+  }
+  if (snapshot.role === "coder") {
+    layer2Lines.push(
+      "Visualization helper rule: use scientific-visualization for bounded implementation-stage figures when they clarify baseline fidelity, ablations, or sanity checks."
+    );
   }
   const layer2 = layer2Lines.join("\n");
 

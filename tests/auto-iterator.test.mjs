@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -1785,6 +1786,18 @@ test("graph presence check resolves the shared global corpus from registry when 
 
   assert.equal(result.status, "ready");
   assert.equal(result.corpusRoot, sourceRoot);
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.mode, "local_corpus");
+  const graphBuildReport = await fs.readFile(
+    path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+    "utf8"
+  );
+  assert.match(graphBuildReport, /Graph Presence Status:\s+ready/i);
+  assert.match(graphBuildReport, /Expected Papers:\s+1/i);
+  assert.match(graphBuildReport, /Present Papers:\s+1/i);
 });
 
 test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps without treating metadata keys as papers", async (t) => {
@@ -1853,12 +1866,60 @@ test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps w
 test("graph presence check does not fall back to local corpus files when remote PaperNexus access is configured", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    requests.push({
+      method: request.method,
+      pathname: url.pathname,
+      corpus: url.searchParams.get("name"),
+      authorization: request.headers.authorization ?? null,
+    });
+    const payload = {
+      rootPath: "/remote/corpora/shared-global-graph",
+      meta: {
+        name: "shared-global-graph",
+        rootPath: "/remote/corpora/shared-global-graph",
+        paperCount: 1,
+        sourceCount: 1,
+      },
+      manifest: {
+        corpusName: "shared-global-graph",
+        sourceCount: 1,
+        activeSourceCount: 1,
+      },
+      sources: [
+        {
+          sourceKey: "/remote/corpora/shared-global-graph/md/2501.00021--remote-only-paper.md",
+          inputPath: "/remote/corpora/shared-global-graph/md/2501.00021--remote-only-paper.md",
+          kind: "markdown",
+          paperId: "paper:remote-only",
+          paperTitle: "Remote Only Paper",
+          activeInGraph: true,
+        },
+      ],
+      generatedAt: "2026-04-07T01:30:00.000Z",
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8");
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": encoded.length,
+    });
+    response.end(encoded);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
   t.after(async () => {
     if (previousToken === undefined) {
       delete process.env.PAPERNEXUS_API_TOKEN;
     } else {
       process.env.PAPERNEXUS_API_TOKEN = previousToken;
     }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -1907,27 +1968,109 @@ test("graph presence check does not fall back to local corpus files when remote 
   const result = await checkGraphPresenceForWorkflow({
     projectRoot,
     remoteAccess: {
-      apiBaseUrl: "https://papernexus.example/api",
+      apiBaseUrl: `http://127.0.0.1:${port}`,
       tokenSource: "env",
       tokenEnv: "PAPERNEXUS_API_TOKEN",
     },
   });
 
-  assert.equal(result.status, "missing_corpus");
-  assert.match(result.blockingReason ?? "", /remote PaperNexus/i);
-  assert.equal(result.presentPaperCount, 0);
-  assert.equal(result.missingPaperCount, 1);
+  assert.equal(result.status, "ready");
+  assert.equal(result.presentPaperCount, 1);
+  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.corpusRoot, "/remote/corpora/shared-global-graph");
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0], {
+    method: "GET",
+    pathname: "/api/corpus-sources",
+    corpus: "shared-global-graph",
+    authorization: "Bearer test-token",
+  });
+
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.mode, "remote_api");
+  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.present_paper_count, 1);
+  assert.equal(refreshedStatus.expected_paper_count, 1);
 });
 
-test("graph presence check uses recorded remote status metadata when remote_mcp is configured", async (t) => {
+test("graph presence check refreshes remote status metadata through remote_mcp", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const bodyChunks = [];
+    for await (const chunk of request) {
+      bodyChunks.push(chunk);
+    }
+    const rawBody = Buffer.concat(bodyChunks).toString("utf8");
+    const parsedBody = rawBody ? JSON.parse(rawBody) : null;
+    requests.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization ?? null,
+      body: parsedBody,
+    });
+
+    const payload = {
+      jsonrpc: "2.0",
+      id: parsedBody?.id ?? 1,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              rootPath: "/remote/corpora/shared-global-graph",
+              meta: {
+                name: "shared-global-graph",
+                rootPath: "/remote/corpora/shared-global-graph",
+                paperCount: 1,
+                sourceCount: 1,
+              },
+              manifest: {
+                corpusName: "shared-global-graph",
+                sourceCount: 1,
+                activeSourceCount: 1,
+              },
+              sources: [
+                {
+                  sourceKey:
+                    "/remote/corpora/shared-global-graph/md/2501.00022--remote-mcp-paper.md",
+                  inputPath:
+                    "/remote/corpora/shared-global-graph/md/2501.00022--remote-mcp-paper.md",
+                  kind: "markdown",
+                  paperId: "paper:remote-mcp",
+                  paperTitle: "Remote MCP Paper",
+                  activeInGraph: true,
+                },
+              ],
+              generatedAt: "2026-04-07T01:31:00.000Z",
+            }),
+          },
+        ],
+      },
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8");
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": encoded.length,
+    });
+    response.end(encoded);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
   t.after(async () => {
     if (previousToken === undefined) {
       delete process.env.PAPERNEXUS_API_TOKEN;
     } else {
       process.env.PAPERNEXUS_API_TOKEN = previousToken;
     }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -1947,17 +2090,12 @@ test("graph presence check uses recorded remote status metadata when remote_mcp 
       ),
     },
   ]);
-  await seedRemoteGraphStatus(projectRoot, {
-    corpusRoot: "https://papernexus.example/mcp",
-    mode: "remote_mcp",
-    expectedPaperCount: 1,
-    presentPaperCount: 1,
-  });
+  await fs.rm(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), { force: true });
 
   const result = await checkGraphPresenceForWorkflow({
     projectRoot,
     remoteAccess: {
-      mcpUrl: "https://papernexus.example/mcp",
+      mcpUrl: `http://127.0.0.1:${port}/mcp`,
       mcpTransport: "streamable-http",
       tokenSource: "env",
       tokenEnv: "PAPERNEXUS_API_TOKEN",
@@ -1967,7 +2105,20 @@ test("graph presence check uses recorded remote status metadata when remote_mcp 
   assert.equal(result.status, "ready");
   assert.equal(result.presentPaperCount, 1);
   assert.equal(result.missingPaperCount, 0);
-  assert.equal(result.corpusRoot, "https://papernexus.example/mcp");
+  assert.equal(result.corpusRoot, "/remote/corpora/shared-global-graph");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].authorization, "Bearer test-token");
+  assert.equal(requests[0].body?.method, "tools/call");
+  assert.equal(requests[0].body?.params?.name, "corpus_sources");
+  assert.equal(requests[0].body?.params?.arguments?.corpus, "shared-global-graph");
+
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.mode, "remote_mcp");
+  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.present_paper_count, 1);
+  assert.equal(refreshedStatus.expected_paper_count, 1);
 });
 
 test("graph presence check reports remote PaperNexus reconciliation in progress when wrapper-driven ingestion is active", async (t) => {

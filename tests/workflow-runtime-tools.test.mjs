@@ -1954,6 +1954,31 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(reviewSession.state.status, "completed");
   assert.equal(reviewSession.state.stageScope, "review");
+  const reviewStateFile = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "REVIEW_STATE.json"), "utf8")
+  );
+  assert.equal(reviewStateFile.round, 2);
+  assert.equal(reviewStateFile.status, "completed");
+  assert.equal(reviewStateFile.lastVerdict, "ready");
+  assert.deepEqual(reviewStateFile.pendingActions, ["Polish the abstract."]);
+  const reviewPacketFile = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), "utf8")
+  );
+  assert.equal(reviewPacketFile.status, "completed");
+  assert.equal(reviewPacketFile.verdict, "ready");
+  const graphEvidenceSummary = await fs.readFile(
+    path.join(projectRoot, "reviewer", "GRAPH_EVIDENCE_SUMMARY.md"),
+    "utf8"
+  );
+  assert.match(graphEvidenceSummary, /Verdict:\s+ready/i);
+  const submissionSimulationReview = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "reviewer", "SUBMISSION_SIMULATION_REVIEW.json"),
+      "utf8"
+    )
+  );
+  assert.equal(submissionSimulationReview.status, "completed");
+  assert.equal(submissionSimulationReview.verdict, "ready");
 
   const graphGuidedWriting = await executeWorkflowTool(tool, {
     action: "set_graph_guided_writing",
@@ -1984,6 +2009,16 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(externalReview.state.status, "received");
   assert.equal(externalReview.state.reviewSkill, "paperreview-submit");
+  const externalReviewFile = await fs.readFile(
+    path.join(projectRoot, "reviewer", "external_review_2026-03-26.md"),
+    "utf8"
+  );
+  assert.match(externalReviewFile, /Overall Recommendation:\s+minor_revision/i);
+  const rebuttalFile = await fs.readFile(
+    path.join(projectRoot, "reviewer", "rebuttal_2026-03-26.md"),
+    "utf8"
+  );
+  assert.match(rebuttalFile, /Required Action:\s+rollback_write/i);
 
   const paperQc = await executeWorkflowTool(tool, {
     action: "set_paper_qc",
@@ -2013,6 +2048,37 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(figureQc.state.status, "ready");
   assert.equal(figureQc.state.selectionStatus, "pass");
+  const figureReviewFile = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json"), "utf8")
+  );
+  assert.equal(figureReviewFile.caption_alignment_status, "pass");
+  const figureSelectionFile = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "academic_writer", "FIGURE_SELECTION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(figureSelectionFile.selection_status, "pass");
+
+  const citationVerification = await executeWorkflowTool(tool, {
+    action: "record_citation_verification",
+    citationVerification: {
+      verification_status: "verified",
+      bibliography_path: "academic_writer/paper/refs.bib",
+      verification_report_path: "reviewer/CITATION_VERIFICATION.md",
+      verified_citation_count: 12,
+      suspicious_citation_count: 1,
+      hallucinated_citation_count: 0,
+      unresolved_placeholder_count: 0,
+      last_verified_at: "2026-03-26T09:15:00.000Z",
+    },
+  });
+  assert.equal(citationVerification.state.verificationStatus, "verified");
+  const citationVerificationReport = await fs.readFile(
+    path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"),
+    "utf8"
+  );
+  assert.match(citationVerificationReport, /Verification Status:\s+verified/i);
 
   const citationCollection = await executeWorkflowTool(tool, {
     action: "set_citation_collection",
@@ -2046,6 +2112,11 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(reviewIssueTracker.state.status, "open");
   assert.equal(reviewIssueTracker.state.openCounts.high, 1);
+  const reviewIssuesFile = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"), "utf8")
+  );
+  assert.equal(reviewIssuesFile.status, "open");
+  assert.equal(reviewIssuesFile.open_counts.high, 1);
 
   const experimentSearch = await executeWorkflowTool(tool, {
     action: "set_experiment_search",

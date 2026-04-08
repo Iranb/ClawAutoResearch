@@ -1592,6 +1592,7 @@ const DEFAULT_WRITING_SECTION_PACKET_DIR = "academic_writer/section-packets";
 const DEFAULT_REVIEW_PACKET_PATH = "reviewer/REVIEW_PACKET.json";
 const DEFAULT_REVIEW_ISSUES_PATH = "reviewer/REVIEW_ISSUES.json";
 const DEFAULT_GRAPH_EVIDENCE_SUMMARY_PATH = "reviewer/GRAPH_EVIDENCE_SUMMARY.md";
+const DEFAULT_RESEARCH_REVIEW_STATE_PATH = "researcher/REVIEW_STATE.json";
 const DEFAULT_THEORY_STATE_PATH = "analyzer/THEORY_STATE.json";
 const DEFAULT_THEORY_NOTE_PATH = "analyzer/THEORY_SUPPORT_NOTE.md";
 const DEFAULT_PROOF_PACKET_DIR = "analyzer/proof-packets";
@@ -2491,6 +2492,33 @@ async function saveManifest(projectRoot: string, manifest: Record<string, unknow
   await writeJsonEnsured(manifestPath, manifest);
 }
 
+async function upsertJsonArtifact(
+  targetPath: string | null,
+  patch: Record<string, unknown>
+): Promise<void> {
+  if (!targetPath) {
+    return;
+  }
+  const current = (await readJsonIfExists<Record<string, unknown>>(targetPath)) ?? {};
+  await writeJsonEnsured(targetPath, {
+    ...current,
+    ...patch,
+  });
+}
+
+async function scaffoldMarkdownArtifactIfMissing(
+  targetPath: string | null,
+  content: string
+): Promise<void> {
+  if (!targetPath) {
+    return;
+  }
+  if (await pathExists(targetPath)) {
+    return;
+  }
+  await writeTextEnsured(targetPath, content);
+}
+
 function getGateStatePath(projectRoot: string): string {
   return getGateStatePathImpl(projectRoot);
 }
@@ -3136,6 +3164,25 @@ async function hydrateReviewIssueTrackerState(params: {
   );
   if (!issueManifest) {
     return state;
+  }
+  const issueManifestRecord = asRecord(issueManifest);
+  if (issueManifestRecord) {
+    const hydratedState = normalizeReviewIssueTrackerState(issueManifestRecord);
+    const hasExplicitCounts =
+      Object.prototype.hasOwnProperty.call(issueManifestRecord, "open_counts") ||
+      Object.prototype.hasOwnProperty.call(issueManifestRecord, "openCounts");
+    return {
+      ...state,
+      status: hydratedState.status ?? state.status,
+      issues: hydratedState.issues.length > 0 ? hydratedState.issues : state.issues,
+      openCounts: hasExplicitCounts ? hydratedState.openCounts : state.openCounts,
+      scoreRecords:
+        hydratedState.scoreRecords.length > 0 ? hydratedState.scoreRecords : state.scoreRecords,
+      lastReviewRound:
+        hydratedState.lastReviewRound > 0 ? hydratedState.lastReviewRound : state.lastReviewRound,
+      lastUpdatedAt: hydratedState.lastUpdatedAt ?? state.lastUpdatedAt,
+      pendingReason: hydratedState.pendingReason ?? state.pendingReason,
+    };
   }
   const hydrated = summarizeReviewIssuesFromManifest(issueManifest);
   return {
@@ -8754,6 +8801,57 @@ export async function setReviewSessionState(params: {
 
   manifest.review_session = serializeReviewSessionState(next);
   await saveManifest(params.projectRoot, manifest);
+  await writeJsonEnsured(
+    path.join(params.projectRoot, DEFAULT_RESEARCH_REVIEW_STATE_PATH),
+    {
+      round: next.round,
+      status: next.status === "completed" ? "completed" : "in_progress",
+      lastScore: deriveResearchMemoryReviewScore(next),
+      lastVerdict: deriveResearchMemoryReviewVerdict(next.verdict),
+      pendingActions: next.actionItems,
+      timestamp: next.lastUpdatedAt ?? new Date().toISOString(),
+    }
+  );
+  await upsertJsonArtifact(
+    resolveProjectArtifactPath(params.projectRoot, next.reviewPacketPath),
+    {
+      status: next.status,
+      stage_scope: next.stageScope,
+      round: next.round,
+      verdict: next.verdict,
+      rubric: serializeReviewSessionRubric(next.rubric),
+      reviewer_summary: next.reviewerSummary,
+      action_items: next.actionItems,
+      blocking_artifacts: next.blockingArtifacts,
+      updated_at: next.lastUpdatedAt,
+      source: "research_workflow.set_review_session",
+    }
+  );
+  await scaffoldMarkdownArtifactIfMissing(
+    resolveProjectArtifactPath(params.projectRoot, next.graphEvidenceSummaryPath),
+    [
+      "# Graph Evidence Summary",
+      "",
+      `Status: ${next.status}`,
+      `Verdict: ${next.verdict ?? "unset"}`,
+      `Reviewer Summary: ${next.reviewerSummary ?? "none"}`,
+      `Updated At: ${next.lastUpdatedAt ?? "unset"}`,
+    ].join("\n")
+  );
+  await upsertJsonArtifact(
+    path.join(params.projectRoot, DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH),
+    {
+      status: next.status,
+      stage_scope: next.stageScope,
+      round: next.round,
+      verdict: next.verdict,
+      reviewer_summary: next.reviewerSummary,
+      action_items: next.actionItems,
+      blocking_artifacts: next.blockingArtifacts,
+      updated_at: next.lastUpdatedAt,
+      source: "research_workflow.set_review_session",
+    }
+  );
 
   return {
     state: next,
@@ -8766,6 +8864,44 @@ export async function setReviewSessionState(params: {
       next.latestReviewPath
     ),
   };
+}
+
+function deriveResearchMemoryReviewVerdict(
+  value: string | null | undefined
+): "ready" | "almost" | "not ready" {
+  const normalized = normalizeStage(value);
+  if (normalized && ["ready", "publication_ready", "accept", "accepted"].includes(normalized)) {
+    return "ready";
+  }
+  if (
+    normalized &&
+    ["almost", "almost_ready", "minor_revision", "needs_revision", "revise"].includes(
+      normalized
+    )
+  ) {
+    return "almost";
+  }
+  return "not ready";
+}
+
+function deriveResearchMemoryReviewScore(reviewSession: ReviewSessionState): number {
+  const rubricValues = Object.values(reviewSession.rubric).filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+  if (rubricValues.length > 0) {
+    const average =
+      rubricValues.reduce((sum, value) => sum + value, 0) / rubricValues.length;
+    return Math.round(average * 100) / 100;
+  }
+  const verdict = deriveResearchMemoryReviewVerdict(reviewSession.verdict);
+  switch (verdict) {
+    case "ready":
+      return 8;
+    case "almost":
+      return 6.5;
+    default:
+      return 4;
+  }
 }
 
 export async function setGraphGuidedWritingState(params: {
@@ -8924,20 +9060,48 @@ export async function setExternalReviewState(params: {
   manifest.external_review_state = serializeExternalReviewState(next);
   await saveManifest(params.projectRoot, manifest);
 
+  const externalReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.externalReviewPath
+  );
+  const reviewResponseResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.reviewResponsePath
+  );
+  await scaffoldMarkdownArtifactIfMissing(
+    externalReviewResolvedPath,
+    [
+      "# External Review",
+      "",
+      `Status: ${next.status}`,
+      `Provider: ${next.provider ?? "unset"}`,
+      `Source Label: ${next.sourceLabel ?? "unset"}`,
+      `Overall Recommendation: ${next.overallRecommendation ?? "unset"}`,
+      `Required Action: ${next.requiredAction ?? "unset"}`,
+      `Last Updated At: ${next.lastUpdatedAt ?? "unset"}`,
+      `Pending Reason: ${next.pendingReason ?? "none"}`,
+    ].join("\n")
+  );
+  await scaffoldMarkdownArtifactIfMissing(
+    reviewResponseResolvedPath,
+    [
+      "# Review Response",
+      "",
+      `Status: ${next.status}`,
+      `Overall Recommendation: ${next.overallRecommendation ?? "unset"}`,
+      `Required Action: ${next.requiredAction ?? "unset"}`,
+      `Last Updated At: ${next.lastUpdatedAt ?? "unset"}`,
+    ].join("\n")
+  );
+
   return {
     state: next,
     submittedPdfResolvedPath: resolveProjectArtifactPath(
       params.projectRoot,
       next.submittedPdfPath
     ),
-    externalReviewResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.externalReviewPath
-    ),
-    reviewResponseResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.reviewResponsePath
-    ),
+    externalReviewResolvedPath,
+    reviewResponseResolvedPath,
     conclusionReady: isExternalReviewConclusionReady(next),
   };
 }
@@ -10283,16 +10447,35 @@ export async function setFigureQcState(params: {
   manifest.figure_qc = serializeFigureQcState(next);
   await saveManifest(params.projectRoot, manifest);
 
+  const figureReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.figureReviewPath
+  );
+  const figureSelectionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    next.figureSelectionPath
+  );
+  await upsertJsonArtifact(figureReviewResolvedPath, {
+    status: next.status,
+    duplicate_figure_status: next.duplicateFigureStatus,
+    caption_alignment_status: next.captionAlignmentStatus,
+    text_alignment_status: next.textAlignmentStatus,
+    selection_status: next.selectionStatus,
+    updated_at: next.lastUpdatedAt,
+    source: "research_workflow.set_figure_qc",
+  });
+  await upsertJsonArtifact(figureSelectionResolvedPath, {
+    status: next.status,
+    selection_status: next.selectionStatus,
+    duplicate_figure_status: next.duplicateFigureStatus,
+    updated_at: next.lastUpdatedAt,
+    source: "research_workflow.set_figure_qc",
+  });
+
   return {
     state: next,
-    figureReviewResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.figureReviewPath
-    ),
-    figureSelectionResolvedPath: resolveProjectArtifactPath(
-      params.projectRoot,
-      next.figureSelectionPath
-    ),
+    figureReviewResolvedPath,
+    figureSelectionResolvedPath,
     hardFailure: isFigureQcHardFailure(next),
   };
 }
@@ -10353,8 +10536,14 @@ export async function setReviewIssueTrackerState(params: {
     params.projectRoot,
     next.issueManifestPath
   );
-  if (Array.isArray(patch.issues) && issueManifestResolvedPath) {
-    await writeJsonEnsured(issueManifestResolvedPath, {
+  if (issueManifestResolvedPath) {
+    await upsertJsonArtifact(issueManifestResolvedPath, {
+      status: next.status,
+      last_review_round: next.lastReviewRound,
+      updated_at: next.lastUpdatedAt,
+      pending_reason: next.pendingReason,
+      open_counts: serializeReviewIssueCounts(next.openCounts),
+      score_records: next.scoreRecords,
       issues: next.issues.map((issue) => serializeReviewIssueState(issue)),
     });
   }
@@ -10407,6 +10596,20 @@ export async function recordCitationVerification(params: {
     syncManifestExperimentMemory,
     normalizeRole,
   } as any);
+  await scaffoldMarkdownArtifactIfMissing(
+    result.verificationReportResolvedPath,
+    [
+      "# Citation Verification",
+      "",
+      `Verification Status: ${result.state.verificationStatus ?? "unknown"}`,
+      `Verified Citations: ${result.state.verifiedCitationCount}`,
+      `Suspicious Citations: ${result.state.suspiciousCitationCount}`,
+      `Hallucinated Citations: ${result.state.hallucinatedCitationCount}`,
+      `Unresolved Placeholders: ${result.state.unresolvedPlaceholderCount}/${result.state.allowedPlaceholderCount}`,
+      `Last Verified At: ${result.state.lastVerifiedAt ?? "unset"}`,
+      `Pending Reason: ${result.state.pendingReason ?? "none"}`,
+    ].join("\n")
+  );
   return {
     ...result,
     state: result.state as CitationIntegrityState,

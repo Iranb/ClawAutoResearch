@@ -239,6 +239,10 @@ test("formatWorkflowSnapshotForPrompt keeps exact handoff and auto-iterator remi
     prompt,
     /Stage completion rule: when your stage outputs are ready, call research_workflow\.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically\./
   );
+  assert.match(
+    prompt,
+    /Interruptibility rule: keep the main session interruptible/i
+  );
   assert.doesNotMatch(prompt, /Idle research:/);
   assert.doesNotMatch(prompt, /Writing contract:/);
   assert.doesNotMatch(prompt, /PaperNexus local defaults:/);

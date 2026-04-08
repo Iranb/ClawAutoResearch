@@ -93,3 +93,33 @@ test("core agent prompts document an interruptible delegation policy", async () 
   assert.match(reviewerAgents, /stop the current branch immediately|stop the current review branch immediately/i);
   assert.match(crossReviewerAgents, /single-turn inline review|one-turn inline review/i);
 });
+
+test("agent bootstrap guides stay within a prompt-safe size budget while preserving stable role rules", async () => {
+  const agentFiles = [
+    "agents/researcher/AGENTS.md",
+    "agents/orchestrator/AGENTS.md",
+    "agents/coder/AGENTS.md",
+    "agents/analyzer/AGENTS.md",
+    "agents/academic_writer/AGENTS.md",
+    "agents/reviewer/AGENTS.md",
+    "agents/cross-reviewer/AGENTS.md",
+  ];
+
+  for (const relativePath of agentFiles) {
+    const content = await readRepoFile(relativePath);
+    assert.ok(
+      content.length <= 12_000,
+      `Expected ${relativePath} to stay under the bootstrap prompt budget, got ${content.length} chars.`
+    );
+    assert.match(
+      content,
+      /\.openclaw-research|PROJECTS_ROOT/i,
+      `Expected ${relativePath} to preserve the stable runtime/project scope rules.`
+    );
+    assert.match(
+      content,
+      /HEARTBEAT_OK/i,
+      `Expected ${relativePath} to keep the heartbeat contract visible.`
+    );
+  }
+});

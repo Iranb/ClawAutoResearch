@@ -156,6 +156,68 @@ function pickCount(
   return null;
 }
 
+function collectTextContent(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectTextContent(entry));
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  const texts: string[] = [];
+  if (typeof record.text === "string" && record.text.trim()) {
+    texts.push(record.text);
+  }
+  if (Array.isArray(record.content)) {
+    texts.push(...record.content.flatMap((entry) => collectTextContent(entry)));
+  }
+  if ("result" in record) {
+    texts.push(...collectTextContent(record.result));
+  }
+  if ("data" in record) {
+    texts.push(...collectTextContent(record.data));
+  }
+  return texts;
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return asRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  if (
+    Array.isArray(record.sources) ||
+    asRecord(record.meta) ||
+    asRecord(record.manifest) ||
+    typeof record.rootPath === "string"
+  ) {
+    return record;
+  }
+  if ("result" in record) {
+    const parsed = parseJsonObject(record.result);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  for (const text of collectTextContent(record)) {
+    const parsed = parseJsonObject(text);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 function normalizeArxivId(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -346,6 +408,11 @@ async function writeJsonEnsured(targetPath: string, value: unknown): Promise<voi
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeTextEnsured(targetPath: string, value: string): Promise<void> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value.endsWith("\n") ? value : `${value}\n`, "utf8");
+}
+
 async function readManifest(projectRoot: string): Promise<ManifestLike> {
   return (
     (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ?? {}
@@ -363,6 +430,88 @@ function inferProjectId(projectRoot: string, manifest: ManifestLike): string | n
 
 function getGraphPresenceReportPath(projectRoot: string): string {
   return path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json");
+}
+
+function getGraphBuildReportPath(projectRoot: string): string {
+  return path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md");
+}
+
+function buildStatusRecordFromPresenceResult(params: {
+  result: GraphPresenceCheckResult;
+  mode: string;
+  existing?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  return {
+    ...(params.existing ?? {}),
+    mode: params.mode,
+    checked_at: params.result.checkedAt,
+    status: params.result.status,
+    corpus_root: params.result.corpusRoot,
+    corpus_name: params.result.corpusName,
+    expected_paper_count: params.result.expectedPaperCount,
+    present_paper_count: params.result.presentPaperCount,
+    missing_paper_count: params.result.missingPaperCount,
+    refresh_required: params.result.refreshRequired,
+    refresh_reason: params.result.refreshReason,
+    repair_required: params.result.repairRequired,
+    repair_reason: params.result.repairReason,
+    repair_target_corpus: params.result.repairTargetCorpus,
+    missing_papers: serializeMissingPapers(params.result.missingPapers),
+    present_papers: serializePresentPapers(params.result.presentPapers),
+  };
+}
+
+function renderGraphBuildReport(result: GraphPresenceCheckResult): string {
+  const lines = [
+    "# Graph Build Report",
+    "",
+    `Checked At: ${result.checkedAt}`,
+    `Project: ${result.projectId ?? path.basename(result.projectRoot)}`,
+    `Graph Presence Status: ${result.status}`,
+    `Corpus: ${result.corpusName ?? "unset"}`,
+    `Corpus Root: ${result.corpusRoot ?? "unset"}`,
+    `Expected Papers: ${result.expectedPaperCount}`,
+    `Present Papers: ${result.presentPaperCount}`,
+    `Missing Papers: ${result.missingPaperCount}`,
+    `Refresh Required: ${result.refreshRequired ? "yes" : "no"}`,
+    `Repair Required: ${result.repairRequired ? "yes" : "no"}`,
+  ];
+  if (result.blockingReason) {
+    lines.push(`Blocking Reason: ${result.blockingReason}`);
+  }
+  if (result.refreshReason && result.refreshReason !== result.blockingReason) {
+    lines.push(`Refresh Reason: ${result.refreshReason}`);
+  }
+  if (result.repairReason) {
+    lines.push(`Repair Reason: ${result.repairReason}`);
+  }
+  if (result.missingPapers.length > 0) {
+    lines.push("", "## Missing Papers");
+    for (const paper of result.missingPapers) {
+      lines.push(`- ${paper.title ?? paper.canonicalId ?? paper.normalizedTitle ?? "unknown"}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function persistGraphPresenceArtifacts(params: {
+  projectRoot: string;
+  result: GraphPresenceCheckResult;
+  mode: string;
+  existingStatusRecord?: Record<string, unknown> | null;
+}): Promise<void> {
+  await writeJsonEnsured(
+    path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json"),
+    buildStatusRecordFromPresenceResult({
+      result: params.result,
+      mode: params.mode,
+      existing: params.existingStatusRecord ?? null,
+    })
+  );
+  await writeTextEnsured(
+    getGraphBuildReportPath(params.projectRoot),
+    renderGraphBuildReport(params.result)
+  );
 }
 
 function getRegistryPath(): string {
@@ -1069,6 +1218,20 @@ function serializeMissingPapers(missingPapers: GraphPresenceMissingPaper[]) {
   }));
 }
 
+function serializePresentPapers(presentPapers: GraphPresenceMatch[]) {
+  return presentPapers.map((paper) => ({
+    canonical_id: paper.canonicalId,
+    title: paper.title,
+    source_kind: paper.sourceKind,
+    source_provider: paper.sourceProvider,
+    retrieval_providers: paper.retrievalProviders,
+    matched_by: paper.matchedBy,
+    corpus_paper_id: paper.corpusPaperId,
+    corpus_paper_title: paper.corpusPaperTitle,
+    corpus_source_key: paper.corpusSourceKey,
+  }));
+}
+
 function toMissingPaper(expected: ExpectedPaper): GraphPresenceMissingPaper {
   return {
     canonicalId: expected.canonicalId,
@@ -1174,6 +1337,253 @@ function mergeRemoteMissingPapers(params: {
   return params.expectedPapers.slice(0, inferredMissingCount).map((paper) => toMissingPaper(paper));
 }
 
+async function fetchRemoteApiCorpusSources(params: {
+  apiBaseUrl: string;
+  token: string;
+  corpusName: string | null;
+}): Promise<{ payload: Record<string, unknown> | null; error: string | null }> {
+  try {
+    const url = new URL(
+      `${params.apiBaseUrl.replace(/\/+$/, "")}/api/corpus-sources`
+    );
+    if (params.corpusName) {
+      url.searchParams.set("name", params.corpusName);
+    }
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return {
+        payload: null,
+        error: `Remote API corpus-sources returned ${response.status}: ${response.statusText}${text ? ` (${text})` : ""}`,
+      };
+    }
+    return {
+      payload: parseJsonObject(text),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      payload: null,
+      error: `Remote API corpus-sources failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+async function fetchRemoteMcpCorpusSources(params: {
+  remoteInspection: Awaited<ReturnType<typeof inspectPapernexusRemoteAccess>>;
+  corpusName: string | null;
+}): Promise<{ payload: Record<string, unknown> | null; error: string | null }> {
+  const mcpUrl = params.remoteInspection.summary.mcpUrl;
+  const token = params.remoteInspection.token;
+  if (!mcpUrl || !token) {
+    return {
+      payload: null,
+      error: "Remote MCP URL or bearer token is unavailable.",
+    };
+  }
+
+  try {
+    const response = await fetch(mcpUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "corpus_sources",
+          arguments: params.corpusName ? { corpus: params.corpusName } : {},
+        },
+      }),
+      signal: AbortSignal.timeout(params.remoteInspection.summary.mcpTimeoutMs),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return {
+        payload: null,
+        error: `Remote MCP corpus_sources returned ${response.status}: ${response.statusText}${text ? ` (${text})` : ""}`,
+      };
+    }
+    let parsedEnvelope: unknown = null;
+    try {
+      parsedEnvelope = JSON.parse(text);
+    } catch (error) {
+      return {
+        payload: null,
+        error: `Remote MCP corpus_sources returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    const parsed = parseJsonObject(asRecord(parsedEnvelope)?.result ?? parsedEnvelope);
+    if (!parsed) {
+      return {
+        payload: null,
+        error: "Remote MCP corpus_sources returned an unreadable JSON payload.",
+      };
+    }
+    return {
+      payload: parsed,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      payload: null,
+      error: `Remote MCP corpus_sources failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function buildRemoteStatusRecordFromSources(params: {
+  payload: Record<string, unknown>;
+  mode: "remote_api" | "remote_mcp";
+  checkedAt: string;
+  expectedPapers: ExpectedPaper[];
+  remoteEndpoint: string | null;
+}): Record<string, unknown> {
+  const meta = asRecord(params.payload.meta);
+  const manifest = asRecord(params.payload.manifest);
+  const sources = Array.isArray(params.payload.sources)
+    ? params.payload.sources
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const corpusEntries = sources.map((entry) => buildCorpusPaper(entry));
+  const presentPapers: GraphPresenceMatch[] = [];
+  const missingPapers: GraphPresenceMissingPaper[] = [];
+
+  for (const paper of params.expectedPapers) {
+    const match = matchExpectedPaper(paper, corpusEntries);
+    if (match) {
+      presentPapers.push(match);
+    } else {
+      missingPapers.push(toMissingPaper(paper));
+    }
+  }
+
+  const status: GraphPresenceStatus =
+    params.expectedPapers.length === 0
+      ? "missing_sources"
+      : missingPapers.length > 0
+        ? "missing_papers"
+        : "ready";
+
+  return {
+    checked_at: params.checkedAt,
+    status,
+    mode: params.mode,
+    corpus_name:
+      pickString(manifest, ["corpusName", "corpus_name"]) ??
+      pickString(meta, ["name", "corpusName", "corpus_name"]) ??
+      null,
+    corpus_root:
+      pickString(params.payload, ["rootPath", "root_path"]) ??
+      pickString(manifest, ["rootPath", "root_path"]) ??
+      pickString(meta, ["rootPath", "root_path"]) ??
+      params.remoteEndpoint,
+    expected_paper_count: params.expectedPapers.length,
+    present_paper_count: presentPapers.length,
+    missing_paper_count: missingPapers.length,
+    missing_papers: serializeMissingPapers(missingPapers),
+    present_papers: serializePresentPapers(presentPapers),
+    refresh_required: status !== "ready",
+    refresh_reason:
+      status === "ready"
+        ? null
+        : buildBlockingReason(
+            "missing_papers",
+            missingPapers,
+            params.expectedPapers.length,
+            pickString(params.payload, ["rootPath", "root_path"]) ?? params.remoteEndpoint
+          ),
+  };
+}
+
+async function refreshRemoteStatusRecord(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  checkedAt: string;
+  expectedPapers: ExpectedPaper[];
+  remoteAccess: PapernexusRemoteAccessConfig;
+  remoteInspection: Awaited<ReturnType<typeof inspectPapernexusRemoteAccess>>;
+  cachedStatusRecord: Record<string, unknown> | null;
+}): Promise<{
+  statusRecord: Record<string, unknown> | null;
+  refreshError: string | null;
+}> {
+  const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
+  const targetCorpus = resolveGraphRepairTargetCorpus({
+    manifest: params.manifest,
+    corpusName: pickString(params.cachedStatusRecord, ["corpus_name", "corpusName"]),
+  });
+  const remoteEndpoint =
+    params.remoteInspection.summary.mcpUrl ?? params.remoteInspection.summary.apiBaseUrl ?? null;
+
+  if (
+    params.remoteInspection.summary.mcpUrl &&
+    params.remoteInspection.summary.mcpTransport === "streamable-http"
+  ) {
+    const mcpResult = await fetchRemoteMcpCorpusSources({
+      remoteInspection: params.remoteInspection,
+      corpusName: targetCorpus,
+    });
+    if (mcpResult.payload) {
+      const statusRecord = buildRemoteStatusRecordFromSources({
+        payload: mcpResult.payload,
+        mode: "remote_mcp",
+        checkedAt: params.checkedAt,
+        expectedPapers: params.expectedPapers,
+        remoteEndpoint,
+      });
+      await writeJsonEnsured(statusPath, statusRecord);
+      return { statusRecord, refreshError: null };
+    }
+    if (!params.remoteInspection.summary.apiBaseUrl) {
+      return {
+        statusRecord: params.cachedStatusRecord,
+        refreshError: mcpResult.error,
+      };
+    }
+  }
+
+  if (params.remoteInspection.summary.apiBaseUrl && params.remoteInspection.token) {
+    const apiResult = await fetchRemoteApiCorpusSources({
+      apiBaseUrl: params.remoteInspection.summary.apiBaseUrl,
+      token: params.remoteInspection.token,
+      corpusName: targetCorpus,
+    });
+    if (apiResult.payload) {
+      const statusRecord = buildRemoteStatusRecordFromSources({
+        payload: apiResult.payload,
+        mode: "remote_api",
+        checkedAt: params.checkedAt,
+        expectedPapers: params.expectedPapers,
+        remoteEndpoint,
+      });
+      await writeJsonEnsured(statusPath, statusRecord);
+      return { statusRecord, refreshError: null };
+    }
+    return {
+      statusRecord: params.cachedStatusRecord,
+      refreshError: apiResult.error,
+    };
+  }
+
+  return {
+    statusRecord: params.cachedStatusRecord,
+    refreshError: null,
+  };
+}
+
 async function checkGraphPresenceViaRemoteStatus(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -1189,10 +1599,25 @@ async function checkGraphPresenceViaRemoteStatus(params: {
 }): Promise<GraphPresenceCheckResult> {
   const remoteInspection = await inspectPapernexusRemoteAccess(params.remoteAccess);
   const statusPath = path.join(params.projectRoot, "graph", "PAPERNEXUS_STATUS.json");
-  const statusRecord = await readJsonIfExists<Record<string, unknown>>(statusPath);
+  const cachedStatusRecord = await readJsonIfExists<Record<string, unknown>>(statusPath);
   const remoteEndpoint =
     remoteInspection.summary.apiBaseUrl ?? remoteInspection.summary.mcpUrl ?? null;
   const paperIngestionProgress = summarizePaperIngestionProgress(params.manifest);
+  const refreshedStatus = remoteInspection.tokenAvailable
+    ? await refreshRemoteStatusRecord({
+        projectRoot: params.projectRoot,
+        manifest: params.manifest,
+        checkedAt: params.checkedAt,
+        expectedPapers: params.expected.papers,
+        remoteAccess: params.remoteAccess,
+        remoteInspection,
+        cachedStatusRecord,
+      })
+    : {
+        statusRecord: cachedStatusRecord,
+        refreshError: null,
+      };
+  const statusRecord = refreshedStatus.statusRecord;
 
   let status: GraphPresenceStatus = "ready";
   let refreshReason: string | null = null;
@@ -1217,6 +1642,8 @@ async function checkGraphPresenceViaRemoteStatus(params: {
           presentPaperCount: 0,
           paperIngestion: paperIngestionProgress,
         })
+      : refreshedStatus.refreshError
+        ? `Failed to refresh remote PaperNexus graph status${remoteEndpoint ? ` from ${remoteEndpoint}` : ""}: ${refreshedStatus.refreshError}`
       : `No remote PaperNexus graph status is recorded yet for ${remoteEndpoint ?? "the configured endpoint"}. ` +
         "Run /graph-build with the configured remote PaperNexus endpoint to refresh graph readiness metadata and the brainstorm bundle before frontier mapping or ideation.";
     presentPaperCount = 0;
@@ -1360,7 +1787,15 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     repair_reason: result.repairReason,
     repair_target_corpus: result.repairTargetCorpus,
     missing_papers: serializeMissingPapers(result.missingPapers),
-    present_papers: [],
+    present_papers: serializePresentPapers(result.presentPapers),
+  });
+  await persistGraphPresenceArtifacts({
+    projectRoot: params.projectRoot,
+    result,
+    mode:
+      pickString(statusRecord, ["mode"]) ??
+      (remoteInspection.summary.mcpUrl ? "remote_mcp" : "remote_api"),
+    existingStatusRecord: statusRecord,
   });
 
   return result;
@@ -1553,17 +1988,27 @@ export async function checkGraphPresenceForWorkflow(params: {
     repair_reason: result.repairReason,
     repair_target_corpus: result.repairTargetCorpus,
     missing_papers: serializeMissingPapers(result.missingPapers),
-    present_papers: result.presentPapers.map((paper) => ({
-      canonical_id: paper.canonicalId,
-      title: paper.title,
-      source_kind: paper.sourceKind,
-      source_provider: paper.sourceProvider,
-      retrieval_providers: paper.retrievalProviders,
-      matched_by: paper.matchedBy,
-      corpus_paper_id: paper.corpusPaperId,
-      corpus_paper_title: paper.corpusPaperTitle,
-      corpus_source_key: paper.corpusSourceKey,
-    })),
+    present_papers: serializePresentPapers(result.presentPapers),
+  });
+  await persistGraphPresenceArtifacts({
+    projectRoot,
+    result,
+    mode: "local_corpus",
+    existingStatusRecord: {
+      manifest: {
+        version:
+          typeof sourceManifest?.version === "number" && Number.isFinite(sourceManifest.version)
+            ? sourceManifest.version
+            : null,
+        corpus_name:
+          pickString(sourceManifest ?? {}, ["corpusName", "corpus_name"]) ??
+          result.corpusName,
+        indexed_at:
+          pickString(sourceManifest ?? {}, ["indexedAt", "indexed_at"]) ??
+          pickString(corpusMeta ?? {}, ["indexedAt", "indexed_at"]),
+      },
+      meta: corpusMeta ?? null,
+    },
   });
 
   if (params.updateManifest !== false) {
