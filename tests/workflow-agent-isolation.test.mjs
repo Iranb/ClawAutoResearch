@@ -62,7 +62,7 @@ test("workflow isolation defaults only expose bindings to project workflow agent
       agentId: null,
       sessionKey: "agent:researcher:discord:group:paper-lab",
     }),
-    true
+    false
   );
 });
 

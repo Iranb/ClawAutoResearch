@@ -115,9 +115,7 @@ export function isWorkflowBindingVisibleToAgent(params: {
   if (mode === "channel_shared") {
     return true;
   }
-  const normalizedAgentId =
-    normalizeWorkflowActorId(params.agentId) ??
-    extractAgentIdFromSessionKey(params.sessionKey);
+  const normalizedAgentId = normalizeWorkflowActorId(params.agentId);
   if (!normalizedAgentId) {
     return false;
   }

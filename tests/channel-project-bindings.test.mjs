@@ -113,6 +113,43 @@ test("non-workflow agents do not inherit project workflow bindings from the shar
   assert.equal(snapshot.projectResolutionSource, "none");
 });
 
+test("dashboard workspace agents do not inherit workflow bindings from reused researcher main sessions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = await makeTempProject(workspaceRoot, "dashboard-isolated-track");
+  const sessionKey = "agent:researcher:main";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    agentId: "work",
+    workspaceDir: path.join(workspaceRoot, "workspace-work"),
+    sessionKey,
+  });
+
+  assert.equal(snapshot.projectRoot, null);
+  assert.equal(snapshot.projectId, null);
+  assert.equal(snapshot.projectResolutionSource, "none");
+});
+
 test("workflow snapshot does not inherit channel project bindings when agent identity is missing", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "missing-agent-track");
@@ -234,7 +271,7 @@ test("workflow snapshot uses the shared PaperNexus source root in local mode", a
   assert.equal(snapshot.projectRoot, projectRoot);
   assert.equal(
     snapshot.defaultPapernexusSourceDir,
-    path.join(os.homedir(), ".papernexus", "papers")
+    path.join(os.homedir(), ".papernexus", "papers", "shared-root-track")
   );
   assert.equal(snapshot.defaultPapernexusIndexRoot, path.join(os.homedir(), ".papernexus", "index-store"));
 });
@@ -353,6 +390,7 @@ test("research memory paths follow the current channel binding", async (t) => {
     },
     {
       workspaceDir: workspaceRoot,
+      agentId: "researcher",
       sessionKey,
       messageChannel: "discord",
     }

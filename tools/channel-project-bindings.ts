@@ -34,6 +34,7 @@ export interface ChannelProjectBindingContext {
   channelKey?: string;
   projectRoot?: string;
   role?: string;
+  agentId?: string;
   parentSessionKey?: string;
   threadBindingKey?: string;
   depth?: number;
@@ -88,6 +89,12 @@ const DEFAULT_POLICY: Required<ChannelProjectBindingPolicy> = {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function resolveContextActorId(
+  context: Pick<ChannelProjectBindingContext, "role" | "agentId"> | null | undefined
+): string | null {
+  return asString(context?.role) ?? asString(context?.agentId);
 }
 
 function expandHome(value: string): string {
@@ -516,7 +523,7 @@ export function resolveProjectContext(params: {
       bindingLookup.binding &&
       isWorkflowBindingVisibleToAgent({
         binding: bindingLookup.binding,
-        agentId: asString(params.context?.role),
+        agentId: resolveContextActorId(params.context),
         sessionKey: asString(params.context?.sessionKey),
       })
     ) {
@@ -620,15 +627,14 @@ export async function setChannelProjectBinding(params: {
     buildWorkflowRuntimeSessionBinding({
       projectRoot,
       projectId: params.projectId,
-      role: asString(context.role) ?? asString(params.boundByAgent) ?? null,
+      role: resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null,
       sessionKey: context.sessionKey,
       sessionId: context.sessionId,
       parentSessionKey: context.parentSessionKey,
       threadBindingKey: context.threadBindingKey,
       depth: context.depth,
     });
-  const workflowActorId =
-    asString(context.role) ?? asString(params.boundByAgent) ?? null;
+  const workflowActorId = resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null;
   const actorMayOwnWorkflowBinding =
     workflowIsolationMode === "channel_shared" ||
     isProjectWorkflowAgentId(

@@ -147,10 +147,36 @@ export function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function inferAgentIdFromPath(value: string | undefined): string | undefined {
+  const raw = readString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  const workspaceMatch = normalized.match(/\/workspace-([^/]+)\/?$/i);
+  if (workspaceMatch?.[1]) {
+    return workspaceMatch[1];
+  }
+  const agentDirMatch = normalized.match(/\/agents\/([^/]+)\/agent(?:\/|$)/i);
+  if (agentDirMatch?.[1]) {
+    return agentDirMatch[1];
+  }
+  return undefined;
+}
+
 export function getToolContext(ctx: Record<string, unknown>): ToolContext {
+  const workspaceDir = readString(ctx.workspaceDir) ?? readString(ctx.cwd);
+  const agentId =
+    readString(ctx.agentId) ??
+    readString(ctx.agentName) ??
+    readString(ctx.agentRole) ??
+    readString(ctx.role) ??
+    readString(ctx.name) ??
+    inferAgentIdFromPath(workspaceDir) ??
+    inferAgentIdFromPath(readString(ctx.agentDir));
   return {
-    workspaceDir: readString(ctx.workspaceDir),
-    agentId: readString(ctx.agentId),
+    workspaceDir,
+    agentId,
     sessionKey: readString(ctx.sessionKey),
     sessionId: readString(ctx.sessionId),
     messageChannel: readString(ctx.messageChannel),
