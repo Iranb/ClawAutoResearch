@@ -266,6 +266,21 @@ function extractDois(value: string | null | undefined): string[] {
   );
 }
 
+function normalizeCorpusRootCandidate(value: string): string {
+  const absolute = path.resolve(value);
+  const basename = path.basename(absolute);
+  if (basename === ".papernexus") {
+    return path.dirname(absolute);
+  }
+  if (basename === "sources.json" || basename === "meta.json") {
+    const parent = path.dirname(absolute);
+    if (path.basename(parent) === ".papernexus") {
+      return path.dirname(parent);
+    }
+  }
+  return absolute;
+}
+
 function normalizeTitle(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -856,7 +871,7 @@ async function resolveCorpusRoot(params: {
   ].filter((item): item is string => Boolean(item)));
 
   for (const candidate of candidates) {
-    const absolute = path.resolve(candidate);
+    const absolute = normalizeCorpusRootCandidate(candidate);
     if (await pathExists(absolute)) {
       return {
         corpusRoot: absolute,
@@ -866,7 +881,8 @@ async function resolveCorpusRoot(params: {
   }
 
   return {
-    corpusRoot: candidates.length > 0 ? path.resolve(candidates[0]) : null,
+    corpusRoot:
+      candidates.length > 0 ? normalizeCorpusRootCandidate(candidates[0]) : null,
     corpusName,
   };
 }
