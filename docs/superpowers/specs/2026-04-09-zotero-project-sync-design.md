@@ -4,7 +4,7 @@ Date: 2026-04-09
 
 ## Summary
 
-Add an optional, workflow-owned Zotero project sync layer for literature research so project papers can be organized under a per-project Zotero collection such as `Bot/<project-id>`.
+Add an optional, workflow-owned Zotero project sync layer for literature research so project papers can be organized under a per-project Zotero collection such as `bot/<project-id>` or `Bot/<project-id>`, depending on plugin-level configuration.
 
 This sync is best-effort only:
 
@@ -15,7 +15,7 @@ This sync is best-effort only:
 
 ## Goals
 
-- Change the default Zotero project path for new projects from `bot/<project-id>` to `Bot/<project-id>`.
+- Add a plugin-global Zotero collection root setting.
 - Respect explicit project overrides in `PROJECT_MANIFEST.json.research_program.zotero_project_path`.
 - Keep project literature organized in Zotero by project collection and sub-collection.
 - Let literature-research flows refresh Zotero automatically when possible.
@@ -27,7 +27,7 @@ This sync is best-effort only:
 - Do not require Zotero MCP to be installed for the workflow to proceed.
 - Do not add new hard blockers to `idea`, `graph_build`, `review`, `write`, or `submit`.
 - Do not require Coder or execution-stage agents to align their runtime with Zotero state.
-- Do not migrate old projects automatically from `bot/<project-id>` to `Bot/<project-id>`.
+- Do not migrate old projects automatically between lowercase `bot/...` and custom roots such as `Bot/...`.
 
 ## Existing State
 
@@ -46,13 +46,15 @@ However, current behavior is mostly prompt-level guidance. There is no workflow-
 
 ## Chosen Approach
 
-Implement a workflow-owned soft sync path built around the existing manifest field plus a small Zotero sync packet.
+Implement a workflow-owned soft sync path built around the existing manifest field plus a small Zotero sync packet, plus one explicit manual Discord command for project-wide reconciliation.
 
 ### 1. Path policy
 
 - If `PROJECT_MANIFEST.json.research_program.zotero_project_path` is set, use it exactly.
-- Otherwise, new defaults become `Bot/<project-id>`.
-- Existing projects with `bot/<project-id>` remain valid and are not rewritten automatically.
+- Otherwise, compute the path from a plugin-global Zotero project root plus the current `project-id`.
+- The plugin-global root defaults to `bot`.
+- Example: if the global root is `Bot`, the effective per-project path becomes `Bot/<project-id>`.
+- Existing projects with `bot/<project-id>` or any other explicit path remain valid and are not rewritten automatically.
 
 ### 2. Workflow-owned Zotero sync packet
 
@@ -97,6 +99,21 @@ Preferred source inputs:
 - baseline-related project artifacts when present
 - writing/review shortlist artifacts when present
 
+### 4. Manual command
+
+Add a dedicated Discord slash command:
+
+- `/zotero-sync`
+
+Command behavior:
+
+- resolve the current workflow project the same way `/graph-build` and `/resume-pipeline` do
+- refresh the workflow-owned Zotero sync packet for that project
+- launch a background Researcher continuation for Zotero reconciliation
+- return immediately to the foreground user without waiting for Zotero MCP completion
+
+This command is the manual override or catch-up path when the user wants an immediate project bibliography reconciliation outside other research checkpoints.
+
 ## Trigger Points
 
 Zotero sync is best-effort and should be refreshed from bounded research checkpoints:
@@ -106,6 +123,25 @@ Zotero sync is best-effort and should be refreshed from bounded research checkpo
 - during `/graph-build` as a bounded bibliography refresh pass
 
 These triggers should update the sync packet and then request background sync. They should not run a long Zotero operation inline in the foreground session.
+
+`/zotero-sync` uses the same background-safe contract, but as an explicit user-initiated trigger.
+
+## Reconciliation Policy
+
+`/zotero-sync` is a project-wide reconciliation command, not an append-only importer.
+
+Expected behavior:
+
+- treat workflow-owned project state as the source of truth for membership in `selected`, `baselines`, and `writing-shortlist`
+- add missing project papers to the corresponding Zotero collections
+- remove papers that no longer belong to the project collections
+- keep collection membership aligned with current project state after paper replacement or deletion
+
+Safety rule:
+
+- when a paper no longer belongs to the project, remove it only from the configured project Zotero collections
+- do not delete the Zotero item itself
+- do not move the Zotero item to trash
 
 ## Foreground/Background Contract
 
@@ -131,6 +167,7 @@ This is the key safety rule for the implementation.
 - Zotero sync must never hold the foreground waiting on MCP I/O
 - failure to connect to Zotero must never trigger stage rollback
 - if a background Zotero sync is already active, the foreground should not start a second conflicting inline sync
+- the manual `/zotero-sync` command must also avoid inline Zotero work and must degrade to queued/background execution if runtime subagent access is unavailable
 
 ## Failure Policy
 
@@ -161,9 +198,13 @@ Required behavior:
 Add tests for:
 
 - default Zotero path now resolves to `Bot/<project-id>` for new projects
+- plugin-global Zotero root defaults to `bot`
+- effective default path resolves to `<configured-root>/<project-id>`
 - explicit manifest path overrides still win
+- `/zotero-sync` registers as a dedicated workflow command and launches a background Researcher continuation
 - sync packet generation is non-blocking and survives missing Zotero availability
 - research/graph trigger points request background sync instead of inline blocking work
+- project reconciliation removes stale papers from project collections without deleting Zotero items
 - workflow continues normally when Zotero sync reports `unavailable` or `failed`
 - human-readable `ZOTERO_PACKET.md` still updates with path and summary information
 
