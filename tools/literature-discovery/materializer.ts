@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asRecord, pickString, uniqueStrings } from "../workflow-guard-core/coercion";
 import {
   normalizeIdeationContractState,
 } from "../workflow-guard-state/ideation-contract";
@@ -7,11 +8,23 @@ import { normalizeReviewPressurePacketState } from "../workflow-guard-state/revi
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import { readJsonIfExists, readTextIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import {
+  hasStoryFacingTrackGraphSupport,
+  loadTrackInnovationEvidence,
+} from "../workflow-guard-track-evidence.js";
 
 export const DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH =
   "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json";
 
 type ManifestLike = Record<string, unknown>;
+type TrackEvidenceGap = {
+  trackId: string;
+  title: string | null;
+  question: string | null;
+  hypothesis: string | null;
+  noveltyBasis: string | null;
+  graphEvidencePath: string | null;
+};
 
 function normalizeStage(value: string | null | undefined): string | null {
   const normalized = String(value ?? "")
@@ -69,6 +82,153 @@ export function needsStoryGapLiteratureDiscovery(params: {
   return paperStory.unsupportedClaimCount > 0 || paperStory.partialClaimCount > 0;
 }
 
+function collectActiveTrackRecords(trackRegistry: Record<string, unknown> | null): Array<Record<string, unknown>> {
+  const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+  return tracks
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter((entry) => normalizeStage(pickString(entry, ["status"])) === "active");
+}
+
+function findProgramTrack(
+  manifest: ManifestLike,
+  trackId: string
+): Record<string, unknown> | null {
+  const researchProgram = asRecord(manifest.research_program);
+  const tracks = Array.isArray(researchProgram?.tracks) ? researchProgram.tracks : [];
+  return (
+    tracks
+      .map((entry) => asRecord(entry))
+      .find(
+        (entry) =>
+          entry &&
+          pickString(entry, ["track_id", "trackId"]) === trackId &&
+          normalizeStage(pickString(entry, ["status"])) === "active"
+      ) ?? null
+  );
+}
+
+async function collectIdeaTrackEvidenceGaps(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<TrackEvidenceGap[]> {
+  const trackRegistry =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(params.projectRoot, "TRACK_REGISTRY.json") ?? ""
+    )) ?? null;
+  const activeTracks = collectActiveTrackRecords(trackRegistry);
+  const gaps: TrackEvidenceGap[] = [];
+
+  for (const track of activeTracks) {
+    const trackId = pickString(track, ["track_id", "trackId"]);
+    if (!trackId) {
+      continue;
+    }
+    const evidence = await loadTrackInnovationEvidence({
+      projectRoot: params.projectRoot,
+      track,
+    });
+    if (hasStoryFacingTrackGraphSupport(evidence)) {
+      continue;
+    }
+    const programTrack = findProgramTrack(params.manifest, trackId);
+    gaps.push({
+      trackId,
+      title:
+        pickString(track, ["name", "title"]) ??
+        pickString(programTrack ?? {}, ["name", "title"]),
+      question:
+        pickString(track, ["question"]) ??
+        pickString(programTrack ?? {}, ["question"]),
+      hypothesis:
+        pickString(track, ["hypothesis"]) ??
+        pickString(programTrack ?? {}, ["hypothesis"]),
+      noveltyBasis:
+        pickString(track, ["novelty_basis", "noveltyBasis"]) ??
+        pickString(programTrack ?? {}, ["novelty_basis", "noveltyBasis"]),
+      graphEvidencePath: evidence.graphEvidencePath,
+    });
+  }
+
+  return gaps;
+}
+
+function buildIdeaTrackEvidenceQueries(params: {
+  gaps: TrackEvidenceGap[];
+  targetDomains: string[];
+  baseline: string;
+  primaryMetric: string;
+}) {
+  const domains = params.targetDomains.length > 0 ? params.targetDomains : ["current-domain"];
+  return params.gaps
+    .flatMap((gap) => {
+      const lead =
+        compactText(
+          gap.question ?? gap.hypothesis ?? gap.title ?? gap.noveltyBasis,
+          gap.trackId
+        );
+      const noveltyLead = compactText(gap.noveltyBasis ?? gap.hypothesis, lead);
+      return [
+        {
+          domain: domains[0],
+          rationale:
+            `Acquire papers and graph nodes that let ${gap.trackId} close its story-facing innovation loop.`,
+          query: `${lead} ${params.baseline} ${params.primaryMetric} related work graph evidence`,
+        },
+        {
+          domain: domains[0],
+          rationale:
+            `Find bridge papers, node candidates, and relation patterns for ${gap.trackId}.`,
+          query: `${noveltyLead} mechanism bridge node relation pattern paper`,
+        },
+      ];
+    })
+    .slice(0, 6);
+}
+
+export async function getWorkflowLiteratureDiscoveryNeed(params: {
+  projectRoot: string;
+  manifest: ManifestLike | null | undefined;
+  stage: string | null;
+}): Promise<{
+  required: boolean;
+  reason: "story_gap" | "idea_track_graph_evidence_gap" | null;
+  trackEvidenceGaps: TrackEvidenceGap[];
+}> {
+  const manifest = params.manifest ?? {};
+  const stage = normalizeStage(params.stage);
+  if (!stage) {
+    return {
+      required: false,
+      reason: null,
+      trackEvidenceGaps: [],
+    };
+  }
+  if (needsStoryGapLiteratureDiscovery({ manifest, stage })) {
+    return {
+      required: true,
+      reason: "story_gap",
+      trackEvidenceGaps: [],
+    };
+  }
+  if (stage !== "idea") {
+    return {
+      required: false,
+      reason: null,
+      trackEvidenceGaps: [],
+    };
+  }
+  const trackEvidenceGaps = await collectIdeaTrackEvidenceGaps({
+    projectRoot: params.projectRoot,
+    manifest,
+  });
+  return {
+    required: trackEvidenceGaps.length > 0,
+    reason: trackEvidenceGaps.length > 0 ? "idea_track_graph_evidence_gap" : null,
+    trackEvidenceGaps,
+  };
+}
+
 export async function materializeLiteratureDiscoveryPacketImpl(params: {
   projectRoot: string;
   literatureDiscoveryMaterialization?: Record<string, unknown>;
@@ -100,7 +260,13 @@ export async function materializeLiteratureDiscoveryPacketImpl(params: {
         DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
     ) || DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH;
 
-  if (!needsStoryGapLiteratureDiscovery({ manifest, stage: originStage })) {
+  const discoveryNeed = await getWorkflowLiteratureDiscoveryNeed({
+    projectRoot,
+    manifest,
+    stage: originStage,
+  });
+
+  if (!discoveryNeed.required) {
     return {
       required: false,
       packetPath,
@@ -154,58 +320,107 @@ export async function materializeLiteratureDiscoveryPacketImpl(params: {
     "baseline"
   );
 
-  const packet: Record<string, unknown> = {
-    schema_version: 1,
-    discovery_id: `${originStage}-story-support-gap`,
-    discovery_reason: `${originStage}_story_support_gap`,
-    target_question_ids:
-      targetQuestionIds.length > 0 ? targetQuestionIds : ["story-support-gap"],
-    target_domains: targetDomains,
-    candidate_queries: [
-      {
-        domain: targetDomains[0] ?? "current-domain",
-        rationale: "Close the write/review-time challenge and limitation evidence gap.",
-        query: `${challengeLine} ${baseline} ${primaryMetric} limitation evidence related work`,
-      },
-      {
-        domain: targetDomains[0] ?? "current-domain",
-        rationale: "Find contradiction, failure-case, or rebuttal evidence for unsupported claims.",
-        query: `${insightLine} contradiction failure case unsupported claim ${primaryMetric}`,
-      },
-      {
-        domain: targetDomains[0] ?? "current-domain",
-        rationale: "Strengthen reviewer-facing rebuttal support and scope boundaries.",
-        query: `${rejectionLine} rebuttal limitation boundary ${baseline}`,
-      },
-    ],
-    candidate_papers: [],
-    selected_papers: [],
-    rejected_papers: [],
-    selection_rationale:
-      `Story support remains ${paperStory.claimSupportStatus}; unsupported=${paperStory.unsupportedClaimCount}, partial=${paperStory.partialClaimCount}. ` +
-      "Run a structured literature discovery pass to close related-work, contradiction, and limitation evidence gaps before continuing write/review.",
-    evidence_gap_closed: false,
-    next_action_suggestion:
-      `Queue a workflow-owned literature discovery pass, ingest the selected papers into the shared graph, rerun graph_build, then return to ${originStage}.`,
-    required_stage_reentry: ["graph_build", originStage],
-    source_contracts: {
-      paper_story_state: {
-        claim_support_status: paperStory.claimSupportStatus,
-        challenge_statement_path: paperStory.challengeStatementPath,
-        insight_summary_path: paperStory.insightSummaryPath,
-        unsupported_claims_path: paperStory.unsupportedClaimsPath,
-      },
-      review_pressure_packet: {
-        limitation_audit_path: reviewPressure.limitationAuditPath,
-        reject_first_review_path: reviewPressure.rejectFirstReviewPath,
-        novelty_attack_path: reviewPressure.noveltyAttackPath,
-      },
-    },
-    trigger: params.trigger ?? null,
-    agent_id: params.agentId ?? null,
-    last_updated_at: new Date().toISOString(),
-    packet_id: randomUUID(),
-  };
+  const packet: Record<string, unknown> =
+    discoveryNeed.reason === "idea_track_graph_evidence_gap"
+      ? {
+          schema_version: 1,
+          discovery_id: "idea-track-graph-evidence-gap",
+          discovery_reason: "idea_track_graph_evidence_gap",
+          trigger_kind: "idea_literature_discovery",
+          target_question_ids: discoveryNeed.trackEvidenceGaps.map(
+            (gap) => `track:${gap.trackId}`
+          ),
+          target_track_ids: discoveryNeed.trackEvidenceGaps.map((gap) => gap.trackId),
+          target_domains: targetDomains,
+          candidate_queries: buildIdeaTrackEvidenceQueries({
+            gaps: discoveryNeed.trackEvidenceGaps,
+            targetDomains,
+            baseline,
+            primaryMetric,
+          }),
+          candidate_papers: [],
+          selected_papers: [],
+          rejected_papers: [],
+          selection_rationale:
+            `Active ideation tracks still lack structural graph support; missing tracks=${discoveryNeed.trackEvidenceGaps
+              .map((gap) => gap.trackId)
+              .join(", ")}. ` +
+            "Run a workflow-owned literature discovery pass so researcher can search broadly, stage PDFs/Markdown, and import the missing papers into the shared graph before continuing idea work.",
+          evidence_gap_closed: false,
+          next_action_suggestion:
+            "Queue a workflow-owned literature discovery pass, let researcher collect and upload the missing papers, import them into the shared graph, rerun graph_build, then return to idea.",
+          required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+          source_contracts: {
+            track_registry: {
+              missing_track_ids: discoveryNeed.trackEvidenceGaps.map((gap) => gap.trackId),
+              graph_evidence_paths: uniqueStrings(
+                discoveryNeed.trackEvidenceGaps
+                  .map((gap) => gap.graphEvidencePath)
+                  .filter((entry): entry is string => Boolean(entry))
+              ),
+            },
+            research_program: {
+              baseline_reference: researchProgram.baselineReference,
+              primary_metric: researchProgram.primaryMetric,
+            },
+          },
+          trigger: params.trigger ?? null,
+          agent_id: params.agentId ?? null,
+          last_updated_at: new Date().toISOString(),
+          packet_id: randomUUID(),
+        }
+      : {
+          schema_version: 1,
+          discovery_id: `${originStage}-story-support-gap`,
+          discovery_reason: `${originStage}_story_support_gap`,
+          target_question_ids:
+            targetQuestionIds.length > 0 ? targetQuestionIds : ["story-support-gap"],
+          target_domains: targetDomains,
+          candidate_queries: [
+            {
+              domain: targetDomains[0] ?? "current-domain",
+              rationale: "Close the write/review-time challenge and limitation evidence gap.",
+              query: `${challengeLine} ${baseline} ${primaryMetric} limitation evidence related work`,
+            },
+            {
+              domain: targetDomains[0] ?? "current-domain",
+              rationale: "Find contradiction, failure-case, or rebuttal evidence for unsupported claims.",
+              query: `${insightLine} contradiction failure case unsupported claim ${primaryMetric}`,
+            },
+            {
+              domain: targetDomains[0] ?? "current-domain",
+              rationale: "Strengthen reviewer-facing rebuttal support and scope boundaries.",
+              query: `${rejectionLine} rebuttal limitation boundary ${baseline}`,
+            },
+          ],
+          candidate_papers: [],
+          selected_papers: [],
+          rejected_papers: [],
+          selection_rationale:
+            `Story support remains ${paperStory.claimSupportStatus}; unsupported=${paperStory.unsupportedClaimCount}, partial=${paperStory.partialClaimCount}. ` +
+            "Run a structured literature discovery pass to close related-work, contradiction, and limitation evidence gaps before continuing write/review.",
+          evidence_gap_closed: false,
+          next_action_suggestion:
+            `Queue a workflow-owned literature discovery pass, ingest the selected papers into the shared graph, rerun graph_build, then return to ${originStage}.`,
+          required_stage_reentry: ["graph_build", originStage],
+          source_contracts: {
+            paper_story_state: {
+              claim_support_status: paperStory.claimSupportStatus,
+              challenge_statement_path: paperStory.challengeStatementPath,
+              insight_summary_path: paperStory.insightSummaryPath,
+              unsupported_claims_path: paperStory.unsupportedClaimsPath,
+            },
+            review_pressure_packet: {
+              limitation_audit_path: reviewPressure.limitationAuditPath,
+              reject_first_review_path: reviewPressure.rejectFirstReviewPath,
+              novelty_attack_path: reviewPressure.noveltyAttackPath,
+            },
+          },
+          trigger: params.trigger ?? null,
+          agent_id: params.agentId ?? null,
+          last_updated_at: new Date().toISOString(),
+          packet_id: randomUUID(),
+        };
 
   const resolvedPacketPath = resolveProjectArtifactPath(projectRoot, packetPath);
   if (!resolvedPacketPath) {

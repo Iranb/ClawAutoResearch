@@ -3,6 +3,9 @@ import os from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+// Workflow-owned PaperNexus stays MCP-first via research_lookup, research_briefing,
+// idea_catalyst, and import_workflow. Ingestion stays hugging-face-paper-pages ->
+// arxiv2md-api -> arxiv2md -> PDF fallback only.
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import {
   clearChannelProjectBinding,
@@ -96,6 +99,7 @@ import {
   resolveProjectArtifactPath,
   resolveTrackArtifactPath,
 } from "./workflow-guard-core/paths";
+import { trackHasGraphBackedInnovationEvidence as trackHasGraphBackedInnovationEvidenceFromHelper } from "./workflow-guard-track-evidence.js";
 import {
   normalizeResearchProgramState,
   normalizeResearchProgramTrack,
@@ -5035,11 +5039,7 @@ async function fileHasNonWhitespaceContent(targetPath: string | null): Promise<b
 }
 
 function trackHasGraphBackedInnovationEvidence(track: Record<string, unknown>): boolean {
-  return (
-    asStringArray(track.evidencePointers ?? track.evidence_pointers).length > 0 ||
-    asStringArray(track.linkedGraphNodes ?? track.linked_graph_nodes).length > 0 ||
-    asStringArray(track.relationPatterns ?? track.relation_patterns).length > 0
-  );
+  return trackHasGraphBackedInnovationEvidenceFromHelper(track);
 }
 
 function normalizeWritingScopeLabel(value: string | null): string | null {

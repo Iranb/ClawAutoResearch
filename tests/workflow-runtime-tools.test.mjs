@@ -1400,6 +1400,216 @@ test("research_workflow materialize_ideation_contract scaffolds graph-first idea
   assert.equal(updatedTrackRegistry.tracks[0].research_proposal_path, "researcher/ideation/RESEARCH_PROPOSAL.md");
 });
 
+test("research_workflow materialize_ideation_contract imports per-track GRAPH_EVIDENCE.json into canonical track evidence fields", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "# Anchor Index\n- anchor: graph-evidence-import\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+    "# Limitation Frontier\n- baseline support links remain brittle\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+    "# Transfer Frontier\n- import explicit graph evidence bindings into ideation\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "# Frontier Report\n\n## Challenge clusters\n- missing per-track evidence canonicalization\n\n## Insight clusters\n- import explicit graph evidence packets\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "INNOVATION_REFLECTION.md"),
+    "# Innovation Reflection\nKeep the graph-evidence import path for track storytelling.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic Chain\n1. Challenge: track evidence is uncaptured\n2. Insight: import the packet canonically\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence Chain\n- track-local graph evidence already exists\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n- how should the workflow import track-local graph evidence?\n",
+    "utf8"
+  );
+
+  await fs.writeFile(
+    path.join(projectRoot, "TRACK_REGISTRY.json"),
+    `${JSON.stringify(
+      {
+        tracks: [
+          {
+            track_id: "track-main",
+            status: "active",
+            question: "How should the workflow import track-local graph evidence?",
+            hypothesis:
+              "Canonicalizing the packet preserves graph-backed story support without forcing coder alignment.",
+            novelty_basis:
+              "The workflow should reconcile packet-backed evidence instead of relying on ad hoc fields.",
+            linked_graph_nodes: [],
+            relation_patterns: [],
+            evidence_pointers: [],
+            reasoning_packet_dir: "researcher/reasoning/track-main",
+            working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+            synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "GRAPH_EVIDENCE.json"),
+    {
+      evidence_pointers: [
+        "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router",
+        "graph/LIMITATION_FRONTIER.md#support-gap",
+      ],
+      linked_graph_nodes: ["paper:router", "finding:support-gap"],
+      relation_patterns: [
+        "supports->claim:support-precision",
+        "bridges->concept:graph-evidence-import",
+      ],
+    }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Repair track-local graph-backed innovation evidence.",
+    problem_statement:
+      "Per-track graph evidence packets exist, but the canonical workflow state misses them.",
+    baseline_reference: "baseline-router",
+    primary_metric: "support_precision",
+    datasets: ["demo-dataset"],
+    success_criteria: ["import packet-backed graph evidence canonically"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+        hypothesis:
+          "Canonicalizing the packet preserves graph-backed story support without forcing coder alignment.",
+        novelty_basis:
+          "The workflow should reconcile packet-backed evidence instead of relying on ad hoc fields.",
+        required_baselines: ["baseline-router"],
+      },
+    ],
+  };
+  manifest.innovation_reflection = {
+    status: "fresh",
+    last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      topic: "Track-local graph evidence import",
+      basis_stage: "frontier_mapping",
+      track_id: "track-main",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      graph_version_seen: "global-v2",
+      contract_version: 1,
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "converge",
+          status: "completed",
+          options: [
+            {
+              option_id: "dir-main",
+              title: "Canonical track graph evidence import",
+              score: 0.94,
+              summary:
+                "Import track-local graph evidence packets into the canonical workflow contract.",
+              logic_chain: "# Logic Main\nPacket -> canonical evidence -> story closure\n",
+              evidence_chain: "# Evidence Main\nTrack-local packet already contains graph nodes\n",
+              reasoning_trace: [
+                {
+                  step: "inspect-track-packet",
+                  conclusion: "the packet already contains usable graph evidence",
+                },
+              ],
+              question_packet: "# Questions Main\n",
+              working_memory: {
+                surviving_direction: "canonical track graph evidence import",
+              },
+              synthesis_packet: "# Synthesis Main\n",
+              reflection_chain: {
+                keep: ["canonical track graph evidence import"],
+              },
+              storyline_brief: {
+                thesis: "Packet-backed graph evidence closes the track-level logic loop.",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "materialize_ideation_contract",
+    ideationMaterialization: {
+      basis_stage: "frontier_mapping",
+    },
+  });
+
+  const updatedTrackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  assert.deepEqual(updatedTrackRegistry.tracks[0].linked_graph_nodes, [
+    "paper:router",
+    "finding:support-gap",
+  ]);
+  assert.deepEqual(updatedTrackRegistry.tracks[0].relation_patterns, [
+    "supports->claim:support-precision",
+    "bridges->concept:graph-evidence-import",
+  ]);
+  assert.equal(
+    updatedTrackRegistry.tracks[0].evidence_pointers.includes(
+      "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router"
+    ),
+    true
+  );
+});
+
 test("research_workflow materialize_ideation_contract reconciles sparse root track registry with active research program tracks", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

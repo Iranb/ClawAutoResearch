@@ -12,7 +12,7 @@ import {
 } from "../idea-catalyst/workflow-bridge";
 import {
   DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
-  needsStoryGapLiteratureDiscovery,
+  getWorkflowLiteratureDiscoveryNeed,
 } from "../literature-discovery/materializer";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
 import { materializeCycleMemory } from "../research-memory-cycle";
@@ -23,6 +23,7 @@ import {
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import { normalizeTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -207,24 +208,7 @@ function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): s
 }
 
 function activeTrackNeedsIdeationScaffold(track: Record<string, unknown>): boolean {
-  const evidencePointers = Array.isArray(track.evidence_pointers)
-    ? track.evidence_pointers
-    : Array.isArray(track.evidencePointers)
-      ? track.evidencePointers
-      : [];
-  const linkedGraphNodes = Array.isArray(track.linked_graph_nodes)
-    ? track.linked_graph_nodes
-    : Array.isArray(track.linkedGraphNodes)
-      ? track.linkedGraphNodes
-      : [];
-  const relationPatterns = Array.isArray(track.relation_patterns)
-    ? track.relation_patterns
-    : Array.isArray(track.relationPatterns)
-      ? track.relationPatterns
-      : [];
-  const hasGraphEvidence =
-    evidencePointers.length > 0 || linkedGraphNodes.length > 0 || relationPatterns.length > 0;
-  if (!hasGraphEvidence) {
+  if (!normalizeTrackInnovationEvidence(track).hasGraphBackedInnovationEvidence) {
     return true;
   }
   return !(
@@ -489,11 +473,12 @@ async function shouldMaterializeLiteratureDiscoveryPacket(params: {
     DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
   );
   const packetExists = Boolean(packetResolvedPath && (await pathExists(packetResolvedPath)));
-  const storyGapRequired = needsStoryGapLiteratureDiscovery({
+  const literatureDiscoveryNeed = await getWorkflowLiteratureDiscoveryNeed({
+    projectRoot: params.projectRoot,
     manifest: params.manifest,
     stage: params.stage,
   });
-  if (!storyGapRequired && !packetExists) {
+  if (!literatureDiscoveryNeed.required && !packetExists) {
     return false;
   }
   if (!packetResolvedPath || !(await pathExists(packetResolvedPath))) {
@@ -565,9 +550,14 @@ async function shouldQueueLiteratureDiscoveryRequisition(params: {
     DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
   );
   const packetExists = Boolean(packetResolvedPath && (await pathExists(packetResolvedPath)));
+  const literatureDiscoveryNeed = await getWorkflowLiteratureDiscoveryNeed({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    stage: params.stage,
+  });
   if (
     !packetExists &&
-    !needsStoryGapLiteratureDiscovery({ manifest: params.manifest, stage: params.stage })
+    !literatureDiscoveryNeed.required
   ) {
     return false;
   }

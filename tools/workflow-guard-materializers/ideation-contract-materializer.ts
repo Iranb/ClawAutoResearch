@@ -24,6 +24,7 @@ import {
   serializeIdeationGraphBasisPaths,
   serializeIdeationGraphIndicesState,
 } from "../workflow-guard-state/ideation-contract";
+import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 import type { IdeationContractState } from "../workflow-guard.js";
 
 type BrainstormOption = {
@@ -129,8 +130,13 @@ function getTrackScaffoldPaths(trackId: string | null): {
   };
 }
 
-function ensureTrackEvidencePointers(track: Record<string, unknown>, fallbackPaths: string[]): string[] {
+function ensureTrackEvidencePointers(
+  track: Record<string, unknown>,
+  importedPointers: string[],
+  fallbackPaths: string[]
+): string[] {
   return uniqueStrings([
+    ...importedPointers,
     ...asStringArray(track.evidence_pointers ?? track.evidencePointers),
     ...fallbackPaths.filter((entry): entry is string => Boolean(entry && entry.trim().length > 0)),
   ]).slice(0, 8);
@@ -1070,13 +1076,20 @@ ${deps.renderMarkdownBulletList([
       (trackId === selectedTrackId && brainstormState.synthesisPacketPath
         ? brainstormState.synthesisPacketPath
         : scaffoldPaths.synthesisPacketPath);
-    const evidencePointers = ensureTrackEvidencePointers(existingTrack, graphEvidenceFallbacks);
-    const linkedGraphNodes = asStringArray(
-      existingTrack.linked_graph_nodes ?? existingTrack.linkedGraphNodes
+    const trackEvidence = await loadTrackInnovationEvidence({
+      projectRoot,
+      track: {
+        ...existingTrack,
+        reasoning_packet_dir: reasoningPacketDir,
+      },
+    });
+    const evidencePointers = ensureTrackEvidencePointers(
+      existingTrack,
+      trackEvidence.evidencePointers,
+      graphEvidenceFallbacks
     );
-    const relationPatterns = asStringArray(
-      existingTrack.relation_patterns ?? existingTrack.relationPatterns
-    );
+    const linkedGraphNodes = trackEvidence.linkedGraphNodes;
+    const relationPatterns = trackEvidence.relationPatterns;
     const title =
       pickString(existingTrack, ["name", "title"]) ??
       (trackId === selectedTrackId ? selectedDirection?.title ?? null : null) ??

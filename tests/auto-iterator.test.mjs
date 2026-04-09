@@ -1263,6 +1263,25 @@ test("auto iterator auto-heals sparse active-track reasoning state before advanc
   trackRegistry.tracks[0].relation_patterns = [];
   trackRegistry.tracks[0].evidence_pointers = [];
   await writeJson(trackRegistryPath, trackRegistry);
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "reasoning",
+      trackId,
+      "GRAPH_EVIDENCE.json"
+    ),
+    {
+      evidence_pointers: [
+        `researcher/reasoning/${trackId}/GRAPH_EVIDENCE.json#paper-demo-idea`,
+      ],
+      linked_graph_nodes: ["paper:demo-idea", "finding:graph-support-gap"],
+      relation_patterns: [
+        "supports->claim:support-precision",
+        "extends->paper:demo-idea",
+      ],
+    }
+  );
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -1305,9 +1324,72 @@ test("auto iterator auto-heals sparse active-track reasoning state before advanc
   assert.equal(result.stageAfter, "plan");
   const refreshedTrackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
   assert.ok(refreshedTrackRegistry.tracks[0].evidence_pointers.length >= 1);
+  assert.deepEqual(refreshedTrackRegistry.tracks[0].linked_graph_nodes, [
+    "paper:demo-idea",
+    "finding:graph-support-gap",
+  ]);
   assert.ok(refreshedTrackRegistry.tracks[0].reasoning_packet_dir);
   assert.ok(refreshedTrackRegistry.tracks[0].working_memory_path);
   assert.ok(refreshedTrackRegistry.tracks[0].synthesis_packet_path);
+});
+
+test("auto iterator queues literature discovery when idea-stage tracks still lack graph-backed innovation support", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+
+  const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+  const trackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
+  trackRegistry.tracks[0].linked_graph_nodes = [];
+  trackRegistry.tracks[0].relation_patterns = [];
+  trackRegistry.tracks[0].evidence_pointers = [];
+  await writeJson(trackRegistryPath, trackRegistry);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  manifest.owner_agent = "researcher";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const discoveryPacket = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-discovery",
+        "LITERATURE_DISCOVERY_PACKET.json"
+      ),
+      "utf8"
+    )
+  );
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.regressed, true);
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.current_micro_stage, "uploading");
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests.some(
+      (entry) => entry.trigger_kind === "idea_literature_discovery"
+    ),
+    true
+  );
+  assert.equal(discoveryPacket.discovery_reason, "idea_track_graph_evidence_gap");
+  assert.equal(
+    discoveryPacket.target_question_ids.includes(`track:${trackId}`),
+    true
+  );
 });
 
 test("auto iterator auto-materializes the ideation contract during idea before advancing", async (t) => {
@@ -1357,6 +1439,22 @@ test("auto iterator reloads preflight-reconciled track registry and advances ide
       },
     ],
   });
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "reasoning",
+      trackId,
+      "GRAPH_EVIDENCE.json"
+    ),
+    {
+      evidence_pointers: [
+        `researcher/reasoning/${trackId}/GRAPH_EVIDENCE.json#track-registry-repair`,
+      ],
+      linked_graph_nodes: ["paper:registry-repair", "concept:graph-grounding"],
+      relation_patterns: ["bridges->concept:graph-grounding"],
+    }
+  );
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
