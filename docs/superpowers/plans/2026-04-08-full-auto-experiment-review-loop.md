@@ -1,6 +1,6 @@
 # Full-Auto Experiment Review Loop Implementation Plan
 
-> **Status:** DRAFT
+> **Status:** COMPLETED
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -102,7 +102,7 @@
 - Modify: `tests/workflow-commands.test.mjs`
 - Modify: `tests/workflow-agent-isolation.test.mjs`
 
-- [ ] **Step 1: Add state-tool regressions for experiment review**
+- [x] **Step 1: Add state-tool regressions for experiment review**
 
 Write failing tests for:
 - `get_experiment_review_state`
@@ -111,7 +111,7 @@ Write failing tests for:
 
 Assert manifest persistence, summaries, and trace metadata.
 
-- [ ] **Step 2: Add auto-iterator regressions for pre-launch review**
+- [x] **Step 2: Add auto-iterator regressions for pre-launch review**
 
 Write failing tests showing:
 - aggressive auto mode without reviewed-full-auto launch stays on current manual behavior
@@ -120,7 +120,7 @@ Write failing tests showing:
 - blocked/revise verdicts do not auto-launch
 - once remote runs exist, the workflow routes to `/monitor-experiment`
 
-- [ ] **Step 3: Add reviewer-panel regressions**
+- [x] **Step 3: Add reviewer-panel regressions**
 
 Write failing tests showing:
 - analyzer and cross-reviewer reviews are independent and persisted separately
@@ -128,7 +128,7 @@ Write failing tests showing:
 - analyzer “claim bundle conflates variables” prevents auto-launch
 - a second review round can approve a revised packet
 
-- [ ] **Step 4: Add role/isolation regressions**
+- [x] **Step 4: Add role/isolation regressions**
 
 Write failing tests showing:
 - `planner` is workflow-visible when bound to the project
@@ -142,7 +142,7 @@ Write failing tests showing:
 - Modify: `tools/workflow-guard.ts`
 - Modify: `tools/workflow-commands/formatters.ts`
 
-- [ ] **Step 1: Add manifest schema for full-auto experiment launch**
+- [x] **Step 1: Add manifest schema for full-auto experiment launch**
 
 Add:
 
@@ -168,7 +168,7 @@ Add:
 }
 ```
 
-- [ ] **Step 2: Normalize and summarize experiment review state**
+- [x] **Step 2: Normalize and summarize experiment review state**
 
 Implement normalized fields for:
 - packet fingerprint
@@ -178,7 +178,7 @@ Implement normalized fields for:
 - blocker count
 - latest launch approval timestamp
 
-- [ ] **Step 3: Expose state in workflow snapshot and status**
+- [x] **Step 3: Expose state in workflow snapshot and status**
 
 Add concise status lines for:
 - experiment review mode
@@ -198,14 +198,14 @@ Add concise status lines for:
 - Modify: `tools/channel-project-bindings.ts`
 - Modify: `tools/plugin-registration-shared.ts`
 
-- [ ] **Step 1: Add planner to workflow roles**
+- [x] **Step 1: Add planner to workflow roles**
 
 Update role policy so:
 - `researcher` can contact/spawn `planner`
 - `planner` can contact `researcher`
 - planner writes only under `{PROJ}/planner/`
 
-- [ ] **Step 2: Define the planner packet contract**
+- [x] **Step 2: Define the planner packet contract**
 
 The materializer must write a workflow-owned packet like:
 
@@ -229,7 +229,7 @@ The materializer must write a workflow-owned packet like:
 }
 ```
 
-- [ ] **Step 3: Ground the planner packet in current durable artifacts**
+- [x] **Step 3: Ground the planner packet in current durable artifacts**
 
 Use:
 - `TRACK_REGISTRY.json`
@@ -252,7 +252,7 @@ The planner packet must explicitly identify what evidence the launch is supposed
 - Modify: `tools/workflow-auto-discussion.ts`
 - Modify: `tools/workflow-auto-gate.ts`
 
-- [ ] **Step 1: Model the review loop after the academic review pipeline**
+- [x] **Step 1: Model the review loop after the academic review pipeline**
 
 Adapt the external review pattern into:
 - Phase 0: planner assembles review packet
@@ -260,7 +260,7 @@ Adapt the external review pattern into:
 - Phase 2: workflow-owned synthesis decides `pass / revise / block`
 - Phase 2.5: revised packet can be re-reviewed up to the configured round limit
 
-- [ ] **Step 2: Define analyzer review output**
+- [x] **Step 2: Define analyzer review output**
 
 Analyzer review must score and explain:
 - claim-to-experiment alignment
@@ -271,7 +271,7 @@ Analyzer review must score and explain:
 - stop-rule sanity
 - expected artifact completeness
 
-- [ ] **Step 3: Define cross-reviewer attack output**
+- [x] **Step 3: Define cross-reviewer attack output**
 
 Cross-reviewer output must include:
 - strongest counter-argument
@@ -283,7 +283,7 @@ Cross-reviewer output must include:
 
 `critical` cross-reviewer findings must hard-block autonomous launch.
 
-- [ ] **Step 4: Persist review results through workflow-owned artifacts**
+- [x] **Step 4: Persist review results through workflow-owned artifacts**
 
 Do not grant broad write scope to `cross-reviewer`. Persist returned reviewer outputs into workflow-owned files and state such as:
 - `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json`
@@ -299,7 +299,7 @@ Do not grant broad write scope to `cross-reviewer`. Persist returned reviewer ou
 - Modify: `tools/workflow-guard-stages/execution-stage-signals.ts`
 - Modify: `tools/register-workflow-tools.ts`
 
-- [ ] **Step 1: Materialize experiment review state during `experiment`**
+- [x] **Step 1: Materialize experiment review state during `experiment`**
 
 When:
 - current stage = `experiment`
@@ -308,7 +308,7 @@ When:
 
 then preflight must ensure the planner packet and review state exist.
 
-- [ ] **Step 2: Add experiment micro-stage routing**
+- [x] **Step 2: Add experiment micro-stage routing**
 
 Use deterministic micro-stages:
 - `planning`
@@ -320,7 +320,7 @@ Use deterministic micro-stages:
 - `monitoring`
 - `ready_for_analysis`
 
-- [ ] **Step 3: Auto-launch only after reviewed approval**
+- [x] **Step 3: Auto-launch only after reviewed approval**
 
 If the review aggregate is approved:
 - hand off to `coder` with an explicit launch packet
@@ -332,7 +332,7 @@ If the review aggregate is `revise` or `block`:
 - surface exact blockers
 - do not route to `coder`
 
-- [ ] **Step 4: Reuse existing monitor flow after launch**
+- [x] **Step 4: Reuse existing monitor flow after launch**
 
 Do not invent a second post-launch control plane. Once runs exist:
 - route back to `/monitor-experiment`
@@ -350,7 +350,7 @@ Do not invent a second post-launch control plane. Once runs exist:
 - Modify: `skills/cross-reviewer/resume-pipeline/SKILL.md`
 - Modify: `WORKFLOW.md`
 
-- [ ] **Step 1: Re-scope Researcher’s experiment-phase role**
+- [x] **Step 1: Re-scope Researcher’s experiment-phase role**
 
 Researcher should:
 - pick tracks/hypotheses
@@ -360,7 +360,7 @@ Researcher should:
 
 Researcher should no longer be the only manual bridge between experiment design and launch in full-auto mode.
 
-- [ ] **Step 2: Make Coder launch strictly packet-driven**
+- [x] **Step 2: Make Coder launch strictly packet-driven**
 
 `/run-experiment` must reject launch attempts that do not have:
 - approved launch decision
@@ -368,7 +368,7 @@ Researcher should no longer be the only manual bridge between experiment design 
 - explicit one-variable change statement
 - concrete stop rule and artifact targets
 
-- [ ] **Step 3: Add graph-grounded experiment-quality checks**
+- [x] **Step 3: Add graph-grounded experiment-quality checks**
 
 The skill docs must explicitly instruct planner/analyzer/cross-reviewer to use PaperNexus-backed context for:
 - standard baselines used in adjacent work
@@ -386,7 +386,7 @@ The skill docs must explicitly instruct planner/analyzer/cross-reviewer to use P
 - Test: `tests/workflow-commands.test.mjs`
 - Test: `tests/workflow-agent-isolation.test.mjs`
 
-- [ ] **Step 1: Run focused runtime and service suites**
+- [x] **Step 1: Run focused runtime and service suites**
 
 Run:
 
@@ -399,7 +399,7 @@ Expected:
 - reviewed full-auto experiment loop promotes `planning -> review -> launch -> monitor`
 - blocked reviews prevent autonomous launch
 
-- [ ] **Step 2: Run the TypeScript build**
+- [x] **Step 2: Run the TypeScript build**
 
 Run:
 
@@ -431,3 +431,10 @@ The adaptation here is intentionally narrower:
 - experiment-launch review, not manuscript review
 - graph-grounded experiment reasonableness, not only prose critique
 - workflow-owned durable state, not chat-only orchestration
+
+## Completion Notes
+
+- Reviewed-auto experiment launch is now a first-class micro-stage loop inside `experiment`: `planning -> analyzer_review -> cross_review -> synthesis -> launching -> monitoring -> ready_for_analysis`.
+- The workflow now persists and summarizes `experiment_review_state` durably, exposes it in `/workflow-status`, and auto-routes ownership to `planner`, `analyzer`, `cross-reviewer`, `researcher`, or `coder` as appropriate.
+- Experiment review state now self-heals from workflow-owned artifacts. Planner/analyzer/cross-reviewer/Researcher can update files and the next materialization pass will reconcile verdicts, blockers, launch readiness, and micro-stage timing without requiring brittle manual manifest edits.
+- Manual launch remains the fallback. The full-auto path activates only when `autonomous_execution.experiment_launch_mode = reviewed_auto`.

@@ -52,10 +52,21 @@ import {
   serializeWritePackageState,
 } from "../workflow-guard-state/execution-state";
 import {
+  coerceCompletedReviewStatus,
+  normalizeExperimentReviewVerdict,
+  normalizeExperimentReviewState,
+  serializeExperimentReviewState,
+} from "../workflow-guard-state/experiment-review";
+import {
   getExperimentSearchPath,
   loadExperimentSearchState,
   saveExperimentSearchStateFile,
 } from "../workflow-guard-experiment-history";
+import {
+  getExperimentReviewStatePath,
+  loadExperimentReviewState,
+  saveExperimentReviewStateFile,
+} from "../workflow-auto-experiment-review";
 import { summarizeIdeationContractState } from "../workflow-guard-summaries/ideation-contract-summary";
 import { summarizePaperStoryState } from "../workflow-guard-summaries/paper-story-summary";
 import { summarizeReviewPressurePacketState } from "../workflow-guard-summaries/review-pressure-summary";
@@ -74,6 +85,7 @@ type ReviewPressurePacketState = ReturnType<typeof normalizeReviewPressurePacket
 type OrchestrationState = ReturnType<typeof normalizeOrchestrationState>;
 type WritePackageState = ReturnType<typeof normalizeWritePackageState>;
 type ExperimentSearchState = ReturnType<typeof normalizeExperimentSearchState>;
+type ExperimentReviewState = ReturnType<typeof normalizeExperimentReviewState>;
 
 const DEFAULT_BRAINSTORM_CYCLE_DIR = "researcher/brainstorm-cycle";
 
@@ -1290,5 +1302,136 @@ export async function setExperimentSearchState(params: {
     stateFilePath,
     stateFileExists: await pathExists(stateFilePath),
     readyForAnalysis: isExperimentSearchReadyForAnalysis(next),
+  };
+}
+
+export async function setExperimentReviewState(params: {
+  projectRoot: string;
+  experimentReview: Record<string, unknown>;
+}): Promise<{
+  state: ExperimentReviewState;
+  stateFilePath: string;
+  stateFileExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = await loadExperimentReviewState({
+    projectRoot: params.projectRoot,
+    manifest,
+  });
+  const patch = asRecord(params.experimentReview) ?? {};
+  const explicitLaunchApproved =
+    pickBoolean(patch, ["launchApproved", "launch_approved"]) ?? current.launchApproved;
+  const analyzerVerdict =
+    normalizeExperimentReviewVerdict(
+      pickString(patch, ["analyzerVerdict", "analyzer_verdict"]) ??
+        patch.analyzerStatus ??
+        patch.analyzer_status
+    ) ?? current.analyzerVerdict;
+  const crossReviewerVerdict =
+    normalizeExperimentReviewVerdict(
+      pickString(patch, ["crossReviewerVerdict", "cross_reviewer_verdict"]) ??
+        patch.crossReviewerStatus ??
+        patch.cross_reviewer_status
+    ) ?? current.crossReviewerVerdict;
+  const next: ExperimentReviewState = {
+    ...current,
+    status: normalizeStage(patch.status) ?? current.status,
+    launchMode:
+      pickString(patch, ["launchMode", "launch_mode"]) === "reviewed_auto"
+        ? "reviewed_auto"
+        : pickString(patch, ["launchMode", "launch_mode"]) === "manual"
+          ? "manual"
+          : current.launchMode,
+    microStage:
+      normalizeStage(patch.microStage ?? patch.micro_stage) ?? current.microStage,
+    reviewRound: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["reviewRound", "review_round"]) ?? current.reviewRound
+      )
+    ),
+    stateFilePath:
+      pickString(patch, ["stateFilePath", "state_file_path"]) ??
+      current.stateFilePath,
+    packetPath: pickString(patch, ["packetPath", "packet_path"]) ?? current.packetPath,
+    plannerPlanPath:
+      pickString(patch, ["plannerPlanPath", "planner_plan_path"]) ??
+      current.plannerPlanPath,
+    analyzerReportPath:
+      pickString(patch, ["analyzerReportPath", "analyzer_report_path"]) ??
+      current.analyzerReportPath,
+    crossReviewerReportPath:
+      pickString(patch, ["crossReviewerReportPath", "cross_reviewer_report_path"]) ??
+      current.crossReviewerReportPath,
+    launchDecisionPath:
+      pickString(patch, ["launchDecisionPath", "launch_decision_path"]) ??
+      current.launchDecisionPath,
+    packetFingerprint:
+      pickString(patch, ["packetFingerprint", "packet_fingerprint"]) ??
+      current.packetFingerprint,
+    targetTrackIds:
+      patch.targetTrackIds || patch.target_track_ids
+        ? asStringArray(patch.targetTrackIds ?? patch.target_track_ids)
+        : current.targetTrackIds,
+    claimIds:
+      patch.claimIds || patch.claim_ids
+        ? asStringArray(patch.claimIds ?? patch.claim_ids)
+        : current.claimIds,
+    graphPacketPaths:
+      patch.graphPacketPaths || patch.graph_packet_paths
+        ? asStringArray(patch.graphPacketPaths ?? patch.graph_packet_paths)
+        : current.graphPacketPaths,
+    plannerStatus:
+      normalizeStage(patch.plannerStatus ?? patch.planner_status) ??
+      current.plannerStatus,
+    analyzerStatus: coerceCompletedReviewStatus(
+      patch.analyzerStatus ?? patch.analyzer_status,
+      analyzerVerdict,
+      current.analyzerStatus
+    ),
+    crossReviewerStatus: coerceCompletedReviewStatus(
+      patch.crossReviewerStatus ?? patch.cross_reviewer_status,
+      crossReviewerVerdict,
+      current.crossReviewerStatus
+    ),
+    synthesisStatus:
+      normalizeStage(patch.synthesisStatus ?? patch.synthesis_status) ??
+      current.synthesisStatus,
+    analyzerVerdict,
+    crossReviewerVerdict,
+    launchApproved: explicitLaunchApproved,
+    blockerCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["blockerCount", "blocker_count"]) ??
+          current.blockerCount
+      )
+    ),
+    blockers:
+      patch.blockers ? asStringArray(patch.blockers) : current.blockers,
+    pendingReason:
+      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+    lastLaunchApprovedAt:
+      pickString(patch, ["lastLaunchApprovedAt", "last_launch_approved_at"]) ??
+      (explicitLaunchApproved && !current.lastLaunchApprovedAt
+        ? new Date().toISOString()
+        : current.lastLaunchApprovedAt),
+    lastUpdatedAt:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  };
+
+  manifest.experiment_review_state = serializeExperimentReviewState(next);
+  await saveExperimentReviewStateFile({
+    projectRoot: params.projectRoot,
+    state: next,
+  });
+  await saveManifest(params.projectRoot, manifest);
+
+  const stateFilePath = getExperimentReviewStatePath(params.projectRoot);
+  return {
+    state: next,
+    stateFilePath,
+    stateFileExists: await pathExists(stateFilePath),
   };
 }

@@ -17,6 +17,8 @@ Monitor experiment status on a remote server and durably reconcile completion so
 
 This is the default follow-up once remote runs exist. In auto mode, the workflow may repeatedly route the EXPERIMENT stage back here until the remote runs are terminal and `experiment_search` is ready for analysis.
 
+In reviewed-auto mode, monitor mode begins only after the pre-launch review loop has approved a packet and Coder has created real remote runs. Planner/analyzer/cross-reviewer work belongs to the earlier experiment micro-stages.
+
 ## Process
 
 ### 1. Check Running Experiments

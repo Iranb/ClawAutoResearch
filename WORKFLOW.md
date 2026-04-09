@@ -829,45 +829,58 @@ When CODE is complete and the required experiment bundle exists, Coder should tr
 
 ### Stage 4 · EXPERIMENT
 **Owner:** Researcher
-**Skills:** `/experiment-phase` → `/parallel-experiments`, `/monitor-experiment` + spawned Coder `/run-experiment`
+**Skills:** `/experiment-phase` → reviewed-auto prelaunch review (`/experiment-plan`, `/experiment-design-review`, `/experiment-attack`) → spawned Coder `/run-experiment` → `/monitor-experiment`
 **Inputs:** `{PROJ}/coder/{experiment-name}/`, `{PROJ}/orchestrator/PLAN.md`  
 **Outputs:**
 - `{PROJ}/researcher/artifacts/results/` — raw results
 - `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — restart-safe structured experiment memory
 - `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` — run status
 - updated `{PROJ}/TRACK_REGISTRY.json` — track evidence status and decision
+- when `autonomous_execution.experiment_launch_mode = reviewed_auto`:
+  - `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json`
+  - `{PROJ}/planner/EXPERIMENT_PLAN.md`
+  - `{PROJ}/analyzer/EXPERIMENT_REASONABLENESS_REPORT.md`
+  - `{PROJ}/cross-reviewer/EXPERIMENT_ATTACK_REPORT.md`
+  - `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json`
 
 ```
 Procedure:
   1. Researcher builds the dispatch plan and allocates GPU slots
-  2. For each active track, decide whether this round is:
+  2. If reviewed-auto launch is enabled and no runs exist yet, execute the experiment micro-stage loop first:
+     - `planning`: Planner assembles the bounded launch packet
+     - `analyzer_review`: Analyzer checks attribution purity, baseline fairness, metric sufficiency, stop rules, and artifact completeness
+     - `cross_review`: Cross-Reviewer stress-tests confounds, falsifiers, novelty risk, cherry-picking risk, and launch-worthiness
+     - `synthesis`: Researcher records launch approval or revision requirements in `researcher/EXPERIMENT_LAUNCH_DECISION.json`
+     - only approved packets may proceed to Coder launch
+  3. For each active track, decide whether this round is:
      - pilot execution
      - full experiment
      - repair experiment
-  3. Dispatch experiments (use /parallel-experiments if N>1; per-bundle launch is assigned to Coder via /run-experiment)
-  4. Monitor with /monitor-experiment
+  4. Dispatch experiments (use /parallel-experiments if N>1; per-bundle launch is assigned to Coder via /run-experiment)
+     - in reviewed-auto mode, Coder must launch strictly from the approved planner packet fingerprint and launch decision
+  5. Monitor with /monitor-experiment
      - once remote runs exist, this becomes the default experiment-stage heartbeat
      - auto mode should keep re-entering `/monitor-experiment` on bounded passes until the remote runs are terminal and the result bundle is analysis-ready
-  5. On completion: collect results to artifacts/results/
-  6. Update EXPERIMENT_REGISTRY.md
-  7. After every meaningful checkpoint (queued, launched, running, done, failed, decision made), upsert `{PROJ}/researcher/EXPERIMENT_LEDGER.json` with:
+  6. On completion: collect results to artifacts/results/
+  7. Update EXPERIMENT_REGISTRY.md
+  8. After every meaningful checkpoint (queued, launched, running, done, failed, decision made), upsert `{PROJ}/researcher/EXPERIMENT_LEDGER.json` with:
      - experiment id / track id / kind
      - config reference, screen name, server, GPU
      - status, checkpoint stage, metrics, result pointers
      - failure signature or decision (`advance` / `merge` / `park` / `kill`)
      - `papernexus_sync.status`
-  8. Mirror the latest experiment-memory summary into `{PROJ}/PROJECT_MANIFEST.json.experiment_memory`
-  9. If the project has a PaperNexus corpus, use idle time or post-run reconciliation to sync important experiment details into PaperNexus and mark sync status in the ledger
-  10. Mark `{PROJ}/PROJECT_MANIFEST.json.innovation_reflection` as pending whenever the latest experiment evidence changes future ideation assumptions
-  11. Run a track decision pass:
+  9. Mirror the latest experiment-memory summary into `{PROJ}/PROJECT_MANIFEST.json.experiment_memory`
+  10. If the project has a PaperNexus corpus, use idle time or post-run reconciliation to sync important experiment details into PaperNexus and mark sync status in the ledger
+  11. Mark `{PROJ}/PROJECT_MANIFEST.json.innovation_reflection` as pending whenever the latest experiment evidence changes future ideation assumptions
+  12. Run a track decision pass:
      - `advance`
      - `merge`
      - `park`
      - `kill`
-  12. Update {PROJ}/TRACK_REGISTRY.json and {PROJ}/PROJECT_MANIFEST.json with the new decision
-  13. Set `current_micro_stage: "experiment_memory_synced"` only after registry, ledger, manifest summary, and innovation-reflection freshness state agree
+  13. Update {PROJ}/TRACK_REGISTRY.json and {PROJ}/PROJECT_MANIFEST.json with the new decision
+  14. Set `current_micro_stage: "experiment_memory_synced"` only after registry, ledger, manifest summary, and innovation-reflection freshness state agree
      - and only after `experiment_search` is honestly `ready_for_analysis` rather than merely "training finished"
-  14. → POST GATE-3
+  15. → POST GATE-3
 ```
 
 ---

@@ -1,5 +1,6 @@
 export type WorkflowRole =
   | "researcher"
+  | "planner"
   | "orchestrator"
   | "coder"
   | "analyzer"
@@ -63,6 +64,16 @@ export type BuildDynamicTasksParams = {
   currentStage: string | null;
   manifest: ManifestLike | null;
   missingStageSignals: string[];
+  experimentReviewMode: "manual" | "reviewed_auto";
+  experimentReviewStatus: string | null;
+  experimentReviewMicroStage: string | null;
+  experimentReviewPendingReason: string | null;
+  experimentReviewPacketPath: string | null;
+  experimentReviewPlannerPlanPath: string | null;
+  experimentReviewAnalyzerReportPath: string | null;
+  experimentReviewCrossReviewerReportPath: string | null;
+  experimentReviewLaunchDecisionPath: string | null;
+  experimentReviewLaunchApproved: boolean;
   idleResearch: IdleResearchState;
   innovationReflection: InnovationReflectionState;
   innovationReflectionDue: boolean;

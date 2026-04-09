@@ -271,6 +271,23 @@ export function formatWorkflowStatusText(params: {
     );
   }
   if (
+    snapshot.experimentReviewMode === "reviewed_auto" ||
+    (snapshot.experimentReviewStatus &&
+      snapshot.experimentReviewStatus !== "missing")
+  ) {
+    lines.push(
+      `Experiment review: mode=${snapshot.experimentReviewMode}, status=${snapshot.experimentReviewStatus ?? "missing"}, micro_stage=${snapshot.experimentReviewMicroStage ?? "unset"}, round=${snapshot.experimentReviewRound ?? 0}, planner=${snapshot.experimentReviewPlannerStatus ?? "unset"}, analyzer=${snapshot.experimentReviewAnalyzerStatus ?? "unset"}, cross=${snapshot.experimentReviewCrossReviewerStatus ?? "unset"}, synthesis=${snapshot.experimentReviewSynthesisStatus ?? "unset"}, launch=${snapshot.experimentReviewLaunchApproved ? "approved" : "pending"}, blockers=${snapshot.experimentReviewBlockerCount ?? 0}`
+    );
+    if (snapshot.experimentReviewPendingReason) {
+      lines.push(`Experiment review pending reason: ${snapshot.experimentReviewPendingReason}`);
+    }
+    if (snapshot.experimentReviewPacketPath || snapshot.experimentReviewPlannerPlanPath) {
+      lines.push(
+        `Experiment review artifacts: packet=${snapshot.experimentReviewPacketPath ?? "unset"}, planner_plan=${snapshot.experimentReviewPlannerPlanPath ?? "unset"}, analyzer_report=${snapshot.experimentReviewAnalyzerReportPath ?? "unset"}, cross_report=${snapshot.experimentReviewCrossReviewerReportPath ?? "unset"}, decision=${snapshot.experimentReviewLaunchDecisionPath ?? "unset"}`
+      );
+    }
+  }
+  if (
     snapshot.researchProgramStatus ||
     (snapshot.researchProgramOnboardingMissing ?? []).length > 0
   ) {

@@ -1,6 +1,25 @@
 import * as path from "node:path";
 import type { ManifestLike, StageSignalsContext } from "./types";
 
+function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "pass" || raw === "revise") {
+    return raw;
+  }
+  if (raw === "block" || raw === "blocked") {
+    return "block";
+  }
+  return null;
+}
+
+function isReviewCompleted(status: unknown, verdict: unknown): boolean {
+  const normalizedStatus = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (normalizedStatus === "ready" || normalizedStatus === "skipped") {
+    return true;
+  }
+  return normalizeReviewVerdict(verdict) !== null;
+}
+
 export interface ExecutionStageDeps {
   isNonEmptyDirectory: (targetPath: string) => Promise<boolean>;
   pathExists: (targetPath: string) => Promise<boolean>;
@@ -10,7 +29,17 @@ export interface ExecutionStageDeps {
     projectRoot: string;
     manifest: ManifestLike | null;
   }) => Promise<any>;
+  loadExperimentReviewState: (params: {
+    projectRoot: string;
+    manifest: ManifestLike | null;
+  }) => Promise<any>;
   isExperimentSearchReadyForAnalysis: (state: any) => boolean;
+  hasActiveExperimentRuns: (ledger: Record<string, unknown> | null) => boolean;
+  normalizeAutonomousExecutionState: (value: unknown) => {
+    experimentLaunchMode: "manual" | "reviewed_auto";
+    requireAnalyzerReview: boolean;
+    requireCrossReview: boolean;
+  };
   readJsonIfExists: (targetPath: string) => Promise<Record<string, unknown> | null>;
   normalizeStage: (value: unknown) => string | null;
   normalizeFigureQcState: (value: unknown) => any;
@@ -35,6 +64,71 @@ export async function collectExperimentStageMissingSignals(
   deps: ExecutionStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+  const experimentSearch = await deps.loadExperimentSearchState({
+    projectRoot: ctx.projectRoot,
+    manifest: ctx.manifest,
+  });
+  const autonomousExecution = deps.normalizeAutonomousExecutionState(
+    ctx.manifest?.autonomous_execution
+  );
+  const experimentReview = await deps.loadExperimentReviewState({
+    projectRoot: ctx.projectRoot,
+    manifest: ctx.manifest,
+  });
+  const reviewedAutoPrelaunch =
+    autonomousExecution.experimentLaunchMode === "reviewed_auto" &&
+    !deps.hasActiveExperimentRuns(ctx.experimentLedger) &&
+    !deps.isExperimentSearchReadyForAnalysis(experimentSearch);
+  if (reviewedAutoPrelaunch) {
+    if (experimentReview.status === "missing") {
+      missing.push("PROJECT_MANIFEST.json.experiment_review_state.status must not be missing in reviewed_auto mode");
+    }
+    const requiredArtifacts = [
+      experimentReview.packetPath,
+      experimentReview.plannerPlanPath,
+      experimentReview.launchDecisionPath,
+    ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
+    for (const artifactPath of requiredArtifacts) {
+      const resolved = deps.resolveProjectArtifactPath(ctx.projectRoot, artifactPath);
+      if (!resolved || !(await deps.pathExists(resolved))) {
+        missing.push(`{PROJ}/${artifactPath}`);
+      }
+    }
+    if (!isReviewCompleted(experimentReview.plannerStatus, null)) {
+      missing.push("PROJECT_MANIFEST.json.experiment_review_state.planner_status = ready");
+    }
+    if (
+      autonomousExecution.requireAnalyzerReview &&
+      !isReviewCompleted(
+        experimentReview.analyzerStatus,
+        experimentReview.analyzerVerdict
+      )
+    ) {
+      missing.push("PROJECT_MANIFEST.json.experiment_review_state.analyzer_status = ready");
+    }
+    if (
+      autonomousExecution.requireCrossReview &&
+      !isReviewCompleted(
+        experimentReview.crossReviewerStatus,
+        experimentReview.crossReviewerVerdict
+      )
+    ) {
+      missing.push(
+        "PROJECT_MANIFEST.json.experiment_review_state.cross_reviewer_status = ready"
+      );
+    }
+    if (experimentReview.blockerCount > 0) {
+      missing.push(
+        `Experiment review blockers remain before launch: ${(experimentReview.blockers ?? []).join("; ")}`
+      );
+    }
+    if (!experimentReview.launchApproved) {
+      missing.push(
+        "PROJECT_MANIFEST.json.experiment_review_state.launch_approved = true or set autonomous_execution.experiment_launch_mode = manual"
+      );
+    }
+    return missing;
+  }
   if (
     !(await deps.isNonEmptyDirectory(
       path.join(ctx.projectRoot, "researcher", "artifacts", "results")
@@ -56,10 +150,6 @@ export async function collectExperimentStageMissingSignals(
   if (!deps.manifestFieldExists(ctx.manifest, ["experiment_memory", "last_ledger_update_at"])) {
     missing.push("PROJECT_MANIFEST.json.experiment_memory.last_ledger_update_at");
   }
-  const experimentSearch = await deps.loadExperimentSearchState({
-    projectRoot: ctx.projectRoot,
-    manifest: ctx.manifest,
-  });
   if (!deps.isExperimentSearchReadyForAnalysis(experimentSearch)) {
     missing.push(
       `PROJECT_MANIFEST.json.experiment_search must be ready_for_analysis with multi_seed + plot pack complete before ANALYZE (current: status=${experimentSearch.status}, multi_seed=${experimentSearch.multiSeedStatus}, plot_pack=${experimentSearch.plotPackStatus})`

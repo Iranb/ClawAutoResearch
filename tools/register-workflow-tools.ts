@@ -11,6 +11,7 @@ import {
   getCitationIntegrityStateSummary,
   getIdeationContractStateSummary,
   getExperimentSearchStateSummary,
+  getExperimentReviewStateSummary,
   getExternalReviewStateSummary,
   getExperimentMemorySummary,
   getFigureQcStateSummary,
@@ -23,6 +24,7 @@ import {
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
   materializeIdeationContract,
+  materializeExperimentReviewState,
   materializeLiteratureDiscoveryPacket,
   materializePaperStoryState,
   queuePaperIngestionRequest,
@@ -53,6 +55,7 @@ import {
   setBrainstormCycleState,
   setCitationCollectionState,
   setExperimentSearchState,
+  setExperimentReviewState,
   setExternalReviewState,
   setFigureQcState,
   setGateStateForWorkflow,
@@ -155,6 +158,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "set_gate_state",
   "set_paper_ingestion",
   "materialize_ideation_contract",
+  "materialize_experiment_review_state",
   "materialize_literature_discovery_packet",
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
@@ -162,6 +166,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_cycle_memory",
   "materialize_idea_catalyst_state",
   "set_ideation_contract",
+  "set_experiment_review_state",
   "set_idea_catalyst_state",
   "set_paper_story_state",
   "materialize_review_pressure_packet",
@@ -239,7 +244,10 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_review_issue_tracker: "getReviewIssueTrackerStateSummary",
   set_review_issue_tracker: "setReviewIssueTrackerState",
   get_experiment_search: "getExperimentSearchStateSummary",
+  get_experiment_review_state: "getExperimentReviewStateSummary",
   set_experiment_search: "setExperimentSearchState",
+  set_experiment_review_state: "setExperimentReviewState",
+  materialize_experiment_review_state: "materializeExperimentReviewState",
   get_external_review_state: "getExternalReviewStateSummary",
   set_external_review_state: "setExternalReviewState",
   get_gate_state: "getGateStateSummary",
@@ -517,6 +525,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_brainstorm_cycle",
               "run_brainstorm_cycle",
               "materialize_ideation_contract",
+              "materialize_experiment_review_state",
               "materialize_literature_discovery_packet",
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
@@ -554,7 +563,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_review_issue_tracker",
               "set_review_issue_tracker",
               "get_experiment_search",
+              "get_experiment_review_state",
               "set_experiment_search",
+              "set_experiment_review_state",
               "get_external_review_state",
               "set_external_review_state",
               "get_gate_state",
@@ -2100,6 +2111,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_experiment_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getExperimentReviewStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "set_experiment_search": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await setExperimentSearchState({
@@ -2108,6 +2126,29 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   params.experimentSearch,
                   "experimentSearch"
                 ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_experiment_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setExperimentReviewState({
+                projectRoot: resolvedProjectRoot,
+                experimentReview: requireObject(
+                  params.experimentReview,
+                  "experimentReview"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_experiment_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeExperimentReviewState({
+                projectRoot: resolvedProjectRoot,
+                experimentReviewMaterialization: asObject(
+                  params.experimentReviewMaterialization
+                ) ?? undefined,
+                trigger: readString(params.trigger) ?? null,
+                agentId: state.bindingRole,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

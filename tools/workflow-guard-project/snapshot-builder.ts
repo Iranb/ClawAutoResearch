@@ -16,6 +16,9 @@ import {
   loadExperimentSearchState,
 } from "../workflow-guard-experiment-history";
 import {
+  loadExperimentReviewState,
+} from "../workflow-auto-experiment-review";
+import {
   inboxForRole,
 } from "../workflow-guard-collaboration";
 import {
@@ -49,6 +52,10 @@ import {
   normalizeFigureQcState,
   normalizeReviewIssueTrackerState,
 } from "../workflow-guard-state/execution-state";
+import {
+  normalizeAutonomousExecutionState,
+  normalizeExperimentReviewState,
+} from "../workflow-guard-state/experiment-review";
 import {
   normalizeTheorySupportState,
 } from "../workflow-guard-state/theory-state";
@@ -711,6 +718,18 @@ export async function buildWorkflowSnapshotFromProjectState(
         readJsonIfExists,
       })
     : normalizeExperimentSearchState(asRecord(projectState.manifest?.experiment_search));
+  const autonomousExecution = normalizeAutonomousExecutionState(
+    asRecord(projectState.manifest?.autonomous_execution)
+  );
+  const experimentReview = projectState.projectRoot
+    ? await loadExperimentReviewState({
+        projectRoot: projectState.projectRoot,
+        manifest: projectState.manifest,
+      })
+    : undefined;
+  const experimentReviewState =
+    experimentReview ??
+    normalizeExperimentReviewState(asRecord(projectState.manifest?.experiment_review_state));
   const researchProgram = normalizeResearchProgramState(
     asRecord(projectState.manifest?.research_program)
   );
@@ -1064,6 +1083,25 @@ export async function buildWorkflowSnapshotFromProjectState(
     orchestrationNextTransitionCandidate: orchestrationState.nextTransitionCandidate,
     orchestrationRetryBudgetRemaining: orchestrationState.retryBudgetRemaining,
     orchestrationRollbackTargetStage: orchestrationState.rollbackTargetStage,
+    experimentReviewMode: autonomousExecution.experimentLaunchMode,
+    experimentReviewStatus: experimentReviewState.status ?? "missing",
+    experimentReviewMicroStage: experimentReviewState.microStage ?? null,
+    experimentReviewRound: experimentReviewState.reviewRound ?? 0,
+    experimentReviewPlannerStatus: experimentReviewState.plannerStatus ?? "pending",
+    experimentReviewAnalyzerStatus: experimentReviewState.analyzerStatus ?? "pending",
+    experimentReviewCrossReviewerStatus:
+      experimentReviewState.crossReviewerStatus ?? "pending",
+    experimentReviewSynthesisStatus: experimentReviewState.synthesisStatus ?? "pending",
+    experimentReviewLaunchApproved: experimentReviewState.launchApproved ?? false,
+    experimentReviewBlockerCount: experimentReviewState.blockerCount ?? 0,
+    experimentReviewPendingReason: experimentReviewState.pendingReason ?? null,
+    experimentReviewPacketPath: experimentReviewState.packetPath ?? null,
+    experimentReviewPlannerPlanPath: experimentReviewState.plannerPlanPath ?? null,
+    experimentReviewAnalyzerReportPath: experimentReviewState.analyzerReportPath ?? null,
+    experimentReviewCrossReviewerReportPath:
+      experimentReviewState.crossReviewerReportPath ?? null,
+    experimentReviewLaunchDecisionPath:
+      experimentReviewState.launchDecisionPath ?? null,
     experimentSearchStatus: experimentSearch.status,
     experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
     experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
@@ -1203,6 +1241,17 @@ export async function buildWorkflowSnapshotFromProjectState(
         currentStage,
         manifest: projectState.manifest,
         missingStageSignals,
+        experimentReviewMode: experimentReviewState.launchMode,
+        experimentReviewStatus: experimentReviewState.status,
+        experimentReviewMicroStage: experimentReviewState.microStage,
+        experimentReviewPendingReason: experimentReviewState.pendingReason,
+        experimentReviewPacketPath: experimentReviewState.packetPath,
+        experimentReviewPlannerPlanPath: experimentReviewState.plannerPlanPath,
+        experimentReviewAnalyzerReportPath: experimentReviewState.analyzerReportPath,
+        experimentReviewCrossReviewerReportPath:
+          experimentReviewState.crossReviewerReportPath,
+        experimentReviewLaunchDecisionPath: experimentReviewState.launchDecisionPath,
+        experimentReviewLaunchApproved: experimentReviewState.launchApproved,
         idleResearch,
         innovationReflection,
         innovationReflectionDue,
