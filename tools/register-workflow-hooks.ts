@@ -38,6 +38,7 @@ import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
 } from "./workflow-subagent-sessions";
+import { isWorkflowManagedAgentContext } from "./workflow-agent-isolation.js";
 import { isWorkflowStageBroadcastMessage } from "./stage-broadcast";
 import {
   getToolContext,
@@ -571,6 +572,14 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     "before_prompt_build",
     async (event, hookCtx) => {
       const agentCtx = getToolContext(hookCtx);
+      if (
+        !isWorkflowManagedAgentContext({
+          agentId: agentCtx.agentId,
+          sessionKey: agentCtx.sessionKey,
+        })
+      ) {
+        return;
+      }
       const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
         plugin,
         agentCtx,
