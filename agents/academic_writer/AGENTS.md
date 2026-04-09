@@ -37,6 +37,7 @@ On every session start:
 4. Read `{PROJ}/analyzer/NARRATIVE_REPORT.md`, `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`, and `{PROJ}/analyzer/TRACK_VERDICTS.md`.
 5. Read reviewer feedback and cross-review notes that the workflow points at.
 6. Read `{PROJ}/researcher/ZOTERO_PACKET.md` when bibliography context matters.
+7. Only start mainline drafting when the current writing packet and runtime owner routing actually point at Writer-owned work; repair/background states upstream are not a paper-writing handoff.
 
 ## Workflow and Writing Rules
 

@@ -9,11 +9,10 @@
 Read the following files from this workspace root:
 1. `SOUL.md` — your identity and principles
 2. `AGENTS.md` — your operating protocols
-3. `WORKFLOW.md` — the **global pipeline definition** (stages, gates, AUTO_PROCEED setting)
+3. `WORKFLOW.md` — the stable global pipeline map and gate vocabulary
 
-Check `WORKFLOW.md` → `Configuration` section:
-- Note `AUTO_PROCEED` value (`true` = autonomous loop, `false` = pause at gates)
-- Note `PROJECT_MODE` value (`single` or `queue`)
+Do not treat `WORKFLOW.md` alone as the live decision source for the next step.
+Stage-local ownership, missing signals, repair/background opportunities, and dispatch timing come from Workflow Guard plus `research_workflow.auto_iterator_tick`.
 
 ## Step 2: Load Research Memory (Researcher Agent only)
 
@@ -29,25 +28,15 @@ Summarize key active constraints in 2–3 bullet points:
 - Any idea directions marked "do not retry"
 - Any proven configs relevant to current task
 
-## Step 3: Check Active Project State & Resume Stage
+## Step 3: Check Active Project State & Let Runtime Decide
 
 ```
-If {PROJECTS_ROOT}/*/researcher/GATE_STATE.json exists:
-  → Read current_stage and gate_status
-  → If gate_status = "waiting" AND AUTO_PROCEED=false:
-      Re-post the gate message (user may have missed it)
-  → Else: resume pipeline at current_stage
-
 If {PROJ}/PROJECT_MANIFEST.json exists:
   → Confirm `project_id`, `owner_agent`, `next_action`, `resume_action`, and `memory_scope.project_isolated`
   → If this workspace was previously working on another project:
-      Run `/resume-pipeline` before any fresh write
+      Do not start fresh stage work until runtime reconciliation runs
   → If your agent is not the recorded owner and no explicit task has been assigned:
       Stay in background-duty mode from AGENTS.md instead of inventing a new stage
-
-If resuming at stage CODE (or about to enter CODE) and either {PROJ}/orchestrator/PLAN.md or {PROJ}/orchestrator/TODOS.md is missing:
-  → **Wake Orchestrator first**: spawn Orchestrator with instruction "Run /plan-research using {PROJ}/researcher/IDEA_REPORT.md; write PLAN.md and TODOS.md to {PROJ}/orchestrator/."
-  → Wait for both files to exist before spawning Coder or proceeding. Do not assume someone else will run Orchestrator.
 
 If {PROJECTS_ROOT}/*/orchestrator/TODOS.md exists (any active project):
   → Read the most recently modified one.
@@ -64,7 +53,16 @@ If {PROJECTS_ROOT}/*/researcher/REVIEW_STATE.json exists:
 
 If an active project exists, call `research_workflow` with action `auto_iterator_tick` and `iterator.mode = "bootstrap"` before any fresh stage work.
 Use the returned `stageAfter`, `ownerAfter`, `blockingReason`, and `recommendedActions` as the deterministic startup decision.
+Interpret the iterator result as follows:
+
+- `drive_stage` = owner work may proceed or be handed off deterministically
+- `repair_artifact` = the workflow is waiting on workflow-owned repair/materialization, not a mainline owner handoff
+- `background` = bounded background work may continue, but do not present it as the next stage owner taking over
+- `wait_human` = stop and wait for the required gate
+
 If the iterator routes ownership away from you, do not invent a parallel mainline task.
+If the iterator surfaces repair or background work, keep the foreground session responsive and use workflow-owned background lanes when available instead of monopolizing chat.
+Do not manually wake Orchestrator, Coder, or another owner just because an older checklist says that stage "should be next"; prefer the runtime-directed handoff path and only use compatibility fallback when runtime context is unavailable.
 
 ## Step 4: Check Running Experiments (Researcher Agent only)
 
@@ -91,11 +89,12 @@ Output before first response:
 - Active project: [title if any, else "none"]
 - Current stage: [IDEA / PLAN / CODE / EXPERIMENT / ANALYZE / REVIEW / WRITE / SUBMIT / none]
 - Current owner: [researcher / orchestrator / coder / analyzer / academic_writer / reviewer / none]
+- Iterator action: [drive_stage / repair_artifact / background / wait_human / none]
 - Pending gate: [GATE-N waiting / none]
 - Pending tasks: [N tasks, next: "..."]
 - Running experiments: [name if any, else "none"]
 - Memory loaded: [ideation-memory: Y/N, experiment-memory: Y/N]
-- Mode: [AUTO_PROCEED=true (autonomous) / AUTO_PROCEED=false (gated)]
+- Control note: [runtime-ready / workflow-owned repair pending / background-only / human gate]
 ```
 
 Non-Researcher agents: skip Steps 2, 4, and the experiments/stage/mode lines in Step 5.

@@ -1,6 +1,6 @@
 # AGENTS.md — Coder Agent
 
-This file is the stable bootstrap contract for Coder. Keep it short. Stage-local execution packets, launch rules, and experiment-stage ownership come from `[Workflow Guard]`, `PLAN.md`, and the assigned experiment bundle.
+This file is the stable bootstrap contract for Coder. Keep it short. Stage-local execution packets, launch rules, and experiment-stage ownership come from `[Workflow Guard]`, `research_program`, and the assigned experiment bundle. `PLAN.md` is a readable derivative, not the only planning authority.
 
 ## First Run
 
@@ -32,10 +32,10 @@ Stable write rules:
 
 On every session start:
 1. Read `SOUL.md`.
-2. Read `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md`.
-3. Read `{PROJ}/TRACK_REGISTRY.json` and the active experiment packet.
-4. Read `{PROJ}/PROJECT_MANIFEST.json` and confirm CODE or EXPERIMENT context.
-5. If resuming, inspect existing `REMOTE_RUN.json` files and execution metadata before touching code.
+2. Read `{PROJ}/PROJECT_MANIFEST.json` and confirm CODE or EXPERIMENT context plus the selected `research_program` task/track.
+3. Read `{PROJ}/orchestrator/PLAN.md`, `{PROJ}/orchestrator/TODOS.md`, `{PROJ}/TRACK_REGISTRY.json`, and the active experiment packet.
+4. If resuming, inspect existing `REMOTE_RUN.json` files and execution metadata before touching code.
+5. Only proceed when workflow routing or an explicit assigned packet says Coder owns the current mainline work; do not infer ownership from an outdated handoff if runtime is still blocked on repair/background work.
 
 ## Workflow and Tooling Rules
 
@@ -60,6 +60,7 @@ On every session start:
 ## Boundaries
 
 - Do not launch unassigned experiments.
+- Do not start CODE work just because PLAN.md exists; the runtime-selected task bundle and current owner routing still win.
 - Do not change research scope, dataset choice, metrics, or evaluation semantics on your own.
 - Do not mutate dataset directories in place.
 - Do not skip dry-run validation or handoff metadata.

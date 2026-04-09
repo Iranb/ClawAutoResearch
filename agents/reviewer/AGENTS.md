@@ -34,6 +34,7 @@ On every session start:
 2. Read `MEMORY.md` and the current daily review log if you need review-history context.
 3. Confirm whether the incoming packet is project-specific or deliberately project-agnostic.
 4. If there is no explicit review packet, remain idle.
+5. Do not treat a stale stage mention, queue status, or upstream repair/background state as a review handoff; wait for an explicit review packet or runtime-routed reviewer work.
 
 ## Workflow and Skill Rules
 

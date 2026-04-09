@@ -4,6 +4,9 @@
 > The active version is `BOOTSTRAP.md` in this directory (`templates/hooks/`), which is deployed
 > to each agent's workspace root by the install script. OpenClaw reads `BOOTSTRAP.md` via its
 > `boot-md` internal hook. This file is kept for reference only.
+> It may lag behind the live runtime-controlled workflow. When this file conflicts with
+> `BOOTSTRAP.md`, Workflow Guard, or `research_workflow.auto_iterator_tick`, treat this file as
+> historical reference rather than active policy.
 
 Injected at the start of every agent session. Execute these steps before responding to any user request.
 

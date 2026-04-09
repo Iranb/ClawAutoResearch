@@ -30,8 +30,9 @@
 2. 计算 `stageBefore`、`ownerBefore`、`missingSignals`、`blockingReasons`。
 3. 在 graph-sensitive 阶段优先检查 graph presence。
 4. 发现缺少 contract 时先触发 materializer，而不是直接推下一位角色硬写。
-5. 决定 `hold / repair / advance / fallback / wait_human`。
-6. 必要时通过 mailbox、queue 或 broadcast 把 handoff 变成结构化事件。
+5. 通过 artifact-backed derived state 计算当前阶段是 `drive_stage`、`repair_artifact`、`background` 还是 `wait_human`。
+6. 只有 `drive_stage` 才会成为真正可派发的 owner handoff；其他结果会转成 repair/background guidance，而不是伪 handoff。
+7. 必要时通过 mailbox、queue 或 broadcast 把 handoff 变成结构化事件。
 
 ## 4. 为什么需要回退能力
 
@@ -49,6 +50,7 @@
 - prompt assembly：把当前阶段真正需要的 snapshot 注入角色 prompt。
 - boundaries：约束写入目录、spawn/send、可联系对象和 mailbox 使用。
 - runtime orchestration：封装 `auto_iterator_tick`、background continuation、dispatch 和 recovery。
+- derived state：统一把 workflow-owned artifact、inline cached fields、repair/background diagnostics 归一成可复用的 readiness / handoff facts。
 - materializers：把 `research_program`、`paper_story_state`、`review_pressure_packet`、writing support artifacts 等产物系统化落盘。
 - summaries：支撑 `/workflow-status`、dashboard 摘要和多项目视图。
 
