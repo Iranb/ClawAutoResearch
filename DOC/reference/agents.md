@@ -122,11 +122,20 @@
 
 当前系统不把原始 `@agent` mention 当作普通聊天装饰，而是把它当作“需要立刻唤醒下一位 owner”的控制信号。
 
-推荐的真实路由路径仍然是：
+推荐的真实路由路径现在是：
 
+- `research_workflow.auto_iterator_tick`
+- workflow service / runtime dispatch
 - `sessions_send`
 - `sessions_spawn`
-- `research_workflow.send_mailbox`
+- `research_workflow.send_mailbox`（兼容 fallback）
+
+其中最重要的变化是：
+
+- 只有当 runtime 产出可派发的 `drive_stage` 时，才算真正进入“下一位 owner 接手”
+- `repair_artifact` 表示 workflow-owned repair / materialization，还不该 handoff 给下游 owner
+- `background` 表示可以继续 bounded background work，但不该伪装成主线 stage handoff
+- foreground Researcher 遇到排队中的 literature discovery、wrapper graph work、resume pipeline 等长任务时，应优先转成 background continuation，保持主线程可响应
 
 ### 4.1 完成交接的标准模板
 
@@ -145,6 +154,7 @@
 - `@<role>` 只在“需要马上唤醒下一位 agent”时出现
 - 每条完成交接消息最多出现一次原始 `@`
 - 如果只是播报进度、同步状态、或等待人类确认，不要 `@`
+- 如果 runtime 当前结果是 `repair_artifact` 或 `background`，不要把它写成 stage-completion handoff，也不要为了“推进流程”硬 `@` 下一位 owner
 - 如果下一位 owner 已经在同一线程里出现过，就不要重复 `@`
 - 如果 next owner 是当前 agent 自己，也不要 `@`，只写自交接说明
 

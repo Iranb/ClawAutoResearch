@@ -39,16 +39,19 @@ On every session start:
 3. Read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` and `{PROJ}/researcher/ZOTERO_PACKET.md` when they exist.
 4. Read `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md` when resuming work.
 5. Confirm `project_id`, `owner_agent`, `next_action`, and `resume_action` before writing.
-6. If you just switched projects or recovered from a restart, run `/resume-pipeline` before new stage work.
+6. If you just switched projects, recovered from a restart, or woke on heartbeat/bootstrap, call `research_workflow.auto_iterator_tick` before new stage work and treat its result as the startup decision.
+7. Only continue mainline stage work when the runtime outcome is a dispatchable `drive_stage` for Researcher; if it reports workflow-owned repair or background work, stay responsive and follow that lane instead of inventing a fresh handoff.
 
 ## Workflow and PaperNexus
 
 - Researcher owns setup, graph build, frontier mapping, idea work, revise, done, and experiment-stage orchestration unless `[Workflow Guard]` routes ownership elsewhere.
+- `research_workflow.auto_iterator_tick` is the first authority on heartbeat, bootstrap, and recovery turns. Do not infer ownership from stale chat, old `@mentions`, or the previous session alone.
 - Use `/project-init` before graph work when the onboarding contract is incomplete.
 - Use `/graph-build` and `/frontier-mapping` before novelty-sensitive ideation when graph or frontier artifacts are stale.
 - Use `/literature-review`, `/research-ideation`, and the `idea-catalyst-*` skills for durable ideation packets rather than ad hoc brainstorming alone.
 - Maintain the Zotero project collection at `bot/<project-id>` and keep `{PROJ}/researcher/ZOTERO_PACKET.md` current when the paper set changes materially.
 - Keep `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, innovation reflection state, and idle research state current through workflow tools instead of hand-editing runtime fields.
+- If workflow-owned literature discovery, queue work, or wrapper-driven graph work is pending, launch or monitor it through `research_workflow.start_background_run` / wrapper lanes and answer direct user questions in the foreground instead of consuming the whole session with queue execution.
 
 PaperNexus access rules:
 - `remote_mcp`: this is the preferred live-graph path. Use the configured remote PaperNexus HTTP MCP endpoint and the MCP-first tool family: `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow`.
@@ -104,6 +107,7 @@ For delegated or long-running work, require this format:
 ## Boundaries
 
 - Do not invent stage transitions or bypass owner routing; call `research_workflow.auto_iterator_tick` when the stage output is truly ready.
+- Do not treat `repair_artifact` or `background` readiness results as permission to hand work to the next stage owner.
 - Do not hand-edit workflow-managed runtime fields when a workflow tool exists.
 - Do not perform owner-only work for another role when `[Workflow Guard]` says you are not the stage owner.
 - Do not replace graph-grounded reasoning with free-form chat summaries.

@@ -1,6 +1,6 @@
 # AGENTS.md — Orchestrator Agent
 
-This file is the Orchestrator bootstrap contract. Keep it stable and compact. Stage-local planning instructions, track scope, and handoff timing come from `[Workflow Guard]`, `PLAN.md`, and the current planning packet.
+This file is the Orchestrator bootstrap contract. Keep it stable and compact. Stage-local planning instructions, track scope, and handoff timing come from `[Workflow Guard]`, `PROJECT_MANIFEST.json.research_program`, and the current planning packet. `PLAN.md` and `TODOS.md` are human-readable derivatives, not the sole source of truth.
 
 ## First Run
 
@@ -33,11 +33,13 @@ On every session start:
 1. Read `SOUL.md`.
 2. Read `{PROJ}/PROJECT_MANIFEST.json` and `{PROJ}/TRACK_REGISTRY.json`.
 3. Read `{PROJ}/researcher/IDEA_REPORT.md` and current reasoning/frontier packets when present.
-4. Read existing `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` before rewriting anything.
+4. Read `research_program`, existing `{PROJ}/orchestrator/PLAN.md`, and `{PROJ}/orchestrator/TODOS.md` before rewriting anything.
+5. Do not assume PLAN stage ownership from a stale mention alone; prefer runtime-routed `drive_stage` ownership, and treat workflow-owned repair/background outcomes as non-handoff states.
 
 ## Workflow Rules
 
 - Turn confirmed idea and track packets into a bounded experiment program.
+- Record the durable planning contract in `PROJECT_MANIFEST.json.research_program` first; mirror it into `PLAN.md` / `TODOS.md` only as readable derivatives.
 - Preserve graph-backed rationale, baseline contracts, rollback rules, and compute estimates.
 - Favor a small number of strong active tracks over a bloated portfolio.
 - If planning depends on graph evidence, honor workflow PaperNexus mode and prefer `remote_mcp` before compatibility paths.
@@ -57,5 +59,6 @@ On every session start:
 ## Boundaries
 
 - Do not execute code, SSH, or launch experiments.
+- Do not self-activate PLAN work when runtime still reports workflow-owned repair/background work in earlier stages.
 - Do not silently reactivate parked or killed tracks.
 - Do not let stale bootstrap text override the current workflow guard or manifest.

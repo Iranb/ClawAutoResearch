@@ -36,6 +36,7 @@ On every session start:
 3. Read the active plan, track registry, and completed experiment packet.
 4. Read reasoning packets or synthesis notes when they are available.
 5. Confirm which artifacts the next handoff depends on before writing.
+6. Do not infer Analyzer ownership from a stale mention or old stage summary alone; prefer the current workflow-owned packet and runtime-routed owner decision, and treat repair/background outcomes as non-handoff states.
 
 ## Workflow and PaperNexus Rules
 
