@@ -40,6 +40,9 @@ describe("readProjectOverviews", () => {
       title: "Confirmation Bias Mitigation In Graph Retrieval",
       currentStage: "graph_build",
       currentStageIndex: 1,
+      workflowLine: "experiment",
+      paperMode: null,
+      surveyStatus: null,
       status: "blocked",
       blockerLabel: "missing sources",
       blockerReason:
@@ -84,7 +87,10 @@ describe("readProjectOverviews", () => {
       id: "latent-planning-sandbox",
       title: "Latent Planning Sandbox",
       currentStage: "review",
-      currentStageIndex: 8,
+      currentStageIndex: 9,
+      workflowLine: "experiment",
+      paperMode: null,
+      surveyStatus: null,
       status: "blocked",
       blockerLabel: "waiting selection",
       blockerReason: "Review queue is waiting selection from the reviewer.",
@@ -119,9 +125,49 @@ describe("readProjectOverviews", () => {
     const paperPolish = result.find((entry) => entry.id === "paper-polish");
 
     expect(paperPolish).toMatchObject({
+      workflowLine: "experiment",
       blockerLabel: "review pending",
       status: "blocked",
     });
     expect(paperPolish?.blockerLabel?.split(" ").length).toBeLessThanOrEqual(3);
+  });
+
+  it("recognizes survey projects as a first-class workflow line", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const surveyProjectRoot = path.join(projectsRoot, "survey-multimodal-reasoning");
+
+    await mkdir(surveyProjectRoot, { recursive: true });
+    await writeFile(
+      path.join(surveyProjectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "survey-multimodal-reasoning",
+          title: "Multimodal Reasoning Survey",
+          current_stage: "survey_review",
+          updated_at: "2026-04-09T12:30:00.000Z",
+          next_action: "Finish screening and synthesize the survey brief.",
+          survey_review: {
+            status: "screening",
+          },
+          writing_contract: {
+            paper_mode: "survey",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectOverviews({ projectsRoot });
+    const surveyProject = result.find((entry) => entry.id === "survey-multimodal-reasoning");
+
+    expect(surveyProject).toMatchObject({
+      currentStage: "survey_review",
+      currentStageIndex: 2,
+      workflowLine: "survey",
+      paperMode: "survey",
+      surveyStatus: "screening",
+      status: "active",
+    });
   });
 });

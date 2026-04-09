@@ -4,7 +4,11 @@
 
 ## 1. 写作的输入不是散文件
 
-进入 `write` 之前，系统希望你已经拥有：
+进入 `write` 之前，系统希望你已经拥有对应主线的结构化输入。
+
+### 实验论文主线
+
+系统希望你已经拥有：
 
 - `paper_story_state`
 - `review_pressure_packet`
@@ -13,6 +17,19 @@
 - figures / tables / theory support
 
 Writer 消费的是这些 durable packets，而不是去实验目录里临时捞材料。
+
+### 科研综述主线
+
+如果项目走的是综述线，Writer 的核心输入会变成：
+
+- `PROJECT_MANIFEST.json.survey_review`
+- `researcher/SURVEY_BRIEF.md`
+- `researcher/LITERATURE_REVIEW.md`
+- `researcher/GAP_SYNTHESIS.md`
+- `researcher/COVERAGE_SUMMARY.md`
+- `writing_contract.paper_mode = survey`
+
+这时系统不会再要求你先具备完整的实验 claim map，重点转为主题组织、coverage、gap articulation 和 survey-mode template 对齐。
 
 ## 2. 为什么 review 要发生在 write 前面
 
@@ -49,6 +66,8 @@ Analyzer 不是只负责“解释指标”，还负责把结果转成写作层�
 - theory note 路径
 
 它避免 Writer 在完全脱离模板的情况下自由发挥。
+
+现在 `paper mode` 已经不只区分 conference / journal，也支持 `survey`。这让综述项目可以复用同一套 workflow 控制平面，同时走一套不同于实验论文的写作合同。
 
 ## 5. submit 不是写完就结束
 

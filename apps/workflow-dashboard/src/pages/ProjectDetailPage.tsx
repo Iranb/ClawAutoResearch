@@ -214,20 +214,46 @@ export function ProjectDetailPage() {
           </section>
           <ArtifactTabs activeTab={activeTab} onTabChange={setActiveTab}>
             {activeTab === "summary" ? (
-              <section className="detail-grid detail-grid--secondary">
-                <article className="detail-card">
-                  <p className="detail-card__label">PaperNexus phase</p>
-                  <p className="detail-card__value">
-                    {summary.papernexusPhase ?? "Unknown"}
-                  </p>
-                </article>
-                <article className="detail-card">
-                  <p className="detail-card__label">PaperNexus progress</p>
-                  <p className="detail-card__value">
-                    {summary.papernexusProgressSummary ?? "No progress summary"}
-                  </p>
-                </article>
-              </section>
+              <>
+                <section className="detail-grid detail-grid--secondary">
+                  <article className="detail-card">
+                    <p className="detail-card__label">PaperNexus phase</p>
+                    <p className="detail-card__value">
+                      {summary.papernexusPhase ?? "Unknown"}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">PaperNexus progress</p>
+                    <p className="detail-card__value">
+                      {summary.papernexusProgressSummary ?? "No progress summary"}
+                    </p>
+                  </article>
+                </section>
+                {summary.workflowLine === "survey" ||
+                summary.surveyStatus ||
+                summary.paperMode === "survey" ? (
+                  <section className="detail-grid detail-grid--secondary">
+                    <article className="detail-card">
+                      <p className="detail-card__label">Survey topic</p>
+                      <p className="detail-card__value">
+                        {summary.surveyTopic ?? "No survey topic"}
+                      </p>
+                    </article>
+                    <article className="detail-card">
+                      <p className="detail-card__label">Survey status</p>
+                      <p className="detail-card__value">
+                        {summary.surveyStatus ?? "Unknown"}
+                      </p>
+                    </article>
+                    <article className="detail-card">
+                      <p className="detail-card__label">Survey progress</p>
+                      <p className="detail-card__value">
+                        {summary.surveyProgressSummary ?? "No survey progress summary"}
+                      </p>
+                    </article>
+                  </section>
+                ) : null}
+              </>
             ) : (
               <section className="artifact-panel">
                 {artifactsStatus === "loading" ? (

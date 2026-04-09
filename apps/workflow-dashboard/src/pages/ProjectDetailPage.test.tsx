@@ -8,6 +8,8 @@ const projectSummaryResponse = {
   title: "Confirmation Bias Mitigation In Graph Retrieval",
   projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
   currentStage: "graph_build",
+  workflowLine: "experiment",
+  paperMode: null,
   owner: "researcher",
   status: "blocked",
   updatedAt: "2026-04-09T08:45:00.000Z",
@@ -15,6 +17,9 @@ const projectSummaryResponse = {
     "missing_sources: canonical papers are still missing from the shared graph",
   nextAction: "Refresh the graph after the missing sources are imported.",
   resumeAction: null,
+  surveyStatus: null,
+  surveyTopic: null,
+  surveyProgressSummary: null,
   papernexusPhase: "waiting_import",
   papernexusProgressSummary: "8/12 completed (4 remaining)",
   source: ["manifest", "papernexus_progress"],
@@ -55,6 +60,10 @@ describe("ProjectDetailPage", () => {
 
     expect(screen.getByText(/current stage/i)).toBeInTheDocument();
     expect(screen.getByText(projectSummaryResponse.currentStage)).toBeInTheDocument();
+    expect(screen.getByText(/workflow line/i)).toBeInTheDocument();
+    expect(screen.getByText(projectSummaryResponse.workflowLine)).toBeInTheDocument();
+    expect(screen.getByText(/paper mode/i)).toBeInTheDocument();
+    expect(screen.getByText("default")).toBeInTheDocument();
     expect(screen.getByText(/owner/i)).toBeInTheDocument();
     expect(screen.getByText(projectSummaryResponse.owner)).toBeInTheDocument();
     expect(screen.getByText(/status/i)).toBeInTheDocument();

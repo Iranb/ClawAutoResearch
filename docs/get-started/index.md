@@ -3,7 +3,7 @@
 这一组页面回答三个问题：
 
 1. 这个插件怎么装进 OpenClaw。
-2. 新项目第一次应该怎么起步。
+2. 新实验项目或综述项目第一次应该怎么起步。
 3. 会话中断、Agent 换人、Discord 线程丢上下文以后，怎么从 durable state 恢复。
 
 ## 推荐阅读顺序
@@ -26,13 +26,24 @@
 
 正确恢复入口是 `/resume-pipeline` 与 `research_workflow.get_snapshot`。系统强调的是“从状态恢复”，而不是“从对话记忆恢复”。
 
+### 4. 想做科研综述，却沿用实验项目的默认启动路径
+
+如果目标是综述，不需要先走 `idea -> plan -> code -> experiment`。最短入口是直接运行 `/survey-review "topic"`，让系统创建轻量 survey workspace，并围绕 `survey_review` durable state 推进到 survey-mode writing。
+
 ## 最短路径
 
 ```text
+实验项目:
 install.sh
   -> /project-init
   -> /graph-build
   -> /research-pipeline
+  -> /workflow-status
+  -> /resume-pipeline
+
+科研综述:
+install.sh
+  -> /survey-review "topic"
   -> /workflow-status
   -> /resume-pipeline
 ```
@@ -42,4 +53,4 @@ install.sh
 | 页面 | 重点 |
 | --- | --- |
 | `installation.md` | 安装脚本、配置、工具许可、heartbeat、PaperNexus 访问 |
-| `project-lifecycle.md` | setup 到 write 的主线、graph presence、resume、常见恢复动作 |
+| `project-lifecycle.md` | 实验主线与综述主线、如何启动综述项目、graph presence、resume、常见恢复动作 |

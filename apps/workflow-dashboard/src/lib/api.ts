@@ -4,6 +4,9 @@ export type ProjectOverview = {
   projectRoot: string;
   currentStage: string | null;
   currentStageIndex: number | null;
+  workflowLine: "experiment" | "survey";
+  paperMode: string | null;
+  surveyStatus: string | null;
   status: "blocked" | "active" | "ready" | "incomplete";
   blockerLabel: string | null;
   blockerReason: string | null;
@@ -17,12 +20,17 @@ export type ProjectDetailSummary = {
   title: string | null;
   projectRoot: string;
   currentStage: string | null;
+  workflowLine: "experiment" | "survey";
+  paperMode: string | null;
   owner: string | null;
   status: "blocked" | "active" | "ready" | "incomplete";
   updatedAt: string | null;
   blockingReason: string | null;
   nextAction: string | null;
   resumeAction: string | null;
+  surveyStatus: string | null;
+  surveyTopic: string | null;
+  surveyProgressSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
   source: Array<"manifest" | "papernexus_progress" | "fallback">;

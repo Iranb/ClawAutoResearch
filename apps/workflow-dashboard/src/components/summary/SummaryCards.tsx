@@ -12,6 +12,14 @@ export function SummaryCards(props: SummaryCardsProps) {
       value: props.summary.currentStage ?? "Unknown",
     },
     {
+      label: "Workflow line",
+      value: props.summary.workflowLine,
+    },
+    {
+      label: "Paper mode",
+      value: props.summary.paperMode ?? "default",
+    },
+    {
       label: "Owner",
       value: props.summary.owner ?? "Unassigned",
     },

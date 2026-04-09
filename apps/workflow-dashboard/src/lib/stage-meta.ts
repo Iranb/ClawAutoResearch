@@ -1,6 +1,7 @@
 export const WORKFLOW_STAGES = [
   "setup",
   "graph_build",
+  "survey_review",
   "frontier_mapping",
   "idea",
   "plan",

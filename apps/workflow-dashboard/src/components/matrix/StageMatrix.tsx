@@ -46,6 +46,9 @@ export function StageMatrix(props: StageMatrixProps) {
                 </Link>
                 <p className="stage-matrix__project-meta">{project.id}</p>
                 <p className="stage-matrix__project-meta">
+                  {formatWorkflowMeta(project)}
+                </p>
+                <p className="stage-matrix__project-meta">
                   Updated {formatTimestamp(project.updatedAt)}
                 </p>
               </th>
@@ -60,4 +63,18 @@ export function StageMatrix(props: StageMatrixProps) {
       </table>
     </div>
   );
+}
+
+function formatWorkflowMeta(project: ProjectOverview): string {
+  const parts = [`${project.workflowLine} line`];
+
+  if (project.paperMode) {
+    parts.push(`${project.paperMode} mode`);
+  }
+
+  if (project.surveyStatus && project.workflowLine === "survey") {
+    parts.push(project.surveyStatus);
+  }
+
+  return parts.join(" · ");
 }

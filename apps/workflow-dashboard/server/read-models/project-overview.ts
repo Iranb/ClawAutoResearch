@@ -25,6 +25,13 @@ type ManifestFile = {
   next_action?: string | null;
   blocking_reason?: string | null;
   updated_at?: string | null;
+  survey_review?: {
+    status?: string | null;
+  } | null;
+  writing_contract?: {
+    paper_mode?: string | null;
+    paperMode?: string | null;
+  } | null;
 };
 
 type PapernexusProgressFile = {
@@ -39,6 +46,9 @@ export type ProjectOverview = {
   projectRoot: string;
   currentStage: string | null;
   currentStageIndex: number | null;
+  workflowLine: "experiment" | "survey";
+  paperMode: string | null;
+  surveyStatus: string | null;
   status: "blocked" | "active" | "ready" | "incomplete";
   blockerLabel: string | null;
   blockerReason: string | null;
@@ -77,6 +87,8 @@ export async function readProjectOverviews(params: {
       const currentStage =
         asString(stateEntry?.stage) ??
         asString(manifest?.current_stage);
+      const paperMode = getPaperMode(manifest?.writing_contract);
+      const surveyStatus = asString(manifest?.survey_review?.status);
       const blockerReason =
         asString(stateEntry?.blocked_by) ??
         asString(manifest?.blocking_reason) ??
@@ -96,6 +108,13 @@ export async function readProjectOverviews(params: {
         projectRoot: project.projectRoot,
         currentStage,
         currentStageIndex: getWorkflowStageIndex(currentStage),
+        workflowLine: deriveWorkflowLine({
+          currentStage,
+          paperMode,
+          surveyStatus,
+        }),
+        paperMode,
+        surveyStatus,
         status: deriveStatus({ currentStage, blockerReason, nextAction }),
         blockerLabel: toBlockerLabel(blockerReason),
         blockerReason,
@@ -108,6 +127,26 @@ export async function readProjectOverviews(params: {
       } satisfies ProjectOverview;
     }),
   );
+}
+
+function deriveWorkflowLine(params: {
+  currentStage: string | null;
+  paperMode: string | null;
+  surveyStatus: string | null;
+}): ProjectOverview["workflowLine"] {
+  if (
+    params.currentStage === "survey_review" ||
+    params.paperMode === "survey" ||
+    (params.surveyStatus !== null && params.surveyStatus !== "missing")
+  ) {
+    return "survey";
+  }
+
+  return "experiment";
+}
+
+function getPaperMode(value: ManifestFile["writing_contract"]): string | null {
+  return asString(value?.paper_mode) ?? asString(value?.paperMode);
 }
 
 function deriveStatus(params: {

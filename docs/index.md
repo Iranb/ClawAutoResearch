@@ -24,7 +24,7 @@ features:
     details: 从安装、启用、项目初始化、graph build 到恢复现场的最短路径。
     link: /get-started/
   - title: Workflow / 工作流控制平面
-    details: 11 个主阶段、owner gate、auto_iterator_tick、回退与 repair 逻辑。
+    details: 实验论文主线与综述主线、owner gate、auto_iterator_tick、回退与 repair 逻辑。
     link: /architecture/workflow-control-plane
   - title: Graph & Memory / 图谱与记忆
     details: PaperNexus、shared corpus、graph presence、实验账本与 innovation reflection。
@@ -52,6 +52,7 @@ features:
 - 用 `PaperNexus` shared graph、graph presence 和 canonical paper ingestion 把创新、分析、写作都锚定在同一套证据上。
 - 用 `auto_iterator_tick`、background queue、runtime recovery 把“推进、回退、等待人工、触发 repair”变成代码层行为。
 - 用 `research_program`、`paper_story_state`、`review_pressure_packet`、`writing_contract` 让 plan、analyze、review、write 阶段都有 durable contracts。
+- 用同一套 workflow 同时支撑实验论文主线和 `survey_review -> write (paper_mode=survey)` 的科研综述主线。
 
 <div class="portal-grid">
   <div class="portal-card">

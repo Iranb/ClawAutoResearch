@@ -9,11 +9,14 @@ const projectsResponse = [
   {
     id: "gcd-confirmation-bias-mitigation",
     title: "Confirmation Bias Mitigation In Graph Retrieval",
-    projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
-    currentStage: "graph_build",
-    currentStageIndex: 1,
-    status: "blocked",
-    blockerLabel: "missing sources",
+  projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
+  currentStage: "graph_build",
+  currentStageIndex: 1,
+  workflowLine: "experiment",
+  paperMode: null,
+  surveyStatus: null,
+  status: "blocked",
+  blockerLabel: "missing sources",
     blockerReason:
       "missing_sources: canonical papers are still missing from the shared graph",
     nextAction: "Import the missing source set and rerun graph verification.",
@@ -27,6 +30,8 @@ const projectSummaryResponse = {
   title: "Confirmation Bias Mitigation In Graph Retrieval",
   projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
   currentStage: "graph_build",
+  workflowLine: "experiment",
+  paperMode: null,
   owner: "researcher",
   status: "blocked",
   updatedAt: "2026-04-09T08:45:00.000Z",
@@ -34,6 +39,9 @@ const projectSummaryResponse = {
     "missing_sources: canonical papers are still missing from the shared graph",
   nextAction: "Refresh the graph after the missing sources are imported.",
   resumeAction: null,
+  surveyStatus: null,
+  surveyTopic: null,
+  surveyProgressSummary: null,
   papernexusPhase: "waiting_import",
   papernexusProgressSummary: "8/12 completed (4 remaining)",
   source: ["manifest", "papernexus_progress"],
@@ -104,6 +112,7 @@ describe("ProjectsMatrixPage", () => {
       "project-row-gcd-confirmation-bias-mitigation",
     );
     expect(within(projectRow).getByRole("link", { name: projectsResponse[0].title })).toBeVisible();
+    expect(within(projectRow).getByText(/experiment line/i)).toBeVisible();
 
     await user.click(
       within(projectRow).getByRole("link", { name: projectsResponse[0].title }),

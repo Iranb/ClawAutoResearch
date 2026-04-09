@@ -47,10 +47,12 @@ Homepage matrix:
 - prefers `PROJECTS_STATE.json`
 - falls back to `{project}/PROJECT_MANIFEST.json`
 - supplements stage context from `{project}/graph/PAPERNEXUS_PROGRESS.json`
+- shows both experiment projects and survey-review projects, including `survey_review` as a first-class workflow stage
 
 Project detail page:
 
 - summary cards come from `{project}/PROJECT_MANIFEST.json`
+- summary cards now surface `workflow line`, `paper mode`, and survey-specific status when present
 - PaperNexus phase/progress comes from `{project}/graph/PAPERNEXUS_PROGRESS.json`
 - artifact tabs enumerate files from:
   - `{project}/PROJECT_MANIFEST.json`

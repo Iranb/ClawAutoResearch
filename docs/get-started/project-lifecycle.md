@@ -1,6 +1,9 @@
 # 项目生命周期
 
-这页把“新项目第一次怎么跑”讲成一条连续主线。
+这页把“新项目第一次怎么跑”讲成两条连续主线：
+
+- 实验论文主线
+- 科研综述主线
 
 ## 1. setup：先把项目变成状态机可识别对象
 
@@ -16,7 +19,27 @@
 
 如果这些文件还不存在，系统通常会停留在 `setup` 或回退到 `setup`。
 
-## 2. graph_build：第一条真实主线
+## 2. 先决定你在走哪条主线
+
+### 实验论文主线
+
+适用于“要做新方法、跑实验、分析结果、写论文”的项目。它通常从：
+
+- `/project-init`
+- `/graph-build`
+- `/research-pipeline`
+
+开始。
+
+### 科研综述主线
+
+适用于“要围绕一个主题做系统综述、做 screening、coverage、gap synthesis、最后写 survey”的项目。它通常直接从：
+
+- `/survey-review "topic"`
+
+开始。这个命令会创建一个轻量 survey workspace，把 durable state 写到 `PROJECT_MANIFEST.json.survey_review`，然后围绕综述 artifacts 推进，最终 handoff 到 `write`，并把 `writing_contract.paper_mode` 设为 `survey`。
+
+## 3. graph_build：实验主线的第一条真实主线
 
 很多系统把文献准备当作前置小事，这套系统不是。这里的 `/graph-build` 是硬门槛，因为后面很多阶段都依赖 graph presence。
 
@@ -31,7 +54,7 @@
 
 如果项目进入 `idea`、`plan` 或 `write`，但共享图里缺核心论文，系统可能会回退到 `graph_build`。这不是保守过度，而是为了避免 novelty、analysis 和 writing 全部建立在不完整证据上。
 
-## 3. frontier_mapping 与 idea：先收敛，再创新
+## 4. frontier_mapping 与 idea：先收敛，再创新
 
 当 graph presence ready 以后，Researcher 会进入：
 
@@ -40,7 +63,7 @@
 
 这里的目标不是“多想几个点子”，而是把前沿限制、矛盾、可迁移机制、challenge-insight tree 和 track ranking 收口成 durable ideation packet。
 
-## 4. plan：从 research_program 而不是口头计划进入执行
+## 5. plan：从 research_program 而不是口头计划进入执行
 
 Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-of-truth 是：
 
@@ -52,9 +75,9 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 
 这一步决定后面 `code` 和 `experiment` 会不会沿着正确 track 推进。
 
-## 5. code -> experiment -> analyze -> review -> write
+## 6. 两条后半段主线
 
-后半段主线的理解方式如下：
+### 实验论文主线
 
 | 阶段 | 关键输出 |
 | --- | --- |
@@ -64,7 +87,32 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 | `review` | review pressure packet、QC、风险闭环 |
 | `write` | 在 writing contract 约束下产出草稿 |
 
-## 6. 中断以后如何恢复
+### 科研综述主线
+
+| 阶段 | 关键输出 |
+| --- | --- |
+| `survey_review` | query registry、screening packet、coverage summary、gap synthesis、`SURVEY_BRIEF.md` |
+| `write` | `paper_mode=survey` 的 survey draft |
+| `submit` | 最终提交前的人类 gate |
+
+综述线不会要求你先补一套 `idea -> plan -> code -> experiment` 工件；它会直接消费 survey review artifacts 进入写作。
+
+## 7. 如何开启一个科研综述项目
+
+最推荐的方式是直接在聊天里调用：
+
+```text
+/survey-review "multimodal reasoning survey"
+```
+
+系统会做这些事：
+
+1. 创建一个轻量 survey workspace，而不是要求你先手工搭实验项目骨架。
+2. 绑定当前会话到该 survey 项目，后续 `/workflow-status` 和 `/resume-pipeline` 都能继续接上。
+3. 在 `PROJECT_MANIFEST.json.survey_review` 下维护 topic、phase、included/excluded counts、coverage、brief readiness 等 durable state。
+4. 当 `SURVEY_BRIEF.md` 和关键综述工件 ready 后，允许 handoff 到 `write`，并以 `paper_mode=survey` 进入写作。
+
+## 8. 中断以后如何恢复
 
 恢复时不要继续滚聊天历史，统一走这条链：
 
@@ -75,7 +123,7 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 
 这能把 `current_stage`、owner、blocking reason、missing signals 和建议动作重新拉回到代码驱动的现场。
 
-## 7. 两个高频故障信号
+## 9. 两个高频故障信号
 
 ### 一直回到 `graph_build`
 
@@ -92,6 +140,15 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 - `research_program` 是否齐全。
 - `paper_story_state`、`review_pressure_packet`、`writing_contract` 是否已经 materialize。
 - mailbox 里是否有未处理 blocker。
+
+### 综述项目一直停在 `survey_review`
+
+优先检查：
+
+- `PROJECT_MANIFEST.json.survey_review.topic` 是否已写入。
+- `researcher/SURVEY_QUERY_REGISTRY.json`、`researcher/INCLUDED_PAPERS.json`、`researcher/GAP_SYNTHESIS.md`、`researcher/SURVEY_BRIEF.md` 是否已经落盘。
+- `survey_review.status` 是否已经 materialize 到 `completed`。
+- `writing_contract.paper_mode` 是否已经是 `survey`，避免误走实验论文写作合同。
 
 > [!INFO]
 > 如果你想知道这些阶段背后的状态机逻辑，直接跳到 [Workflow 控制平面](../architecture/workflow-control-plane.md)。

@@ -8,9 +8,17 @@
 
 ## 2. 主阶段机
 
+这套系统现在不是只有一条线性的“实验论文流水线”，而是两条共用控制平面的主线：
+
+- 实验论文主线：`setup -> graph_build -> frontier_mapping -> idea -> plan -> code -> experiment -> analyze -> review -> write -> submit`
+- 科研综述主线：`setup -> survey_review -> write -> submit`
+
+它们共享同一个 `workflow-guard`、同一个 `auto_iterator_tick`、同一个 mailbox/runtime/snapshot 体系，只是在阶段合同与下游依赖上不同。
+
 | Stage | Owner | 核心输出 | 下游为什么依赖它 |
 | --- | --- | --- | --- |
 | `setup` | `researcher` | 项目骨架与基础状态 | 后面所有阶段都需要 durable project surface |
+| `survey_review` | `researcher` | screening packet、coverage、gap synthesis、`SURVEY_BRIEF.md` | 综述写作要消费的是完整 survey packet，而不是实验 story |
 | `graph_build` | `researcher` | graph presence ready | 没有共享图就不应该做 novelty-sensitive 工作 |
 | `frontier_mapping` | `researcher` | frontier / contradiction / transfer packet | ideation 需要图谱驱动的收敛而不是空想 |
 | `idea` | `researcher` | active tracks + ideation contract | `plan` 要消费可追溯的创新包 |
@@ -42,6 +50,7 @@
 - `plan` 阶段发现 ideation contract 缺失，应回到 `idea`。
 - `write` 阶段发现 `paper_story_state` 或 `review_pressure_packet` 缺失，应回到 `analyze` 或 `review` 的准备面。
 - `experiment` 阶段产生了新证据，但 `innovation_reflection` 仍旧陈旧，下次 serious ideation 前应回补反思链路。
+- `write` 阶段如果是综述项目，但 `survey_review.status` 还没到 `completed`，应回到 `survey_review` 而不是硬写 survey 稿件。
 
 ## 5. workflow-guard 的职责分层
 
@@ -72,6 +81,9 @@
 - 必须保存 selection rationale。
 - 必须记录被选 track 与 ideation 结果的对齐关系。
 - 必须把 execution plan 变成 durable state，而不是只写一页自然语言计划。
+
+> [!NOTE]
+> 这条要求只适用于实验论文主线。综述主线默认不进入 `plan`，而是通过 `survey_review` 的 query registry、screening packet、coverage summary 和 `SURVEY_BRIEF.md` 直接 handoff 到 `write`。
 
 ## 8. 对系统贡献者最重要的判断标准
 
