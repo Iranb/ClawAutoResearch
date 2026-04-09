@@ -12,12 +12,92 @@ export type ProjectOverview = {
   source: "projects_state" | "manifest_fallback";
 };
 
+export type ProjectDetailSummary = {
+  id: string;
+  title: string | null;
+  projectRoot: string;
+  currentStage: string | null;
+  owner: string | null;
+  status: "blocked" | "active" | "ready" | "incomplete";
+  updatedAt: string | null;
+  blockingReason: string | null;
+  nextAction: string | null;
+  resumeAction: string | null;
+  papernexusPhase: string | null;
+  papernexusProgressSummary: string | null;
+  source: Array<"manifest" | "papernexus_progress" | "fallback">;
+};
+
+export type ArtifactDescriptor = {
+  key:
+    | "manifest"
+    | "graph_progress"
+    | "graph_presence"
+    | "graph_status"
+    | "runtime_mailbox"
+    | "runtime_queue"
+    | "runtime_sessions"
+    | "runtime_events"
+    | "runtime_trace";
+  label: string;
+  path: string;
+  kind: "json" | "jsonl" | "markdown" | "text";
+  exists: boolean;
+};
+
+export type RawArtifact = {
+  path: string;
+  kind: "json" | "jsonl" | "markdown" | "text";
+  status: "ok" | "missing" | "invalid";
+  content: string;
+  metadata: {
+    presentation: "pretty-json" | "rendered-source" | "recent-lines" | "plain-text";
+    totalLines?: number;
+    shownLines?: number;
+    truncated?: boolean;
+    truncationNote?: string | null;
+    note?: string;
+  };
+};
+
 export async function fetchProjectsOverview(): Promise<ProjectOverview[]> {
-  const response = await fetch("/api/projects");
+  return fetchJson<ProjectOverview[]>("/api/projects", "project overview");
+}
+
+export async function fetchProjectSummary(
+  projectId: string,
+): Promise<ProjectDetailSummary> {
+  return fetchJson<ProjectDetailSummary>(
+    `/api/projects/${projectId}/summary`,
+    "project summary",
+  );
+}
+
+export async function fetchProjectArtifacts(
+  projectId: string,
+): Promise<ArtifactDescriptor[]> {
+  return fetchJson<ArtifactDescriptor[]>(
+    `/api/projects/${projectId}/artifacts`,
+    "project artifacts",
+  );
+}
+
+export async function fetchProjectRawArtifact(
+  projectId: string,
+  artifactKey: ArtifactDescriptor["key"],
+): Promise<RawArtifact> {
+  return fetchJson<RawArtifact>(
+    `/api/projects/${projectId}/raw/${artifactKey}`,
+    "raw artifact",
+  );
+}
+
+async function fetchJson<T>(url: string, label: string): Promise<T> {
+  const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`Failed to load project overview (${response.status})`);
+    throw new Error(`Failed to load ${label} (${response.status})`);
   }
 
-  return response.json() as Promise<ProjectOverview[]>;
+  return response.json() as Promise<T>;
 }

@@ -1,14 +1,10 @@
-import { BrowserRouter, MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { BrowserRouter, MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { AppShell } from "../components/layout/AppShell";
 import { ProjectsMatrixPage } from "../pages/ProjectsMatrixPage";
+import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 
 type AppRouterProps = {
   initialEntries?: string[];
-};
-
-type DetailRouteState = {
-  title?: string;
 };
 
 export function AppRouter(props: AppRouterProps) {
@@ -31,28 +27,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<ProjectsMatrixPage />} />
-      <Route path="/projects/:projectId" element={<ProjectDetailPlaceholder />} />
+      <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
     </Routes>
-  );
-}
-
-function ProjectDetailPlaceholder() {
-  const { projectId } = useParams();
-  const location = useLocation();
-  const state = (location.state ?? null) as DetailRouteState | null;
-  const title = state?.title ?? projectId ?? "Project Detail";
-
-  return (
-    <AppShell
-      eyebrow="Project Detail"
-      title={title}
-      description="Project drill-down placeholder."
-    >
-      <section className="placeholder-panel">
-        <p>
-          Detail view coming soon for <strong>{title}</strong>.
-        </p>
-      </section>
-    </AppShell>
   );
 }
