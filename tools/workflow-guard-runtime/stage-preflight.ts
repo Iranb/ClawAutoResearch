@@ -456,7 +456,9 @@ async function shouldMaterializePaperStory(params: {
     return false;
   }
   const ideationState = normalizeIdeationContractState(params.manifest.ideation_contract);
-  if (ideationState.status !== "ready") {
+  const surveyReviewState = normalizeSurveyReviewState(params.manifest.survey_review);
+  const surveyWritingBridgeReady = surveyReviewState.status === "completed";
+  if (ideationState.status !== "ready" && !surveyWritingBridgeReady) {
     return false;
   }
   const state = normalizePaperStoryState(params.manifest.paper_story_state);
@@ -484,15 +486,29 @@ async function shouldMaterializePaperStory(params: {
   if (stateTimestamp === null) {
     return true;
   }
-  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
-    ideationState.researchProposalPath,
-    ideationState.problemDecompositionPath,
-    ideationState.graphIdeationPacketPath,
-    ideationState.graphBasisPaths.storylineBriefPath,
-    state.claimEvidenceMatrixPath,
-    state.trackVerdictsPath,
-    state.unsupportedClaimsPath,
-  ]);
+  const sourceTimestamp = await latestArtifactMtimeMs(
+    params.projectRoot,
+    surveyWritingBridgeReady
+      ? [
+          surveyReviewState.surveyBriefPath,
+          surveyReviewState.literatureReviewPath,
+          surveyReviewState.gapSynthesisPath,
+          surveyReviewState.coverageSummaryPath,
+          surveyReviewState.sotaMatrixPath,
+          state.claimEvidenceMatrixPath,
+          state.trackVerdictsPath,
+          state.unsupportedClaimsPath,
+        ]
+      : [
+          ideationState.researchProposalPath,
+          ideationState.problemDecompositionPath,
+          ideationState.graphIdeationPacketPath,
+          ideationState.graphBasisPaths.storylineBriefPath,
+          state.claimEvidenceMatrixPath,
+          state.trackVerdictsPath,
+          state.unsupportedClaimsPath,
+        ]
+  );
   return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
 }
 

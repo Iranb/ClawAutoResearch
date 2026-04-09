@@ -15,10 +15,15 @@ import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { buildIdeaToClaimMap } from "../idea-catalyst/claim-mapper";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import {
   normalizePaperStoryState,
   serializePaperStoryState,
 } from "../workflow-guard-state/paper-story";
+import {
+  normalizeWritingContractState,
+  serializeWritingContractState,
+} from "../workflow-guard-state/writing-contract";
 import type { PaperStoryState } from "../workflow-guard.js";
 
 type ClaimSupportSummary = {
@@ -46,6 +51,16 @@ type BrainstormSummary = {
     storylineBriefPath: string | null;
   };
 };
+
+function slugSurveyTopic(value: string | null | undefined): string {
+  const cleaned = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return cleaned || "survey";
+}
 
 type PaperStorySummary = {
   validationErrors: string[];
@@ -116,8 +131,11 @@ export async function materializePaperStoryStateImpl(
   const projectRoot = path.resolve(params.projectRoot);
   const manifest = await deps.readManifestEnsured(projectRoot);
   const current = normalizePaperStoryState(manifest.paper_story_state);
+  const currentWritingContract = normalizeWritingContractState(manifest.writing_contract);
   const patch = asRecord(params.paperStoryMaterialization) ?? {};
   const researchProgram = normalizeResearchProgramState(manifest.research_program);
+  const surveyReviewState = normalizeSurveyReviewState(manifest.survey_review);
+  const surveyWritingBridgeReady = surveyReviewState.status === "completed";
   const ideationSummary = await deps.getIdeationContractStateSummary({ projectRoot });
   const ideationState = ideationSummary.state;
   const ideaCatalystState = normalizeIdeaCatalystState(manifest.idea_catalyst);
@@ -138,6 +156,7 @@ export async function materializePaperStoryStateImpl(
     current.storylineSourceTrackId ??
     ideationState.selectedTrackId ??
     brainstormState.trackId ??
+    (surveyWritingBridgeReady ? `survey-${slugSurveyTopic(surveyReviewState.topic)}` : null) ??
     pickString(activeTracks[0], ["track_id", "trackId"]);
   const selectedTrack =
     activeTracks.find(
@@ -159,6 +178,10 @@ export async function materializePaperStoryStateImpl(
     claimEvidenceMatrixText,
     trackVerdictsText,
     unsupportedClaimsText,
+    surveyBriefText,
+    surveyLiteratureReviewText,
+    surveyGapSynthesisText,
+    surveyCoverageSummaryText,
   ] = await Promise.all([
     readTextIfExists(resolveProjectArtifactPath(projectRoot, ideationState.researchProposalPath)),
     readTextIfExists(
@@ -182,6 +205,14 @@ export async function materializePaperStoryStateImpl(
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.claimEvidenceMatrixPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.trackVerdictsPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, current.unsupportedClaimsPath)),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, surveyReviewState.surveyBriefPath)),
+    readTextIfExists(
+      resolveProjectArtifactPath(projectRoot, surveyReviewState.literatureReviewPath)
+    ),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, surveyReviewState.gapSynthesisPath)),
+    readTextIfExists(
+      resolveProjectArtifactPath(projectRoot, surveyReviewState.coverageSummaryPath)
+    ),
   ]);
 
   const storylineBrief = asRecord(storylineBriefRecord) ?? {};
@@ -200,16 +231,31 @@ export async function materializePaperStoryStateImpl(
 
   const taskSummary =
     pickString(graphStorylinePacket, ["task_summary", "taskSummary"]) ??
+    (surveyWritingBridgeReady
+      ? `Write a graph-grounded survey paper on ${surveyReviewState.topic ?? "the selected survey topic"}.`
+      : null) ??
     researchProgram.goal ??
     ideationState.longTermGoal ??
     "Deliver a research narrative that stays grounded in explicit graph evidence.";
   const challengeStatement =
     pickString(graphStorylinePacket, ["challenge_statement", "challengeStatement"]) ??
+    (surveyWritingBridgeReady
+      ? deps.collectMarkdownSignalLines(surveyGapSynthesisText).slice(0, 1)[0] ??
+        deps.collectMarkdownSignalLines(surveyCoverageSummaryText).slice(0, 1)[0] ??
+        "The survey must synthesize broad coverage without flattening important method differences and open problems."
+      : null) ??
     researchProgram.problemStatement ??
     ideationState.problemScope ??
     "Current drafts lose fine-grained support as the narrative widens.";
   const insightSummary =
     pickString(graphStorylinePacket, ["insight_summary", "insightSummary"]) ??
+    (surveyWritingBridgeReady
+      ? deps.collectMarkdownSignalLines(surveyBriefText).slice(0, 1)[0] ??
+        deps.collectMarkdownSignalLines(surveyLiteratureReviewText, {
+          includeSectionsContaining: ["taxonomy", "theme", "cluster"],
+        }).slice(0, 1)[0] ??
+        `The survey story should organize ${surveyReviewState.topic ?? "the topic"} by method families, benchmark clusters, and unresolved gaps.`
+      : null) ??
     (selectedTrack ? pickString(selectedTrack, ["hypothesis"]) : null) ??
     (selectedProgramTrack ? pickString(selectedProgramTrack, ["hypothesis"]) : null) ??
     (selectedTrack ? pickString(selectedTrack, ["novelty_basis"]) : null) ??
@@ -224,14 +270,28 @@ export async function materializePaperStoryStateImpl(
       : []) as unknown[])
       .map((entry) => pickString({ value: entry }, ["value"]))
       .filter((entry): entry is string => Boolean(entry)),
-    "Graph-grounded routing turns evidence links into a controllable story-planning signal.",
-    "The method preserves support precision without abandoning clarity-oriented structure.",
-    "The workflow keeps claim, experiment, and reviewer pressure aligned around one direction.",
+    ...(surveyWritingBridgeReady
+      ? [
+          `Synthesize ${surveyReviewState.includedPaperCount ?? "the included"} papers into a reviewer-readable thematic structure.`,
+          "Turn durable survey coverage into a theme-to-evidence writing packet instead of a flat paper list.",
+          "Make contradiction areas and open gaps explicit before prose-level synthesis.",
+        ]
+      : [
+          "Graph-grounded routing turns evidence links into a controllable story-planning signal.",
+          "The method preserves support precision without abandoning clarity-oriented structure.",
+          "The workflow keeps claim, experiment, and reviewer pressure aligned around one direction.",
+        ]),
     ...deps.collectMarkdownSignalLines(proposalText, {
       includeSectionsContaining: ["method", "contribution"],
     }),
     ...deps.collectMarkdownSignalLines(decompositionText, {
       includeSectionsContaining: ["sub-problems", "validation"],
+    }),
+    ...deps.collectMarkdownSignalLines(surveyCoverageSummaryText, {
+      includeSectionsContaining: ["coverage", "scope", "included"],
+    }),
+    ...deps.collectMarkdownSignalLines(surveyGapSynthesisText, {
+      includeSectionsContaining: ["gap", "open", "future"],
     }),
   ]).slice(0, 4);
   const advantageBullets = uniqueStrings([
@@ -242,12 +302,23 @@ export async function materializePaperStoryStateImpl(
       : []) as unknown[])
       .map((entry) => pickString({ value: entry }, ["value"]))
       .filter((entry): entry is string => Boolean(entry)),
-    `Improves the primary metric: ${researchProgram.primaryMetric ?? "primary_metric"}.`,
-    `Stays comparable to the baseline: ${researchProgram.baselineReference ?? "named baseline"}.`,
-    "Makes each claim easier to defend with explicit graph-backed support packets.",
+    ...(surveyWritingBridgeReady
+      ? [
+          "Keeps coverage decisions explicit through included/excluded packets and the review protocol.",
+          "Lets the draft cite benchmark clusters, method families, and disagreement areas from durable survey artifacts.",
+          "Preserves graph-grounded traceability from survey brief to prose-level themes.",
+        ]
+      : [
+          `Improves the primary metric: ${researchProgram.primaryMetric ?? "primary_metric"}.`,
+          `Stays comparable to the baseline: ${researchProgram.baselineReference ?? "named baseline"}.`,
+          "Makes each claim easier to defend with explicit graph-backed support packets.",
+        ]),
     ...trackVerdictSignals,
     ...deps.collectMarkdownSignalLines(proposalText, {
       includeSectionsContaining: ["expected", "advantage"],
+    }),
+    ...deps.collectMarkdownSignalLines(surveyBriefText, {
+      includeSectionsContaining: ["baseline", "benchmark", "gap"],
     }),
   ]).slice(0, 4);
   const packetLimitationFallbackSignals = ((Array.isArray(
@@ -305,7 +376,45 @@ ${deps.quoteMarkdownText(
 )}
 `;
 
-  const pipelineFigureSketch = `# Pipeline Figure Sketch
+  const pipelineFigureSketch = surveyWritingBridgeReady
+    ? `# Pipeline Figure Sketch
+
+1. Inputs
+   - Topic: ${deps.quoteMarkdownText(surveyReviewState.topic)}
+   - Included papers: ${surveyReviewState.includedPaperCount ?? "unset"}
+   - Coverage packet(s): ${deps.renderMarkdownBulletList(
+       uniqueStrings([
+         surveyReviewState.reviewProtocolPath ?? "researcher/REVIEW_PROTOCOL.md",
+         surveyReviewState.includedPapersPath ?? "researcher/INCLUDED_PAPERS.json",
+         surveyReviewState.excludedPapersPath ?? "researcher/EXCLUDED_PAPERS.json",
+         surveyReviewState.surveyBriefPath ?? "researcher/SURVEY_BRIEF.md",
+       ]).slice(0, 4)
+     )}
+2. Core synthesis layer
+   - Theme/taxonomy organizer grounded in the survey packet
+   - Evidence bundling for benchmark clusters, disagreements, and open gaps
+3. Outputs
+   - Theme-to-evidence map for writing
+   - Survey narrative bundle with explicit scope and limitation hooks
+4. Evaluation overlay
+   - Coverage summary: ${deps.quoteMarkdownText(
+       deps.collectMarkdownSignalLines(surveyCoverageSummaryText).slice(0, 1)[0] ??
+         "keep included/excluded logic and gap coverage explicit"
+     )}
+
+## Survey Storyline Hooks
+${deps.renderMarkdownBulletList(
+  uniqueStrings([
+    ...deps.collectMarkdownSignalLines(surveyLiteratureReviewText, {
+      includeSectionsContaining: ["theme", "taxonomy", "cluster"],
+    }),
+    ...deps.collectMarkdownSignalLines(surveyGapSynthesisText, {
+      includeSectionsContaining: ["gap", "open", "future"],
+    }),
+  ]).slice(0, 3)
+)}
+`
+    : `# Pipeline Figure Sketch
 
 1. Inputs
    - Baseline system: ${deps.quoteMarkdownText(researchProgram.baselineReference)}
@@ -357,7 +466,17 @@ ${packetModuleMotivations.length > 0
 - Advantage: ${pickString(entry, ["advantage"]) ?? "pending"}`;
         })
         .join("\n\n")
-    : `## Module 1: Graph-grounded support router
+    : surveyWritingBridgeReady
+      ? `## Module 1: Survey coverage organizer
+- Design: cluster included papers into stable method/theme groups before drafting
+- Motivation: keep the survey from collapsing into a bibliography dump
+- Advantage: produces sections with explicit coverage boundaries and comparison axes
+
+## Module 2: Theme-to-evidence map
+- Design: bind each survey theme to representative papers, benchmark clusters, and contradiction notes
+- Motivation: prevent unsupported synthesis claims from entering the manuscript
+- Advantage: makes reviewer pressure explicit before writing`
+      : `## Module 1: Graph-grounded support router
 - Design: route each claim through graph evidence packets before surface drafting
 - Motivation: reduce support attribution drift as the story widens
 - Advantage: preserve support precision while keeping a readable narrative
@@ -368,7 +487,27 @@ ${packetModuleMotivations.length > 0
 - Advantage: makes reviewer pressure explicit before writing`}
 `;
 
-  const claimToExperimentMap = `# Claim To Experiment Map
+  const claimToExperimentMap = surveyWritingBridgeReady
+    ? `# Claim To Experiment Map
+
+Survey mode note: this file acts as a theme-to-evidence map rather than an experiment-launch contract.
+
+## Theme 1 (theme-1)
+- Theme: Core method families in ${deps.quoteMarkdownText(surveyReviewState.topic)}
+- Evidence target: representative included papers + taxonomy notes
+- Validation step: cite canonical papers for each family and keep their boundaries explicit
+
+## Theme 2 (theme-2)
+- Theme: Benchmark and evaluation clusters
+- Evidence target: SOTA matrix + coverage summary
+- Validation step: tie comparisons to explicit datasets/metrics instead of generic performance prose
+
+## Theme 3 (theme-3)
+- Theme: Open problems, disagreement zones, and unresolved gaps
+- Evidence target: gap synthesis + survey brief
+- Validation step: frame these as synthesis claims backed by included papers, not speculative future-work filler
+`
+    : `# Claim To Experiment Map
 
 ## Claim 1 (claim-1)
 - Claim: Graph-grounded routing improves ${deps.quoteMarkdownText(
@@ -434,9 +573,17 @@ ${deps.renderMarkdownBulletList(advantageBullets)}
 
   const fallbackNarrative = `# Fallback Narrative
 
-- If the main novelty claim feels too broad, narrow the story to "graph-grounded support routing" instead of a general writing overhaul.
-- If empirical gains are modest, emphasize bounded support precision wins under unchanged baseline protocol.
-- If reviewer pressure focuses on overlap with existing pipelines, pivot to the stricter claim-evidence alignment layer as the core contribution.
+- If the main ${surveyWritingBridgeReady ? "survey thesis" : "novelty claim"} feels too broad, narrow the story to "${surveyWritingBridgeReady ? "a bounded synthesis over explicit method families and gaps" : "graph-grounded support routing"}" instead of a general ${
+    surveyWritingBridgeReady ? "field-wide conclusion" : "writing overhaul"
+  }.
+- If ${surveyWritingBridgeReady ? "coverage confidence is uneven" : "empirical gains are modest"}, emphasize ${
+    surveyWritingBridgeReady
+      ? "explicit inclusion/exclusion logic and benchmark clusters under the stated scope"
+      : "bounded support precision wins under unchanged baseline protocol"
+  }.
+- If reviewer pressure focuses on ${surveyWritingBridgeReady ? "taxonomy instability or missing coverage" : "overlap with existing pipelines"}, pivot to the stricter ${
+    surveyWritingBridgeReady ? "theme-to-evidence map" : "claim-evidence alignment layer"
+  } as the core contribution.
 ${deps.renderMarkdownBulletList(
   unsupportedClaimSignals.length > 0
     ? unsupportedClaimSignals.map(
@@ -452,8 +599,8 @@ ${deps.renderMarkdownBulletList(
 
 | Risk | Why it could trigger rejection | Mitigation |
 | --- | --- | --- |
-| Novelty overlap | The direction may look like a baseline refinement. | Keep the story focused on graph-grounded routing and claim binding rather than a generic rewrite pipeline. |
-| Weak empirical gain | The method could sound cleaner than it measures. | Tie each headline claim to the baseline-aware validation ladder in the claim map. |
+| ${surveyWritingBridgeReady ? "Coverage blind spot" : "Novelty overlap"} | ${surveyWritingBridgeReady ? "The survey may look broad while still omitting an important cluster or benchmark family." : "The direction may look like a baseline refinement."} | ${surveyWritingBridgeReady ? "Keep the review protocol, included/excluded lists, and coverage summary visible in the story contract." : "Keep the story focused on graph-grounded routing and claim binding rather than a generic rewrite pipeline."} |
+| ${surveyWritingBridgeReady ? "Weak synthesis" : "Weak empirical gain"} | ${surveyWritingBridgeReady ? "The manuscript may read like a bibliography dump instead of a real thematic synthesis." : "The method could sound cleaner than it measures."} | ${surveyWritingBridgeReady ? "Tie each major section to the theme-to-evidence map and explicit contrast axes." : "Tie each headline claim to the baseline-aware validation ladder in the claim map."} |
 | Unsupported narrative scope | The story may promise stronger reasoning than the evidence supports. | Use the fallback narrative and keep unsupported claims out of the draft. |
 `;
 
@@ -461,7 +608,8 @@ ${deps.renderMarkdownBulletList(
     ...serializePaperStoryState(current),
     ...patch,
     status:
-      deps.isIdeationContractReady(ideationState) && Boolean(storylineSourceTrackId)
+      ((deps.isIdeationContractReady(ideationState) && Boolean(storylineSourceTrackId)) ||
+        surveyWritingBridgeReady)
         ? "ready"
         : "pending",
     contract_version:
@@ -486,7 +634,9 @@ ${deps.renderMarkdownBulletList(
       pickString(patch, ["ideaToClaimMapPath", "idea_to_claim_map_path"]) ??
       current.ideaToClaimMapPath,
     pending_reason:
-      !deps.isIdeationContractReady(ideationState)
+      surveyWritingBridgeReady
+        ? null
+        : !deps.isIdeationContractReady(ideationState)
         ? "ideation_contract is not ready yet."
         : !storylineSourceTrackId
           ? "No active track is available for the paper story contract."
@@ -545,6 +695,50 @@ ${deps.renderMarkdownBulletList(
     if (changed) {
       await writeJsonEnsured(path.join(projectRoot, "TRACK_REGISTRY.json"), trackRegistry);
     }
+  }
+
+  if (surveyWritingBridgeReady && !currentWritingContract.paperMode) {
+    manifest.writing_contract = serializeWritingContractState(
+      normalizeWritingContractState({
+        ...serializeWritingContractState(currentWritingContract),
+        paper_mode: "survey",
+        template_required: false,
+        template_status: "optional",
+        template_copy_status: "pending",
+        body_page_budget: 12,
+        reference_page_budget: 4,
+        body_word_target_min: 7000,
+        body_word_target_max: 10000,
+        max_core_ideas: 4,
+        max_headline_claims: 6,
+        kg_storyline_required: false,
+        kg_storyline_status: "optional",
+        proof_appendix_required: false,
+        proof_appendix_status: "optional",
+        required_sections: [
+          "abstract",
+          "introduction",
+          "scope_and_protocol",
+          "taxonomy",
+          "evidence_synthesis",
+          "benchmark_landscape",
+          "open_problems",
+          "conclusion",
+        ],
+        section_order: [
+          "abstract",
+          "introduction",
+          "scope_and_protocol",
+          "taxonomy",
+          "evidence_synthesis",
+          "benchmark_landscape",
+          "open_problems",
+          "conclusion",
+        ],
+        storyline_source: "survey_packet",
+        pending_reason: null,
+      })
+    );
   }
 
   manifest.paper_story_state = serializePaperStoryState(nextState);

@@ -708,7 +708,7 @@ type BrainstormCycleState = {
   pendingReason: string | null;
 };
 
-export type WritingMode = "conference" | "journal";
+export type WritingMode = "conference" | "journal" | "survey";
 
 type TheorySupportState = {
   status: string;
@@ -1977,6 +1977,8 @@ type WritingModePreset = {
   maxHeadlineClaims: number;
   requiredSections: string[];
   sectionOrder: string[];
+  kgStorylineRequired: boolean;
+  proofAppendixRequired: boolean;
 };
 
 const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
@@ -2012,6 +2014,8 @@ const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
       "limitations",
       "conclusion",
     ],
+    kgStorylineRequired: true,
+    proofAppendixRequired: true,
   },
   journal: {
     mode: "journal",
@@ -2045,6 +2049,41 @@ const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
       "limitations",
       "conclusion",
     ],
+    kgStorylineRequired: true,
+    proofAppendixRequired: true,
+  },
+  survey: {
+    mode: "survey",
+    templateFile: "survey-review.md",
+    templateName: "survey-review",
+    bodyPageBudget: 12,
+    referencePageBudget: 4,
+    bodyWordTargetMin: 7000,
+    bodyWordTargetMax: 10000,
+    maxCoreIdeas: 4,
+    maxHeadlineClaims: 6,
+    requiredSections: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+    sectionOrder: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+    kgStorylineRequired: false,
+    proofAppendixRequired: false,
   },
 };
 
@@ -2084,9 +2123,9 @@ const STAGE_EXECUTION_HINTS: Record<
   },
   survey_review: {
     owner: "researcher",
-    summary: "Run the projectless survey loop until the review packet is saturated and synthesized.",
+    summary: "Run the survey loop until the review packet is saturated, then hand off into survey-mode writing.",
     command:
-      'Run /survey-review "topic" to expand retrieval coverage, maintain the durable screening packet, and stop after SURVEY_BRIEF.md is synthesized.',
+      'Run /survey-review "topic" to expand retrieval coverage, maintain the durable screening packet, and synthesize SURVEY_BRIEF.md plus the survey review artifacts before WRITE handoff.',
   },
   graph_build: {
     owner: "researcher",
@@ -2947,7 +2986,9 @@ function getConfiguredWritingModeTemplatePath(
   const configured =
     mode === "conference"
       ? normalized.defaultConferenceTemplatePath
-      : normalized.defaultJournalTemplatePath;
+      : mode === "journal"
+        ? normalized.defaultJournalTemplatePath
+        : null;
   return configured || null;
 }
 
@@ -5499,6 +5540,13 @@ async function collectSurveyReviewStageMissingSignals(params: {
   const missing: string[] = [];
   if (!state.topic) {
     missing.push("PROJECT_MANIFEST.json.survey_review.topic is required");
+  }
+  if (state.status !== "completed") {
+    missing.push(
+      state.pendingReason
+        ? `survey_review must reach completed before WRITE handoff: ${state.pendingReason}`
+        : `survey_review must reach completed before WRITE handoff (current: ${state.status})`
+    );
   }
   const queryRegistryResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,

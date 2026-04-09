@@ -76,6 +76,31 @@ test("journal mode preset exposes 12-plus-2 writing envelope through summary", a
   assert.ok(summary.templateResolvedPath);
 });
 
+test("survey mode preset exposes survey sections and disables theory-first requirements", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await setWritingContractState({
+    projectRoot,
+    writingContract: {
+      paper_mode: "survey",
+    },
+  });
+
+  assert.equal(result.state.paperMode, "survey");
+  assert.equal(result.state.bodyPageBudget, 12);
+  assert.equal(result.state.referencePageBudget, 4);
+  assert.equal(result.state.kgStorylineRequired, false);
+  assert.equal(result.state.proofAppendixRequired, false);
+  assert.equal(result.state.templateName, "survey-review");
+  assert.ok(result.state.sectionOrder.includes("taxonomy"));
+  assert.ok(result.state.sectionOrder.includes("benchmark_landscape"));
+  assert.ok(result.state.sectionOrder.includes("open_problems"));
+  assert.equal(result.templateCopyStatus, "ready");
+});
+
 test("configured default conference template is copied into the project before writing", async (t) => {
   const projectRoot = await makeTempProject();
   const externalTemplateRoot = await fs.mkdtemp(

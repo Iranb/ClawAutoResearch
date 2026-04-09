@@ -40,7 +40,7 @@ The workflow uses these durable paths:
 
 ## Workflow Shape
 
-The survey stays inside one top-level stage:
+The retrieval/screening/synthesis loop stays inside one top-level stage:
 
 `survey_review`
 
@@ -53,6 +53,7 @@ The internal phases are:
 5. `complete`
 
 Do not route into `plan`, `code`, or `experiment`.
+Once the survey packet is truly complete, the workflow may hand off into `write` with `paper_mode=survey`; that handoff is for writing only, not for experimental planning.
 
 ## Retrieval Strategy
 

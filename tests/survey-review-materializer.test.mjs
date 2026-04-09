@@ -16,7 +16,11 @@ import {
   DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH,
   DEFAULT_SURVEY_SOTA_MATRIX_PATH,
 } from "../tools/workflow-guard-state/survey-review.ts";
-import { materializeSurveyReviewState } from "../tools/workflow-guard.ts";
+import {
+  materializePaperStoryState,
+  materializeSurveyReviewState,
+  runWorkflowAutoIterator,
+} from "../tools/workflow-guard.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -92,4 +96,111 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
   assert.equal(result.state.includedPaperCount, 2);
   assert.equal(result.state.excludedPaperCount, 1);
   assert.equal(result.state.graphGroundedBriefReady, true);
+});
+
+test("completed survey artifacts can seed survey-mode paper story and writing contract", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [{ query: "graph reasoning survey", provider: "papers-cool" }],
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: [{ canonical_id: "arxiv:2501.00001" }, { canonical_id: "arxiv:2501.00002" }],
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: [{ canonical_id: "arxiv:2401.00003" }],
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Graph pretraining\n- Graph reasoning agents\n"
+  );
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH), "# SOTA Matrix\n");
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n- Benchmark coverage remains fragmented.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Included papers cover three benchmark families.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n- The area clusters into a few recurring method families.\n"
+  );
+
+  await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+
+  const result = await materializePaperStoryState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.status, "ready");
+  await fs.access(path.join(projectRoot, result.state.storySpinePath));
+  await fs.access(path.join(projectRoot, result.state.claimToExperimentMapPath));
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.deepEqual(manifest.writing_contract.required_sections, [
+    "abstract",
+    "introduction",
+    "scope_and_protocol",
+    "taxonomy",
+    "evidence_synthesis",
+    "benchmark_landscape",
+    "open_problems",
+    "conclusion",
+  ]);
+  assert.equal(manifest.writing_contract.proof_appendix_required, false);
+});
+
+test("completed survey review can advance into write stage", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [{ query: "graph reasoning survey", provider: "papers-cool" }],
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: [{ canonical_id: "arxiv:2501.00001" }],
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: [{ canonical_id: "arxiv:2401.00003" }],
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH), "# Literature Review\n");
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH), "# SOTA Matrix\n");
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH), "# Gap Synthesis\n");
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH), "# Coverage Summary\n");
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH), "# Survey Brief\n");
+
+  await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "survey_review");
+  assert.equal(result.stageAfter, "write");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "write");
+  assert.equal(manifest.owner_agent, "academic_writer");
 });

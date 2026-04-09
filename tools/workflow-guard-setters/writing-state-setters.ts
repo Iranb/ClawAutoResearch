@@ -49,7 +49,7 @@ import {
 } from "../workflow-guard-writing/write-package-eval";
 import type { WorkflowGuardPolicy } from "../workflow-guard.js";
 
-type WritingMode = "conference" | "journal";
+type WritingMode = "conference" | "journal" | "survey";
 
 type WritingContractState = ReturnType<typeof normalizeWritingContractState>;
 type WritingSessionState = ReturnType<typeof normalizeWritingSessionState>;
@@ -74,6 +74,8 @@ type WritingModePreset = {
   maxHeadlineClaims: number;
   requiredSections: string[];
   sectionOrder: string[];
+  kgStorylineRequired: boolean;
+  proofAppendixRequired: boolean;
 };
 
 const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
@@ -108,6 +110,8 @@ const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
       "limitations",
       "conclusion",
     ],
+    kgStorylineRequired: true,
+    proofAppendixRequired: true,
   },
   journal: {
     templateFile: "journal-12p-body-2p-refs.md",
@@ -140,6 +144,40 @@ const WRITING_MODE_PRESETS: Record<WritingMode, WritingModePreset> = {
       "limitations",
       "conclusion",
     ],
+    kgStorylineRequired: true,
+    proofAppendixRequired: true,
+  },
+  survey: {
+    templateFile: "survey-review.md",
+    templateName: "survey-review",
+    bodyPageBudget: 12,
+    referencePageBudget: 4,
+    bodyWordTargetMin: 7000,
+    bodyWordTargetMax: 10000,
+    maxCoreIdeas: 4,
+    maxHeadlineClaims: 6,
+    requiredSections: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+    sectionOrder: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+    kgStorylineRequired: false,
+    proofAppendixRequired: false,
   },
 };
 
@@ -219,7 +257,9 @@ function getConfiguredWritingModeTemplatePath(
   const configured =
     mode === "conference"
       ? policy?.defaultConferenceTemplatePath
-      : policy?.defaultJournalTemplatePath;
+      : mode === "journal"
+        ? policy?.defaultJournalTemplatePath
+        : null;
   return configured || null;
 }
 
@@ -387,6 +427,7 @@ export async function setWritingContractState(params: {
   const patch = asRecord(params.writingContract) ?? {};
   const requestedMode =
     normalizeWritingMode(patch.paperMode ?? patch.paper_mode) ?? current.paperMode;
+  const modeChanged = Boolean(requestedMode && requestedMode !== current.paperMode);
   const hasKgStorylineRequiredPatch =
     Object.prototype.hasOwnProperty.call(patch, "kgStorylineRequired") ||
     Object.prototype.hasOwnProperty.call(patch, "kg_storyline_required");
@@ -464,21 +505,30 @@ export async function setWritingContractState(params: {
     if (!templateName || templateName === current.templateName) {
       templateName = preset.templateName;
     }
-    if (requiredSections.length === 0 || requestedMode !== current.paperMode) {
+    if (requiredSections.length === 0 || modeChanged) {
       requiredSections = [...preset.requiredSections];
     }
-    if (sectionOrder.length === 0 || requestedMode !== current.paperMode) {
+    if (sectionOrder.length === 0 || modeChanged) {
       sectionOrder = [...preset.sectionOrder];
     }
-    bodyPageBudget = bodyPageBudget ?? preset.bodyPageBudget;
-    referencePageBudget = referencePageBudget ?? preset.referencePageBudget;
-    bodyWordTargetMin = bodyWordTargetMin ?? preset.bodyWordTargetMin;
-    bodyWordTargetMax = bodyWordTargetMax ?? preset.bodyWordTargetMax;
-    maxCoreIdeas = maxCoreIdeas ?? preset.maxCoreIdeas;
-    maxHeadlineClaims = maxHeadlineClaims ?? preset.maxHeadlineClaims;
-    storylineSource = storylineSource ?? "papernexus_kg";
-    if (!hasKgStorylineRequiredPatch && requestedMode !== current.paperMode) {
-      kgStorylineRequired = true;
+    bodyPageBudget = modeChanged ? preset.bodyPageBudget : bodyPageBudget ?? preset.bodyPageBudget;
+    referencePageBudget = modeChanged
+      ? preset.referencePageBudget
+      : referencePageBudget ?? preset.referencePageBudget;
+    bodyWordTargetMin = modeChanged
+      ? preset.bodyWordTargetMin
+      : bodyWordTargetMin ?? preset.bodyWordTargetMin;
+    bodyWordTargetMax = modeChanged
+      ? preset.bodyWordTargetMax
+      : bodyWordTargetMax ?? preset.bodyWordTargetMax;
+    maxCoreIdeas = modeChanged ? preset.maxCoreIdeas : maxCoreIdeas ?? preset.maxCoreIdeas;
+    maxHeadlineClaims = modeChanged
+      ? preset.maxHeadlineClaims
+      : maxHeadlineClaims ?? preset.maxHeadlineClaims;
+    storylineSource =
+      storylineSource ?? (requestedMode === "survey" ? "survey_packet" : "papernexus_kg");
+    if (!hasKgStorylineRequiredPatch && modeChanged) {
+      kgStorylineRequired = preset.kgStorylineRequired;
     }
     kgStorylinePacketPath =
       kgStorylinePacketPath ?? DEFAULT_KG_STORYLINE_PACKET_PATH;
@@ -489,7 +539,9 @@ export async function setWritingContractState(params: {
       proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
     }
     mainTextProofStyle = mainTextProofStyle ?? "lemma_result_only";
-    proofAppendixRequired = proofAppendixRequired ?? true;
+    proofAppendixRequired = modeChanged
+      ? preset.proofAppendixRequired
+      : proofAppendixRequired ?? preset.proofAppendixRequired;
     proofAppendixPath =
       proofAppendixPath ?? "academic_writer/paper/sections/appendix_theory.tex";
     theoryNotePath = theoryNotePath ?? "analyzer/THEORY_SUPPORT_NOTE.md";

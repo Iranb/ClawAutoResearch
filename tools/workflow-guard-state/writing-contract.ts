@@ -63,6 +63,13 @@ export function normalizeWritingMode(value: unknown): WritingMode | null {
   ) {
     return "journal";
   }
+  if (
+    ["survey", "survey_review", "survey_paper", "review_paper", "literature_review"].includes(
+      normalized
+    )
+  ) {
+    return "survey";
+  }
   return null;
 }
 
