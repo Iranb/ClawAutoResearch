@@ -844,7 +844,7 @@ test("phase-2 runtime state summaries persist QC, issue tracking, and independen
   assert.equal(experimentSearchSummary.readyForAnalysis, true);
 });
 
-test("write-stage auto iterator blocks forward progression until writing session and graph coverage are ready", async (t) => {
+test("ordinary paper line write-stage auto iterator blocks forward progression until writing session and graph coverage are ready", async (t) => {
   const projectRoot = await makeProjectRoot();
 
   t.after(async () => {
@@ -961,7 +961,7 @@ test("write-stage auto iterator blocks forward progression until writing session
   );
 });
 
-test("write-stage gate blocks only on hard review/QC failures, not merely pending late-stage QC work", async (t) => {
+test("ordinary paper line write-stage gate blocks only on hard review/QC failures, not merely pending late-stage QC work", async (t) => {
   const projectRoot = await makeProjectRoot();
 
   t.after(async () => {

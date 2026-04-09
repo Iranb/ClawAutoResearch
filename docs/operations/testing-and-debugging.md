@@ -8,6 +8,7 @@
 npm run build
 node --test tests/workflow-web-doc.test.mjs
 node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs
+node --test tests/writer-reviewer-runtime-state.test.mjs tests/workflow-writing-lines-e2e.test.mjs
 ```
 
 ## 2. 为什么这些测试最重要
@@ -20,6 +21,10 @@ node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs
   - 保证 `research_workflow` 的主要工具动作仍然对齐当前状态合同。
 - `tests/workflow-web-doc.test.mjs`
   - 保证文档站、兼容入口和 GitHub Pages 相关约束没有漂移。
+- `tests/writer-reviewer-runtime-state.test.mjs`
+  - 保证普通论文主线的 write-stage gate、writer/reviewer runtime 状态与 submit handoff 约束仍然成立。
+- `tests/workflow-writing-lines-e2e.test.mjs`
+  - 保证科研综述主线能从 `survey_review` 进入 `paper_mode=survey` 的 write 阶段，而且不会误吃实验论文专属 blocker。
 
 ## 3. 常见问题应该先查哪里
 

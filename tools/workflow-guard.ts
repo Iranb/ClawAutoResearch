@@ -2201,15 +2201,41 @@ const STAGE_EXECUTION_HINTS: Record<
   },
 };
 
-const PREVIOUS_STAGE: Record<string, string> = Object.entries(STAGE_REQUIREMENTS).reduce(
-  (acc, [stage, requirement]) => {
-    if (requirement.nextStage && requirement.nextStage !== stage && !(requirement.nextStage in acc)) {
-      acc[requirement.nextStage] = stage;
-    }
-    return acc;
-  },
-  {} as Record<string, string>
-);
+function getPreviousStagesForRegression(params: {
+  currentStage: string | null;
+  manifest: ManifestLike | null;
+}): string[] {
+  const normalizedStage = normalizeStage(params.currentStage);
+  if (!normalizedStage) {
+    return [];
+  }
+
+  const candidates = Object.entries(STAGE_REQUIREMENTS)
+    .filter(
+      ([stage, requirement]) =>
+        requirement.nextStage === normalizedStage && stage !== normalizedStage
+    )
+    .map(([stage]) => stage);
+
+  if (normalizedStage !== "write") {
+    return candidates;
+  }
+
+  const writingContract = normalizeWritingContractState(
+    params.manifest?.writing_contract
+  );
+  const surveyReview = normalizeSurveyReviewState(params.manifest?.survey_review);
+  const preferSurveyBranch =
+    normalizeStage(params.manifest?.current_stage) === "survey_review" ||
+    writingContract.paperMode === "survey" ||
+    (surveyReview.status !== "missing" && Boolean(surveyReview.topic));
+
+  const preferredOrder = preferSurveyBranch
+    ? ["survey_review", "review", "revise"]
+    : ["review", "revise", "survey_review"];
+
+  return preferredOrder.filter((stage) => candidates.includes(stage));
+}
 
 function normalizePolicy(
   config: Record<string, unknown> | undefined
@@ -8578,7 +8604,7 @@ export async function runWorkflowAutoIterator(params: {
       normalizeWritePackageState,
       assembleWritePackage,
       checkGraphPresenceForWorkflow,
-      PREVIOUS_STAGE,
+      getPreviousStagesForRegression,
       getMissingStageSignals,
       evaluateWorkflowAutoModeRisk,
       readAutoModeDiscussionStore,

@@ -51,8 +51,10 @@
 - `tests/workflow-runtime-tools.test.mjs`
 - `tests/workflow-control-plane-phase-3.test.mjs`
 - `tests/workflow-web-doc.test.mjs`
+- `tests/writer-reviewer-runtime-state.test.mjs`
+- `tests/workflow-writing-lines-e2e.test.mjs`
 
-它们分别守住推进器、工具接口、控制平面阶段约束和文档站结构。
+它们分别守住推进器、工具接口、控制平面阶段约束、文档站结构，以及普通论文/综述论文两条写作主线。
 
 新增的 decomposition-focused 套件：
 

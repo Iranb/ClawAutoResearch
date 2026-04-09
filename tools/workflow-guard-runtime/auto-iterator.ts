@@ -148,7 +148,10 @@ type AutoIteratorDeps = {
       tokenLookupTimeoutMs?: number;
     };
   }) => Promise<GraphPresenceCheckResult>;
-  PREVIOUS_STAGE: Record<string, string>;
+  getPreviousStagesForRegression: (params: {
+    currentStage: string | null;
+    manifest: ManifestLike;
+  }) => string[];
   getMissingStageSignals: (params: {
     projectRoot: string;
     manifest: ManifestLike;
@@ -524,8 +527,12 @@ export async function runWorkflowAutoIteratorImpl(
       regressionDepthCapped = true;
       break;
     }
-    const previousStage = deps.PREVIOUS_STAGE[stageEffective];
-    if (!previousStage || visited.has(previousStage)) {
+    const previousStages = deps.getPreviousStagesForRegression({
+      currentStage: stageEffective,
+      manifest,
+    });
+    const previousStage = previousStages.find((candidate) => !visited.has(candidate)) ?? null;
+    if (!previousStage) {
       break;
     }
     visited.add(previousStage);

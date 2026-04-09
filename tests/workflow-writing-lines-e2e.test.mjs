@@ -1,0 +1,162 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  materializePaperStoryState,
+  materializeSurveyReviewState,
+  runWorkflowAutoIterator,
+} from "../tools/workflow-guard.ts";
+
+async function writeJson(targetPath, value) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeText(targetPath, value = "# artifact\n") {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value, "utf8");
+}
+
+async function makeProjectRoot(prefix) {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+async function readManifest(projectRoot) {
+  return JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8"),
+  );
+}
+
+async function seedSurveyReviewProject(projectRoot) {
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-graph-reasoning",
+    title: "Graph Reasoning Survey",
+    current_stage: "survey_review",
+    current_micro_stage: "survey_requested",
+    owner_agent: "researcher",
+    updated_at: "2026-04-09T12:30:00.000Z",
+    survey_review: {
+      topic: "Graph reasoning survey",
+      mode: "deep",
+    },
+  });
+
+  await writeJson(
+    path.join(projectRoot, "researcher", "SURVEY_QUERY_REGISTRY.json"),
+    {
+      rounds: [{ query: "graph reasoning survey", provider: "papers-cool" }],
+    },
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"),
+    "# Review Protocol\n",
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "INCLUDED_PAPERS.json"),
+    {
+      papers: [
+        { canonical_id: "arxiv:2501.00001" },
+        { canonical_id: "arxiv:2501.00002" },
+      ],
+    },
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "EXCLUDED_PAPERS.json"),
+    {
+      papers: [{ canonical_id: "arxiv:2401.00003" }],
+    },
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "LITERATURE_REVIEW.md"),
+    [
+      "# Literature Review",
+      "",
+      "## Taxonomy",
+      "- Graph pretraining",
+      "- Graph reasoning agents",
+    ].join("\n"),
+  );
+  await writeText(path.join(projectRoot, "researcher", "SOTA_MATRIX.md"), "# SOTA Matrix\n");
+  await writeText(
+    path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"),
+    "# Gap Synthesis\n\n- Benchmark coverage remains fragmented.\n",
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"),
+    "# Coverage Summary\n\n- Included papers cover three benchmark families.\n",
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"),
+    "# Survey Brief\n\n- The area clusters into a few recurring method families.\n",
+  );
+}
+
+test("end-to-end survey paper line advances survey review into survey-mode write without experiment-only theory blockers", async (t) => {
+  const projectRoot = await makeProjectRoot(
+    "openclaw-research-writing-line-survey-",
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await seedSurveyReviewProject(projectRoot);
+
+  const surveyState = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+  assert.equal(surveyState.state.status, "completed");
+
+  const storyState = await materializePaperStoryState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+  assert.equal(storyState.state.status, "ready");
+
+  const transition = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const manifestAfterTransition = await readManifest(projectRoot);
+
+  assert.equal(transition.stageBefore, "survey_review");
+  assert.equal(transition.stageAfter, "write");
+  assert.equal(manifestAfterTransition.current_stage, "write");
+  assert.equal(manifestAfterTransition.owner_agent, "academic_writer");
+  assert.equal(manifestAfterTransition.writing_contract.paper_mode, "survey");
+  assert.deepEqual(manifestAfterTransition.writing_contract.required_sections, [
+    "abstract",
+    "introduction",
+    "scope_and_protocol",
+    "taxonomy",
+    "evidence_synthesis",
+    "benchmark_landscape",
+    "open_problems",
+    "conclusion",
+  ]);
+  assert.equal(manifestAfterTransition.writing_contract.proof_appendix_required, false);
+
+  const writeGate = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(writeGate.stageBefore, "write");
+  assert.equal(writeGate.stageAfter, "write");
+  assert.ok(
+    writeGate.missingStageSignals.some((signal) =>
+      /writing_session must be ready_for_submit/i.test(signal),
+    ),
+  );
+  assert.ok(
+    !writeGate.missingStageSignals.some((signal) =>
+      /appendix_theory\.tex|THEORY_STATE\.json/i.test(signal),
+    ),
+  );
+});
