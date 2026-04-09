@@ -80,6 +80,41 @@ Then:
 4. review `Current stage`, `Owner`, `Status`, `Updated`, `Blocking reason`, and `Next action`
 5. open `Manifest`, `Graph`, `Runtime`, or `Raw JSON` only when you need source evidence
 
+## Page structure
+
+Homepage:
+
+- stage matrix for all discovered projects
+- sticky project identity column
+- current-stage emphasis with state color coding for blocked, active, and ready items
+
+Project detail:
+
+- first screen shows `Current stage`, `Owner`, `Status`, `Updated`, `Blocking reason`, and `Next action`
+- `Summary` tab keeps the lightweight project interpretation layer first
+- `Manifest`, `Graph`, `Runtime`, and `Raw JSON` tabs expose the underlying artifacts on demand
+
+Artifact viewer:
+
+- left-side artifact selector for the active tab group
+- right-side raw viewer with path, representation label, and formatted content
+- explicit messages for truncated JSONL output, missing artifacts, and invalid artifacts
+
+## Verified behavior
+
+The current implementation has been verified with:
+
+- `npm run dashboard:test`
+- `npm run dashboard:build`
+- local `dashboard:dev` against a real `OPENCLAW_PROJECTS_ROOT`
+
+Smoke-checked flow:
+
+- homepage project listing through `/api/projects`
+- project detail summary through `/api/projects/:id/summary`
+- artifact enumeration through `/api/projects/:id/artifacts`
+- raw manifest and runtime trace drill-down through `/api/projects/:id/raw/:artifactKey`
+
 ## Not in v1
 
 - no write actions such as refresh, resume, or graph rebuild
