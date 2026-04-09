@@ -56,6 +56,23 @@ async function writeTrackRegistry(projectRoot, tracks) {
   );
 }
 
+async function writeMailbox(projectRoot, messages) {
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-mailbox.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        messages,
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+}
+
 test("snapshot builder preserves project context and emits derived fields", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-split");
@@ -183,6 +200,86 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
 
   assert.deepEqual(snapshot.missingStageSignals, []);
   assert.equal(snapshot.blockingReason, null);
+});
+
+test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocker no longer matches", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-mailbox");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await writeMailbox(projectRoot, [
+    {
+      id: "stale-auto-iterator",
+      fromAgent: "orchestrator",
+      toAgent: "researcher",
+      subject: "auto-iterator: idea owner handoff",
+      body: [
+        "Please resume idea stage.",
+        "Next action: Run /idea-phase.",
+        "Missing stage signals: active track fd-gcd-freq-debiased missing graph-backed innovation evidence; active track talon-gcd-bias missing graph-backed innovation evidence",
+      ].join("\n"),
+      kind: "handoff",
+      priority: "high",
+      status: "pending",
+      createdAt: "2026-04-09T07:13:26.090Z",
+    },
+  ]);
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-stale-mailbox",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.deepEqual(snapshot.missingStageSignals, []);
+  assert.deepEqual(snapshot.unreadMailbox, []);
 });
 
 test("snapshot builder surfaces survey review state for projectless review workflows", async (t) => {

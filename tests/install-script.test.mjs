@@ -145,3 +145,46 @@ exit 1
   assert.match(stdout, /\[6\/7\] 同步工作区配置、模板和角色根配置/);
   assert.match(stdout, /SKIP 同步工作区配置/);
 });
+
+test("install.sh defaults to no agent creation, previews build, and syncs optional agent markdown", async (t) => {
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-install-default-full-test-")
+  );
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const mockBin = path.join(tempRoot, "bin");
+  const mockOpenclaw = path.join(mockBin, "openclaw");
+  await writeExecutable(
+    mockOpenclaw,
+    `#!/bin/sh
+if [ "$1" = "agents" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+  printf '[]\\n'
+  exit 0
+fi
+echo "unexpected openclaw invocation: $*" >&2
+exit 1
+`
+  );
+
+  const repoRoot = process.cwd();
+  const { code, stdout, stderr } = await spawnInstallScript(["--dry-run", "--yes"], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PATH: `${mockBin}:${process.env.PATH ?? ""}`,
+      OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
+      PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
+      HOME: path.join(tempRoot, "home"),
+    },
+  });
+
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /Mode:\s+FULL INSTALL/);
+  assert.match(stdout, /\[ Build \] 编译最新插件代码/);
+  assert.match(stdout, /\[dry-run\] \(cd .* && npm run build\)/);
+  assert.match(stdout, /SKIP 全部 Agent 创建（默认关闭；使用 --with-agent-create 开启）/);
+  assert.match(stdout, /workspace-planner\/AGENTS\.md/);
+});

@@ -28,6 +28,7 @@ import {
   resolveHandoffEligibility,
 } from "../workflow-derived-state/handoff-eligibility.js";
 import {
+  filterStaleAutoIteratorMailboxItems,
   inboxForRole,
 } from "../workflow-guard-collaboration";
 import {
@@ -768,14 +769,18 @@ export async function buildWorkflowSnapshotFromProjectState(
         ? null
         : blockingReasonRaw
       : derivedEvidence.summary ?? blockingReasonRaw;
-  const unreadMailbox = inboxForRole({
-    mailbox: projectState.mailbox,
-    role,
-    limit:
-      typeof policy.maxWorkflowInboxMessages === "number" &&
-      Number.isFinite(policy.maxWorkflowInboxMessages)
-        ? Math.max(1, Math.floor(policy.maxWorkflowInboxMessages))
-        : 6,
+  const unreadMailbox = filterStaleAutoIteratorMailboxItems({
+    items: inboxForRole({
+      mailbox: projectState.mailbox,
+      role,
+      limit:
+        typeof policy.maxWorkflowInboxMessages === "number" &&
+        Number.isFinite(policy.maxWorkflowInboxMessages)
+          ? Math.max(1, Math.floor(policy.maxWorkflowInboxMessages))
+          : 6,
+    }),
+    currentStage,
+    missingStageSignals,
   });
   const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
   const paperIngestionState = normalizePaperIngestionState(paperIngestion);

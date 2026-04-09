@@ -1,17 +1,18 @@
 #!/bin/bash
 # ClawAutoResearch Plugin Installer
 # Usage:
-#   bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create] [--yes]
+#   bash install.sh [--dry-run] [--force-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
 #
 # 功能：
-#   1. 可选地添加或检查研究工作流所需的 agents
+#   1. 可选地添加或检查研究工作流所需的 agents；默认会把仓库中新增加的可选 agents 纳入同步范围
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
 #   3. 若本机存在 PaperNexus 仓库，则自动发现并同步 SKILL/ 下全部 Skills 到本仓库后再安装
-#   4. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
-#   5. 同步共享工作区核心配置、模板和 researcher/reviewer/cross-reviewer 根配置
-#   6. 不修改用户 openclaw.json
-#   7. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
-#   8. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
+#   4. 默认编译最新插件代码到 dist/
+#   5. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
+#   6. 同步共享工作区核心配置、模板和每个 agent 目录下的全部 Markdown 配置文件
+#   7. 不修改用户 openclaw.json
+#   8. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
+#   9. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
 
 set -euo pipefail
 
@@ -20,8 +21,10 @@ OC_DIR="${OPENCLAW_HOME:-$HOME/.openclaw}"
 PAPERNEXUS_DIR="${PAPERNEXUS_DIR:-/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus}"
 DRY_RUN=false
 FORCE_ROLE_FILES=false
-SKIP_AGENT_CREATE=false
+SKIP_AGENT_CREATE=true
 ASSUME_YES=false
+SKIP_BUILD=false
+SKIP_EXTRA_AGENTS=false
 INSTALL_MODE="full"
 INSTALL_MODE_LABEL="FULL INSTALL"
 RUN_AGENT_PHASE=true
@@ -29,18 +32,27 @@ RUN_PAPERNEXUS_PHASE=true
 RUN_SKILL_PHASE=true
 RUN_PLUGIN_LINK_PHASE=true
 RUN_WORKSPACE_PHASE=true
+RUN_BUILD_PHASE=true
+INSTALL_EXTRA_AGENTS=true
 FORCE_MENU_INPUT="${OPENCLAW_INSTALL_FORCE_MENU:-}"
 ORIGINAL_ARG_COUNT=$#
 PAPERNEXUS_SYNCED_SKILL_ENTRIES=()
+CORE_AGENT_IDS=(researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer)
+AVAILABLE_AGENT_IDS=()
+OPTIONAL_AGENT_IDS=()
+SELECTED_AGENT_IDS=()
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--dry-run] [--force-role-files] [--skip-agent-create] [--yes]
+Usage: bash install.sh [--dry-run] [--force-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
 
 Options:
   --dry-run           只预览，不实际写入
   --force-role-files  覆盖 workspace root 中已存在的 researcher/reviewer/cross-reviewer 角色配置文件
-  --skip-agent-create 跳过 `openclaw agents add` / `set-identity`，只同步插件、skills、模板和角色配置
+  --with-agent-create 显式执行 `openclaw agents add` / `set-identity`
+  --skip-agent-create 兼容旧参数；当前默认本来就跳过 agent 创建
+  --skip-build        跳过 `npm run build`
+  --skip-extra-agents 只处理核心 7 个 agents，不自动创建/同步仓库里新增的可选 agents
   --yes               非交互模式下默认回答 yes，并采用完整安装流程
   -h, --help          显示帮助
 
@@ -61,8 +73,17 @@ for arg in "$@"; do
     --force-role-files)
       FORCE_ROLE_FILES=true
       ;;
+    --with-agent-create)
+      SKIP_AGENT_CREATE=false
+      ;;
     --skip-agent-create)
       SKIP_AGENT_CREATE=true
+      ;;
+    --skip-build)
+      SKIP_BUILD=true
+      ;;
+    --skip-extra-agents)
+      SKIP_EXTRA_AGENTS=true
       ;;
     --yes)
       ASSUME_YES=true
@@ -200,6 +221,8 @@ configure_install_mode() {
   RUN_SKILL_PHASE=false
   RUN_PLUGIN_LINK_PHASE=false
   RUN_WORKSPACE_PHASE=false
+  RUN_BUILD_PHASE=false
+  INSTALL_EXTRA_AGENTS=true
 
   case "$INSTALL_MODE" in
     full)
@@ -208,6 +231,7 @@ configure_install_mode() {
       RUN_SKILL_PHASE=true
       RUN_PLUGIN_LINK_PHASE=true
       RUN_WORKSPACE_PHASE=true
+      RUN_BUILD_PHASE=true
       ;;
     skills-only)
       RUN_PAPERNEXUS_PHASE=true
@@ -219,8 +243,17 @@ configure_install_mode() {
     advanced-custom)
       echo ""
       echo "[ Advanced Custom ]"
-      if prompt_yes_no "创建或检查 Agents？" "y"; then
+      if prompt_yes_no "创建或检查 Agents？" "n"; then
         RUN_AGENT_PHASE=true
+        SKIP_AGENT_CREATE=false
+      fi
+      if prompt_yes_no "编译最新插件代码（npm run build）？" "y"; then
+        RUN_BUILD_PHASE=true
+      fi
+      if prompt_yes_no "包含仓库里新增的可选 agents（默认启用）？" "y"; then
+        INSTALL_EXTRA_AGENTS=true
+      else
+        INSTALL_EXTRA_AGENTS=false
       fi
       if prompt_yes_no "同步本机 PaperNexus skills？" "y"; then
         RUN_PAPERNEXUS_PHASE=true
@@ -239,6 +272,53 @@ configure_install_mode() {
       die "未知安装模式: $INSTALL_MODE"
       ;;
   esac
+}
+
+is_core_agent() {
+  local candidate="$1"
+  local agent
+  for agent in "${CORE_AGENT_IDS[@]}"; do
+    if [[ "$agent" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+discover_available_agent_ids() {
+  local dir
+  AVAILABLE_AGENT_IDS=()
+  if [[ ! -d "$PLUGIN_DIR/agents" ]]; then
+    return 0
+  fi
+
+  for dir in "$PLUGIN_DIR"/agents/*; do
+    [[ -d "$dir" ]] || continue
+    AVAILABLE_AGENT_IDS+=("$(basename "$dir")")
+  done
+}
+
+collect_selected_agent_ids() {
+  local agent
+  SELECTED_AGENT_IDS=()
+  OPTIONAL_AGENT_IDS=()
+
+  discover_available_agent_ids
+
+  for agent in "${CORE_AGENT_IDS[@]}"; do
+    if [[ -d "$PLUGIN_DIR/agents/$agent" ]]; then
+      SELECTED_AGENT_IDS+=("$agent")
+    fi
+  done
+
+  if $INSTALL_EXTRA_AGENTS; then
+    for agent in "${AVAILABLE_AGENT_IDS[@]}"; do
+      if ! is_core_agent "$agent"; then
+        OPTIONAL_AGENT_IDS+=("$agent")
+        SELECTED_AGENT_IDS+=("$agent")
+      fi
+    done
+  fi
 }
 
 ensure_dir() {
@@ -394,8 +474,15 @@ papernexus_skill_slug() {
 find_existing_skill_agent_for_slug() {
   local slug="$1"
   local agent
+  local agent_ids=()
 
-  for agent in researcher analyzer orchestrator coder reviewer academic_writer cross-reviewer; do
+  if [[ ${#AVAILABLE_AGENT_IDS[@]} -gt 0 ]]; then
+    agent_ids=("${AVAILABLE_AGENT_IDS[@]}")
+  else
+    agent_ids=("${CORE_AGENT_IDS[@]}")
+  fi
+
+  for agent in "${agent_ids[@]}"; do
     if [[ -d "$PLUGIN_DIR/skills/$agent/$slug" || -L "$PLUGIN_DIR/skills/$agent/$slug" ]]; then
       printf '%s\n' "$agent"
       return 0
@@ -646,7 +733,29 @@ default_workspace_rel_for_agent() {
     analyzer) echo "workspace-analyzer" ;;
     academic_writer) echo "workspace-academic_writer" ;;
     cross-reviewer) echo "workspace-cross-reviewer" ;;
+    planner) echo "workspace-planner" ;;
     *) echo "workspace-$1" ;;
+  esac
+}
+
+display_name_for_agent() {
+  case "$1" in
+    researcher) echo "Researcher" ;;
+    reviewer) echo "Reviewer" ;;
+    orchestrator) echo "Orchestrator" ;;
+    coder) echo "Coder" ;;
+    analyzer) echo "Analyzer" ;;
+    academic_writer) echo "Writer" ;;
+    cross-reviewer) echo "Cross-Reviewer" ;;
+    planner) echo "Planner" ;;
+    *)
+      printf '%s\n' "$1" | tr '_-' '  ' | awk '{
+        for (i = 1; i <= NF; i++) {
+          $i = toupper(substr($i, 1, 1)) tolower(substr($i, 2))
+        }
+        print
+      }'
+      ;;
   esac
 }
 
@@ -666,20 +775,33 @@ copy_role_bundle() {
   local ws_root="$2"
   local overwrite="$3"
   local ws_name
+  local agent_dir="$PLUGIN_DIR/agents/$role"
   ws_name=$(basename "$ws_root")
-  local files=(AGENTS.md SOUL.md IDENTITY.md TOOLS.md BOOT.md BOOTSTRAP.md HEARTBEAT.md)
 
-  if [[ "$role" == "researcher" ]]; then
-    files+=(SERVER.md)
+  if [[ ! -d "$agent_dir" ]]; then
+    echo "    -> SKIP $ws_name (插件内缺少 agents/$role)"
+    return 0
   fi
 
-  for file in "${files[@]}"; do
-    local src="$PLUGIN_DIR/agents/$role/$file"
-    local dst="$ws_root/$file"
+  while IFS= read -r src; do
+    local file
+    local dst
+    file=$(basename "$src")
+    dst="$ws_root/$file"
     if [[ "$overwrite" != "true" && ( -e "$dst" || -L "$dst" ) ]]; then
       echo "    -> SKIP $ws_name/$file (已存在；使用 --force-role-files 可覆盖)"
     else
       copy_file "$src" "$dst" "$ws_name/$file" "$overwrite"
+    fi
+  done < <(find "$agent_dir" -maxdepth 1 -type f -name '*.md' | sort)
+
+  for hook in BOOTSTRAP.md HEARTBEAT.md; do
+    local hook_src="$PLUGIN_DIR/templates/hooks/$hook"
+    local hook_dst="$ws_root/$hook"
+    if [[ "$overwrite" != "true" && ( -e "$hook_dst" || -L "$hook_dst" ) ]]; then
+      echo "    -> SKIP $ws_name/$hook (已存在；使用 --force-role-files 可覆盖)"
+    else
+      copy_file "$hook_src" "$hook_dst" "$ws_name/$hook" "$overwrite"
     fi
   done
 }
@@ -710,6 +832,13 @@ elif (( ORIGINAL_ARG_COUNT == 0 )) && [[ -t 0 ]] && ! $ASSUME_YES; then
 fi
 
 configure_install_mode
+
+if $SKIP_BUILD; then
+  RUN_BUILD_PHASE=false
+fi
+if $SKIP_EXTRA_AGENTS; then
+  INSTALL_EXTRA_AGENTS=false
+fi
 
 OC_DIR_EXPANDED=$(expand_path "$OC_DIR")
 OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OC_DIR_EXPANDED/openclaw.json}"
@@ -751,6 +880,8 @@ if [[ ! -d "$PLUGIN_DIR" ]]; then
   die "插件目录不存在: $PLUGIN_DIR"
 fi
 
+collect_selected_agent_ids
+
 ensure_dir "$OC_DIR_EXPANDED"
 ensure_dir "$OC_PLUGINS_DIR"
 
@@ -759,35 +890,57 @@ if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
   echo "        脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
 fi
 
-if [[ ! -f "$PLUGIN_DIR/dist/index.js" ]]; then
-  echo "  WARN: 未检测到 $PLUGIN_DIR/dist/index.js"
-  echo "        建议先执行 npm run build，再运行安装脚本。"
+if $RUN_BUILD_PHASE; then
+  if ! command -v npm >/dev/null 2>&1; then
+    die "未找到 npm，但当前安装模式需要先编译 dist。请安装 npm，或使用 --skip-build 跳过。"
+  fi
+  echo "  -> 将编译最新插件代码到 dist/"
 else
-  echo "  -> 已检测到构建产物 dist/index.js"
+  if [[ ! -f "$PLUGIN_DIR/dist/index.js" ]]; then
+    echo "  WARN: 未检测到 $PLUGIN_DIR/dist/index.js"
+    echo "        当前又跳过了 build，运行中的插件可能仍会使用旧代码。"
+  else
+    echo "  -> 使用现有构建产物 dist/index.js"
+  fi
+fi
+if [[ ${#OPTIONAL_AGENT_IDS[@]} -gt 0 ]]; then
+  if $INSTALL_EXTRA_AGENTS; then
+    echo "  -> 将包含新增可选 agents: ${OPTIONAL_AGENT_IDS[*]}"
+  else
+    echo "  -> 可选 agents 已跳过: ${OPTIONAL_AGENT_IDS[*]}"
+  fi
 fi
 
 echo "  -> 配置目录就绪"
 echo ""
 
-echo "[1/7] 添加 Agents（openclaw agents add）..."
+echo "[ Build ] 编译最新插件代码..."
+if $RUN_BUILD_PHASE; then
+  if $DRY_RUN; then
+    echo "  [dry-run] (cd $PLUGIN_DIR && npm run build)"
+  else
+    (
+      cd "$PLUGIN_DIR"
+      npm run build
+    )
+    echo "  -> BUILD dist/"
+  fi
+else
+  echo "  -> SKIP 构建（当前模式或参数已禁用）"
+fi
 
-AGENTS=(
-  "researcher|Researcher|workspace-researcher"
-  "reviewer|Reviewer|workspace-reviewer"
-  "orchestrator|Orchestrator|workspace-orchestrator"
-  "coder|Coder|workspace-coder"
-  "analyzer|Analyzer|workspace-analyzer"
-  "academic_writer|Writer|workspace-academic_writer"
-  "cross-reviewer|Cross-Reviewer|workspace-cross-reviewer"
-)
+echo ""
+
+echo "[1/7] 添加 Agents（openclaw agents add）..."
 
 if ! $RUN_AGENT_PHASE; then
   echo "  -> SKIP 添加 Agents（当前模式未包含）"
 elif $SKIP_AGENT_CREATE; then
-  echo "  -> SKIP 全部 Agent 创建（已启用 --skip-agent-create）"
+  echo "  -> SKIP 全部 Agent 创建（默认关闭；使用 --with-agent-create 开启）"
 else
-  for entry in "${AGENTS[@]}"; do
-    IFS='|' read -r id name workspace_rel <<< "$entry"
+  for id in "${SELECTED_AGENT_IDS[@]}"; do
+    local_name=$(display_name_for_agent "$id")
+    workspace_rel=$(default_workspace_rel_for_agent "$id")
     workspace_abs="$OC_DIR_EXPANDED/$workspace_rel"
 
     if [[ ! -d "$PLUGIN_DIR/agents/$id" ]]; then
@@ -805,7 +958,7 @@ else
     if run openclaw agents add "$id" --workspace "$workspace_abs" --model "modelstudio/glm-5" --non-interactive 2>/dev/null; then
       echo "  -> ADD $id"
       if ! $DRY_RUN; then
-        run openclaw agents set-identity --agent "$id" --name "$name" --workspace "$workspace_abs" 2>/dev/null || true
+        run openclaw agents set-identity --agent "$id" --name "$local_name" --workspace "$workspace_abs" 2>/dev/null || true
       fi
     else
       echo "  WARN: $id 添加失败，请检查 openclaw 与当前配置后重试"
@@ -829,7 +982,7 @@ DELETE_DUPLICATES=false
 if $RUN_SKILL_PHASE; then
   DUPLICATES=()
 
-  for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
+  for agent in "${SELECTED_AGENT_IDS[@]}"; do
     skill_src="$PLUGIN_DIR/skills/$agent"
     ws_root="$(workspace_for_agent "$agent")"
     ws_skills="$ws_root/skills"
@@ -872,7 +1025,7 @@ echo ""
 echo "[4/7] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
 
 if $RUN_SKILL_PHASE; then
-  for agent in researcher reviewer orchestrator coder analyzer academic_writer cross-reviewer; do
+  for agent in "${SELECTED_AGENT_IDS[@]}"; do
     skill_src="$PLUGIN_DIR/skills/$agent"
     ws_root="$(workspace_for_agent "$agent")"
     ws_skills="$ws_root/skills"
@@ -952,7 +1105,8 @@ REVIEWER_WS="$OC_DIR_EXPANDED/workspace-reviewer"
 CROSS_REVIEWER_WS="$OC_DIR_EXPANDED/workspace-cross-reviewer"
 
 if $RUN_WORKSPACE_PHASE; then
-  for ws_root in "$RESEARCHER_WS" "$REVIEWER_WS" "$CROSS_REVIEWER_WS"; do
+  for agent in "${SELECTED_AGENT_IDS[@]}"; do
+    ws_root="$(workspace_for_agent "$agent")"
     ensure_dir "$ws_root"
   done
 
@@ -986,10 +1140,11 @@ if $RUN_WORKSPACE_PHASE; then
     done
   fi
 
-  echo "  -> 同步 workspace root 角色配置..."
-  copy_role_bundle "researcher" "$RESEARCHER_WS" "$FORCE_ROLE_FILES"
-  copy_role_bundle "reviewer" "$REVIEWER_WS" "$FORCE_ROLE_FILES"
-  copy_role_bundle "cross-reviewer" "$CROSS_REVIEWER_WS" "$FORCE_ROLE_FILES"
+  echo "  -> 同步各 agent 的 Markdown 配置与 hooks..."
+  for agent in "${SELECTED_AGENT_IDS[@]}"; do
+    ws_root="$(workspace_for_agent "$agent")"
+    copy_role_bundle "$agent" "$ws_root" "$FORCE_ROLE_FILES"
+  done
 else
   echo "  -> SKIP 同步工作区配置（当前模式未包含）"
 fi
@@ -1005,32 +1160,46 @@ echo ""
 if ! $RUN_AGENT_PHASE; then
   echo "  1. Agents: 当前模式未包含"
 elif $SKIP_AGENT_CREATE; then
-  echo "  1. Agents: 已跳过 openclaw Agent 创建；如需创建可移除 --skip-agent-create 后重跑"
+  echo "  1. Agents: 默认已跳过 openclaw Agent 创建；如需创建请追加 --with-agent-create"
 else
   echo "  1. Agents: 已添加或检查研究工作流所需 agents"
 fi
-if $RUN_PAPERNEXUS_PHASE; then
-  echo "  2. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则会自动发现并同步全部 skills，并补齐 skills/index.json 注册"
+if $RUN_BUILD_PHASE; then
+  echo "  2. Build: 已编译最新插件代码到 dist/"
 else
-  echo "  2. PaperNexus: 当前模式未包含"
+  echo "  2. Build: 当前模式未包含或已通过参数跳过"
+fi
+if $RUN_PAPERNEXUS_PHASE; then
+  echo "  3. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则会自动发现并同步全部 skills，并补齐 skills/index.json 注册"
+else
+  echo "  3. PaperNexus: 当前模式未包含"
 fi
 if $RUN_SKILL_PHASE; then
-  echo "  3. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
+  echo "  4. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
 else
-  echo "  3. Skills: 当前模式未包含"
+  echo "  4. Skills: 当前模式未包含"
 fi
 if $RUN_PLUGIN_LINK_PHASE; then
-  echo "  4. Plugin: 已创建或检查 $PLUGIN_LINK"
+  echo "  5. Plugin: 已创建或检查 $PLUGIN_LINK"
 else
-  echo "  4. Plugin: 当前模式未包含"
+  echo "  5. Plugin: 当前模式未包含"
 fi
 if $RUN_WORKSPACE_PHASE; then
-  echo "  5. Workspace: 已同步共享配置、研究模板和 researcher/reviewer/cross-reviewer 根配置"
+  echo "  6. Workspace: 已同步共享配置、研究模板，以及每个 agent 目录下的 Markdown 配置与 hooks"
 else
-  echo "  5. Workspace: 当前模式未包含"
+  echo "  6. Workspace: 当前模式未包含"
 fi
-echo "  6. Config: 未修改你的 openclaw.json"
-echo "  7. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
+if [[ ${#OPTIONAL_AGENT_IDS[@]} -gt 0 ]]; then
+  if $INSTALL_EXTRA_AGENTS; then
+    echo "  7. Optional Agents: 已纳入 ${OPTIONAL_AGENT_IDS[*]}"
+  else
+    echo "  7. Optional Agents: 已跳过 ${OPTIONAL_AGENT_IDS[*]}"
+  fi
+else
+  echo "  7. Optional Agents: 当前仓库无新增可选 agents"
+fi
+echo "  8. Config: 未修改你的 openclaw.json"
+echo "  9. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
 echo ""
 highlight "  请重点检查：plugin load path、agentDir 绝对路径、skills roots、research_workflow 工具权限、projectsRoot、autoMode、autoGate"
 echo "  新手入口：$PLUGIN_DIR/DOC/beginner_zh.md"
@@ -1053,7 +1222,7 @@ if $DRY_RUN; then
   echo "  使用不带 --dry-run 的方式运行以应用更改。"
 fi
 if [[ "$SKIP_AGENT_CREATE" == "true" ]]; then
-  echo "  如需让脚本通过 OpenClaw 自动创建 agents，请去掉 --skip-agent-create 后重跑。"
+  echo "  如需让脚本通过 OpenClaw 自动创建 agents，请追加 --with-agent-create 后重跑。"
 fi
 if [[ "$FORCE_ROLE_FILES" != "true" ]]; then
   echo "  若要用插件中的 researcher/reviewer/cross-reviewer 根配置覆盖现有 workspace root 文件，请追加 --force-role-files。"

@@ -240,6 +240,10 @@ test("formatWorkflowSnapshotForPrompt surfaces compact derived evidence diagnost
 
   assert.match(prompt, /Derived evidence: repairable/i);
   assert.match(prompt, /file-backed GRAPH_EVIDENCE\.json pending canonicalization/i);
+  assert.match(
+    prompt,
+    /Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick\./i
+  );
   assert.doesNotMatch(prompt, /missing_signals=/i);
 });
 

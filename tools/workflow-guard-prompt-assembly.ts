@@ -200,6 +200,9 @@ export function buildFocusedPromptAssemblyImpl(
       "Bootstrap-vs-guard rule: AGENTS.md only carries stable role policy. Stage-local checklists, queue state, and the next bounded action in this Workflow Guard override memory or stale templates."
     );
     layer2Lines.push(
+      "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker."
+    );
+    layer2Lines.push(
       'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
     );
     if (params.trigger === "heartbeat") {
@@ -469,6 +472,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
   );
   if (snapshot.role === "researcher") {
+    lines.push(
+      "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker."
+    );
     lines.push(
       'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
     );

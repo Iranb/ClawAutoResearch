@@ -51,6 +51,39 @@ type PartialWorkflowSnapshotLike = {
   channelProjectBindingWorkflowSessionKey?: string | null;
 };
 
+function normalizeMailboxText(value: string | null | undefined): string {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+}
+
+function parseAutoIteratorMailboxStage(subject: string): string | null {
+  const match = subject.match(/^auto-iterator:\s+(.+?)\s+owner handoff$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function parseAutoIteratorMailboxSignals(body: string): string[] {
+  const line = body
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => /^missing stage signals:/i.test(entry));
+  if (!line) {
+    return [];
+  }
+  return line
+    .replace(/^missing stage signals:\s*/i, "")
+    .split(/\s*;\s*/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function equivalentSignalLists(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const normalizedLeft = [...left].map(normalizeMailboxText).sort();
+  const normalizedRight = [...right].map(normalizeMailboxText).sort();
+  return normalizedLeft.every((entry, index) => entry === normalizedRight[index]);
+}
+
 export function getMailboxPath(projectRoot: string): string {
   return path.join(projectRoot, ".openclaw-research", "workflow-mailbox.json");
 }
@@ -125,12 +158,32 @@ export async function queueWorkflowMailboxMessageImpl(params: {
     projectRoot: params.projectRoot,
     readJsonIfExists: params.readJsonIfExists,
   });
+  const normalizedSubject = params.subject.trim();
+  const normalizedBody = params.body.trim();
+  const existingPending = mailbox.messages.find(
+    (message) =>
+      message.status === "pending" &&
+      message.fromAgent === params.fromAgent &&
+      message.toAgent === params.toAgent &&
+      message.kind ===
+        (params.kind === "handoff" ||
+        params.kind === "blocker" ||
+        params.kind === "request" ||
+        params.kind === "note"
+          ? params.kind
+          : "note") &&
+      normalizeMailboxText(message.subject) === normalizeMailboxText(normalizedSubject) &&
+      normalizeMailboxText(message.body) === normalizeMailboxText(normalizedBody)
+  );
+  if (existingPending) {
+    return existingPending;
+  }
   const item: WorkflowMailboxItemLike = {
     id: randomUUID(),
     fromAgent: params.fromAgent,
     toAgent: params.toAgent,
-    subject: params.subject.trim(),
-    body: params.body.trim(),
+    subject: normalizedSubject,
+    body: normalizedBody,
     kind:
       params.kind === "handoff" ||
       params.kind === "blocker" ||
@@ -311,6 +364,29 @@ export function inboxForRole(params: {
       return left.createdAt.localeCompare(right.createdAt);
     })
     .slice(0, params.limit);
+}
+
+export function filterStaleAutoIteratorMailboxItems(params: {
+  items: WorkflowMailboxItemLike[];
+  currentStage?: string | null;
+  missingStageSignals?: string[];
+}): WorkflowMailboxItemLike[] {
+  const currentStage = params.currentStage?.trim() || null;
+  const currentSignals = (params.missingStageSignals ?? []).map((entry) => entry.trim()).filter(Boolean);
+  return params.items.filter((item) => {
+    if (item.kind !== "handoff" || !/^auto-iterator:/i.test(item.subject)) {
+      return true;
+    }
+    const mailboxStage = parseAutoIteratorMailboxStage(item.subject);
+    if (currentStage && mailboxStage && mailboxStage !== currentStage) {
+      return false;
+    }
+    const mailboxSignals = parseAutoIteratorMailboxSignals(item.body);
+    if (mailboxSignals.length === 0) {
+      return currentSignals.length === 0;
+    }
+    return equivalentSignalLists(mailboxSignals, currentSignals);
+  });
 }
 
 export function buildNonOwnerRoutingAdvice(
