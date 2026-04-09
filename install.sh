@@ -1,7 +1,7 @@
 #!/bin/bash
 # ClawAutoResearch Plugin Installer
 # Usage:
-#   bash install.sh [--dry-run] [--force-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
+#   bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
 #
 # 功能：
 #   1. 可选地添加或检查研究工作流所需的 agents；默认会把仓库中新增加的可选 agents 纳入同步范围
@@ -20,7 +20,7 @@ PLUGIN_DIR="${PLUGIN_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 OC_DIR="${OPENCLAW_HOME:-$HOME/.openclaw}"
 PAPERNEXUS_DIR="${PAPERNEXUS_DIR:-/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus}"
 DRY_RUN=false
-FORCE_ROLE_FILES=false
+FORCE_ROLE_FILES=true
 SKIP_AGENT_CREATE=true
 ASSUME_YES=false
 SKIP_BUILD=false
@@ -44,11 +44,12 @@ SELECTED_AGENT_IDS=()
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--dry-run] [--force-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
+Usage: bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
 
 Options:
   --dry-run           只预览，不实际写入
-  --force-role-files  覆盖 workspace root 中已存在的 researcher/reviewer/cross-reviewer 角色配置文件
+  --preserve-role-files 保留 agent workspace 中已存在的 Markdown / hook 文件，不执行默认覆盖
+  --force-role-files  兼容旧参数；当前默认本来就会覆盖 agent workspace Markdown / hook 文件
   --with-agent-create 显式执行 `openclaw agents add` / `set-identity`
   --skip-agent-create 兼容旧参数；当前默认本来就跳过 agent 创建
   --skip-build        跳过 `npm run build`
@@ -72,6 +73,9 @@ for arg in "$@"; do
       ;;
     --force-role-files)
       FORCE_ROLE_FILES=true
+      ;;
+    --preserve-role-files)
+      FORCE_ROLE_FILES=false
       ;;
     --with-agent-create)
       SKIP_AGENT_CREATE=false
@@ -789,7 +793,7 @@ copy_role_bundle() {
     file=$(basename "$src")
     dst="$ws_root/$file"
     if [[ "$overwrite" != "true" && ( -e "$dst" || -L "$dst" ) ]]; then
-      echo "    -> SKIP $ws_name/$file (已存在；使用 --force-role-files 可覆盖)"
+      echo "    -> SKIP $ws_name/$file (已存在；默认会覆盖，当前因 --preserve-role-files 保留)"
     else
       copy_file "$src" "$dst" "$ws_name/$file" "$overwrite"
     fi
@@ -799,7 +803,7 @@ copy_role_bundle() {
     local hook_src="$PLUGIN_DIR/templates/hooks/$hook"
     local hook_dst="$ws_root/$hook"
     if [[ "$overwrite" != "true" && ( -e "$hook_dst" || -L "$hook_dst" ) ]]; then
-      echo "    -> SKIP $ws_name/$hook (已存在；使用 --force-role-files 可覆盖)"
+      echo "    -> SKIP $ws_name/$hook (已存在；默认会覆盖，当前因 --preserve-role-files 保留)"
     else
       copy_file "$hook_src" "$hook_dst" "$ws_name/$hook" "$overwrite"
     fi
@@ -856,7 +860,7 @@ echo "  Target:  $OC_DIR_EXPANDED"
 echo "  PaperNexus: $PAPERNEXUS_DIR"
 echo "  Mode:    $INSTALL_MODE_LABEL"
 echo "  Mode:    $([ "$DRY_RUN" = true ] && echo 'DRY RUN (no changes)' || echo 'LIVE')"
-echo "  Force:   $([ "$FORCE_ROLE_FILES" = true ] && echo 'overwrite role root files' || echo 'preserve existing role root files')"
+echo "  Role MD: $([ "$FORCE_ROLE_FILES" = true ] && echo 'overwrite existing agent markdown/hooks' || echo 'preserve existing agent markdown/hooks')"
 if ! $RUN_AGENT_PHASE; then
   echo "  Agents:  skipped by selected mode"
 elif [ "$SKIP_AGENT_CREATE" = true ]; then
@@ -1225,6 +1229,6 @@ if [[ "$SKIP_AGENT_CREATE" == "true" ]]; then
   echo "  如需让脚本通过 OpenClaw 自动创建 agents，请追加 --with-agent-create 后重跑。"
 fi
 if [[ "$FORCE_ROLE_FILES" != "true" ]]; then
-  echo "  若要用插件中的 researcher/reviewer/cross-reviewer 根配置覆盖现有 workspace root 文件，请追加 --force-role-files。"
+  echo "  当前启用了 --preserve-role-files，现有 agent workspace Markdown / hook 文件会被保留。"
 fi
 echo ""

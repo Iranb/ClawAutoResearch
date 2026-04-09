@@ -170,6 +170,15 @@ exit 1
   );
 
   const repoRoot = process.cwd();
+  await fs.mkdir(path.join(tempRoot, ".openclaw", "workspace-planner"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(tempRoot, ".openclaw", "workspace-planner", "AGENTS.md"),
+    "old planner config\n",
+    "utf8"
+  );
+
   const { code, stdout, stderr } = await spawnInstallScript(["--dry-run", "--yes"], {
     cwd: repoRoot,
     env: {
@@ -186,5 +195,61 @@ exit 1
   assert.match(stdout, /\[ Build \] 编译最新插件代码/);
   assert.match(stdout, /\[dry-run\] \(cd .* && npm run build\)/);
   assert.match(stdout, /SKIP 全部 Agent 创建（默认关闭；使用 --with-agent-create 开启）/);
-  assert.match(stdout, /workspace-planner\/AGENTS\.md/);
+  assert.match(stdout, /-> UPDATE workspace-planner\/AGENTS\.md/);
+  assert.doesNotMatch(stdout, /workspace-planner\/AGENTS\.md \(已存在；默认会覆盖，当前因 --preserve-role-files 保留\)/);
+});
+
+test("install.sh can preserve existing agent markdown when requested", async (t) => {
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-install-preserve-role-test-")
+  );
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const mockBin = path.join(tempRoot, "bin");
+  const mockOpenclaw = path.join(mockBin, "openclaw");
+  await writeExecutable(
+    mockOpenclaw,
+    `#!/bin/sh
+if [ "$1" = "agents" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+  printf '[]\\n'
+  exit 0
+fi
+echo "unexpected openclaw invocation: $*" >&2
+exit 1
+`
+  );
+
+  const repoRoot = process.cwd();
+  await fs.mkdir(path.join(tempRoot, ".openclaw", "workspace-planner"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(tempRoot, ".openclaw", "workspace-planner", "AGENTS.md"),
+    "old planner config\n",
+    "utf8"
+  );
+
+  const { code, stdout, stderr } = await spawnInstallScript(
+    ["--dry-run", "--yes", "--preserve-role-files"],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PATH: `${mockBin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
+        PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
+        HOME: path.join(tempRoot, "home"),
+      },
+    }
+  );
+
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /Role MD:\s+preserve existing agent markdown\/hooks/);
+  assert.match(
+    stdout,
+    /workspace-planner\/AGENTS\.md \(已存在；默认会覆盖，当前因 --preserve-role-files 保留\)/
+  );
 });
