@@ -16,6 +16,10 @@ allowed-tools:
 
 Run a survey-only workflow for a topic without entering plan/code/experiment. This skill is meant for review papers, rapid literature overviews, and saturation-oriented topic scouting.
 
+Primary slash entry:
+
+- `/survey-pipeline "topic"`
+
 ## Core Rule
 
 Treat `PROJECT_MANIFEST.json.survey_review` as the authoritative state. Do not try to advance the survey by hand-editing a pile of Markdown files and hoping the workflow notices.

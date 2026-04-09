@@ -38,7 +38,8 @@ export type WorkflowBackgroundCommandKind =
 export type WorkflowCommandKind =
   | WorkflowBackgroundCommandKind
   | "project_init"
-  | "workflow_status";
+  | "workflow_status"
+  | "show_commands";
 
 export type WorkflowCommandDependencies = {
   resolveConversationBindingRecord: (
@@ -84,7 +85,8 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   graph_build: "/graph-build",
   zotero_sync: "/zotero-sync",
   literature_review: "/literature-review",
-  survey_review: "/survey-review",
+  survey_review: "/survey-pipeline",
   project_init: "/project-init",
   workflow_status: "/workflow-status",
+  show_commands: "/show-commands",
 };

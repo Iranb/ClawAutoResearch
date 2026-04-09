@@ -2137,7 +2137,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Run the survey loop until the review packet is saturated, then hand off into survey-mode writing.",
     command:
-      'Run /survey-review "topic" to expand retrieval coverage, maintain the durable screening packet, and synthesize SURVEY_BRIEF.md plus the survey review artifacts before WRITE handoff.',
+      'Run /survey-pipeline "topic" to expand retrieval coverage, maintain the durable screening packet, and synthesize SURVEY_BRIEF.md plus the survey review artifacts before WRITE handoff.',
   },
   graph_build: {
     owner: "researcher",

@@ -185,7 +185,7 @@ test("research-pipeline command starts a background continuation on the bound re
   );
 });
 
-test("survey-review command starts a projectless background continuation on the bound researcher session", async () => {
+test("survey-pipeline command starts a projectless background continuation on the bound researcher session", async () => {
   let captured = null;
   const api = makeApi();
   const surveyCommand = getCommand(
@@ -218,17 +218,17 @@ test("survey-review command starts a projectless background continuation on the 
           sessionKey: params.agentCtx.sessionKey,
           projectRoot: params.snapshot.projectRoot,
           projectId: params.snapshot.projectId,
-          summary: "Background survey review started.",
+          summary: "Background survey pipeline started.",
         };
       },
     }),
-    "survey-review"
+    "survey-pipeline"
   );
 
   const result = await surveyCommand.handler({
     channel: "discord",
     isAuthorizedSender: true,
-    commandBody: '/survey-review "graph reasoning survey"',
+    commandBody: '/survey-pipeline "graph reasoning survey"',
     args: '"graph reasoning survey"',
     config: {},
     from: "discord:channel:survey-lab",
@@ -239,7 +239,7 @@ test("survey-review command starts a projectless background continuation on the 
     getCurrentConversationBinding: async () => null,
   });
 
-  assert.equal(result.text, "Background survey review started.");
+  assert.equal(result.text, "Background survey pipeline started.");
   assert.equal(
     captured.backgroundParams.agentCtx.sessionKey,
     "agent:researcher:discord:group:survey-lab"
@@ -252,8 +252,34 @@ test("survey-review command starts a projectless background continuation on the 
   );
   assert.match(
     captured.backgroundParams.backgroundRun.commandText,
-    /^\/survey-review\b/
+    /^\/survey-pipeline\b/
   );
+});
+
+test("show-commands command lists the available slash commands and when to use them", async () => {
+  const api = makeApi();
+  const showCommands = getCommand(createResearchWorkflowCommands(api), "show-commands");
+
+  const result = await showCommands.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/show-commands",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /Available slash commands:/);
+  assert.match(result.text, /\/project-init/);
+  assert.match(result.text, /\/research-pipeline/);
+  assert.match(result.text, /\/survey-pipeline/);
+  assert.match(result.text, /\/show-commands/);
+  assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
 });
 
 test("literature-review command starts a project-bound background continuation on the bound researcher session", async () => {

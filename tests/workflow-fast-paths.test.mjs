@@ -32,6 +32,7 @@ import {
   buildLiteratureReviewBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
+  buildSurveyReviewBackgroundCommand,
   buildZoteroSyncBackgroundCommand,
   clearBackgroundWorkflowQueueForTests,
   drainQueuedBackgroundWorkflowRuns,
@@ -733,6 +734,19 @@ test("buildLiteratureReviewBackgroundCommand appends the background continuation
       '/literature-review "baseline coverage refresh" -- __BACKGROUND_CONTINUATION__: true'
     ),
     '/literature-review "baseline coverage refresh" -- __BACKGROUND_CONTINUATION__: true'
+  );
+});
+
+test("buildSurveyReviewBackgroundCommand appends the background continuation marker once", () => {
+  assert.equal(
+    buildSurveyReviewBackgroundCommand('/survey-pipeline "graph reasoning survey"'),
+    '/survey-pipeline "graph reasoning survey" -- __BACKGROUND_CONTINUATION__: true'
+  );
+  assert.equal(
+    buildSurveyReviewBackgroundCommand(
+      '/survey-pipeline "graph reasoning survey" -- __BACKGROUND_CONTINUATION__: true'
+    ),
+    '/survey-pipeline "graph reasoning survey" -- __BACKGROUND_CONTINUATION__: true'
   );
 });
 

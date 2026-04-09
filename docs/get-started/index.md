@@ -28,7 +28,7 @@
 
 ### 4. 想做科研综述，却沿用实验项目的默认启动路径
 
-如果目标是综述，不需要先走 `idea -> plan -> code -> experiment`。最短入口是直接运行 `/survey-review "topic"`，让系统创建轻量 survey workspace，并围绕 `survey_review` durable state 推进到 survey-mode writing。
+如果目标是综述，不需要先走 `idea -> plan -> code -> experiment`。最短入口是直接运行 `/survey-pipeline "topic"`，让系统创建轻量 survey workspace，并围绕 `survey_review` durable state 推进到 survey-mode writing。
 
 ## 最短路径
 
@@ -43,7 +43,7 @@ install.sh
 
 科研综述:
 install.sh
-  -> /survey-review "topic"
+  -> /survey-pipeline "topic"
   -> /workflow-status
   -> /resume-pipeline
 ```

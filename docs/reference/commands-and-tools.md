@@ -9,9 +9,11 @@
 | `/project-init` | 初始化项目骨架 | 新建项目 |
 | `/graph-build` | 构建或修复 graph presence | 共享图缺论文、graph 不 ready |
 | `/research-pipeline` | 启动或继续主研究流程 | 想从当前项目状态持续推进 |
+| `/survey-pipeline` | 启动综述主线 | 想围绕一个主题做综述、screening、coverage 与 survey 写作 |
 | `/research-queue` | 多项目排队推进 | 同时管理多个研究项目 |
 | `/resume-pipeline` | 从 durable state 恢复 | 会话重启、上下文丢失、换频道 |
 | `/workflow-status` | 查看阶段、blocking reason、auto discussion | 排障与人工诊断 |
+| `/show-commands` | 列出可用 slash commands 与简介 | 刚接触系统，或不确定该用哪个入口 |
 
 ## 2. `research_memory`
 

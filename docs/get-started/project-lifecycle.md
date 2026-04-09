@@ -35,7 +35,7 @@
 
 适用于“要围绕一个主题做系统综述、做 screening、coverage、gap synthesis、最后写 survey”的项目。它通常直接从：
 
-- `/survey-review "topic"`
+- `/survey-pipeline "topic"`
 
 开始。这个命令会创建一个轻量 survey workspace，把 durable state 写到 `PROJECT_MANIFEST.json.survey_review`，然后围绕综述 artifacts 推进，最终 handoff 到 `write`，并把 `writing_contract.paper_mode` 设为 `survey`。
 
@@ -102,7 +102,7 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 最推荐的方式是直接在聊天里调用：
 
 ```text
-/survey-review "multimodal reasoning survey"
+/survey-pipeline "multimodal reasoning survey"
 ```
 
 系统会做这些事：

@@ -64,7 +64,7 @@ test("home page and detailed docs pages cover the current system design", async 
     ],
     [
       "docs/reference/commands-and-tools.md",
-      [/\/research-pipeline/, /research_workflow/, /research_memory/, /auto_iterator_tick/],
+      [/\/research-pipeline/, /\/show-commands/, /research_workflow/, /research_memory/, /auto_iterator_tick/],
     ],
     [
       "docs/reference/state-contracts.md",

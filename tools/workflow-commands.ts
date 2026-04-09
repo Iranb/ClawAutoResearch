@@ -239,7 +239,7 @@ function buildBackgroundRunRequest(
       topic: extractQuotedSegment(ctx.args),
       summary:
         overrides.summary ??
-        `Background survey review started for ${
+        `Background survey pipeline started for ${
           readString(overrides.title) ??
           extractQuotedSegment(ctx.args) ??
           "the current topic"
@@ -257,6 +257,65 @@ function buildBackgroundRunRequest(
       }.`,
     ...overrides,
   };
+}
+
+type ShowCommandsEntry = {
+  label: string;
+  intro: string;
+};
+
+const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
+  {
+    label: COMMAND_LABELS.project_init,
+    intro: "初始化或刷新当前项目的 research program onboarding。",
+  },
+  {
+    label: COMMAND_LABELS.research_pipeline,
+    intro: "启动或继续普通论文主研究流程。",
+  },
+  {
+    label: COMMAND_LABELS.survey_review,
+    intro: '围绕一个主题启动综述主线，例如 `/survey-pipeline "topic"`。',
+  },
+  {
+    label: COMMAND_LABELS.graph_build,
+    intro: "刷新 graph readiness，并补齐后续 brainstorm 所需输入。",
+  },
+  {
+    label: COMMAND_LABELS.literature_review,
+    intro: "对当前项目发起一次 bounded literature review 后台调研。",
+  },
+  {
+    label: COMMAND_LABELS.zotero_sync,
+    intro: "把当前项目论文集合 best-effort 同步到 Zotero。",
+  },
+  {
+    label: COMMAND_LABELS.research_queue,
+    intro: "批量排队推进多个项目，而不是只盯住当前会话。",
+  },
+  {
+    label: COMMAND_LABELS.resume_pipeline,
+    intro: "从 durable workflow state 恢复当前项目，或显式恢复某个 project id。",
+  },
+  {
+    label: COMMAND_LABELS.workflow_status,
+    intro: "查看当前阶段、owner、blockers、auto mode 与 runtime health。",
+  },
+  {
+    label: COMMAND_LABELS.show_commands,
+    intro: "列出当前可用的 slash commands 和用途说明。",
+  },
+];
+
+function formatShowCommandsText(): string {
+  const lines = [
+    "Available slash commands:",
+    "",
+    ...SHOW_COMMANDS_ENTRIES.map((entry) => `- ${entry.label}: ${entry.intro}`),
+    "",
+    "Tip: 普通论文从 /project-init 或 /research-pipeline 开始；综述项目直接用 /survey-pipeline \"topic\"。",
+  ];
+  return lines.join("\n");
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -708,6 +767,12 @@ function createWorkflowStatusCommandHandler(
   };
 }
 
+function createShowCommandsCommandHandler() {
+  return async () => ({
+    text: formatShowCommandsText(),
+  });
+}
+
 async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   api: WorkflowCommandApi,
   workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>
@@ -813,7 +878,7 @@ export function createResearchWorkflowCommands(
       ),
     },
     {
-      name: "survey-review",
+      name: "survey-pipeline",
       description:
         "Start a survey-only literature review workflow for a topic in a background Researcher continuation.",
       acceptsArgs: true,
@@ -829,6 +894,13 @@ export function createResearchWorkflowCommands(
         "Show the current workflow snapshot for this bound conversation or workflow session.",
       acceptsArgs: false,
       handler: createWorkflowStatusCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "show-commands",
+      description:
+        "List the available workflow slash commands and when to use them.",
+      acceptsArgs: false,
+      handler: createShowCommandsCommandHandler(),
     },
   ];
 }

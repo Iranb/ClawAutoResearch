@@ -30,6 +30,7 @@ import {
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
+  buildSurveyReviewBackgroundCommand,
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
@@ -126,6 +127,10 @@ function looksLikeResumePipelineCommand(text: string | null | undefined): boolea
 
 function looksLikeLiteratureReviewCommand(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\/literature-review\b/i.test(text));
+}
+
+function looksLikeSurveyPipelineCommand(text: string | null | undefined): boolean {
+  return Boolean(text && /^\s*\/survey-pipeline\b/i.test(text));
 }
 
 export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
@@ -629,6 +634,21 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
             buildLiteratureReviewBackgroundCommand(latestPromptLikeText ?? "")
           )}`,
           "Keep the pass project-scoped, durable, and bounded. After the tool returns, reply briefly that the background literature review has started and stop. The background continuation will materialize the real review packet.",
+          "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role === "researcher" &&
+        looksLikeSurveyPipelineCommand(latestPromptLikeText) &&
+        !hasBackgroundContinuationMarker(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Slash Fast Path]",
+          "This turn appears to come from /survey-pipeline.",
+          'Before doing heavy survey work, call research_workflow with action start_background_run and backgroundRun.kind="survey_review".',
+          `Pass backgroundRun.commandText as: ${JSON.stringify(
+            buildSurveyReviewBackgroundCommand(latestPromptLikeText ?? "")
+          )}`,
+          "After the tool returns, reply briefly that the background survey pipeline has started and stop. The background continuation will materialize the real survey packet.",
           "[/Slash Fast Path]"
         );
       } else if (

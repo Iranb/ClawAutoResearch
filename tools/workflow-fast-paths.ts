@@ -2203,7 +2203,7 @@ export function buildLiteratureReviewBackgroundCommand(commandText: string): str
 export function buildSurveyReviewBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
   if (!trimmed) {
-    return '/survey-review "research topic" -- __BACKGROUND_CONTINUATION__: true';
+    return '/survey-pipeline "research topic" -- __BACKGROUND_CONTINUATION__: true';
   }
   if (hasBackgroundContinuationMarker(trimmed)) {
     return trimmed;
@@ -2735,7 +2735,7 @@ export async function startBackgroundWorkflowRun(params: {
           )
       : normalizedKind === "survey_review"
         ? buildSurveyReviewBackgroundCommand(
-            `/survey-review "${topic ?? ensuredProject?.title ?? "research topic"}"`
+            `/survey-pipeline "${topic ?? ensuredProject?.title ?? "research topic"}"`
           )
       : normalizedKind === "idle_research"
         ? requestedCommandText ?? null
@@ -3111,7 +3111,7 @@ export async function startBackgroundWorkflowRun(params: {
         : normalizedKind === "literature_review"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background literature review started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "survey_review"
-          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background survey review started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current topic"}.`
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background survey pipeline started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current topic"}.`
         : normalizedKind === "idle_research"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Idle research started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current project"}.`
         : isPapernexusBackgroundKind(normalizedKind)
