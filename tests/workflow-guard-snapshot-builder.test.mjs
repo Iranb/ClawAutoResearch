@@ -114,3 +114,65 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.ok(snapshot.backgroundTasks.some((task) => task.includes("Continue literature survey")));
 });
 
+test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-blocker");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.blocking_reason =
+    "Waiting for researcher to satisfy: active track fd-gcd-freq-debiased missing graph-backed innovation evidence";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-stale-blocker",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.deepEqual(snapshot.missingStageSignals, []);
+  assert.equal(snapshot.blockingReason, null);
+});

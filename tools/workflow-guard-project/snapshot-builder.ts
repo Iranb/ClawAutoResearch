@@ -650,6 +650,12 @@ export async function buildWorkflowSnapshotFromProjectState(
           currentStage,
         })
       : [];
+  const blockingReasonRaw = asString(projectState.manifest?.blocking_reason);
+  const blockingReason =
+    missingStageSignals.length === 0 &&
+    /^waiting for .+ to satisfy:/i.test(blockingReasonRaw ?? "")
+      ? null
+      : blockingReasonRaw;
   const unreadMailbox = inboxForRole({
     mailbox: projectState.mailbox,
     role,
@@ -901,7 +907,7 @@ export async function buildWorkflowSnapshotFromProjectState(
     recommendedOwner,
     nextAction: asString(projectState.manifest?.next_action),
     resumeAction: asString(projectState.manifest?.resume_action),
-    blockingReason: asString(projectState.manifest?.blocking_reason),
+    blockingReason,
     allowedWriteScopes: role ? ROLE_POLICIES[role].writeScopeLabels : [],
     allowedContacts: role
       ? Array.from(
