@@ -19,6 +19,12 @@ This is the default follow-up once remote runs exist. In auto mode, the workflow
 
 In reviewed-auto mode, monitor mode begins only after the pre-launch review loop has approved a packet and Coder has created real remote runs. Planner/analyzer/cross-reviewer work belongs to the earlier experiment micro-stages.
 
+## Monitoring Principles
+
+- **Baseline-first interpretation**: compare running curves against the agreed baseline contract before reading too much into a proposed variant.
+- **Soft early intervention**: if a run spends a meaningful stretch clearly below baseline, do not just keep waiting out the whole budget by default.
+- **No universal hard threshold**: use training progress, eval checkpoints, and the baseline trend to judge whether the run is still plausibly recovering or genuinely off-track.
+
 ## Process
 
 ### 1. Check Running Experiments
@@ -80,6 +86,33 @@ In workflow auto mode, prefer short bounded monitor passes over one giant wait:
 
 Let the workflow scheduler re-enter `/monitor-experiment` on the next pass instead of holding one chat turn forever.
 
+### 5.5 Baseline-first watchpoints
+
+On each bounded monitoring pass, ask:
+
+1. Is the run comparable to baseline yet?
+2. If yes, is it tracking near / above / below the baseline trend?
+3. If below, does the pattern look temporary or persistent?
+
+Useful signs that a branch may need intervention:
+
+- repeated eval checkpoints stay materially below baseline
+- loss curve looks unhealthy relative to the baseline run
+- the proposed branch underperforms while the baseline on the same protocol is healthy
+- the run keeps consuming time but produces no evidence that it is closing the baseline gap
+
+If that happens, treat it as a **strategy-review signal**:
+
+- update the ledger / registry with the current comparison note
+- distinguish runtime issues from scientific issues
+- prefer one of:
+  - bounded runtime fix by Coder
+  - a closer-to-baseline repair branch
+  - pausing lower-priority follow-up runs
+  - escalating back to Researcher / Orchestrator for strategy adjustment
+
+The point is not to hard-stop every underperforming run instantly. The point is to avoid silently burning long GPU time on a branch that is staying below baseline with no recovery story.
+
 ### 6. Promote the workflow when runs are done
 
 When all active remote runs are terminal:
@@ -102,6 +135,7 @@ Do not mark the project analysis-ready just because the training process exited.
 When finished, output a status summary:
 - runtime
 - final metrics (extracted from result files)
+- current baseline comparison status
 - whether there were errors or warnings
 - whether the experiment ledger, experiment registry, and `experiment_search` state were updated
 - whether the workflow is now ready to advance from EXPERIMENT to ANALYZE

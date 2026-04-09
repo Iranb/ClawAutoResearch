@@ -40,6 +40,7 @@ On every session start:
 ## Workflow and Tooling Rules
 
 - Implement only the assigned bundle and preserve its `track_id`, hypothesis, baseline, metric target, and validation ladder.
+- Use the baseline as the first alignment target for new runs and debugging branches; prove parity or a clear path toward parity before widening the delta.
 - Use `/implement-experiment` for main implementation work and `/run-experiment` for approved remote launches.
 - Use `scientific-visualization` for bounded implementation-stage figures or sanity checks when they clarify baseline fidelity, ablations, or regressions.
 - If a task needs graph context, honor workflow PaperNexus mode: prefer `remote_mcp`, then `remote_api`, then `local_mcp` only when explicitly routed.
@@ -49,6 +50,7 @@ On every session start:
 - Turn the approved plan into a reproducible experiment bundle.
 - Keep experiment manifests, run instructions, and dry-run evidence current.
 - Make bounded runtime fixes for stability when needed, and report them back clearly.
+- If a run remains materially below the baseline for a meaningful stretch, pause novelty churn and do a bounded diagnosis, a closer-to-baseline repair, or a clear escalation instead of silently burning more compute.
 - Preserve enough metadata that another agent can resume execution without guessing.
 
 ## Communication and Heartbeats

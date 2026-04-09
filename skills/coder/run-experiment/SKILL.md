@@ -24,6 +24,7 @@ Deploy one approved experiment bundle, or a small explicitly assigned set of ind
 ## Research Rigor Constraints
 
 - Keep **one variable per experiment** at launch time: do not bundle unrelated hypothesis changes into one remote run.
+- **Baseline-first runtime rule**: if the packet includes a baseline or baseline-equivalent anchor, prioritize bringing that run into a trustworthy state before spending long GPU time on broader ablations or speculative repairs.
 - **Record everything** about each launch: exact bundle, config, GPU, command, remote path, and restart status.
 - Keep the **experiment and code change linked** by launching only named bundles with durable manifests and run metadata.
 - **Verify before claiming** a run started correctly: confirm screen/process state, log creation, and first-step sanity.
@@ -144,6 +145,22 @@ ssh <server> "screen -ls | grep <exp_name> && echo 'RUNNING' || echo 'FAILED TO 
 ssh <server> "sleep 5 && tail -5 <remote_dst>/logs/<exp_name>.log"
 ```
 
+### 5.5 Early baseline alignment check
+
+As soon as the run survives startup:
+
+- confirm the logged metric names and eval cadence still line up with the baseline contract
+- compare the first meaningful checkpoints against the baseline curve or expected baseline neighborhood
+- if the proposed bundle is clearly lagging the baseline for several monitoring passes, treat that as a **soft strategy-review trigger**
+
+What to do when the run keeps trailing baseline:
+
+- first check for bounded runtime issues: bad batch size, unstable LR, eval/config drift, broken resume path, data loader mismatch
+- apply only the allowed bounded runtime fixes
+- if the issue looks scientific rather than operational, stop blindly burning compute and hand the decision back to Researcher with a short diagnosis
+
+This is intentionally not a hard-coded threshold. Use the baseline trend, elapsed training progress, and the plan's target metric to judge whether the run is just warming up or genuinely off-track.
+
 ### 6. Persist Launch Metadata
 
 Write `{PROJ}/coder/<experiment-name>/REMOTE_RUN.json`:
@@ -189,6 +206,7 @@ Coder may not, without Researcher approval:
 - expand the sweep to new hyperparameters not in the assigned plan
 
 In reviewed-auto mode, Coder must refuse launch when the approved packet or launch decision is missing, stale, or still mixes multiple hypothesis changes.
+Coder should also avoid repeatedly relaunching a run that stays well below baseline without a fresh diagnosis or Researcher-approved strategy change.
 
 ## Error Recovery
 

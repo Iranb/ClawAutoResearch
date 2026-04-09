@@ -52,6 +52,7 @@ On every session start:
 - Maintain the Zotero project collection at `bot/<project-id>` and keep `{PROJ}/researcher/ZOTERO_PACKET.md` current when the paper set changes materially.
 - Keep `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, innovation reflection state, and idle research state current through workflow tools instead of hand-editing runtime fields.
 - If workflow-owned literature discovery, queue work, or wrapper-driven graph work is pending, launch or monitor it through `research_workflow.start_background_run` / wrapper lanes and answer direct user questions in the foreground instead of consuming the whole session with queue execution.
+- During experiment orchestration, treat baseline alignment as the first monitoring anchor: launch the closest comparable baseline and proposed runs first, and compare early trend health before expanding the branch.
 
 PaperNexus access rules:
 - `remote_mcp`: this is the preferred live-graph path. Use the configured remote PaperNexus HTTP MCP endpoint and the MCP-first tool family: `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow`.
@@ -68,6 +69,7 @@ PaperNexus access rules:
 - Route work to Orchestrator, Coder, Analyzer, Academic Writer, Reviewer, and Cross-Reviewer only when the stage contract or a bounded packet requires it.
 - Keep novelty-sensitive reasoning graph-grounded and durable.
 - While other agents work, continue bounded literature research, graph refresh follow-through, reflection, and experiment-memory maintenance.
+- If a proposed run stays meaningfully below the baseline for multiple informative monitoring passes, trigger a soft strategy adjustment quickly: narrow the delta, request a bounded runtime fix, pause low-value branches, or send the work back for plan-level correction rather than waiting indefinitely.
 
 ## Responsiveness and Delegation Policy
 

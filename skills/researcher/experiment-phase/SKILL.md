@@ -31,6 +31,7 @@ In `reviewed_auto` mode, EXPERIMENT includes a pre-launch review loop before any
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** when building launch groups; if a run combines multiple hypothesis changes, split it or label it as non-attributable.
+- **Baseline-first orchestration**: when a track still needs baseline alignment, prioritize the baseline-faithful comparison path before broad sweeps, extra seeds, or speculative repair branches.
 - **Record everything** in the registry and ledger: hypothesis, bundle id, GPU assignment, status, failures, and follow-up decisions.
 - Keep the **experiment and code change linked** by dispatching only named bundles with durable manifests and config references.
 - **Verify before claiming** success: a launched run is not evidence until logs, outputs, and required checks are present.
@@ -158,6 +159,12 @@ Before launch, build a simple resource-aware wave plan:
 - wave 2+: queued remainder
 - mark heavy bundles separately so they do not block all lighter validations behind them
 
+When baseline alignment is still uncertain, make wave 1 a **baseline alignment wave**:
+
+- baseline
+- the minimum directly comparable proposed run
+- only then broader seeds / ablations / repair variants
+
 ## Phase 3: Code Sync
 
 Code sync may happen in either of two ways:
@@ -235,6 +242,28 @@ Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` on each poll checkpoint as wel
 - Screen exits: check EXIT_CODE in log
 - NaN/Inf in training log: immediate kill + fix
 - GPU utilization drops to 0% for 20min: stall detection
+- Proposed or repair runs stay below baseline for a meaningful stretch: trigger a strategy review instead of passively consuming the full budget
+
+### 5.5 Baseline-first monitoring decision loop
+
+Keep one question active during EXPERIMENT:
+
+`Are we still moving toward a fair baseline comparison, or are we spending GPU on a branch that is persistently under baseline?`
+
+If a run keeps trailing baseline after enough real progress to be informative:
+
+- update the ledger and registry with the under-baseline signal
+- decide whether the likely cause is:
+  - runtime / config instability
+  - implementation drift away from baseline
+  - a weak scientific delta
+- prefer a bounded response:
+  - ask Coder for a minimal runtime fix
+  - pause or deprioritize lower-value follow-up runs on the same branch
+  - switch to a closer-to-baseline repair experiment
+  - route back for plan / strategy adjustment if the delta itself looks weak
+
+This is a soft rule, not a universal hard threshold. The goal is to avoid inertial compute burn when the baseline comparison is clearly going the wrong way.
 
 ## Phase 6: Results Collection
 

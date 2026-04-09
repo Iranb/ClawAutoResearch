@@ -22,6 +22,7 @@ Write reproducible, self-contained experiment code from a research plan specific
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment**: each bundle should implement one hypothesis or one clearly named repair, not a grab bag of changes.
+- **Baseline-first alignment**: implement and keep a clean baseline path/config first, then express proposed changes as minimal deltas on top of that baseline so later monitoring can compare apples to apples.
 - **Record everything**: experiment id, changed files, configs, run command, and assumptions must stay visible in manifests and README notes.
 - Keep the **experiment and code change linked** so later analysis can trace a result back to an exact diff and config.
 - **Verify before claiming** readiness: dry-run, shape checks, and minimal validation come before "implementation complete".
@@ -69,6 +70,10 @@ Before writing any code:
 - If PLAN.md or the current task conflicts with the active track contract, stop and ask Researcher / Orchestrator to reconcile it before implementing
 - If code would violate the current `RESEARCH_PROPOSAL.md`, `PROBLEM_DECOMPOSITION.md`, or `CLAIM_TO_EXPERIMENT_MAP.md`, stop and force a plan/story update before implementing
 - If the requested code change would alter the baseline training setup or eval method without an explicit allowed deviation, stop and force a plan update before implementing
+- Build a **baseline-first diff view** before implementation:
+  - what is identical to baseline
+  - what is intentionally changed
+  - what logs/metrics must stay directly comparable during monitoring
 
 ### 2. Determine Dataset Configuration
 
@@ -215,6 +220,13 @@ uv run python train.py --config configs/proposed.yaml --seed 42 \
 Expected: no crash, loss printed, no NaN.
 
 If the dry-run or mini-ablation is hard to interpret from logs alone, generate one bounded diagnostic plot with `/scientific-visualization` and store it in the experiment bundle so Analyzer can later reuse or re-render it.
+
+Before handing the bundle to launch:
+- make sure `configs/baseline.yaml` is the clean comparison anchor
+- make sure `configs/proposed.yaml` differs from baseline only where the track contract expects
+- make sure log keys / eval cadence are comparable enough that Researcher can judge whether the proposed run is tracking above or below baseline without reverse-engineering the code
+
+If later monitoring shows the run stays materially below the baseline trend for a meaningful stretch, your default move is not to pile on more novelty. First prepare a bounded diagnosis around baseline parity, likely runtime issues, and the smallest safe fix.
 
 If dry-run fails:
 - ImportError → `uv pip install <package> --index-url https://pypi.tuna.tsinghua.edu.cn/simple`, then update `requirements.txt`
