@@ -22,7 +22,7 @@ Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-sea
 
 - When literature turns into candidate experiments, preserve **one variable per experiment** by keeping mechanism ideas isolated instead of merging several deltas at once.
 - **Record everything**: queries, canonical paper ids, ingestion decisions, rejected papers, and emerging baseline hypotheses belong in durable project files.
-- **Keep bibliography state durable too**: if local Zotero MCP is available, keep the project collection under `bot/<project-id>/` synchronized with selected, included, excluded, baseline, and writing-shortlist sets.
+- **Keep bibliography state durable too**: if local Zotero MCP is available, keep the configured project Zotero collection synchronized with selected, included, excluded, baseline, and writing-shortlist sets. The plugin-global root defaults to `bot`, so the default project path is `<zoteroProjectRoot>/<project-id>` unless the project overrides it explicitly. If Zotero add-item flows need `apiKey`, use plugin config `zoteroApiKey` or `zoteroApiKeyEnv`, and never print the raw key.
 - Keep the **experiment and code change linked** by noting which papers justify which future experiment deltas or baseline requirements.
 - **Verify before claiming** novelty, contradiction, or support; abstracts and memory alone are not enough.
 - **Never manipulate evaluation** by selecting only flattering baselines or citations from the literature sweep.
@@ -57,7 +57,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 14:** For batch imports, the workflow-owned upload session must also write `active_batches`, `batch_items`, `queued_requests`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
    - **Step 15:** Do not rely on a free-form chat reply as the upload progress signal. `research_workflow.queue_paper_ingestion` plus the later `research_workflow.set_paper_ingestion` updates are the required feedback path for per-paper or per-batch progress
    - **Step 15a:** Read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` when you need one authoritative status line. Prefer that snapshot before improvising from `paper_ingestion`, wrapper logs, or the background-session registry
-   - **Step 16:** If local Zotero MCP is available, sync verified paper identities into `bot/<project-id>/selected` and put baseline-defining papers into `bot/<project-id>/baselines`; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
+   - **Step 16:** If local Zotero MCP is available, sync verified paper identities into the configured project Zotero `selected` collection and put baseline-defining papers into the project `baselines` collection; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -66,7 +66,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
    - If the project needs a durable systematic survey packet, run `/literature-review` now to produce `REVIEW_PROTOCOL.md`, `INCLUDED_PAPERS.json`, `SOTA_MATRIX.md`, and `GAP_SYNTHESIS.md` before final frontier or ideation work
    - Run `/graph-build` for the final graph-readiness and brainstorm bundle refresh
-   - Refresh the Zotero `bot/<project-id>` collections and `writing-shortlist` before handing off to writing-heavy or review-heavy stages
+   - Refresh the configured Zotero project collections and `writing-shortlist` before handing off to writing-heavy or review-heavy stages
    - Do not use `--force`; if graph build fails, hand the exact non-force graph-build command to the user
    - Run `/frontier-mapping` to extract research frontiers
    - Write `{PROJ}/researcher/LITERATURE.md` with full survey

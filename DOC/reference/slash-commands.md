@@ -8,7 +8,7 @@
 ## 2. 主流程命令
 
 - `/project-init`  
-  引导式项目开启入口。用于在 setup 阶段锁定 research program onboarding contract：研究目标、问题陈述、baseline、primary metric、数据集、success criteria，以及 Zotero `bot/<project-id>` 路径。`/workflow-status` 如果显示 setup checklist 缺项，应优先运行它。
+  引导式项目开启入口。用于在 setup 阶段锁定 research program onboarding contract：研究目标、问题陈述、baseline、primary metric、数据集、success criteria，以及 Zotero 项目路径。默认路径来自插件全局配置 `zoteroProjectRoot`（默认 `bot`），所以通常是 `<zoteroProjectRoot>/<project-id>`；如果项目显式设置了 `research_program.zotero_project_path`，则以项目值为准。`/workflow-status` 如果显示 setup checklist 缺项，应优先运行它。
 
 - `/research-pipeline`  
   完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus HTTP MCP 优先控制 live graph；导入/排队仍通过 wrappers。现在它会先检查 guided setup/onboarding contract；如果 contract 还不完整，先补 `/project-init`，再继续图谱与文献流。
@@ -25,10 +25,10 @@
 ## 3. 文献与图谱
 
 - `/research-lit`  
-  主题调研与持续文献跟踪，包含 project-local staging、MCP-backed PaperNexus graph grounding，以及 wrapper-based import / queue tracking；如果配置了本地 Zotero MCP server，则直接使用本地 Zotero 并同步维护 `bot/<project-id>` 文献集合。
+  主题调研与持续文献跟踪，包含 project-local staging、MCP-backed PaperNexus graph grounding，以及 wrapper-based import / queue tracking；如果配置了本地 Zotero MCP server，则直接使用本地 Zotero 并同步维护配置好的项目文献集合，默认是 `<zoteroProjectRoot>/<project-id>`。
 
 - `/literature-review`  
-  当项目需要更严谨的文献综述包时使用，生成 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合接在 `/research-lit` 后面，再进入 `/graph-build` 与 `/frontier-mapping`；完成后应把 included/excluded/baseline 清单同步到 Zotero `bot/<project-id>`。
+  当项目需要更严谨的文献综述包时使用，生成 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合接在 `/research-lit` 后面，再进入 `/graph-build` 与 `/frontier-mapping`；完成后应把 included/excluded/baseline 清单同步到配置好的 Zotero 项目集合。
 
 - `/papers-cool`  
   粗粒度检索论文入口。
@@ -46,10 +46,13 @@
   当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
-  Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，live graph 走远程 HTTP MCP，导入/排队走 queued wrappers；如果本地 Zotero MCP server 已配置，还要同步更新 Zotero `bot/<project-id>/selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
+  Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，live graph 走远程 HTTP MCP，导入/排队走 queued wrappers；如果本地 Zotero MCP server 已配置，还要同步更新配置好的 Zotero 项目集合里的 `selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
+
+- `/zotero-sync`
+  Discord 可见的后台 Researcher 命令。以当前项目的 workflow-owned 状态为 source of truth，对 Zotero 项目集合做一次显式 reconciliation：刷新 `selected` / `baselines` / `writing-shortlist`，把已经不属于项目的论文**只从项目 collection 移除**，但**不删除也不丢进 Zotero 废纸篓**。该命令始终走后台 continuation，不应阻塞前台主会话；若 Zotero MCP 不可用，只需把 `unavailable` / `failed` 状态写回 `ZOTERO_SYNC_PACKET.json` 和 `ZOTERO_PACKET.md`。如果本地 Zotero add-item 流程需要 `apiKey`，可在插件配置中提供 `zoteroApiKey` 或 `zoteroApiKeyEnv`。
 
 - `/zotero-project-library`  
-  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到 `bot/<project-id>` 目录，维护 selected / included / excluded / baselines / writing-shortlist。
+  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到配置好的项目目录，维护 selected / included / excluded / baselines / writing-shortlist。默认项目根来自插件全局配置 `zoteroProjectRoot`，默认值是 `bot`。
 
 - `/papernexus`  
   直接调用 PaperNexus 能力，默认优先走远程 HTTP MCP；导入类任务再走 wrappers。

@@ -47,7 +47,7 @@ import {
 import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
-import { materializeZoteroSyncPacket } from "./workflow-zotero-sync.ts";
+import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
@@ -59,6 +59,20 @@ function readString(value: unknown): string | undefined {
 
 function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
+}
+
+function describeZoteroApiKeySource(params: {
+  zoteroApiKey?: string | null;
+  zoteroApiKeyEnv?: string | null;
+}): { source: "plugin_config" | "env" | "unset"; env: string | null } {
+  if (readString(params.zoteroApiKey)) {
+    return { source: "plugin_config", env: null };
+  }
+  const env = readString(params.zoteroApiKeyEnv) ?? null;
+  if (env) {
+    return { source: "env", env };
+  }
+  return { source: "unset", env: null };
 }
 
 function isGatewaySubagentUnavailableError(error: unknown): boolean {
@@ -2257,13 +2271,13 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
       "Graph-build workflow rule: treat /graph-build as a bounded graph-readiness and brainstorm-refresh pass. The remote PaperNexus import worker performs the real graph mutation; do not turn this continuation into a manual rebuild loop."
     );
     lines.push(
-      "During /graph-build, use the local Zotero MCP server through /zotero-project-library and keep the project's bibliography synchronized under bot/<project-id> (for example bot/paper-lab)."
+      "During /graph-build, use the local Zotero MCP server through /zotero-project-library and keep the project's bibliography synchronized under the configured project Zotero path (default <zoteroProjectRoot>/<project-id>, where zoteroProjectRoot defaults to bot)."
     );
     lines.push(
-      "At minimum, sync the verified canonical paper set into bot/<project-id>/selected, put baseline-defining papers into bot/<project-id>/baselines, and refresh {PROJ}/researcher/ZOTERO_PACKET.md with collection path, counts, and unresolved metadata cleanup tasks."
+      "At minimum, sync the verified canonical paper set into the configured project's selected collection, put baseline-defining papers into the baselines collection, and refresh {PROJ}/researcher/ZOTERO_PACKET.md with collection path, counts, and unresolved metadata cleanup tasks."
     );
     lines.push(
-      "Do not wait indefinitely on Zotero work either; keep graph readiness and brainstorm bundle refresh as the primary bounded pass, then complete the Zotero bot/<project-id> sync before reporting graph-build completion."
+      "Do not wait indefinitely on Zotero work either; keep graph readiness and brainstorm bundle refresh as the primary bounded pass, then complete the bounded project Zotero sync before reporting graph-build completion."
     );
     if (graphBuildRepairContinuation) {
       lines.push(
@@ -2725,26 +2739,53 @@ export async function startBackgroundWorkflowRun(params: {
     params.snapshot.projectRoot ??
     null;
   let backgroundRunExtraSystemPrompt = readString(params.backgroundRun.extraSystemPrompt) ?? null;
-  if (normalizedKind === "zotero_sync" && resolvedProjectRoot && resolvedProjectId) {
+  if (
+    (normalizedKind === "graph_build" || normalizedKind === "zotero_sync") &&
+    resolvedProjectRoot &&
+    resolvedProjectId
+  ) {
     const packet = await materializeZoteroSyncPacket({
       projectRoot: resolvedProjectRoot,
       projectId: resolvedProjectId,
       zoteroProjectRoot: params.workflowPolicy.zoteroProjectRoot,
-      trigger: "manual_command",
+      trigger: normalizedKind === "graph_build" ? "graph_build" : "manual_command",
     });
     const packetPrompt = [
       "Zotero sync packet path: {PROJ}/researcher/ZOTERO_SYNC_PACKET.json",
       `Effective Zotero project path: ${packet.zoteroProjectPath ?? "<configured-root>/<project-id>"}.`,
-      "Reconcile selected, baselines, and writing-shortlist against workflow-owned project state.",
+      normalizedKind === "graph_build"
+        ? "During graph-build, keep selected and baselines synchronized against workflow-owned project state and refresh writing-shortlist only when the project has one."
+        : "Reconcile selected, baselines, and writing-shortlist against workflow-owned project state.",
       "If a paper no longer belongs to the project, remove it only from the project collections and never delete or trash the Zotero item.",
-      "Do not block the foreground session while waiting on Zotero MCP work.",
+      normalizedKind === "graph_build"
+        ? "Do not block graph-build or the foreground session while waiting on Zotero MCP work; record unavailable or failed state durably and keep the pass bounded."
+        : "Do not block the foreground session while waiting on Zotero MCP work.",
     ].join("\n");
+    const zoteroApiKeyAccess = describeZoteroApiKeySource({
+      zoteroApiKey: params.workflowPolicy.zoteroApiKey,
+      zoteroApiKeyEnv: params.workflowPolicy.zoteroApiKeyEnv,
+    });
+    const zoteroApiKeyPrompt =
+      zoteroApiKeyAccess.source === "plugin_config"
+        ? [
+            "Zotero API key source: plugin_config.",
+            "Use the configured Zotero API key when local Zotero MCP or add-item flows ask for apiKey, and never print or persist the raw key.",
+          ].join("\n")
+        : zoteroApiKeyAccess.source === "env"
+          ? [
+              `Zotero API key source: env (${zoteroApiKeyAccess.env ?? "unset"}).`,
+              `Resolve the Zotero API key from env ${zoteroApiKeyAccess.env ?? "unset"} when local Zotero MCP or add-item flows ask for apiKey, and never print or persist the raw key.`,
+            ].join("\n")
+          : [
+              "Zotero API key source: unset.",
+              "If local Zotero MCP or add-item flows require apiKey and none is configured, record unavailable or needs_manual_followup durably instead of blocking the workflow.",
+            ].join("\n");
     backgroundRunExtraSystemPrompt = backgroundRunExtraSystemPrompt
       ? mergeBackgroundWorkflowSystemPrompt(
           backgroundRunExtraSystemPrompt,
-          packetPrompt
+          `${packetPrompt}\n${zoteroApiKeyPrompt}`
         )
-      : packetPrompt;
+      : `${packetPrompt}\n${zoteroApiKeyPrompt}`;
   }
   const queueKey = buildBackgroundRunQueueKey({
     requesterSessionKey: params.agentCtx.sessionKey,

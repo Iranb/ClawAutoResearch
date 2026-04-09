@@ -5,7 +5,7 @@ description: Use when a project needs durable bibliography management in the loc
 
 # Zotero Project Library
 
-Use the configured local Zotero MCP server directly to keep a restart-safe project bibliography under Zotero's `bot/<project-id>` collection tree.
+Use the configured local Zotero MCP server directly to keep a restart-safe project bibliography under the configured Zotero project path (default `<zoteroProjectRoot>/<project-id>`, where `zoteroProjectRoot` defaults to `bot`).
 
 ## Core Rules
 
@@ -49,10 +49,17 @@ Maintain:
 
 Record:
 
-- Zotero collection path: `bot/<project-id>`
+- Zotero collection path: the effective configured project path
 - last sync time
 - selected / included / excluded / baseline counts
 - any missing identifiers or manual cleanup tasks
+
+## API Key Rule
+
+- If local Zotero MCP or add-item flows require `apiKey`, use the plugin-configured Zotero key source.
+- Prefer `zoteroApiKeyEnv` when available; `zoteroApiKey` is allowed for trusted local setups.
+- Never print or persist the raw API key in chat, prompts, logs, or project files.
+- If Zotero requires `apiKey` and none is configured, mark the sync as `unavailable` or `needs_manual_followup` instead of blocking the workflow.
 
 ## Sync Rules
 

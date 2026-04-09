@@ -15,7 +15,7 @@ allowed-tools:
 
 Validate that the current project's selected literature is already reflected in the shared global PaperNexus graph, then refresh the brainstorm package that later idea generation depends on. Queued import workers should do the real graph mutation automatically; this skill is the bounded readiness and brainstorm-refresh pass that keeps workflow state honest.
 
-If the local Zotero MCP server is configured, this same pass must also synchronize the verified project bibliography into Zotero's `bot/<project-id>/` tree and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`. `/graph-build` is the point where graph readiness, brainstorm grounding, and bibliography organization should converge before frontier mapping.
+If the local Zotero MCP server is configured, this same pass must also synchronize the verified project bibliography into the configured Zotero project tree and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`. The plugin-global Zotero root defaults to `bot`, so the default project path is `<zoteroProjectRoot>/<project-id>` unless the project overrides it explicitly. If Zotero add-item flows need `apiKey`, use plugin config `zoteroApiKey` or `zoteroApiKeyEnv`, and never print the raw key. `/graph-build` is the point where graph readiness, brainstorm grounding, and bibliography organization should converge before frontier mapping.
 
 > **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
@@ -158,7 +158,7 @@ This should:
 - if uploads are still missing, create or repair one queued upload request and let the workflow-owned continuation run the actual wrappers; do not turn Researcher into the direct uploader
 - after each completed paper import or each batch status pass, run a short status pass and report progress before the next workflow tick
 - once the required papers are present, move the workflow to `graph_build/brainstorm_refresh`, run one bounded core-provider refresh using `research_lookup` / `research_briefing` (or their thin wrappers `pn_graph_query.py` and `pn_research_chains.py`) or a future compatible provider, and persist the resulting durable bundle through `research_workflow.run_brainstorm_cycle`
-- if the local Zotero MCP server is available, sync the verified canonical set into `bot/<project-id>/selected`, put baseline-defining papers into `bot/<project-id>/baselines`, keep `bot/<project-id>/writing-shortlist` untouched unless the project is already entering writing-heavy work, and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
+- if the local Zotero MCP server is available, sync the verified canonical set into the configured project `selected` collection, put baseline-defining papers into the project `baselines` collection, keep `writing-shortlist` untouched unless the project is already entering writing-heavy work, and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 
 Hard rule:
 
@@ -185,7 +185,7 @@ Feedback rule:
 - if graph build delegated wrapper work into a background subagent, require progress to come back through `research_workflow.set_paper_ingestion` and the workflow status broadcast path
 - do not wait for a free-form subagent reply before updating channel-visible status
 - if graph readiness is already satisfied, spend the remaining `/graph-build` budget on refreshing the brainstorm bundle rather than re-running a fake manual reconciliation loop
-- if graph readiness is already satisfied, spend the remaining `/graph-build` budget on refreshing the brainstorm bundle and Zotero `bot/<project-id>` collections rather than re-running a fake manual reconciliation loop
+- if graph readiness is already satisfied, spend the remaining `/graph-build` budget on refreshing the brainstorm bundle and the configured Zotero project collections rather than re-running a fake manual reconciliation loop
 
 ## Output Files
 

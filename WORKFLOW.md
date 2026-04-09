@@ -110,7 +110,7 @@ Citation reliability must become durable workflow state instead of a last-minute
 - record it in `{PROJ}/PROJECT_MANIFEST.json.citation_integrity`
 - keep `citation_integrity.bibliography_path = academic_writer/paper/refs.bib`
 - keep `citation_integrity.verification_report_path = reviewer/CITATION_VERIFICATION.md`
-- when the local Zotero MCP server is configured, use that local Zotero server directly and treat Zotero `bot/<project-id>` as the bibliography queue and writing shortlist, while still verifying final metadata against DBLP/CrossRef/DataCite/Semantic Scholar/arXiv before accepting citations
+- when the local Zotero MCP server is configured, use that local Zotero server directly and treat the configured Zotero project path (default `<zoteroProjectRoot>/<project-id>`, where `zoteroProjectRoot` defaults to `bot`) as the bibliography queue and writing shortlist, while still verifying final metadata against DBLP/CrossRef/DataCite/Semantic Scholar/arXiv before accepting citations
 - require writer-side `/citation-preflight` before final citation review
 - require reviewer-side citation verification before SUBMIT
 - block submission when citation verification is not `verified`
@@ -213,7 +213,7 @@ Before graph build, Researcher must also maintain a project-local paper selectio
 - if Hugging Face does not provide valid markdown for an arXiv paper, try `/arxiv2md-api`, then `/arxiv2md`
 - if both markdown sources are unavailable, fall back to `/papers-cool` PDF download
 - record every selected canonical paper in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
-- if the local Zotero MCP server is configured, use that local Zotero server directly and keep a per-project bibliography tree under `bot/<project-id>/` synchronized with the selected / included / excluded / baseline paper sets; Zotero is the organizer, while PaperNexus remains the full-text and graph source of truth
+- if the local Zotero MCP server is configured, use that local Zotero server directly and keep a per-project bibliography tree under the configured Zotero project path synchronized with the selected / included / excluded / baseline paper sets; Zotero is the organizer, while PaperNexus remains the full-text and graph source of truth
 - if new PDFs or Markdown arrive through the PaperNexus UI or Web/API, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) and durable `research_workflow.set_paper_ingestion` updates; do not manually copy those ad hoc uploads into local shared storage during automation
 - do not hand-write `/api/*` REST calls in workflow execution; live graph work should go through remote HTTP MCP, and compatibility mode should still go through the authenticated wrappers instead of ad hoc curl/fetch
 - if `papernexusAccessMode = remote_mcp`, use the configured remote HTTP MCP endpoint (`streamable-http`) plus the shared bearer token for graph reads and writes; prefer `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow`
@@ -231,7 +231,7 @@ Paper source layout and refresh rules:
 - refresh graph readiness immediately if a newly ingested paper changes the novelty baseline or closest prior work
 - otherwise refresh graph readiness when 3+ genuinely new canonical papers, or 2+ new overlapping recent venue papers, accumulate since the last graph sync
 - for ideation, prefer the brainstorm-quality node layer (`brainstormEligible`, `brainstormScore`, `brainstormTier`) over the raw full graph when choosing anchors for `ideas`, `brainstorm`, and typed brief / chain endpoints
-- keep a durable Zotero sync note under `{PROJ}/researcher/ZOTERO_PACKET.md`, including the `bot/<project-id>` path, shortlist counts, baseline collection status, and unresolved metadata cleanup work
+- keep a durable Zotero sync note under `{PROJ}/researcher/ZOTERO_PACKET.md`, including the effective project Zotero path, shortlist counts, baseline collection status, unresolved metadata cleanup work, and whether the last sync was `synced`, `unavailable`, `failed`, or `needs_manual_followup`
 - agents may add or update understanding in the shared graph, but must not delete shared corpus data or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks
 
 ### Experiment-Informed Innovation Reflection Contract
@@ -492,7 +492,7 @@ Actions:
       - `research_program.primary_metric`
       - `research_program.datasets`
       - `research_program.success_criteria`
-      - `research_program.zotero_project_path = bot/<project-id>`
+      - `research_program.zotero_project_path = <zoteroProjectRoot>/<project-id>` (plugin-global root defaults to `bot` unless the project overrides it explicitly)
   6. Load {PROJ}/TRACK_REGISTRY.json
   7. Load {PROJ}/CLAIM_POLICY.md
   8. Load {PROJ}/memory/ideation-memory.md, {PROJ}/memory/experiment-memory.md, and {PROJ}/researcher/EXPERIMENT_LEDGER.json (project-isolated + restart-safe)
@@ -517,14 +517,14 @@ Actions:
 - `{PROJ}/graph/PAPERNEXUS_STATUS.json` — shared PaperNexus graph status for this project's selected papers
 - `{PROJ}/graph/GRAPH_BUILD_REPORT.md` — graph-readiness plus brainstorm-refresh summary
 - `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` — preliminary brainstorm scaffold built during literature work
-- `{PROJ}/researcher/ZOTERO_PACKET.md` — synced Zotero `bot/<project-id>` bibliography status and shortlist summary
+- `{PROJ}/researcher/ZOTERO_PACKET.md` — synced Zotero project bibliography status and shortlist summary
 
 ```
 Procedure:
   1. Run /research-lit first if the project has not yet recorded key papers in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json`
   2. Use `/papers-cool` for broad discovery and venue sweep; if stable, also query `/pasa-paper-search` and merge by canonical identity
   3. As soon as a key paper's identity is confirmed, call `/hugging-face-paper-pages` to fetch full markdown into `{PROJ}/researcher/paper-staging/`; if that fails and the paper is on arXiv, try `/arxiv2md-api`, then `/arxiv2md`; only if all markdown sources are unavailable, save PDF via `/papers-cool`
-  3a. Keep Zotero synchronized through `/zotero-project-library`: selected papers belong in `bot/<project-id>/selected`, and baseline-defining papers also belong in `bot/<project-id>/baselines`
+  3a. Keep Zotero synchronized through `/zotero-project-library`: selected papers belong in `<zoteroProjectPath>/selected`, and baseline-defining papers also belong in `<zoteroProjectPath>/baselines`
   3b. If material enters through the PaperNexus dashboard or Web/API upload path, prefer the queued wrapper flow (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`) instead of copying those files by hand
   4. Apply the graph refresh trigger rule:
      - refresh now if 1 new paper changes novelty / closest prior work
@@ -532,7 +532,7 @@ Procedure:
      - refresh now if 2+ overlapping recent venue papers accumulated
      - otherwise defer until the next major checkpoint
   5. Check remote graph-readiness status before trusting an existing graph
-  6. Run /graph-build as a bounded status pass: verify automatic graph catch-up, refresh graph readiness metadata, update the brainstorm bundle, and synchronize Zotero `bot/<project-id>/selected` plus `baselines`; do not create a project-scoped corpus or manually rebuild the shared graph
+  6. Run /graph-build as a bounded status pass: verify automatic graph catch-up, refresh graph readiness metadata, update the brainstorm bundle, and synchronize Zotero `<zoteroProjectPath>/selected` plus `baselines`; do not create a project-scoped corpus or manually rebuild the shared graph
   7. If required papers are still missing, queue or request wrapper-driven import / catch-up instead of rebuilding a project-local corpus
   8. During literature work itself, maintain a preliminary brainstorm scaffold under {PROJ}/researcher/RESEARCH_BRAINSTORM.md; do not wait for IDEA to start the first serious brainstorm
   9. Persist typed brainstorm artifacts through `research_workflow.run_brainstorm_cycle` once graph readiness is sufficient
@@ -1009,7 +1009,7 @@ Procedure:
      → saved to {PROJ}/cross-reviewer/outline/{date}.md
   8. Writer runs /paper-write section by section, starts from the generated THEORY_APPENDIX_PLAN.md + appendix_theory.tex, keeps theorem / lemma statements concise in the body, and pushes detailed derivations to the appendix path from `writing_contract`
   9. For each section, Writer performs a reverse-outline pass and paragraph transition audit before treating the section as stable
-  10. Writer uses `/citation-management` to pull the paper queue from Zotero `bot/<project-id>/writing-shortlist`, then runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
+  10. Writer uses `/citation-management` to pull the paper queue from Zotero `<zoteroProjectPath>/writing-shortlist`, then runs /citation-preflight to verify refs.bib against real metadata sources and remove or downgrade suspicious references before reviewer-side citation verification
   11. Final paper section order must follow `writing_contract.section_order` / `TEMPLATE_MAPPING.md` when a user template is configured
   12. Cross-Reviewer checks each section (Prose Mode)
   13. Sync `paper_story_state` in PROJECT_MANIFEST.json through workflow tools before draft completion; use `materialize_paper_story_state` for scaffold and `set_paper_story_state` only for bounded patches

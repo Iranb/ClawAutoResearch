@@ -75,6 +75,31 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     );
   }
 
+  const slashCommands = await fs.readFile(
+    path.join(repoRoot, "DOC", "reference", "slash-commands.md"),
+    "utf8"
+  );
+  assert.match(slashCommands, /\/zotero-sync/i);
+  assert.match(slashCommands, /zoteroProjectRoot|configured.*project.*path|global.*root/i);
+  assert.match(
+    slashCommands,
+    /remove.*project collection|项目 collection 移除|不删除|不丢进|do not delete|do not trash/i
+  );
+
+  const configDoc = await fs.readFile(
+    path.join(repoRoot, "DOC", "reference", "configuration.md"),
+    "utf8"
+  );
+  assert.match(configDoc, /zoteroApiKey/i);
+  assert.match(configDoc, /zoteroApiKeyEnv/i);
+
+  const zoteroSkill = await fs.readFile(
+    path.join(repoRoot, "skills", "researcher", "zotero-project-library", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(zoteroSkill, /apiKey|API key/i);
+  assert.match(zoteroSkill, /never print|never persist/i);
+
   const writerDocs = [
     path.join(repoRoot, "agents", "academic_writer", "AGENTS.md"),
     path.join(repoRoot, "skills", "academic_writer", "paper-plan", "SKILL.md"),

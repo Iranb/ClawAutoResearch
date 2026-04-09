@@ -11,7 +11,7 @@
   Researcher 的主流程入口，串起 setup 到实验前后的主要研究循环，并协调 PaperNexus MCP-first live graph control。
 
 - `graph-build`  
-  基于论文源和 PaperNexus MCP-first graph control 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle、graph readiness，以及 Zotero `bot/<project-id>` 项目文献集合；导入与排队仍使用 wrappers。
+  基于论文源和 PaperNexus MCP-first graph control 检查自动图谱 catch-up 状态，并刷新 brainstorm bundle、graph readiness，以及配置好的 Zotero 项目文献集合；导入与排队仍使用 wrappers。默认项目根来自插件全局配置 `zoteroProjectRoot`，默认值是 `bot`。
 
 - `frontier-mapping`  
   生成 graph-grounded frontier report、子图和方向包，默认走 PaperNexus HTTP MCP。
@@ -71,7 +71,7 @@
   结构化文献综述包，负责 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合放在 `research-lit` 之后、`frontier-mapping` 和 `idea-phase` 之前。
 
 - `zotero-project-library`  
-  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献组织到 Zotero `bot/<project-id>` 目录下，维护 selected / included / excluded / baselines / writing-shortlist 这些集合，并生成项目侧 `ZOTERO_PACKET.md`。
+  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献组织到配置好的 Zotero 项目目录下，维护 selected / included / excluded / baselines / writing-shortlist 这些集合，并生成项目侧 `ZOTERO_PACKET.md`。如果添加条目需要 `apiKey`，可通过插件配置里的 `zoteroApiKey` 或 `zoteroApiKeyEnv` 提供。
 
 - `scientific-brainstorming`  
   在 graph-grounded brainstorm bundle 已经准备好的前提下，做有边界的科研发散、假设反转和跨领域联想；它增强 `idea-phase`，但不替代 PaperNexus 的 graph grounding。
@@ -157,7 +157,7 @@
   论文计划、章节规划、模版映射，并通过 workflow-owned `materialize_paper_story_state` 脚手架生成 durable story contract。
 
 - `citation-management`  
-  基于 Zotero `bot/<project-id>` 的 writing-shortlist 和外部 metadata source-of-truth，清洗引用候选并为 `refs.bib` 做准备。
+  基于 Zotero 项目 writing-shortlist 和外部 metadata source-of-truth，清洗引用候选并为 `refs.bib` 做准备。
 
 - `venue-templates`  
   面向目标 venue 的模板、页数预算和章节约束，帮助 Writer 在 `paper-plan` 和 `paper-write` 里保持结构一致。

@@ -63,6 +63,12 @@ test("resolveEffectiveZoteroProjectPath falls back to the configured global root
   );
 });
 
+test("workflow-zotero-sync extensionless shim re-exports the helper APIs", async () => {
+  const mod = await import("../tools/workflow-zotero-sync");
+  assert.equal(typeof mod.materializeZoteroSyncPacket, "function");
+  assert.equal(typeof mod.resolveEffectiveZoteroProjectPath, "function");
+});
+
 test("materializeZoteroSyncPacket writes selected baselines and writing-shortlist targets", async (t) => {
   const projectRoot = await makeProjectRoot();
 

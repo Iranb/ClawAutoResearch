@@ -26,7 +26,7 @@ import {
   drainQueuedBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
-} from "./workflow-fast-paths.ts";
+} from "./workflow-fast-paths";
 import {
   readGateReviewStore,
 } from "./workflow-auto-gate.js";
@@ -69,7 +69,7 @@ import {
   compactStatusText,
   joinStatusList,
 } from "./workflow-commands/formatters.js";
-import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state.ts";
+import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state";
 
 // Re-export public APIs from submodules
 export {

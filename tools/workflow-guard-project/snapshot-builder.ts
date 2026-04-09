@@ -733,6 +733,13 @@ export async function buildWorkflowSnapshotFromProjectState(
   const researchProgram = normalizeResearchProgramState(
     asRecord(projectState.manifest?.research_program)
   );
+  const zoteroApiKey = asString(policy?.zoteroApiKey);
+  const zoteroApiKeyEnv = asString(policy?.zoteroApiKeyEnv);
+  const zoteroApiKeySource = zoteroApiKey
+    ? "plugin_config"
+    : zoteroApiKeyEnv
+      ? "env"
+      : null;
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1078,6 +1085,9 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    zoteroApiKeyEnv: zoteroApiKeyEnv ?? null,
+    zoteroApiKeySource,
+    zoteroApiKeyConfigured: Boolean(zoteroApiKey || zoteroApiKeyEnv),
     orchestrationStatus: orchestrationState.status,
     orchestrationBlockingCategory: orchestrationState.blockingCategory,
     orchestrationNextTransitionCandidate: orchestrationState.nextTransitionCandidate,

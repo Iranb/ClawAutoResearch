@@ -452,6 +452,8 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
   zoteroProjectRoot?: string;
+  zoteroApiKey?: string;
+  zoteroApiKeyEnv?: string;
   papernexusApiBaseUrl?: string;
   papernexusSharedCorpus?: string;
   papernexusMcpUrl?: string;
@@ -1522,6 +1524,9 @@ export type WorkflowSnapshot = {
   researchProgramDatasetCount: number | null;
   researchProgramSuccessCriteriaCount: number | null;
   researchProgramZoteroProjectPath: string | null;
+  zoteroApiKeyEnv: string | null;
+  zoteroApiKeySource: string | null;
+  zoteroApiKeyConfigured: boolean;
   orchestrationStatus: string | null;
   orchestrationBlockingCategory: string | null;
   orchestrationNextTransitionCandidate: string | null;
@@ -1773,6 +1778,8 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
   zoteroProjectRoot: "bot",
+  zoteroApiKey: "",
+  zoteroApiKeyEnv: "",
   papernexusApiBaseUrl: "",
   papernexusSharedCorpus: "",
   papernexusMcpUrl: "",
@@ -2042,7 +2049,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Lock the onboarding contract before doing fresh work.",
     command:
-      "Run /project-init to lock the research goal, baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path; then run /resume-pipeline to reconcile PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, idle_research, and the experiment ledger.",
+      "Run /project-init to lock the research goal, baseline, primary metric, datasets, success criteria, and configured Zotero project path; then run /resume-pipeline to reconcile PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, idle_research, and the experiment ledger.",
   },
   graph_build: {
     owner: "researcher",
@@ -2185,6 +2192,12 @@ function normalizePolicy(
     zoteroProjectRoot:
       asString((config as Record<string, unknown> | null)?.zoteroProjectRoot) ??
       DEFAULT_POLICY.zoteroProjectRoot,
+    zoteroApiKey:
+      asString((config as Record<string, unknown> | null)?.zoteroApiKey) ??
+      DEFAULT_POLICY.zoteroApiKey,
+    zoteroApiKeyEnv:
+      asString((config as Record<string, unknown> | null)?.zoteroApiKeyEnv) ??
+      DEFAULT_POLICY.zoteroApiKeyEnv,
     papernexusApiBaseUrl:
       asString(config?.papernexusApiBaseUrl) ??
       DEFAULT_POLICY.papernexusApiBaseUrl,
@@ -3462,7 +3475,8 @@ function getResearchProgramOnboardingGaps(params: {
   if (!state.zoteroProjectPath) {
     gaps.push(
       `PROJECT_MANIFEST.json.research_program.zotero_project_path (recommended: ${
-        defaultResearchProgramZoteroProjectPath(params.projectId) ?? "bot/<project-id>"
+        defaultResearchProgramZoteroProjectPath(params.projectId) ??
+        "<zoteroProjectRoot>/<project-id>"
       })`
     );
   }
