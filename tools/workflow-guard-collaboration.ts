@@ -406,6 +406,7 @@ export function buildNonOwnerRoutingAdvice(
     `Owner gate: you are not the stage owner. ${snapshot.recommendedOwner} must lead substantive ${snapshot.currentStage ?? "current-stage"} work.`,
     `Non-owner rule: if the user asks you to continue this stage, do not perform the stage work yourself. Give a brief status update, then route through the workflow runtime/orchestrator path first; use ${snapshot.recommendedOwner} handoff only as a compatibility fallback when runtime context is unavailable.`,
     runtimePathHint,
+    `Stale handoff rule: if chat text or a previous agent says the stage was handed to you, but Workflow Guard still lists ${snapshot.recommendedOwner} as the owner, treat that handoff as pending/stale. Do not claim a stage transition, do not start owner-only work, and do not present yourself as the active owner yet.`,
     "Non-owner response rule: you may summarize completed work, report current status, or handle bounded background tasks explicitly listed below, but you must not claim that you are now executing the owner-only phase.",
   ];
 }

@@ -149,6 +149,9 @@ export function buildFocusedPromptAssemblyImpl(
     layer2Lines.push(
       `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
     );
+    layer2Lines.push(
+      "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged."
+    );
   }
   if (snapshot.channelProjectBindingWorkflowSessionKey) {
     layer2Lines.push(
@@ -205,6 +208,9 @@ export function buildFocusedPromptAssemblyImpl(
   }
   layer2Lines.push(
     "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
+  );
+  layer2Lines.push(
+    "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner."
   );
   layer2Lines.push(
     "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
@@ -449,6 +455,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     lines.push(
       `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
     );
+    lines.push(
+      "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged."
+    );
   }
   if (snapshot.channelProjectBindingWorkflowSessionKey) {
     lines.push(
@@ -503,6 +512,9 @@ export function formatWorkflowSnapshotForPromptImpl(
   }
   lines.push(
     "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
+  );
+  lines.push(
+    "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner."
   );
   lines.push(
     "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
