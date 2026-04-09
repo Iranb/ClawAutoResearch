@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   assembleWritePackage,
   acknowledgeWorkflowMailboxMessage,
@@ -314,7 +316,22 @@ async function resolveWorkflowToolState(params: {
     });
   }
 
+  const workspaceProjectRoot = await (async () => {
+    const workspaceDir = readString(params.agentCtx.workspaceDir);
+    if (!workspaceDir) {
+      return null;
+    }
+    const candidate = path.resolve(workspaceDir);
+    try {
+      await fs.stat(path.join(candidate, "PROJECT_MANIFEST.json"));
+      return candidate;
+    } catch {
+      return null;
+    }
+  })();
+
   const projectRoot =
+    workspaceProjectRoot ??
     snapshot.projectRoot ??
     getProjectRootForWorkflow({
       policy: workflowPolicy,
