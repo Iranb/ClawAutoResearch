@@ -99,7 +99,10 @@ import {
   resolveProjectArtifactPath,
   resolveTrackArtifactPath,
 } from "./workflow-guard-core/paths";
-import { trackHasGraphBackedInnovationEvidence as trackHasGraphBackedInnovationEvidenceFromHelper } from "./workflow-guard-track-evidence.js";
+import {
+  loadTrackInnovationEvidence,
+  trackHasGraphBackedInnovationEvidence as trackHasGraphBackedInnovationEvidenceFromHelper,
+} from "./workflow-guard-track-evidence.js";
 import {
   normalizeResearchProgramState,
   normalizeResearchProgramTrack,
@@ -5479,6 +5482,7 @@ async function getMissingStageSignals(params: {
           getActiveTracks,
           asString,
           trackHasGraphBackedInnovationEvidence,
+          loadTrackInnovationEvidence,
           getBrainstormCycleMissingSignals,
           normalizeResearchProgramState,
           getResearchProgramValidationErrors,

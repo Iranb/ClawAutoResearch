@@ -26,9 +26,13 @@ import {
 } from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
-import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
+import {
+  isNonEmptyDirectory,
+  pathExists,
+  readJsonIfExists,
+} from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
-import { normalizeTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
+import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -219,17 +223,40 @@ function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): s
     .filter((entry): entry is string => Boolean(entry));
 }
 
-function activeTrackNeedsIdeationScaffold(track: Record<string, unknown>): boolean {
-  if (!normalizeTrackInnovationEvidence(track).hasGraphBackedInnovationEvidence) {
+async function activeTrackNeedsIdeationScaffold(params: {
+  projectRoot: string;
+  track: Record<string, unknown>;
+}): Promise<boolean> {
+  const trackEvidence = await loadTrackInnovationEvidence({
+    projectRoot: params.projectRoot,
+    track: params.track,
+  });
+  if (!trackEvidence.hasGraphBackedInnovationEvidence) {
     return true;
   }
+  const track = params.track;
+  const reasoningPacketDir =
+    typeof track.reasoning_packet_dir === "string" ? track.reasoning_packet_dir : null;
+  const workingMemoryPath =
+    typeof track.working_memory_path === "string" ? track.working_memory_path : null;
+  const synthesisPacketPath =
+    typeof track.synthesis_packet_path === "string" ? track.synthesis_packet_path : null;
   return !(
-    typeof track.reasoning_packet_dir === "string" &&
-    track.reasoning_packet_dir.trim().length > 0 &&
-    typeof track.working_memory_path === "string" &&
-    track.working_memory_path.trim().length > 0 &&
-    typeof track.synthesis_packet_path === "string" &&
-    track.synthesis_packet_path.trim().length > 0
+    reasoningPacketDir &&
+    reasoningPacketDir.trim().length > 0 &&
+    workingMemoryPath &&
+    workingMemoryPath.trim().length > 0 &&
+    synthesisPacketPath &&
+    synthesisPacketPath.trim().length > 0 &&
+    (await isNonEmptyDirectory(
+      resolveProjectArtifactPath(params.projectRoot, reasoningPacketDir) ?? ""
+    )) &&
+    (await pathExists(
+      resolveProjectArtifactPath(params.projectRoot, workingMemoryPath) ?? ""
+    )) &&
+    (await pathExists(
+      resolveProjectArtifactPath(params.projectRoot, synthesisPacketPath) ?? ""
+    ))
   );
 }
 
@@ -269,15 +296,22 @@ async function ideationTrackRegistryNeedsRefresh(params: {
     return true;
   }
   const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
-  return tracks.some((entry) => {
+  for (const entry of tracks) {
     const track = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
     if (!track) {
-      return false;
+      continue;
     }
-    return (
-      normalizeStageValue(track.status) === "active" && activeTrackNeedsIdeationScaffold(track)
-    );
-  });
+    if (normalizeStageValue(track.status) !== "active") {
+      continue;
+    }
+    if (await activeTrackNeedsIdeationScaffold({
+      projectRoot: params.projectRoot,
+      track,
+    })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function shouldMaterializeIdeationContract(params: {

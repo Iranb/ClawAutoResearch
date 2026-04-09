@@ -33,6 +33,10 @@ export interface IdeationStageDeps {
   getActiveTracks: (trackRegistry: TrackRegistryLike | null) => WorkflowTrackLike[];
   asString: (value: unknown) => string | null;
   trackHasGraphBackedInnovationEvidence: (track: WorkflowTrackLike) => boolean;
+  loadTrackInnovationEvidence?: (params: {
+    projectRoot: string;
+    track: WorkflowTrackLike | null | undefined;
+  }) => Promise<{ hasGraphBackedInnovationEvidence: boolean }>;
   getBrainstormCycleMissingSignals: (params: {
     projectRoot: string;
     manifest: ManifestLike | null;
@@ -167,7 +171,16 @@ export async function collectIdeaStageMissingSignals(
     const reasoningPacketDir = deps.asString(track.reasoning_packet_dir);
     const workingMemoryPath = deps.asString(track.working_memory_path);
     const synthesisPacketPath = deps.asString(track.synthesis_packet_path);
-    if (!deps.trackHasGraphBackedInnovationEvidence(track)) {
+    const trackEvidence = deps.loadTrackInnovationEvidence
+      ? await deps.loadTrackInnovationEvidence({
+          projectRoot: ctx.projectRoot,
+          track,
+        })
+      : null;
+    const hasGraphBackedInnovationEvidence =
+      trackEvidence?.hasGraphBackedInnovationEvidence ??
+      deps.trackHasGraphBackedInnovationEvidence(track);
+    if (!hasGraphBackedInnovationEvidence) {
       missing.push(`active track ${trackId} missing graph-backed innovation evidence`);
     }
     if (!reasoningPacketDir) {
