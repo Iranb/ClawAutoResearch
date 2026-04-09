@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  deriveAutoZoteroSyncCandidate,
   materializeZoteroSyncPacket,
+  readZoteroSyncStateSummary,
   resolveEffectiveZoteroProjectPath,
 } from "../tools/workflow-zotero-sync.ts";
 
@@ -20,6 +22,7 @@ async function makeProjectRoot() {
   );
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "paper-lab",
+    graph_last_built_at: "2026-04-09T10:00:00.000Z",
     research_program: {
       baseline_reference: "Baseline Paper",
     },
@@ -130,4 +133,99 @@ test("materializeZoteroSyncPacket records collection-only removal policy without
   assert.equal(packet.removalPolicy, "remove_from_project_collections_only");
   assert.equal(packet.deleteMissingItems, false);
   assert.equal(packet.trashMissingItems, false);
+});
+
+test("materializeZoteroSyncPacket persists trigger reason and collection fingerprint metadata", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    summary: {
+      activeExperimentIds: ["exp-1"],
+    },
+  });
+
+  const packet = await materializeZoteroSyncPacket({
+    projectRoot,
+    projectId: "paper-lab",
+    zoteroProjectRoot: "Bot",
+    trigger: "auto_experiment_launch",
+    triggerReason: "Experiment activity started for exp-1.",
+  });
+
+  assert.equal(packet.trigger, "auto_experiment_launch");
+  assert.equal(packet.triggerReason, "Experiment activity started for exp-1.");
+  assert.ok(packet.collectionFingerprint);
+  assert.equal(packet.graphLastBuiltAtSeen, "2026-04-09T10:00:00.000Z");
+  assert.deepEqual(packet.activeExperimentIdsSeen, ["exp-1"]);
+  assert.ok(packet.activeExperimentFingerprintSeen);
+
+  const summary = await readZoteroSyncStateSummary({
+    projectRoot,
+    projectId: "paper-lab",
+    zoteroProjectRoot: "Bot",
+  });
+  assert.equal(summary.status, "pending");
+  assert.equal(summary.trigger, "auto_experiment_launch");
+  assert.equal(summary.triggerReason, "Experiment activity started for exp-1.");
+  assert.equal(summary.collectionFingerprint, packet.collectionFingerprint);
+});
+
+test("deriveAutoZoteroSyncCandidate recommends a graph-refresh sync when the graph changed since the last packet", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const candidate = await deriveAutoZoteroSyncCandidate({
+    projectRoot,
+    projectId: "paper-lab",
+    zoteroProjectRoot: "Bot",
+  });
+
+  assert.equal(candidate.shouldLaunch, true);
+  assert.equal(candidate.trigger, "auto_graph_refresh");
+  assert.match(candidate.triggerReason ?? "", /Graph refresh observed/i);
+  assert.ok(candidate.dedupeKey);
+});
+
+test("deriveAutoZoteroSyncCandidate recommends experiment-start sync when active experiments changed", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeZoteroSyncPacket({
+    projectRoot,
+    projectId: "paper-lab",
+    zoteroProjectRoot: "Bot",
+    trigger: "graph_build",
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "paper-lab",
+    graph_last_built_at: "2026-04-09T10:00:00.000Z",
+    research_program: {
+      baseline_reference: "Baseline Paper",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    summary: {
+      activeExperimentIds: ["exp-2", "exp-3"],
+    },
+  });
+
+  const candidate = await deriveAutoZoteroSyncCandidate({
+    projectRoot,
+    projectId: "paper-lab",
+    zoteroProjectRoot: "Bot",
+  });
+
+  assert.equal(candidate.shouldLaunch, true);
+  assert.equal(candidate.trigger, "auto_experiment_launch");
+  assert.match(candidate.triggerReason ?? "", /exp-2, exp-3/);
 });

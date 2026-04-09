@@ -40,6 +40,10 @@ import {
   summarizePapernexusProgress,
 } from "../papernexus-progress";
 import {
+  deriveAutoZoteroSyncCandidate,
+  readZoteroSyncStateSummary,
+} from "../workflow-zotero-sync";
+import {
   buildWorkflowRuntimeSessionBinding,
 } from "../workflow-subagent-sessions";
 import {
@@ -908,6 +912,47 @@ export async function buildWorkflowSnapshotFromProjectState(
     state: researchProgram,
     projectId: projectState.projectId,
   });
+  const zoteroSyncState = projectState.projectRoot
+    ? await readZoteroSyncStateSummary({
+        projectRoot: projectState.projectRoot,
+        projectId: projectState.projectId,
+        zoteroProjectRoot: policy.zoteroProjectRoot,
+      })
+    : {
+        projectId: projectState.projectId,
+        zoteroProjectPath: null,
+        status: null,
+        trigger: null,
+        triggerReason: null,
+        lastRequestedAt: null,
+        collectionFingerprint: null,
+        graphLastBuiltAtSeen: null,
+        activeExperimentIdsSeen: [],
+        activeExperimentFingerprintSeen: null,
+        packetPath: "researcher/ZOTERO_SYNC_PACKET.json",
+        markdownPath: "researcher/ZOTERO_PACKET.md",
+      };
+  const pendingAutoZoteroSync = projectState.projectRoot
+    ? await deriveAutoZoteroSyncCandidate({
+        projectRoot: projectState.projectRoot,
+        projectId: projectState.projectId,
+        zoteroProjectRoot: policy.zoteroProjectRoot,
+      })
+    : {
+        shouldLaunch: false,
+        trigger: null,
+        triggerReason: null,
+        dedupeKey: null,
+        collectionFingerprint: null,
+        graphLastBuiltAt: null,
+        activeExperimentIds: [],
+        activeExperimentFingerprint: null,
+        zoteroProjectPath: null,
+        packetPath: "researcher/ZOTERO_SYNC_PACKET.json",
+        markdownPath: "researcher/ZOTERO_PACKET.md",
+        currentPaperCount: 0,
+        status: null,
+      };
   const orchestrationState = normalizeOrchestrationState(
     asRecord(projectState.manifest?.orchestration_state)
   );
@@ -1295,6 +1340,15 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    zoteroSyncStatus: zoteroSyncState.status,
+    zoteroSyncTrigger: zoteroSyncState.trigger,
+    zoteroSyncTriggerReason: zoteroSyncState.triggerReason,
+    zoteroSyncLastRequestedAt: zoteroSyncState.lastRequestedAt,
+    zoteroSyncCollectionFingerprint: zoteroSyncState.collectionFingerprint,
+    zoteroSyncPendingAutoTrigger:
+      pendingAutoZoteroSync.shouldLaunch ? pendingAutoZoteroSync.trigger : null,
+    zoteroSyncPendingAutoReason:
+      pendingAutoZoteroSync.shouldLaunch ? pendingAutoZoteroSync.triggerReason : null,
     orchestrationStatus: orchestrationState.status,
     orchestrationBlockingCategory: orchestrationState.blockingCategory,
     orchestrationNextTransitionCandidate: orchestrationState.nextTransitionCandidate,

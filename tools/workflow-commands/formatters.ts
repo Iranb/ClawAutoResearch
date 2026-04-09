@@ -364,6 +364,20 @@ export function formatWorkflowStatusText(params: {
         `Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`
       );
     }
+    if (
+      snapshot.zoteroSyncStatus ||
+      snapshot.zoteroSyncPendingAutoTrigger ||
+      snapshot.researchProgramZoteroProjectPath
+    ) {
+      lines.push(
+        `Zotero sync: status=${snapshot.zoteroSyncStatus ?? "missing"}, trigger=${snapshot.zoteroSyncTrigger ?? "unset"}, last_requested=${snapshot.zoteroSyncLastRequestedAt ?? "never"}, pending_auto=${snapshot.zoteroSyncPendingAutoTrigger ?? "none"}`
+      );
+      if (snapshot.zoteroSyncTriggerReason || snapshot.zoteroSyncPendingAutoReason) {
+        lines.push(
+          `Zotero sync detail: last_reason=${snapshot.zoteroSyncTriggerReason ?? "none"}, pending_reason=${snapshot.zoteroSyncPendingAutoReason ?? "none"}`
+        );
+      }
+    }
     if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
       lines.push(
         `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`

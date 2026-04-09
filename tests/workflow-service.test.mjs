@@ -31,6 +31,7 @@ import {
   maybeAdvanceAutoGateReviewForProject,
   maybeDispatchAutoModeMitigationForProject,
   maybeLaunchAutoStageForProject,
+  maybeLaunchAutoZoteroSyncForProject,
   maybeLaunchIdleResearchForProject,
   runWorkflowCoordinatorPass,
 } from "../tools/register-workflow-service.ts";
@@ -69,6 +70,30 @@ async function makeProject(projectsRoot, projectId, stage = "setup") {
     current_stage: stage,
   });
   return projectRoot;
+}
+
+async function seedProjectPapers(projectRoot, extraManifest = {}) {
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: path.basename(projectRoot),
+    current_stage: "idea",
+    graph_last_built_at: "2026-04-09T10:00:00.000Z",
+    research_program: {
+      baseline_reference: "Baseline Paper",
+    },
+    ...extraManifest,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:1111.1111",
+        title: "Baseline Paper",
+      },
+      {
+        canonical_id: "arxiv:2222.2222",
+        title: "Followup Paper",
+      },
+    ],
+  });
 }
 
 test("selectDispatchableAutoStageAction withholds drive_stage when stage signals remain", () => {
@@ -948,6 +973,119 @@ test("maybeLaunchAutoStageForProject defaults experiment monitor cooldown to fiv
   assert.equal(launch.launched, false);
   assert.equal(launch.reason, "already_launched");
   assert.equal(runs.length, 0);
+});
+
+test("maybeLaunchAutoZoteroSyncForProject starts a non-blocking researcher continuation after graph refresh", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await seedProjectPapers(projectRoot);
+
+  const launch = await maybeLaunchAutoZoteroSyncForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `zotero-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+      zoteroProjectRoot: "Bot",
+    },
+    projectRoot,
+    projectId: "alpha",
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.trigger, "auto_graph_refresh");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message ?? "", /\/zotero-sync/i);
+  assert.match(runs[0].extraSystemPrompt ?? "", /Workflow coordinator soft Zotero sync trigger/i);
+  assert.match(runs[0].extraSystemPrompt ?? "", /Trigger:\s+auto_graph_refresh/i);
+});
+
+test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway runtime access is unavailable", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await seedProjectPapers(projectRoot);
+
+  const launch = await maybeLaunchAutoZoteroSyncForProject({
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+      zoteroProjectRoot: "Bot",
+    },
+    projectRoot,
+    projectId: "alpha",
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.queued, true);
+  assert.equal(launch.reason, "queued");
+  assert.equal(launch.trigger, "auto_graph_refresh");
 });
 
 test("maybeLaunchAutoStageForProject shares the researcher service session pool across projects", async (t) => {

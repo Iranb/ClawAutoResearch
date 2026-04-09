@@ -17,6 +17,12 @@ Validate that the current project's selected literature is already reflected in 
 
 If the local Zotero MCP server is configured, this same pass must also synchronize the verified project bibliography into the configured Zotero project tree and refresh `{PROJ}/researcher/ZOTERO_PACKET.md`. The plugin-global Zotero root defaults to `bot`, so the default project path is `<zoteroProjectRoot>/<project-id>` unless the project overrides it explicitly. If Zotero writes require authentication, rely on the Zotero MCP server's own `ZOTERO_API_KEY` / `ZOTERO_USER_ID` environment rather than plugin config. `/graph-build` is the point where graph readiness, brainstorm grounding, and bibliography organization should converge before frontier mapping.
 
+Workflow soft-sync rule:
+
+- the workflow coordinator may also queue a separate non-blocking Zotero background sync after a fresh graph update
+- do not wait for that background Zotero pass before reporting graph readiness
+- if this graph-build continuation already refreshed Zotero successfully, keep `{PROJ}/researcher/ZOTERO_SYNC_PACKET.json` / `{PROJ}/researcher/ZOTERO_PACKET.md` truthful so the coordinator does not immediately requeue duplicate work
+
 > **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 

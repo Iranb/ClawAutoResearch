@@ -40,6 +40,13 @@ Minimum expectations:
 - After `/research-lit`, sync the current candidate set into Zotero.
 - After `/literature-review`, mirror `INCLUDED_PAPERS.json`, `EXCLUDED_PAPERS.json`, `SOTA_MATRIX.md`, and baseline papers into the corresponding Zotero collections/tags.
 - Before `/paper-plan` or `/citation-preflight`, refresh the `writing-shortlist` collection.
+- The workflow coordinator may also start this as a non-blocking background pass after graph refresh or when experiments first become active.
+
+Foreground/Background rule:
+
+- if the workflow launched this pass automatically, treat it as a bounded background reconciliation only
+- never hold the foreground Researcher chat, graph-build completion, or experiment launch waiting for Zotero MCP
+- keep `{PROJ}/researcher/ZOTERO_SYNC_PACKET.json` and `{PROJ}/researcher/ZOTERO_PACKET.md` truthful so later auto triggers can dedupe correctly
 
 ## Required Project Artifact
 

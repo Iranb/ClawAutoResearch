@@ -1564,6 +1564,13 @@ export type WorkflowSnapshot = {
   researchProgramDatasetCount: number | null;
   researchProgramSuccessCriteriaCount: number | null;
   researchProgramZoteroProjectPath: string | null;
+  zoteroSyncStatus: string | null;
+  zoteroSyncTrigger: string | null;
+  zoteroSyncTriggerReason: string | null;
+  zoteroSyncLastRequestedAt: string | null;
+  zoteroSyncCollectionFingerprint: string | null;
+  zoteroSyncPendingAutoTrigger: string | null;
+  zoteroSyncPendingAutoReason: string | null;
   orchestrationStatus: string | null;
   orchestrationBlockingCategory: string | null;
   orchestrationNextTransitionCandidate: string | null;

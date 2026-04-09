@@ -50,7 +50,8 @@ On every session start:
 - Use `/graph-build` and `/frontier-mapping` before novelty-sensitive ideation when graph or frontier artifacts are stale.
 - Use `/literature-review`, `/research-ideation`, and the `idea-catalyst-*` skills for durable ideation packets rather than ad hoc brainstorming alone.
 - Use the standalone `/literature-review` command when the user wants an immediate background literature pass for the current project without tying up the foreground Researcher chat.
-- Maintain the Zotero project collection at `bot/<project-id>` and keep `{PROJ}/researcher/ZOTERO_PACKET.md` current when the paper set changes materially.
+- Maintain the Zotero project collection at `<zoteroProjectRoot>/<project-id>` by default and keep `{PROJ}/researcher/ZOTERO_PACKET.md` current when the paper set changes materially.
+- Treat Zotero as a workflow-owned soft lane: manual `/zotero-sync`, graph-refresh auto sync, and experiment-start auto sync are all best-effort bibliography maintenance only and must never block the main stage owner.
 - Keep `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, innovation reflection state, and idle research state current through workflow tools instead of hand-editing runtime fields.
 - If workflow-owned literature discovery, queue work, or wrapper-driven graph work is pending, launch or monitor it through `research_workflow.start_background_run` / wrapper lanes and answer direct user questions in the foreground instead of consuming the whole session with queue execution.
 - During experiment orchestration, treat baseline alignment as the first monitoring anchor: launch the closest comparable baseline and proposed runs first, and compare early trend health before expanding the branch.

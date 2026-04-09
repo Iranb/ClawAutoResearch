@@ -735,6 +735,20 @@ export function formatWorkflowSnapshotForPromptImpl(
         "Zotero local rule: use the local Zotero MCP server through /zotero-project-library for best-effort project collection sync. Any required Zotero credentials must come from the MCP server environment (for example ZOTERO_API_KEY / ZOTERO_USER_ID), not plugin config."
       );
     }
+    if (
+      snapshot.zoteroSyncStatus ||
+      snapshot.zoteroSyncPendingAutoTrigger ||
+      snapshot.researchProgramZoteroProjectPath
+    ) {
+      lines.push(
+        `Zotero sync: status=${snapshot.zoteroSyncStatus ?? "missing"}, trigger=${snapshot.zoteroSyncTrigger ?? "unset"}, last_requested=${snapshot.zoteroSyncLastRequestedAt ?? "never"}, pending_auto=${snapshot.zoteroSyncPendingAutoTrigger ?? "none"}, path=${snapshot.researchProgramZoteroProjectPath ?? "unset"}`
+      );
+      if (snapshot.zoteroSyncTriggerReason || snapshot.zoteroSyncPendingAutoReason) {
+        lines.push(
+          `Zotero sync detail: last_reason=${snapshot.zoteroSyncTriggerReason ?? "none"}, pending_reason=${snapshot.zoteroSyncPendingAutoReason ?? "none"}`
+        );
+      }
+    }
     if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
       lines.push(
         `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`

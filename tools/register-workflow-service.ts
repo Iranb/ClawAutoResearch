@@ -85,6 +85,7 @@ import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
+import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -146,6 +147,28 @@ type IdleResearchLaunchAttempt = {
   summary: string | null;
   reusedIdleSession: boolean;
   activeResearcherSessionsInChannel: number | null;
+};
+
+type AutoZoteroSyncAttempt = {
+  launched: boolean;
+  queued: boolean;
+  reason:
+    | "started"
+    | "queued"
+    | "no_candidate"
+    | "already_launched"
+    | "already_queued";
+  projectId: string | null;
+  projectRoot: string;
+  trigger: string | null;
+  triggerReason: string | null;
+  sessionKey: string | null;
+  runId: string | null;
+  summary: string | null;
+  queueKey: string | null;
+  zoteroProjectPath: string | null;
+  packetPath: string | null;
+  markdownPath: string | null;
 };
 
 type AutoStageLaunchAttempt = {
@@ -741,6 +764,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   autoMitigationDispatch: AutoModeMitigationDispatchAttempt;
   autoStageLaunch: AutoStageLaunchAttempt;
   idleResearchLaunch: IdleResearchLaunchAttempt;
+  autoZoteroSync?: AutoZoteroSyncAttempt;
 }): WorkflowCoordinatorVisibleStatusUpdate | null {
   const autoCodeReview =
     params.autoCodeReview ??
@@ -831,6 +855,44 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         "capacity",
         params.idleResearchLaunch.topic ?? "unknown-topic",
         String(params.idleResearchLaunch.activeResearcherSessionsInChannel ?? "unknown"),
+      ].join(":"),
+    };
+  }
+  if (params.autoZoteroSync?.launched) {
+    return {
+      status: "continued",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.autoZoteroSync.summary ??
+        `Started non-blocking Zotero sync for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "zotero-sync",
+        "started",
+        params.autoZoteroSync.trigger ?? "unknown",
+        params.autoZoteroSync.queueKey ?? "no-queue-key",
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoZoteroSync &&
+    params.autoZoteroSync.queued &&
+    params.autoZoteroSync.reason === "queued"
+  ) {
+    return {
+      status: "queued",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.autoZoteroSync.summary ??
+        `Queued non-blocking Zotero sync for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "zotero-sync",
+        "queued",
+        params.autoZoteroSync.trigger ?? "unknown",
+        params.autoZoteroSync.queueKey ?? "no-queue-key",
       ].join(":"),
     };
   }
@@ -1169,6 +1231,195 @@ export async function maybeLaunchIdleResearchForProject(params: {
         reusedIdleSession: launched.reusedIdleSession,
         activeResearcherSessionsInChannel:
           launched.activeResearcherSessionsInChannel,
+      };
+    },
+  });
+}
+
+function buildAutoZoteroSyncExtraPrompt(params: {
+  projectId: string | null;
+  projectRoot: string;
+  trigger: string;
+  triggerReason: string | null;
+  packetPath: string;
+  markdownPath: string;
+  zoteroProjectPath: string | null;
+}) {
+  return [
+    "Workflow coordinator soft Zotero sync trigger.",
+    params.projectId ? `Project ID: ${params.projectId}` : null,
+    `Project root: ${params.projectRoot}`,
+    `Trigger: ${params.trigger}`,
+    params.triggerReason ? `Trigger reason: ${params.triggerReason}` : null,
+    `Packet path: ${params.packetPath}`,
+    `Markdown path: ${params.markdownPath}`,
+    `Effective project collection path: ${params.zoteroProjectPath ?? "<configured-root>/<project-id>"}`,
+    "Treat this as a best-effort bibliography reconciliation pass. Keep the foreground workflow responsive, and if Zotero MCP is unavailable, record unavailable or failed state durably instead of blocking the main project flow.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function maybeLaunchAutoZoteroSyncForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps: WorkflowCoordinatorDependencies = {
+    runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow,
+    ...params.deps,
+  };
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    label: "workflow_auto_zotero_sync",
+    logger: params.logger,
+    task: async (): Promise<AutoZoteroSyncAttempt> => {
+      const candidate = await deriveAutoZoteroSyncCandidate({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        zoteroProjectRoot: params.workflowPolicy.zoteroProjectRoot,
+      });
+      if (!candidate.shouldLaunch || !candidate.trigger || !candidate.dedupeKey) {
+        return {
+          launched: false,
+          queued: false,
+          reason: "no_candidate",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          trigger: candidate.trigger,
+          triggerReason: candidate.triggerReason,
+          sessionKey: null,
+          runId: null,
+          summary: null,
+          queueKey: null,
+          zoteroProjectPath: candidate.zoteroProjectPath,
+          packetPath: candidate.packetPath,
+          markdownPath: candidate.markdownPath,
+        };
+      }
+
+      const pending = await hasPendingBackgroundWorkflowQueueKey({
+        queueKey: candidate.dedupeKey,
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        projectsRoot: params.workflowPolicy.projectsRoot,
+      });
+      if (pending.active) {
+        return {
+          launched: false,
+          queued: false,
+          reason: "already_launched",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          trigger: candidate.trigger,
+          triggerReason: candidate.triggerReason,
+          sessionKey: null,
+          runId: null,
+          summary: null,
+          queueKey: candidate.dedupeKey,
+          zoteroProjectPath: candidate.zoteroProjectPath,
+          packetPath: candidate.packetPath,
+          markdownPath: candidate.markdownPath,
+        };
+      }
+      if (pending.queued) {
+        return {
+          launched: false,
+          queued: true,
+          reason: "already_queued",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          trigger: candidate.trigger,
+          triggerReason: candidate.triggerReason,
+          sessionKey: null,
+          runId: null,
+          summary: null,
+          queueKey: candidate.dedupeKey,
+          zoteroProjectPath: candidate.zoteroProjectPath,
+          packetPath: candidate.packetPath,
+          markdownPath: candidate.markdownPath,
+        };
+      }
+
+      const requesterBinding = resolveWorkflowRequesterBinding({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const requesterSessionKey =
+        requesterBinding.sessionKey ?? "agent:researcher:main";
+      const sessionKey = buildResearcherWorkflowSubagentSessionKey({
+        requesterSessionKey,
+        projectRoot: params.projectRoot,
+        purpose: "workflow-zotero-sync",
+        segments: [
+          candidate.trigger,
+          candidate.collectionFingerprint,
+          candidate.activeExperimentFingerprint,
+          candidate.graphLastBuiltAt,
+        ],
+      });
+      const launched = await startBackgroundWorkflowRun({
+        runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: params.projectRoot,
+          sessionKey,
+          messageChannel: requesterBinding.messageChannel ?? "discord",
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          channelProjectBindingsEnabled:
+            params.workflowPolicy.enableChannelProjectBindings === true,
+        },
+        backgroundRun: {
+          kind: "zotero_sync",
+          projectId: params.projectId ?? undefined,
+          projectRoot: params.projectRoot,
+          ensureProjectBinding: false,
+          summary:
+            `Background Zotero sync started for ` +
+            `${params.projectId ?? path.basename(params.projectRoot)} (${candidate.trigger}).`,
+          dedupeKey: candidate.dedupeKey,
+          triggerKind: candidate.trigger,
+          triggerReason: candidate.triggerReason ?? undefined,
+          extraSystemPrompt: buildAutoZoteroSyncExtraPrompt({
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            trigger: candidate.trigger,
+            triggerReason: candidate.triggerReason,
+            packetPath: candidate.packetPath,
+            markdownPath: candidate.markdownPath,
+            zoteroProjectPath: candidate.zoteroProjectPath,
+          }),
+        },
+      });
+
+      return {
+        launched: launched.started,
+        queued: launched.queued,
+        reason: launched.started ? "started" : launched.queued ? "queued" : "queued",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        trigger: candidate.trigger,
+        triggerReason: candidate.triggerReason,
+        sessionKey: launched.sessionKey,
+        runId: launched.runId,
+        summary: launched.summary,
+        queueKey: launched.queueKey ?? candidate.dedupeKey,
+        zoteroProjectPath: candidate.zoteroProjectPath,
+        packetPath: candidate.packetPath,
+        markdownPath: candidate.markdownPath,
       };
     },
   });
@@ -3684,6 +3935,21 @@ export function createWorkflowCoordinatorService(
           )
         );
         const idleResearchLaunches = idleResearchAttempts.filter((entry) => entry.launched);
+        const autoZoteroSyncAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry) =>
+            maybeLaunchAutoZoteroSyncForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              logger,
+              deps,
+            })
+          )
+        );
+        const autoZoteroSyncLaunches = autoZoteroSyncAttempts.filter(
+          (entry) => entry.launched || entry.queued
+        );
         await Promise.all(
           discussionRefreshedResults.map(async (entry, index) => {
             const statusUpdate = deriveWorkflowCoordinatorStatusUpdate({
@@ -3698,6 +3964,7 @@ export function createWorkflowCoordinatorService(
               autoMitigationDispatch: autoMitigationAttempts[index],
               autoStageLaunch: autoStageAttempts[index],
               idleResearchLaunch: idleResearchAttempts[index],
+              autoZoteroSync: autoZoteroSyncAttempts[index],
             });
             if (!statusUpdate) {
               return null;
@@ -3737,6 +4004,7 @@ export function createWorkflowCoordinatorService(
           autoMitigationDispatches,
           autoStageLaunches,
           idleResearchLaunches,
+          autoZoteroSyncLaunches,
         });
         if (autoMitigationDispatches.length > 0) {
           logger.info?.("Workflow coordinator launched mitigation passes.", {
@@ -3772,6 +4040,19 @@ export function createWorkflowCoordinatorService(
               topic: entry.topic,
               sessionKey: entry.sessionKey,
               runId: entry.runId,
+            })),
+          });
+        }
+        if (autoZoteroSyncLaunches.length > 0) {
+          logger.info?.("Workflow coordinator launched non-blocking Zotero sync.", {
+            trigger,
+            launches: autoZoteroSyncLaunches.map((entry) => ({
+              projectId: entry.projectId,
+              trigger: entry.trigger,
+              queueKey: entry.queueKey,
+              runId: entry.runId,
+              queued: entry.queued,
+              zoteroProjectPath: entry.zoteroProjectPath,
             })),
           });
         }

@@ -28,6 +28,12 @@ In `reviewed_auto` mode, EXPERIMENT includes a pre-launch review loop before any
 - `launching` — Coder launches only from an approved packet
 - `monitoring` — `/monitor-experiment` takes over once real runs exist
 
+Workflow soft Zotero rule:
+
+- when real runs begin, the workflow may queue a non-blocking Zotero background reconciliation for the project's current `selected` / `baselines` collections
+- treat that Zotero pass as best-effort bibliography maintenance only; it must never block launch, monitoring, or rollback decisions
+- once remote runs exist, keep experiment orchestration focused on baseline alignment, monitoring, and result reconciliation rather than waiting on Zotero MCP work
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** when building launch groups; if a run combines multiple hypothesis changes, split it or label it as non-attributable.

@@ -80,6 +80,9 @@ export type BackgroundRunRequest = {
   projectRoot?: string;
   ensureProjectBinding?: boolean;
   extraSystemPrompt?: string;
+  dedupeKey?: string;
+  triggerKind?: string;
+  triggerReason?: string;
 };
 
 export type PapernexusWrapperScript =
@@ -2779,7 +2782,10 @@ export async function startBackgroundWorkflowRun(params: {
       projectRoot: resolvedProjectRoot,
       projectId: resolvedProjectId,
       zoteroProjectRoot: params.workflowPolicy.zoteroProjectRoot,
-      trigger: normalizedKind === "graph_build" ? "graph_build" : "manual_command",
+      trigger:
+        readString(params.backgroundRun.triggerKind) ??
+        (normalizedKind === "graph_build" ? "graph_build" : "manual_command"),
+      triggerReason: readString(params.backgroundRun.triggerReason) ?? null,
     });
     const packetPrompt = [
       "Zotero sync packet path: {PROJ}/researcher/ZOTERO_SYNC_PACKET.json",
@@ -2806,7 +2812,7 @@ export async function startBackgroundWorkflowRun(params: {
     kind: normalizedKind,
     projectId: resolvedProjectId,
     projectRoot: resolvedProjectRoot,
-    topic,
+    topic: readString(params.backgroundRun.dedupeKey) ?? topic,
     commandText,
   });
   let reusableBackgroundSessionKey: string | null = null;
