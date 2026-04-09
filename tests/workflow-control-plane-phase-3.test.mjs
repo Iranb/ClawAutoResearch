@@ -1252,6 +1252,103 @@ test("control-plane runtime states persist through workflow tool actions and sum
   assert.match(rawTrace, /set_write_package/);
 });
 
+test("materialize_plan_state repairs malformed plan payloads into auto-iterator-ready research_program state", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedPlanProject(projectRoot);
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await executeWorkflowTool(tool, {
+    action: "set_research_program",
+    researchProgram: {
+      status: "approved",
+      goal: "Complete program",
+      problem_statement: "Demo plan payload drift",
+      baseline_reference: "SimGCD",
+      primary_metric: "acc",
+      datasets: ["CUB-200"],
+      success_criteria: ["acc>=0.9"],
+      tracks: {
+        main: {
+          track_id: "track-main",
+          priority: 1,
+          status: "active",
+          hypothesis: "Demo hypothesis",
+          novelty_basis: "Demo novelty",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: "baseline-a",
+          required_ablations: ["ablation-a"],
+          required_controls: { primary: "seed-control" },
+          experiment_stage_matrix: {
+            baseline_implementation: { ready: true },
+            baseline_tuning: { ready: true },
+            creative_research: { ready: true },
+            ablation_studies: { ready: true },
+          },
+          budget: {
+            gpu_hours: 8,
+            max_runs: 4,
+            max_debug_iterations: 1,
+          },
+          stop_rules: "stop after no improvement",
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: "claim-1",
+            allowed_figure_ids: ["fig-1"],
+          },
+        },
+      },
+      task_graph: {
+        tasks: {
+          plan_main: {
+            task_id: "plan-main",
+            stage: "plan",
+            track_id: "track-main",
+            owner: "researcher",
+            dependencies: [],
+            entry_criteria: "track active",
+            expected_outputs: { primary: "plan complete" },
+            retry_budget: 1,
+            exit_criteria: ["plan ready"],
+          },
+        },
+      },
+    },
+  });
+
+  const materialized = await executeWorkflowTool(tool, {
+    action: "materialize_plan_state",
+    planMaterialization: {
+      selectedTrackId: "track-main",
+    },
+  });
+  assert.equal(
+    materialized.validationErrors.some((signal) =>
+      signal.includes("experiment_stage_matrix")
+    ),
+    false
+  );
+  assert.equal(
+    materialized.validationErrors.some((signal) => signal.includes("task_graph coverage")),
+    false
+  );
+  assert.equal(
+    materialized.validationErrors.some((signal) =>
+      signal.includes("plan_alternatives")
+    ),
+    false
+  );
+  assert.equal(
+    materialized.validationErrors.some((signal) => signal.includes("plan_selection")),
+    false
+  );
+});
+
 test("write-package assembler derives secondary artifacts and marks the package ready", async (t) => {
   const projectRoot = await makeProjectRoot();
 

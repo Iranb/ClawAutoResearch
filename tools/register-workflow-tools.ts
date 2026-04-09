@@ -28,6 +28,7 @@ import {
   materializeIdeationContract,
   materializeExperimentReviewState,
   materializeLiteratureDiscoveryPacket,
+  materializePlanState,
   materializePaperStoryState,
   queuePaperIngestionRequest,
   getPaperQcStateSummary,
@@ -175,6 +176,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_ideation_contract",
   "materialize_experiment_review_state",
   "materialize_literature_discovery_packet",
+  "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
@@ -223,6 +225,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
+  materialize_plan_state: "materializePlanState",
   materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   materialize_paper_story_state: "materializePaperStoryState",
@@ -805,6 +808,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_ideation_contract",
               "materialize_experiment_review_state",
               "materialize_literature_discovery_packet",
+              "materialize_plan_state",
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
@@ -1891,6 +1895,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ideationMaterialization: requireObject(
                   params.ideationMaterialization ?? {},
                   "ideationMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_plan_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializePlanState({
+                projectRoot: resolvedProjectRoot,
+                planMaterialization: requireObject(
+                  params.planMaterialization ?? {},
+                  "planMaterialization"
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,

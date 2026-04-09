@@ -113,6 +113,18 @@ Add one explicit **Theory / Proof Appendix Plan** section:
 - what assumptions are empirical, heuristic, or only partially justified
 - what extra experiments or diagnostics would raise confidence in the derivation
 
+After the human-readable plan files are drafted, **materialize the durable plan contract** through the workflow tool instead of manually editing `PROJECT_MANIFEST.json`:
+
+- preferred: `research_workflow.materialize_plan_state`
+- fallback: `research_workflow.set_research_program`
+
+The canonical `research_program` schema must satisfy:
+- `tracks[]` for every active track
+- `experiment_stage_matrix` as a **string array** containing `baseline_implementation`, `baseline_tuning`, `creative_research`, and `ablation_studies`
+- `task_graph` as an **array of tasks** (not an object) with `track_id`, `entry_criteria`, `expected_outputs`, and `exit_criteria`
+- `plan_alternatives` with at least 2 compared options
+- `plan_selection` with `selected_option_id`, `selected_track_id`, `compared_option_ids`, `rationale`, and `decisive_graph_evidence_paths`
+
 ### 4. Write TODOS.md
 
 Write `{PROJ}/orchestrator/TODOS.md` with:
@@ -181,6 +193,7 @@ Do not consider PLAN complete until all of the following are true:
 - `{PROJ}/orchestrator/PLAN.md` exists and is non-empty
 - `{PROJ}/orchestrator/TODOS.md` exists and is non-empty
 - `{PROJ}/orchestrator/PLAN_AUDIT.md` exists and is non-empty
+- `research_workflow.materialize_plan_state` or `research_workflow.set_research_program` has updated `PROJECT_MANIFEST.json.research_program` into canonical workflow schema
 - `PLAN_AUDIT.md` says `Verdict: READY_FOR_CODE`
 - `PLAN_AUDIT.md` says `Ready to hand off to CODE: yes`
 

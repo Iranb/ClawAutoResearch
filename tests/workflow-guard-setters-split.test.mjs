@@ -8,6 +8,7 @@ import {
   setIdleResearchState,
   setExperimentSearchState,
   setBrainstormCycleState,
+  setResearchProgramState,
 } from "../tools/workflow-guard-setters/research-state-setters.ts";
 import {
   setWritingContractState,
@@ -99,6 +100,87 @@ test("research setter module persists manifest updates", async (t) => {
   });
   assert.ok(Array.isArray(brainstormResult.validationErrors));
   assert.equal(typeof brainstormResult.chainBundleReady, "boolean");
+});
+
+test("research setter module canonicalizes object-shaped plan track and task payloads", async (t) => {
+  const projectRoot = await makeProjectRoot({
+    project_id: "demo-project",
+    research_program: {
+      status: "approved",
+      goal: "demo",
+      global_constraints: {},
+      tracks: [],
+      task_graph: [],
+      plan_alternatives: [],
+      plan_selection: {},
+      datasets: [],
+      success_criteria: [],
+    },
+  });
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await setResearchProgramState({
+    projectRoot,
+    researchProgram: {
+      status: "approved",
+      goal: "demo",
+      tracks: {
+        main: {
+          track_id: "track-main",
+          status: "active",
+          hypothesis: "demo hypothesis",
+          novelty_basis: "demo novelty",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: "baseline-a",
+          required_ablations: ["ablation-a"],
+          required_controls: { primary: "seed-control" },
+          experiment_stage_matrix: {
+            baseline_implementation: { ready: true },
+            baseline_tuning: { ready: true },
+            creative_research: { ready: true },
+            ablation_studies: { ready: true },
+          },
+          stop_rules: "stop after no improvement",
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: "claim-1",
+            allowed_figure_ids: ["fig-1"],
+          },
+        },
+      },
+      task_graph: {
+        tasks: {
+          plan_main: {
+            task_id: "plan-main",
+            stage: "plan",
+            track_id: "track-main",
+            owner: "researcher",
+            dependencies: [],
+            entry_criteria: "track active",
+            expected_outputs: { primary: "plan ready" },
+            retry_budget: 1,
+            exit_criteria: ["plan locked"],
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.state.tracks.length, 1);
+  assert.deepEqual(result.state.tracks[0].experimentStageMatrix, [
+    "baseline_implementation",
+    "baseline_tuning",
+    "creative_research",
+    "ablation_studies",
+  ]);
+  assert.equal(result.state.taskGraph.length, 1);
+  assert.deepEqual(result.state.taskGraph[0].entryCriteria, ["track active"]);
+  assert.deepEqual(result.state.taskGraph[0].expectedOutputs, ["plan ready"]);
+  assert.deepEqual(result.state.taskGraph[0].exitCriteria, ["plan locked"]);
 });
 
 test("writing setter module copies templates and updates review state", async (t) => {

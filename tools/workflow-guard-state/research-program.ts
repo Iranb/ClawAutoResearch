@@ -1,10 +1,12 @@
 import {
   asRecord,
+  asString,
   asStringArray,
   normalizeStage,
   pickBoolean,
   pickNumber,
   pickString,
+  uniqueStrings,
 } from "../workflow-guard-core/coercion";
 import type {
   ResearchProgramPlanAlternative,
@@ -16,6 +18,109 @@ import type {
   ResearchProgramTrackBudget,
   ResearchProgramTrackWriteScope,
 } from "../workflow-guard.js";
+
+function normalizeLooseStringArray(value: unknown): string[] {
+  const direct = asString(value);
+  if (direct) {
+    return [direct];
+  }
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap((entry) => normalizeLooseStringArray(entry)));
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  for (const key of ["items", "entries", "values", "list", "paths"]) {
+    const nested = normalizeLooseStringArray(record[key]);
+    if (nested.length > 0) {
+      return nested;
+    }
+  }
+  return uniqueStrings(
+    Object.values(record)
+      .map((entry) => asString(entry))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+}
+
+function normalizeCollectionEntries(
+  value: unknown,
+  nestedKeys: string[]
+): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  for (const key of nestedKeys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+    const nestedRecord = asRecord(candidate);
+    if (nestedRecord) {
+      const nestedValues = Object.values(nestedRecord).filter(
+        (entry) => Array.isArray(entry) || asRecord(entry)
+      );
+      if (nestedValues.length > 0) {
+        return nestedValues.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
+      }
+    }
+  }
+  return Object.values(record).filter((entry) => asRecord(entry));
+}
+
+function normalizeResearchProgramStageMatrix(value: unknown): string[] {
+  const direct = asString(value);
+  if (direct) {
+    const normalized = normalizeStage(direct);
+    return normalized ? [normalized] : [];
+  }
+  if (Array.isArray(value)) {
+    return uniqueStrings(
+      value.flatMap((entry) => normalizeResearchProgramStageMatrix(entry))
+    );
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  for (const key of ["entries", "stages", "items", "phases"]) {
+    const nested = normalizeResearchProgramStageMatrix(record[key]);
+    if (nested.length > 0) {
+      return nested;
+    }
+  }
+  const explicit = pickString(record, [
+    "stage",
+    "stageId",
+    "stage_id",
+    "name",
+    "phase",
+    "id",
+  ]);
+  if (explicit) {
+    const normalized = normalizeStage(explicit);
+    return normalized ? [normalized] : [];
+  }
+  return uniqueStrings(
+    Object.entries(record)
+      .filter(([, entry]) => {
+        if (typeof entry === "boolean") {
+          return entry;
+        }
+        if (asString(entry)) {
+          return true;
+        }
+        return asRecord(entry) != null;
+      })
+      .map(([key]) => normalizeStage(key) ?? "")
+      .filter(Boolean)
+  );
+}
 
 function normalizeResearchProgramTrackBudget(
   value: unknown
@@ -46,10 +151,10 @@ function normalizeResearchProgramTrackWriteScope(
 ): ResearchProgramTrackWriteScope {
   const record = asRecord(value) ?? {};
   return {
-    allowedClaimIds: asStringArray(
+    allowedClaimIds: normalizeLooseStringArray(
       record.allowedClaimIds ?? record.allowed_claim_ids
     ),
-    allowedFigureIds: asStringArray(
+    allowedFigureIds: normalizeLooseStringArray(
       record.allowedFigureIds ?? record.allowed_figure_ids
     ),
   };
@@ -86,10 +191,10 @@ function normalizeResearchProgramPlanAlternative(
     title: pickString(record, ["title"]),
     status: normalizeResearchProgramPlanAlternativeStatus(record.status),
     summary: pickString(record, ["summary"]),
-    graphEvidencePaths: asStringArray(
+    graphEvidencePaths: normalizeLooseStringArray(
       record.graphEvidencePaths ?? record.graph_evidence_paths
     ),
-    keyRisks: asStringArray(record.keyRisks ?? record.key_risks),
+    keyRisks: normalizeLooseStringArray(record.keyRisks ?? record.key_risks),
   };
 }
 
@@ -121,14 +226,14 @@ function normalizeResearchProgramPlanSelection(
       "selectedTrackId",
       "selected_track_id",
     ]),
-    comparedOptionIds: asStringArray(
+    comparedOptionIds: normalizeLooseStringArray(
       record.comparedOptionIds ?? record.compared_option_ids
     ),
     rationale: pickString(record, ["rationale"]),
-    decisiveGraphEvidencePaths: asStringArray(
+    decisiveGraphEvidencePaths: normalizeLooseStringArray(
       record.decisiveGraphEvidencePaths ?? record.decisive_graph_evidence_paths
     ),
-    fallbackOptionIds: asStringArray(
+    fallbackOptionIds: normalizeLooseStringArray(
       record.fallbackOptionIds ?? record.fallback_option_ids
     ),
     lastComparedAt: pickString(record, ["lastComparedAt", "last_compared_at"]),
@@ -164,21 +269,21 @@ export function normalizeResearchProgramTrack(value: unknown): ResearchProgramTr
       "successThreshold",
       "success_threshold",
     ]),
-    requiredBaselines: asStringArray(
+    requiredBaselines: normalizeLooseStringArray(
       record.requiredBaselines ?? record.required_baselines
     ),
-    requiredAblations: asStringArray(
+    requiredAblations: normalizeLooseStringArray(
       record.requiredAblations ?? record.required_ablations
     ),
-    requiredControls: asStringArray(
+    requiredControls: normalizeLooseStringArray(
       record.requiredControls ?? record.required_controls
     ),
-    experimentStageMatrix: asStringArray(
+    experimentStageMatrix: normalizeResearchProgramStageMatrix(
       record.experimentStageMatrix ?? record.experiment_stage_matrix
-    ).map((entry) => normalizeStage(entry) ?? entry),
+    ),
     budget: normalizeResearchProgramTrackBudget(record.budget),
-    stopRules: asStringArray(record.stopRules ?? record.stop_rules),
-    rollbackTriggers: asStringArray(
+    stopRules: normalizeLooseStringArray(record.stopRules ?? record.stop_rules),
+    rollbackTriggers: normalizeLooseStringArray(
       record.rollbackTriggers ?? record.rollback_triggers
     ),
     writeScope: normalizeResearchProgramTrackWriteScope(
@@ -218,11 +323,19 @@ export function normalizeResearchProgramTask(value: unknown): ResearchProgramTas
     stage: normalizeStage(record.stage),
     trackId: pickString(record, ["trackId", "track_id"]),
     owner: pickString(record, ["owner"]),
-    dependencies: asStringArray(record.dependencies),
-    entryCriteria: asStringArray(record.entryCriteria ?? record.entry_criteria),
-    expectedOutputs: asStringArray(record.expectedOutputs ?? record.expected_outputs),
+    dependencies: normalizeLooseStringArray(
+      record.dependencies ?? record.depends_on
+    ),
+    entryCriteria: normalizeLooseStringArray(
+      record.entryCriteria ?? record.entry_criteria
+    ),
+    expectedOutputs: normalizeLooseStringArray(
+      record.expectedOutputs ?? record.expected_outputs
+    ),
     retryBudget: pickNumber(record, ["retryBudget", "retry_budget"]),
-    exitCriteria: asStringArray(record.exitCriteria ?? record.exit_criteria),
+    exitCriteria: normalizeLooseStringArray(
+      record.exitCriteria ?? record.exit_criteria
+    ),
   };
 }
 
@@ -276,14 +389,19 @@ function serializeResearchProgramGlobalConstraints(
 
 export function normalizeResearchProgramState(value: unknown): ResearchProgramState {
   const record = asRecord(value) ?? {};
-  const taskGraphEntries = Array.isArray(record.taskGraph ?? record.task_graph)
-    ? ((record.taskGraph ?? record.task_graph) as unknown[])
-    : [];
-  const planAlternativeEntries = Array.isArray(
-    record.planAlternatives ?? record.plan_alternatives
-  )
-    ? ((record.planAlternatives ?? record.plan_alternatives) as unknown[])
-    : [];
+  const trackEntries = normalizeCollectionEntries(record.tracks, [
+    "tracks",
+    "entries",
+    "items",
+  ]);
+  const taskGraphEntries = normalizeCollectionEntries(
+    record.taskGraph ?? record.task_graph,
+    ["tasks", "entries", "items", "nodes"]
+  );
+  const planAlternativeEntries = normalizeCollectionEntries(
+    record.planAlternatives ?? record.plan_alternatives,
+    ["options", "alternatives", "entries", "items"]
+  );
   return {
     programVersion: Math.max(
       1,
@@ -302,18 +420,16 @@ export function normalizeResearchProgramState(value: unknown): ResearchProgramSt
       "baseline_reference",
     ]),
     primaryMetric: pickString(record, ["primaryMetric", "primary_metric"]),
-    datasets: asStringArray(record.datasets),
-    constraints: asStringArray(record.constraints),
-    successCriteria: asStringArray(
+    datasets: normalizeLooseStringArray(record.datasets),
+    constraints: normalizeLooseStringArray(record.constraints),
+    successCriteria: normalizeLooseStringArray(
       record.successCriteria ?? record.success_criteria
     ),
     zoteroProjectPath: pickString(record, [
       "zoteroProjectPath",
       "zotero_project_path",
     ]),
-    tracks: Array.isArray(record.tracks)
-      ? record.tracks.map((entry) => normalizeResearchProgramTrack(entry))
-      : [],
+    tracks: trackEntries.map((entry) => normalizeResearchProgramTrack(entry)),
     planAlternatives: planAlternativeEntries.map((entry: unknown) =>
       normalizeResearchProgramPlanAlternative(entry)
     ),

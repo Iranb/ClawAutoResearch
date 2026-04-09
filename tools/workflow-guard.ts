@@ -246,6 +246,7 @@ import { materializePapernexusPacketContracts } from "./papernexus-packets/mater
 import { materializeIdeationContractImpl } from "./workflow-guard-materializers/ideation-contract-materializer";
 import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
+import { materializePlanStateImpl } from "./workflow-guard-materializers/plan-state-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
 import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
 import {
@@ -7859,6 +7860,43 @@ export async function materializeExperimentReviewState(params: {
     readManifestEnsured,
     saveManifest,
   });
+}
+
+export async function materializePlanState(params: {
+  projectRoot: string;
+  planMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  state: ResearchProgramState;
+  validationErrors: string[];
+  onboardingStatus: string;
+  onboardingGaps: string[];
+  generatedDefaults: string[];
+}> {
+  const result = await materializePlanStateImpl(params);
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const projectId = inferProjectId(params.projectRoot, manifest);
+  const ideationContract = normalizeIdeationContractState(manifest.ideation_contract);
+  return {
+    state: result.state,
+    validationErrors: [
+      ...getResearchProgramValidationErrors(result.state),
+      ...getResearchProgramPlanValidationErrors({
+        state: result.state,
+        ideationContract,
+      }),
+    ],
+    onboardingStatus: getResearchProgramOnboardingStatus({
+      state: result.state,
+      projectId,
+    }),
+    onboardingGaps: getResearchProgramOnboardingGaps({
+      state: result.state,
+      projectId,
+    }),
+    generatedDefaults: result.generatedDefaults,
+  };
 }
 
 export async function setExperimentReviewState(params: {

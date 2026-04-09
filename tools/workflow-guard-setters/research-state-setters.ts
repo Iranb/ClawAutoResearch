@@ -895,19 +895,24 @@ export async function setResearchProgramState(params: {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeResearchProgramState(manifest.research_program);
   const patch = asRecord(params.researchProgram) ?? {};
-  const patchedTaskGraph = Array.isArray(patch.taskGraph ?? patch.task_graph)
-    ? ((patch.taskGraph ?? patch.task_graph) as unknown[])
-    : [];
+  const normalizedPatch = normalizeResearchProgramState(patch);
+  const hasTracksPatch = Object.prototype.hasOwnProperty.call(patch, "tracks");
+  const hasTaskGraphPatch =
+    Object.prototype.hasOwnProperty.call(patch, "taskGraph") ||
+    Object.prototype.hasOwnProperty.call(patch, "task_graph");
   const merged = normalizeResearchProgramState({
     ...serializeResearchProgramState(current),
     ...patch,
-    tracks:
-      Array.isArray(patch.tracks) && patch.tracks.length > 0
-        ? patch.tracks
-        : current.tracks.map((track) => serializeResearchProgramTrack(track)),
+    tracks: hasTracksPatch
+      ? normalizedPatch.tracks.length > 0
+        ? normalizedPatch.tracks.map((track) => serializeResearchProgramTrack(track))
+        : current.tracks.map((track) => serializeResearchProgramTrack(track))
+      : current.tracks.map((track) => serializeResearchProgramTrack(track)),
     task_graph:
-      patchedTaskGraph.length > 0
-        ? patchedTaskGraph
+      hasTaskGraphPatch
+        ? normalizedPatch.taskGraph.length > 0
+          ? normalizedPatch.taskGraph.map((task) => serializeResearchProgramTask(task))
+          : current.taskGraph.map((task) => serializeResearchProgramTask(task))
         : current.taskGraph.map((task) => serializeResearchProgramTask(task)),
     global_constraints:
       asRecord(patch.globalConstraints ?? patch.global_constraints) ?? current.globalConstraints,

@@ -191,10 +191,16 @@ export function buildFocusedPromptAssemblyImpl(
       "Plan contract rule: PLAN.md, TODOS.md, and PLAN_AUDIT.md are human-readable derivatives. The durable source of truth is PROJECT_MANIFEST.json.research_program, and plan stage is not complete until it records graph-grounded multi-option comparison plus a locked selection."
     );
     layer2Lines.push(
+      "Canonical plan-state rule: after writing PLAN.md, TODOS.md, and PLAN_AUDIT.md, call research_workflow.materialize_plan_state or set_research_program instead of hand-editing PROJECT_MANIFEST.json. The workflow tool will canonicalize active tracks, experiment_stage_matrix, task_graph coverage, plan_alternatives, and plan_selection."
+    );
+    layer2Lines.push(
       "Planner rigor rule: research_program.plan_alternatives must compare at least two options, and research_program.plan_selection must record the selected option/track, compared option ids, decisive graph evidence, and rationale before handing work to Coder."
     );
     layer2Lines.push(
       "Evo-style planning rule: after choosing the winning option, express the selected track as staged tasks with success signals, baseline/ablation coverage, expected artifacts, retry budget, and fallback path."
+    );
+    layer2Lines.push(
+      "Plan schema rule: each active track must carry experiment_stage_matrix as a string array containing baseline_implementation, baseline_tuning, creative_research, and ablation_studies. task_graph must be an array of per-track tasks with non-empty entry_criteria, expected_outputs, and exit_criteria."
     );
   }
   layer2Lines.push(
