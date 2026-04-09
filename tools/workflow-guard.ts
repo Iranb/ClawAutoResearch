@@ -454,6 +454,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   zoteroProjectRoot?: string;
   zoteroApiKey?: string;
   zoteroApiKeyEnv?: string;
+  zoteroUserId?: string;
   papernexusApiBaseUrl?: string;
   papernexusSharedCorpus?: string;
   papernexusMcpUrl?: string;
@@ -1524,6 +1525,7 @@ export type WorkflowSnapshot = {
   researchProgramDatasetCount: number | null;
   researchProgramSuccessCriteriaCount: number | null;
   researchProgramZoteroProjectPath: string | null;
+  zoteroUserId: string | null;
   zoteroApiKeyEnv: string | null;
   zoteroApiKeySource: string | null;
   zoteroApiKeyConfigured: boolean;
@@ -1780,6 +1782,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   zoteroProjectRoot: "bot",
   zoteroApiKey: "",
   zoteroApiKeyEnv: "",
+  zoteroUserId: "",
   papernexusApiBaseUrl: "",
   papernexusSharedCorpus: "",
   papernexusMcpUrl: "",
@@ -2198,6 +2201,9 @@ function normalizePolicy(
     zoteroApiKeyEnv:
       asString((config as Record<string, unknown> | null)?.zoteroApiKeyEnv) ??
       DEFAULT_POLICY.zoteroApiKeyEnv,
+    zoteroUserId:
+      asString((config as Record<string, unknown> | null)?.zoteroUserId) ??
+      DEFAULT_POLICY.zoteroUserId,
     papernexusApiBaseUrl:
       asString(config?.papernexusApiBaseUrl) ??
       DEFAULT_POLICY.papernexusApiBaseUrl,

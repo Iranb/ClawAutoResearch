@@ -92,6 +92,7 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   );
   assert.match(configDoc, /zoteroApiKey/i);
   assert.match(configDoc, /zoteroApiKeyEnv/i);
+  assert.match(configDoc, /zoteroUserId/i);
 
   const zoteroSkill = await fs.readFile(
     path.join(repoRoot, "skills", "researcher", "zotero-project-library", "SKILL.md"),

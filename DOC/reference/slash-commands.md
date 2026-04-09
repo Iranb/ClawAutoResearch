@@ -49,7 +49,7 @@
   Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，live graph 走远程 HTTP MCP，导入/排队走 queued wrappers；如果本地 Zotero MCP server 已配置，还要同步更新配置好的 Zotero 项目集合里的 `selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。
 
 - `/zotero-sync`
-  Discord 可见的后台 Researcher 命令。以当前项目的 workflow-owned 状态为 source of truth，对 Zotero 项目集合做一次显式 reconciliation：刷新 `selected` / `baselines` / `writing-shortlist`，把已经不属于项目的论文**只从项目 collection 移除**，但**不删除也不丢进 Zotero 废纸篓**。该命令始终走后台 continuation，不应阻塞前台主会话；若 Zotero MCP 不可用，只需把 `unavailable` / `failed` 状态写回 `ZOTERO_SYNC_PACKET.json` 和 `ZOTERO_PACKET.md`。如果本地 Zotero add-item 流程需要 `apiKey`，可在插件配置中提供 `zoteroApiKey` 或 `zoteroApiKeyEnv`。
+  Discord 可见的后台 Researcher 命令。以当前项目的 workflow-owned 状态为 source of truth，对 Zotero 项目集合做一次显式 reconciliation：刷新 `selected` / `baselines` / `writing-shortlist`，把已经不属于项目的论文**只从项目 collection 移除**，但**不删除也不丢进 Zotero 废纸篓**。该命令始终走后台 continuation，不应阻塞前台主会话；若 Zotero MCP 不可用，只需把 `unavailable` / `failed` 状态写回 `ZOTERO_SYNC_PACKET.json` 和 `ZOTERO_PACKET.md`。如果本地 Zotero add-item 流程需要 `apiKey`，可在插件配置中提供 `zoteroApiKey` 或 `zoteroApiKeyEnv`；如果还需要 `userId`，可继续提供 `zoteroUserId`。
 
 - `/zotero-project-library`  
   当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献同步到配置好的项目目录，维护 selected / included / excluded / baselines / writing-shortlist。默认项目根来自插件全局配置 `zoteroProjectRoot`，默认值是 `bot`。

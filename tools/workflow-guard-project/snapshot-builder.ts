@@ -735,6 +735,7 @@ export async function buildWorkflowSnapshotFromProjectState(
   );
   const zoteroApiKey = asString(policy?.zoteroApiKey);
   const zoteroApiKeyEnv = asString(policy?.zoteroApiKeyEnv);
+  const zoteroUserId = asString(policy?.zoteroUserId);
   const zoteroApiKeySource = zoteroApiKey
     ? "plugin_config"
     : zoteroApiKeyEnv
@@ -1085,6 +1086,7 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    zoteroUserId: zoteroUserId ?? null,
     zoteroApiKeyEnv: zoteroApiKeyEnv ?? null,
     zoteroApiKeySource,
     zoteroApiKeyConfigured: Boolean(zoteroApiKey || zoteroApiKeyEnv),

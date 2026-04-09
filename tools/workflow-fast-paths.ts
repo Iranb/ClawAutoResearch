@@ -2765,6 +2765,15 @@ export async function startBackgroundWorkflowRun(params: {
       zoteroApiKey: params.workflowPolicy.zoteroApiKey,
       zoteroApiKeyEnv: params.workflowPolicy.zoteroApiKeyEnv,
     });
+    const zoteroUserIdPrompt = readString(params.workflowPolicy.zoteroUserId)
+      ? [
+          `Zotero user id: ${readString(params.workflowPolicy.zoteroUserId)}.`,
+          "Use the configured Zotero user id when local Zotero MCP or add-item flows ask for userId.",
+        ].join("\n")
+      : [
+          "Zotero user id: unset.",
+          "If the local Zotero MCP server requires userId and none is configured, record needs_manual_followup durably instead of blocking the workflow.",
+        ].join("\n");
     const zoteroApiKeyPrompt =
       zoteroApiKeyAccess.source === "plugin_config"
         ? [
@@ -2783,9 +2792,9 @@ export async function startBackgroundWorkflowRun(params: {
     backgroundRunExtraSystemPrompt = backgroundRunExtraSystemPrompt
       ? mergeBackgroundWorkflowSystemPrompt(
           backgroundRunExtraSystemPrompt,
-          `${packetPrompt}\n${zoteroApiKeyPrompt}`
+          `${packetPrompt}\n${zoteroUserIdPrompt}\n${zoteroApiKeyPrompt}`
         )
-      : `${packetPrompt}\n${zoteroApiKeyPrompt}`;
+      : `${packetPrompt}\n${zoteroUserIdPrompt}\n${zoteroApiKeyPrompt}`;
   }
   const queueKey = buildBackgroundRunQueueKey({
     requesterSessionKey: params.agentCtx.sessionKey,

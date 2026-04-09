@@ -78,6 +78,9 @@
 - `zoteroApiKeyEnv`
   可选的 Zotero API key 环境变量名。推荐优先用这个字段，例如 `ZOTERO_API_KEY`；当本地 Zotero MCP / add-item 流程需要 `apiKey` 时，workflow 会提示 Agent 从这个环境变量取值，而不是把 secret 写进项目状态。
 
+- `zoteroUserId`
+  可选的 Zotero user id。像 `xbghc/zotero-mcp` 这类 server 在创建/写入条目时可能要求 `userId`；workflow 会把这个值作为非敏感配置透传给 Zotero 相关 prompt。
+
 - `papernexusApiBaseUrl`  
   可选的 PaperNexus 远程 Web/API 地址。现在它主要作为 `remote_api` compatibility mode 的回退入口；如果同时配置了 `papernexusMcpUrl`，workflow 会优先把 live graph 工作引导到远程 HTTP MCP。
 
@@ -287,10 +290,12 @@
 
 - 直接在插件配置里设置 `zoteroApiKey`
 - 更推荐设置 `zoteroApiKeyEnv = "ZOTERO_API_KEY"`，然后在运行环境里提供对应环境变量
+- 如果你的 Zotero MCP server 要求 user id，再设置 `zoteroUserId = "你的_zotero_user_id"`
 
 注意：
 
 - workflow 只会暴露“key 已配置/应从哪个 env 读取”这类提示，不会把原始 key 打进 prompt 或项目文件
+- `zoteroUserId` 会作为普通配置出现在 Zotero workflow 提示里，方便 agent 调用需要 `userId` 的 MCP server
 - 如果 Zotero MCP/add-item 流程要求 `apiKey`，而你没有配置 `zoteroApiKey` 或 `zoteroApiKeyEnv`，workflow 会保持 soft-fail，不把 Zotero 变成硬阻塞点
 
 ### 想让 PaperNexus token 走系统原生 keychain

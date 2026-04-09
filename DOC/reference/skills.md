@@ -70,8 +70,8 @@
 - `literature-review`  
   结构化文献综述包，负责 inclusion/exclusion、SoTA matrix、baseline coverage 和 gap synthesis，适合放在 `research-lit` 之后、`frontier-mapping` 和 `idea-phase` 之前。
 
-- `zotero-project-library`  
-  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献组织到配置好的 Zotero 项目目录下，维护 selected / included / excluded / baselines / writing-shortlist 这些集合，并生成项目侧 `ZOTERO_PACKET.md`。如果添加条目需要 `apiKey`，可通过插件配置里的 `zoteroApiKey` 或 `zoteroApiKeyEnv` 提供。
+- `zotero-project-library`
+  当本地 Zotero MCP server 已配置时，直接使用本地 Zotero，把项目文献组织到配置好的 Zotero 项目目录下，维护 selected / included / excluded / baselines / writing-shortlist 这些集合，并生成项目侧 `ZOTERO_PACKET.md`。如果添加条目需要 `apiKey`，可通过插件配置里的 `zoteroApiKey` 或 `zoteroApiKeyEnv` 提供；如果 MCP server 还要求 `userId`，可通过 `zoteroUserId` 提供。
 
 - `scientific-brainstorming`  
   在 graph-grounded brainstorm bundle 已经准备好的前提下，做有边界的科研发散、假设反转和跨领域联想；它增强 `idea-phase`，但不替代 PaperNexus 的 graph grounding。

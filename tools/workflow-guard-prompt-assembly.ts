@@ -647,13 +647,19 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
     if (
       snapshot.researchProgramZoteroProjectPath ||
+      snapshot.zoteroUserId ||
       snapshot.zoteroApiKeyConfigured ||
       snapshot.zoteroApiKeySource ||
       snapshot.zoteroApiKeyEnv
     ) {
       lines.push(
-        `Zotero local access: project_path=${snapshot.researchProgramZoteroProjectPath ?? "unset"}, api_key_source=${snapshot.zoteroApiKeySource ?? "unset"}, api_key_configured=${snapshot.zoteroApiKeyConfigured ? "true" : "false"}, api_key_env=${snapshot.zoteroApiKeyEnv ?? "unset"}`
+        `Zotero local access: project_path=${snapshot.researchProgramZoteroProjectPath ?? "unset"}, user_id=${snapshot.zoteroUserId ?? "unset"}, api_key_source=${snapshot.zoteroApiKeySource ?? "unset"}, api_key_configured=${snapshot.zoteroApiKeyConfigured ? "true" : "false"}, api_key_env=${snapshot.zoteroApiKeyEnv ?? "unset"}`
       );
+      if (snapshot.zoteroUserId) {
+        lines.push(
+          `Zotero local rule: use the configured Zotero user id ${snapshot.zoteroUserId} when local Zotero MCP or add-item flows ask for userId.`
+        );
+      }
       if (snapshot.zoteroApiKeySource === "plugin_config") {
         lines.push(
           "Zotero local rule: a configured Zotero API key is available from plugin settings. Use the configured key when local Zotero MCP or add-item flows ask for apiKey, and Never print or persist the raw key."

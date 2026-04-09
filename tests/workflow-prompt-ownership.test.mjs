@@ -51,6 +51,7 @@ function makeBaseSnapshot() {
     papernexusApiTokenAccount: null,
     papernexusMineruHttpUrl: null,
     papernexusAccessMode: null,
+    zoteroUserId: null,
     zoteroApiKeyEnv: null,
     zoteroApiKeySource: null,
     zoteroApiKeyConfigured: false,
@@ -380,6 +381,13 @@ test("getWorkflowGuardPolicy preserves explicit Zotero API key settings", () => 
   assert.equal(policy.zoteroApiKeyEnv, "ZOTERO_API_KEY");
 });
 
+test("getWorkflowGuardPolicy preserves explicit Zotero user id", () => {
+  const policy = getWorkflowGuardPolicy({
+    zoteroUserId: "123456",
+  });
+  assert.equal(policy.zoteroUserId, "123456");
+});
+
 test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus access safely", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {
@@ -439,6 +447,7 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured Zoter
       researchProgramTrackCount: 1,
       researchProgramActiveTrackCount: 1,
       researchProgramZoteroProjectPath: "Bot/demo-project",
+      zoteroUserId: "123456",
       zoteroApiKeySource: "plugin_config",
       zoteroApiKeyConfigured: true,
       zoteroApiKeyEnv: null,
@@ -447,8 +456,10 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured Zoter
 
   assert.match(prompt, /Zotero local access:/);
   assert.match(prompt, /project_path=Bot\/demo-project/);
+  assert.match(prompt, /user_id=123456/);
   assert.match(prompt, /api_key_source=plugin_config/);
   assert.match(prompt, /api_key_configured=true/);
+  assert.match(prompt, /configured Zotero user id/i);
   assert.match(prompt, /configured Zotero API key/i);
   assert.match(prompt, /Never print or persist the raw key/i);
   assert.doesNotMatch(prompt, /secret-test-key/);

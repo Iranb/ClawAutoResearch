@@ -61,6 +61,12 @@ Record:
 - Never print or persist the raw API key in chat, prompts, logs, or project files.
 - If Zotero requires `apiKey` and none is configured, mark the sync as `unavailable` or `needs_manual_followup` instead of blocking the workflow.
 
+## User ID Rule
+
+- If local Zotero MCP or add-item flows require `userId`, use the plugin-configured `zoteroUserId`.
+- `zoteroUserId` is treated as ordinary configuration rather than a secret, so it may appear in workflow prompts.
+- If Zotero requires `userId` and none is configured, mark the sync as `needs_manual_followup` instead of blocking the workflow.
+
 ## Sync Rules
 
 - Deduplicate by canonical paper identity, not by Zotero title text alone.
