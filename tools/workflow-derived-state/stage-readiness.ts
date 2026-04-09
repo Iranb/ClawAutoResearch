@@ -33,7 +33,11 @@ export function resolveStageReadiness(params: {
 }): StageReadinessState {
   const evidence = params.trackEvidence;
   const backgroundOpportunities = [...(params.backgroundOpportunities ?? [])];
-  const repairableSignals = [...evidence.repairable.repairableSignals];
+  const mixedEvidenceReady =
+    evidence.hasGraphBackedInnovationEvidence && evidence.presence === "mixed";
+  const repairableSignals = mixedEvidenceReady
+    ? []
+    : [...evidence.repairable.repairableSignals];
   const blockingSignals: StageReadinessSignal[] = [];
 
   if (!evidence.hasGraphBackedInnovationEvidence) {
@@ -54,7 +58,10 @@ export function resolveStageReadiness(params: {
       );
       backgroundOpportunities.push("continue background research");
     }
-  } else if (evidence.importedFromGraphEvidence || evidence.repairable.repairable) {
+  } else if (
+    !mixedEvidenceReady &&
+    (evidence.presence === "file_backed" || evidence.repairable.repairable)
+  ) {
     if (repairableSignals.length === 0) {
       repairableSignals.push("graph_evidence.materialization_pending");
     }
@@ -82,7 +89,7 @@ export function resolveStageReadiness(params: {
     blockingSignals.length === 0 &&
     repairableSignals.length === 0 &&
     evidence.hasGraphBackedInnovationEvidence &&
-    evidence.presence === "inline_only";
+    (evidence.presence === "inline_only" || evidence.presence === "mixed");
 
   const handoffMode: StageReadinessState["handoffMode"] = readyForOwnerWork
     ? "drive_stage"

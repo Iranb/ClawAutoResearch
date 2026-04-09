@@ -2,7 +2,6 @@ export type WorkflowIsolationMode = "workflow_roles_only" | "channel_shared";
 
 export const DEFAULT_PROJECT_WORKFLOW_ALLOWED_ROLES = [
   "researcher",
-  "planner",
   "orchestrator",
   "coder",
   "analyzer",
@@ -111,6 +110,7 @@ export function isWorkflowManagedAgentContext(params: {
   visibleBindingWorkflowRole?: string | null;
   allowedRoles?: readonly string[];
   allowedAgentIds?: readonly string[];
+  allowSessionKeyInference?: boolean;
 }): boolean {
   const allowedRoles = params.allowedRoles ?? DEFAULT_PROJECT_WORKFLOW_ALLOWED_ROLES;
   const allowedAgentIds = params.allowedAgentIds ?? [];
@@ -118,8 +118,10 @@ export function isWorkflowManagedAgentContext(params: {
     params.agentId,
     params.workflowRole,
     params.visibleBindingWorkflowRole,
-    extractAgentIdFromSessionKey(params.sessionKey),
   ];
+  if (params.allowSessionKeyInference !== false) {
+    candidates.push(extractAgentIdFromSessionKey(params.sessionKey));
+  }
   return candidates.some((candidate) =>
     isProjectWorkflowAgentId(candidate, allowedRoles, allowedAgentIds)
   );

@@ -53,6 +53,34 @@ test("before_prompt_build does not inject Workflow Guard into non-workflow agent
   assert.equal(result, undefined);
 });
 
+test("before_prompt_build does not inject Workflow Guard into custom dashboard agents that inherit a workflow-like session key", async () => {
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+
+  const result = await beforePromptBuild(
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello from dashboard" }],
+        },
+      ],
+    },
+    {
+      agentId: "designer",
+      workspaceDir: "/tmp/custom-agent-workspace",
+      sessionKey: "agent:researcher:dashboard:main",
+      sessionId: "session-designer",
+      messageChannel: "main",
+      trigger: "user",
+    }
+  );
+
+  assert.equal(result, undefined);
+});
+
 test("before_prompt_build still injects Workflow Guard into workflow agents", async () => {
   const harness = createHookHarness({
     injectWorkflowContext: true,
@@ -79,4 +107,30 @@ test("before_prompt_build still injects Workflow Guard into workflow agents", as
   );
 
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+});
+
+test("before_tool_call ignores workflow-specific guards for custom agents that inherit a workflow-like session key", async () => {
+  const harness = createHookHarness({
+    blockDiscordAgentMentions: true,
+  });
+  const beforeToolCall = harness.getHandler("before_tool_call");
+
+  const result = await beforeToolCall(
+    {
+      toolName: "message",
+      params: {
+        content: "@researcher please take a look",
+      },
+    },
+    {
+      agentId: "designer",
+      workspaceDir: "/tmp/custom-agent-workspace",
+      sessionKey: "agent:researcher:dashboard:main",
+      sessionId: "session-designer",
+      messageChannel: "main",
+      trigger: "user",
+    }
+  );
+
+  assert.equal(result, undefined);
 });

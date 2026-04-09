@@ -42,7 +42,6 @@ import { isWorkflowManagedAgentContext } from "./workflow-agent-isolation.js";
 import { isWorkflowStageBroadcastMessage } from "./stage-broadcast";
 import {
   getToolContext,
-  maybeAutoBindChannelProject,
   readString,
   requireObject,
   type PluginRegistrationContext,
@@ -53,10 +52,25 @@ import {
   enqueueWorkflowTask,
 } from "./workflow-coordination";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
-import {
-  maybeRefreshGraphPresenceForSnapshot,
-  reconcileBackgroundWorkflowStateForSnapshot,
-} from "./workflow-runtime-refresh.js";
+import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+
+const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
+  "researcher",
+  "orchestrator",
+  "coder",
+  "analyzer",
+  "academic_writer",
+  "reviewer",
+  "cross-reviewer",
+] as const;
+
+function isExplicitWorkflowHookAgent(agentCtx: ToolContext): boolean {
+  return isWorkflowManagedAgentContext({
+    agentId: agentCtx.agentId,
+    allowedRoles: WORKFLOW_GUARD_ALLOWED_AGENT_IDS,
+    allowSessionKeyInference: false,
+  });
+}
 
 function collectStringFragments(value: unknown, acc: string[], depth = 0): void {
   if (depth > 4 || value == null) {
@@ -157,42 +171,13 @@ async function resolveWorkflowSnapshotForAgentContext(params: {
   agentCtx: ToolContext;
   autoBind?: boolean;
 }) {
-  const workflowPolicy = params.plugin.getWorkflowPolicy();
-  const buildSnapshot = () =>
-    buildWorkflowSnapshot({
-      policy: workflowPolicy,
-      agentId: params.agentCtx.agentId,
-      workspaceDir: params.agentCtx.workspaceDir,
-      sessionKey: params.agentCtx.sessionKey,
-      sessionId: params.agentCtx.sessionId,
-      messageChannel: params.agentCtx.messageChannel,
-    });
-  let snapshot = await buildSnapshot();
-  await reconcileBackgroundWorkflowStateForSnapshot({
-    snapshot,
-    workflowPolicy,
-    runtimeSubagent: params.plugin.api.runtime?.subagent,
+  return resolveWorkflowSnapshotContext({
+    plugin: params.plugin,
+    agentCtx: params.agentCtx,
+    autoBind: params.autoBind,
+    stagePreflight: true,
+    preflightTrigger: "workflow_hook:prompt_or_tool",
   });
-  snapshot = await buildSnapshot();
-  if (
-    await maybeRefreshGraphPresenceForSnapshot({
-      snapshot,
-      workflowPolicy,
-    })
-  ) {
-    snapshot = await buildSnapshot();
-  }
-  if (params.autoBind !== false) {
-    await maybeAutoBindChannelProject({
-      policy: workflowPolicy,
-      agentCtx: params.agentCtx,
-      snapshot,
-    });
-  }
-  return {
-    workflowPolicy,
-    snapshot,
-  };
 }
 
 function buildRequesterToolContext(
@@ -572,12 +557,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     "before_prompt_build",
     async (event, hookCtx) => {
       const agentCtx = getToolContext(hookCtx);
-      if (
-        !isWorkflowManagedAgentContext({
-          agentId: agentCtx.agentId,
-          sessionKey: agentCtx.sessionKey,
-        })
-      ) {
+      if (!isExplicitWorkflowHookAgent(agentCtx)) {
         return;
       }
       const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
@@ -724,6 +704,9 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     "before_tool_call",
     async (event, hookCtx) => {
       const agentCtx = getToolContext(hookCtx);
+      if (!isExplicitWorkflowHookAgent(agentCtx)) {
+        return;
+      }
       const toolName = String(event.toolName ?? "");
       if (!shouldQueueBeforeToolCall(toolName)) {
         return runBeforeToolCallHook({
@@ -781,6 +764,10 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     async (event, hookCtx) => {
       const workflowPolicy = plugin.getWorkflowPolicy();
       if (!workflowPolicy.enforceWorkflowBoundaries) {
+        return;
+      }
+      const requesterAgentCtx = getToolContext(hookCtx);
+      if (!isExplicitWorkflowHookAgent(requesterAgentCtx)) {
         return;
       }
       const requesterRole = inferTargetRoleFromToolParams({

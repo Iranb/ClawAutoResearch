@@ -113,10 +113,6 @@ import {
   type PapernexusWrapperRunRequest,
 } from "./workflow-fast-paths";
 import {
-  maybeRefreshGraphPresenceForSnapshot,
-  reconcileBackgroundWorkflowStateForSnapshot,
-} from "./workflow-runtime-refresh.js";
-import {
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   retireBackgroundWorkflowRuns,
@@ -124,7 +120,6 @@ import {
 import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import {
   asObject,
-  maybeAutoBindChannelProject,
   readNumber,
   readString,
   requireObject,
@@ -132,6 +127,9 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
+import { readJsonIfExists, pathExists } from "./workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { loadTrackInnovationEvidence } from "./workflow-derived-state/track-evidence";
 import {
   buildWorkflowQueueContext,
   enqueueWorkflowTask,
@@ -143,6 +141,7 @@ import {
   isTrackedPapernexusImportWrapper,
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
+import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -195,6 +194,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_snapshot: "buildWorkflowSnapshot",
+  diagnose_track_evidence: "loadTrackInnovationEvidence",
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
   check_graph_presence: "checkGraphPresenceForWorkflow",
@@ -292,42 +292,19 @@ async function resolveWorkflowToolState(params: {
   plugin: PluginRegistrationContext;
   agentCtx: ToolContext;
   rawParams: Record<string, unknown>;
+  action?: string;
   autoBind?: boolean;
 }): Promise<WorkflowToolState> {
-  const workflowPolicy = params.plugin.getWorkflowPolicy();
   const channelBinding = asObject(params.rawParams.channelBinding);
-  const buildSnapshot = () =>
-    buildWorkflowSnapshot({
-      policy: workflowPolicy,
-      agentId: params.agentCtx.agentId,
-      workspaceDir: params.agentCtx.workspaceDir,
-      sessionKey: params.agentCtx.sessionKey,
-      sessionId: params.agentCtx.sessionId,
-      messageChannel: params.agentCtx.messageChannel,
-      channelKey: readString(channelBinding?.channelKey),
-    });
-  let snapshot = await buildSnapshot();
-  await reconcileBackgroundWorkflowStateForSnapshot({
-    snapshot,
-    workflowPolicy,
-    runtimeSubagent: params.plugin.api.runtime?.subagent,
+  const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotContext({
+    plugin: params.plugin,
+    agentCtx: params.agentCtx,
+    channelKey: readString(channelBinding?.channelKey) ?? null,
+    autoBind: params.autoBind,
+    stagePreflight:
+      params.action === "get_snapshot" || params.action === "diagnose_track_evidence",
+    preflightTrigger: params.action ? `workflow_tool:${params.action}` : "workflow_tool",
   });
-  snapshot = await buildSnapshot();
-  if (
-    await maybeRefreshGraphPresenceForSnapshot({
-      snapshot,
-      workflowPolicy,
-    })
-  ) {
-    snapshot = await buildSnapshot();
-  }
-  if (params.autoBind !== false) {
-    await maybeAutoBindChannelProject({
-      policy: workflowPolicy,
-      agentCtx: params.agentCtx,
-      snapshot,
-    });
-  }
 
   const workspaceProjectRoot = await (async () => {
     const workspaceDir = readString(params.agentCtx.workspaceDir);
@@ -396,6 +373,102 @@ function requireWorkflowProjectRoot(state: WorkflowToolState): string {
     throw new Error(state.projectRequiredMessage);
   }
   return state.projectRoot;
+}
+
+function normalizeTrackStatus(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readTrackId(track: Record<string, unknown>): string | null {
+  const trackId = track.track_id ?? track.trackId;
+  return typeof trackId === "string" && trackId.trim().length > 0 ? trackId.trim() : null;
+}
+
+async function diagnoseTrackEvidence(projectRoot: string) {
+  const manifestPath = resolveProjectArtifactPath(projectRoot, "PROJECT_MANIFEST.json");
+  const trackRegistryPath = resolveProjectArtifactPath(projectRoot, "TRACK_REGISTRY.json");
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+  const trackRegistry =
+    (await readJsonIfExists<Record<string, unknown>>(trackRegistryPath)) ?? {};
+  const researchProgram =
+    manifest.research_program && typeof manifest.research_program === "object"
+      ? (manifest.research_program as Record<string, unknown>)
+      : null;
+  const programTracks = Array.isArray(researchProgram?.tracks)
+    ? (researchProgram?.tracks as Array<Record<string, unknown>>)
+    : [];
+  const programActiveTrackIds = programTracks
+    .map((track) => (track && typeof track === "object" ? track : null))
+    .filter((track): track is Record<string, unknown> => Boolean(track))
+    .filter((track) => normalizeTrackStatus(track.status) === "active")
+    .map((track) => readTrackId(track))
+    .filter((trackId): trackId is string => Boolean(trackId));
+  const registryTracks = Array.isArray(trackRegistry.tracks)
+    ? (trackRegistry.tracks as Array<Record<string, unknown>>)
+    : [];
+
+  const tracks = await Promise.all(
+    registryTracks.map(async (track) => {
+      const trackId = readTrackId(track);
+      const evidence = await loadTrackInnovationEvidence({
+        projectRoot,
+        track,
+      });
+      const reasoningPacketDir =
+        typeof track.reasoning_packet_dir === "string" ? track.reasoning_packet_dir : null;
+      const graphEvidenceResolvedPath = resolveProjectArtifactPath(
+        projectRoot,
+        evidence.graphEvidencePath
+      );
+      return {
+        trackId,
+        status: normalizeTrackStatus(track.status),
+        isActiveInRegistry: normalizeTrackStatus(track.status) === "active",
+        isActiveInResearchProgram: trackId
+          ? programActiveTrackIds.includes(trackId)
+          : false,
+        reasoningPacketDir,
+        reasoningPacketResolvedPath: resolveProjectArtifactPath(projectRoot, reasoningPacketDir),
+        graphEvidencePath: evidence.graphEvidencePath,
+        graphEvidenceResolvedPath,
+        graphEvidenceFileExists: graphEvidenceResolvedPath
+          ? await pathExists(graphEvidenceResolvedPath)
+          : false,
+        presence: evidence.presence,
+        hasGraphBackedInnovationEvidence: evidence.hasGraphBackedInnovationEvidence,
+        importedFromGraphEvidence: evidence.importedFromGraphEvidence,
+        evidencePointerCount: evidence.evidencePointers.length,
+        linkedGraphNodeCount: evidence.linkedGraphNodes.length,
+        relationPatternCount: evidence.relationPatterns.length,
+        diagnostics: evidence.diagnostics,
+        repairable: evidence.repairable,
+      };
+    })
+  );
+
+  return {
+    projectRoot,
+    manifestPath,
+    trackRegistryPath,
+    currentStage: readString(manifest.current_stage) ?? null,
+    currentMicroStage: readString(manifest.current_micro_stage) ?? null,
+    ownerAgent: readString(manifest.owner_agent) ?? null,
+    registryDeclaredActiveTracks: readNumber(trackRegistry.active_tracks) ?? null,
+    researchProgramActiveTrackCount: programActiveTrackIds.length,
+    programActiveTrackIds,
+    registryActiveTrackIds: tracks
+      .filter((track) => track.isActiveInRegistry && track.trackId)
+      .map((track) => track.trackId),
+    missingGraphBackedInnovationEvidenceTrackIds: tracks
+      .filter((track) => track.isActiveInRegistry && !track.hasGraphBackedInnovationEvidence)
+      .map((track) => track.trackId),
+    tracks,
+  };
 }
 
 function buildUnboundProjectAutoIteratorPayload(params: {
@@ -611,6 +684,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "string",
             enum: [
               "get_snapshot",
+              "diagnose_track_evidence",
               "get_papernexus_remote_access",
               "get_papernexus_progress",
               "check_graph_presence",
@@ -918,6 +992,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             plugin,
             agentCtx: ctx,
             rawParams: params,
+            action,
           });
           const {
             workflowPolicy,
@@ -957,6 +1032,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             switch (action) {
               case "get_snapshot":
                 return textResponse(JSON.stringify(snapshot, null, 2));
+            case "diagnose_track_evidence": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const diagnosis = await diagnoseTrackEvidence(resolvedProjectRoot);
+              return textResponse(JSON.stringify(diagnosis, null, 2));
+            }
             case "get_papernexus_remote_access": {
               const access = await inspectPapernexusRemoteAccess({
                 apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
@@ -2507,6 +2587,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           plugin,
           agentCtx: ctx,
           rawParams: params,
+          action,
           autoBind: false,
         });
         return enqueueWorkflowTask({
