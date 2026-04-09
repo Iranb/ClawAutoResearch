@@ -22,10 +22,11 @@ import {
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
+  buildZoteroSyncBackgroundCommand,
   drainQueuedBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
-} from "./workflow-fast-paths.js";
+} from "./workflow-fast-paths.ts";
 import {
   readGateReviewStore,
 } from "./workflow-auto-gate.js";
@@ -202,6 +203,19 @@ function buildBackgroundRunRequest(
       ...overrides,
     };
   }
+  if (kind === "zotero_sync") {
+    return {
+      kind,
+      commandText: buildZoteroSyncBackgroundCommand(ctx.commandBody),
+      topic: extractQuotedSegment(ctx.args),
+      summary:
+        overrides.summary ??
+        `Background Zotero sync started for ${
+          readString(overrides.projectId) ?? "the current project"
+        }.`,
+      ...overrides,
+    };
+  }
   return {
     kind,
     commandText: buildResumePipelineBackgroundCommand(ctx.commandBody),
@@ -342,7 +356,9 @@ function createBackgroundWorkflowCommandHandler(
         sessionKey: targetSessionKey,
         messageChannel: ctx.channel,
       });
-      if (kind === "graph_build" && !snapshot.projectRoot) {
+      const requiresProjectBoundConversation =
+        kind === "graph_build" || kind === "zotero_sync";
+      if (requiresProjectBoundConversation && !snapshot.projectRoot) {
         return {
           text:
             `❌ ${commandLabel} requires a project-bound workflow conversation. ` +
@@ -395,13 +411,19 @@ function createBackgroundWorkflowCommandHandler(
             kind === "graph_build"
               ? injectGraphBuildRepairFlags(ctx.commandBody, commandSnapshot)
               : undefined;
+          const zoteroSyncCommandText =
+            kind === "zotero_sync"
+              ? buildZoteroSyncBackgroundCommand(ctx.commandBody)
+              : undefined;
 
+      const researcherBackgroundKind =
+        kind === "graph_build" || kind === "zotero_sync";
       const resolvedBackgroundAgentId =
-        kind === "graph_build"
+        researcherBackgroundKind
           ? "researcher"
           : target.agentId ?? currentSnapshot.role ?? undefined;
       const resolvedBackgroundWorkspaceDir =
-        kind === "graph_build" &&
+        researcherBackgroundKind &&
         typeof api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
           ? readString(api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, "researcher")) ??
             target.workspaceDir ??
@@ -420,12 +442,13 @@ function createBackgroundWorkflowCommandHandler(
             snapshot: commandSnapshot,
             backgroundRun: buildBackgroundRunRequest(kind, ctx, {
               ...(graphBuildCommandText ? { commandText: graphBuildCommandText } : {}),
+              ...(zoteroSyncCommandText ? { commandText: zoteroSyncCommandText } : {}),
               projectId:
                 explicitProject?.projectId ??
-                (kind === "graph_build" ? commandSnapshot.projectId ?? undefined : undefined),
+                (researcherBackgroundKind ? commandSnapshot.projectId ?? undefined : undefined),
               projectRoot:
                 explicitProject?.projectRoot ??
-                (kind === "graph_build" ? commandSnapshot.projectRoot ?? undefined : undefined),
+                (researcherBackgroundKind ? commandSnapshot.projectRoot ?? undefined : undefined),
             }),
           });
         },
@@ -721,6 +744,17 @@ export function createResearchWorkflowCommands(
       handler: createBackgroundWorkflowCommandHandler(
         api,
         "graph_build",
+        resolvedDeps
+      ),
+    },
+    {
+      name: "zotero-sync",
+      description:
+        "Reconcile the current project's Zotero collections in a background Researcher continuation without blocking the foreground workflow session.",
+      acceptsArgs: true,
+      handler: createBackgroundWorkflowCommandHandler(
+        api,
+        "zotero_sync",
         resolvedDeps
       ),
     },

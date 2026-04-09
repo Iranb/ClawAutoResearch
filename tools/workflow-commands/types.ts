@@ -30,7 +30,8 @@ export type WorkflowBackgroundCommandKind =
   | "research_pipeline"
   | "research_queue"
   | "resume_pipeline"
-  | "graph_build";
+  | "graph_build"
+  | "zotero_sync";
 
 export type WorkflowCommandKind =
   | WorkflowBackgroundCommandKind
@@ -79,6 +80,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   research_queue: "/research-queue",
   resume_pipeline: "/resume-pipeline",
   graph_build: "/graph-build",
+  zotero_sync: "/zotero-sync",
   project_init: "/project-init",
   workflow_status: "/workflow-status",
 };

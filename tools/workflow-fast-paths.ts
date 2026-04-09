@@ -47,6 +47,7 @@ import {
 import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { materializeZoteroSyncPacket } from "./workflow-zotero-sync.ts";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
@@ -376,6 +377,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "research_queue":
     case "resume_pipeline":
     case "graph_build":
+    case "zotero_sync":
     case "idle_research":
       return "research";
     case "papernexus_skill":
@@ -2171,6 +2173,17 @@ export function buildGraphBuildBackgroundCommand(commandText: string): string {
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+export function buildZoteroSyncBackgroundCommand(commandText: string): string {
+  const trimmed = commandText.trim();
+  if (!trimmed) {
+    return '/zotero-sync "current project" -- __BACKGROUND_CONTINUATION__: true';
+  }
+  if (hasBackgroundContinuationMarker(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
+}
+
 export function buildPapernexusSkillBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
   if (hasBackgroundContinuationMarker(trimmed)) {
@@ -2210,6 +2223,8 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
   const commandText = readString(params?.commandText) ?? null;
   const graphBuildContinuation =
     normalizedKind === "graph_build" || /^\/graph-build\b/i.test(commandText ?? "");
+  const zoteroSyncContinuation =
+    normalizedKind === "zotero_sync" || /^\/zotero-sync\b/i.test(commandText ?? "");
   const graphBuildRepairContinuation =
     graphBuildContinuation &&
     /--repair-import(?:\s+|=)(?:true|1|yes)\b/i.test(commandText ?? "");
@@ -2269,6 +2284,20 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
         "Keep repair progress durable through research_workflow.set_paper_ingestion: mirror active_batches, batch_items, completed_papers, and paper_operations, and clear repair_required only after a fresh batch is running or graph_presence_status becomes ready."
       );
     }
+  }
+  if (zoteroSyncContinuation) {
+    lines.push(
+      "Zotero sync workflow rule: treat /zotero-sync as a bounded project-wide bibliography reconciliation pass, not as an inline foreground task."
+    );
+    lines.push(
+      "Use the local Zotero MCP server through /zotero-project-library, reconcile the configured project collections, and keep ZOTERO_SYNC_PACKET.json plus ZOTERO_PACKET.md truthful."
+    );
+    lines.push(
+      "Collection safety rule: remove stale papers only from the project's Zotero collections; do not delete or trash Zotero items themselves."
+    );
+    lines.push(
+      "Foreground responsiveness rule: do not block the foreground session waiting on Zotero MCP work; if Zotero is unavailable, record unavailable or failed state durably and exit."
+    );
   }
   if (importLifecycleCommand) {
     if (batchImportCommand) {
@@ -2656,6 +2685,10 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildGraphBuildBackgroundCommand(
             `/graph-build "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
           )
+      : normalizedKind === "zotero_sync"
+        ? buildZoteroSyncBackgroundCommand(
+            `/zotero-sync "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
+          )
       : normalizedKind === "idle_research"
         ? requestedCommandText ?? null
       : null);
@@ -2663,7 +2696,7 @@ export async function startBackgroundWorkflowRun(params: {
     throw new Error(
       isPapernexusBackgroundKind(normalizedKind)
         ? "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
-        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, or graph_build."
+        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, graph_build, or zotero_sync."
     );
   }
   if (
@@ -2691,6 +2724,28 @@ export async function startBackgroundWorkflowRun(params: {
     readString(params.backgroundRun.projectRoot) ??
     params.snapshot.projectRoot ??
     null;
+  let backgroundRunExtraSystemPrompt = readString(params.backgroundRun.extraSystemPrompt) ?? null;
+  if (normalizedKind === "zotero_sync" && resolvedProjectRoot && resolvedProjectId) {
+    const packet = await materializeZoteroSyncPacket({
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
+      zoteroProjectRoot: params.workflowPolicy.zoteroProjectRoot,
+      trigger: "manual_command",
+    });
+    const packetPrompt = [
+      "Zotero sync packet path: {PROJ}/researcher/ZOTERO_SYNC_PACKET.json",
+      `Effective Zotero project path: ${packet.zoteroProjectPath ?? "<configured-root>/<project-id>"}.`,
+      "Reconcile selected, baselines, and writing-shortlist against workflow-owned project state.",
+      "If a paper no longer belongs to the project, remove it only from the project collections and never delete or trash the Zotero item.",
+      "Do not block the foreground session while waiting on Zotero MCP work.",
+    ].join("\n");
+    backgroundRunExtraSystemPrompt = backgroundRunExtraSystemPrompt
+      ? mergeBackgroundWorkflowSystemPrompt(
+          backgroundRunExtraSystemPrompt,
+          packetPrompt
+        )
+      : packetPrompt;
+  }
   const queueKey = buildBackgroundRunQueueKey({
     requesterSessionKey: params.agentCtx.sessionKey,
     family: normalizedFamily,
@@ -2723,7 +2778,7 @@ export async function startBackgroundWorkflowRun(params: {
   });
   const mergedContinuationSystemPrompt = mergeBackgroundWorkflowSystemPrompt(
     continuationSystemPrompt,
-    params.backgroundRun.extraSystemPrompt
+    backgroundRunExtraSystemPrompt
   );
   const queueIfRuntimeUnavailable = async (reason?: string | null) =>
     queueBackgroundWorkflowUntilRuntimeRecovers({
@@ -2740,7 +2795,7 @@ export async function startBackgroundWorkflowRun(params: {
         readString(params.backgroundRun.summary) ??
         `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
       commandText,
-      extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
+      extraSystemPrompt: backgroundRunExtraSystemPrompt,
       unavailableReason: reason,
     });
 

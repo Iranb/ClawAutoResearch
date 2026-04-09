@@ -31,6 +31,7 @@ import {
   buildGraphBuildBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
+  buildZoteroSyncBackgroundCommand,
   clearBackgroundWorkflowQueueForTests,
   drainQueuedBackgroundWorkflowRuns,
   clearBackgroundWorkflowRunRegistryForTests,
@@ -410,6 +411,12 @@ test("buildGraphBuildBackgroundCommand appends the continuation marker once", ()
   assert.equal(buildGraphBuildBackgroundCommand(command), command);
 });
 
+test("buildZoteroSyncBackgroundCommand appends the continuation marker once", () => {
+  const command = buildZoteroSyncBackgroundCommand('/zotero-sync "paper-lab"');
+  assert.match(command, /__BACKGROUND_CONTINUATION__:\s*true/i);
+  assert.equal(buildZoteroSyncBackgroundCommand(command), command);
+});
+
 test("buildPapernexusSkillBackgroundCommand appends the continuation marker once", () => {
   const command = buildPapernexusSkillBackgroundCommand(
     'python3 scripts/pn_graph_query.py --api-base "https://papernexus.example/api" --corpus "demo" query "topic" --limit 8'
@@ -655,6 +662,59 @@ test("startBackgroundWorkflowRun gives graph-build continuations explicit Zotero
   assert.match(runCalls[0].extraSystemPrompt ?? "", /bot\/<project-id>|bot\/paper-lab/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_PACKET\.md/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /graph readiness|brainstorm bundle/i);
+});
+
+test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-blocking reconciliation instructions", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-zotero-sync-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+      zoteroProjectRoot: "Bot",
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-bg-zotero-sync-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      projectId: "paper-lab",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "zotero_sync",
+      projectId: "paper-lab",
+      projectRoot: path.join(projectsRoot, "paper-lab"),
+      commandText: '/zotero-sync "paper-lab" -- __BACKGROUND_CONTINUATION__: true',
+      summary: "Background Zotero sync started for paper-lab.",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^\/zotero-sync\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /zotero-project-library/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /Bot\/paper-lab|<configured-root>\/<project-id>/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /do not block the foreground session|stay responsive/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /remove.*project collections/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_SYNC_PACKET\.json/i);
 });
 
 test("startBackgroundWorkflowRun gives graph-build repair continuations explicit import repair instructions", async (t) => {

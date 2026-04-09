@@ -611,6 +611,68 @@ test("graph-build command auto-injects repair flags when paper ingestion require
   assert.match(captured.backgroundRun.commandText, /--shared-corpus "?GCD"?/i);
 });
 
+test("zotero-sync command starts a background continuation for the current project and routes it to Researcher", async () => {
+  let captured = null;
+  const api = makeApi();
+  const zoteroSyncCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "orchestrator",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          projectResolutionSource: "channel_binding",
+          channelProjectBindingsEnabled: true,
+          unreadMailbox: [],
+          idleResearchEnabled: false,
+          idleResearchDue: false,
+          idleResearchTopic: null,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = params;
+        return {
+          started: true,
+          runId: "bg-run-zotero-sync",
+          sessionKey: "agent:researcher:discord:group:paper-lab:subagent:zotero-sync",
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background Zotero sync started for paper-lab.",
+        };
+      },
+    }),
+    "zotero-sync"
+  );
+
+  const result = await zoteroSyncCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/zotero-sync "paper-lab"',
+    args: '"paper-lab"',
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background Zotero sync started for paper-lab.");
+  assert.equal(captured.agentCtx.agentId, "researcher");
+  assert.equal(captured.agentCtx.workspaceDir, "/tmp/workspace-researcher");
+  assert.equal(captured.backgroundRun.kind, "zotero_sync");
+  assert.equal(captured.backgroundRun.projectId, "paper-lab");
+  assert.equal(captured.backgroundRun.projectRoot, "/tmp/projects/paper-lab");
+  assert.match(captured.backgroundRun.commandText, /^\/zotero-sync\b/);
+  assert.match(captured.backgroundRun.commandText, /__BACKGROUND_CONTINUATION__:\s*true/i);
+});
+
 test("workflow commands opportunistically replay queued background runs when runtime access returns", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "paper-lab");
