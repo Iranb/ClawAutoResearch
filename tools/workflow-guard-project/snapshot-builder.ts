@@ -19,6 +19,15 @@ import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
 import {
+  loadTrackInnovationEvidence,
+} from "../workflow-derived-state/track-evidence.js";
+import {
+  resolveStageReadiness,
+} from "../workflow-derived-state/stage-readiness.js";
+import {
+  resolveHandoffEligibility,
+} from "../workflow-derived-state/handoff-eligibility.js";
+import {
   inboxForRole,
 } from "../workflow-guard-collaboration";
 import {
@@ -115,6 +124,13 @@ type ResearchProgramState = ReturnType<typeof normalizeResearchProgramState>;
 type BrainstormCycleState = ReturnType<typeof normalizeBrainstormCycleState>;
 type IdleResearchState = ReturnType<typeof normalizeIdleResearchState>;
 type InnovationReflectionState = ReturnType<typeof normalizeInnovationReflectionState>;
+type WorkflowEvidenceStatus = "ready" | "repairable" | "missing";
+
+type WorkflowDerivedEvidenceSummary = {
+  status: WorkflowEvidenceStatus;
+  summary: string | null;
+  diagnostics: string[];
+};
 
 export type WorkflowSnapshotBuilderDeps = {
   getMissingStageSignals?: (params: {
@@ -434,6 +450,95 @@ function getActiveTracks(trackRegistry: Record<string, unknown> | null): Array<R
   return getTracks(trackRegistry).filter((track) => normalizeStage(track.status) === "active");
 }
 
+function formatWorkflowTrackLabel(track: Record<string, unknown>, fallbackIndex: number): string {
+  return (
+    pickString(track, ["track_id", "trackId", "id", "name"]) ??
+    `track-${fallbackIndex + 1}`
+  );
+}
+
+async function summarizeWorkflowDerivedEvidence(params: {
+  projectRoot: string | null;
+  trackRegistry: Record<string, unknown> | null;
+  currentStage: string | null;
+}): Promise<WorkflowDerivedEvidenceSummary> {
+  if (!params.projectRoot) {
+    return {
+      status: "ready",
+      summary: null,
+      diagnostics: [],
+    };
+  }
+
+  const activeTracks = getActiveTracks(params.trackRegistry).slice(0, 4);
+  if (activeTracks.length === 0) {
+    return {
+      status: "ready",
+      summary: null,
+      diagnostics: [],
+    };
+  }
+
+  const diagnostics: string[] = [];
+  let sawRepairable = false;
+  let sawMissing = false;
+
+  for (const [index, track] of activeTracks.entries()) {
+    const trackLabel = formatWorkflowTrackLabel(track, index);
+    const evidence = await loadTrackInnovationEvidence({
+      projectRoot: params.projectRoot,
+      track,
+    });
+    const readiness = resolveStageReadiness({
+      stage: params.currentStage,
+      trackEvidence: evidence,
+    });
+    const handoff = resolveHandoffEligibility(readiness);
+
+    if (handoff.recommendedAction === "repair_artifact") {
+      sawRepairable = true;
+      const detail =
+        evidence.presence === "invalid"
+          ? "invalid GRAPH_EVIDENCE.json payload"
+          : evidence.presence === "file_backed" || evidence.presence === "mixed"
+            ? "file-backed GRAPH_EVIDENCE.json pending canonicalization"
+            : "workflow-owned graph evidence repair pending";
+      diagnostics.push(`track ${trackLabel}: ${detail}`);
+      continue;
+    }
+
+    if (handoff.recommendedAction === "background") {
+      sawMissing = true;
+      diagnostics.push(
+        `track ${trackLabel}: ${
+          evidence.graphEvidencePath ? "missing GRAPH_EVIDENCE.json" : "missing graph-backed evidence"
+        }`
+      );
+      continue;
+    }
+
+    diagnostics.push(
+      `track ${trackLabel}: ${
+        evidence.presence === "inline_only"
+          ? "inline graph evidence present"
+          : "graph evidence ready"
+      }`
+    );
+  }
+
+  const status: WorkflowEvidenceStatus = sawMissing
+    ? "missing"
+    : sawRepairable
+      ? "repairable"
+      : "ready";
+
+  return {
+    status,
+    summary: diagnostics.length > 0 ? `${status}: ${diagnostics.slice(0, 2).join("; ")}` : null,
+    diagnostics,
+  };
+}
+
 function isLocalPapernexusStoragePath(value: string | null | undefined): boolean {
   const raw = value?.trim();
   if (!raw) {
@@ -652,11 +757,17 @@ export async function buildWorkflowSnapshotFromProjectState(
         })
       : [];
   const blockingReasonRaw = asString(projectState.manifest?.blocking_reason);
+  const derivedEvidence = await summarizeWorkflowDerivedEvidence({
+    projectRoot: projectState.projectRoot,
+    trackRegistry: projectState.trackRegistry,
+    currentStage,
+  });
   const blockingReason =
-    missingStageSignals.length === 0 &&
-    /^waiting for .+ to satisfy:/i.test(blockingReasonRaw ?? "")
-      ? null
-      : blockingReasonRaw;
+    derivedEvidence.status === "ready"
+      ? /^waiting for .+ to satisfy:/i.test(blockingReasonRaw ?? "")
+        ? null
+        : blockingReasonRaw
+      : derivedEvidence.summary ?? blockingReasonRaw;
   const unreadMailbox = inboxForRole({
     mailbox: projectState.mailbox,
     role,
@@ -912,6 +1023,8 @@ export async function buildWorkflowSnapshotFromProjectState(
     nextAction: asString(projectState.manifest?.next_action),
     resumeAction: asString(projectState.manifest?.resume_action),
     blockingReason,
+    workflowEvidenceStatus: derivedEvidence.status,
+    workflowEvidenceSummary: derivedEvidence.summary,
     allowedWriteScopes: role ? ROLE_POLICIES[role].writeScopeLabels : [],
     allowedContacts: role
       ? Array.from(

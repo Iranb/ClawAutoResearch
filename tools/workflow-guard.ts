@@ -100,7 +100,7 @@ import {
   resolveTrackArtifactPath,
 } from "./workflow-guard-core/paths";
 import {
-  loadTrackInnovationEvidence,
+  loadTrackInnovationEvidence as loadTrackInnovationEvidenceFromHelper,
   trackHasGraphBackedInnovationEvidence as trackHasGraphBackedInnovationEvidenceFromHelper,
 } from "./workflow-guard-track-evidence.js";
 import {
@@ -1413,6 +1413,8 @@ export type WorkflowSnapshot = {
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;
+  workflowEvidenceStatus: "ready" | "repairable" | "missing";
+  workflowEvidenceSummary: string | null;
   allowedWriteScopes: string[];
   allowedContacts: WorkflowRole[];
   allowedSpawns: WorkflowRole[];
@@ -5589,13 +5591,13 @@ async function getMissingStageSignals(params: {
           getActiveTracks,
           asString,
           trackHasGraphBackedInnovationEvidence,
-          loadTrackInnovationEvidence,
           getBrainstormCycleMissingSignals,
           normalizeResearchProgramState,
           getResearchProgramValidationErrors,
           getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
+          loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
           getCodeStageBundleMissingSignals,
         }
       );
@@ -5625,6 +5627,7 @@ async function getMissingStageSignals(params: {
           getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
+          loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
           getCodeStageBundleMissingSignals,
         }
       );
@@ -5653,6 +5656,7 @@ async function getMissingStageSignals(params: {
           getResearchProgramPlanValidationErrors,
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
+          loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
           getCodeStageBundleMissingSignals,
         }
       );

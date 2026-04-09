@@ -1576,6 +1576,16 @@ test("research_workflow materialize_ideation_contract imports per-track GRAPH_EV
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+  const snapshotBeforeRepair = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(
+    snapshotBeforeRepair.missingStageSignals.some((signal) =>
+      /active track .*missing graph-backed innovation evidence/i.test(signal)
+    ),
+    false
+  );
+
   await executeWorkflowTool(tool, {
     action: "run_brainstorm_cycle",
     brainstormCycle: {

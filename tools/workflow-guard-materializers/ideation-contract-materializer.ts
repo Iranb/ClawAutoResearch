@@ -180,12 +180,34 @@ export async function materializeIdeationContractImpl(
     activeTracks.find(
       (track) => pickString(track, ["track_id", "trackId"]) === selectedTrackId
     ) ?? null;
+  const activeTrackEvidenceEntries = await Promise.all(
+    activeTracks.map(async (track) => {
+      const trackId = pickString(track, ["track_id", "trackId"]);
+      if (!trackId) {
+        return null;
+      }
+      return [trackId, await loadTrackInnovationEvidence({ projectRoot, track })] as const;
+    })
+  );
+  const activeTrackEvidenceById = new Map(
+    activeTrackEvidenceEntries.filter(
+      (entry): entry is readonly [string, Awaited<ReturnType<typeof loadTrackInnovationEvidence>>] =>
+        Boolean(entry)
+    )
+  );
+  const selectedTrackEvidence =
+    (selectedTrackId ? activeTrackEvidenceById.get(selectedTrackId) ?? null : null) ?? null;
   const researchProgramState = normalizeResearchProgramState(manifest.research_program);
   const selectedProgramTrack = deps.resolveResearchProgramTrack(manifest, selectedTrackId);
   const graphBasisPaths = normalizeIdeationGraphBasisPaths(
     asRecord(patch.graphBasisPaths ?? patch.graph_basis_paths) ??
       serializeIdeationGraphBasisPaths(current.graphBasisPaths)
   );
+  const requestedBasisStage =
+    normalizeStage(patch.basisStage ?? patch.basis_stage) ??
+    current.basisStage ??
+    brainstormState.basisStage ??
+    "frontier_mapping";
 
   const [
     frontierReportText,
@@ -258,7 +280,9 @@ export async function materializeIdeationContractImpl(
       const novelty = clampUnitScore(option.score, 0.72);
       const feasibility = clampUnitScore(option.score, 0.68);
       const relevance = clampUnitScore(
-        selectedTrack && deps.trackHasGraphBackedInnovationEvidence(selectedTrack) ? 0.86 : 0.72,
+        selectedTrackEvidence && selectedTrackEvidence.hasGraphBackedInnovationEvidence
+          ? 0.86
+          : 0.72,
         0.72
       );
       const clarity = clampUnitScore(
@@ -290,7 +314,8 @@ export async function materializeIdeationContractImpl(
       ? []
       : activeTracks.map((track, index) => {
           const trackId = pickString(track, ["track_id", "trackId"]) ?? `track-${index + 1}`;
-          const novelty = deps.trackHasGraphBackedInnovationEvidence(track) ? 0.82 : 0.7;
+          const trackEvidence = activeTrackEvidenceById.get(trackId);
+          const novelty = trackEvidence?.hasGraphBackedInnovationEvidence ? 0.82 : 0.7;
           const feasibility = 0.74;
           const relevance = 0.8;
           const clarity = 0.76;
@@ -340,11 +365,7 @@ export async function materializeIdeationContractImpl(
     researchProgramState.problemStatement ??
     (selectedTrack ? pickString(selectedTrack, ["question"]) : null) ??
     "Identify a graph-grounded research direction with explicit challenge, insight, and evidence support.";
-  const basisStage =
-    normalizeStage(patch.basisStage ?? patch.basis_stage) ??
-    current.basisStage ??
-    brainstormState.basisStage ??
-    "frontier_mapping";
+  const basisStage = requestedBasisStage;
 
   const noveltyCandidateClusters = uniqueStrings([
     ...(selectedDirection?.title ? [selectedDirection.title] : []),
@@ -1076,17 +1097,23 @@ ${deps.renderMarkdownBulletList([
       (trackId === selectedTrackId && brainstormState.synthesisPacketPath
         ? brainstormState.synthesisPacketPath
         : scaffoldPaths.synthesisPacketPath);
-    const trackEvidence = await loadTrackInnovationEvidence({
-      projectRoot,
-      track: {
-        ...existingTrack,
-        reasoning_packet_dir: reasoningPacketDir,
-      },
-    });
+    const trackEvidence =
+      activeTrackEvidenceById.get(trackId) ??
+      (await loadTrackInnovationEvidence({
+        projectRoot,
+        track: {
+          ...existingTrack,
+          reasoning_packet_dir: reasoningPacketDir,
+        },
+      }));
     const evidencePointers = ensureTrackEvidencePointers(
       existingTrack,
       trackEvidence.evidencePointers,
-      graphEvidenceFallbacks
+      requestedBasisStage === "idea" &&
+      trackEvidence.presence === "missing" &&
+      !trackEvidence.importedFromGraphEvidence
+        ? []
+        : graphEvidenceFallbacks
     );
     const linkedGraphNodes = trackEvidence.linkedGraphNodes;
     const relationPatterns = trackEvidence.relationPatterns;

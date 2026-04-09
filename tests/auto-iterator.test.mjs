@@ -1392,6 +1392,69 @@ test("auto iterator queues literature discovery when idea-stage tracks still lac
   );
 });
 
+test("auto iterator treats file-backed track evidence as repairable and advances idea to plan", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+
+  const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+  const trackRegistry = JSON.parse(await fs.readFile(trackRegistryPath, "utf8"));
+  trackRegistry.tracks[0].linked_graph_nodes = [];
+  trackRegistry.tracks[0].relation_patterns = [];
+  trackRegistry.tracks[0].evidence_pointers = [];
+  await writeJson(trackRegistryPath, trackRegistry);
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", trackId, "GRAPH_EVIDENCE.json"),
+    {
+      evidence_pointers: [
+        `researcher/reasoning/${trackId}/GRAPH_EVIDENCE.json#track-repair`,
+      ],
+      linked_graph_nodes: ["paper:file-backed-track", "concept:graph-grounding"],
+      relation_patterns: ["bridges->concept:graph-grounding"],
+    }
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  manifest.owner_agent = "researcher";
+  delete manifest.ideation_contract;
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "plan");
+  assert.equal(result.regressed, false);
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /active track .*missing graph-backed innovation evidence/i.test(signal)
+    )
+  );
+  assert.equal(
+    result.recommendedActions.some((action) => action.kind === "drive_stage"),
+    true
+  );
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    Boolean(
+      updatedManifest.paper_ingestion?.queued_requests?.some(
+        (entry) => entry.trigger_kind === "idea_literature_discovery"
+      )
+    ),
+    false
+  );
+});
+
 test("auto iterator auto-materializes the ideation contract during idea before advancing", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

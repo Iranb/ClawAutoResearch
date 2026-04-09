@@ -37,6 +37,23 @@ export function joinStatusList(values: string[]): string {
   return values.length > 0 ? values.join("; ") : "none";
 }
 
+function formatDerivedEvidenceLine(snapshot: WorkflowSnapshot): string | null {
+  const status =
+    typeof (snapshot as Record<string, unknown>).workflowEvidenceStatus === "string" &&
+    String((snapshot as Record<string, unknown>).workflowEvidenceStatus).trim()
+      ? String((snapshot as Record<string, unknown>).workflowEvidenceStatus).trim()
+      : null;
+  const summary =
+    typeof (snapshot as Record<string, unknown>).workflowEvidenceSummary === "string" &&
+    String((snapshot as Record<string, unknown>).workflowEvidenceSummary).trim()
+      ? String((snapshot as Record<string, unknown>).workflowEvidenceSummary).trim()
+      : null;
+  if (!status && !summary) {
+    return null;
+  }
+  return `Derived evidence: ${status ?? "unknown"}${summary ? ` - ${summary}` : ""}`;
+}
+
 export function formatAutoModeSection(params: {
   autoIteratorResult: WorkflowAutoIteratorResult | null;
 }): string[] {
@@ -208,6 +225,7 @@ export function formatWorkflowStatusText(params: {
     (snapshot.paperIngestionFailedBatchItemCount ?? 0) > 0 ||
     snapshot.paperIngestionReconcileRequired ||
     snapshot.paperIngestionRepairRequired;
+  const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
   const lines = [
     "Workflow Status",
     `Session: ${params.targetSessionKey}`,
@@ -218,6 +236,7 @@ export function formatWorkflowStatusText(params: {
     `Next action: ${snapshot.nextAction ?? "none"}`,
     `Resume action: ${snapshot.resumeAction ?? params.commandLabel}`,
     `Blocking reason: ${snapshot.blockingReason ?? "none"}`,
+    ...(derivedEvidenceLine ? [derivedEvidenceLine] : []),
     `Mailbox: ${unreadMailboxCount} unread`,
     `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,

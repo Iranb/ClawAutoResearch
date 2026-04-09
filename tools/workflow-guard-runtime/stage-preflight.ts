@@ -34,6 +34,7 @@ import {
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
+import { resolveStageReadiness } from "../workflow-derived-state/stage-readiness.js";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -235,11 +236,14 @@ async function activeTrackNeedsIdeationScaffold(params: {
   projectRoot: string;
   track: Record<string, unknown>;
 }): Promise<boolean> {
-  const trackEvidence = await loadTrackInnovationEvidence({
+  const evidence = await loadTrackInnovationEvidence({
     projectRoot: params.projectRoot,
     track: params.track,
   });
-  if (!trackEvidence.hasGraphBackedInnovationEvidence) {
+  const readiness = resolveStageReadiness({
+    trackEvidence: evidence,
+  });
+  if (readiness.handoffMode !== "drive_stage") {
     return true;
   }
   const track = params.track;
@@ -312,10 +316,12 @@ async function ideationTrackRegistryNeedsRefresh(params: {
     if (normalizeStageValue(track.status) !== "active") {
       continue;
     }
-    if (await activeTrackNeedsIdeationScaffold({
-      projectRoot: params.projectRoot,
-      track,
-    })) {
+    if (
+      await activeTrackNeedsIdeationScaffold({
+        projectRoot: params.projectRoot,
+        track,
+      })
+    ) {
       return true;
     }
   }

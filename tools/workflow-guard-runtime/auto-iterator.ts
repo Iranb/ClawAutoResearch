@@ -88,6 +88,31 @@ type ProjectsStateLike = {
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
 
+export function selectDispatchableAutoStageAction(params: {
+  autoIteratorResult: Pick<
+    AutoIteratorResult,
+    "gateBlocking" | "missingStageSignals" | "recommendedActions"
+  >;
+  owner?: AutoIteratorAction["owner"] | null;
+}): AutoIteratorAction | null {
+  if (params.autoIteratorResult.gateBlocking) {
+    return null;
+  }
+  if ((params.autoIteratorResult.missingStageSignals ?? []).length > 0) {
+    return null;
+  }
+  return (
+    params.autoIteratorResult.recommendedActions.find(
+      (action) =>
+        action.kind === "drive_stage" &&
+        action.owner &&
+        action.command &&
+        action.blocking !== true &&
+        (params.owner == null || action.owner === params.owner)
+    ) ?? null
+  );
+}
+
 type AutoIteratorDeps = {
   normalizePolicy: (value: Record<string, unknown> | undefined) => WorkflowGuardPolicy;
   loadExperimentLedgerIfExists: (
@@ -417,7 +442,10 @@ export async function runWorkflowAutoIteratorImpl(
       queueLiteratureDiscoveryRequisition: deps.queueLiteratureDiscoveryRequisition,
     },
   });
-  manifest = stagePreflight.manifest;
+  manifest = {
+    ...manifest,
+    ...stagePreflight.manifest,
+  };
   trackRegistry =
     (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
     trackRegistry;
@@ -658,6 +686,7 @@ export async function runWorkflowAutoIteratorImpl(
           state: experimentReviewState,
         })
       : null;
+  const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
   const experimentMonitorCommand = shouldMonitorExperiments
     ? deps.buildExperimentMonitorCommand()
     : null;
@@ -683,26 +712,39 @@ export async function runWorkflowAutoIteratorImpl(
       : null;
   const ownerAfter =
     (experimentReviewCommand ? experimentReviewOwner : null) ?? deps.stageOwner(stageAfter);
+  const stageRepairCommand =
+    graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
+  const stageReadinessRepairSummary =
+    dispatchStageSignals.length > 0
+      ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
+      : stageRepairCommand;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
     : experimentMonitorCommand ??
       experimentReviewCommand ??
-      graphImportRepairCommand ??
-      ideaCatalystRequisitionCommand ??
-      setupOnboardingCommand ??
+      stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
     : experimentMonitorCommand ??
       experimentReviewCommand ??
-      graphImportRepairCommand ??
-      ideaCatalystRequisitionCommand ??
-      setupOnboardingCommand ??
+      stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : activeStageSignals.length > 0
-      ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${activeStageSignals.join("; ")}`
+    : dispatchStageSignals.length > 0
+      ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${dispatchStageSignals.join("; ")}`
+      : stageReadinessRepairSummary
+        ? "Waiting for workflow-owned repair before the stage can be handed off."
+        : null;
+  const stageReadyForOwnerWork =
+    !gateEvaluation.blocking &&
+    dispatchStageSignals.length === 0 &&
+    stageRepairCommand == null;
+  const stageRepairBackgroundCommand = stageReadinessRepairSummary
+    ? stageReadinessRepairSummary
+    : dispatchStageSignals.length > 0
+      ? `Review the blocking signals and repair the workflow-owned gap before handing off ${stageAfter ?? "the current"} stage.`
       : null;
   const previousMicroStage = normalizeStage(manifest.current_micro_stage) ?? null;
   const nextMicroStage =
@@ -845,7 +887,7 @@ export async function runWorkflowAutoIteratorImpl(
       cooldownRemainingSeconds: null,
       blocking: true,
     });
-  } else {
+  } else if (stageReadyForOwnerWork) {
     const mailbox =
       params.queueMailbox === false
         ? {
@@ -859,7 +901,7 @@ export async function runWorkflowAutoIteratorImpl(
             toRole: ownerAfter,
             stage: stageAfter,
             nextAction,
-            missingStageSignals: activeStageSignals,
+            missingStageSignals: dispatchStageSignals,
             cooldownSeconds:
               typeof params.cooldownSeconds === "number" &&
               Number.isFinite(params.cooldownSeconds)
@@ -877,6 +919,20 @@ export async function runWorkflowAutoIteratorImpl(
       mailboxQueued: mailbox.queued,
       mailboxMessageId: mailbox.messageId,
       cooldownRemainingSeconds: mailbox.cooldownRemainingSeconds,
+      blocking: false,
+    });
+  } else {
+    recommendedActions.push({
+      kind: "background",
+      stage: stageAfter,
+      owner: "researcher",
+      summary:
+        blockingReason ??
+        "Workflow-owned repair or materialization is still required before the stage can be handed off.",
+      command: stageRepairBackgroundCommand,
+      mailboxQueued: false,
+      mailboxMessageId: null,
+      cooldownRemainingSeconds: null,
       blocking: false,
     });
   }
@@ -1014,7 +1070,7 @@ export async function runWorkflowAutoIteratorImpl(
     gateBlocking: gateEvaluation.blocking,
     gateReason: gateEvaluation.reason,
     timedDefaultTriggered: gateEvaluation.timedDefaultTriggered,
-    missingStageSignals: activeStageSignals,
+    missingStageSignals: dispatchStageSignals,
     ownerBefore,
     ownerAfter,
     nextAction,
@@ -1048,7 +1104,7 @@ export async function runWorkflowAutoIteratorImpl(
       regressionDepthCapped,
       gateBlocking: gateEvaluation.blocking,
       blockingReason,
-      missingStageSignals: activeStageSignals,
+      missingStageSignals: dispatchStageSignals,
       configuredAutoMode: autoModeEvaluation.configuredMode,
       effectiveAutoMode: autoModeEvaluation.effectiveMode,
       ownerBefore,

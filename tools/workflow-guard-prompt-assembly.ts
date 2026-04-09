@@ -59,6 +59,27 @@ function formatPromptPath(value: unknown): string {
   return raw;
 }
 
+function formatDerivedEvidenceLine(snapshot: SnapshotLike): string | null {
+  const status =
+    typeof snapshot.workflowEvidenceStatus === "string" && snapshot.workflowEvidenceStatus.trim()
+      ? snapshot.workflowEvidenceStatus.trim()
+      : typeof snapshot.derivedEvidenceStatus === "string" &&
+          snapshot.derivedEvidenceStatus.trim()
+        ? snapshot.derivedEvidenceStatus.trim()
+        : null;
+  const summary =
+    typeof snapshot.workflowEvidenceSummary === "string" && snapshot.workflowEvidenceSummary.trim()
+      ? snapshot.workflowEvidenceSummary.trim()
+      : typeof snapshot.derivedEvidenceSummary === "string" &&
+          snapshot.derivedEvidenceSummary.trim()
+        ? snapshot.derivedEvidenceSummary.trim()
+        : null;
+  if (!status && !summary) {
+    return null;
+  }
+  return `Derived evidence: ${status ?? "unknown"}${summary ? ` - ${summary}` : ""}`;
+}
+
 export function buildFocusedPromptAssemblyImpl(
   params: {
     snapshot: SnapshotLike;
@@ -121,7 +142,10 @@ export function buildFocusedPromptAssemblyImpl(
   if (snapshot.blockingReason) {
     layer2Lines.push(`blocking_reason=${snapshot.blockingReason}`);
   }
-  if ((snapshot.missingStageSignals ?? []).length > 0) {
+  const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
+  if (derivedEvidenceLine) {
+    layer2Lines.push(derivedEvidenceLine);
+  } else if ((snapshot.missingStageSignals ?? []).length > 0) {
     layer2Lines.push(
       `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ")}`
     );
@@ -395,6 +419,15 @@ export function formatWorkflowSnapshotForPromptImpl(
   if (snapshot.blockingReason) {
     lines.push(`blocking_reason: ${snapshot.blockingReason}`);
   }
+  const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
+  if (derivedEvidenceLine) {
+    lines.push(derivedEvidenceLine);
+  } else if ((snapshot.missingStageSignals ?? []).length > 0) {
+    lines.push("Missing stage signals:");
+    for (const signal of snapshot.missingStageSignals.slice(0, 8)) {
+      lines.push(`- ${signal}`);
+    }
+  }
   if ((snapshot.allowedWriteScopes ?? []).length > 0) {
     lines.push("Allowed writes:");
     for (const scope of snapshot.allowedWriteScopes) {
@@ -443,12 +476,6 @@ export function formatWorkflowSnapshotForPromptImpl(
       lines.push(
         'Heartbeat first step: call research_workflow {"action":"auto_iterator_tick","iterator":{"mode":"heartbeat"}} before any manual planning or ad hoc spawning.'
       );
-    }
-  }
-  if ((snapshot.missingStageSignals ?? []).length > 0) {
-    lines.push("Missing stage signals:");
-    for (const signal of snapshot.missingStageSignals.slice(0, 8)) {
-      lines.push(`- ${signal}`);
     }
   }
   const resolvedPapernexusAccessMode =

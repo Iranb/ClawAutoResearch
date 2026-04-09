@@ -98,6 +98,9 @@ import {
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
+  selectDispatchableAutoStageAction,
+} from "./workflow-guard-runtime/auto-iterator";
+import {
   maybeBroadcastAutoIteratorStageChange,
   maybeBroadcastWorkflowStatusUpdate,
 } from "./stage-broadcast";
@@ -483,9 +486,10 @@ export async function maybeDispatchAutoIteratorTask(params: {
   if (!requesterRole || !ownerAfter || requesterRole === ownerAfter) {
     return null;
   }
-  const primaryAction = params.result.recommendedActions.find(
-    (action) => action.kind === "drive_stage" && action.owner === ownerAfter && !action.blocking
-  );
+  const primaryAction = selectDispatchableAutoStageAction({
+    autoIteratorResult: params.result,
+    owner: ownerAfter,
+  });
   if (!primaryAction) {
     return null;
   }
