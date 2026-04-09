@@ -246,6 +246,50 @@ test("project-init command scaffolds a project and seeds the onboarding contract
   assert.equal(manifest.research_program.status, "draft");
 });
 
+test("project-init command uses the configured plugin-global Zotero root for new projects", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      zoteroProjectRoot: "Bot",
+    },
+  });
+  const projectInitCommand = getCommand(
+    createResearchWorkflowCommands(api),
+    "project-init"
+  );
+
+  await projectInitCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/project-init "gcd confirmation bias mitigation"',
+    args: '"gcd confirmation bias mitigation"',
+    config: {},
+    from: "discord:channel:gcd-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(
+    manifest.research_program.zotero_project_path,
+    "Bot/gcd-confirmation-bias-mitigation"
+  );
+});
+
 test("research-queue command refuses to run from a non-researcher session", async () => {
   const queueCommand = getCommand(createResearchWorkflowCommands(makeApi(), {
     resolveConversationBindingRecord() {

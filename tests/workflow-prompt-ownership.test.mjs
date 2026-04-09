@@ -356,6 +356,18 @@ test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () =
   assert.equal(policy.papernexusAccessMode, "remote_mcp");
 });
 
+test("getWorkflowGuardPolicy defaults zoteroProjectRoot to bot", () => {
+  const policy = getWorkflowGuardPolicy({});
+  assert.equal(policy.zoteroProjectRoot, "bot");
+});
+
+test("getWorkflowGuardPolicy preserves explicit zoteroProjectRoot", () => {
+  const policy = getWorkflowGuardPolicy({
+    zoteroProjectRoot: "Bot",
+  });
+  assert.equal(policy.zoteroProjectRoot, "Bot");
+});
+
 test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus access safely", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {

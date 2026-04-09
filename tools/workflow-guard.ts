@@ -451,6 +451,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   agentContactCooldownSeconds?: number;
   defaultConferenceTemplatePath?: string;
   defaultJournalTemplatePath?: string;
+  zoteroProjectRoot?: string;
   papernexusApiBaseUrl?: string;
   papernexusSharedCorpus?: string;
   papernexusMcpUrl?: string;
@@ -1771,6 +1772,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   channelProjectBindingsPath: "",
   defaultConferenceTemplatePath: "",
   defaultJournalTemplatePath: "",
+  zoteroProjectRoot: "bot",
   papernexusApiBaseUrl: "",
   papernexusSharedCorpus: "",
   papernexusMcpUrl: "",
@@ -2180,6 +2182,9 @@ function normalizePolicy(
     defaultJournalTemplatePath:
       asString(config?.defaultJournalTemplatePath) ??
       DEFAULT_POLICY.defaultJournalTemplatePath,
+    zoteroProjectRoot:
+      asString((config as Record<string, unknown> | null)?.zoteroProjectRoot) ??
+      DEFAULT_POLICY.zoteroProjectRoot,
     papernexusApiBaseUrl:
       asString(config?.papernexusApiBaseUrl) ??
       DEFAULT_POLICY.papernexusApiBaseUrl,

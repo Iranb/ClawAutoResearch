@@ -69,6 +69,9 @@
 - `defaultJournalTemplatePath`  
   可选的 journal 默认模板路径。启用 `paper_mode = journal` 时，插件会优先使用这个路径，并先复制到项目目录下再写。
 
+- `zoteroProjectRoot`  
+  Zotero 项目集合的全局根目录。默认是 `bot`；如果某个项目没有显式设置 `PROJECT_MANIFEST.json.research_program.zotero_project_path`，则有效路径会解析为 `<zoteroProjectRoot>/<project-id>`，例如把它设成 `Bot` 后，项目默认会落到 `Bot/<project-id>`。
+
 - `papernexusApiBaseUrl`  
   可选的 PaperNexus 远程 Web/API 地址。现在它主要作为 `remote_api` compatibility mode 的回退入口；如果同时配置了 `papernexusMcpUrl`，workflow 会优先把 live graph 工作引导到远程 HTTP MCP。
 
@@ -169,6 +172,7 @@
    - `idle_research`
    - `writing_contract`
    - `paper_source_dir`
+   - `zoteroProjectRoot`
    - `papernexus_root`
    - `papernexusApiBaseUrl`
    - `papernexusApiTokenEnv`

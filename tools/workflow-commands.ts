@@ -68,6 +68,7 @@ import {
   compactStatusText,
   joinStatusList,
 } from "./workflow-commands/formatters.js";
+import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state.ts";
 
 // Re-export public APIs from submodules
 export {
@@ -502,7 +503,10 @@ function createProjectInitCommandHandler(
             currentSummary.state.problemStatement ?? seededGoal,
           zotero_project_path:
             currentSummary.state.zoteroProjectPath ??
-            `bot/${ensuredProject.projectId}`,
+            defaultResearchProgramZoteroProjectPath(
+              ensuredProject.projectId,
+              workflowPolicy.zoteroProjectRoot
+            ),
           pending_reason:
             currentSummary.state.pendingReason ??
             "Complete the onboarding contract before graph grounding.",
@@ -515,7 +519,13 @@ function createProjectInitCommandHandler(
         text:
           `Project init saved for ${ensuredProject.projectId}. ` +
           `Research program onboarding=${update.onboardingStatus}. ` +
-          `Zotero path=${update.state.zoteroProjectPath ?? `bot/${ensuredProject.projectId}`}. ` +
+          `Zotero path=${
+            update.state.zoteroProjectPath ??
+            defaultResearchProgramZoteroProjectPath(
+              ensuredProject.projectId,
+              workflowPolicy.zoteroProjectRoot
+            )
+          }. ` +
           (missingLabels ? `missing=${missingLabels}` : "missing=none"),
       };
     } catch (error) {

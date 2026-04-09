@@ -99,6 +99,11 @@
         "default": "",
         "description": "Optional default journal paper template path. When configured, journal writing mode copies this template into each project before Writer edits it."
       },
+      "zoteroProjectRoot": {
+        "type": "string",
+        "default": "bot",
+        "description": "Plugin-global Zotero collection root used when a project does not override research_program.zotero_project_path explicitly. Effective project paths become <zoteroProjectRoot>/<project-id>."
+      },
       "papernexusApiBaseUrl": {
         "type": "string",
         "default": "",
@@ -341,6 +346,9 @@
     },
     "defaultJournalTemplatePath": {
       "label": "Default Journal Template Path"
+    },
+    "zoteroProjectRoot": {
+      "label": "Zotero Project Root"
     },
     "papernexusApiBaseUrl": {
       "label": "PaperNexus API Base URL"

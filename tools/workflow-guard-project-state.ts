@@ -13,6 +13,7 @@ import { expandHome } from "./workflow-guard-core/paths";
 type WorkflowGuardPolicyLike = {
   projectsRoot?: string | null;
   allowWorkspaceFallback?: boolean;
+  zoteroProjectRoot?: string | null;
 };
 
 type EnsuredWorkflowProjectLike = {
@@ -127,13 +128,16 @@ export function buildIdleResearchTemplateForBootstrap(params: {
 }
 
 export function defaultResearchProgramZoteroProjectPath(
-  projectId: string | null | undefined
+  projectId: string | null | undefined,
+  zoteroProjectRoot?: string | null | undefined
 ): string | null {
   const normalizedProjectId = asString(projectId);
   if (!normalizedProjectId) {
     return null;
   }
-  return `bot/${normalizedProjectId}`;
+  const normalizedRoot = asString(zoteroProjectRoot) ?? "bot";
+  const trimmedRoot = normalizedRoot.replace(/[\\/]+$/g, "");
+  return `${trimmedRoot}/${normalizedProjectId}`;
 }
 
 export function getConfiguredProjectsRoot(params: {
@@ -349,7 +353,10 @@ export async function ensureWorkflowProjectRootImpl(params: {
         datasets: [],
         constraints: [],
         success_criteria: [],
-        zotero_project_path: defaultResearchProgramZoteroProjectPath(projectId),
+        zotero_project_path: defaultResearchProgramZoteroProjectPath(
+          projectId,
+          params.policy?.zoteroProjectRoot
+        ),
         last_updated_at: now,
         pending_reason:
           "Complete the onboarding contract (baseline, metric, datasets, success criteria, Zotero path) before graph grounding.",
