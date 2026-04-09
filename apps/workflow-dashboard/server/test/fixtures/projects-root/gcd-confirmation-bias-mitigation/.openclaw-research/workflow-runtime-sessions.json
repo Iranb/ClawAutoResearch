@@ -1,0 +1,10 @@
+{
+  "sessions": [
+    {
+      "id": "sess-researcher-1",
+      "role": "researcher",
+      "state": "active",
+      "started_at": "2026-04-09T08:40:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{"seq":1,"event":"workflow_started"}
+{"seq":2,"event":"graph_progress_loaded"}
+{"seq":3,"event":"graph_presence_checked"}
+{"seq":4,"event":"missing_sources_detected"}
+{"seq":5,"event":"mailbox_scan"}
+{"seq":6,"event":"runtime_sessions_loaded"}
+{"seq":7,"event":"dashboard_snapshot_rendered"}

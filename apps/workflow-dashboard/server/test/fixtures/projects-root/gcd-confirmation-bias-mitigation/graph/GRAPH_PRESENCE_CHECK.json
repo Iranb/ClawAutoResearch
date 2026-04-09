@@ -1,0 +1,12 @@
+{
+  "status": "missing_sources",
+  "checked_at": "2026-04-09T08:48:00.000Z",
+  "expected_papers": 12,
+  "present_papers": 8,
+  "missing_papers": [
+    "paper-a",
+    "paper-b",
+    "paper-c",
+    "paper-d"
+  ]
+}
