@@ -12,6 +12,9 @@ process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = path.join(
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import {
+  bindChannelProjectForWorkflow,
+} from "../tools/workflow-guard.ts";
+import {
   clearBackgroundWorkflowRunRegistryForTests,
   recordBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
@@ -80,6 +83,17 @@ async function executeWorkflowTool(tool, params) {
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function seedMinimalProject(projectRoot, manifest) {
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    idle_research: { enabled: false },
+    ...manifest,
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [],
+  });
 }
 
 async function seedPaperSourceIndex(projectRoot, papers) {
@@ -1985,6 +1999,84 @@ test("research_workflow get_snapshot stage-preflights sparse idea tracks before 
     "talon-gcd-bias",
   ]);
   assert.equal(refreshedManifest.primary_track_id, "fd-gcd-freq-debiased");
+});
+
+test("research_workflow auto_iterator_tick follows the bound channel project even when workspaceDir points at another project", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-runtime-binding-priority-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const boundProjectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+  const workspaceProjectRoot = path.join(workspaceRoot, "gcd-part-manifold-2026");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.OPENCLAW_PROJECT;
+  await seedMinimalProject(boundProjectRoot, {
+    project_id: "gcd-confirmation-bias-mitigation",
+    current_stage: "idea",
+    owner_agent: "researcher",
+  });
+  await seedMinimalProject(workspaceProjectRoot, {
+    project_id: "gcd-part-manifold-2026",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: boundProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: workspaceProjectRoot,
+    sessionKey,
+    messageChannel: "discord",
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.projectRoot, boundProjectRoot);
+  assert.equal(snapshot.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(snapshot.currentStage, "idea");
+  assert.equal(snapshot.projectResolutionSource, "channel_binding");
+
+  const result = await executeWorkflowTool(tool, {
+    action: "auto_iterator_tick",
+    iterator: {
+      mode: "test",
+      queueMailbox: false,
+      dispatchTasks: false,
+      broadcastStageChange: false,
+    },
+  });
+
+  assert.equal(result.projectRoot, boundProjectRoot);
+  assert.equal(result.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(result.stageBefore, "idea");
+  assert.notEqual(result.projectRoot, workspaceProjectRoot);
+  assert.notEqual(result.stageBefore, "graph_build");
 });
 
 test("research_workflow diagnose_track_evidence reports canonical graph evidence resolution", async (t) => {

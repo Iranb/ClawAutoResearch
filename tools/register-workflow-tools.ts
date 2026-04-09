@@ -321,8 +321,8 @@ async function resolveWorkflowToolState(params: {
   })();
 
   const projectRoot =
-    workspaceProjectRoot ??
     snapshot.projectRoot ??
+    workspaceProjectRoot ??
     getProjectRootForWorkflow({
       policy: workflowPolicy,
       workspaceDir: params.agentCtx.workspaceDir,
