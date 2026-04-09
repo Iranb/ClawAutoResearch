@@ -22,7 +22,7 @@ Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-sea
 
 - When literature turns into candidate experiments, preserve **one variable per experiment** by keeping mechanism ideas isolated instead of merging several deltas at once.
 - **Record everything**: queries, canonical paper ids, ingestion decisions, rejected papers, and emerging baseline hypotheses belong in durable project files.
-- **Keep bibliography state durable too**: if local Zotero MCP is available, keep the configured project Zotero collection synchronized with selected, included, excluded, baseline, and writing-shortlist sets. The plugin-global root defaults to `bot`, so the default project path is `<zoteroProjectRoot>/<project-id>` unless the project overrides it explicitly. If Zotero add-item flows need `apiKey`, use plugin config `zoteroApiKey` or `zoteroApiKeyEnv`, and never print the raw key.
+- **Keep bibliography state durable too**: if local Zotero MCP is available, keep the configured project Zotero collection synchronized with selected, included, excluded, baseline, and writing-shortlist sets. The plugin-global root defaults to `bot`, so the default project path is `<zoteroProjectRoot>/<project-id>` unless the project overrides it explicitly. If Zotero writes require authentication, rely on the Zotero MCP server's own `ZOTERO_API_KEY` / `ZOTERO_USER_ID` environment rather than plugin config.
 - Keep the **experiment and code change linked** by noting which papers justify which future experiment deltas or baseline requirements.
 - **Verify before claiming** novelty, contradiction, or support; abstracts and memory alone are not enough.
 - **Never manipulate evaluation** by selecting only flattering baselines or citations from the literature sweep.

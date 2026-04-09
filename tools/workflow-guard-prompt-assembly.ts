@@ -644,35 +644,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
     if (snapshot.researchProgramZoteroProjectPath) {
       lines.push(`Research program Zotero path: ${snapshot.researchProgramZoteroProjectPath}`);
-    }
-    if (
-      snapshot.researchProgramZoteroProjectPath ||
-      snapshot.zoteroUserId ||
-      snapshot.zoteroApiKeyConfigured ||
-      snapshot.zoteroApiKeySource ||
-      snapshot.zoteroApiKeyEnv
-    ) {
       lines.push(
-        `Zotero local access: project_path=${snapshot.researchProgramZoteroProjectPath ?? "unset"}, user_id=${snapshot.zoteroUserId ?? "unset"}, api_key_source=${snapshot.zoteroApiKeySource ?? "unset"}, api_key_configured=${snapshot.zoteroApiKeyConfigured ? "true" : "false"}, api_key_env=${snapshot.zoteroApiKeyEnv ?? "unset"}`
+        "Zotero local rule: use the local Zotero MCP server through /zotero-project-library for best-effort project collection sync. Any required Zotero credentials must come from the MCP server environment (for example ZOTERO_API_KEY / ZOTERO_USER_ID), not plugin config."
       );
-      if (snapshot.zoteroUserId) {
-        lines.push(
-          `Zotero local rule: use the configured Zotero user id ${snapshot.zoteroUserId} when local Zotero MCP or add-item flows ask for userId.`
-        );
-      }
-      if (snapshot.zoteroApiKeySource === "plugin_config") {
-        lines.push(
-          "Zotero local rule: a configured Zotero API key is available from plugin settings. Use the configured key when local Zotero MCP or add-item flows ask for apiKey, and Never print or persist the raw key."
-        );
-      } else if (snapshot.zoteroApiKeySource === "env" && snapshot.zoteroApiKeyEnv) {
-        lines.push(
-          `Zotero local rule: resolve the Zotero API key from env ${snapshot.zoteroApiKeyEnv} when local Zotero MCP or add-item flows ask for apiKey. Never print or persist the raw key.`
-        );
-      } else {
-        lines.push(
-          "Zotero local rule: if adding items through a Zotero MCP flow requires apiKey and none is configured, record unavailable or needs_manual_followup durably instead of blocking the workflow."
-        );
-      }
     }
     if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
       lines.push(

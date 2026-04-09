@@ -104,21 +104,6 @@
         "default": "bot",
         "description": "Plugin-global Zotero collection root used when a project does not override research_program.zotero_project_path explicitly. Effective project paths become <zoteroProjectRoot>/<project-id>."
       },
-      "zoteroApiKey": {
-        "type": "string",
-        "default": "",
-        "description": "Optional Zotero API key stored directly in plugin config for local Zotero MCP/add-item flows. The workflow never echoes the raw key into prompts or project files."
-      },
-      "zoteroApiKeyEnv": {
-        "type": "string",
-        "default": "",
-        "description": "Optional environment variable name that stores the Zotero API key. Used as a safer fallback when local Zotero MCP/add-item flows need apiKey."
-      },
-      "zoteroUserId": {
-        "type": "string",
-        "default": "",
-        "description": "Optional Zotero user id for local Zotero MCP/add-item flows that need userId. Safe to expose in workflow prompts when configured."
-      },
       "papernexusApiBaseUrl": {
         "type": "string",
         "default": "",
@@ -364,15 +349,6 @@
     },
     "zoteroProjectRoot": {
       "label": "Zotero Project Root"
-    },
-    "zoteroApiKey": {
-      "label": "Zotero API Key"
-    },
-    "zoteroApiKeyEnv": {
-      "label": "Zotero API Key Env"
-    },
-    "zoteroUserId": {
-      "label": "Zotero User ID"
     },
     "papernexusApiBaseUrl": {
       "label": "PaperNexus API Base URL"

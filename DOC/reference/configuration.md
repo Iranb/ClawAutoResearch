@@ -72,15 +72,6 @@
 - `zoteroProjectRoot`  
   Zotero 项目集合的全局根目录。默认是 `bot`；如果某个项目没有显式设置 `PROJECT_MANIFEST.json.research_program.zotero_project_path`，则有效路径会解析为 `<zoteroProjectRoot>/<project-id>`，例如把它设成 `Bot` 后，项目默认会落到 `Bot/<project-id>`。
 
-- `zoteroApiKey`
-  可选的 Zotero API key 明文配置。只建议在本机可信环境里使用；workflow 会读取这个配置来指导本地 Zotero MCP / add-item 流程，但不会把原始 key 回显到 prompt、聊天或项目文件。
-
-- `zoteroApiKeyEnv`
-  可选的 Zotero API key 环境变量名。推荐优先用这个字段，例如 `ZOTERO_API_KEY`；当本地 Zotero MCP / add-item 流程需要 `apiKey` 时，workflow 会提示 Agent 从这个环境变量取值，而不是把 secret 写进项目状态。
-
-- `zoteroUserId`
-  可选的 Zotero user id。像 `xbghc/zotero-mcp` 这类 server 在创建/写入条目时可能要求 `userId`；workflow 会把这个值作为非敏感配置透传给 Zotero 相关 prompt。
-
 - `papernexusApiBaseUrl`  
   可选的 PaperNexus 远程 Web/API 地址。现在它主要作为 `remote_api` compatibility mode 的回退入口；如果同时配置了 `papernexusMcpUrl`，workflow 会优先把 live graph 工作引导到远程 HTTP MCP。
 
@@ -284,19 +275,20 @@
 - `remote_mcp` 负责 live graph 的主控制面；优先使用 `research_lookup`、`research_briefing`、`idea_catalyst`，而 workflow 里的 upload/import 仍走 `pn_stage_sync.py`、`pn_import_submit.py`、`pn_import_queue.py`、`pn_batch_import.py`
 - 如果你同时配置了 `papernexusApiBaseUrl` 和 `papernexusMcpUrl`，并把 `papernexusAccessMode` 设为 `auto`，系统会先尝试 `remote_mcp`，再尝试 `remote_api`
 
-### 想让 Zotero 同步在添加条目时带上 API key
+### 想让 Zotero MCP 能正常写入
 
-推荐二选一：
+不要再在插件配置里填写 Zotero 凭据。现在插件只管理项目集合根，例如 `zoteroProjectRoot`；认证完全交给 Zotero MCP server 自己的环境变量。
 
-- 直接在插件配置里设置 `zoteroApiKey`
-- 更推荐设置 `zoteroApiKeyEnv = "ZOTERO_API_KEY"`，然后在运行环境里提供对应环境变量
-- 如果你的 Zotero MCP server 要求 user id，再设置 `zoteroUserId = "你的_zotero_user_id"`
+推荐在运行 Zotero MCP server 的环境里提供：
+
+- `ZOTERO_API_KEY`
+- `ZOTERO_USER_ID`
 
 注意：
 
-- workflow 只会暴露“key 已配置/应从哪个 env 读取”这类提示，不会把原始 key 打进 prompt 或项目文件
-- `zoteroUserId` 会作为普通配置出现在 Zotero workflow 提示里，方便 agent 调用需要 `userId` 的 MCP server
-- 如果 Zotero MCP/add-item 流程要求 `apiKey`，而你没有配置 `zoteroApiKey` 或 `zoteroApiKeyEnv`，workflow 会保持 soft-fail，不把 Zotero 变成硬阻塞点
+- workflow 不再维护 Zotero 凭据字段，也不会把这类值注入 prompt 或项目文件
+- `/zotero-sync` 与 `/graph-build` 只会假设“本地 Zotero MCP 已经被正确配置”
+- 如果 Zotero MCP 不可用或认证缺失，workflow 仍保持 soft-fail，不把 Zotero 变成硬阻塞点
 
 ### 想让 PaperNexus token 走系统原生 keychain
 

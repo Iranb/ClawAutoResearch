@@ -90,16 +90,17 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     path.join(repoRoot, "DOC", "reference", "configuration.md"),
     "utf8"
   );
-  assert.match(configDoc, /zoteroApiKey/i);
-  assert.match(configDoc, /zoteroApiKeyEnv/i);
-  assert.match(configDoc, /zoteroUserId/i);
+  assert.match(configDoc, /zoteroProjectRoot/i);
+  assert.doesNotMatch(configDoc, /zoteroApiKey/i);
+  assert.doesNotMatch(configDoc, /zoteroApiKeyEnv/i);
+  assert.doesNotMatch(configDoc, /zoteroUserId/i);
 
   const zoteroSkill = await fs.readFile(
     path.join(repoRoot, "skills", "researcher", "zotero-project-library", "SKILL.md"),
     "utf8"
   );
-  assert.match(zoteroSkill, /apiKey|API key/i);
-  assert.match(zoteroSkill, /never print|never persist/i);
+  assert.match(zoteroSkill, /ZOTERO_API_KEY|ZOTERO_USER_ID|MCP/i);
+  assert.doesNotMatch(zoteroSkill, /zoteroApiKey|zoteroApiKeyEnv|zoteroUserId/i);
 
   const writerDocs = [
     path.join(repoRoot, "agents", "academic_writer", "AGENTS.md"),

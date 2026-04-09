@@ -115,8 +115,6 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
       projectsRoot,
       enableChannelProjectBindings: true,
       zoteroProjectRoot: "Bot",
-      zoteroUserId: "123456",
-      zoteroApiKey: "secret-test-key",
     },
     agentCtx: {
       agentId: "researcher",
@@ -687,8 +685,6 @@ test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-bl
       projectsRoot,
       enableChannelProjectBindings: true,
       zoteroProjectRoot: "Bot",
-      zoteroUserId: "123456",
-      zoteroApiKey: "secret-test-key",
     },
     agentCtx: {
       agentId: "researcher",
@@ -720,10 +716,10 @@ test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-bl
   assert.match(runCalls[0].extraSystemPrompt ?? "", /do not block the foreground session|stay responsive/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /remove.*project collections/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_SYNC_PACKET\.json/i);
-  assert.match(runCalls[0].extraSystemPrompt ?? "", /Zotero user id: 123456/i);
-  assert.match(runCalls[0].extraSystemPrompt ?? "", /Zotero API key source: plugin_config/i);
-  assert.match(runCalls[0].extraSystemPrompt ?? "", /configured Zotero API key/i);
-  assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /secret-test-key/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /local Zotero MCP server/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_API_KEY|ZOTERO_USER_ID/i);
+  assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /zoteroApiKey|zoteroApiKeyEnv|zoteroUserId/);
+  assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /plugin_config|configured Zotero API key|configured Zotero user id/i);
 });
 
 test("startBackgroundWorkflowRun gives graph-build repair continuations explicit import repair instructions", async (t) => {

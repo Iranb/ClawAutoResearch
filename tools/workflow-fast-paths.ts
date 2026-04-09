@@ -61,20 +61,6 @@ function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
 }
 
-function describeZoteroApiKeySource(params: {
-  zoteroApiKey?: string | null;
-  zoteroApiKeyEnv?: string | null;
-}): { source: "plugin_config" | "env" | "unset"; env: string | null } {
-  if (readString(params.zoteroApiKey)) {
-    return { source: "plugin_config", env: null };
-  }
-  const env = readString(params.zoteroApiKeyEnv) ?? null;
-  if (env) {
-    return { source: "env", env };
-  }
-  return { source: "unset", env: null };
-}
-
 function isGatewaySubagentUnavailableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -2760,41 +2746,14 @@ export async function startBackgroundWorkflowRun(params: {
       normalizedKind === "graph_build"
         ? "Do not block graph-build or the foreground session while waiting on Zotero MCP work; record unavailable or failed state durably and keep the pass bounded."
         : "Do not block the foreground session while waiting on Zotero MCP work.",
+      "Credential rule: if Zotero MCP requires ZOTERO_API_KEY or ZOTERO_USER_ID, rely on the MCP server environment and never expect plugin-managed credential fields.",
     ].join("\n");
-    const zoteroApiKeyAccess = describeZoteroApiKeySource({
-      zoteroApiKey: params.workflowPolicy.zoteroApiKey,
-      zoteroApiKeyEnv: params.workflowPolicy.zoteroApiKeyEnv,
-    });
-    const zoteroUserIdPrompt = readString(params.workflowPolicy.zoteroUserId)
-      ? [
-          `Zotero user id: ${readString(params.workflowPolicy.zoteroUserId)}.`,
-          "Use the configured Zotero user id when local Zotero MCP or add-item flows ask for userId.",
-        ].join("\n")
-      : [
-          "Zotero user id: unset.",
-          "If the local Zotero MCP server requires userId and none is configured, record needs_manual_followup durably instead of blocking the workflow.",
-        ].join("\n");
-    const zoteroApiKeyPrompt =
-      zoteroApiKeyAccess.source === "plugin_config"
-        ? [
-            "Zotero API key source: plugin_config.",
-            "Use the configured Zotero API key when local Zotero MCP or add-item flows ask for apiKey, and never print or persist the raw key.",
-          ].join("\n")
-        : zoteroApiKeyAccess.source === "env"
-          ? [
-              `Zotero API key source: env (${zoteroApiKeyAccess.env ?? "unset"}).`,
-              `Resolve the Zotero API key from env ${zoteroApiKeyAccess.env ?? "unset"} when local Zotero MCP or add-item flows ask for apiKey, and never print or persist the raw key.`,
-            ].join("\n")
-          : [
-              "Zotero API key source: unset.",
-              "If local Zotero MCP or add-item flows require apiKey and none is configured, record unavailable or needs_manual_followup durably instead of blocking the workflow.",
-            ].join("\n");
     backgroundRunExtraSystemPrompt = backgroundRunExtraSystemPrompt
       ? mergeBackgroundWorkflowSystemPrompt(
           backgroundRunExtraSystemPrompt,
-          `${packetPrompt}\n${zoteroUserIdPrompt}\n${zoteroApiKeyPrompt}`
+          packetPrompt
         )
-      : `${packetPrompt}\n${zoteroUserIdPrompt}\n${zoteroApiKeyPrompt}`;
+      : packetPrompt;
   }
   const queueKey = buildBackgroundRunQueueKey({
     requesterSessionKey: params.agentCtx.sessionKey,

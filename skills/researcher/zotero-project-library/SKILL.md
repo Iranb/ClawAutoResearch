@@ -54,18 +54,12 @@ Record:
 - selected / included / excluded / baseline counts
 - any missing identifiers or manual cleanup tasks
 
-## API Key Rule
+## MCP Credential Rule
 
-- If local Zotero MCP or add-item flows require `apiKey`, use the plugin-configured Zotero key source.
-- Prefer `zoteroApiKeyEnv` when available; `zoteroApiKey` is allowed for trusted local setups.
-- Never print or persist the raw API key in chat, prompts, logs, or project files.
-- If Zotero requires `apiKey` and none is configured, mark the sync as `unavailable` or `needs_manual_followup` instead of blocking the workflow.
-
-## User ID Rule
-
-- If local Zotero MCP or add-item flows require `userId`, use the plugin-configured `zoteroUserId`.
-- `zoteroUserId` is treated as ordinary configuration rather than a secret, so it may appear in workflow prompts.
-- If Zotero requires `userId` and none is configured, mark the sync as `needs_manual_followup` instead of blocking the workflow.
+- If local Zotero MCP or add-item flows require authentication, rely on the MCP server environment, typically `ZOTERO_API_KEY` and `ZOTERO_USER_ID`.
+- Do not expect plugin-managed Zotero credential fields; workflow only manages project collection paths.
+- Never print or persist raw credentials in chat, prompts, logs, or project files.
+- If Zotero authentication is missing or MCP is unavailable, mark the sync as `unavailable` or `needs_manual_followup` instead of blocking the workflow.
 
 ## Sync Rules
 

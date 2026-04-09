@@ -51,10 +51,6 @@ function makeBaseSnapshot() {
     papernexusApiTokenAccount: null,
     papernexusMineruHttpUrl: null,
     papernexusAccessMode: null,
-    zoteroUserId: null,
-    zoteroApiKeyEnv: null,
-    zoteroApiKeySource: null,
-    zoteroApiKeyConfigured: false,
     idleResearchEnabled: false,
     idleResearchTopic: null,
     idleResearchStatus: null,
@@ -372,20 +368,15 @@ test("getWorkflowGuardPolicy preserves explicit zoteroProjectRoot", () => {
   assert.equal(policy.zoteroProjectRoot, "Bot");
 });
 
-test("getWorkflowGuardPolicy preserves explicit Zotero API key settings", () => {
+test("getWorkflowGuardPolicy does not expose deprecated Zotero credential fields", () => {
   const policy = getWorkflowGuardPolicy({
     zoteroApiKey: "secret-test-key",
     zoteroApiKeyEnv: "ZOTERO_API_KEY",
-  });
-  assert.equal(policy.zoteroApiKey, "secret-test-key");
-  assert.equal(policy.zoteroApiKeyEnv, "ZOTERO_API_KEY");
-});
-
-test("getWorkflowGuardPolicy preserves explicit Zotero user id", () => {
-  const policy = getWorkflowGuardPolicy({
     zoteroUserId: "123456",
   });
-  assert.equal(policy.zoteroUserId, "123456");
+  assert.equal("zoteroApiKey" in policy, false);
+  assert.equal("zoteroApiKeyEnv" in policy, false);
+  assert.equal("zoteroUserId" in policy, false);
 });
 
 test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remote PaperNexus access safely", () => {
@@ -428,7 +419,7 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
   );
 });
 
-test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured Zotero API keys safely", () => {
+test("formatWorkflowSnapshotForPrompt only advertises the project Zotero path and MCP-managed access", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {
       ...makeBaseSnapshot(),
@@ -447,22 +438,15 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured Zoter
       researchProgramTrackCount: 1,
       researchProgramActiveTrackCount: 1,
       researchProgramZoteroProjectPath: "Bot/demo-project",
-      zoteroUserId: "123456",
-      zoteroApiKeySource: "plugin_config",
-      zoteroApiKeyConfigured: true,
-      zoteroApiKeyEnv: null,
     },
   });
 
-  assert.match(prompt, /Zotero local access:/);
-  assert.match(prompt, /project_path=Bot\/demo-project/);
-  assert.match(prompt, /user_id=123456/);
-  assert.match(prompt, /api_key_source=plugin_config/);
-  assert.match(prompt, /api_key_configured=true/);
-  assert.match(prompt, /configured Zotero user id/i);
-  assert.match(prompt, /configured Zotero API key/i);
-  assert.match(prompt, /Never print or persist the raw key/i);
-  assert.doesNotMatch(prompt, /secret-test-key/);
+  assert.match(prompt, /Research program Zotero path: Bot\/demo-project/i);
+  assert.match(prompt, /use the local Zotero MCP server through \/zotero-project-library/i);
+  assert.match(prompt, /ZOTERO_API_KEY|ZOTERO_USER_ID/i);
+  assert.doesNotMatch(prompt, /Zotero local access:/);
+  assert.doesNotMatch(prompt, /zoteroApiKey|zoteroApiKeyEnv|zoteroUserId/);
+  assert.doesNotMatch(prompt, /plugin_config|configured Zotero API key|configured Zotero user id/i);
 });
 
 test("formatWorkflowSnapshotForPrompt does not advertise local PaperNexus storage in remote-only mode", () => {
