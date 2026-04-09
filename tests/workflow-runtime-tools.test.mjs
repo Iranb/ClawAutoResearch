@@ -135,6 +135,46 @@ test("research_workflow get_papernexus_remote_access returns a redacted token st
   assert.equal(result.summary.tokenEnv, "PAPERNEXUS_API_TOKEN");
 });
 
+test("research_workflow survey-review actions persist and read durable survey state", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const setResult = await executeWorkflowTool(tool, {
+    action: "set_survey_review",
+    surveyReview: {
+      topic: "Graph reasoning survey",
+      mode: "deep",
+      status: "searching",
+      current_phase: "retrieval",
+      candidate_paper_count: 72,
+      query_round_count: 10,
+    },
+  });
+  assert.equal(setResult.state.topic, "Graph reasoning survey");
+  assert.equal(setResult.state.status, "searching");
+  assert.equal(setResult.state.queryRoundCount, 10);
+
+  const summary = await executeWorkflowTool(tool, {
+    action: "get_survey_review",
+  });
+  assert.equal(summary.state.topic, "Graph reasoning survey");
+  assert.equal(summary.state.mode, "deep");
+  assert.equal(summary.state.candidatePaperCount, 72);
+  assert.equal(summary.state.queryRoundCount, 10);
+});
+
 test("research_workflow gate-state actions persist timed-default confirmation metadata", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

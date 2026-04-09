@@ -241,6 +241,12 @@ export function formatWorkflowStatusText(params: {
           `Brainstorm contract: provider=${snapshot.brainstormCycleProvider ?? "unset"}, provider_mode=${snapshot.brainstormCycleProviderMode ?? "unset"}, provider_status=${snapshot.brainstormCycleProviderStatus ?? "unset"}, contract_version=${snapshot.brainstormCycleContractVersion ?? "unset"}, bundle_ready=${snapshot.brainstormCycleChainBundleReady ? "true" : "false"}`,
         ]
       : []),
+    ...(snapshot.surveyReviewStatus && snapshot.surveyReviewStatus !== "missing"
+      ? [
+          `Survey review: status=${snapshot.surveyReviewStatus}, phase=${snapshot.surveyReviewCurrentPhase ?? "unset"}, topic=${snapshot.surveyReviewTopic ?? "unset"}, mode=${snapshot.surveyReviewMode ?? "unset"}, candidates=${snapshot.surveyReviewCandidatePaperCount ?? 0}, included=${snapshot.surveyReviewIncludedPaperCount ?? 0}, excluded=${snapshot.surveyReviewExcludedPaperCount ?? 0}, query_rounds=${snapshot.surveyReviewQueryRoundCount ?? 0}`,
+          `Survey synthesis: graph_grounded_brief=${snapshot.surveyReviewGraphGroundedBriefReady ? "true" : "false"}, survey_brief=${snapshot.surveyReviewSurveyBriefPath ?? "unset"}, pending_reason=${snapshot.surveyReviewPendingReason ?? "none"}`,
+        ]
+      : []),
     ...(snapshot.ideationContractStatus
       ? [
           `Ideation contract: status=${snapshot.ideationContractStatus}, track=${snapshot.ideationContractSelectedTrackId ?? "unset"}, direction=${snapshot.ideationContractSelectedDirectionId ?? "unset"}, idea_tree=${snapshot.ideationContractIdeaTreePath ?? "unset"}, proposal=${snapshot.ideationContractResearchProposalPath ?? "unset"}, ranking=${snapshot.ideationContractRankingHistoryPath ?? "unset"}, scoreboard=${snapshot.ideationContractTournamentScoreboardPath ?? "unset"}, top3=${snapshot.ideationContractTop3SummaryPath ?? "unset"}, graph_packet=${snapshot.ideationContractGraphPacketPath ?? "unset"}`,

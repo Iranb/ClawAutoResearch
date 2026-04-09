@@ -185,6 +185,77 @@ test("research-pipeline command starts a background continuation on the bound re
   );
 });
 
+test("survey-review command starts a projectless background continuation on the bound researcher session", async () => {
+  let captured = null;
+  const api = makeApi();
+  const surveyCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:survey-lab",
+        };
+      },
+      async buildWorkflowSnapshot(params) {
+        captured = {
+          ...(captured ?? {}),
+          snapshotParams: params,
+        };
+        return {
+          role: "researcher",
+          projectRoot: null,
+          projectId: null,
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-survey-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background survey review started.",
+        };
+      },
+    }),
+    "survey-review"
+  );
+
+  const result = await surveyCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/survey-review "graph reasoning survey"',
+    args: '"graph reasoning survey"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background survey review started.");
+  assert.equal(
+    captured.backgroundParams.agentCtx.sessionKey,
+    "agent:researcher:discord:group:survey-lab"
+  );
+  assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
+  assert.equal(captured.backgroundParams.backgroundRun.topic, "graph reasoning survey");
+  assert.equal(
+    captured.backgroundParams.backgroundRun.projectId,
+    "survey-graph-reasoning-survey"
+  );
+  assert.match(
+    captured.backgroundParams.backgroundRun.commandText,
+    /^\/survey-review\b/
+  );
+});
+
 test("project-init command scaffolds a project and seeds the onboarding contract", async (t) => {
   const projectsRoot = await makeProjectsRoot();
 

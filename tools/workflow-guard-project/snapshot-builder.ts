@@ -33,6 +33,7 @@ import {
   normalizeInnovationReflectionState,
 } from "../workflow-guard-state/research-loop-state";
 import { normalizeIdeationContractState } from "../workflow-guard-state/ideation-contract";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   normalizeResearchProgramState,
@@ -698,6 +699,9 @@ export async function buildWorkflowSnapshotFromProjectState(
   const brainstormCycle = normalizeBrainstormCycleState(
     asRecord(projectState.manifest?.brainstorm_cycle)
   );
+  const surveyReview = normalizeSurveyReviewState(
+    asRecord(projectState.manifest?.survey_review)
+  );
   const ideationContract = normalizeIdeationContractState(
     asRecord(projectState.manifest?.ideation_contract)
   );
@@ -1004,6 +1008,17 @@ export async function buildWorkflowSnapshotFromProjectState(
       isBrainstormCycleReady(brainstormCycle) &&
       getBrainstormCycleValidationErrors(brainstormCycle).length === 0,
     brainstormCyclePendingReason: brainstormCycle.pendingReason,
+    surveyReviewStatus: surveyReview.status,
+    surveyReviewCurrentPhase: surveyReview.currentPhase,
+    surveyReviewTopic: surveyReview.topic,
+    surveyReviewMode: surveyReview.mode,
+    surveyReviewCandidatePaperCount: surveyReview.candidatePaperCount,
+    surveyReviewIncludedPaperCount: surveyReview.includedPaperCount,
+    surveyReviewExcludedPaperCount: surveyReview.excludedPaperCount,
+    surveyReviewQueryRoundCount: surveyReview.queryRoundCount,
+    surveyReviewGraphGroundedBriefReady: surveyReview.graphGroundedBriefReady,
+    surveyReviewSurveyBriefPath: surveyReview.surveyBriefPath,
+    surveyReviewPendingReason: surveyReview.pendingReason,
     ideationContractStatus: ideationContract.status,
     ideationContractSelectedDirectionId: ideationContract.selectedDirectionId,
     ideationContractSelectedTrackId: ideationContract.selectedTrackId,

@@ -45,6 +45,12 @@ The workflow advances only when:
 4. experiment history is durably reconciled before leaving the EXPERIMENT stage
 5. claim support satisfies the current gate
 
+For survey-only work, the workflow may create a lightweight project whose primary durable contract is:
+
+- `{PROJ}/PROJECT_MANIFEST.json.survey_review`
+
+The survey loop still uses the same manifest/snapshot/runtime infrastructure, but it does not enter `plan`, `code`, or `experiment`.
+
 Advisory writing signals are tracked separately and never block draft generation.
 
 ### Gate Types
@@ -185,6 +191,44 @@ Default portfolio rule:
 - at most **2 active tracks**
 - at most **1 parked track**
 - all remaining tracks must be merged or killed
+
+### Survey-Only Review Mode
+
+When the user invokes `/survey-review`, the system creates or reuses a lightweight survey workspace and keeps the project inside one top-level stage:
+
+- `survey_review`
+
+The authoritative progress contract is `PROJECT_MANIFEST.json.survey_review`, not any single Markdown file.
+
+Durable survey artifacts:
+
+- `{PROJ}/researcher/SURVEY_QUERY_REGISTRY.json`
+- `{PROJ}/researcher/LITERATURE.md`
+- `{PROJ}/researcher/REVIEW_PROTOCOL.md`
+- `{PROJ}/researcher/INCLUDED_PAPERS.json`
+- `{PROJ}/researcher/EXCLUDED_PAPERS.json`
+- `{PROJ}/researcher/LITERATURE_REVIEW.md`
+- `{PROJ}/researcher/SOTA_MATRIX.md`
+- `{PROJ}/researcher/GAP_SYNTHESIS.md`
+- `{PROJ}/researcher/COVERAGE_SUMMARY.md`
+- `{PROJ}/researcher/SURVEY_BRIEF.md`
+
+The survey materializer must reconcile these artifacts back into the manifest after each retrieval, screening, or synthesis pass. This is required to avoid the old failure mode where files existed on disk but the workflow still blocked on stale in-memory or stale-manifest state.
+
+Survey review internal phases:
+
+1. `bootstrap`
+2. `retrieval`
+3. `screening`
+4. `synthesis`
+5. `complete`
+
+Survey mode rules:
+
+- prefer broad retrieval saturation over bounded startup research coverage
+- keep explicit included/excluded decisions
+- keep coverage gaps durable
+- stop after survey synthesis; do not automatically route into experiment planning
 
 ### Graph-Grounded Brainstorming Contract
 

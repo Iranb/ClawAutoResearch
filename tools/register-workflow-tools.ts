@@ -32,6 +32,7 @@ import {
   getProjectRootForWorkflow,
   getReviewIssueTrackerStateSummary,
   getReviewSessionStateSummary,
+  getSurveyReviewStateSummary,
   getTheoryStateSummary,
   getWorkflowContactCooldown,
   getWritePackageStateSummary,
@@ -40,6 +41,7 @@ import {
   inferTargetRoleFromToolParams,
   listChannelProjectBindingsForWorkflow,
   materializeReviewPressurePacket,
+  materializeSurveyReviewState,
   materializeTheoryAppendix,
   queueWorkflowMailboxMessage,
   readWorkflowMailboxForAgent,
@@ -67,6 +69,7 @@ import {
   setReviewPressurePacketState,
   setReviewIssueTrackerState,
   setReviewSessionState,
+  setSurveyReviewState,
   setWritePackageState,
   setWritingSessionState,
   setWritingContractState,
@@ -160,7 +163,9 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
   "materialize_cycle_memory",
+  "materialize_survey_review_state",
   "materialize_idea_catalyst_state",
+  "set_survey_review",
   "set_ideation_contract",
   "set_idea_catalyst_state",
   "set_paper_story_state",
@@ -194,6 +199,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_experiment_memory: "getExperimentMemorySummary",
   get_innovation_reflection: "getInnovationReflectionStateSummary",
   get_brainstorm_cycle: "getBrainstormCycleStateSummary",
+  get_survey_review: "getSurveyReviewStateSummary",
   set_brainstorm_cycle: "setBrainstormCycleState",
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
@@ -203,11 +209,13 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_cycle_memory: "materializeCycleMemory",
+  materialize_survey_review_state: "materializeSurveyReviewState",
   get_ideation_contract: "getIdeationContractStateSummary",
   get_idea_catalyst_state: "getIdeaCatalystStateSummary",
   set_ideation_contract: "setIdeationContractState",
   set_idea_catalyst_state: "setIdeaCatalystState",
   get_research_program: "getResearchProgramStateSummary",
+  set_survey_review: "setSurveyReviewState",
   set_research_program: "setResearchProgramState",
   get_orchestration_state: "getOrchestrationStateSummary",
   set_orchestration_state: "setOrchestrationState",
@@ -514,6 +522,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_experiment_memory",
               "get_innovation_reflection",
               "get_brainstorm_cycle",
+              "get_survey_review",
               "set_brainstorm_cycle",
               "run_brainstorm_cycle",
               "materialize_ideation_contract",
@@ -522,7 +531,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
               "materialize_cycle_memory",
+              "materialize_survey_review_state",
               "get_research_program",
+              "set_survey_review",
               "set_research_program",
               "get_orchestration_state",
               "set_orchestration_state",
@@ -627,7 +638,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          surveyReview: {
+            type: "object",
+            additionalProperties: true,
+          },
           ideationMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          surveyReviewMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -1527,6 +1546,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_survey_review": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getSurveyReviewStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "set_brainstorm_cycle": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await setBrainstormCycleState({
@@ -1591,6 +1617,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "materialize_survey_review_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeSurveyReviewState({
+                projectRoot: resolvedProjectRoot,
+                surveyReviewMaterialization: requireObject(
+                  params.surveyReviewMaterialization ?? {},
+                  "surveyReviewMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "set_ideation_contract": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await setIdeationContractState({
@@ -1619,6 +1658,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_survey_review": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setSurveyReviewState({
+                projectRoot: resolvedProjectRoot,
+                surveyReview: requireObject(params.surveyReview, "surveyReview"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "set_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

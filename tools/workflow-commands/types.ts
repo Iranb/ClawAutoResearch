@@ -30,7 +30,8 @@ export type WorkflowBackgroundCommandKind =
   | "research_pipeline"
   | "research_queue"
   | "resume_pipeline"
-  | "graph_build";
+  | "graph_build"
+  | "survey_review";
 
 export type WorkflowCommandKind =
   | WorkflowBackgroundCommandKind
@@ -79,6 +80,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   research_queue: "/research-queue",
   resume_pipeline: "/resume-pipeline",
   graph_build: "/graph-build",
+  survey_review: "/survey-review",
   project_init: "/project-init",
   workflow_status: "/workflow-status",
 };
