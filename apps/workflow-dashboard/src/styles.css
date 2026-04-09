@@ -1,0 +1,223 @@
+:root {
+  color-scheme: light;
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(30, 111, 255, 0.18), transparent 28%),
+    linear-gradient(180deg, #f6f3eb 0%, #fdfcf9 100%);
+  color: #152033;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+a {
+  color: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.app-shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.app-shell__hero {
+  margin-bottom: 24px;
+}
+
+.app-shell__eyebrow {
+  margin: 0 0 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  color: #506078;
+}
+
+.app-shell__hero h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  line-height: 0.96;
+}
+
+.app-shell__description {
+  max-width: 760px;
+  margin: 12px 0 0;
+  color: #4d5a6f;
+  font-size: 1.05rem;
+}
+
+.app-shell__content {
+  display: grid;
+  gap: 20px;
+}
+
+.status-panel,
+.placeholder-panel {
+  padding: 20px 22px;
+  border: 1px solid rgba(21, 32, 51, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.status-panel--error {
+  border-color: rgba(190, 64, 76, 0.3);
+  color: #8a1d28;
+}
+
+.stage-matrix__scroller {
+  overflow-x: auto;
+  border: 1px solid rgba(21, 32, 51, 0.12);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+}
+
+.stage-matrix {
+  min-width: 1280px;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.stage-matrix th,
+.stage-matrix td {
+  padding: 16px 12px;
+  border-bottom: 1px solid rgba(21, 32, 51, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.stage-matrix thead th {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5c6980;
+  background: rgba(255, 255, 255, 0.92);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.stage-matrix__identity {
+  min-width: 280px;
+  max-width: 280px;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: rgba(255, 252, 249, 0.98);
+}
+
+.stage-matrix__identity--header {
+  z-index: 3;
+}
+
+.stage-matrix__project-link {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 1rem;
+  text-decoration: none;
+}
+
+.stage-matrix__project-link:hover {
+  text-decoration: underline;
+}
+
+.stage-matrix__project-meta {
+  margin: 6px 0 0;
+  color: #617089;
+  font-size: 0.88rem;
+}
+
+.stage-cell {
+  min-height: 82px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background: rgba(234, 238, 244, 0.7);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.stage-cell__badge {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(21, 32, 51, 0.25);
+}
+
+.stage-cell__label {
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.stage-cell[data-current="true"] {
+  box-shadow: inset 0 0 0 2px #1d62ff;
+}
+
+.stage-cell[data-state="blocked"] {
+  background: rgba(236, 78, 98, 0.18);
+  border-color: rgba(177, 37, 61, 0.22);
+}
+
+.stage-cell[data-state="blocked"] .stage-cell__badge {
+  background: #b1253d;
+}
+
+.stage-cell[data-state="active"] {
+  background: rgba(233, 185, 60, 0.2);
+  border-color: rgba(181, 130, 24, 0.24);
+}
+
+.stage-cell[data-state="active"] .stage-cell__badge {
+  background: #b58218;
+}
+
+.stage-cell[data-state="ready"] {
+  background: rgba(91, 176, 122, 0.2);
+  border-color: rgba(33, 116, 69, 0.2);
+}
+
+.stage-cell[data-state="ready"] .stage-cell__badge {
+  background: #217445;
+}
+
+.stage-cell[data-state="complete"] {
+  background: rgba(201, 214, 228, 0.54);
+}
+
+.stage-cell[data-state="complete"] .stage-cell__badge {
+  background: #6f7d92;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    padding: 24px 14px 36px;
+  }
+
+  .stage-matrix__identity {
+    min-width: 220px;
+    max-width: 220px;
+  }
+
+  .stage-matrix th,
+  .stage-matrix td {
+    padding: 14px 10px;
+  }
+}
