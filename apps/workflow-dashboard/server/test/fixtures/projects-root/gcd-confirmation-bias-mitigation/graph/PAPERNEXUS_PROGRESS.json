@@ -1,0 +1,11 @@
+{
+  "updated_at": "2026-04-09T08:50:00.000Z",
+  "phase": "waiting_import",
+  "progress": {
+    "total": 12,
+    "completed": 8,
+    "remaining": 4
+  },
+  "next_action": "Wait for the import batch to complete, then verify graph presence.",
+  "blocking_reason": "missing_sources: canonical papers are still missing from the shared graph"
+}

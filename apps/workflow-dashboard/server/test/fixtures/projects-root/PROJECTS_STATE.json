@@ -1,0 +1,18 @@
+{
+  "updated_at": "2026-04-09T09:30:00.000Z",
+  "gpu_allocation": {
+    "0": null,
+    "1": null
+  },
+  "total_gpu_hours_used": 12,
+  "projects": [
+    {
+      "id": "gcd-confirmation-bias-mitigation",
+      "stage": "graph_build",
+      "status": "active",
+      "updated": "2026-04-09T09:30:00.000Z",
+      "next_action": "Import the missing source set and rerun graph verification.",
+      "blocked_by": "missing_sources: canonical papers are still missing from the shared graph"
+    }
+  ]
+}

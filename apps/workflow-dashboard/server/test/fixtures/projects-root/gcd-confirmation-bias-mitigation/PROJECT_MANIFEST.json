@@ -1,0 +1,9 @@
+{
+  "project_id": "gcd-confirmation-bias-mitigation",
+  "title": "Confirmation Bias Mitigation In Graph Retrieval",
+  "current_stage": "graph_build",
+  "owner_agent": "researcher",
+  "next_action": "Refresh the graph after the missing sources are imported.",
+  "blocking_reason": "missing_sources: canonical papers are still missing from the shared graph",
+  "updated_at": "2026-04-09T08:45:00.000Z"
+}
