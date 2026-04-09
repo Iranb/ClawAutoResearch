@@ -1,5 +1,5 @@
 import path from "node:path";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 
 import request from "supertest";
@@ -150,6 +150,24 @@ describe("workflow-dashboard api routes", () => {
     expect(response.body).toEqual({
       error: "Invalid artifact key",
       artifactKey: "not-a-real-artifact",
+    });
+  });
+
+  it("returns a json 500 when a read-model throws while parsing fixture data", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const app = createApp({ projectsRoot });
+
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      '{\n  "projects": [\n',
+    );
+
+    const response = await request(app).get("/api/projects");
+
+    expect(response.status).toBe(500);
+    expect(response.headers["content-type"]).toMatch(/application\/json/);
+    expect(response.body).toEqual({
+      error: "Internal server error",
     });
   });
 });

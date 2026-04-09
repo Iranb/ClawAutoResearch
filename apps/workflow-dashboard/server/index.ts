@@ -1,21 +1,6 @@
 import { createApp } from "./app.js";
+import { readCliProjectsRoot } from "./cli-projects-root.js";
 import { resolveProjectsRoot } from "./config/projects-root.js";
-
-function readCliProjectsRoot(argv: string[]): string | undefined {
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-
-    if (value === "--projectsRoot") {
-      return argv[index + 1];
-    }
-
-    if (value.startsWith("--projectsRoot=")) {
-      return value.slice("--projectsRoot=".length);
-    }
-  }
-
-  return undefined;
-}
 
 const projectsRoot = resolveProjectsRoot({
   cliProjectsRoot: readCliProjectsRoot(process.argv.slice(2)),
