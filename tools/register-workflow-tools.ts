@@ -91,6 +91,7 @@ import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import {
   dispatchWorkflowTaskToAgent,
+  deriveWorkflowDispatchSessionCandidates,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
@@ -100,6 +101,7 @@ import {
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
 import {
   buildPapernexusWrapperBackgroundRunRequest,
+  enqueueQueuedBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
   type PapernexusWrapperRunRequest,
@@ -439,7 +441,21 @@ function buildUnboundProjectAutoIteratorPayload(params: {
   };
 }
 
-async function maybeDispatchAutoIteratorTask(params: {
+function buildAutoStageDispatchQueueKey(params: {
+  projectRoot: string;
+  stage: string | null | undefined;
+  owner: string | null | undefined;
+  command: string | null | undefined;
+}) {
+  return [
+    path.resolve(params.projectRoot),
+    params.stage ?? "unknown-stage",
+    params.owner ?? "unknown-owner",
+    params.command ?? "no-command",
+  ].join("::");
+}
+
+export async function maybeDispatchAutoIteratorTask(params: {
   plugin: PluginRegistrationContext;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   agentCtx: ToolContext;
@@ -451,6 +467,8 @@ async function maybeDispatchAutoIteratorTask(params: {
 }) {
   const requesterRole = params.snapshot.role;
   const ownerAfter = params.result.ownerAfter as DispatchableWorkflowRole | null;
+  const autoModeActive =
+    (params.result.effectiveAutoMode ?? params.workflowPolicy.autoMode ?? "off") !== "off";
   if (!params.workflowPolicy.enforceWorkflowBoundaries) {
     return null;
   }
@@ -490,8 +508,7 @@ async function maybeDispatchAutoIteratorTask(params: {
     waitTimeoutMs: params.waitTimeoutMs,
     retryOnTimeout: params.retryOnTimeout,
     enableSpawnFallback: params.enableSpawnFallback,
-    autoModeActive:
-      (params.result.effectiveAutoMode ?? params.workflowPolicy.autoMode ?? "off") !== "off",
+    autoModeActive,
     logger: params.plugin.api.logger,
   });
   if (dispatch.dispatched) {
@@ -501,6 +518,64 @@ async function maybeDispatchAutoIteratorTask(params: {
       toAgent: ownerAfter,
       channel: dispatch.channel ?? "sessions_send",
     });
+  }
+  if (!dispatch.dispatched && autoModeActive) {
+    const requesterSessionKey =
+      readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
+    const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
+      requesterSessionKey,
+      targetRole: ownerAfter,
+    });
+    const queued = await enqueueQueuedBackgroundWorkflowRun({
+      source: "workflow_auto_stage",
+      ownerAgent: ownerAfter,
+      requesterSessionKey,
+      messageChannel: readString(params.agentCtx.messageChannel),
+      preferredSessionKey: preferredSessionKeys[0] ?? null,
+      family: "research",
+      kind: "workflow_stage_dispatch",
+      projectId: params.snapshot.projectId,
+      projectRoot: params.snapshot.projectRoot,
+      projectsRoot: params.workflowPolicy.projectsRoot,
+      queueKey: buildAutoStageDispatchQueueKey({
+        projectRoot: params.snapshot.projectRoot,
+        stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+        owner: ownerAfter,
+        command: primaryAction.command,
+      }),
+      summary:
+        `Queued the ${primaryAction.stage ?? params.result.stageAfter ?? "current"} stage handoff for ${ownerAfter} because immediate auto-mode dispatch was unavailable.`,
+      dispatchPayload: {
+        requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
+        requesterAccountId: null,
+        preferredSessionKeys,
+        fromRole: requesterRole,
+        toRole: ownerAfter,
+        projectRoot: params.snapshot.projectRoot,
+        projectId: params.snapshot.projectId,
+        stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+        summary: primaryAction.summary,
+        command: primaryAction.command,
+        mailboxMessageId: primaryAction.mailboxMessageId ?? null,
+        extraBody:
+          "Workflow auto-mode queued dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+        waitTimeoutMs: params.waitTimeoutMs ?? 5000,
+        retryOnTimeout: params.retryOnTimeout ?? false,
+        enableSpawnFallback:
+          params.enableSpawnFallback === false ? false : true,
+        useWorkflowHandoff: true,
+        autoModeActive: true,
+      },
+    });
+    return {
+      ...dispatch,
+      blockedByCooldown: false,
+      cooldownRemainingSeconds: null,
+      owner: ownerAfter,
+      queuedFallback: true,
+      queueKey: queued.entry.queueKey,
+      queuePosition: queued.queuePosition,
+    };
   }
   return {
     ...dispatch,
