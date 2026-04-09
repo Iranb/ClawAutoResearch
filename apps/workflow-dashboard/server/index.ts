@@ -1,5 +1,4 @@
-import http from "node:http";
-
+import { createApp } from "./app.js";
 import { resolveProjectsRoot } from "./config/projects-root.js";
 
 function readCliProjectsRoot(argv: string[]): string | undefined {
@@ -22,22 +21,12 @@ const projectsRoot = resolveProjectsRoot({
   cliProjectsRoot: readCliProjectsRoot(process.argv.slice(2)),
 });
 
-const port = Number(process.env.PORT ?? "4317");
-
-const server = http.createServer((request, response) => {
-  if (request.url === "/api/config") {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ projectsRoot, readOnly: true }));
-    return;
-  }
-
-  response.writeHead(404, { "content-type": "application/json" });
-  response.end(JSON.stringify({ error: "Not found" }));
-});
-
-server.listen(port, () => {
-  console.log(`workflow-dashboard server listening on http://localhost:${port}`);
-  console.log(`workflow-dashboard projectsRoot=${projectsRoot}`);
+const port = Number.parseInt(process.env.PORT ?? "4317", 10);
+const app = createApp({ projectsRoot });
+const server = app.listen(port, () => {
+  console.log(
+    `workflow-dashboard server listening on http://localhost:${port} projectsRoot=${projectsRoot}`,
+  );
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
