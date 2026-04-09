@@ -196,6 +196,7 @@ exit 1
   assert.match(stdout, /\[dry-run\] \(cd .* && npm run build\)/);
   assert.match(stdout, /SKIP 全部 Agent 创建（默认关闭；使用 --with-agent-create 开启）/);
   assert.match(stdout, /-> UPDATE workspace-planner\/AGENTS\.md/);
+  assert.match(stdout, /\[dry-run\] openclaw gateway restart/);
   assert.doesNotMatch(stdout, /workspace-planner\/AGENTS\.md \(已存在；默认会覆盖，当前因 --preserve-role-files 保留\)/);
 });
 

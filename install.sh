@@ -1155,6 +1155,18 @@ fi
 
 echo ""
 echo "[7/7] 完成安装收尾..."
+echo "  -> 重启 OpenClaw Gateway..."
+if ! command -v openclaw >/dev/null 2>&1; then
+  echo "  WARN: 未找到 openclaw，跳过 gateway restart"
+elif $DRY_RUN; then
+  echo "  [dry-run] openclaw gateway restart"
+else
+  if openclaw gateway restart; then
+    echo "  -> RESTART openclaw gateway"
+  else
+    echo "  WARN: openclaw gateway restart 失败，请手动执行 `openclaw gateway restart`"
+  fi
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
