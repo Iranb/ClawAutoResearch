@@ -378,6 +378,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "resume_pipeline":
     case "graph_build":
     case "zotero_sync":
+    case "literature_review":
     case "survey_review":
     case "idle_research":
       return "research";
@@ -2185,6 +2186,17 @@ export function buildZoteroSyncBackgroundCommand(commandText: string): string {
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+export function buildLiteratureReviewBackgroundCommand(commandText: string): string {
+  const trimmed = commandText.trim();
+  if (!trimmed) {
+    return '/literature-review "current project" -- __BACKGROUND_CONTINUATION__: true';
+  }
+  if (hasBackgroundContinuationMarker(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
+}
+
 export function buildSurveyReviewBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
   if (!trimmed) {
@@ -2237,6 +2249,8 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     normalizedKind === "graph_build" || /^\/graph-build\b/i.test(commandText ?? "");
   const zoteroSyncContinuation =
     normalizedKind === "zotero_sync" || /^\/zotero-sync\b/i.test(commandText ?? "");
+  const literatureReviewContinuation =
+    normalizedKind === "literature_review" || /^\/literature-review\b/i.test(commandText ?? "");
   const graphBuildRepairContinuation =
     graphBuildContinuation &&
     /--repair-import(?:\s+|=)(?:true|1|yes)\b/i.test(commandText ?? "");
@@ -2309,6 +2323,17 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     );
     lines.push(
       "Foreground responsiveness rule: do not block the foreground session waiting on Zotero MCP work; if Zotero is unavailable, record unavailable or failed state durably and exit."
+    );
+  }
+  if (literatureReviewContinuation) {
+    lines.push(
+      "Literature-review workflow rule: treat /literature-review as a bounded durable review-packet pass for the current project, not as an endless foreground search session."
+    );
+    lines.push(
+      "Refresh REVIEW_PROTOCOL.md, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, and LITERATURE_REVIEW.md coherently so downstream frontier / plan / writing stages can trust one packet."
+    );
+    lines.push(
+      "Foreground responsiveness rule: keep the foreground chat interruptible while this review pass runs; summarize progress durably rather than monopolizing the session."
     );
   }
   if (importLifecycleCommand) {
@@ -2701,6 +2726,10 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildZoteroSyncBackgroundCommand(
             `/zotero-sync "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
           )
+      : normalizedKind === "literature_review"
+        ? buildLiteratureReviewBackgroundCommand(
+            `/literature-review "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
+          )
       : normalizedKind === "survey_review"
         ? buildSurveyReviewBackgroundCommand(
             `/survey-review "${topic ?? ensuredProject?.title ?? "research topic"}"`
@@ -2712,7 +2741,7 @@ export async function startBackgroundWorkflowRun(params: {
     throw new Error(
       isPapernexusBackgroundKind(normalizedKind)
         ? "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
-        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, graph_build, zotero_sync, or survey_review."
+        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, graph_build, zotero_sync, literature_review, or survey_review."
     );
   }
   if (
@@ -3073,6 +3102,8 @@ export async function startBackgroundWorkflowRun(params: {
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "graph_build"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background graph build started for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? params.snapshot.projectId ?? "the current project"}.`
+        : normalizedKind === "literature_review"
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background literature review started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "survey_review"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background survey review started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current topic"}.`
         : normalizedKind === "idle_research"

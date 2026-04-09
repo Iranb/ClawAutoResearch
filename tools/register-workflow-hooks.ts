@@ -25,6 +25,7 @@ import {
   shouldBlockWriterTemplateWrite,
 } from "./workflow-guard";
 import {
+  buildLiteratureReviewBackgroundCommand,
   buildPapernexusSkillBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
@@ -121,6 +122,10 @@ function looksLikeResearchQueueCommand(text: string | null | undefined): boolean
 
 function looksLikeResumePipelineCommand(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\/resume-pipeline\b/i.test(text));
+}
+
+function looksLikeLiteratureReviewCommand(text: string | null | undefined): boolean {
+  return Boolean(text && /^\s*\/literature-review\b/i.test(text));
 }
 
 export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
@@ -608,6 +613,22 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
             buildResearchQueueBackgroundCommand(latestPromptLikeText ?? "")
           )}`,
           "After the tool returns, reply briefly that the research queue task has started and stop. The background continuation will perform the real queue workflow.",
+          "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role === "researcher" &&
+        snapshot.projectRoot &&
+        looksLikeLiteratureReviewCommand(latestPromptLikeText) &&
+        !hasBackgroundContinuationMarker(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Slash Fast Path]",
+          "This turn appears to come from /literature-review.",
+          'Before doing heavy review work, call research_workflow with action start_background_run and backgroundRun.kind="literature_review".',
+          `Pass backgroundRun.commandText as: ${JSON.stringify(
+            buildLiteratureReviewBackgroundCommand(latestPromptLikeText ?? "")
+          )}`,
+          "Keep the pass project-scoped, durable, and bounded. After the tool returns, reply briefly that the background literature review has started and stop. The background continuation will materialize the real review packet.",
           "[/Slash Fast Path]"
         );
       } else if (

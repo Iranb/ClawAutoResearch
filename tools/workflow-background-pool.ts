@@ -87,6 +87,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "research_queue":
     case "resume_pipeline":
     case "graph_build":
+    case "literature_review":
     case "idle_research":
       return "research";
     case "papernexus_skill":

@@ -69,6 +69,7 @@ Experiment completion signals:
 - the log tail contains `EXIT_CODE=0`
 - result files have been generated
 - the bundle's `REMOTE_RUN.json` can be updated from `running` to a terminal state with concrete artifact paths
+- the workflow ledger / guard reports `active_runs=0` with `finished_unreconciled>0`
 
 ### 5. Polling Strategy
 

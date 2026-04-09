@@ -187,6 +187,24 @@ Also update:
 Return a short structured summary so Researcher can update `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`.
 If you can identify `experimentId`, `trackId`, `server`, `gpu_id`, `screen_name`, and `REMOTE_RUN.json`, also call `research_workflow.upsert_experiment` so the shared ledger records the atomic launch immediately.
 
+### 6.5 Know when launch work is "done enough"
+
+Coder does not need to wait for a human to say "the run finished".
+
+Treat the run as having crossed from **launch** into **monitor / reconcile** when the evidence stack says so:
+
+- `screen -ls` no longer shows the run
+- the log contains `EXIT_CODE=0` or another terminal failure signature
+- `REMOTE_RUN.json` can be updated to a terminal status
+- the workflow ledger / guard shows `active_runs=0` and `finished_unreconciled>0`
+- the workflow `next_action` or monitor summary points at `/monitor-experiment`
+
+When those signals appear:
+
+- stop treating the branch as a fresh launch problem
+- do not burn more GPU time on adjacent novelty branches just because the old screen exited
+- hand control to monitoring / reconciliation so results, artifacts, and ledger state become durable
+
 ## Allowed Runtime Adjustments
 
 Coder may make only bounded execution-time adjustments needed to keep the assigned experiment alive:

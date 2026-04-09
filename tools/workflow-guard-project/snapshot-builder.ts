@@ -13,6 +13,7 @@ import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
   buildExperimentMemoryDigest,
+  isTerminalExperimentStatus,
   loadExperimentSearchState,
 } from "../workflow-guard-experiment-history";
 import {
@@ -365,6 +366,47 @@ function getInnovationReflectionBasis(ledger: unknown): {
       .map((entry) => pickString(entry, ["experimentId", "experiment_id"]) ?? null)
       .filter((entry): entry is string => Boolean(entry)),
   };
+}
+
+function getExperimentLedgerEntries(
+  ledger: unknown
+): Array<Record<string, unknown>> {
+  const ledgerRecord = asRecord(ledger);
+  return Array.isArray(ledgerRecord?.experiments)
+    ? ledgerRecord.experiments
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+}
+
+function countTerminalExperimentEntries(ledger: unknown): number {
+  return getExperimentLedgerEntries(ledger).filter((entry) =>
+    isTerminalExperimentStatus(normalizeStage(pickString(entry, ["status"])) ?? null)
+  ).length;
+}
+
+function countFinishedExperimentEntriesAwaitingReconciliation(params: {
+  ledger: unknown;
+  experimentSearch: { status?: string | null } | null | undefined;
+}): number {
+  if (normalizeStage(params.experimentSearch?.status) === "ready_for_analysis") {
+    return 0;
+  }
+  return getExperimentLedgerEntries(params.ledger).filter((entry) => {
+    const status = normalizeStage(pickString(entry, ["status"])) ?? null;
+    if (!isTerminalExperimentStatus(status)) {
+      return false;
+    }
+    const resultPaths = entry.resultPaths ?? entry.result_paths;
+    const evidencePointers = entry.evidencePointers ?? entry.evidence_pointers;
+    return Boolean(
+      pickString(entry, ["completedAt", "completed_at", "finishedAt", "finished_at"]) ||
+        (Array.isArray(resultPaths) && resultPaths.length > 0) ||
+        (Array.isArray(evidencePointers) && evidencePointers.length > 0) ||
+        asRecord(entry.keyMetric ?? entry.key_metric ?? entry.metric) ||
+        asRecord(entry.metrics)
+    );
+  }).length;
 }
 
 export function isInnovationReflectionDue(params: {
@@ -921,6 +963,20 @@ export async function buildWorkflowSnapshotFromProjectState(
   const experimentLedgerSummary = asRecord(
     (projectState.experimentLedger as Record<string, unknown> | null)?.summary
   );
+  const experimentActiveRunCount =
+    Array.isArray(experimentLedgerSummary?.activeExperimentIds)
+      ? experimentLedgerSummary.activeExperimentIds.length
+      : 0;
+  const experimentTerminalRunCount = countTerminalExperimentEntries(
+    projectState.experimentLedger
+  );
+  const experimentFinishedUnreconciledCount =
+    countFinishedExperimentEntriesAwaitingReconciliation({
+      ledger: projectState.experimentLedger,
+      experimentSearch,
+    });
+  const experimentNeedsMonitorPass =
+    experimentActiveRunCount > 0 || experimentFinishedUnreconciledCount > 0;
   const experimentSyncRequired =
     experimentLedgerSummary?.papernexusSyncRequired === true ||
     experimentMemory?.papernexus_sync_required === true;
@@ -1145,6 +1201,13 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentLedgerUpdatedAt:
       asString((projectState.experimentLedger as Record<string, unknown> | null)?.updatedAt) ??
       asString(experimentMemory?.last_ledger_update_at),
+    experimentActiveRunCount,
+    experimentTerminalRunCount,
+    experimentFinishedUnreconciledCount,
+    experimentNeedsMonitorPass,
+    experimentMonitorRecommendedCommand: experimentNeedsMonitorPass
+      ? "/monitor-experiment"
+      : null,
     experimentSyncRequired,
     experimentPapernexusSyncStatus,
     innovationReflectionStatus: innovationReflection.status,

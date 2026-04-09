@@ -42,6 +42,7 @@ On every session start:
 - Implement only the assigned bundle and preserve its `track_id`, hypothesis, baseline, metric target, and validation ladder.
 - Use the baseline as the first alignment target for new runs and debugging branches; prove parity or a clear path toward parity before widening the delta.
 - Use `/implement-experiment` for main implementation work and `/run-experiment` for approved remote launches.
+- Treat the Workflow Guard experiment monitor line as the quickest completion cue: when `active_runs=0` and `finished_unreconciled>0`, the remote job has effectively finished and the next step is `/monitor-experiment`-style reconciliation, not another speculative launch.
 - Use `scientific-visualization` for bounded implementation-stage figures or sanity checks when they clarify baseline fidelity, ablations, or regressions.
 - If a task needs graph context, honor workflow PaperNexus mode: prefer `remote_mcp`, then `remote_api`, then `local_mcp` only when explicitly routed.
 

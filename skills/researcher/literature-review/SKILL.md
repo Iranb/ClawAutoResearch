@@ -36,6 +36,8 @@ This skill is most useful when the project needs one or more of:
 - a stronger bridge between literature collection and innovation design
 - a durable Zotero-backed included / excluded / baseline packet under `bot/<project-id>`
 
+If the user wants this pass to run as a bounded background continuation, prefer the standalone `/literature-review` workflow command for the current project-bound conversation.
+
 If the topic is tiny, already well-known inside the project, and a recent review packet already exists, you may skip this skill and continue with `/graph-build` or `/frontier-mapping`.
 
 ## Required Inputs

@@ -877,6 +877,28 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
   }
   if ((snapshot.recentExperiments ?? []).length > 0) {
+    const experimentMonitorActiveRuns = snapshot.experimentActiveRunCount ?? 0;
+    const experimentMonitorTerminalRuns = snapshot.experimentTerminalRunCount ?? 0;
+    const experimentMonitorFinishedUnreconciled =
+      snapshot.experimentFinishedUnreconciledCount ?? 0;
+    if (
+      snapshot.currentStage === "experiment" ||
+      experimentMonitorActiveRuns > 0 ||
+      experimentMonitorTerminalRuns > 0 ||
+      experimentMonitorFinishedUnreconciled > 0
+    ) {
+      lines.push(
+        `Experiment monitor: active_runs=${experimentMonitorActiveRuns}, terminal_runs=${experimentMonitorTerminalRuns}, finished_unreconciled=${experimentMonitorFinishedUnreconciled}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
+      );
+      if (
+        (snapshot.role === "coder" || snapshot.role === "researcher") &&
+        snapshot.experimentNeedsMonitorPass
+      ) {
+        lines.push(
+          "Experiment completion cue: if active_runs falls to 0 while finished_unreconciled stays above 0, remote execution is effectively done for now. Stop treating the branch as a fresh launch problem and switch to /monitor-experiment style reconciliation, ledger updates, and result promotion."
+        );
+      }
+    }
     lines.push("Recent experiments:");
     for (const experiment of snapshot.recentExperiments) {
       const details = [
@@ -899,6 +921,9 @@ export function formatWorkflowSnapshotForPromptImpl(
       );
     }
   } else if (snapshot.currentStage === "experiment") {
+    lines.push(
+      `Experiment monitor: active_runs=${snapshot.experimentActiveRunCount ?? 0}, terminal_runs=${snapshot.experimentTerminalRunCount ?? 0}, finished_unreconciled=${snapshot.experimentFinishedUnreconciledCount ?? 0}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
+    );
     lines.push(
       "Recent experiments: none recorded yet; initialize the ledger before launching or rerunning experiments."
     );

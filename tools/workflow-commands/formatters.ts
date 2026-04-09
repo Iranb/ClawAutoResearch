@@ -320,6 +320,16 @@ export function formatWorkflowStatusText(params: {
     `Innovation reflection: status=${snapshot.innovationReflectionStatus ?? "unknown"}, due=${snapshot.innovationReflectionDue ? "true" : "false"}`,
     `Experiment sync: ${snapshot.experimentSyncRequired ? `required (${snapshot.experimentPapernexusSyncStatus ?? "pending"})` : "not required"}`,
   ];
+  if (
+    snapshot.currentStage === "experiment" ||
+    (snapshot.experimentActiveRunCount ?? 0) > 0 ||
+    (snapshot.experimentTerminalRunCount ?? 0) > 0 ||
+    (snapshot.experimentFinishedUnreconciledCount ?? 0) > 0
+  ) {
+    lines.push(
+      `Experiment monitor: active_runs=${snapshot.experimentActiveRunCount ?? 0}, terminal_runs=${snapshot.experimentTerminalRunCount ?? 0}, finished_unreconciled=${snapshot.experimentFinishedUnreconciledCount ?? 0}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
+    );
+  }
   if (snapshot.experimentSearchStatus && snapshot.experimentSearchStatus !== "missing") {
     lines.push(
       `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`

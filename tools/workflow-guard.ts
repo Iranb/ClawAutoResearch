@@ -1488,6 +1488,11 @@ export type WorkflowSnapshot = {
   idleResearchDigestPath: string | null;
   experimentLedgerPath: string | null;
   experimentLedgerUpdatedAt: string | null;
+  experimentActiveRunCount: number | null;
+  experimentTerminalRunCount: number | null;
+  experimentFinishedUnreconciledCount: number | null;
+  experimentNeedsMonitorPass: boolean;
+  experimentMonitorRecommendedCommand: string | null;
   experimentSyncRequired: boolean;
   experimentPapernexusSyncStatus: string | null;
   innovationReflectionStatus: string | null;

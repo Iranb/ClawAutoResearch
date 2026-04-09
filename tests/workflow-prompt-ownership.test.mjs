@@ -64,6 +64,11 @@ function makeBaseSnapshot() {
     idleResearchDigestPath: null,
     experimentLedgerPath: null,
     experimentLedgerUpdatedAt: null,
+    experimentActiveRunCount: 0,
+    experimentTerminalRunCount: 0,
+    experimentFinishedUnreconciledCount: 0,
+    experimentNeedsMonitorPass: false,
+    experimentMonitorRecommendedCommand: null,
     experimentSyncRequired: false,
     experimentPapernexusSyncStatus: null,
     innovationReflectionStatus: null,
@@ -274,6 +279,48 @@ test("formatWorkflowSnapshotForPrompt tells agents to trust the live snapshot wh
   assert.match(prompt, /Runtime audit: stale\/completed/i);
   assert.match(prompt, /Runtime truth rule: the live Workflow Guard snapshot is the source of truth/i);
   assert.match(prompt, /Stale audit rule: if the last auto-iterator audit is stale, do not restate its blocker/i);
+});
+
+test("formatWorkflowSnapshotForPrompt tells coder when a remote run finished and needs monitor reconciliation", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "coder",
+      currentStage: "experiment",
+      currentMicroStage: "monitoring",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      nextAction: "/monitor-experiment",
+      experimentActiveRunCount: 0,
+      experimentTerminalRunCount: 1,
+      experimentFinishedUnreconciledCount: 1,
+      experimentNeedsMonitorPass: true,
+      experimentMonitorRecommendedCommand: "/monitor-experiment",
+      recentExperiments: [
+        {
+          experimentId: "exp-1",
+          name: "baseline",
+          trackId: "track-main",
+          status: "done",
+          stage: "training",
+          decision: null,
+          updatedAt: "2026-04-09T10:00:00.000Z",
+          keyMetric: "all_acc=53.4",
+          papernexusSyncStatus: "pending",
+          failureSignature: null,
+        },
+      ],
+    },
+  });
+
+  assert.match(
+    prompt,
+    /Experiment monitor: active_runs=0, terminal_runs=1, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/
+  );
+  assert.match(
+    prompt,
+    /Experiment completion cue: if active_runs falls to 0 while finished_unreconciled stays above 0/i
+  );
 });
 
 test("formatWorkflowStatusText reports derived evidence state and clears stale blocker text once readiness is satisfied", () => {

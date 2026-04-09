@@ -19,6 +19,7 @@ import {
 } from "./workflow-guard.js";
 import {
   buildGraphBuildBackgroundCommand,
+  buildLiteratureReviewBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
@@ -218,6 +219,19 @@ function buildBackgroundRunRequest(
       ...overrides,
     };
   }
+  if (kind === "literature_review") {
+    return {
+      kind,
+      commandText: buildLiteratureReviewBackgroundCommand(ctx.commandBody),
+      topic: extractQuotedSegment(ctx.args),
+      summary:
+        overrides.summary ??
+        `Background literature review started for ${
+          readString(overrides.projectId) ?? extractQuotedSegment(ctx.args) ?? "the current project"
+        }.`,
+      ...overrides,
+    };
+  }
   if (kind === "survey_review") {
     return {
       kind,
@@ -352,6 +366,7 @@ function createBackgroundWorkflowCommandHandler(
       const requiresResearcherSession =
         kind === "research_pipeline" ||
         kind === "research_queue" ||
+        kind === "literature_review" ||
         kind === "survey_review";
       if (requiresResearcherSession && targetRole !== "researcher") {
         return {
@@ -376,7 +391,7 @@ function createBackgroundWorkflowCommandHandler(
         messageChannel: ctx.channel,
       });
       const requiresProjectBoundConversation =
-        kind === "graph_build" || kind === "zotero_sync";
+        kind === "graph_build" || kind === "zotero_sync" || kind === "literature_review";
       if (requiresProjectBoundConversation && !snapshot.projectRoot) {
         return {
           text:
@@ -441,7 +456,9 @@ function createBackgroundWorkflowCommandHandler(
               : undefined;
 
       const researcherBackgroundKind =
-        kind === "graph_build" || kind === "zotero_sync";
+        kind === "graph_build" ||
+        kind === "zotero_sync" ||
+        kind === "literature_review";
       const resolvedBackgroundAgentId =
         researcherBackgroundKind
           ? "researcher"
@@ -781,6 +798,17 @@ export function createResearchWorkflowCommands(
       handler: createBackgroundWorkflowCommandHandler(
         api,
         "zotero_sync",
+        resolvedDeps
+      ),
+    },
+    {
+      name: "literature-review",
+      description:
+        "Run the current project's durable literature-review packet in a background Researcher continuation without blocking the foreground session.",
+      acceptsArgs: true,
+      handler: createBackgroundWorkflowCommandHandler(
+        api,
+        "literature_review",
         resolvedDeps
       ),
     },

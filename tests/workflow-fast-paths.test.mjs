@@ -29,6 +29,7 @@ import {
   buildPapernexusWrapperCommand,
   buildPapernexusSkillBackgroundCommand,
   buildGraphBuildBackgroundCommand,
+  buildLiteratureReviewBackgroundCommand,
   buildResearchPipelineBackgroundCommand,
   buildResearchQueueBackgroundCommand,
   buildZoteroSyncBackgroundCommand,
@@ -720,6 +721,19 @@ test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-bl
   assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_API_KEY|ZOTERO_USER_ID/i);
   assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /zoteroApiKey|zoteroApiKeyEnv|zoteroUserId/);
   assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /plugin_config|configured Zotero API key|configured Zotero user id/i);
+});
+
+test("buildLiteratureReviewBackgroundCommand appends the background continuation marker once", () => {
+  assert.equal(
+    buildLiteratureReviewBackgroundCommand('/literature-review "baseline coverage refresh"'),
+    '/literature-review "baseline coverage refresh" -- __BACKGROUND_CONTINUATION__: true'
+  );
+  assert.equal(
+    buildLiteratureReviewBackgroundCommand(
+      '/literature-review "baseline coverage refresh" -- __BACKGROUND_CONTINUATION__: true'
+    ),
+    '/literature-review "baseline coverage refresh" -- __BACKGROUND_CONTINUATION__: true'
+  );
 });
 
 test("startBackgroundWorkflowRun gives graph-build repair continuations explicit import repair instructions", async (t) => {

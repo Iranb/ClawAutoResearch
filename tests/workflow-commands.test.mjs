@@ -256,6 +256,62 @@ test("survey-review command starts a projectless background continuation on the 
   );
 });
 
+test("literature-review command starts a project-bound background continuation on the bound researcher session", async () => {
+  let captured = null;
+  const api = makeApi();
+  const literatureCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = params;
+        return {
+          started: true,
+          runId: "bg-run-literature-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background literature review started.",
+        };
+      },
+    }),
+    "literature-review"
+  );
+
+  const result = await literatureCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/literature-review "baseline coverage refresh"',
+    args: '"baseline coverage refresh"',
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background literature review started.");
+  assert.equal(captured.agentCtx.sessionKey, "agent:researcher:discord:group:paper-lab");
+  assert.equal(captured.backgroundRun.kind, "literature_review");
+  assert.equal(captured.backgroundRun.projectId, "paper-lab");
+  assert.equal(captured.backgroundRun.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.backgroundRun.topic, "baseline coverage refresh");
+  assert.match(captured.backgroundRun.commandText, /^\/literature-review\b/);
+});
+
 test("project-init command scaffolds a project and seeds the onboarding contract", async (t) => {
   const projectsRoot = await makeProjectsRoot();
 
@@ -1004,6 +1060,11 @@ test("workflow-status command returns a readable workflow summary", async () => 
           "bot/gcd-confirmation-bias-mitigation",
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
+        experimentActiveRunCount: 1,
+        experimentTerminalRunCount: 2,
+        experimentFinishedUnreconciledCount: 1,
+        experimentNeedsMonitorPass: true,
+        experimentMonitorRecommendedCommand: "/monitor-experiment",
         experimentSearchStatus: "running",
         experimentSearchCurrentMainStage: "creative_research",
         experimentSearchCurrentSubstage: "branch_expansion",
@@ -1130,6 +1191,7 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
+  assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
   assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
   assert.match(result.text ?? "", /Paper story: status=ready, track=track-idea-1, story_spine=academic_writer\/story\/STORY_SPINE\.md, claim_map=academic_writer\/story\/CLAIM_TO_EXPERIMENT_MAP\.md, fallback=academic_writer\/story\/FALLBACK_NARRATIVE\.md/);
   assert.match(result.text ?? "", /Paper story support: status=partial, supported=2, partial=1, unsupported=1/);
