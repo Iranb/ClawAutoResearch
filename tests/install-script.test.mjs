@@ -139,10 +139,11 @@ exit 1
   assert.match(stdout, /3\. 仅同步 workspace/);
   assert.match(stdout, /4\. 高级自定义/);
   assert.match(stdout, /Mode:\s+SKILLS ONLY/);
-  assert.match(stdout, /\[1\/7\] 添加 Agents/);
+  assert.match(stdout, /\[1\/8\] 同步最新 Git 代码/);
+  assert.match(stdout, /\[3\/8\] 添加 Agents/);
   assert.match(stdout, /SKIP 添加 Agents|SKIP 全部 Agent 创建/);
-  assert.match(stdout, /\[4\/7\] 复制技能到 Agent 工作区 skills/);
-  assert.match(stdout, /\[6\/7\] 同步工作区配置、模板和角色根配置/);
+  assert.match(stdout, /\[6\/8\] 复制技能到 Agent 工作区 skills/);
+  assert.match(stdout, /\[8\/8\] 同步工作区配置、模板和角色根配置/);
   assert.match(stdout, /SKIP 同步工作区配置/);
 });
 
@@ -192,7 +193,8 @@ exit 1
 
   assert.equal(code, 0, stderr);
   assert.match(stdout, /Mode:\s+FULL INSTALL/);
-  assert.match(stdout, /\[ Build \] 编译最新插件代码/);
+  assert.match(stdout, /\[dry-run\] \(cd .* && git pull --ff-only\)/);
+  assert.match(stdout, /\[2\/8\] 编译最新插件代码/);
   assert.match(stdout, /\[dry-run\] \(cd .* && npm run build\)/);
   assert.match(stdout, /SKIP 全部 Agent 创建（默认关闭；使用 --with-agent-create 开启）/);
   assert.match(stdout, /-> UPDATE workspace-planner\/AGENTS\.md/);

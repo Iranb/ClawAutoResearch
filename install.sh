@@ -7,12 +7,13 @@
 #   1. 可选地添加或检查研究工作流所需的 agents；默认会把仓库中新增加的可选 agents 纳入同步范围
 #   2. 同步各 agent skills（包括 vendored `pasa-paper-search`），并处理重复 skill
 #   3. 若本机存在 PaperNexus 仓库，则自动发现并同步 SKILL/ 下全部 Skills 到本仓库后再安装
-#   4. 默认编译最新插件代码到 dist/
-#   5. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
-#   6. 同步共享工作区核心配置、模板和每个 agent 目录下的全部 Markdown 配置文件
-#   7. 不修改用户 openclaw.json
-#   8. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
-#   9. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
+#   4. 默认通过 git pull --ff-only 同步当前分支最新代码（若当前目录是 Git 仓库）
+#   5. 默认编译最新插件代码到 dist/
+#   6. 创建/更新插件链接到 ~/.openclaw/plugins/ClawAutoResearch
+#   7. 同步共享工作区核心配置、模板和每个 agent 目录下的全部 Markdown 配置文件
+#   8. 不修改用户 openclaw.json
+#   9. 安装完成后提示 Auto mode、自动讨论和 /workflow-status 的使用方式
+#   10. 保留仓库内 README / DOC / openclaw.RECOMMENDED.json 作为唯一说明来源
 
 set -euo pipefail
 
@@ -340,6 +341,10 @@ ensure_dir() {
 
 path_exists() {
   [[ -e "$1" || -L "$1" ]]
+}
+
+is_git_repo() {
+  [[ -d "$PLUGIN_DIR/.git" ]]
 }
 
 copy_file() {
@@ -894,6 +899,15 @@ if [[ ! -f "$OPENCLAW_CONFIG_PATH" ]]; then
   echo "        脚本仍会继续安装 agents / skills / templates，但不会修改或创建你的 openclaw.json。"
 fi
 
+if is_git_repo; then
+  if ! command -v git >/dev/null 2>&1; then
+    die "当前插件目录是 Git 仓库，但未找到 git；无法同步最新代码。请先安装 git。"
+  fi
+  echo "  -> 将通过 git pull --ff-only 同步当前分支最新代码"
+else
+  echo "  -> 当前插件目录不是 Git 仓库；将跳过 git pull"
+fi
+
 if $RUN_BUILD_PHASE; then
   if ! command -v npm >/dev/null 2>&1; then
     die "未找到 npm，但当前安装模式需要先编译 dist。请安装 npm，或使用 --skip-build 跳过。"
@@ -918,7 +932,24 @@ fi
 echo "  -> 配置目录就绪"
 echo ""
 
-echo "[ Build ] 编译最新插件代码..."
+echo "[1/8] 同步最新 Git 代码..."
+if is_git_repo; then
+  if $DRY_RUN; then
+    echo "  [dry-run] (cd $PLUGIN_DIR && git pull --ff-only)"
+  else
+    (
+      cd "$PLUGIN_DIR"
+      git pull --ff-only
+    )
+    echo "  -> PULL 最新代码"
+  fi
+else
+  echo "  -> SKIP Git 同步（当前插件目录不是 Git 仓库）"
+fi
+
+echo ""
+
+echo "[2/8] 编译最新插件代码..."
 if $RUN_BUILD_PHASE; then
   if $DRY_RUN; then
     echo "  [dry-run] (cd $PLUGIN_DIR && npm run build)"
@@ -935,7 +966,7 @@ fi
 
 echo ""
 
-echo "[1/7] 添加 Agents（openclaw agents add）..."
+echo "[3/8] 添加 Agents（openclaw agents add）..."
 
 if ! $RUN_AGENT_PHASE; then
   echo "  -> SKIP 添加 Agents（当前模式未包含）"
@@ -971,7 +1002,7 @@ else
 fi
 
 echo ""
-echo "[2/7] 同步本机 PaperNexus Skills（如果存在）..."
+echo "[4/8] 同步本机 PaperNexus Skills（如果存在）..."
 
 if $RUN_PAPERNEXUS_PHASE; then
   sync_papernexus_skills
@@ -980,7 +1011,7 @@ else
 fi
 
 echo ""
-echo "[3/7] 检查重复技能..."
+echo "[5/8] 检查重复技能..."
 
 DELETE_DUPLICATES=false
 if $RUN_SKILL_PHASE; then
@@ -1026,7 +1057,7 @@ else
 fi
 
 echo ""
-echo "[4/7] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
+echo "[6/8] 复制技能到 Agent 工作区 skills（包括 vendored retrieval skills）..."
 
 if $RUN_SKILL_PHASE; then
   for agent in "${SELECTED_AGENT_IDS[@]}"; do
@@ -1090,7 +1121,7 @@ else
 fi
 
 echo ""
-echo "[5/7] 创建插件链接..."
+echo "[7/8] 创建插件链接..."
 
 if $RUN_PLUGIN_LINK_PHASE; then
   sync_plugin_link "$PLUGIN_LINK"
@@ -1102,7 +1133,7 @@ else
 fi
 
 echo ""
-echo "[6/7] 同步工作区配置、模板和角色根配置..."
+echo "[8/8] 同步工作区配置、模板和角色根配置..."
 
 RESEARCHER_WS="$OC_DIR_EXPANDED/workspace-researcher"
 REVIEWER_WS="$OC_DIR_EXPANDED/workspace-reviewer"
@@ -1154,7 +1185,7 @@ else
 fi
 
 echo ""
-echo "[7/7] 完成安装收尾..."
+echo "[ 收尾 ] 完成安装收尾..."
 echo "  -> 重启 OpenClaw Gateway..."
 if ! command -v openclaw >/dev/null 2>&1; then
   echo "  WARN: 未找到 openclaw，跳过 gateway restart"
@@ -1173,49 +1204,58 @@ echo "╔═══════════════════════�
 echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete            ' || echo 'Complete                    ')║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-if ! $RUN_AGENT_PHASE; then
-  echo "  1. Agents: 当前模式未包含"
-elif $SKIP_AGENT_CREATE; then
-  echo "  1. Agents: 默认已跳过 openclaw Agent 创建；如需创建请追加 --with-agent-create"
+if is_git_repo; then
+  if $DRY_RUN; then
+    echo "  1. Git: 将执行 git pull --ff-only 同步当前分支最新代码"
+  else
+    echo "  1. Git: 已通过 git pull --ff-only 同步当前分支最新代码"
+  fi
 else
-  echo "  1. Agents: 已添加或检查研究工作流所需 agents"
+  echo "  1. Git: 当前目录不是 Git 仓库，已跳过 git pull"
+fi
+if ! $RUN_AGENT_PHASE; then
+  echo "  2. Agents: 当前模式未包含"
+elif $SKIP_AGENT_CREATE; then
+  echo "  2. Agents: 默认已跳过 openclaw Agent 创建；如需创建请追加 --with-agent-create"
+else
+  echo "  2. Agents: 已添加或检查研究工作流所需 agents"
 fi
 if $RUN_BUILD_PHASE; then
-  echo "  2. Build: 已编译最新插件代码到 dist/"
+  echo "  3. Build: 已编译最新插件代码到 dist/"
 else
-  echo "  2. Build: 当前模式未包含或已通过参数跳过"
+  echo "  3. Build: 当前模式未包含或已通过参数跳过"
 fi
 if $RUN_PAPERNEXUS_PHASE; then
-  echo "  3. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则会自动发现并同步全部 skills，并补齐 skills/index.json 注册"
+  echo "  4. PaperNexus: 若本机存在 $PAPERNEXUS_DIR ，则会自动发现并同步全部 skills，并补齐 skills/index.json 注册"
 else
-  echo "  3. PaperNexus: 当前模式未包含"
+  echo "  4. PaperNexus: 当前模式未包含"
 fi
 if $RUN_SKILL_PHASE; then
-  echo "  4. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
+  echo "  5. Skills: 已同步到各 agent workspace（包括 researcher 的 pasa-paper-search），重复项仅在你确认后删除并覆盖"
 else
-  echo "  4. Skills: 当前模式未包含"
+  echo "  5. Skills: 当前模式未包含"
 fi
 if $RUN_PLUGIN_LINK_PHASE; then
-  echo "  5. Plugin: 已创建或检查 $PLUGIN_LINK"
+  echo "  6. Plugin: 已创建或检查 $PLUGIN_LINK"
 else
-  echo "  5. Plugin: 当前模式未包含"
+  echo "  6. Plugin: 当前模式未包含"
 fi
 if $RUN_WORKSPACE_PHASE; then
-  echo "  6. Workspace: 已同步共享配置、研究模板，以及每个 agent 目录下的 Markdown 配置与 hooks"
+  echo "  7. Workspace: 已同步共享配置、研究模板，以及每个 agent 目录下的 Markdown 配置与 hooks"
 else
-  echo "  6. Workspace: 当前模式未包含"
+  echo "  7. Workspace: 当前模式未包含"
 fi
 if [[ ${#OPTIONAL_AGENT_IDS[@]} -gt 0 ]]; then
   if $INSTALL_EXTRA_AGENTS; then
-    echo "  7. Optional Agents: 已纳入 ${OPTIONAL_AGENT_IDS[*]}"
+    echo "  8. Optional Agents: 已纳入 ${OPTIONAL_AGENT_IDS[*]}"
   else
-    echo "  7. Optional Agents: 已跳过 ${OPTIONAL_AGENT_IDS[*]}"
+    echo "  8. Optional Agents: 已跳过 ${OPTIONAL_AGENT_IDS[*]}"
   fi
 else
-  echo "  7. Optional Agents: 当前仓库无新增可选 agents"
+  echo "  8. Optional Agents: 当前仓库无新增可选 agents"
 fi
-echo "  8. Config: 未修改你的 openclaw.json"
-echo "  9. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
+echo "  9. Config: 未修改你的 openclaw.json"
+echo "  10. Docs: 介绍性文档已统一放到 DOC/，README 仅保留入口"
 echo ""
 highlight "  请重点检查：plugin load path、agentDir 绝对路径、skills roots、research_workflow 工具权限、projectsRoot、autoMode、autoGate"
 echo "  新手入口：$PLUGIN_DIR/DOC/beginner_zh.md"
