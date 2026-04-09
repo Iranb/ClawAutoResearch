@@ -48,6 +48,14 @@ async function makeProject(workspaceRoot, projectId = "demo-project") {
   return projectRoot;
 }
 
+async function writeTrackRegistry(projectRoot, tracks) {
+  await fs.writeFile(
+    path.join(projectRoot, "TRACK_REGISTRY.json"),
+    `${JSON.stringify({ tracks }, null, 2)}\n`,
+    "utf8"
+  );
+}
+
 test("snapshot builder preserves project context and emits derived fields", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-split");
@@ -114,3 +122,233 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.ok(snapshot.backgroundTasks.some((task) => task.includes("Continue literature survey")));
 });
 
+test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-blocker");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.blocking_reason =
+    "Waiting for researcher to satisfy: active track fd-gcd-freq-debiased missing graph-backed innovation evidence";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-stale-blocker",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.deepEqual(snapshot.missingStageSignals, []);
+  assert.equal(snapshot.blockingReason, null);
+});
+
+test("snapshot builder classifies file-backed track evidence as repairable and distinguishes it from missing evidence", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-file-backed-evidence");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeTrackRegistry(projectRoot, [
+    {
+      track_id: "track-main",
+      status: "active",
+      reasoning_packet_dir: "researcher/reasoning/track-main",
+    },
+  ]);
+  await fs.mkdir(path.join(projectRoot, "researcher", "reasoning", "track-main"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "GRAPH_EVIDENCE.json"),
+    `${JSON.stringify(
+      {
+        graph_innovation_evidence: {
+          evidence_pointers: [
+            "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router",
+          ],
+          linked_graph_nodes: ["paper:router"],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.blocking_reason =
+    "Waiting for researcher to satisfy: active track track-main missing graph-backed innovation evidence";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-file-backed-evidence",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.workflowEvidenceStatus, "repairable");
+  assert.match(
+    snapshot.workflowEvidenceSummary,
+    /file-backed GRAPH_EVIDENCE\.json pending canonicalization/i
+  );
+  assert.notEqual(snapshot.blockingReason, null);
+  assert.doesNotMatch(snapshot.blockingReason, /waiting for researcher to satisfy/i);
+});
+
+test("snapshot builder clears stale blocker text when derived evidence readiness is satisfied", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-ready-evidence");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeTrackRegistry(projectRoot, [
+    {
+      track_id: "track-main",
+      status: "active",
+      reasoning_packet_dir: "researcher/reasoning/track-main",
+      evidence_pointers: [
+        "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router",
+      ],
+    },
+  ]);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.blocking_reason =
+    "Waiting for researcher to satisfy: active track track-main missing graph-backed innovation evidence";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-ready-evidence",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.workflowEvidenceStatus, "ready");
+  assert.match(snapshot.workflowEvidenceSummary, /inline graph evidence present/i);
+  assert.equal(snapshot.blockingReason, null);
+});

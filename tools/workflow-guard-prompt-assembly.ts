@@ -59,6 +59,27 @@ function formatPromptPath(value: unknown): string {
   return raw;
 }
 
+function formatDerivedEvidenceLine(snapshot: SnapshotLike): string | null {
+  const status =
+    typeof snapshot.workflowEvidenceStatus === "string" && snapshot.workflowEvidenceStatus.trim()
+      ? snapshot.workflowEvidenceStatus.trim()
+      : typeof snapshot.derivedEvidenceStatus === "string" &&
+          snapshot.derivedEvidenceStatus.trim()
+        ? snapshot.derivedEvidenceStatus.trim()
+        : null;
+  const summary =
+    typeof snapshot.workflowEvidenceSummary === "string" && snapshot.workflowEvidenceSummary.trim()
+      ? snapshot.workflowEvidenceSummary.trim()
+      : typeof snapshot.derivedEvidenceSummary === "string" &&
+          snapshot.derivedEvidenceSummary.trim()
+        ? snapshot.derivedEvidenceSummary.trim()
+        : null;
+  if (!status && !summary) {
+    return null;
+  }
+  return `Derived evidence: ${status ?? "unknown"}${summary ? ` - ${summary}` : ""}`;
+}
+
 export function buildFocusedPromptAssemblyImpl(
   params: {
     snapshot: SnapshotLike;
@@ -121,7 +142,10 @@ export function buildFocusedPromptAssemblyImpl(
   if (snapshot.blockingReason) {
     layer2Lines.push(`blocking_reason=${snapshot.blockingReason}`);
   }
-  if ((snapshot.missingStageSignals ?? []).length > 0) {
+  const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
+  if (derivedEvidenceLine) {
+    layer2Lines.push(derivedEvidenceLine);
+  } else if ((snapshot.missingStageSignals ?? []).length > 0) {
     layer2Lines.push(
       `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ")}`
     );
@@ -159,6 +183,15 @@ export function buildFocusedPromptAssemblyImpl(
   layer2Lines.push(
     "Interruptibility rule: keep the main session interruptible. If a task needs more than a quick turn to scope or execute safely, split it into a bounded packet, delegated branch, or workflow-owned background action instead of monopolizing the thread."
   );
+  if (
+    snapshot.role === "researcher" &&
+    ((snapshot.paperIngestionQueuedRequestCount ?? 0) > 0 ||
+      (snapshot.paperIngestionRunningRequestCount ?? 0) > 0)
+  ) {
+    layer2Lines.push(
+      "Foreground queue rule: if workflow-owned literature discovery or other long queue work is pending, keep the main chat session responsive. Start or monitor that work through research_workflow.start_background_run or the queued wrapper flow, and answer direct user questions in the foreground instead of consuming the whole reply with queue execution."
+    );
+  }
   layer2Lines.push(
     "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
   );
@@ -386,6 +419,15 @@ export function formatWorkflowSnapshotForPromptImpl(
   if (snapshot.blockingReason) {
     lines.push(`blocking_reason: ${snapshot.blockingReason}`);
   }
+  const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
+  if (derivedEvidenceLine) {
+    lines.push(derivedEvidenceLine);
+  } else if ((snapshot.missingStageSignals ?? []).length > 0) {
+    lines.push("Missing stage signals:");
+    for (const signal of snapshot.missingStageSignals.slice(0, 8)) {
+      lines.push(`- ${signal}`);
+    }
+  }
   if ((snapshot.allowedWriteScopes ?? []).length > 0) {
     lines.push("Allowed writes:");
     for (const scope of snapshot.allowedWriteScopes) {
@@ -434,12 +476,6 @@ export function formatWorkflowSnapshotForPromptImpl(
       lines.push(
         'Heartbeat first step: call research_workflow {"action":"auto_iterator_tick","iterator":{"mode":"heartbeat"}} before any manual planning or ad hoc spawning.'
       );
-    }
-  }
-  if ((snapshot.missingStageSignals ?? []).length > 0) {
-    lines.push("Missing stage signals:");
-    for (const signal of snapshot.missingStageSignals.slice(0, 8)) {
-      lines.push(`- ${signal}`);
     }
   }
   const resolvedPapernexusAccessMode =
@@ -831,6 +867,15 @@ export function formatWorkflowSnapshotForPromptImpl(
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
   );
+  if (
+    snapshot.role === "researcher" &&
+    ((snapshot.paperIngestionQueuedRequestCount ?? 0) > 0 ||
+      (snapshot.paperIngestionRunningRequestCount ?? 0) > 0)
+  ) {
+    lines.push(
+      "Foreground queue rule: if workflow-owned literature discovery or other long queue work is pending, keep the main chat session responsive. Start or monitor that work through research_workflow.start_background_run or the queued wrapper flow, and answer direct user questions in the foreground instead of consuming the whole reply with queue execution."
+    );
+  }
   if (resolvedPapernexusAccessMode === "remote_mcp") {
     lines.push(
       "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) before trusting raw full-graph prominence. Keep `import_workflow` and the queued wrappers for staged import/status work."

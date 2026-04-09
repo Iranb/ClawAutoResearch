@@ -34,6 +34,9 @@ import {
   maybeLaunchIdleResearchForProject,
   runWorkflowCoordinatorPass,
 } from "../tools/register-workflow-service.ts";
+import {
+  selectDispatchableAutoStageAction,
+} from "../tools/workflow-guard-runtime/auto-iterator.ts";
 import { recordWorkflowAnnounceEvent } from "../tools/workflow-session-orchestrator.ts";
 import { readGateReviewStore } from "../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
@@ -67,6 +70,41 @@ async function makeProject(projectsRoot, projectId, stage = "setup") {
   });
   return projectRoot;
 }
+
+test("selectDispatchableAutoStageAction withholds drive_stage when stage signals remain", () => {
+  const action = selectDispatchableAutoStageAction({
+    autoIteratorResult: {
+      gateBlocking: false,
+      missingStageSignals: ["PROJECT_MANIFEST.json.research_program.plan_selection"],
+      recommendedActions: [
+        {
+          kind: "background",
+          stage: "code",
+          owner: "researcher",
+          summary: "Repair workflow-owned readiness gaps before handing off code.",
+          command: "Resolve the readiness blockers and materialize the missing workflow-owned gap.",
+          mailboxQueued: false,
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: null,
+          blocking: false,
+        },
+        {
+          kind: "drive_stage",
+          stage: "code",
+          owner: "coder",
+          summary: "Implement the approved experiments as runnable bundles.",
+          command: "/implement-experiment",
+          mailboxQueued: false,
+          mailboxMessageId: "mailbox-1",
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+  });
+
+  assert.equal(action, null);
+});
 
 test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STATE", async (t) => {
   const projectsRoot = await makeProjectsRoot();
@@ -565,6 +603,94 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   assert.equal(launch.dispatchStrategy, "sessions_spawn");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/implement-experiment/);
+});
+
+test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair guidance instead of drive_stage handoff", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "code",
+      missingStageSignals: [
+        "PROJECT_MANIFEST.json.research_program.plan_selection",
+      ],
+      recommendedActions: [
+        {
+          kind: "background",
+          owner: "researcher",
+          stage: "code",
+          summary:
+            "Repair workflow-owned readiness gaps before handing off the stage.",
+          command:
+            "Resolve the readiness blockers and materialize the missing workflow-owned gap before handing off code.",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: null,
+          blocking: false,
+        },
+        {
+          kind: "drive_stage",
+          owner: "coder",
+          stage: "code",
+          summary: "Implement the approved experiments as runnable bundles.",
+          command: "/implement-experiment",
+          mailboxMessageId: "mailbox-1",
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "no_drive_stage_action");
+  assert.equal(runs.length, 0);
 });
 
 test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated subagent session", async (t) => {

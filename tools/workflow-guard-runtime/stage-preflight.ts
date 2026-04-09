@@ -23,7 +23,8 @@ import {
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
-import { normalizeTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
+import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
+import { resolveStageReadiness } from "../workflow-derived-state/stage-readiness";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -207,17 +208,27 @@ function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): s
     .filter((entry): entry is string => Boolean(entry));
 }
 
-function activeTrackNeedsIdeationScaffold(track: Record<string, unknown>): boolean {
-  if (!normalizeTrackInnovationEvidence(track).hasGraphBackedInnovationEvidence) {
+async function activeTrackNeedsIdeationScaffold(params: {
+  projectRoot: string;
+  track: Record<string, unknown>;
+}): Promise<boolean> {
+  const evidence = await loadTrackInnovationEvidence({
+    projectRoot: params.projectRoot,
+    track: params.track,
+  });
+  const readiness = resolveStageReadiness({
+    trackEvidence: evidence,
+  });
+  if (readiness.handoffMode !== "drive_stage") {
     return true;
   }
   return !(
-    typeof track.reasoning_packet_dir === "string" &&
-    track.reasoning_packet_dir.trim().length > 0 &&
-    typeof track.working_memory_path === "string" &&
-    track.working_memory_path.trim().length > 0 &&
-    typeof track.synthesis_packet_path === "string" &&
-    track.synthesis_packet_path.trim().length > 0
+    typeof params.track.reasoning_packet_dir === "string" &&
+    params.track.reasoning_packet_dir.trim().length > 0 &&
+    typeof params.track.working_memory_path === "string" &&
+    params.track.working_memory_path.trim().length > 0 &&
+    typeof params.track.synthesis_packet_path === "string" &&
+    params.track.synthesis_packet_path.trim().length > 0
   );
 }
 
@@ -257,15 +268,24 @@ async function ideationTrackRegistryNeedsRefresh(params: {
     return true;
   }
   const tracks = Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
-  return tracks.some((entry) => {
+  for (const entry of tracks) {
     const track = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
     if (!track) {
-      return false;
+      continue;
     }
-    return (
-      normalizeStageValue(track.status) === "active" && activeTrackNeedsIdeationScaffold(track)
-    );
-  });
+    if (normalizeStageValue(track.status) !== "active") {
+      continue;
+    }
+    if (
+      await activeTrackNeedsIdeationScaffold({
+        projectRoot: params.projectRoot,
+        track,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function shouldMaterializeIdeationContract(params: {

@@ -34,6 +34,9 @@ import {
   runWorkflowAutoIterator,
 } from "./workflow-guard";
 import {
+  selectDispatchableAutoStageAction,
+} from "./workflow-guard-runtime/auto-iterator";
+import {
   deriveAgentSessionKeyForRole,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
@@ -1370,6 +1373,7 @@ export async function maybeLaunchAutoStageForProject(params: {
     autoModeMitigationStatus?: string | null;
     gateBlocking?: boolean;
     stageAfter?: string | null;
+    missingStageSignals?: string[];
     recommendedActions: Array<{
       kind: string;
       owner: string | null;
@@ -1474,13 +1478,28 @@ export async function maybeLaunchAutoStageForProject(params: {
         };
       }
 
-      const action = params.autoIteratorResult.recommendedActions.find(
-        (entry) =>
-          entry.kind === "drive_stage" &&
-          entry.owner &&
-          entry.command &&
-          entry.blocking !== true
-      );
+      const dispatchableAutoIteratorResult: Parameters<
+        typeof selectDispatchableAutoStageAction
+      >[0]["autoIteratorResult"] = {
+        gateBlocking: params.autoIteratorResult.gateBlocking ?? false,
+        missingStageSignals: params.autoIteratorResult.missingStageSignals ?? [],
+        recommendedActions: (params.autoIteratorResult.recommendedActions ?? []).map(
+          (entry) => ({
+            kind: entry.kind as "drive_stage" | "background" | "wait_human" | "switch_project",
+            owner: entry.owner as DispatchableWorkflowRole | null,
+            stage: entry.stage ?? null,
+            summary: entry.summary,
+            command: entry.command ?? null,
+            mailboxQueued: false,
+            mailboxMessageId: entry.mailboxMessageId ?? null,
+            cooldownRemainingSeconds: entry.cooldownRemainingSeconds ?? null,
+            blocking: entry.blocking === true,
+          })
+        ),
+      };
+      const action = selectDispatchableAutoStageAction({
+        autoIteratorResult: dispatchableAutoIteratorResult,
+      });
       if (!action) {
         params.launchedStageKeys.delete(params.projectRoot);
         return {

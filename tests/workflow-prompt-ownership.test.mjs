@@ -7,6 +7,9 @@ import {
   formatWorkflowSnapshotForPrompt,
   getWorkflowGuardPolicy,
 } from "../tools/workflow-guard.ts";
+import {
+  formatWorkflowStatusText,
+} from "../tools/workflow-commands/formatters.ts";
 
 function makeBaseSnapshot() {
   return {
@@ -215,6 +218,53 @@ test("formatWorkflowSnapshotForPrompt can emit a focused writer prompt without f
   assert.doesNotMatch(prompt, /PaperNexus:/);
 });
 
+test("formatWorkflowSnapshotForPrompt surfaces compact derived evidence diagnostics instead of raw missing signals", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "idea",
+      currentMicroStage: "graph_support_gap",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      workflowEvidenceStatus: "repairable",
+      workflowEvidenceSummary:
+        "active track track-main: file-backed GRAPH_EVIDENCE.json pending canonicalization",
+      blockingReason: null,
+      missingStageSignals: [
+        "active track track-main missing graph-backed innovation evidence",
+      ],
+    },
+    detailLevel: "focused",
+  });
+
+  assert.match(prompt, /Derived evidence: repairable/i);
+  assert.match(prompt, /file-backed GRAPH_EVIDENCE\.json pending canonicalization/i);
+  assert.doesNotMatch(prompt, /missing_signals=/i);
+});
+
+test("formatWorkflowStatusText reports derived evidence state and clears stale blocker text once readiness is satisfied", () => {
+  const text = formatWorkflowStatusText({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      workflowEvidenceStatus: "ready",
+      workflowEvidenceSummary: "active track track-main: inline graph evidence present",
+      blockingReason: null,
+      missingStageSignals: [],
+    },
+    commandLabel: "/status",
+    targetSessionKey: "agent:researcher:discord:group:paper-lab",
+    autoIteratorResult: null,
+    discussionStore: null,
+    gateReviewStore: null,
+    codeReviewStore: null,
+  });
+
+  assert.match(text, /Derived evidence: ready/i);
+  assert.match(text, /inline graph evidence present/i);
+  assert.match(text, /Blocking reason: none/i);
+});
+
 test("formatWorkflowSnapshotForPrompt keeps exact handoff and auto-iterator reminders in focused mode", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {
@@ -278,6 +328,35 @@ test("formatWorkflowSnapshotForPrompt teaches researcher MCP-first graph work wi
   assert.match(prompt, /research_lookup|research_briefing|idea_catalyst|import_workflow/i);
   assert.match(prompt, /pn_import_submit\.py/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
+});
+
+test("formatWorkflowSnapshotForPrompt tells Researcher to background queued literature-discovery work instead of monopolizing chat", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "idea",
+      currentMicroStage: "graph_support_gap",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      nextAction: "/idea",
+      paperIngestionQueuedRequestCount: 1,
+      paperIngestionRunningRequestCount: 0,
+    },
+  });
+
+  assert.match(
+    prompt,
+    /Foreground queue rule: if workflow-owned literature discovery or other long queue work is pending, keep the main chat session responsive/i
+  );
+  assert.match(
+    prompt,
+    /start_background_run/i
+  );
+  assert.match(
+    prompt,
+    /answer direct user questions in the foreground/i
+  );
 });
 
 test("formatWorkflowSnapshotForPrompt renders local PaperNexus home paths with ~", () => {
