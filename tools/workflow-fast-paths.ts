@@ -378,6 +378,7 @@ function deriveBackgroundRunFamily(kind: string): string {
     case "resume_pipeline":
     case "graph_build":
     case "zotero_sync":
+    case "survey_review":
     case "idle_research":
       return "research";
     case "papernexus_skill":
@@ -2184,6 +2185,17 @@ export function buildZoteroSyncBackgroundCommand(commandText: string): string {
   return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
 }
 
+export function buildSurveyReviewBackgroundCommand(commandText: string): string {
+  const trimmed = commandText.trim();
+  if (!trimmed) {
+    return '/survey-review "research topic" -- __BACKGROUND_CONTINUATION__: true';
+  }
+  if (hasBackgroundContinuationMarker(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} -- __BACKGROUND_CONTINUATION__: true`;
+}
+
 export function buildPapernexusSkillBackgroundCommand(commandText: string): string {
   const trimmed = commandText.trim();
   if (hasBackgroundContinuationMarker(trimmed)) {
@@ -2689,6 +2701,10 @@ export async function startBackgroundWorkflowRun(params: {
         ? buildZoteroSyncBackgroundCommand(
             `/zotero-sync "${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "current project"}"`
           )
+      : normalizedKind === "survey_review"
+        ? buildSurveyReviewBackgroundCommand(
+            `/survey-review "${topic ?? ensuredProject?.title ?? "research topic"}"`
+          )
       : normalizedKind === "idle_research"
         ? requestedCommandText ?? null
       : null);
@@ -2696,7 +2712,7 @@ export async function startBackgroundWorkflowRun(params: {
     throw new Error(
       isPapernexusBackgroundKind(normalizedKind)
         ? "PaperNexus wrapper runs require an explicit wrapper command. Use research_workflow action run_papernexus_wrapper or pass backgroundRun.commandText with a Python wrapper command."
-        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, graph_build, or zotero_sync."
+        : "backgroundRun.commandText is required unless kind=research_pipeline, research_queue, graph_build, zotero_sync, or survey_review."
     );
   }
   if (
@@ -3057,6 +3073,8 @@ export async function startBackgroundWorkflowRun(params: {
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background resume pipeline started for"} ${readString(params.backgroundRun.projectId) ?? params.snapshot.projectId ?? "the current project"}.`
         : normalizedKind === "graph_build"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background graph build started for"} ${readString(params.backgroundRun.projectId) ?? ensuredProject?.projectId ?? params.snapshot.projectId ?? "the current project"}.`
+        : normalizedKind === "survey_review"
+          ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Background survey review started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current topic"}.`
         : normalizedKind === "idle_research"
           ? `${reusableBackgroundSessionKey ? "Reused an idle Researcher subagent and started" : "Idle research started for"} ${topic ?? ensuredProject?.title ?? readString(params.backgroundRun.projectId) ?? "the current project"}.`
         : isPapernexusBackgroundKind(normalizedKind)

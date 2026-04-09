@@ -9,6 +9,7 @@ import {
   normalizeAutonomousExecutionState,
   normalizeExperimentReviewState,
 } from "../workflow-guard-state/experiment-review";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   hasActiveIdeaCatalystRequisitionRequest,
@@ -61,6 +62,12 @@ type StagePreflightDeps = {
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
+  materializeSurveyReviewState: (params: {
+    projectRoot: string;
+    surveyReviewMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
   materializeIdeaCatalystState: (params: {
     projectRoot: string;
     ideaCatalystMaterialization?: Record<string, unknown>;
@@ -104,6 +111,7 @@ const IDEA_CATALYST_PREP_STAGES = new Set([
   "write",
   "submit",
 ]);
+const SURVEY_REVIEW_PREP_STAGES = new Set(["survey_review"]);
 const PAPERNEXUS_PACKET_PREP_STAGES = new Set([
   "idea",
   "plan",
@@ -347,6 +355,23 @@ async function shouldMaterializeIdeationContract(params: {
     projectRoot: params.projectRoot,
     manifest: params.manifest,
   });
+}
+
+async function shouldMaterializeSurveyReviewState(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !SURVEY_REVIEW_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const state = normalizeSurveyReviewState(params.manifest.survey_review);
+  const artifactMissing = await anyArtifactMissing(params.projectRoot, [
+    state.queryRegistryPath,
+    state.literaturePath,
+    state.reviewProtocolPath,
+  ]);
+  return state.status !== "completed" || artifactMissing;
 }
 
 async function shouldMaterializeIdeaCatalyst(params: {
@@ -742,6 +767,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
       projectRoot,
       trigger,
       agentId: params.agentId ?? null,
+    })
+  );
+  await runStep("survey_review_state", shouldMaterializeSurveyReviewState, () =>
+    params.deps.materializeSurveyReviewState({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+      surveyReviewMaterialization: {
+        basis_stage: params.stage,
+      },
     })
   );
 

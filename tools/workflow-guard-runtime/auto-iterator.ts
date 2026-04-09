@@ -276,6 +276,12 @@ type AutoIteratorDeps = {
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
+  materializeSurveyReviewState: (params: {
+    projectRoot: string;
+    surveyReviewMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
   materializeIdeaCatalystState: (params: {
     projectRoot: string;
     ideaCatalystMaterialization?: Record<string, unknown>;
@@ -403,6 +409,7 @@ export async function runWorkflowAutoIteratorImpl(
       materializePaperStoryState: deps.materializePaperStoryState,
       materializeExperimentReviewState: deps.materializeExperimentReviewState,
       materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
+      materializeSurveyReviewState: deps.materializeSurveyReviewState,
       materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
       materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
       materializePapernexusPacketContracts: deps.materializePapernexusPacketContracts,

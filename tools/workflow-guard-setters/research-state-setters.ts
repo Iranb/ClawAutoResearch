@@ -32,6 +32,11 @@ import {
   serializeResearchProgramTrack,
 } from "../workflow-guard-state/research-program";
 import {
+  getSurveyReviewStateSummary,
+  normalizeSurveyReviewState,
+  serializeSurveyReviewState,
+} from "../workflow-guard-state/survey-review";
+import {
   normalizeIdeationContractState,
   serializeIdeationContractState,
 } from "../workflow-guard-state/ideation-contract";
@@ -86,6 +91,7 @@ type OrchestrationState = ReturnType<typeof normalizeOrchestrationState>;
 type WritePackageState = ReturnType<typeof normalizeWritePackageState>;
 type ExperimentSearchState = ReturnType<typeof normalizeExperimentSearchState>;
 type ExperimentReviewState = ReturnType<typeof normalizeExperimentReviewState>;
+type SurveyReviewState = ReturnType<typeof normalizeSurveyReviewState>;
 
 const DEFAULT_BRAINSTORM_CYCLE_DIR = "researcher/brainstorm-cycle";
 
@@ -918,6 +924,31 @@ export async function setResearchProgramState(params: {
     onboardingStatus: getResearchProgramOnboardingStatus({ state: merged, projectId }),
     onboardingGaps: getResearchProgramOnboardingGaps({ state: merged, projectId }),
   };
+}
+
+export async function setSurveyReviewState(params: {
+  projectRoot: string;
+  surveyReview: Record<string, unknown>;
+}): Promise<{
+  state: SurveyReviewState;
+  ready: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeSurveyReviewState(manifest.survey_review);
+  const patch = asRecord(params.surveyReview) ?? {};
+  const next = normalizeSurveyReviewState({
+    ...serializeSurveyReviewState(current),
+    ...patch,
+    last_updated_at:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
+      new Date().toISOString(),
+  });
+  manifest.survey_review = serializeSurveyReviewState(next);
+  manifest.current_stage = "survey_review";
+  manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
+  manifest.owner_agent = STAGE_REQUIREMENTS.survey_review?.owner ?? "researcher";
+  await saveManifest(params.projectRoot, manifest);
+  return getSurveyReviewStateSummary(manifest);
 }
 
 export async function setIdeationContractState(params: {

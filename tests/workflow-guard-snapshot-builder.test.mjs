@@ -143,6 +143,7 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
     },
     projectRoot,
     projectId: "workflow-guard-stale-blocker",
+    projectId: "workflow-guard-stale-blocker",
     messageChannel: "discord",
     boundByAgent: "researcher",
   });
@@ -162,6 +163,7 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
     {
       policy: {
         enableChannelProjectBindings: true,
+        maxWorkflowInboxMessages: 3,
       },
       agentId: "researcher",
       projectState,
@@ -175,4 +177,94 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
 
   assert.deepEqual(snapshot.missingStageSignals, []);
   assert.equal(snapshot.blockingReason, null);
+});
+
+test("snapshot builder surfaces survey review state for projectless review workflows", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "survey-graph-reasoning");
+  const sessionKey = "agent:researcher:discord:group:survey-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "survey-graph-reasoning",
+        current_stage: "survey_review",
+        owner_agent: "researcher",
+        survey_review: {
+          status: "screening",
+          current_phase: "screening",
+          topic: "Graph reasoning survey",
+          mode: "deep",
+          candidate_paper_count: 80,
+          included_paper_count: 24,
+          excluded_paper_count: 31,
+          graph_grounded_brief_ready: false,
+          survey_brief_path: "researcher/SURVEY_BRIEF.md",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "survey-graph-reasoning",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+        maxWorkflowInboxMessages: 3,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.currentStage, "survey_review");
+  assert.equal(snapshot.surveyReviewStatus, "screening");
+  assert.equal(snapshot.surveyReviewCurrentPhase, "screening");
+  assert.equal(snapshot.surveyReviewTopic, "Graph reasoning survey");
+  assert.equal(snapshot.surveyReviewMode, "deep");
+  assert.equal(snapshot.surveyReviewCandidatePaperCount, 80);
+  assert.equal(snapshot.surveyReviewIncludedPaperCount, 24);
+  assert.equal(snapshot.surveyReviewExcludedPaperCount, 31);
+  assert.equal(snapshot.surveyReviewGraphGroundedBriefReady, false);
+  assert.equal(snapshot.surveyReviewSurveyBriefPath, "researcher/SURVEY_BRIEF.md");
 });

@@ -183,6 +183,7 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
 
 export const STAGE_REQUIREMENTS: Record<string, StageRequirement> = {
   setup: { owner: "researcher", nextStage: "graph_build" },
+  survey_review: { owner: "researcher", nextStage: null },
   graph_build: { owner: "researcher", nextStage: "frontier_mapping" },
   frontier_mapping: { owner: "researcher", nextStage: "idea" },
   idea: { owner: "researcher", nextStage: "plan" },

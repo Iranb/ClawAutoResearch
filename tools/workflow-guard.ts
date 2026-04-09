@@ -128,6 +128,10 @@ import {
   serializeReviewPressurePacketState,
 } from "./workflow-guard-state/review-pressure";
 import {
+  getSurveyReviewStateSummary as getSurveyReviewStateSummaryFromModule,
+  normalizeSurveyReviewState,
+} from "./workflow-guard-state/survey-review";
+import {
   normalizeCitationIntegrityState,
   normalizeExternalReviewState,
   normalizeGraphGuidedWritingState,
@@ -243,6 +247,7 @@ import { materializeIdeationContractImpl } from "./workflow-guard-materializers/
 import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
+import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
 import {
   buildNonOwnerRoutingAdvice as buildNonOwnerRoutingAdviceImpl,
   acknowledgeWorkflowMailboxMessageImpl,
@@ -405,6 +410,7 @@ import {
   setPaperStoryState as setPaperStoryStateFromModule,
   setResearchProgramState as setResearchProgramStateFromModule,
   setReviewPressurePacketState as setReviewPressurePacketStateFromModule,
+  setSurveyReviewState as setSurveyReviewStateFromModule,
   setWritePackageState as setWritePackageStateFromModule,
 } from "./workflow-guard-setters/research-state-setters";
 import {
@@ -1150,6 +1156,8 @@ export type ReviewPressurePacketState = {
   lastUpdatedAt: string | null;
 };
 
+export type SurveyReviewState = ReturnType<typeof normalizeSurveyReviewState>;
+
 type OrchestrationState = {
   status: string;
   activeTicketId: string | null;
@@ -1484,6 +1492,17 @@ export type WorkflowSnapshot = {
   brainstormCycleImportTaskCount: number | null;
   brainstormCycleChainBundleReady: boolean;
   brainstormCyclePendingReason: string | null;
+  surveyReviewStatus: string | null;
+  surveyReviewCurrentPhase: string | null;
+  surveyReviewTopic: string | null;
+  surveyReviewMode: string | null;
+  surveyReviewCandidatePaperCount: number | null;
+  surveyReviewIncludedPaperCount: number | null;
+  surveyReviewExcludedPaperCount: number | null;
+  surveyReviewQueryRoundCount: number | null;
+  surveyReviewGraphGroundedBriefReady: boolean;
+  surveyReviewSurveyBriefPath: string | null;
+  surveyReviewPendingReason: string | null;
   ideationContractStatus: string | null;
   ideationContractSelectedDirectionId: string | null;
   ideationContractSelectedTrackId: string | null;
@@ -2019,6 +2038,7 @@ const STAGE_REQUIREMENTS = WORKFLOW_STAGE_REQUIREMENTS;
 
 const STAGE_ENTRY_MICRO_STAGES: Record<string, string> = {
   setup: "state_reconciled",
+  survey_review: "survey_requested",
   graph_build: "uploading",
   frontier_mapping: "frontier_mapping_requested",
   idea: "idea_refresh_requested",
@@ -2046,6 +2066,12 @@ const STAGE_EXECUTION_HINTS: Record<
     summary: "Lock the onboarding contract before doing fresh work.",
     command:
       "Run /project-init to lock the research goal, baseline, primary metric, datasets, success criteria, and configured Zotero project path; then run /resume-pipeline to reconcile PROJECT_MANIFEST.json, TRACK_REGISTRY.json, CLAIM_POLICY.md, idle_research, and the experiment ledger.",
+  },
+  survey_review: {
+    owner: "researcher",
+    summary: "Run the projectless survey loop until the review packet is saturated and synthesized.",
+    command:
+      'Run /survey-review "topic" to expand retrieval coverage, maintain the durable screening packet, and stop after SURVEY_BRIEF.md is synthesized.',
   },
   graph_build: {
     owner: "researcher",
@@ -5387,6 +5413,82 @@ async function findUnsupportedPrimaryClaimsInSelectedWritingScope(params: {
   };
 }
 
+async function collectSurveyReviewStageMissingSignals(params: {
+  projectRoot: string;
+  manifest: ManifestLike | null;
+}): Promise<string[]> {
+  const state = normalizeSurveyReviewState(params.manifest?.survey_review);
+  const missing: string[] = [];
+  if (!state.topic) {
+    missing.push("PROJECT_MANIFEST.json.survey_review.topic is required");
+  }
+  const queryRegistryResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.queryRegistryPath
+  );
+  const includedResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.includedPapersPath
+  );
+  const excludedResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.excludedPapersPath
+  );
+  const literatureReviewResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.literatureReviewPath
+  );
+  const gapResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.gapSynthesisPath
+  );
+  const surveyBriefResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.surveyBriefPath
+  );
+
+  const requiresQueryRegistry = ["searching", "screening", "synthesizing", "completed"].includes(
+    state.status
+  );
+  const requiresScreeningPacket = ["screening", "synthesizing", "completed"].includes(
+    state.status
+  );
+  const requiresSynthesisPacket = ["synthesizing", "completed"].includes(state.status);
+  const requiresSurveyBrief = state.status === "completed";
+
+  if (
+    requiresQueryRegistry &&
+    !(await fileHasMeaningfulJsonContent(queryRegistryResolvedPath))
+  ) {
+    missing.push(`${state.queryRegistryPath ?? "researcher/SURVEY_QUERY_REGISTRY.json"} should record one or more retrieval rounds`);
+  }
+  if (
+    requiresScreeningPacket &&
+    !(await fileHasMeaningfulJsonContent(includedResolvedPath))
+  ) {
+    missing.push(`${state.includedPapersPath ?? "researcher/INCLUDED_PAPERS.json"} should list the included survey papers`);
+  }
+  if (
+    requiresScreeningPacket &&
+    !(await fileHasMeaningfulJsonContent(excludedResolvedPath))
+  ) {
+    missing.push(`${state.excludedPapersPath ?? "researcher/EXCLUDED_PAPERS.json"} should list excluded/background-only survey candidates`);
+  }
+  if (
+    requiresSynthesisPacket &&
+    !(await fileHasNonWhitespaceContent(literatureReviewResolvedPath))
+  ) {
+    missing.push(`${state.literatureReviewPath ?? "researcher/LITERATURE_REVIEW.md"} is required before the survey brief can be finalized`);
+  }
+  if (requiresSynthesisPacket && !(await fileHasNonWhitespaceContent(gapResolvedPath))) {
+    missing.push(`${state.gapSynthesisPath ?? "researcher/GAP_SYNTHESIS.md"} is required before the survey brief can be finalized`);
+  }
+  if (requiresSurveyBrief && !(await fileHasNonWhitespaceContent(surveyBriefResolvedPath))) {
+    missing.push(`${state.surveyBriefPath ?? "researcher/SURVEY_BRIEF.md"} is required when survey_review.status=completed`);
+  }
+  return missing;
+}
+
 async function getMissingStageSignals(params: {
   projectRoot: string;
   manifest: ManifestLike | null;
@@ -5421,6 +5523,11 @@ async function getMissingStageSignals(params: {
           normalizeStage,
         }
       );
+    case "survey_review":
+      return collectSurveyReviewStageMissingSignals({
+        projectRoot,
+        manifest,
+      });
     case "graph_build":
       return collectGraphBuildStageMissingSignals(
         { projectRoot, manifest, trackRegistry, experimentLedger },
@@ -6284,6 +6391,16 @@ export async function getIdeationContractStateSummary(params: {
     fileHasMeaningfulJsonContent,
     fileHasNonWhitespaceContent,
   });
+}
+
+export async function getSurveyReviewStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: SurveyReviewState;
+  ready: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  return getSurveyReviewStateSummaryFromModule(manifest);
 }
 
 export async function getResearchProgramStateSummary(params: {
@@ -7913,6 +8030,18 @@ export async function materializeLiteratureDiscoveryPacket(params: {
   return materializeLiteratureDiscoveryPacketImpl(params);
 }
 
+export async function materializeSurveyReviewState(params: {
+  projectRoot: string;
+  surveyReviewMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  state: SurveyReviewState;
+  generatedFiles: string[];
+}> {
+  return materializeSurveyReviewStateImpl(params);
+}
+
 export async function setPaperStoryState(params: {
   projectRoot: string;
   paperStoryState: Record<string, unknown>;
@@ -7925,6 +8054,16 @@ export async function setPaperStoryState(params: {
   claimToExperimentMapExists: boolean;
 }> {
   return await setPaperStoryStateFromModule(params);
+}
+
+export async function setSurveyReviewState(params: {
+  projectRoot: string;
+  surveyReview: Record<string, unknown>;
+}): Promise<{
+  state: SurveyReviewState;
+  ready: boolean;
+}> {
+  return await setSurveyReviewStateFromModule(params);
 }
 
 export async function setReviewPressurePacketState(params: {
@@ -8303,6 +8442,7 @@ export async function runWorkflowAutoIterator(params: {
     materializePaperStoryState,
     materializeExperimentReviewState,
     materializeReviewPressurePacket,
+    materializeSurveyReviewState,
   } as any);
 }
 

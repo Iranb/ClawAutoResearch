@@ -23,6 +23,7 @@ import {
   buildResearchQueueBackgroundCommand,
   buildResumePipelineBackgroundCommand,
   buildZoteroSyncBackgroundCommand,
+  buildSurveyReviewBackgroundCommand,
   drainQueuedBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
@@ -70,6 +71,7 @@ import {
   joinStatusList,
 } from "./workflow-commands/formatters.js";
 import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state";
+import { sanitizeProjectIdFragment } from "./workflow-guard-project/project-context";
 
 // Re-export public APIs from submodules
 export {
@@ -216,6 +218,21 @@ function buildBackgroundRunRequest(
       ...overrides,
     };
   }
+  if (kind === "survey_review") {
+    return {
+      kind,
+      commandText: buildSurveyReviewBackgroundCommand(ctx.commandBody),
+      topic: extractQuotedSegment(ctx.args),
+      summary:
+        overrides.summary ??
+        `Background survey review started for ${
+          readString(overrides.title) ??
+          extractQuotedSegment(ctx.args) ??
+          "the current topic"
+        }.`,
+      ...overrides,
+    };
+  }
   return {
     kind,
     commandText: buildResumePipelineBackgroundCommand(ctx.commandBody),
@@ -333,7 +350,9 @@ function createBackgroundWorkflowCommandHandler(
         sessionKey: targetSessionKey,
       });
       const requiresResearcherSession =
-        kind === "research_pipeline" || kind === "research_queue";
+        kind === "research_pipeline" ||
+        kind === "research_queue" ||
+        kind === "survey_review";
       if (requiresResearcherSession && targetRole !== "researcher") {
         return {
           text:
@@ -372,6 +391,11 @@ function createBackgroundWorkflowCommandHandler(
               projectId: extractQuotedSegment(ctx.args),
             })
           : null;
+      const surveyTopic = kind === "survey_review" ? extractQuotedSegment(ctx.args) : null;
+      const surveyProjectId =
+        kind === "survey_review" && surveyTopic
+          ? `survey-${sanitizeProjectIdFragment(surveyTopic)}`
+          : undefined;
 
       if (kind === "resume_pipeline" && !explicitProject && !snapshot.projectRoot) {
         return {
@@ -445,10 +469,12 @@ function createBackgroundWorkflowCommandHandler(
               ...(zoteroSyncCommandText ? { commandText: zoteroSyncCommandText } : {}),
               projectId:
                 explicitProject?.projectId ??
+                (kind === "survey_review" ? surveyProjectId : undefined) ??
                 (researcherBackgroundKind ? commandSnapshot.projectId ?? undefined : undefined),
               projectRoot:
                 explicitProject?.projectRoot ??
                 (researcherBackgroundKind ? commandSnapshot.projectRoot ?? undefined : undefined),
+              title: kind === "survey_review" ? surveyTopic ?? undefined : undefined,
             }),
           });
         },
@@ -755,6 +781,17 @@ export function createResearchWorkflowCommands(
       handler: createBackgroundWorkflowCommandHandler(
         api,
         "zotero_sync",
+        resolvedDeps
+      ),
+    },
+    {
+      name: "survey-review",
+      description:
+        "Start a survey-only literature review workflow for a topic in a background Researcher continuation.",
+      acceptsArgs: true,
+      handler: createBackgroundWorkflowCommandHandler(
+        api,
+        "survey_review",
         resolvedDeps
       ),
     },

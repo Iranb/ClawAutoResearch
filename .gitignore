@@ -50,15 +50,15 @@ yarn-error.log*
 openclaw-research-suggested-changes.txt
 
 # Project data (if accidentally created in repo root)
-projects/
-memory/
-researcher/
-orchestrator/
-coder/
-analyzer/
-academic_writer/
-reviewer/
-cross-reviewer/
+/projects/
+/memory/
+/researcher/
+/orchestrator/
+/coder/
+/analyzer/
+/academic_writer/
+/reviewer/
+/cross-reviewer/
 !skills/researcher/
 !skills/researcher/idle-research/
 !skills/researcher/idle-research/SKILL.md
