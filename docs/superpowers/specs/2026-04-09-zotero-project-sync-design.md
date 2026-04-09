@@ -1,0 +1,174 @@
+# Zotero Project Sync Design
+
+Date: 2026-04-09
+
+## Summary
+
+Add an optional, workflow-owned Zotero project sync layer for literature research so project papers can be organized under a per-project Zotero collection such as `Bot/<project-id>`.
+
+This sync is best-effort only:
+
+- if Zotero MCP is available, sync project papers into Zotero collections
+- if Zotero MCP is unavailable, misconfigured, or fails, record the skip/failure durably and continue the workflow
+- never make Zotero sync a stage blocker
+- never let Zotero sync block the main Researcher chat/process or force a workflow rollback
+
+## Goals
+
+- Change the default Zotero project path for new projects from `bot/<project-id>` to `Bot/<project-id>`.
+- Respect explicit project overrides in `PROJECT_MANIFEST.json.research_program.zotero_project_path`.
+- Keep project literature organized in Zotero by project collection and sub-collection.
+- Let literature-research flows refresh Zotero automatically when possible.
+- Preserve foreground responsiveness by pushing Zotero work to background/best-effort execution.
+
+## Non-Goals
+
+- Do not make Zotero the source of truth for graph state, full text, or citation verification.
+- Do not require Zotero MCP to be installed for the workflow to proceed.
+- Do not add new hard blockers to `idea`, `graph_build`, `review`, `write`, or `submit`.
+- Do not require Coder or execution-stage agents to align their runtime with Zotero state.
+- Do not migrate old projects automatically from `bot/<project-id>` to `Bot/<project-id>`.
+
+## Existing State
+
+The repository already treats Zotero as a recommended per-project bibliography layer:
+
+- new project bootstrap seeds `research_program.zotero_project_path`
+- `research-lit` and `graph-build` prompts already mention `/zotero-project-library`
+- `{PROJ}/researcher/ZOTERO_PACKET.md` is already the durable human-readable status artifact
+
+However, current behavior is mostly prompt-level guidance. There is no workflow-owned soft-sync layer that:
+
+- computes a normalized sync target
+- triggers sync consistently from research flows
+- records skipped/unavailable states durably
+- keeps the foreground Researcher session responsive
+
+## Chosen Approach
+
+Implement a workflow-owned soft sync path built around the existing manifest field plus a small Zotero sync packet.
+
+### 1. Path policy
+
+- If `PROJECT_MANIFEST.json.research_program.zotero_project_path` is set, use it exactly.
+- Otherwise, new defaults become `Bot/<project-id>`.
+- Existing projects with `bot/<project-id>` remain valid and are not rewritten automatically.
+
+### 2. Workflow-owned Zotero sync packet
+
+Add a machine-readable project artifact that captures the current sync intent and status.
+
+Proposed artifact:
+
+- `{PROJ}/researcher/ZOTERO_SYNC_PACKET.json`
+
+Primary responsibilities:
+
+- record the effective Zotero project path
+- capture the collections that should be synchronized
+- capture a bounded, background-safe sync status
+- store the last skip/failure reason without turning it into a blocker
+
+The existing human-readable artifact remains:
+
+- `{PROJ}/researcher/ZOTERO_PACKET.md`
+
+`ZOTERO_PACKET.md` summarizes the last attempted sync, collection counts, unresolved metadata cleanup, and any manual follow-up.
+
+### 3. Sync scope
+
+Initial automatic collections:
+
+- `<path>/selected`
+- `<path>/baselines`
+- `<path>/writing-shortlist`
+
+Deferred collections, enabled when upstream artifacts already exist:
+
+- `<path>/included`
+- `<path>/excluded`
+
+The sync packet should be built from workflow-owned project state, not from ad hoc chat memory.
+
+Preferred source inputs:
+
+- `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` for canonical paper identities
+- `PROJECT_MANIFEST.json.research_program`
+- baseline-related project artifacts when present
+- writing/review shortlist artifacts when present
+
+## Trigger Points
+
+Zotero sync is best-effort and should be refreshed from bounded research checkpoints:
+
+- after `/research-lit` has materially updated canonical paper state
+- after workflow-owned literature discovery materializes a meaningful new paper set
+- during `/graph-build` as a bounded bibliography refresh pass
+
+These triggers should update the sync packet and then request background sync. They should not run a long Zotero operation inline in the foreground session.
+
+## Foreground/Background Contract
+
+This is the key safety rule for the implementation.
+
+### Foreground responsibilities
+
+- compute or refresh the Zotero sync packet
+- record that a background sync is wanted
+- provide a short user-visible status update if helpful
+- return control immediately
+
+### Background responsibilities
+
+- run `/zotero-project-library` or the equivalent Zotero MCP-backed sync step
+- update `ZOTERO_SYNC_PACKET.json`
+- refresh `ZOTERO_PACKET.md`
+- stop on bounded failure and report `skipped`, `unavailable`, or `needs_manual_followup`
+
+### Hard constraints
+
+- the main Researcher conversation must stay responsive
+- Zotero sync must never hold the foreground waiting on MCP I/O
+- failure to connect to Zotero must never trigger stage rollback
+- if a background Zotero sync is already active, the foreground should not start a second conflicting inline sync
+
+## Failure Policy
+
+Zotero sync outcomes are informational, not blocking.
+
+Allowed terminal states:
+
+- `synced`
+- `skipped`
+- `unavailable`
+- `failed`
+- `needs_manual_followup`
+
+Required behavior:
+
+- no stage blocker for any of these non-`synced` states
+- persist the last error/skipped reason durably
+- keep the rest of literature, graph, and ideation work moving
+
+## Compatibility
+
+- Keep existing docs and prompts that mention `bot/<project-id>` compatible, but update defaults and examples toward `Bot/<project-id>`.
+- Do not break projects that already use a lowercase `bot/...` path.
+- Preserve the current meaning of `research_program.zotero_project_path`: it is the project bibliography path, not a readiness gate for stage advancement.
+
+## Testing Plan
+
+Add tests for:
+
+- default Zotero path now resolves to `Bot/<project-id>` for new projects
+- explicit manifest path overrides still win
+- sync packet generation is non-blocking and survives missing Zotero availability
+- research/graph trigger points request background sync instead of inline blocking work
+- workflow continues normally when Zotero sync reports `unavailable` or `failed`
+- human-readable `ZOTERO_PACKET.md` still updates with path and summary information
+
+## Open Implementation Notes
+
+- The actual Zotero MCP invocation should be wrapped behind workflow-owned helpers so prompt wording is not the only contract.
+- The first implementation should prefer the smallest reliable scope: `selected`, `baselines`, `writing-shortlist`, then expand only if the repository already has strong upstream artifacts for `included` and `excluded`.
+- If the local Zotero MCP schema differs from assumptions, degrade to `unavailable` cleanly rather than blocking or retry-looping in the foreground.
