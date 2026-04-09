@@ -275,6 +275,14 @@ worker 不应：
 - selected writing scope 中不包含 unsupported primary claims
 - section packet 没有允许 forbidden claim
 
+对于 ideation，graph-backed innovation evidence 由 track 级 canonical 字段满足：
+`evidence_pointers`、`linked_graph_nodes`、`relation_patterns`。
+workflow-owned repair 可以从
+`<reasoning_packet_dir>/GRAPH_EVIDENCE.json` 导入这些字段，但各种 ad hoc
+全局 index 文件不属于 semantic contract 本身。
+这个契约是 story-facing 的：它服务于 track 级 novelty 叙事和逻辑闭环，
+但不会单独把 coder 的实现路径强行绑定成一一对应的执行设计。
+
 ### 6.3 质量契约
 
 检查产出是否满足最低质量标准。

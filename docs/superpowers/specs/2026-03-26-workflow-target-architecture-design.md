@@ -275,6 +275,15 @@ Examples:
 - selected writing scope contains no unsupported primary claims
 - section packets do not permit forbidden claims
 
+For ideation, graph-backed innovation evidence is satisfied by canonical per-track fields:
+`evidence_pointers`, `linked_graph_nodes`, and `relation_patterns`.
+Workflow-owned repair may import these fields from
+`<reasoning_packet_dir>/GRAPH_EVIDENCE.json`, but ad hoc global index files are
+not part of the semantic contract.
+This contract is story-facing: it supports track-level novelty narration and
+logic closure, but it does not by itself impose a hard one-to-one execution
+design on coder-owned implementation.
+
 ### 6.3 Quality Contract
 
 Checks that outputs meet minimum quality thresholds.

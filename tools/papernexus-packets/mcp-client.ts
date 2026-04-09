@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Types — PaperNexus MCP tool names and their parameter/result contracts
@@ -105,11 +106,22 @@ function createStdioPapernexusMcpClient(
     }
   >();
 
+  function buildChildEnv(): NodeJS.ProcessEnv {
+    const currentPath = process.env.PATH ?? "";
+    const nodeBinDir = path.dirname(process.execPath);
+    const pathEntries = [nodeBinDir, ...currentPath.split(path.delimiter).filter(Boolean)];
+    return {
+      ...process.env,
+      PATH: Array.from(new Set(pathEntries)).join(path.delimiter),
+    };
+  }
+
   function ensureChild(): ChildProcess {
     if (child && child.exitCode === null) {
       return child;
     }
     child = spawn(bin, ["mcp"], {
+      env: buildChildEnv(),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
