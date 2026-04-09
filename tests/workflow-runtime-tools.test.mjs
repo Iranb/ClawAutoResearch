@@ -93,6 +93,206 @@ async function writeText(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
 }
 
+async function seedSparseIdeationRepairScenario(projectRoot, tool) {
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "# Anchor Index\n- anchor: bias-router\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+    "# Limitation Frontier\n- baseline calibration still leaks confirmation bias\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+    "# Transfer Frontier\n- import consistent alignment into GCD debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "# Frontier Report\n\n## Challenge clusters\n- confirmation bias persists in pseudo-labeling\n\n## Insight clusters\n- alignment-aware debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "INNOVATION_REFLECTION.md"),
+    "# Innovation Reflection\nKeep the frequency-debiased track and a TALON-inspired fallback.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+    "# Logic Chain\n1. Challenge: pseudo-label bias\n2. Insight: graph-grounded debiasing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+    "# Evidence Chain\n- frontier packets show calibration failures\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+    "# Questions\n- how to stabilize debiasing across seeds?\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+    "# Synthesis\n- favor frequency-debiased routing\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"),
+    `${JSON.stringify({ selected_track_id: "fd-gcd-freq-debiased" }, null, 2)}\n`,
+    "utf8"
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "reasoning",
+      "fd-gcd-freq-debiased",
+      "GRAPH_EVIDENCE.json"
+    ),
+    {
+      source: "papernexus_remote_mcp",
+      graph_nodes: ["paper:fd-1", "finding:fd-gap"],
+      evidence_pointers: [
+        "researcher/reasoning/fd-gcd-freq-debiased/GRAPH_EVIDENCE.json#paper:fd-1",
+      ],
+      relation_patterns: ["supports->track:fd-gcd-freq-debiased"],
+    }
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "reasoning",
+      "talon-gcd-bias",
+      "GRAPH_EVIDENCE.json"
+    ),
+    {
+      source: "papernexus_remote_mcp",
+      graph_nodes: ["paper:talon-1", "finding:talon-gap"],
+      evidence_pointers: [
+        "researcher/reasoning/talon-gcd-bias/GRAPH_EVIDENCE.json#paper:talon-1",
+      ],
+      relation_patterns: ["supports->track:talon-gcd-bias"],
+    }
+  );
+
+  await fs.writeFile(
+    path.join(projectRoot, "TRACK_REGISTRY.json"),
+    `${JSON.stringify(
+      {
+        tracks: [
+          {
+            track_id: "fd-gcd-freq-debiased",
+            status: "active",
+            name: "Frequency-Debiased GCD",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.active_track_ids = ["talon-gcd-bias", "part-level-gcd"];
+  manifest.primary_track_id = "talon-gcd-bias";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Reduce confirmation bias in GCD with graph-grounded debiasing.",
+    problem_statement: "Known-class bias dominates the pseudo-label loop in GCD.",
+    baseline_reference: "SimGCD",
+    primary_metric: "All Accuracy (ACC)",
+    datasets: ["CUB-200"],
+    success_criteria: ["All ACC > 53.4% on C-GCD"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [
+      {
+        track_id: "fd-gcd-freq-debiased",
+        status: "active",
+        hypothesis:
+          "Frequency-domain debiasing plus alignment reduces confirmation bias in pseudo-labeling.",
+        novelty_basis: "Compose DEBGCD, FREE, and consistent alignment into a graph-backed track.",
+        required_baselines: ["SimGCD"],
+      },
+      {
+        track_id: "talon-gcd-bias",
+        status: "active",
+        hypothesis:
+          "Margin-aware TALON-style calibration reduces confirmation bias in the novel-class tail.",
+        novelty_basis: "Compose TALON-style calibration with GCD pseudo-label control.",
+        required_baselines: ["SimGCD"],
+      },
+    ],
+  };
+  manifest.innovation_reflection = {
+    status: "fresh",
+    last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      topic: "Frequency-debiased GCD",
+      basis_stage: "experiment_analysis",
+      track_id: "fd-gcd-freq-debiased",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      graph_version_seen: "GCD-2026-04-06",
+      contract_version: 1,
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "converge",
+          status: "completed",
+          options: [
+            {
+              option_id: "dir-main",
+              title: "Frequency-debiased pseudo-label routing",
+              score: 0.93,
+              summary: "Use graph-backed debiasing signals to stabilize GCD pseudo-labels.",
+              logic_chain: "# Logic Main\nChallenge -> debiasing -> evidence\n",
+              evidence_chain: "# Evidence Main\nCalibration failures + transfer evidence\n",
+              reasoning_trace: [
+                {
+                  step: "inspect-calibration-gap",
+                  conclusion: "need a graph-backed debiasing route",
+                },
+              ],
+              question_packet: "# Questions Main\n",
+              working_memory: {
+                surviving_direction: "frequency-debiased pseudo-label routing",
+              },
+              synthesis_packet: "# Synthesis Main\n",
+              reflection_chain: {
+                keep: ["frequency-debiased pseudo-label routing"],
+              },
+              storyline_brief: {
+                thesis: "Challenge -> debiasing -> evidence-backed stability",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  return { manifestPath };
+}
+
 test("research_workflow get_papernexus_remote_access returns a redacted token status", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -992,6 +1192,7 @@ test("research_workflow ideation, story, and review-pressure contracts persist t
   const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
 
   for (const [filePath, content] of [
+    ["researcher/ideation/IDEA_TREE.md", "# Idea Tree\n"],
     ["researcher/ideation/NOVELTY_TREE.md", "# Novelty\n"],
     ["researcher/ideation/CHALLENGE_INSIGHT_TREE.md", "# Challenge Insight\n"],
     [
@@ -1002,17 +1203,41 @@ test("research_workflow ideation, story, and review-pressure contracts persist t
     ["researcher/ideation/PROBLEM_DECOMPOSITION.md", "# Decomposition\n"],
     ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md", "# Top 3\n"],
     ["researcher/ideation/RESEARCH_PROPOSAL.md", "# Proposal\n"],
+    ["academic_writer/story/TASK_SUMMARY.md", "# Task Summary\n"],
+    ["academic_writer/story/CHALLENGE_STATEMENT.md", "# Challenge Statement\n"],
+    ["academic_writer/story/INSIGHT_SUMMARY.md", "# Insight Summary\n"],
+    ["academic_writer/story/CONTRIBUTION_MAP.md", "# Contribution Map\n"],
+    ["academic_writer/story/ADVANTAGE_MAP.md", "# Advantage Map\n"],
     ["academic_writer/story/STORY_SPINE.md", "# Story Spine\n"],
+    [
+      "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+      "# Pipeline Figure Sketch\n",
+    ],
+    [
+      "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+      "# Module Motivation Map\n",
+    ],
     [
       "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
       "# Claim Map\n",
     ],
     ["academic_writer/story/FALLBACK_NARRATIVE.md", "# Fallback\n"],
+    [
+      "academic_writer/story/REJECTION_RISK_TABLE.md",
+      "# Rejection Risk Table\n",
+    ],
+    ["analyzer/CLAIM_EVIDENCE_MATRIX.md", "# Claim Evidence Matrix\n"],
+    ["analyzer/TRACK_VERDICTS.md", "# Track Verdicts\n"],
+    ["analyzer/UNSUPPORTED_CLAIMS.md", "# Unsupported Claims\n"],
     ["reviewer/story-pressure/REJECT_FIRST_REVIEW.md", "# Reject First\n"],
+    ["reviewer/story-pressure/NOVELTY_ATTACK.md", "# Novelty Attack\n"],
     [
       "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
       "# Claim Audit\n",
     ],
+    ["reviewer/story-pressure/REVERSE_OUTLINE.md", "# Reverse Outline\n"],
+    ["reviewer/story-pressure/FIGURE_TABLE_QC.md", "# Figure Table QC\n"],
+    ["reviewer/story-pressure/LIMITATION_AUDIT.md", "# Limitation Audit\n"],
   ]) {
     const resolved = path.join(projectRoot, filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
@@ -1032,11 +1257,66 @@ test("research_workflow ideation, story, and review-pressure contracts persist t
       "researcher/ideation/GRAPH_IDEATION_PACKET.json",
       { novelty_zones: ["zone:1"], challenge_clusters: ["challenge:1"] },
     ],
+    [
+      "researcher/ideation/RANKING_HISTORY.json",
+      { status: "completed", rounds: [] },
+    ],
   ]) {
     const resolved = path.join(projectRoot, filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     await fs.writeFile(resolved, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    active_tracks: 1,
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+        reasoning_packet_dir: "researcher/reasoning/track-main",
+        working_memory_path: "researcher/reasoning/track-main/WORKING_MEMORY.json",
+        synthesis_packet_path: "researcher/reasoning/track-main/SYNTHESIS_PACKET.md",
+        evidence_pointers: ["graph/LIMITATION_FRONTIER.md#track-main"],
+        linked_graph_nodes: ["paper:track-main"],
+        relation_patterns: ["supports->track:track-main"],
+      },
+    ],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "WORKING_MEMORY.json"),
+    {
+      surviving_direction: "graph-grounded story direction",
+    }
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "SYNTHESIS_PACKET.md"),
+    "# Synthesis\n"
+  );
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    current_micro_stage: "drafting",
+    owner_agent: "academic_writer",
+    idle_research: { enabled: false },
+    innovation_reflection: {
+      status: "fresh",
+      last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+    },
+    research_program: {
+      status: "approved",
+      goal: "Keep workflow contracts readable through runtime tools.",
+      problem_statement: "Read-side checks should see the same active track context as writers.",
+      baseline_reference: "baseline-router",
+      primary_metric: "support_precision",
+      datasets: ["demo-dataset"],
+      success_criteria: ["runtime snapshots remain aligned with durable contracts"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+        },
+      ],
+    },
+  });
 
   const ideationResult = await executeWorkflowTool(tool, {
     action: "set_ideation_contract",
@@ -1054,6 +1334,7 @@ test("research_workflow ideation, story, and review-pressure contracts persist t
         occupied_solution_zones: [],
         transfer_bridges: ["bridge:1"],
       },
+      idea_tree_path: "researcher/ideation/IDEA_TREE.md",
       novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",
       challenge_insight_tree_path:
         "researcher/ideation/CHALLENGE_INSIGHT_TREE.md",
@@ -1064,6 +1345,7 @@ test("research_workflow ideation, story, and review-pressure contracts persist t
       problem_decomposition_path:
         "researcher/ideation/PROBLEM_DECOMPOSITION.md",
       candidate_pool_path: "researcher/ideation/CANDIDATE_POOL.json",
+      ranking_history_path: "researcher/ideation/RANKING_HISTORY.json",
       tournament_scoreboard_path:
         "researcher/ideation/TOURNAMENT_SCOREBOARD.json",
       top3_summary_path: "researcher/ideation/TOP3_DIRECTION_SUMMARY.md",
@@ -1618,6 +1900,137 @@ test("research_workflow materialize_ideation_contract imports per-track GRAPH_EV
     ),
     true
   );
+});
+
+test("research_workflow get_snapshot stage-preflights sparse idea tracks before reporting blockers", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const { manifestPath } = await seedSparseIdeationRepairScenario(projectRoot, tool);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+
+  assert.equal(snapshot.currentStage, "idea");
+  assert.equal(["ready", "repairable"].includes(snapshot.workflowEvidenceStatus), true);
+  assert.equal(
+    snapshot.missingStageSignals.some((signal) =>
+      /active track .*missing graph-backed innovation evidence/i.test(signal)
+    ),
+    false
+  );
+
+  const updatedTrackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  const trackIds = updatedTrackRegistry.tracks.map((track) => track.track_id).sort();
+  assert.deepEqual(trackIds, ["fd-gcd-freq-debiased", "talon-gcd-bias"]);
+  assert.equal(updatedTrackRegistry.active_tracks, 2);
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.deepEqual(refreshedManifest.active_track_ids, [
+    "fd-gcd-freq-debiased",
+    "talon-gcd-bias",
+  ]);
+  assert.equal(refreshedManifest.primary_track_id, "fd-gcd-freq-debiased");
+});
+
+test("research_workflow diagnose_track_evidence reports canonical graph evidence resolution", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "idea",
+    current_micro_stage: "judging",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+    innovation_reflection: {
+      status: "fresh",
+      last_reflection_path: "researcher/INNOVATION_REFLECTION.md",
+    },
+    research_program: {
+      status: "approved",
+      goal: "Diagnose track graph evidence resolution.",
+      problem_statement: "Need a readable report for canonical graph evidence paths.",
+      baseline_reference: "baseline-router",
+      primary_metric: "support_precision",
+      datasets: ["demo-dataset"],
+      success_criteria: ["diagnostics report the resolved artifact path"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    active_tracks: 1,
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+        reasoning_packet_dir: "researcher/reasoning/track-main",
+        working_memory_path: "researcher/reasoning/track-main/WORKING_MEMORY.json",
+        synthesis_packet_path: "researcher/reasoning/track-main/SYNTHESIS_PACKET.md",
+      },
+    ],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "reasoning", "track-main", "GRAPH_EVIDENCE.json"),
+    {
+      source: "papernexus_remote_mcp",
+      graph_nodes: ["paper:router", "finding:support-gap"],
+      evidence_pointers: [
+        "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router",
+      ],
+      relation_patterns: ["supports->claim:support-precision"],
+    }
+  );
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const diagnosis = await executeWorkflowTool(tool, {
+    action: "diagnose_track_evidence",
+  });
+
+  assert.equal(diagnosis.currentStage, "idea");
+  assert.deepEqual(diagnosis.missingGraphBackedInnovationEvidenceTrackIds, []);
+  assert.equal(diagnosis.registryDeclaredActiveTracks, 1);
+  assert.equal(diagnosis.researchProgramActiveTrackCount, 1);
+  assert.equal(diagnosis.tracks.length, 1);
+  assert.equal(diagnosis.tracks[0].trackId, "track-main");
+  assert.equal(diagnosis.tracks[0].graphEvidenceFileExists, true);
+  assert.equal(
+    diagnosis.tracks[0].graphEvidencePath,
+    "researcher/reasoning/track-main/GRAPH_EVIDENCE.json"
+  );
+  assert.match(diagnosis.tracks[0].graphEvidenceResolvedPath ?? "", /GRAPH_EVIDENCE\.json$/);
+  assert.equal(["file_backed", "mixed"].includes(diagnosis.tracks[0].presence), true);
+  assert.equal(diagnosis.tracks[0].linkedGraphNodeCount, 2);
+  assert.equal(diagnosis.tracks[0].evidencePointerCount >= 1, true);
 });
 
 test("research_workflow materialize_ideation_contract reconciles sparse root track registry with active research program tracks", async (t) => {

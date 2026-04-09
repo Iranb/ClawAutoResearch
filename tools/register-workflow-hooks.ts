@@ -31,14 +31,17 @@ import {
   buildResumePipelineBackgroundCommand,
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
+import { isLiteratureDiscoveryTriggerKind } from "./literature-discovery/workflow-bridge";
 import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
 } from "./workflow-subagent-sessions";
+import { isWorkflowManagedAgentContext } from "./workflow-agent-isolation.js";
 import { isWorkflowStageBroadcastMessage } from "./stage-broadcast";
 import {
   getToolContext,
-  maybeAutoBindChannelProject,
   readString,
   requireObject,
   type PluginRegistrationContext,
@@ -49,10 +52,14 @@ import {
   enqueueWorkflowTask,
 } from "./workflow-coordination";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
-import {
-  maybeRefreshGraphPresenceForSnapshot,
-  reconcileBackgroundWorkflowStateForSnapshot,
-} from "./workflow-runtime-refresh.js";
+import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+
+function isExplicitWorkflowHookAgent(agentCtx: ToolContext): boolean {
+  return isWorkflowManagedAgentContext({
+    agentId: agentCtx.agentId,
+    allowSessionKeyInference: false,
+  });
+}
 
 function collectStringFragments(value: unknown, acc: string[], depth = 0): void {
   if (depth > 4 || value == null) {
@@ -105,47 +112,61 @@ function looksLikeResumePipelineCommand(text: string | null | undefined): boolea
   return Boolean(text && /^\s*\/resume-pipeline\b/i.test(text));
 }
 
+export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
+  paperIngestion: unknown;
+}): {
+  requestId: string;
+  commandText: string;
+  status: "queued" | "needs_repair";
+} | null {
+  const state = normalizePaperIngestionState(params.paperIngestion);
+  const queuedRequest =
+    state.queuedRequests.find(
+      (entry) =>
+        isLiteratureDiscoveryTriggerKind(entry.triggerKind) &&
+        (entry.status === "queued" || entry.status === "needs_repair") &&
+        typeof entry.commandText === "string" &&
+        entry.commandText.trim().length > 0
+    ) ?? null;
+  if (!queuedRequest?.requestId || !queuedRequest.commandText) {
+    return null;
+  }
+  return {
+    requestId: queuedRequest.requestId,
+    commandText: buildResearchQueueBackgroundCommand(queuedRequest.commandText),
+    status: queuedRequest.status === "needs_repair" ? "needs_repair" : "queued",
+  };
+}
+
+async function loadQueuedLiteratureDiscoveryForegroundFastPath(
+  projectRoot: string | null | undefined
+): Promise<ReturnType<typeof resolveQueuedLiteratureDiscoveryForegroundFastPath>> {
+  const root = readString(projectRoot);
+  if (!root) {
+    return null;
+  }
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(`${root}/PROJECT_MANIFEST.json`)) ?? null;
+  if (!manifest) {
+    return null;
+  }
+  return resolveQueuedLiteratureDiscoveryForegroundFastPath({
+    paperIngestion: manifest.paper_ingestion,
+  });
+}
+
 async function resolveWorkflowSnapshotForAgentContext(params: {
   plugin: PluginRegistrationContext;
   agentCtx: ToolContext;
   autoBind?: boolean;
 }) {
-  const workflowPolicy = params.plugin.getWorkflowPolicy();
-  const buildSnapshot = () =>
-    buildWorkflowSnapshot({
-      policy: workflowPolicy,
-      agentId: params.agentCtx.agentId,
-      workspaceDir: params.agentCtx.workspaceDir,
-      sessionKey: params.agentCtx.sessionKey,
-      sessionId: params.agentCtx.sessionId,
-      messageChannel: params.agentCtx.messageChannel,
-    });
-  let snapshot = await buildSnapshot();
-  await reconcileBackgroundWorkflowStateForSnapshot({
-    snapshot,
-    workflowPolicy,
-    runtimeSubagent: params.plugin.api.runtime?.subagent,
+  return resolveWorkflowSnapshotContext({
+    plugin: params.plugin,
+    agentCtx: params.agentCtx,
+    autoBind: params.autoBind,
+    stagePreflight: true,
+    preflightTrigger: "workflow_hook:prompt_or_tool",
   });
-  snapshot = await buildSnapshot();
-  if (
-    await maybeRefreshGraphPresenceForSnapshot({
-      snapshot,
-      workflowPolicy,
-    })
-  ) {
-    snapshot = await buildSnapshot();
-  }
-  if (params.autoBind !== false) {
-    await maybeAutoBindChannelProject({
-      policy: workflowPolicy,
-      agentCtx: params.agentCtx,
-      snapshot,
-    });
-  }
-  return {
-    workflowPolicy,
-    snapshot,
-  };
 }
 
 function buildRequesterToolContext(
@@ -525,6 +546,9 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     "before_prompt_build",
     async (event, hookCtx) => {
       const agentCtx = getToolContext(hookCtx);
+      if (!isExplicitWorkflowHookAgent(agentCtx)) {
+        return;
+      }
       const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
         plugin,
         agentCtx,
@@ -539,6 +563,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       const latestPromptLikeText = getLatestPromptLikeText(
         Array.isArray(event.messages) ? event.messages : []
       );
+      const queuedLiteratureDiscoveryFastPath =
+        snapshot.role === "researcher" &&
+        !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
+          ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
+          : null;
       const extraContext: string[] = [];
       if (
         snapshot.role === "researcher" &&
@@ -601,6 +630,23 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           "After the tool returns, reply briefly that the resume pipeline task has started and stop. The background continuation will perform the actual reconciliation.",
           "[/Slash Fast Path]"
         );
+      } else if (
+        snapshot.role === "researcher" &&
+        queuedLiteratureDiscoveryFastPath &&
+        !hasBackgroundContinuationMarker(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Workflow-Owned Literature Fast Path]",
+          `A workflow-owned literature discovery request (${queuedLiteratureDiscoveryFastPath.requestId}) is ${queuedLiteratureDiscoveryFastPath.status} for this project.`,
+          "If the current turn needs you to continue that queued literature-discovery pass, do not execute the full pass inline in this foreground Researcher session.",
+          'Instead call research_workflow with action start_background_run and backgroundRun.kind="research_queue".',
+          `Pass backgroundRun.commandText as: ${JSON.stringify(
+            queuedLiteratureDiscoveryFastPath.commandText
+          )}`,
+          "After the tool returns, reply briefly that the background literature-discovery pass has started. If the user asked a direct question or status check, answer it normally in the foreground while the background session continues.",
+          "Do not start a duplicate run if the queue entry is no longer queued by the time you act.",
+          "[/Workflow-Owned Literature Fast Path]"
+        );
       }
       const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
       const focusedAssembly =
@@ -647,6 +693,9 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     "before_tool_call",
     async (event, hookCtx) => {
       const agentCtx = getToolContext(hookCtx);
+      if (!isExplicitWorkflowHookAgent(agentCtx)) {
+        return;
+      }
       const toolName = String(event.toolName ?? "");
       if (!shouldQueueBeforeToolCall(toolName)) {
         return runBeforeToolCallHook({
@@ -704,6 +753,10 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
     async (event, hookCtx) => {
       const workflowPolicy = plugin.getWorkflowPolicy();
       if (!workflowPolicy.enforceWorkflowBoundaries) {
+        return;
+      }
+      const requesterAgentCtx = getToolContext(hookCtx);
+      if (!isExplicitWorkflowHookAgent(requesterAgentCtx)) {
         return;
       }
       const requesterRole = inferTargetRoleFromToolParams({

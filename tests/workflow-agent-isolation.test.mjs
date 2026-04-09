@@ -5,6 +5,7 @@ import {
   DEFAULT_PROJECT_WORKFLOW_ALLOWED_ROLES,
   isProjectWorkflowAgentId,
   isWorkflowBindingVisibleToAgent,
+  isWorkflowManagedAgentContext,
   normalizeWorkflowAllowedAgentIds,
   normalizeWorkflowAllowedRoles,
   normalizeWorkflowIsolationMode,
@@ -96,4 +97,23 @@ test("workflow isolation helpers normalize policy fields conservatively", () => 
   );
   assert.equal(isProjectWorkflowAgentId("writer"), true);
   assert.equal(isProjectWorkflowAgentId("designer"), false);
+});
+
+test("workflow managed agent detection can ignore inherited session lineage for custom agents", () => {
+  assert.equal(
+    isWorkflowManagedAgentContext({
+      agentId: "designer",
+      sessionKey: "agent:researcher:dashboard:main",
+      allowSessionKeyInference: false,
+    }),
+    false
+  );
+  assert.equal(
+    isWorkflowManagedAgentContext({
+      agentId: "designer",
+      sessionKey: "agent:researcher:dashboard:main",
+      allowSessionKeyInference: true,
+    }),
+    true
+  );
 });

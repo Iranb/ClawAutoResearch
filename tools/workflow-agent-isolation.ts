@@ -103,6 +103,30 @@ export function isProjectWorkflowAgentId(
   return allowedAgentIds.includes(normalized) || allowedRoles.includes(normalized);
 }
 
+export function isWorkflowManagedAgentContext(params: {
+  agentId?: string | null;
+  sessionKey?: string | null;
+  workflowRole?: string | null;
+  visibleBindingWorkflowRole?: string | null;
+  allowedRoles?: readonly string[];
+  allowedAgentIds?: readonly string[];
+  allowSessionKeyInference?: boolean;
+}): boolean {
+  const allowedRoles = params.allowedRoles ?? DEFAULT_PROJECT_WORKFLOW_ALLOWED_ROLES;
+  const allowedAgentIds = params.allowedAgentIds ?? [];
+  const candidates = [
+    params.agentId,
+    params.workflowRole,
+    params.visibleBindingWorkflowRole,
+  ];
+  if (params.allowSessionKeyInference !== false) {
+    candidates.push(extractAgentIdFromSessionKey(params.sessionKey));
+  }
+  return candidates.some((candidate) =>
+    isProjectWorkflowAgentId(candidate, allowedRoles, allowedAgentIds)
+  );
+}
+
 export function isWorkflowBindingVisibleToAgent(params: {
   binding: WorkflowBindingIsolationShape | null | undefined;
   agentId?: string | null;

@@ -133,6 +133,35 @@ test("resolveStageReadiness separates blocking and repairable signals", () => {
   assert.equal(readiness.suggestedOwner, "workflow");
 });
 
+test("resolveStageReadiness treats mixed inline-plus-file graph evidence as ready", () => {
+  const readiness = resolveStageReadiness({
+    stage: "idea",
+    trackEvidence: {
+      presence: "mixed",
+      evidencePointers: ["researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router"],
+      linkedGraphNodes: ["paper:router", "finding:support-gap"],
+      relationPatterns: ["supports->claim:novelty"],
+      hasGraphBackedInnovationEvidence: true,
+      hasStructuralGraphEvidence: true,
+      hasStoryFacingTrackGraphSupport: true,
+      graphEvidencePath: "researcher/reasoning/track-main/GRAPH_EVIDENCE.json",
+      importedFromGraphEvidence: true,
+      diagnostics: [],
+      repairable: {
+        repairable: true,
+        repairableSignals: ["graph_evidence.materialization_pending"],
+        suggestedOwner: "workflow",
+        suggestedAction: "materialize_graph_evidence",
+      },
+    },
+  });
+
+  assert.equal(readiness.readyForOwnerWork, true);
+  assert.deepEqual(readiness.repairableSignals, []);
+  assert.equal(readiness.handoffMode, "drive_stage");
+  assert.equal(readiness.suggestedOwner, "owner");
+});
+
 test("resolveHandoffEligibility keeps drive_stage out when blocking signals remain", () => {
   const handoff = resolveHandoffEligibility({
     readyForOwnerWork: false,
