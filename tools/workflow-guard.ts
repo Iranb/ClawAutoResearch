@@ -265,6 +265,7 @@ import {
   saveContactStore as saveContactStoreImpl,
   saveMailbox as saveMailboxImpl,
 } from "./workflow-guard-collaboration";
+import { normalizeWorkflowAutoIteratorAudit } from "./workflow-runtime-health.js";
 import {
   buildExperimentLedgerSummary as buildExperimentLedgerSummaryImpl,
   buildExperimentMemoryDigest as buildExperimentMemoryDigestImpl,
@@ -543,6 +544,7 @@ type ProjectState = {
   trackRegistry: TrackRegistryLike | null;
   mailbox: WorkflowMailboxStore | null;
   experimentLedger: ExperimentLedger | null;
+  autoIteratorAudit: Record<string, unknown> | null;
 };
 
 type ExperimentPapernexusSync = {
@@ -1413,6 +1415,16 @@ export type WorkflowSnapshot = {
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;
+  stateRevision: string | null;
+  stateUpdatedAt: string | null;
+  autoIteratorAuditStatus: string | null;
+  autoIteratorAuditFreshness: "missing" | "fresh" | "stale" | "unknown";
+  autoIteratorAuditUpdatedAt: string | null;
+  autoIteratorAuditRunId: string | null;
+  autoIteratorAuditStageBefore: string | null;
+  autoIteratorAuditStageAfter: string | null;
+  autoIteratorAuditMatchesLiveState: boolean | null;
+  autoIteratorAuditSummary: string | null;
   workflowEvidenceStatus: "ready" | "repairable" | "missing";
   workflowEvidenceSummary: string | null;
   allowedWriteScopes: string[];
@@ -2729,6 +2741,61 @@ function getAutoIteratorAuditPath(projectRoot: string): string {
   return path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json");
 }
 
+async function writeAutoIteratorAuditLifecycle(params: {
+  projectRoot: string;
+  runId: string;
+  status: "started" | "completed" | "failed";
+  startedAt: string | null;
+  updatedAt: string;
+  completedAt?: string | null;
+  failedAt?: string | null;
+  summary?: string | null;
+  result?: AutoIteratorResult | null;
+  error?: unknown;
+}): Promise<string> {
+  const auditPath = getAutoIteratorAuditPath(params.projectRoot);
+  const existing = normalizeWorkflowAutoIteratorAudit(
+    await readJsonIfExists<Record<string, unknown>>(auditPath)
+  );
+  const startedAt =
+    params.startedAt ??
+    existing?.startedAt ??
+    (params.status === "started" ? params.updatedAt : null);
+  const errorRecord =
+    params.error instanceof Error
+      ? {
+          name: params.error.name,
+          message: params.error.message,
+        }
+      : params.error && typeof params.error === "object"
+        ? (params.error as Record<string, unknown>)
+        : params.error == null
+          ? null
+          : {
+              message: String(params.error),
+            };
+  await writeJsonEnsured(auditPath, {
+    schemaVersion: 2,
+    runId: params.runId,
+    status: params.status,
+    startedAt,
+    completedAt:
+      params.status === "completed" ? params.completedAt ?? params.updatedAt : null,
+    failedAt: params.status === "failed" ? params.failedAt ?? params.updatedAt : null,
+    updatedAt: params.updatedAt,
+    summary:
+      params.summary ??
+      (params.status === "started"
+        ? "Auto iterator started."
+        : params.status === "completed"
+          ? "Auto iterator completed."
+          : "Auto iterator failed."),
+    result: params.result ?? (params.status === "completed" ? existing?.result ?? null : null),
+    error: params.status === "failed" ? errorRecord : null,
+  });
+  return auditPath;
+}
+
 async function evaluateGateBlocking(params: {
   projectRoot: string;
   gateState: GateState;
@@ -2823,10 +2890,18 @@ async function writeAutoIteratorAudit(
   projectRoot: string,
   result: AutoIteratorResult
 ): Promise<string> {
-  const auditPath = getAutoIteratorAuditPath(projectRoot);
-  await writeJsonEnsured(auditPath, {
-    schemaVersion: 1,
-    updatedAt: new Date().toISOString(),
+  const updatedAt = new Date().toISOString();
+  const existing = normalizeWorkflowAutoIteratorAudit(
+    await readJsonIfExists<Record<string, unknown>>(getAutoIteratorAuditPath(projectRoot))
+  );
+  const auditPath = await writeAutoIteratorAuditLifecycle({
+    projectRoot,
+    runId: existing?.runId ?? randomUUID(),
+    status: "completed",
+    startedAt: existing?.startedAt ?? updatedAt,
+    updatedAt,
+    completedAt: updatedAt,
+    summary: `Auto iterator evaluated ${result.stageBefore ?? "unknown"} -> ${result.stageAfter ?? "unknown"}.`,
     result,
   });
   return auditPath;
@@ -8397,57 +8472,85 @@ export async function runWorkflowAutoIterator(params: {
   policy?: WorkflowGuardPolicy;
   now?: string;
 }): Promise<AutoIteratorResult> {
-  return runWorkflowAutoIteratorImpl(params, {
-    normalizePolicy,
-    loadExperimentLedgerIfExists,
-    readGateState,
-    normalizeRole,
-    inferProjectId,
-    normalizeWritePackageState,
-    assembleWritePackage,
-    checkGraphPresenceForWorkflow,
-    PREVIOUS_STAGE,
-    getMissingStageSignals,
-    evaluateWorkflowAutoModeRisk,
-    readAutoModeDiscussionStore,
-    resolveEffectiveWorkflowAutoMode,
-    evaluateGateBlocking,
-    STAGE_REQUIREMENTS,
-    stageOwner,
-    normalizeExperimentSearchState,
-    normalizeAutonomousExecutionState,
-    loadExperimentReviewState,
-    isReviewedAutoExperimentLaunchEnabled,
-    resolveExperimentReviewNextOwner,
-    deriveExperimentReviewMicroStage,
-    buildExperimentReviewCommand,
-    hasActiveExperimentRuns,
-    hasFinishedExperimentWorkAwaitingReconciliation,
-    buildExperimentMonitorCommand,
-    buildGraphImportRepairGuidance,
-    formatStageCommand,
-    STAGE_ENTRY_MICRO_STAGES,
-    saveManifest,
-    saveGateState,
-    maybeQueueAutoIteratorMailbox,
-    formatStageSummary,
-    normalizeIdleResearchState,
-    isIdleResearchDue,
-    syncProjectsStateEntry,
-    readProjectsStateRaw,
-    writeAutoIteratorAudit,
-    appendWorkflowTraceEvent,
-    materializeIdeaCatalystState,
-    materializeLiteratureDiscoveryPacket,
-    materializePapernexusPacketContracts,
-    queueIdeaCatalystRequisition,
-    queueLiteratureDiscoveryRequisition,
-    materializeIdeationContract,
-    materializePaperStoryState,
-    materializeExperimentReviewState,
-    materializeReviewPressurePacket,
-    materializeSurveyReviewState,
-  } as any);
+  const runId = randomUUID();
+  const startedAt = new Date().toISOString();
+  await writeAutoIteratorAuditLifecycle({
+    projectRoot: params.projectRoot,
+    runId,
+    status: "started",
+    startedAt,
+    updatedAt: startedAt,
+    summary: `Auto iterator started for ${params.mode ?? "default"} mode.`,
+  });
+  try {
+    return await runWorkflowAutoIteratorImpl(params, {
+      normalizePolicy,
+      loadExperimentLedgerIfExists,
+      readGateState,
+      normalizeRole,
+      inferProjectId,
+      normalizeWritePackageState,
+      assembleWritePackage,
+      checkGraphPresenceForWorkflow,
+      PREVIOUS_STAGE,
+      getMissingStageSignals,
+      evaluateWorkflowAutoModeRisk,
+      readAutoModeDiscussionStore,
+      resolveEffectiveWorkflowAutoMode,
+      evaluateGateBlocking,
+      STAGE_REQUIREMENTS,
+      stageOwner,
+      normalizeExperimentSearchState,
+      normalizeAutonomousExecutionState,
+      loadExperimentReviewState,
+      isReviewedAutoExperimentLaunchEnabled,
+      resolveExperimentReviewNextOwner,
+      deriveExperimentReviewMicroStage,
+      buildExperimentReviewCommand,
+      hasActiveExperimentRuns,
+      hasFinishedExperimentWorkAwaitingReconciliation,
+      buildExperimentMonitorCommand,
+      buildGraphImportRepairGuidance,
+      formatStageCommand,
+      STAGE_ENTRY_MICRO_STAGES,
+      saveManifest,
+      saveGateState,
+      maybeQueueAutoIteratorMailbox,
+      formatStageSummary,
+      normalizeIdleResearchState,
+      isIdleResearchDue,
+      syncProjectsStateEntry,
+      readProjectsStateRaw,
+      writeAutoIteratorAudit,
+      appendWorkflowTraceEvent,
+      materializeIdeaCatalystState,
+      materializeLiteratureDiscoveryPacket,
+      materializePapernexusPacketContracts,
+      queueIdeaCatalystRequisition,
+      queueLiteratureDiscoveryRequisition,
+      materializeIdeationContract,
+      materializePaperStoryState,
+      materializeExperimentReviewState,
+      materializeReviewPressurePacket,
+      materializeSurveyReviewState,
+    } as any);
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    await writeAutoIteratorAuditLifecycle({
+      projectRoot: params.projectRoot,
+      runId,
+      status: "failed",
+      startedAt,
+      updatedAt: failedAt,
+      failedAt,
+      summary:
+        error instanceof Error
+          ? error.message
+          : "Auto iterator failed before a terminal result was recorded.",
+      error,
+    });
+    throw error;
+  }
 }
 
 export function getProjectRootForWorkflow(options?: {

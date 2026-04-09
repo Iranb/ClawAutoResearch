@@ -80,6 +80,28 @@ function formatDerivedEvidenceLine(snapshot: SnapshotLike): string | null {
   return `Derived evidence: ${status ?? "unknown"}${summary ? ` - ${summary}` : ""}`;
 }
 
+function formatRuntimeAuditLine(snapshot: SnapshotLike): string | null {
+  const freshness =
+    typeof snapshot.autoIteratorAuditFreshness === "string" &&
+    snapshot.autoIteratorAuditFreshness.trim()
+      ? snapshot.autoIteratorAuditFreshness.trim()
+      : null;
+  const status =
+    typeof snapshot.autoIteratorAuditStatus === "string" &&
+    snapshot.autoIteratorAuditStatus.trim()
+      ? snapshot.autoIteratorAuditStatus.trim()
+      : null;
+  const summary =
+    typeof snapshot.autoIteratorAuditSummary === "string" &&
+    snapshot.autoIteratorAuditSummary.trim()
+      ? snapshot.autoIteratorAuditSummary.trim()
+      : null;
+  if (!freshness && !status && !summary) {
+    return null;
+  }
+  return `Runtime audit: ${freshness ?? "unknown"}${status ? `/${status}` : ""}${summary ? ` - ${summary}` : ""}`;
+}
+
 export function buildFocusedPromptAssemblyImpl(
   params: {
     snapshot: SnapshotLike;
@@ -142,6 +164,10 @@ export function buildFocusedPromptAssemblyImpl(
   if (snapshot.blockingReason) {
     layer2Lines.push(`blocking_reason=${snapshot.blockingReason}`);
   }
+  const runtimeAuditLine = formatRuntimeAuditLine(snapshot);
+  if (runtimeAuditLine) {
+    layer2Lines.push(runtimeAuditLine);
+  }
   const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
   if (derivedEvidenceLine) {
     layer2Lines.push(derivedEvidenceLine);
@@ -195,6 +221,11 @@ export function buildFocusedPromptAssemblyImpl(
   layer2Lines.push(
     "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
   );
+  if (snapshot.autoIteratorAuditFreshness === "stale") {
+    layer2Lines.push(
+      "Runtime truth rule: the live Workflow Guard snapshot is the source of truth. Treat stale auto-iterator audit records as historical diagnostics only, not as the current blocker."
+    );
+  }
   if (snapshot.role === "researcher") {
     layer2Lines.push(
       "Bootstrap-vs-guard rule: AGENTS.md only carries stable role policy. Stage-local checklists, queue state, and the next bounded action in this Workflow Guard override memory or stale templates."
@@ -205,6 +236,11 @@ export function buildFocusedPromptAssemblyImpl(
     layer2Lines.push(
       'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
     );
+    if (snapshot.autoIteratorAuditFreshness === "stale") {
+      layer2Lines.push(
+        "Stale audit rule: if the last auto-iterator audit is stale, do not restate its blocker. Report the current snapshot, rerun auto_iterator_tick once, and then describe only the new delta."
+      );
+    }
     if (params.trigger === "heartbeat") {
       layer2Lines.push(
         'Heartbeat first step: call research_workflow {"action":"auto_iterator_tick","iterator":{"mode":"heartbeat"}} before any manual planning or ad hoc spawning.'

@@ -2001,6 +2001,55 @@ test("research_workflow get_snapshot stage-preflights sparse idea tracks before 
   assert.equal(refreshedManifest.primary_track_id, "fd-gcd-freq-debiased");
 });
 
+test("research_workflow get_runtime_health reports stale auto-iterator audit without regressing live snapshot truth", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await seedSparseIdeationRepairScenario(projectRoot, tool);
+  await writeJson(path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json"), {
+    schemaVersion: 1,
+    updatedAt: "2026-04-09T08:59:36.572Z",
+    result: {
+      projectRoot,
+      projectId: "demo-project",
+      stageBefore: "idea",
+      stageAfter: "idea",
+      ownerAfter: "researcher",
+      blockingReason:
+        "active track fd-gcd-freq-debiased missing graph-backed innovation evidence",
+      missingStageSignals: [
+        "active track fd-gcd-freq-debiased missing graph-backed innovation evidence",
+        "active track talon-gcd-bias missing graph-backed innovation evidence",
+      ],
+    },
+  });
+
+  const health = await executeWorkflowTool(tool, {
+    action: "get_runtime_health",
+  });
+
+  assert.equal(health.projectResolution.resolvedProjectRoot, projectRoot);
+  assert.equal(health.snapshot.currentStage, "idea");
+  assert.equal(["ready", "repairable"].includes(health.snapshot.workflowEvidenceStatus), true);
+  assert.equal(health.autoIteratorAudit.status, "completed");
+  assert.equal(health.autoIteratorAudit.freshness, "stale");
+  assert.equal(health.autoIteratorAudit.matchesLiveState, false);
+  assert.match(health.autoIteratorAudit.summary ?? "", /stale auto-iterator audit/i);
+  assert.equal(Array.isArray(health.guidance), true);
+  assert.equal(health.guidance.some((line) => /trust the live snapshot/i.test(line)), true);
+});
+
 test("research_workflow auto_iterator_tick follows the bound channel project even when workspaceDir points at another project", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-runtime-binding-priority-")

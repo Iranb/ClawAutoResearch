@@ -28,6 +28,9 @@ import {
   resolveHandoffEligibility,
 } from "../workflow-derived-state/handoff-eligibility.js";
 import {
+  resolveWorkflowRuntimeHealth,
+} from "../workflow-runtime-health.js";
+import {
   filterStaleAutoIteratorMailboxItems,
   inboxForRole,
 } from "../workflow-guard-collaboration";
@@ -1005,7 +1008,19 @@ export async function buildWorkflowSnapshotFromProjectState(
     return value;
   })();
 
-  return {
+  const snapshotBase: Omit<
+    WorkflowSnapshot,
+    | "stateRevision"
+    | "stateUpdatedAt"
+    | "autoIteratorAuditStatus"
+    | "autoIteratorAuditFreshness"
+    | "autoIteratorAuditUpdatedAt"
+    | "autoIteratorAuditRunId"
+    | "autoIteratorAuditStageBefore"
+    | "autoIteratorAuditStageAfter"
+    | "autoIteratorAuditMatchesLiveState"
+    | "autoIteratorAuditSummary"
+  > = {
     projectRoot: projectState.projectRoot,
     projectId: projectState.projectId,
     projectResolutionSource: projectState.projectResolutionSource,
@@ -1432,5 +1447,19 @@ export async function buildWorkflowSnapshotFromProjectState(
         DEFAULT_CITATION_REPORT_PATH,
       }
     ),
+  };
+  const runtimeHealth = await resolveWorkflowRuntimeHealth({
+    projectRoot: projectState.projectRoot,
+    manifest: projectState.manifest,
+    trackRegistry: projectState.trackRegistry,
+    mailbox: projectState.mailbox as Record<string, unknown> | null,
+    experimentLedger: projectState.experimentLedger as Record<string, unknown> | null,
+    autoIteratorAudit: projectState.autoIteratorAudit,
+    snapshot: snapshotBase,
+  });
+
+  return {
+    ...snapshotBase,
+    ...runtimeHealth,
   };
 }

@@ -247,10 +247,42 @@ test("formatWorkflowSnapshotForPrompt surfaces compact derived evidence diagnost
   assert.doesNotMatch(prompt, /missing_signals=/i);
 });
 
+test("formatWorkflowSnapshotForPrompt tells agents to trust the live snapshot when auto-iterator audit is stale", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "idea",
+      currentMicroStage: "judging",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      workflowEvidenceStatus: "ready",
+      workflowEvidenceSummary: "track evidence is ready",
+      autoIteratorAuditStatus: "completed",
+      autoIteratorAuditFreshness: "stale",
+      autoIteratorAuditUpdatedAt: "2026-04-09T08:59:36.572Z",
+      autoIteratorAuditSummary:
+        "Stale auto-iterator audit (completed) from 2026-04-09T08:59:36.572Z for idea -> idea; trust the live snapshot instead.",
+    },
+    detailLevel: "focused",
+  });
+
+  assert.match(prompt, /Runtime audit: stale\/completed/i);
+  assert.match(prompt, /Runtime truth rule: the live Workflow Guard snapshot is the source of truth/i);
+  assert.match(prompt, /Stale audit rule: if the last auto-iterator audit is stale, do not restate its blocker/i);
+});
+
 test("formatWorkflowStatusText reports derived evidence state and clears stale blocker text once readiness is satisfied", () => {
   const text = formatWorkflowStatusText({
     snapshot: {
       ...makeBaseSnapshot(),
+      stateRevision: "rev-demo",
+      stateUpdatedAt: "2026-04-09T18:43:18.000Z",
+      autoIteratorAuditStatus: "completed",
+      autoIteratorAuditFreshness: "stale",
+      autoIteratorAuditUpdatedAt: "2026-04-09T08:59:36.572Z",
+      autoIteratorAuditSummary:
+        "Stale auto-iterator audit (completed) from 2026-04-09T08:59:36.572Z for idea -> idea; trust the live snapshot instead.",
       workflowEvidenceStatus: "ready",
       workflowEvidenceSummary: "active track track-main: inline graph evidence present",
       blockingReason: null,
@@ -265,6 +297,8 @@ test("formatWorkflowStatusText reports derived evidence state and clears stale b
   });
 
   assert.match(text, /Derived evidence: ready/i);
+  assert.match(text, /State revision: rev-demo, updated=2026-04-09T18:43:18.000Z/i);
+  assert.match(text, /Runtime audit: stale\/completed, updated=2026-04-09T08:59:36.572Z/i);
   assert.match(text, /inline graph evidence present/i);
   assert.match(text, /Blocking reason: none/i);
 });

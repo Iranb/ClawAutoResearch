@@ -119,6 +119,11 @@ import {
 } from "./workflow-background-pool";
 import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import {
+  getWorkflowRuntimeQueuePath,
+  getWorkflowRuntimeSessionsPath,
+  readWorkflowRuntimeEvents,
+} from "./workflow-runtime-state.js";
+import {
   asObject,
   readNumber,
   readString,
@@ -150,6 +155,7 @@ type WorkflowToolState = {
   channelBinding: Record<string, unknown> | null;
   snapshot: WorkflowSnapshot;
   projectRoot: string | null;
+  workspaceProjectRoot: string | null;
   projectRequiredMessage: string;
   bindingRole: string | null;
 };
@@ -194,6 +200,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_snapshot: "buildWorkflowSnapshot",
+  get_runtime_health: "buildWorkflowSnapshot",
   diagnose_track_evidence: "loadTrackInnovationEvidence",
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
@@ -337,6 +344,7 @@ async function resolveWorkflowToolState(params: {
     channelBinding,
     snapshot,
     projectRoot,
+    workspaceProjectRoot,
     projectRequiredMessage:
       "A resolved project is required for this workflow action. Bind the current Discord/channel session to a project or set OPENCLAW_PROJECT.",
     bindingRole:
@@ -468,6 +476,96 @@ async function diagnoseTrackEvidence(projectRoot: string) {
       .filter((track) => track.isActiveInRegistry && !track.hasGraphBackedInnovationEvidence)
       .map((track) => track.trackId),
     tracks,
+  };
+}
+
+async function getWorkflowRuntimeHealthReport(params: {
+  state: WorkflowToolState;
+  agentCtx: ToolContext;
+}) {
+  const resolvedProjectRoot = params.state.projectRoot;
+  const queuePath = resolvedProjectRoot ? getWorkflowRuntimeQueuePath(resolvedProjectRoot) : null;
+  const sessionsPath = resolvedProjectRoot
+    ? getWorkflowRuntimeSessionsPath(resolvedProjectRoot)
+    : null;
+  const eventsPath = resolvedProjectRoot
+    ? path.join(resolvedProjectRoot, ".openclaw-research", "workflow-events.jsonl")
+    : null;
+  const autoIteratorAuditPath = resolvedProjectRoot
+    ? path.join(resolvedProjectRoot, ".openclaw-research", "auto-iterator-state.json")
+    : null;
+
+  const [queueStore, sessionsStore, runtimeEvents] = resolvedProjectRoot
+    ? await Promise.all([
+        readJsonIfExists<Record<string, unknown>>(queuePath),
+        readJsonIfExists<Record<string, unknown>>(sessionsPath),
+        readWorkflowRuntimeEvents(resolvedProjectRoot),
+      ])
+    : [null, null, []];
+  const queueEntries = Array.isArray(queueStore?.entries) ? queueStore.entries : [];
+  const sessionEntries = Array.isArray(sessionsStore?.entries) ? sessionsStore.entries : [];
+  const latestRuntimeEvent = Array.isArray(runtimeEvents) ? runtimeEvents.at(-1) ?? null : null;
+
+  return {
+    projectResolution: {
+      resolvedProjectRoot,
+      snapshotProjectRoot: params.state.snapshot.projectRoot,
+      workspaceProjectRoot: params.state.workspaceProjectRoot,
+      bindingProjectRoot:
+        readString(params.state.channelBinding?.projectRoot) ??
+        readString(params.state.channelBinding?.project_path) ??
+        null,
+      projectId: params.state.snapshot.projectId,
+      channelBindingKey: params.state.snapshot.channelProjectBindingKey,
+      projectResolutionSource: params.state.snapshot.projectResolutionSource,
+    },
+    snapshot: {
+      currentStage: params.state.snapshot.currentStage,
+      currentMicroStage: params.state.snapshot.currentMicroStage,
+      ownerAgent: params.state.snapshot.ownerAgent,
+      recommendedOwner: params.state.snapshot.recommendedOwner,
+      nextAction: params.state.snapshot.nextAction,
+      resumeAction: params.state.snapshot.resumeAction,
+      blockingReason: params.state.snapshot.blockingReason,
+      missingStageSignals: params.state.snapshot.missingStageSignals,
+      workflowEvidenceStatus: params.state.snapshot.workflowEvidenceStatus,
+      workflowEvidenceSummary: params.state.snapshot.workflowEvidenceSummary,
+      stateRevision: params.state.snapshot.stateRevision,
+      stateUpdatedAt: params.state.snapshot.stateUpdatedAt,
+    },
+    autoIteratorAudit: {
+      path: autoIteratorAuditPath,
+      status: params.state.snapshot.autoIteratorAuditStatus,
+      freshness: params.state.snapshot.autoIteratorAuditFreshness,
+      updatedAt: params.state.snapshot.autoIteratorAuditUpdatedAt,
+      runId: params.state.snapshot.autoIteratorAuditRunId,
+      stageBefore: params.state.snapshot.autoIteratorAuditStageBefore,
+      stageAfter: params.state.snapshot.autoIteratorAuditStageAfter,
+      matchesLiveState: params.state.snapshot.autoIteratorAuditMatchesLiveState,
+      summary: params.state.snapshot.autoIteratorAuditSummary,
+    },
+    runtime: {
+      queuePath,
+      sessionsPath,
+      eventsPath,
+      queueEntryCount: queueEntries.length,
+      queueRunningCount: queueEntries.filter((entry) => asObject(entry)?.status === "running").length,
+      queueQueuedCount: queueEntries.filter((entry) => asObject(entry)?.status === "queued").length,
+      sessionEntryCount: sessionEntries.length,
+      sessionActiveCount: sessionEntries.filter((entry) => asObject(entry)?.status === "active").length,
+      sessionIdleCount: sessionEntries.filter((entry) => asObject(entry)?.status === "idle").length,
+      latestEvent: latestRuntimeEvent,
+    },
+    guidance: [
+      params.state.snapshot.autoIteratorAuditFreshness === "stale"
+        ? "The last auto-iterator audit is stale. Trust the live snapshot, then rerun auto_iterator_tick once if you need a fresh terminal audit."
+        : "The last auto-iterator audit is aligned with the live snapshot or no audit exists yet.",
+      resolvedProjectRoot &&
+      params.state.workspaceProjectRoot &&
+      resolvedProjectRoot !== params.state.workspaceProjectRoot
+        ? "Workspace project root differs from the bound project root. Workflow tools now follow the bound snapshot project."
+        : "Resolved project root matches the current workspace binding context.",
+    ],
   };
 }
 
@@ -684,6 +782,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "string",
             enum: [
               "get_snapshot",
+              "get_runtime_health",
               "diagnose_track_evidence",
               "get_papernexus_remote_access",
               "get_papernexus_progress",
@@ -1032,6 +1131,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             switch (action) {
               case "get_snapshot":
                 return textResponse(JSON.stringify(snapshot, null, 2));
+            case "get_runtime_health": {
+              const report = await getWorkflowRuntimeHealthReport({
+                state,
+                agentCtx: ctx,
+              });
+              return textResponse(JSON.stringify(report, null, 2));
+            }
             case "diagnose_track_evidence": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const diagnosis = await diagnoseTrackEvidence(resolvedProjectRoot);

@@ -54,6 +54,33 @@ function formatDerivedEvidenceLine(snapshot: WorkflowSnapshot): string | null {
   return `Derived evidence: ${status ?? "unknown"}${summary ? ` - ${summary}` : ""}`;
 }
 
+function formatRuntimeAuditLine(snapshot: WorkflowSnapshot): string | null {
+  const freshness =
+    typeof (snapshot as Record<string, unknown>).autoIteratorAuditFreshness === "string" &&
+    String((snapshot as Record<string, unknown>).autoIteratorAuditFreshness).trim()
+      ? String((snapshot as Record<string, unknown>).autoIteratorAuditFreshness).trim()
+      : null;
+  const status =
+    typeof (snapshot as Record<string, unknown>).autoIteratorAuditStatus === "string" &&
+    String((snapshot as Record<string, unknown>).autoIteratorAuditStatus).trim()
+      ? String((snapshot as Record<string, unknown>).autoIteratorAuditStatus).trim()
+      : null;
+  const summary =
+    typeof (snapshot as Record<string, unknown>).autoIteratorAuditSummary === "string" &&
+    String((snapshot as Record<string, unknown>).autoIteratorAuditSummary).trim()
+      ? String((snapshot as Record<string, unknown>).autoIteratorAuditSummary).trim()
+      : null;
+  const updatedAt =
+    typeof (snapshot as Record<string, unknown>).autoIteratorAuditUpdatedAt === "string" &&
+    String((snapshot as Record<string, unknown>).autoIteratorAuditUpdatedAt).trim()
+      ? String((snapshot as Record<string, unknown>).autoIteratorAuditUpdatedAt).trim()
+      : null;
+  if (!freshness && !status && !summary && !updatedAt) {
+    return null;
+  }
+  return `Runtime audit: ${freshness ?? "unknown"}${status ? `/${status}` : ""}${updatedAt ? `, updated=${updatedAt}` : ""}${summary ? ` - ${summary}` : ""}`;
+}
+
 export function formatAutoModeSection(params: {
   autoIteratorResult: WorkflowAutoIteratorResult | null;
 }): string[] {
@@ -226,6 +253,7 @@ export function formatWorkflowStatusText(params: {
     snapshot.paperIngestionReconcileRequired ||
     snapshot.paperIngestionRepairRequired;
   const derivedEvidenceLine = formatDerivedEvidenceLine(snapshot);
+  const runtimeAuditLine = formatRuntimeAuditLine(snapshot);
   const lines = [
     "Workflow Status",
     `Session: ${params.targetSessionKey}`,
@@ -236,6 +264,8 @@ export function formatWorkflowStatusText(params: {
     `Next action: ${snapshot.nextAction ?? "none"}`,
     `Resume action: ${snapshot.resumeAction ?? params.commandLabel}`,
     `Blocking reason: ${snapshot.blockingReason ?? "none"}`,
+    `State revision: ${snapshot.stateRevision ?? "unknown"}${snapshot.stateUpdatedAt ? `, updated=${snapshot.stateUpdatedAt}` : ""}`,
+    ...(runtimeAuditLine ? [runtimeAuditLine] : []),
     ...(derivedEvidenceLine ? [derivedEvidenceLine] : []),
     `Mailbox: ${unreadMailboxCount} unread`,
     `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,

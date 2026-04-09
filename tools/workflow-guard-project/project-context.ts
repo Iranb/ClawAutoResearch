@@ -30,6 +30,7 @@ export type WorkflowProjectState = {
   trackRegistry: Record<string, unknown> | null;
   mailbox: Awaited<ReturnType<typeof readMailbox>> | null;
   experimentLedger: Awaited<ReturnType<typeof loadExperimentLedgerIfExists>> | null;
+  autoIteratorAudit: Record<string, unknown> | null;
 };
 
 export type WorkflowProjectContextOptions = ChannelProjectBindingContext & {
@@ -123,10 +124,11 @@ export async function loadWorkflowProjectState(
       trackRegistry: null,
       mailbox: null,
       experimentLedger: null,
+      autoIteratorAudit: null,
     };
   }
 
-  const [manifest, trackRegistry, mailbox, experimentLedger] = await Promise.all([
+  const [manifest, trackRegistry, mailbox, experimentLedger, autoIteratorAudit] = await Promise.all([
     readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "PROJECT_MANIFEST.json")),
     readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "TRACK_REGISTRY.json")),
     readMailbox({
@@ -137,6 +139,9 @@ export async function loadWorkflowProjectState(
       projectRoot,
       readJsonIfExists,
     }),
+    readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json")
+    ),
   ]);
 
   return {
@@ -150,5 +155,6 @@ export async function loadWorkflowProjectState(
     trackRegistry,
     mailbox,
     experimentLedger,
+    autoIteratorAudit,
   };
 }

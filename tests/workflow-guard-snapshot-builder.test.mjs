@@ -73,6 +73,15 @@ async function writeMailbox(projectRoot, messages) {
   );
 }
 
+async function writeAutoIteratorAudit(projectRoot, audit) {
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json"),
+    `${JSON.stringify(audit, null, 2)}\n`,
+    "utf8"
+  );
+}
+
 test("snapshot builder preserves project context and emits derived fields", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-split");
@@ -200,6 +209,100 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
 
   assert.deepEqual(snapshot.missingStageSignals, []);
   assert.equal(snapshot.blockingReason, null);
+});
+
+test("snapshot builder marks stale auto-iterator audits without regressing live ready evidence state", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-audit");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeTrackRegistry(projectRoot, [
+    {
+      track_id: "track-main",
+      status: "active",
+      evidence_pointers: [
+        "researcher/reasoning/track-main/GRAPH_EVIDENCE.json#paper:router",
+      ],
+    },
+  ]);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.blocking_reason =
+    "Waiting for researcher to satisfy: active track track-main missing graph-backed innovation evidence";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await writeAutoIteratorAudit(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-04-09T08:59:36.572Z",
+    result: {
+      projectRoot,
+      projectId: "workflow-guard-stale-audit",
+      stageBefore: "idea",
+      stageAfter: "idea",
+      ownerAfter: "researcher",
+      blockingReason:
+        "active track track-main missing graph-backed innovation evidence",
+      missingStageSignals: [
+        "active track track-main missing graph-backed innovation evidence",
+      ],
+    },
+  });
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-stale-audit",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.workflowEvidenceStatus, "ready");
+  assert.equal(snapshot.blockingReason, null);
+  assert.equal(snapshot.autoIteratorAuditStatus, "completed");
+  assert.equal(snapshot.autoIteratorAuditFreshness, "stale");
+  assert.equal(snapshot.autoIteratorAuditMatchesLiveState, false);
+  assert.match(snapshot.autoIteratorAuditSummary ?? "", /stale auto-iterator audit/i);
 });
 
 test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocker no longer matches", async (t) => {
