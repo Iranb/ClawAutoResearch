@@ -280,6 +280,35 @@ test("formatWorkflowSnapshotForPrompt teaches researcher MCP-first graph work wi
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
 });
 
+test("formatWorkflowSnapshotForPrompt tells Researcher to background queued literature-discovery work instead of monopolizing chat", () => {
+  const prompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...makeBaseSnapshot(),
+      role: "researcher",
+      currentStage: "idea",
+      currentMicroStage: "graph_support_gap",
+      ownerAgent: "researcher",
+      recommendedOwner: "researcher",
+      nextAction: "/idea",
+      paperIngestionQueuedRequestCount: 1,
+      paperIngestionRunningRequestCount: 0,
+    },
+  });
+
+  assert.match(
+    prompt,
+    /Foreground queue rule: if workflow-owned literature discovery or other long queue work is pending, keep the main chat session responsive/i
+  );
+  assert.match(
+    prompt,
+    /start_background_run/i
+  );
+  assert.match(
+    prompt,
+    /answer direct user questions in the foreground/i
+  );
+});
+
 test("formatWorkflowSnapshotForPrompt renders local PaperNexus home paths with ~", () => {
   const prompt = formatWorkflowSnapshotForPrompt({
     snapshot: {

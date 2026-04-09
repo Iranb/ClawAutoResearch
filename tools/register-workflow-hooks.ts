@@ -31,6 +31,9 @@ import {
   buildResumePipelineBackgroundCommand,
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
+import { isLiteratureDiscoveryTriggerKind } from "./literature-discovery/workflow-bridge";
 import {
   isWorkflowSubagentSessionKey,
   looksLikePapernexusHeavyCommand,
@@ -103,6 +106,49 @@ function looksLikeResearchQueueCommand(text: string | null | undefined): boolean
 
 function looksLikeResumePipelineCommand(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\/resume-pipeline\b/i.test(text));
+}
+
+export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
+  paperIngestion: unknown;
+}): {
+  requestId: string;
+  commandText: string;
+  status: "queued" | "needs_repair";
+} | null {
+  const state = normalizePaperIngestionState(params.paperIngestion);
+  const queuedRequest =
+    state.queuedRequests.find(
+      (entry) =>
+        isLiteratureDiscoveryTriggerKind(entry.triggerKind) &&
+        (entry.status === "queued" || entry.status === "needs_repair") &&
+        typeof entry.commandText === "string" &&
+        entry.commandText.trim().length > 0
+    ) ?? null;
+  if (!queuedRequest?.requestId || !queuedRequest.commandText) {
+    return null;
+  }
+  return {
+    requestId: queuedRequest.requestId,
+    commandText: buildResearchQueueBackgroundCommand(queuedRequest.commandText),
+    status: queuedRequest.status === "needs_repair" ? "needs_repair" : "queued",
+  };
+}
+
+async function loadQueuedLiteratureDiscoveryForegroundFastPath(
+  projectRoot: string | null | undefined
+): Promise<ReturnType<typeof resolveQueuedLiteratureDiscoveryForegroundFastPath>> {
+  const root = readString(projectRoot);
+  if (!root) {
+    return null;
+  }
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(`${root}/PROJECT_MANIFEST.json`)) ?? null;
+  if (!manifest) {
+    return null;
+  }
+  return resolveQueuedLiteratureDiscoveryForegroundFastPath({
+    paperIngestion: manifest.paper_ingestion,
+  });
 }
 
 async function resolveWorkflowSnapshotForAgentContext(params: {
@@ -539,6 +585,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       const latestPromptLikeText = getLatestPromptLikeText(
         Array.isArray(event.messages) ? event.messages : []
       );
+      const queuedLiteratureDiscoveryFastPath =
+        snapshot.role === "researcher" &&
+        !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
+          ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
+          : null;
       const extraContext: string[] = [];
       if (
         snapshot.role === "researcher" &&
@@ -600,6 +651,23 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           )}`,
           "After the tool returns, reply briefly that the resume pipeline task has started and stop. The background continuation will perform the actual reconciliation.",
           "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role === "researcher" &&
+        queuedLiteratureDiscoveryFastPath &&
+        !hasBackgroundContinuationMarker(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Workflow-Owned Literature Fast Path]",
+          `A workflow-owned literature discovery request (${queuedLiteratureDiscoveryFastPath.requestId}) is ${queuedLiteratureDiscoveryFastPath.status} for this project.`,
+          "If the current turn needs you to continue that queued literature-discovery pass, do not execute the full pass inline in this foreground Researcher session.",
+          'Instead call research_workflow with action start_background_run and backgroundRun.kind="research_queue".',
+          `Pass backgroundRun.commandText as: ${JSON.stringify(
+            queuedLiteratureDiscoveryFastPath.commandText
+          )}`,
+          "After the tool returns, reply briefly that the background literature-discovery pass has started. If the user asked a direct question or status check, answer it normally in the foreground while the background session continues.",
+          "Do not start a duplicate run if the queue entry is no longer queued by the time you act.",
+          "[/Workflow-Owned Literature Fast Path]"
         );
       }
       const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
