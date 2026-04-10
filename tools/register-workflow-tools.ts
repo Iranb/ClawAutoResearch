@@ -311,8 +311,7 @@ async function resolveWorkflowToolState(params: {
     agentCtx: params.agentCtx,
     channelKey: readString(channelBinding?.channelKey) ?? null,
     autoBind: params.autoBind,
-    stagePreflight:
-      params.action === "get_snapshot" || params.action === "diagnose_track_evidence",
+    stagePreflight: false,
     preflightTrigger: params.action ? `workflow_tool:${params.action}` : "workflow_tool",
   });
 

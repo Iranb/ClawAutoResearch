@@ -305,6 +305,72 @@ test("snapshot builder marks stale auto-iterator audits without regressing live 
   assert.match(snapshot.autoIteratorAuditSummary ?? "", /stale auto-iterator audit/i);
 });
 
+test("snapshot builder downgrades orphan started auto-iterator audits to timed_out", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-guard-started-audit");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeAutoIteratorAudit(projectRoot, {
+    schemaVersion: 2,
+    runId: "started-audit",
+    status: "started",
+    startedAt: "2026-04-09T08:59:36.572Z",
+    updatedAt: "2026-04-09T08:59:36.572Z",
+    summary: "Auto iterator started for default mode.",
+  });
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-guard-started-audit",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.autoIteratorAuditStatus, "timed_out");
+  assert.equal(snapshot.autoIteratorAuditFreshness, "stale");
+  assert.match(snapshot.autoIteratorAuditSummary ?? "", /timed out/i);
+});
+
 test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocker no longer matches", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-mailbox");

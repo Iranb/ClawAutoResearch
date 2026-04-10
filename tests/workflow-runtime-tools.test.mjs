@@ -1956,7 +1956,7 @@ test("research_workflow materialize_ideation_contract imports per-track GRAPH_EV
   );
 });
 
-test("research_workflow get_snapshot stage-preflights sparse idea tracks before reporting blockers", async (t) => {
+test("research_workflow get_snapshot stays read-only for sparse idea tracks", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
 
@@ -1972,33 +1972,23 @@ test("research_workflow get_snapshot stage-preflights sparse idea tracks before 
   process.env.OPENCLAW_PROJECT = projectRoot;
   const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
   const { manifestPath } = await seedSparseIdeationRepairScenario(projectRoot, tool);
+  const trackRegistryPath = path.join(projectRoot, "TRACK_REGISTRY.json");
+  const initialManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const initialTrackRegistry = await fs.readFile(trackRegistryPath, "utf8");
 
   const snapshot = await executeWorkflowTool(tool, {
     action: "get_snapshot",
   });
 
   assert.equal(snapshot.currentStage, "idea");
-  assert.equal(["ready", "repairable"].includes(snapshot.workflowEvidenceStatus), true);
-  assert.equal(
-    snapshot.missingStageSignals.some((signal) =>
-      /active track .*missing graph-backed innovation evidence/i.test(signal)
-    ),
-    false
-  );
-
-  const updatedTrackRegistry = JSON.parse(
-    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
-  );
-  const trackIds = updatedTrackRegistry.tracks.map((track) => track.track_id).sort();
-  assert.deepEqual(trackIds, ["fd-gcd-freq-debiased", "talon-gcd-bias"]);
-  assert.equal(updatedTrackRegistry.active_tracks, 2);
-
+  assert.equal(Array.isArray(snapshot.missingStageSignals), true);
+  assert.equal(await fs.readFile(trackRegistryPath, "utf8"), initialTrackRegistry);
   const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-  assert.deepEqual(refreshedManifest.active_track_ids, [
-    "fd-gcd-freq-debiased",
-    "talon-gcd-bias",
-  ]);
-  assert.equal(refreshedManifest.primary_track_id, "fd-gcd-freq-debiased");
+  assert.deepEqual(refreshedManifest.active_track_ids, initialManifest.active_track_ids);
+  assert.equal(refreshedManifest.primary_track_id, initialManifest.primary_track_id);
+  await assert.rejects(
+    fs.stat(path.join(projectRoot, "researcher", "ideation", "GRAPH_IDEATION_PACKET.json"))
+  );
 });
 
 test("research_workflow get_runtime_health reports stale auto-iterator audit without regressing live snapshot truth", async (t) => {
@@ -2048,6 +2038,45 @@ test("research_workflow get_runtime_health reports stale auto-iterator audit wit
   assert.match(health.autoIteratorAudit.summary ?? "", /stale auto-iterator audit/i);
   assert.equal(Array.isArray(health.guidance), true);
   assert.equal(health.guidance.some((line) => /trust the live snapshot/i.test(line)), true);
+});
+
+test("research_workflow get_runtime_health treats stale started audits as timed out", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await seedMinimalProject(projectRoot, {
+    project_id: "demo-project",
+    current_stage: "plan",
+    owner_agent: "orchestrator",
+    updated_at: "2026-04-10T08:00:00.000Z",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json"), {
+    schemaVersion: 2,
+    runId: "audit-started",
+    status: "started",
+    startedAt: "2026-04-09T08:59:36.572Z",
+    updatedAt: "2026-04-09T08:59:36.572Z",
+    summary: "Auto iterator started for default mode.",
+  });
+
+  const health = await executeWorkflowTool(tool, {
+    action: "get_runtime_health",
+  });
+
+  assert.equal(health.autoIteratorAudit.status, "timed_out");
+  assert.equal(health.autoIteratorAudit.freshness, "stale");
+  assert.match(health.autoIteratorAudit.summary ?? "", /timed out/i);
 });
 
 test("research_workflow auto_iterator_tick follows the bound channel project even when workspaceDir points at another project", async (t) => {

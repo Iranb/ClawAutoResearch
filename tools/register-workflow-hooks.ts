@@ -185,7 +185,7 @@ async function resolveWorkflowSnapshotForAgentContext(params: {
     plugin: params.plugin,
     agentCtx: params.agentCtx,
     autoBind: params.autoBind,
-    stagePreflight: true,
+    stagePreflight: false,
     preflightTrigger: "workflow_hook:prompt_or_tool",
   });
 }

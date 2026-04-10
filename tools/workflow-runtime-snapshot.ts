@@ -87,7 +87,7 @@ export async function resolveWorkflowSnapshotContext(params: {
   let stagePreflight: Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>> | null =
     null;
   if (
-    params.stagePreflight !== false &&
+    params.stagePreflight === true &&
     snapshot.projectRoot &&
     snapshot.currentStage &&
     shouldRunStagePreflight(snapshot)

@@ -20,6 +20,8 @@ export type WorkflowAutoIteratorAuditFreshness =
   | "stale"
   | "unknown";
 
+export const AUTO_ITERATOR_STARTED_TIMEOUT_MS = 5 * 60 * 1000;
+
 export type NormalizedWorkflowAutoIteratorAudit = {
   schemaVersion: number | null;
   status: WorkflowAutoIteratorAuditStatus;
@@ -245,6 +247,36 @@ export function normalizeWorkflowAutoIteratorAudit(
   };
 }
 
+export function deriveEffectiveWorkflowAutoIteratorAudit(params: {
+  audit: NormalizedWorkflowAutoIteratorAudit | null;
+  now?: string | number | null;
+}): NormalizedWorkflowAutoIteratorAudit | null {
+  const audit = params.audit;
+  if (!audit || audit.status !== "started") {
+    return audit;
+  }
+
+  const nowMillis =
+    typeof params.now === "number"
+      ? params.now
+      : parseIsoMillis(typeof params.now === "string" ? params.now : null) ?? Date.now();
+  const startedMillis = parseIsoMillis(audit.updatedAt ?? audit.startedAt);
+  if (startedMillis == null || nowMillis - startedMillis < AUTO_ITERATOR_STARTED_TIMEOUT_MS) {
+    return audit;
+  }
+
+  const timeoutMinutes = Math.round(AUTO_ITERATOR_STARTED_TIMEOUT_MS / 60000);
+  return {
+    ...audit,
+    status: "timed_out",
+    summary:
+      audit.summary ??
+      `Auto iterator run started at ${
+        audit.updatedAt ?? audit.startedAt ?? "unknown time"
+      } exceeded the ${timeoutMinutes}-minute terminal-audit window.`,
+  };
+}
+
 export async function deriveWorkflowStateUpdatedAt(params: {
   projectRoot: string | null;
   manifest: Record<string, unknown> | null;
@@ -342,6 +374,15 @@ function buildAuditSummary(params: {
   const stageAfter =
     asString(audit.result?.stageAfter ?? audit.result?.stage_after) ?? "unknown";
   const transition = `${stageBefore} -> ${stageAfter}`;
+  if (audit.status === "timed_out") {
+    return `Auto-iterator run timed out after starting at ${audit.startedAt ?? audit.updatedAt ?? "unknown time"} without a terminal audit.`;
+  }
+  if (audit.status === "superseded") {
+    return `A newer auto-iterator run superseded the prior in-flight audit at ${audit.updatedAt ?? "unknown time"}.`;
+  }
+  if (audit.status === "aborted") {
+    return `Auto-iterator run aborted at ${audit.updatedAt ?? "unknown time"} before writing a completed audit.`;
+  }
   if (params.freshness === "stale") {
     return `Stale auto-iterator audit (${audit.status}) from ${audit.updatedAt ?? "unknown time"} for ${transition}; trust the live snapshot instead.`;
   }
@@ -366,6 +407,7 @@ export async function resolveWorkflowRuntimeHealth(params: {
   autoIteratorAudit: Record<string, unknown> | null;
   snapshot: SnapshotLike;
 }): Promise<WorkflowRuntimeHealthSummary> {
+  const now = new Date().toISOString();
   const [stateUpdatedAt, stateRevision] = await Promise.all([
     deriveWorkflowStateUpdatedAt({
       projectRoot: params.projectRoot,
@@ -381,7 +423,10 @@ export async function resolveWorkflowRuntimeHealth(params: {
     }),
   ]);
 
-  const audit = normalizeWorkflowAutoIteratorAudit(params.autoIteratorAudit);
+  const audit = deriveEffectiveWorkflowAutoIteratorAudit({
+    audit: normalizeWorkflowAutoIteratorAudit(params.autoIteratorAudit),
+    now,
+  });
   if (!audit) {
     return {
       stateRevision,
@@ -418,6 +463,14 @@ export async function resolveWorkflowRuntimeHealth(params: {
     freshness = "stale";
   } else if (audit.status === "started") {
     freshness = "fresh";
+  }
+
+  if (
+    audit.status === "timed_out" ||
+    audit.status === "superseded" ||
+    audit.status === "aborted"
+  ) {
+    freshness = "stale";
   }
 
   return {

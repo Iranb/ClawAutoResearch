@@ -266,7 +266,11 @@ import {
   saveContactStore as saveContactStoreImpl,
   saveMailbox as saveMailboxImpl,
 } from "./workflow-guard-collaboration";
-import { normalizeWorkflowAutoIteratorAudit } from "./workflow-runtime-health.js";
+import {
+  AUTO_ITERATOR_STARTED_TIMEOUT_MS,
+  deriveEffectiveWorkflowAutoIteratorAudit,
+  normalizeWorkflowAutoIteratorAudit,
+} from "./workflow-runtime-health.js";
 import {
   buildExperimentLedgerSummary as buildExperimentLedgerSummaryImpl,
   buildExperimentMemoryDigest as buildExperimentMemoryDigestImpl,
@@ -2822,7 +2826,13 @@ function getAutoIteratorAuditPath(projectRoot: string): string {
 async function writeAutoIteratorAuditLifecycle(params: {
   projectRoot: string;
   runId: string;
-  status: "started" | "completed" | "failed";
+  status:
+    | "started"
+    | "completed"
+    | "failed"
+    | "aborted"
+    | "timed_out"
+    | "superseded";
   startedAt: string | null;
   updatedAt: string;
   completedAt?: string | null;
@@ -2867,9 +2877,18 @@ async function writeAutoIteratorAuditLifecycle(params: {
         ? "Auto iterator started."
         : params.status === "completed"
           ? "Auto iterator completed."
-          : "Auto iterator failed."),
+          : params.status === "failed"
+            ? "Auto iterator failed."
+            : params.status === "timed_out"
+              ? `Auto iterator timed out after ${Math.round(
+                  AUTO_ITERATOR_STARTED_TIMEOUT_MS / 60000
+                )} minutes without a terminal audit.`
+              : params.status === "superseded"
+                ? "Auto iterator was superseded by a newer run."
+                : "Auto iterator aborted before completion."),
     result: params.result ?? (params.status === "completed" ? existing?.result ?? null : null),
-    error: params.status === "failed" ? errorRecord : null,
+    error:
+      params.status === "failed" || params.status === "aborted" ? errorRecord : null,
   });
   return auditPath;
 }
@@ -8598,6 +8617,41 @@ export async function runWorkflowAutoIterator(params: {
 }): Promise<AutoIteratorResult> {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
+  const rawExistingAudit = normalizeWorkflowAutoIteratorAudit(
+    await readJsonIfExists<Record<string, unknown>>(getAutoIteratorAuditPath(params.projectRoot))
+  );
+  const existingAudit = deriveEffectiveWorkflowAutoIteratorAudit({
+    audit: rawExistingAudit,
+    now: startedAt,
+  });
+  if (rawExistingAudit?.status === "started" && existingAudit?.status === "started" && existingAudit.runId && existingAudit.runId !== runId) {
+    await writeAutoIteratorAuditLifecycle({
+      projectRoot: params.projectRoot,
+      runId: existingAudit.runId,
+      status: "superseded",
+      startedAt: existingAudit.startedAt,
+      updatedAt: startedAt,
+      summary: `Auto iterator run ${existingAudit.runId} was superseded by newer run ${runId}.`,
+      error: existingAudit.error,
+    });
+  } else if (
+    rawExistingAudit?.status === "started" &&
+    existingAudit?.status === "timed_out" &&
+    existingAudit.runId &&
+    existingAudit.runId !== runId
+  ) {
+    await writeAutoIteratorAuditLifecycle({
+      projectRoot: params.projectRoot,
+      runId: existingAudit.runId,
+      status: "timed_out",
+      startedAt: existingAudit.startedAt,
+      updatedAt: startedAt,
+      summary:
+        existingAudit.summary ??
+        `Auto iterator run ${existingAudit.runId} timed out before newer run ${runId} started.`,
+      error: existingAudit.error,
+    });
+  }
   await writeAutoIteratorAuditLifecycle({
     projectRoot: params.projectRoot,
     runId,
