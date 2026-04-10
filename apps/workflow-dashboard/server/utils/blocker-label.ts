@@ -4,6 +4,7 @@ const BLOCKER_LABEL_RULES: ReadonlyArray<readonly [string, string]> = [
   ["graph_presence", "missing graph artifacts"],
   ["missing graph artifacts", "missing graph artifacts"],
   ["waiting selection", "waiting selection"],
+  ["survey_review", "survey review pending"],
   ["review", "review pending"],
   ["writing contract", "writing contract missing"],
 ] as const;

@@ -153,7 +153,7 @@ describe("workflow-dashboard api routes", () => {
     });
   });
 
-  it("returns a json 500 when a read-model throws while parsing fixture data", async () => {
+  it("keeps /api/projects available when PROJECTS_STATE.json is malformed", async () => {
     const projectsRoot = await createProjectsRootFixture();
     const app = createApp({ projectsRoot });
 
@@ -164,10 +164,12 @@ describe("workflow-dashboard api routes", () => {
 
     const response = await request(app).get("/api/projects");
 
-    expect(response.status).toBe(500);
-    expect(response.headers["content-type"]).toMatch(/application\/json/);
-    expect(response.body).toEqual({
-      error: "Internal server error",
-    });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      expect.objectContaining({
+        id: "gcd-confirmation-bias-mitigation",
+        currentStage: "graph_build",
+      }),
+    ]);
   });
 });

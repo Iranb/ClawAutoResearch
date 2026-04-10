@@ -1,7 +1,8 @@
 import path from "node:path";
 
 import { getWorkflowStageIndex } from "../constants/workflow-stages.js";
-import { pathExists, readJsonFile } from "../file-access/fs.js";
+import { readJsonFile } from "../file-access/fs.js";
+import { resolveExistingProjectRoot } from "../file-access/project-root.js";
 
 type ManifestFile = {
   project_id?: string | null;
@@ -60,9 +61,12 @@ export async function readProjectDetailSummary(params: {
   projectsRoot: string;
   projectId: string;
 }): Promise<ProjectDetailSummary | null> {
-  const projectRoot = path.join(params.projectsRoot, params.projectId);
+  const projectRoot = await resolveExistingProjectRoot({
+    projectsRoot: params.projectsRoot,
+    projectId: params.projectId,
+  });
 
-  if (!(await pathExists(projectRoot))) {
+  if (!projectRoot) {
     return null;
   }
 
@@ -147,7 +151,7 @@ function deriveStatus(params: {
     return "incomplete";
   }
 
-  if (params.currentStage === "submit" || !params.nextAction) {
+  if (params.currentStage === "submit" || params.currentStage === "done" || !params.nextAction) {
     return "ready";
   }
 

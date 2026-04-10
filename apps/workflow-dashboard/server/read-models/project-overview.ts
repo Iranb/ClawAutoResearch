@@ -1,8 +1,11 @@
 import path from "node:path";
 
-import { WORKFLOW_STAGES, getWorkflowStageIndex } from "../constants/workflow-stages.js";
+import {
+  getWorkflowLineStageIndex,
+  getWorkflowStageIndex,
+} from "../constants/workflow-stages.js";
 import { discoverProjects } from "../file-access/project-discovery.js";
-import { readJsonFile } from "../file-access/fs.js";
+import { readJsonFileSafe } from "../file-access/fs.js";
 import { toBlockerLabel } from "../utils/blocker-label.js";
 
 type ProjectsStateEntry = {
@@ -60,7 +63,7 @@ export type ProjectOverview = {
 export async function readProjectOverviews(params: {
   projectsRoot: string;
 }): Promise<ProjectOverview[]> {
-  const projectsState = await readJsonFile<ProjectsStateFile>(
+  const projectsState = await readJsonFileSafe<ProjectsStateFile>(
     path.join(params.projectsRoot, "PROJECTS_STATE.json"),
   );
   const stateEntries = new Map<string, ProjectsStateEntry>();
@@ -75,44 +78,48 @@ export async function readProjectOverviews(params: {
 
   const discoveredProjects = await discoverProjects(params.projectsRoot);
 
-  return Promise.all(
+  const results = await Promise.all(
     discoveredProjects.map(async (project) => {
-      const manifest = await readJsonFile<ManifestFile>(
+      const manifest = await readJsonFileSafe<ManifestFile>(
         path.join(project.projectRoot, "PROJECT_MANIFEST.json"),
       );
-      const progress = await readJsonFile<PapernexusProgressFile>(
+      const progress = await readJsonFileSafe<PapernexusProgressFile>(
         path.join(project.projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
       );
       const stateEntry = stateEntries.get(project.id);
+      if (!manifest && !progress && !stateEntry) {
+        return null;
+      }
       const currentStage =
-        asString(stateEntry?.stage) ??
-        asString(manifest?.current_stage);
+        asString(manifest?.current_stage) ??
+        asString(stateEntry?.stage);
       const paperMode = getPaperMode(manifest?.writing_contract);
       const surveyStatus = asString(manifest?.survey_review?.status);
+      const workflowLine = deriveWorkflowLine({
+        currentStage,
+        paperMode,
+        surveyStatus,
+      });
       const blockerReason =
-        asString(stateEntry?.blocked_by) ??
         asString(manifest?.blocking_reason) ??
+        asString(stateEntry?.blocked_by) ??
         asString(progress?.blocking_reason);
       const nextAction =
-        asString(stateEntry?.next_action) ??
         asString(manifest?.next_action) ??
+        asString(stateEntry?.next_action) ??
         asString(progress?.next_action);
 
       return {
         id: project.id,
         title:
-          asString(stateEntry?.title) ??
           asString(manifest?.title) ??
+          asString(stateEntry?.title) ??
           asString(manifest?.project_id) ??
           null,
         projectRoot: project.projectRoot,
         currentStage,
-        currentStageIndex: getWorkflowStageIndex(currentStage),
-        workflowLine: deriveWorkflowLine({
-          currentStage,
-          paperMode,
-          surveyStatus,
-        }),
+        currentStageIndex: getWorkflowLineStageIndex(workflowLine, currentStage),
+        workflowLine,
         paperMode,
         surveyStatus,
         status: deriveStatus({ currentStage, blockerReason, nextAction }),
@@ -120,13 +127,14 @@ export async function readProjectOverviews(params: {
         blockerReason,
         nextAction,
         updatedAt:
-          asString(stateEntry?.updated) ??
           asString(manifest?.updated_at) ??
+          asString(stateEntry?.updated) ??
           asString(progress?.updated_at),
         source: project.source,
       } satisfies ProjectOverview;
     }),
   );
+  return results.filter((entry): entry is ProjectOverview => Boolean(entry));
 }
 
 function deriveWorkflowLine(params: {
@@ -162,7 +170,7 @@ function deriveStatus(params: {
     return "incomplete";
   }
 
-  if (params.currentStage === "submit" || !params.nextAction) {
+  if (params.currentStage === "submit" || params.currentStage === "done" || !params.nextAction) {
     return "ready";
   }
 

@@ -9,19 +9,35 @@ const projectsResponse = [
   {
     id: "gcd-confirmation-bias-mitigation",
     title: "Confirmation Bias Mitigation In Graph Retrieval",
-  projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
-  currentStage: "graph_build",
-  currentStageIndex: 1,
-  workflowLine: "experiment",
-  paperMode: null,
-  surveyStatus: null,
-  status: "blocked",
-  blockerLabel: "missing sources",
+    projectRoot: "/tmp/projects/gcd-confirmation-bias-mitigation",
+    currentStage: "graph_build",
+    currentStageIndex: 1,
+    workflowLine: "experiment",
+    paperMode: null,
+    surveyStatus: null,
+    status: "blocked",
+    blockerLabel: "missing sources",
     blockerReason:
       "missing_sources: canonical papers are still missing from the shared graph",
     nextAction: "Import the missing source set and rerun graph verification.",
     updatedAt: "2026-04-09T09:30:00.000Z",
     source: "projects_state",
+  },
+  {
+    id: "survey-multimodal-reasoning",
+    title: "Multimodal Reasoning Survey",
+    projectRoot: "/tmp/projects/survey-multimodal-reasoning",
+    currentStage: "write",
+    currentStageIndex: 3,
+    workflowLine: "survey",
+    paperMode: "survey",
+    surveyStatus: "completed",
+    status: "active",
+    blockerLabel: null,
+    blockerReason: null,
+    nextAction: "Draft the survey manuscript.",
+    updatedAt: "2026-04-09T12:30:00.000Z",
+    source: "manifest_fallback",
   },
 ];
 
@@ -63,6 +79,34 @@ describe("ProjectsMatrixPage", () => {
             "Content-Type": "application/json",
           },
         });
+      }
+
+      if (url.includes("/api/projects/survey-multimodal-reasoning/summary")) {
+        return new Response(
+          JSON.stringify({
+            ...projectSummaryResponse,
+            id: "survey-multimodal-reasoning",
+            title: "Multimodal Reasoning Survey",
+            projectRoot: "/tmp/projects/survey-multimodal-reasoning",
+            currentStage: "write",
+            workflowLine: "survey",
+            paperMode: "survey",
+            owner: "academic_writer",
+            status: "active",
+            updatedAt: "2026-04-09T12:30:00.000Z",
+            blockingReason: null,
+            nextAction: "Draft the survey manuscript.",
+            surveyStatus: "completed",
+            surveyTopic: "multimodal reasoning",
+            surveyProgressSummary: "42 candidates · 16 included · 9 excluded · brief ready",
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        );
       }
 
       if (url.includes("/api/projects")) {
@@ -113,6 +157,16 @@ describe("ProjectsMatrixPage", () => {
     );
     expect(within(projectRow).getByRole("link", { name: projectsResponse[0].title })).toBeVisible();
     expect(within(projectRow).getByText(/experiment line/i)).toBeVisible();
+
+    const surveySkippedIdeaCell = screen.getByTestId(
+      "stage-cell-survey-multimodal-reasoning-idea",
+    );
+    expect(surveySkippedIdeaCell).toHaveAttribute("data-state", "idle");
+
+    const surveyWriteCell = screen.getByTestId(
+      "stage-cell-survey-multimodal-reasoning-write",
+    );
+    expect(surveyWriteCell).toHaveAttribute("data-state", "active");
 
     await user.click(
       within(projectRow).getByRole("link", { name: projectsResponse[0].title }),

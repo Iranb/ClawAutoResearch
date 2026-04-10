@@ -47,6 +47,7 @@ import {
 import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
@@ -411,6 +412,10 @@ function backgroundRunRegistryEntryMatchesProject(
 
 function isBackgroundQueueEntryPending(entry: BackgroundWorkflowQueueEntry): boolean {
   return ["queued", "launching", "degraded", "needs_repair"].includes(entry.status);
+}
+
+function isReusableBackgroundQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
+  return ["queued", "launching", "running", "degraded", "needs_repair"].includes(entry.status);
 }
 
 function getBackgroundRunRegistryPath(): string {
@@ -1077,7 +1082,12 @@ async function upsertBackgroundWorkflowQueueEntry(
     projectRoot: entry.projectRoot,
   };
   const current = await pruneBackgroundWorkflowQueue(entryScope);
-  const existing = current.find((candidate) => candidate.queueKey === entry.queueKey) ?? null;
+  const existing =
+    current.find(
+      (candidate) =>
+        candidate.queueKey === entry.queueKey &&
+        isReusableBackgroundQueueEntry(candidate)
+    ) ?? null;
   if (existing) {
     return {
       entry: existing,
@@ -1731,6 +1741,9 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
   const processedEntries: BackgroundWorkflowQueueEntry[] = [];
 
   for (const entry of queue) {
+    if (!isBackgroundQueueEntryPending(entry)) {
+      continue;
+    }
     const lastAttemptedAtMs = entry.lastAttemptedAt
       ? Date.parse(entry.lastAttemptedAt)
       : null;
@@ -2673,6 +2686,16 @@ export async function startBackgroundWorkflowRun(params: {
   const requestedCommandText = readString(params.backgroundRun.commandText);
   const topic =
     readString(params.backgroundRun.topic) ?? readString(params.backgroundRun.title);
+  const derivedSurveyProjectId =
+    normalizedKind === "survey_review" && topic
+      ? `survey-${sanitizeProjectIdFragment(topic)}`
+      : null;
+  const resolvedBackgroundProjectId =
+    readString(params.backgroundRun.projectId) ??
+    derivedSurveyProjectId ??
+    params.snapshot.projectId;
+  const resolvedBackgroundTitle =
+    readString(params.backgroundRun.title) ?? topic;
   const shouldEnsureProjectBinding =
     params.backgroundRun.ensureProjectBinding === false ? false : true;
 
@@ -2687,8 +2710,8 @@ export async function startBackgroundWorkflowRun(params: {
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
       projectRoot: readString(params.backgroundRun.projectRoot) ?? params.snapshot.projectRoot,
-      projectId: readString(params.backgroundRun.projectId) ?? params.snapshot.projectId,
-      title: readString(params.backgroundRun.title),
+      projectId: resolvedBackgroundProjectId,
+      title: resolvedBackgroundTitle,
       topic,
     });
     if (
@@ -2815,6 +2838,48 @@ export async function startBackgroundWorkflowRun(params: {
     topic: readString(params.backgroundRun.dedupeKey) ?? topic,
     commandText,
   });
+  const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
+    queueKey,
+    projectId: resolvedProjectId,
+    projectRoot: resolvedProjectRoot,
+    projectsRoot: params.workflowPolicy.projectsRoot,
+  });
+  if (pendingQueueState.active) {
+    return {
+      started: false,
+      reason: "session_unavailable",
+      runId: null,
+      sessionKey: null,
+      projectRoot:
+        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      summary:
+        readString(params.backgroundRun.summary) ??
+        `Background workflow is already running for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+      queued: false,
+      queueKey,
+    };
+  }
+  if (pendingQueueState.queued) {
+    return {
+      started: false,
+      reason: "session_unavailable",
+      runId: null,
+      sessionKey: null,
+      projectRoot:
+        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      summary:
+        readString(params.backgroundRun.summary) ??
+        `Background workflow is already queued for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+      queued: true,
+      queueKey,
+    };
+  }
   let reusableBackgroundSessionKey: string | null = null;
   let activeResearcherSessionsInChannel: number | null = null;
 
@@ -3012,7 +3077,7 @@ export async function startBackgroundWorkflowRun(params: {
           readString(params.backgroundRun.summary) ??
           `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
         commandText,
-        extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
+        extraSystemPrompt: backgroundRunExtraSystemPrompt,
         reusableBackgroundSessionKey,
         activeResearcherSessionsInChannel,
         unavailableReason: directLaunch.error,
@@ -3069,7 +3134,7 @@ export async function startBackgroundWorkflowRun(params: {
         readString(params.backgroundRun.summary) ??
         `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
       commandText,
-      extraSystemPrompt: params.backgroundRun.extraSystemPrompt ?? null,
+      extraSystemPrompt: backgroundRunExtraSystemPrompt,
       reusableBackgroundSessionKey,
       activeResearcherSessionsInChannel,
       unavailableReason: error instanceof Error ? error.message : String(error),

@@ -27,6 +27,17 @@ export async function readJsonFile<T>(targetPath: string): Promise<T | null> {
   }
 }
 
+export async function readJsonFileSafe<T>(targetPath: string): Promise<T | null> {
+  try {
+    return await readJsonFile<T>(targetPath);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function readDirectoryNames(targetPath: string): Promise<string[]> {
   try {
     const entries = await readdir(targetPath, { withFileTypes: true });

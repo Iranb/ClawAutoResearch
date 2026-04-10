@@ -1,5 +1,9 @@
 import type { ProjectOverview } from "../../lib/api";
-import { getStageIndex, type MatrixCellState, type WorkflowStage } from "../../lib/stage-meta";
+import {
+  getStageIndexForLine,
+  type MatrixCellState,
+  type WorkflowStage,
+} from "../../lib/stage-meta";
 
 type StageCellProps = {
   project: ProjectOverview;
@@ -8,8 +12,10 @@ type StageCellProps = {
 
 export function StageCell(props: StageCellProps) {
   const isCurrent = props.project.currentStage === props.stage;
-  const stageIndex = getStageIndex(props.stage);
-  const currentStageIndex = props.project.currentStageIndex ?? getStageIndex(props.project.currentStage);
+  const stageIndex = getStageIndexForLine(props.project.workflowLine, props.stage);
+  const currentStageIndex =
+    props.project.currentStageIndex ??
+    getStageIndexForLine(props.project.workflowLine, props.project.currentStage);
   const state = getCellState({
     isCurrent,
     project: props.project,

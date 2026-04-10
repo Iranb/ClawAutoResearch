@@ -1636,9 +1636,7 @@ test("auto iterator enforces research program semantics, experiment-search readi
     queueMailbox: false,
   });
   assert.equal(result.stageAfter, "experiment");
-  assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("experiment_search"))
-  );
+  assert.match(result.nextAction ?? "", /monitor-experiment/i);
 
   await setExperimentSearchState({
     projectRoot,

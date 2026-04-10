@@ -1,6 +1,7 @@
 import path from "node:path";
 
-import { pathExists, readDirectoryNames, readJsonFile } from "./fs.js";
+import { pathExists, readDirectoryNames, readJsonFileSafe } from "./fs.js";
+import { resolveProjectRoot } from "./project-root.js";
 
 type ProjectsStateEntry = {
   id?: string | null;
@@ -20,21 +21,22 @@ export async function discoverProjects(
   projectsRoot: string,
 ): Promise<DiscoveredProject[]> {
   const projectsStatePath = path.join(projectsRoot, "PROJECTS_STATE.json");
-  const projectsState = await readJsonFile<ProjectsStateFile>(projectsStatePath);
+  const projectsState = await readJsonFileSafe<ProjectsStateFile>(projectsStatePath);
   const discoveredProjects: DiscoveredProject[] = [];
   const knownIds = new Set<string>();
 
   for (const entry of projectsState?.projects ?? []) {
     const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+    const projectRoot = resolveProjectRoot(projectsRoot, id);
 
-    if (!id || knownIds.has(id)) {
+    if (!id || !projectRoot || knownIds.has(id)) {
       continue;
     }
 
     knownIds.add(id);
     discoveredProjects.push({
       id,
-      projectRoot: path.join(projectsRoot, id),
+      projectRoot,
       source: "projects_state",
     });
   }

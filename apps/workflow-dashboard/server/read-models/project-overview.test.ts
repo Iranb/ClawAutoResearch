@@ -47,8 +47,8 @@ describe("readProjectOverviews", () => {
       blockerLabel: "missing sources",
       blockerReason:
         "missing_sources: canonical papers are still missing from the shared graph",
-      nextAction: "Import the missing source set and rerun graph verification.",
-      updatedAt: "2026-04-09T09:30:00.000Z",
+      nextAction: "Refresh the graph after the missing sources are imported.",
+      updatedAt: "2026-04-09T08:45:00.000Z",
       source: "projects_state",
     });
     expect(result[0]?.projectRoot).toBe(
@@ -87,7 +87,7 @@ describe("readProjectOverviews", () => {
       id: "latent-planning-sandbox",
       title: "Latent Planning Sandbox",
       currentStage: "review",
-      currentStageIndex: 9,
+      currentStageIndex: 8,
       workflowLine: "experiment",
       paperMode: null,
       surveyStatus: null,
@@ -169,5 +169,52 @@ describe("readProjectOverviews", () => {
       surveyStatus: "screening",
       status: "active",
     });
+  });
+
+  it("prefers manifest stage fields over stale PROJECTS_STATE values", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      JSON.stringify(
+        {
+          projects: [
+            {
+              id: "gcd-confirmation-bias-mitigation",
+              stage: "setup",
+              blocked_by: "old blocker",
+              next_action: "old action",
+              updated: "2026-04-09T09:30:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectOverviews({ projectsRoot });
+
+    expect(result[0]).toMatchObject({
+      currentStage: "graph_build",
+      blockerReason:
+        "missing_sources: canonical papers are still missing from the shared graph",
+      nextAction: "Refresh the graph after the missing sources are imported.",
+      updatedAt: "2026-04-09T08:45:00.000Z",
+    });
+  });
+
+  it("ignores malformed projects state and skips invalid project ids outside projectsRoot", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      '{\n  "projects": [\n    { "id": "../escape" }\n',
+    );
+
+    const result = await readProjectOverviews({ projectsRoot });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.id).toBe("gcd-confirmation-bias-mitigation");
   });
 });

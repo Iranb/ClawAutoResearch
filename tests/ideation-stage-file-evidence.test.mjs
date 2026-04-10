@@ -210,7 +210,7 @@ test("collectIdeaStageMissingSignals accepts file-backed GRAPH_EVIDENCE.json for
   );
 });
 
-test("maybePrepareWorkflowStageContracts does not rematerialize ideation when file-backed track evidence already closes the loop", async (t) => {
+test("maybePrepareWorkflowStageContracts rematerializes ideation when file-backed track evidence still needs canonicalization", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -258,6 +258,6 @@ test("maybePrepareWorkflowStageContracts does not rematerialize ideation when fi
     },
   });
 
-  assert.equal(materializeCalls.length, 0);
-  assert.equal(result.materializedContracts.includes("ideation_contract"), false);
+  assert.equal(materializeCalls.length, 1);
+  assert.equal(result.materializedContracts.includes("ideation_contract"), true);
 });

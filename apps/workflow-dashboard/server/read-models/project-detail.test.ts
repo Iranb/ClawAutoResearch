@@ -145,4 +145,15 @@ describe("readProjectDetailSummary", () => {
       status: "active",
     });
   });
+
+  it("rejects project ids that escape the configured projects root", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+
+    const result = await readProjectDetailSummary({
+      projectsRoot,
+      projectId: "../outside",
+    });
+
+    expect(result).toBeNull();
+  });
 });
