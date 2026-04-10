@@ -496,6 +496,13 @@ test("research_workflow paper-ingestion actions persist formal waiting and recon
 test("research_workflow queue_paper_ingestion persists a durable workflow-owned upload request", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "batch-import.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
 
   t.after(async () => {
     if (previousProjectRoot === undefined) {
@@ -504,6 +511,21 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
       process.env.OPENCLAW_PROJECT = previousProjectRoot;
     }
     await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis is a sufficiently long markdown fixture for staged import validation. ".repeat(30)
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "demo-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
@@ -519,20 +541,20 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
         "--corpus",
         "GCD",
         "--manifest",
-        "/tmp/demo/batch-import.json",
+        manifestPath,
         "submit",
       ],
       summary: "Queue shared-corpus batch import for graph-build.",
-      manifest_path: "/tmp/demo/batch-import.json",
+      manifest_path: manifestPath,
       shared_corpus: "GCD",
-      paper_count: 4,
+      paper_count: 1,
     },
   });
 
   assert.equal(result.request.status, "queued");
   assert.equal(result.request.wrapper, "pn_batch_import.py");
   assert.equal(result.request.sharedCorpus, "GCD");
-  assert.equal(result.request.paperCount, 4);
+  assert.equal(result.request.paperCount, 1);
   assert.match(result.request.commandText ?? "", /python3 scripts\/pn_batch_import\.py/);
   assert.equal(result.state.queuedRequests.length, 1);
 
@@ -546,6 +568,13 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
 test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.json with staging progress", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "batch-import.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
 
   t.after(async () => {
     if (previousProjectRoot === undefined) {
@@ -554,6 +583,21 @@ test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.js
       process.env.OPENCLAW_PROJECT = previousProjectRoot;
     }
     await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis is a sufficiently long markdown fixture for staged import validation. ".repeat(30)
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "demo-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
@@ -569,13 +613,13 @@ test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.js
         "--corpus",
         "GCD",
         "--manifest",
-        "/tmp/demo/batch-import.json",
+        manifestPath,
         "submit",
       ],
       summary: "Queue shared-corpus batch import for graph-build.",
-      manifest_path: "/tmp/demo/batch-import.json",
+      manifest_path: manifestPath,
       shared_corpus: "GCD",
-      paper_count: 4,
+      paper_count: 1,
     },
   });
 
@@ -586,10 +630,182 @@ test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.js
     )
   );
   assert.equal(progress.phase, "staging");
-  assert.equal(progress.batch.total_items, 4);
-  assert.equal(progress.batch.pending_items, 4);
+  assert.equal(progress.batch.total_items, 1);
+  assert.equal(progress.batch.pending_items, 1);
   assert.equal(progress.progress.completed_ratio, 0);
   assert.equal(progress.progress.percent, 0);
+});
+
+test("research_workflow queue_paper_ingestion code-validates staged markdown and blocks invalid stubs", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "batch-import.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "bad-paper.md"
+  );
+  await writeText(
+    stagedMarkdownPath,
+    "<!doctype html><html><body>Access denied. Sign in to continue.</body></html>"
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "bad-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      wrapper: "pn_batch_import.py",
+      summary: "Queue invalid staged markdown to verify code-level validation.",
+      manifest_path: manifestPath,
+      shared_corpus: "GCD",
+      paper_count: 1,
+    },
+  });
+
+  assert.equal(result.request.status, "needs_repair");
+  assert.equal(result.request.validationStatus, "invalid");
+  assert.match(result.request.validationSummary ?? "", /1 invalid/i);
+  assert.equal(result.request.attemptCount, 0);
+  assert.equal(result.request.maxAttempts, 3);
+  assert.ok(result.request.validationReportPath);
+
+  const report = JSON.parse(
+    await fs.readFile(result.request.validationReportPath, "utf8")
+  );
+  assert.equal(report.status, "invalid");
+  assert.match(report.entries[0].issues[0].message ?? "", /HTML|stub|paper/i);
+});
+
+test("research_workflow audit_literature_coverage writes a non-blocking coverage diagnostic", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    research_program: {
+      baseline_reference: "Baseline Router",
+    },
+  });
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00031",
+      arxiv_id: "2501.00031",
+      title: "Baseline Router for Graph Alignment",
+      year: 2026,
+      venue: "ICLR",
+      source_provider: "papers-cool",
+      retrieval_providers: ["papers-cool"],
+      source_path: path.join(projectRoot, "researcher", "paper-staging", "2501.00031.md"),
+      citation_count: 42,
+    },
+    {
+      canonical_id: "arxiv:2501.00032",
+      arxiv_id: "2501.00032",
+      title: "Follow-up Graph Alignment System",
+      year: 2025,
+      venue: "NeurIPS",
+      source_provider: "pasa-paper-search",
+      retrieval_providers: ["papers-cool", "pasa-paper-search"],
+      source_path: path.join(projectRoot, "researcher", "paper-staging", "2501.00032.md"),
+      citation_count: 15,
+    },
+  ]);
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "audit_literature_coverage",
+  });
+
+  assert.equal(result.audit.projectId, "demo-project");
+  assert.ok(["thin", "adequate", "strong"].includes(result.audit.verdict));
+  assert.equal(result.audit.baselineMatches[0].canonicalIds[0], "arxiv:2501.00031");
+  assert.ok(result.audit.auditPath);
+  assert.ok(result.audit.markdownPath);
+});
+
+test("research_workflow plan_citation_expansion writes a bounded seed packet", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+  });
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00041",
+      arxiv_id: "2501.00041",
+      title: "High Impact Baseline",
+      year: 2024,
+      citation_count: 120,
+    },
+    {
+      canonical_id: "arxiv:2501.00042",
+      arxiv_id: "2501.00042",
+      title: "Recent Follow-up Method",
+      year: 2026,
+      citation_count: 30,
+    },
+  ]);
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "plan_citation_expansion",
+    citationExpansion: {
+      max_seeds: 2,
+    },
+  });
+
+  assert.equal(result.packet.bounded, true);
+  assert.equal(result.packet.maxSeeds, 2);
+  assert.equal(result.packet.seeds.length, 2);
+  assert.equal(result.packet.queries.some((entry) => entry.type === "forward_citations"), true);
+  assert.ok(result.packet.packetPath);
+  assert.ok(result.packet.markdownPath);
 });
 
 test("research_workflow get_snapshot reconciles finished uploads and refreshes graph presence during graph_build", async (t) => {

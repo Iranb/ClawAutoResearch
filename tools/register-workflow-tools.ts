@@ -26,12 +26,14 @@ import {
   getPapernexusProgressSummary,
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
+  auditLiteratureCoverageForWorkflow,
   materializeIdeationContract,
   materializeExperimentMemoryPacket,
   materializeExperimentReviewState,
   materializeLiteratureDiscoveryPacket,
   materializePlanState,
   materializePaperStoryState,
+  planCitationExpansionForWorkflow,
   queuePaperIngestionRequest,
   getPaperQcStateSummary,
   getResearchProgramStateSummary,
@@ -87,6 +89,7 @@ import {
   unbindChannelProjectForWorkflow,
   upsertExperimentLedgerEntry,
   upsertTheoryProofPacket,
+  validatePaperIngestionRequest,
 } from "./workflow-guard";
 import {
   getIdeaCatalystStateSummary,
@@ -212,10 +215,13 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
   check_graph_presence: "checkGraphPresenceForWorkflow",
+  audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
+  plan_citation_expansion: "planCitationExpansionForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
   queue_paper_ingestion: "queuePaperIngestionRequest",
+  validate_paper_ingestion: "validatePaperIngestionRequest",
   queue_idea_catalyst_requisition: "queueIdeaCatalystRequisition",
   queue_literature_discovery_requisition: "queueLiteratureDiscoveryRequisition",
   migrate_runtime_state: "migrateWorkflowRuntimeState",
@@ -799,10 +805,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_papernexus_remote_access",
               "get_papernexus_progress",
               "check_graph_presence",
+              "audit_literature_coverage",
+              "plan_citation_expansion",
               "auto_iterator_tick",
               "start_background_run",
               "run_papernexus_wrapper",
               "queue_paper_ingestion",
+              "validate_paper_ingestion",
               "queue_literature_discovery_requisition",
               "migrate_runtime_state",
               "get_idle_research",
@@ -905,6 +914,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           paperIngestionRequest: {
+            type: "object",
+            additionalProperties: true,
+          },
+          literatureCoverage: {
+            type: "object",
+            additionalProperties: true,
+          },
+          citationExpansion: {
             type: "object",
             additionalProperties: true,
           },
@@ -1229,6 +1246,24 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 },
               });
               return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "audit_literature_coverage": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const audit = await auditLiteratureCoverageForWorkflow({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(audit, null, 2));
+            }
+            case "plan_citation_expansion": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const citationExpansion = asObject(params.citationExpansion);
+              const packet = await planCitationExpansionForWorkflow({
+                projectRoot: resolvedProjectRoot,
+                maxSeeds: readNumber(
+                  citationExpansion?.maxSeeds ?? citationExpansion?.max_seeds
+                ),
+              });
+              return textResponse(JSON.stringify(packet, null, 2));
             }
             case "get_channel_project_binding": {
               const binding = getChannelProjectBindingForWorkflow({
@@ -2258,6 +2293,22 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "validate_paper_ingestion": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const requestPayload = asObject(params.paperIngestionRequest);
+              const result = await validatePaperIngestionRequest({
+                projectRoot: resolvedProjectRoot,
+                requestId: readString(
+                  requestPayload?.requestId ?? requestPayload?.request_id
+                ),
+                paperIngestionRequest: requestPayload,
+                persist:
+                  requestPayload && Object.keys(requestPayload).length > 0
+                    ? false
+                    : true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "set_paper_ingestion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

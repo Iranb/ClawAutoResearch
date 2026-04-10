@@ -17,6 +17,13 @@ import {
   type WorkflowGuardPolicy,
 } from "./workflow-guard";
 import {
+  applyPaperIngestionValidationToRequest,
+  isQueuedPaperIngestionRetryDue,
+  markQueuedPaperIngestionLaunchFailure,
+  markQueuedPaperIngestionLaunchStarted,
+  validateQueuedPaperIngestionRequest,
+} from "./paper-ingestion-validation";
+import {
   buildWorkflowSubagentSessionKey,
   derivePapernexusTaskLabel,
   looksLikePapernexusHeavyCommand,
@@ -2489,9 +2496,10 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
     projectRoot: params.projectRoot,
   });
   const inFlight = isPaperIngestionStateInFlight(ingestion.state);
+  const now = new Date().toISOString();
   const queuedCandidate =
     ingestion.state.queuedRequests.find((entry) =>
-      ["queued", "needs_repair"].includes(entry.status)
+      isQueuedPaperIngestionRetryDue(entry, now)
     ) ??
     (!inFlight
       ? ingestion.state.queuedRequests.find((entry) =>
@@ -2502,7 +2510,6 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
     return null;
   }
 
-  const now = new Date().toISOString();
   const staleRunning = ["launching", "running"].includes(queuedCandidate.status);
   if (staleRunning) {
     await setPaperIngestionState({
@@ -2523,6 +2530,51 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
         ],
       },
     });
+  }
+
+  const validationReport = await validateQueuedPaperIngestionRequest({
+    projectRoot: params.projectRoot,
+    request: queuedCandidate,
+  });
+  const validatedRequest = applyPaperIngestionValidationToRequest({
+    request: queuedCandidate,
+    report: validationReport,
+    nowIso: now,
+  });
+  if (validatedRequest.status === "needs_repair") {
+    const blockedRequest = markQueuedPaperIngestionLaunchFailure({
+      request: validatedRequest,
+      nowIso: now,
+      error: validationReport.summary,
+    });
+    await setPaperIngestionState({
+      projectRoot: params.projectRoot,
+      paperIngestion: {
+        queued_requests: [
+          {
+            request_id: blockedRequest.requestId,
+            wrapper: blockedRequest.wrapper,
+            command_text: blockedRequest.commandText,
+            manifest_path: blockedRequest.manifestPath,
+            summary: blockedRequest.summary,
+            status: blockedRequest.status,
+            updated_at: blockedRequest.updatedAt,
+            detail: blockedRequest.detail,
+            last_error: blockedRequest.lastError,
+            validation_status: blockedRequest.validationStatus,
+            validation_summary: blockedRequest.validationSummary,
+            validation_report_path: blockedRequest.validationReportPath,
+            attempt_count: blockedRequest.attemptCount,
+            max_attempts: blockedRequest.maxAttempts,
+            last_attempt_at: blockedRequest.lastAttemptAt,
+            next_retry_at: blockedRequest.nextRetryAt,
+            dead_letter_at: blockedRequest.deadLetterAt,
+            dead_letter_reason: blockedRequest.deadLetterReason,
+          },
+        ],
+      },
+    });
+    return null;
   }
 
   const requestPrompt = buildWorkflowOwnedIngestionRequestPrompt({
@@ -2552,27 +2604,49 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
     },
   });
 
+  const launchRequest = result.started
+    ? markQueuedPaperIngestionLaunchStarted({
+        request: validatedRequest,
+        nowIso: new Date().toISOString(),
+        runId: result.runId,
+        sessionKey: result.sessionKey,
+        triggerKind: params.triggerKind,
+        summary: `Workflow-triggered upload started from ${params.triggerKind}.`,
+      })
+    : markQueuedPaperIngestionLaunchFailure({
+        request: validatedRequest,
+        nowIso: new Date().toISOString(),
+        error:
+          result.summary ??
+          `Workflow tried to trigger upload from ${params.triggerKind} but it remained queued (${result.reason}).`,
+      });
   await setPaperIngestionState({
     projectRoot: params.projectRoot,
     paperIngestion: {
       queued_requests: [
         {
-          request_id: queuedCandidate.requestId,
-          wrapper: queuedCandidate.wrapper,
-          command_text: queuedCandidate.commandText,
-          manifest_path: queuedCandidate.manifestPath,
-          summary: queuedCandidate.summary,
-          status: result.started ? "running" : "queued",
-          updated_at: new Date().toISOString(),
-          started_at: result.started ? new Date().toISOString() : null,
-          last_run_id: result.runId,
-          last_session_key: result.sessionKey,
-          last_error: result.started ? null : result.summary,
-          trigger_kind: params.triggerKind,
-          detail:
-            result.started
-              ? `Workflow-triggered upload started from ${params.triggerKind}.`
-              : `Workflow tried to trigger upload from ${params.triggerKind} but it remained queued (${result.reason}).`,
+          request_id: launchRequest.requestId,
+          wrapper: launchRequest.wrapper,
+          command_text: launchRequest.commandText,
+          manifest_path: launchRequest.manifestPath,
+          summary: launchRequest.summary,
+          status: launchRequest.status,
+          updated_at: launchRequest.updatedAt,
+          started_at: launchRequest.startedAt,
+          last_run_id: launchRequest.lastRunId,
+          last_session_key: launchRequest.lastSessionKey,
+          last_error: launchRequest.lastError,
+          trigger_kind: launchRequest.triggerKind,
+          detail: launchRequest.detail,
+          validation_status: launchRequest.validationStatus,
+          validation_summary: launchRequest.validationSummary,
+          validation_report_path: launchRequest.validationReportPath,
+          attempt_count: launchRequest.attemptCount,
+          max_attempts: launchRequest.maxAttempts,
+          last_attempt_at: launchRequest.lastAttemptAt,
+          next_retry_at: launchRequest.nextRetryAt,
+          dead_letter_at: launchRequest.deadLetterAt,
+          dead_letter_reason: launchRequest.deadLetterReason,
         },
       ],
     },
@@ -2588,7 +2662,7 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
       run_id: result.runId,
       session_key: result.sessionKey,
       queue_key: result.queueKey,
-      wrapper: queuedCandidate.wrapper,
+      wrapper: launchRequest.wrapper,
     },
     updatedAt: new Date().toISOString(),
   });

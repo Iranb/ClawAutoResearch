@@ -51,6 +51,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
    - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers over manually copying the upload into workflow-owned shared storage
    - **Step 10:** For one staged paper, queue one workflow-owned upload request that will later execute `pn_import_submit.py` plus `pn_import_queue.py`; for 2 or more staged papers, create one manifest and queue one workflow-owned `pn_batch_import.py` request. Use `research_workflow.queue_paper_ingestion` for this instead of running the upload wrapper inline from Researcher
+   - **Step 10a:** The workflow now validates staged files in code. If the queued request lands in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and the JSON report under `{PROJ}/graph/paper-ingestion-validation/` before retrying
    - **Step 11:** Do not hand-roll shell loops or one-paper submit loops for multi-paper sync. Reuse the same batch manifest for `submit`, `status`, and bounded `wait`, but let `/graph-build` or `/resume-pipeline` trigger the actual wrapper run
    - **Step 12:** Once the request is queued, do not block the literature sweep waiting for upload completion. The workflow-owned `/graph-build` or `/resume-pipeline` pass will launch the queued upload and preserve its intermediate state if the runtime restarts
    - **Step 13:** When a workflow-owned PaperNexus import task truly reaches `completed`, the dedicated workflow session must call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
@@ -61,6 +62,8 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
+   - If baseline coverage, recent-paper coverage, or metadata quality still feels weak, run `research_workflow.audit_literature_coverage` as a non-blocking diagnosis pass
+   - If only a few in-corpus anchors look strong, run `research_workflow.plan_citation_expansion` to create one bounded follow-up packet instead of widening into an uncontrolled crawl
    - Run one bounded brainstorm synthesis pass over the currently ingested papers; this is mandatory during research, not postponed to IDEA
 4. **After ALL searches complete**:
    - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
@@ -260,6 +263,8 @@ Update `{PROJ}/PROJECT_MANIFEST.json`:
 Notes:
 - `/graph-build` now means "check this project's `PAPER_SOURCE_INDEX.json` against the shared global graph, confirm the automatic import worker has caught up, and refresh the brainstorm bundle through the Python PaperNexus control plane"
 - if benchmark coverage, baseline ambiguity, or scope creep remains high after the raw survey, insert `/literature-review` before relying on the frontier or brainstorm bundle for idea selection
+- use `research_workflow.audit_literature_coverage` when you need a durable explanation of baseline gaps, weak recent-paper coverage, or missing metadata without blocking the main pipeline
+- use `research_workflow.plan_citation_expansion` only as a bounded follow-up plan around a few in-corpus seeds; do not turn it into an always-on citation crawler
 - do not create or name a new per-project corpus during this step
 - if required papers are missing from the shared graph, record the gap and request or queue automatic graph catch-up rather than building a project-local corpus
 - if a PaperNexus queued import completed during this batch, report that completion through `research_workflow.set_paper_ingestion.completed_papers` instead of relying on `PAPER_SOURCE_INDEX.json` diffs alone

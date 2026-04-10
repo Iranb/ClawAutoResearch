@@ -17,6 +17,7 @@ import type {
   PaperIngestionRemoteTaskProgress,
   PaperIngestionState,
 } from "../workflow-guard.js";
+import type { PaperIngestionValidationStatus } from "../paper-ingestion-validation";
 
 export function normalizePaperIngestionRuntimeStatus(value: unknown): string {
   const normalized = normalizeStage(value);
@@ -215,6 +216,21 @@ function normalizePaperIngestionQueuedRequestStatus(
       return normalized;
     default:
       return "queued";
+  }
+}
+
+function normalizePaperIngestionValidationStatus(
+  value: unknown
+): PaperIngestionValidationStatus {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "valid":
+    case "warning":
+    case "invalid":
+    case "unknown":
+      return normalized;
+    default:
+      return "unknown";
   }
 }
 
@@ -810,6 +826,27 @@ export function normalizePaperIngestionQueuedRequest(
     triggerKind,
     progress,
     queueProgress,
+    validationStatus: normalizePaperIngestionValidationStatus(
+      record.validationStatus ?? record.validation_status
+    ),
+    validationSummary: pickString(record, [
+      "validationSummary",
+      "validation_summary",
+    ]),
+    validationReportPath: pickString(record, [
+      "validationReportPath",
+      "validation_report_path",
+    ]),
+    attemptCount:
+      normalizeOptionalCount(record.attemptCount ?? record.attempt_count) ?? 0,
+    maxAttempts: normalizeOptionalCount(record.maxAttempts ?? record.max_attempts),
+    lastAttemptAt: pickString(record, ["lastAttemptAt", "last_attempt_at"]),
+    nextRetryAt: pickString(record, ["nextRetryAt", "next_retry_at"]),
+    deadLetterAt: pickString(record, ["deadLetterAt", "dead_letter_at"]),
+    deadLetterReason: pickString(record, [
+      "deadLetterReason",
+      "dead_letter_reason",
+    ]),
   };
 }
 
@@ -864,6 +901,15 @@ export function serializePaperIngestionQueuedRequest(
     trigger_kind: value.triggerKind,
     progress: serializePaperIngestionRemoteTaskProgress(value.progress),
     queue_progress: serializePaperIngestionQueueProgress(value.queueProgress),
+    validation_status: value.validationStatus,
+    validation_summary: value.validationSummary,
+    validation_report_path: value.validationReportPath,
+    attempt_count: value.attemptCount,
+    max_attempts: value.maxAttempts,
+    last_attempt_at: value.lastAttemptAt,
+    next_retry_at: value.nextRetryAt,
+    dead_letter_at: value.deadLetterAt,
+    dead_letter_reason: value.deadLetterReason,
   };
 }
 
@@ -898,6 +944,19 @@ function mergePaperIngestionQueuedRequestValues(
       current.queueProgress,
       patch.queueProgress
     ),
+    validationStatus:
+      patch.validationStatus !== "unknown"
+        ? patch.validationStatus
+        : current.validationStatus,
+    validationSummary: patch.validationSummary ?? current.validationSummary,
+    validationReportPath:
+      patch.validationReportPath ?? current.validationReportPath,
+    attemptCount: Math.max(current.attemptCount, patch.attemptCount),
+    maxAttempts: patch.maxAttempts ?? current.maxAttempts,
+    lastAttemptAt: patch.lastAttemptAt ?? current.lastAttemptAt,
+    nextRetryAt: patch.nextRetryAt ?? current.nextRetryAt,
+    deadLetterAt: patch.deadLetterAt ?? current.deadLetterAt,
+    deadLetterReason: patch.deadLetterReason ?? current.deadLetterReason,
   };
 }
 

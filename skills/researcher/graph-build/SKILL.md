@@ -156,6 +156,7 @@ Normal workflow-owned action:
 
 This should:
 - trigger any durable queued upload request first; `/graph-build` is allowed to launch queued `queue_paper_ingestion` work before it starts the readiness pass
+- if a queued upload request is stuck in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and any dead-letter reason before blaming graph readiness itself
 - check whether the canonical papers recorded in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` are already present in the shared global graph
 - update project-local readiness metadata
 - record whether automatic shared-graph catch-up is still required
@@ -174,6 +175,7 @@ Hard rule:
 - do **not** wait indefinitely for one remote paper import, one batch wait, or one status/brainstorm refresh attempt; cap each workflow wait pass at 60 seconds, record durable progress, and continue on the next pass
 - for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; the workflow needs manifest-level progress plus per-item visibility
 - Researcher should stage papers and queue the upload request; `/graph-build` or `/resume-pipeline` is the workflow-owned place that actually launches the queued request and preserves `queued_requests` state across restarts
+- if a queued request has `dead_letter_at`, treat it as a hard stop for this pass and surface the repair reason instead of silently requeueing forever
 - when remote PaperNexus status looks stale, read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` before declaring a hard missing-corpus failure; phases `submitting`, `uploading`, `waiting_import`, or `verifying_graph` mean the wrapper-driven catch-up is still in flight
 - every per-paper terminal state, every batch summary/item refresh, and every brainstorm bundle refresh must be reflected through `research_workflow.set_paper_ingestion` or `research_workflow.run_brainstorm_cycle`, because that is what feeds `/workflow-status` and the Discord-visible completion/progress updates
 - stale active background sessions are bookkeeping, not proof of live work; trust `queued_requests` plus `PAPERNEXUS_PROGRESS.json` first, batch/item counters second, and the background-session registry last

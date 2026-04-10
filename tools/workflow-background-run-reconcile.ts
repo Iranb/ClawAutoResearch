@@ -11,6 +11,7 @@ import {
   serializePaperIngestionState,
 } from "./workflow-guard-state/paper-ingestion";
 import { normalizeGraphPresenceStatus } from "./workflow-guard-core/coercion";
+import { finalizeQueuedPaperIngestionAttempt } from "./paper-ingestion-validation";
 import {
   readPapernexusProgress,
   writePapernexusProgressFromManifest,
@@ -50,35 +51,6 @@ export type BackgroundRunDurableTerminalState = {
     | "paper_ingestion_request"
     | "paper_ingestion_idle_import_wrapper";
 };
-
-function deriveQueuedRequestTerminalStatus(
-  status: BackgroundRunTerminalStatus
-): "completed" | "failed" | "needs_repair" {
-  if (status === "failed") {
-    return "failed";
-  }
-  if (status === "needs_repair") {
-    return "needs_repair";
-  }
-  return "completed";
-}
-
-function deriveQueuedRequestDetail(params: {
-  status: BackgroundRunTerminalStatus;
-  error: string | null;
-}): string {
-  if (params.status === "completed") {
-    return "Workflow observed that the delegated PaperNexus wrapper pass finished. Upload execution is no longer running in the background.";
-  }
-  if (params.status === "failed") {
-    return params.error
-      ? `Workflow observed that the delegated PaperNexus wrapper pass failed: ${params.error}`
-      : "Workflow observed that the delegated PaperNexus wrapper pass failed.";
-  }
-  return params.error
-    ? `Workflow could not reconcile the delegated PaperNexus wrapper pass cleanly and marked it for repair: ${params.error}`
-    : "Workflow could not reconcile the delegated PaperNexus wrapper pass cleanly and marked it for repair.";
-}
 
 function hasDurableInFlightPaperUpload(
   paperIngestion: ReturnType<typeof normalizePaperIngestionState>
@@ -407,18 +379,12 @@ async function reconcilePaperIngestionTerminalState(params: {
     }
     matched = true;
     matchedRequestWrapper = request.wrapper;
-    return {
-      ...request,
-      status: deriveQueuedRequestTerminalStatus(params.terminalStatus),
-      updatedAt: params.finishedAt,
+    return finalizeQueuedPaperIngestionAttempt({
+      request,
+      terminalStatus: params.terminalStatus,
       finishedAt: params.finishedAt,
-      lastError:
-        params.terminalStatus === "completed" ? null : params.error ?? request.lastError,
-      detail: deriveQueuedRequestDetail({
-        status: params.terminalStatus,
-        error: params.error,
-      }),
-    };
+      error: params.error,
+    });
   });
 
   if (

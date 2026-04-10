@@ -24,6 +24,7 @@ type ExpectedPaper = {
   canonicalId: string;
   title: string | null;
   normalizedTitle: string | null;
+  titleSignature: string | null;
   arxivId: string | null;
   doi: string | null;
   sourceHints: string[];
@@ -40,6 +41,7 @@ type CorpusPaper = {
   arxivIds: Set<string>;
   dois: Set<string>;
   normalizedTitles: Set<string>;
+  titleSignatures: Set<string>;
   sourceHints: Set<string>;
   sourceBasenames: Set<string>;
 };
@@ -112,6 +114,27 @@ const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
 
 const ARXIV_ID_REGEX = /\b(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b/gi;
 const DOI_REGEX = /\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/gi;
+const TITLE_SIGNATURE_STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "of",
+  "for",
+  "to",
+  "in",
+  "on",
+  "with",
+  "via",
+  "from",
+  "by",
+  "using",
+  "use",
+  "toward",
+  "towards",
+  "based",
+]);
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -349,6 +372,38 @@ function normalizeTitle(value: string | null | undefined): string | null {
   normalized = normalized.replace(/[^a-z0-9]+/gi, " ");
   normalized = normalized.trim().toLowerCase().replace(/\s+/g, " ");
   return normalized || null;
+}
+
+function normalizeTitleToken(value: string): string {
+  let normalized = value.trim().toLowerCase();
+  if (normalized.endsWith("ies") && normalized.length > 4) {
+    normalized = `${normalized.slice(0, -3)}y`;
+  } else if (normalized.endsWith("es") && normalized.length > 4) {
+    normalized = normalized.slice(0, -2);
+  } else if (
+    normalized.endsWith("s") &&
+    normalized.length > 3 &&
+    !normalized.endsWith("ss")
+  ) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function buildTitleSignature(value: string | null | undefined): string | null {
+  const normalized = normalizeTitle(value);
+  if (!normalized) {
+    return null;
+  }
+  const tokens = normalized
+    .split(" ")
+    .map((token) => normalizeTitleToken(token))
+    .filter(
+      (token) =>
+        token.length >= 3 && !TITLE_SIGNATURE_STOPWORDS.has(token)
+    );
+  const signature = Array.from(new Set(tokens)).sort().join(" ");
+  return signature || null;
 }
 
 function uniqueStrings(items: string[]): string[] {
@@ -698,6 +753,11 @@ function buildExpectedPaperFromRecord(
     canonicalId: canonicalId ?? `title:${normalizedTitle ?? "unknown"}`,
     title,
     normalizedTitle,
+    titleSignature:
+      pickString(raw, ["title_signature", "titleSignature"]) ??
+      buildTitleSignature(title) ??
+      buildTitleSignature(sourceHints[0]) ??
+      null,
     arxivId: normalizeArxivId(arxivId),
     doi: normalizeDoi(doi),
     sourceHints,
@@ -716,6 +776,7 @@ function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): Exp
     canonicalId: target.canonicalId,
     title: target.title ?? incoming.title,
     normalizedTitle: target.normalizedTitle ?? incoming.normalizedTitle,
+    titleSignature: target.titleSignature ?? incoming.titleSignature,
     arxivId: target.arxivId ?? incoming.arxivId,
     doi: target.doi ?? incoming.doi,
     sourceHints: uniqueStrings([...target.sourceHints, ...incoming.sourceHints]),
@@ -1045,6 +1106,11 @@ function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
         .map((value) => normalizeTitle(value))
         .filter((value): value is string => Boolean(value))
     ),
+    titleSignatures: new Set(
+      titleHints
+        .map((value) => buildTitleSignature(value))
+        .filter((value): value is string => Boolean(value))
+    ),
     sourceHints: new Set(sourceHints.map((hint) => path.resolve(hint))),
     sourceBasenames: new Set(
       sourceHints.map((hint) => path.basename(hint, path.extname(hint)).toLowerCase())
@@ -1117,6 +1183,25 @@ function matchExpectedPaper(
   if (expected.normalizedTitle) {
     const match = activeCorpus.find((entry) =>
       entry.normalizedTitles.has(expected.normalizedTitle as string)
+    );
+    if (match) {
+      return {
+        canonicalId: expected.canonicalId,
+        title: expected.title,
+        sourceKind: expected.sourceKind,
+        sourceProvider: expected.sourceProvider,
+        retrievalProviders: expected.retrievalProviders,
+        matchedBy: "title",
+        corpusPaperId: match.paperId,
+        corpusPaperTitle: match.paperTitle,
+        corpusSourceKey: match.sourceKey,
+      };
+    }
+  }
+
+  if (expected.titleSignature) {
+    const match = activeCorpus.find((entry) =>
+      entry.titleSignatures.has(expected.titleSignature as string)
     );
     if (match) {
       return {
@@ -1429,6 +1514,23 @@ function matchExpectedPaperDescriptor(
   );
   if (normalizedTitle) {
     const direct = expectedPapers.find((paper) => paper.normalizedTitle === normalizedTitle);
+    if (direct) {
+      return direct;
+    }
+  }
+  const titleSignature = buildTitleSignature(
+    pickString(record, [
+      "title_signature",
+      "titleSignature",
+      "normalized_title",
+      "normalizedTitle",
+      "title",
+      "paper_title",
+      "paperTitle",
+    ])
+  );
+  if (titleSignature) {
+    const direct = expectedPapers.find((paper) => paper.titleSignature === titleSignature);
     if (direct) {
       return direct;
     }

@@ -22,6 +22,19 @@ import {
   type GraphPresenceStatus,
 } from "./graph-presence";
 import {
+  auditLiteratureCoverage,
+  planCitationExpansion,
+  type CitationExpansionPacket,
+  type LiteratureCoverageAudit,
+} from "./paper-discovery-diagnostics";
+import {
+  applyPaperIngestionValidationToRequest,
+  defaultPaperIngestionMaxAttempts,
+  type PaperIngestionValidationReport,
+  type PaperIngestionValidationStatus,
+  validateQueuedPaperIngestionRequest,
+} from "./paper-ingestion-validation";
+import {
   evaluateWorkflowAutoModeRisk,
   normalizeWorkflowAutoGateConfig,
   normalizeWorkflowAutoMode,
@@ -1365,6 +1378,15 @@ export type PaperIngestionQueuedRequest = {
   triggerKind: string | null;
   progress: PaperIngestionRemoteTaskProgress | null;
   queueProgress: PaperIngestionQueueProgress | null;
+  validationStatus: PaperIngestionValidationStatus;
+  validationSummary: string | null;
+  validationReportPath: string | null;
+  attemptCount: number;
+  maxAttempts: number | null;
+  lastAttemptAt: string | null;
+  nextRetryAt: string | null;
+  deadLetterAt: string | null;
+  deadLetterReason: string | null;
 };
 
 type PaperQcState = {
@@ -7639,19 +7661,136 @@ export async function queuePaperIngestionRequest(params: {
   normalized.lastSessionKey = null;
   normalized.lastError = null;
   normalized.triggerKind = null;
+  normalized.validationStatus = normalized.validationStatus ?? "unknown";
+  normalized.validationSummary = normalized.validationSummary ?? null;
+  normalized.validationReportPath = normalized.validationReportPath ?? null;
+  normalized.attemptCount = 0;
+  normalized.maxAttempts =
+    normalized.maxAttempts ?? defaultPaperIngestionMaxAttempts();
+  normalized.lastAttemptAt = null;
+  normalized.nextRetryAt = null;
+  normalized.deadLetterAt = null;
+  normalized.deadLetterReason = null;
+  const validationReport = await validateQueuedPaperIngestionRequest({
+    projectRoot: params.projectRoot,
+    request: normalized,
+  }).catch((): PaperIngestionValidationReport | null => null);
+  const prepared = validationReport
+    ? applyPaperIngestionValidationToRequest({
+        request: normalized,
+        report: validationReport,
+      })
+    : normalized;
   const result = await setPaperIngestionState({
     projectRoot: params.projectRoot,
     paperIngestion: {
-      queued_requests: [serializePaperIngestionQueuedRequest(normalized)],
-      last_updated_at: normalized.updatedAt,
+      queued_requests: [serializePaperIngestionQueuedRequest(prepared)],
+      last_updated_at: prepared.updatedAt,
     },
   });
   const request =
-    result.state.queuedRequests.find((entry) => entry.requestId === normalized.requestId) ??
-    normalized;
+    result.state.queuedRequests.find((entry) => entry.requestId === prepared.requestId) ??
+    prepared;
   return {
     state: result.state,
     request,
+  };
+}
+
+export async function validatePaperIngestionRequest(params: {
+  projectRoot: string;
+  requestId?: string | null;
+  paperIngestionRequest?: Record<string, unknown> | null;
+  persist?: boolean;
+}): Promise<{
+  report: PaperIngestionValidationReport;
+  request: PaperIngestionQueuedRequest;
+  state: PaperIngestionState | null;
+}> {
+  let request: PaperIngestionQueuedRequest | null = null;
+  if (params.paperIngestionRequest) {
+    request = normalizePaperIngestionQueuedRequest({
+      ...params.paperIngestionRequest,
+      request_id:
+        pickString(params.paperIngestionRequest, ["requestId", "request_id"]) ??
+        randomUUID(),
+      status:
+        pickString(params.paperIngestionRequest, ["status"]) ?? "queued",
+      created_at:
+        pickString(params.paperIngestionRequest, ["createdAt", "created_at"]) ??
+        new Date().toISOString(),
+      updated_at:
+        pickString(params.paperIngestionRequest, ["updatedAt", "updated_at"]) ??
+        new Date().toISOString(),
+    });
+  } else {
+    const current = await getPaperIngestionStateSummary({
+      projectRoot: params.projectRoot,
+    });
+    request =
+      (params.requestId
+        ? current.state.queuedRequests.find((entry) => entry.requestId === params.requestId)
+        : current.state.queuedRequests.find((entry) =>
+            ["queued", "needs_repair", "launching", "running"].includes(entry.status)
+          )) ?? null;
+  }
+  if (!request) {
+    throw new Error("No queued paper ingestion request was available for validation.");
+  }
+  const report = await validateQueuedPaperIngestionRequest({
+    projectRoot: params.projectRoot,
+    request,
+  });
+  const patchedRequest = applyPaperIngestionValidationToRequest({
+    request,
+    report,
+  });
+  if (params.persist === false && !params.requestId) {
+    return {
+      report,
+      request: patchedRequest,
+      state: null,
+    };
+  }
+  const result = await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      queued_requests: [serializePaperIngestionQueuedRequest(patchedRequest)],
+      last_updated_at: patchedRequest.updatedAt,
+    },
+  });
+  return {
+    report,
+    request:
+      result.state.queuedRequests.find((entry) => entry.requestId === patchedRequest.requestId) ??
+      patchedRequest,
+    state: result.state,
+  };
+}
+
+export async function auditLiteratureCoverageForWorkflow(params: {
+  projectRoot: string;
+}): Promise<{
+  audit: LiteratureCoverageAudit;
+}> {
+  return {
+    audit: await auditLiteratureCoverage({
+      projectRoot: params.projectRoot,
+    }),
+  };
+}
+
+export async function planCitationExpansionForWorkflow(params: {
+  projectRoot: string;
+  maxSeeds?: number | null;
+}): Promise<{
+  packet: CitationExpansionPacket;
+}> {
+  return {
+    packet: await planCitationExpansion({
+      projectRoot: params.projectRoot,
+      maxSeeds: params.maxSeeds,
+    }),
   };
 }
 

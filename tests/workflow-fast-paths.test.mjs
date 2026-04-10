@@ -893,6 +893,18 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = path.join(projectsRoot, "paper-lab");
+  const batchManifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "batch-import.json"
+  );
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
   const runCalls = [];
 
   t.after(async () => {
@@ -900,6 +912,30 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   });
 
   await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis markdown fixture is long enough for staged validation. ".repeat(30),
+    "utf8"
+  );
+  await fs.writeFile(
+    batchManifestPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        papers: [
+          {
+            paperId: "demo-paper",
+            source: stagedMarkdownPath,
+            sourceKind: "markdown",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
   await fs.writeFile(
     path.join(projectRoot, "PROJECT_MANIFEST.json"),
     `${JSON.stringify(
@@ -915,10 +951,10 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
               status: "queued",
               wrapper: "pn_batch_import.py",
               command_text:
-                "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
-              manifest_path: "/tmp/demo/batch-import.json",
+                `python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest ${batchManifestPath} submit`,
+              manifest_path: batchManifestPath,
               shared_corpus: "GCD",
-              paper_count: 4,
+              paper_count: 1,
               summary: "Queued corpus upload",
               created_at: "2026-04-02T00:00:00.000Z",
               updated_at: "2026-04-02T00:00:00.000Z",

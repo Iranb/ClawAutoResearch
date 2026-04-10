@@ -73,6 +73,8 @@ Survey mode is broader than startup research mode.
   - `/arxiv2md-api`
   - `/arxiv2md`
   - PaperNexus graph expansion and citation-neighbor lookup
+  - `research_workflow.audit_literature_coverage` for non-blocking survey coverage diagnostics
+  - `research_workflow.plan_citation_expansion` for bounded seed-based follow-up search
 - Keep canonical identities merged in the survey packet; do not count duplicates as new coverage.
 
 Record every retrieval round in `SURVEY_QUERY_REGISTRY.json` with:
@@ -82,6 +84,12 @@ Record every retrieval round in `SURVEY_QUERY_REGISTRY.json` with:
 - provider
 - candidate count
 - notes on duplicates / failures / coverage gaps
+
+When coverage still looks thin after a broad pass:
+
+- run `research_workflow.audit_literature_coverage` to make baseline and recency gaps explicit
+- if only a few anchor papers look strong, use `research_workflow.plan_citation_expansion` to generate one bounded seed packet
+- do not turn survey mode into an infinite citation crawl
 
 ## Screening Contract
 

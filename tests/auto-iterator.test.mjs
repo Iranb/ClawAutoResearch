@@ -1983,6 +1983,55 @@ test("graph presence check preserves source provider and retrieval providers fro
   ]);
 });
 
+test("graph presence check matches light title variants through title signatures", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "title:graph-neural-network-benchmark",
+      title: "Graph Neural Networks Benchmark",
+      source_kind: "markdown",
+      source_provider: "papers-cool",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "graph-neural-networks-benchmark.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "graph-neural-network-benchmark.md"),
+      inputPath: path.join(sourceRoot, "md", "graph-neural-network-benchmark.md"),
+      kind: "markdown",
+      paperId: "paper:gnn-benchmark",
+      paperTitle: "Graph Neural Network Benchmark",
+      sourcePath: path.join(sourceRoot, "md", "graph-neural-network-benchmark.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "graph-neural-network-benchmark.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "graph-neural-network-benchmark.md"),
+    },
+  ]);
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.presentPaperCount, 1);
+  assert.equal(result.missingPaperCount, 0);
+});
+
 test("graph presence check resolves the shared global corpus from registry when the project does not pin one", async (t) => {
   const projectRoot = await makeTempProject();
   const priorPapernexusHome = process.env.PAPERNEXUS_HOME;
