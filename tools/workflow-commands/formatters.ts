@@ -332,8 +332,16 @@ export function formatWorkflowStatusText(params: {
   }
   if (snapshot.experimentSearchStatus && snapshot.experimentSearchStatus !== "missing") {
     lines.push(
-      `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
+      `Experiment search: status=${snapshot.experimentSearchStatus}, session=${snapshot.experimentSearchSessionId ?? "unset"}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, incumbent_exp=${snapshot.experimentSearchIncumbentExperimentId ?? "unset"}, incumbent_branch=${snapshot.experimentSearchIncumbentBranch ?? "unset"}, incumbent_commit=${snapshot.experimentSearchIncumbentCommit ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
     );
+    lines.push(
+      `Experiment search artifacts: spec=${snapshot.experimentSearchSpecPath ?? "unset"}, state=${snapshot.experimentSearchStatePath ?? "unset"}, graph_memory_packet=${snapshot.experimentSearchGraphMemoryPacketPath ?? snapshot.experimentMemoryGraphPacketPath ?? "unset"}, graph_sync=${snapshot.experimentSearchGraphMemorySyncStatus ?? "unset"}`
+    );
+    if (snapshot.experimentSearchRequestedGitOp || snapshot.experimentSearchGitOpStatus) {
+      lines.push(
+        `Experiment search git: requested_op=${snapshot.experimentSearchRequestedGitOp ?? "unset"}, status=${snapshot.experimentSearchGitOpStatus ?? "unset"}, review_store=${snapshot.experimentSearchGitReviewStorePath ?? "unset"}, packet=${snapshot.experimentSearchGitReviewPacketPath ?? "unset"}, worktree=${snapshot.experimentSearchCandidateWorktreePath ?? "unset"}, base_commit=${snapshot.experimentSearchCandidateBaseCommit ?? "unset"}, head_commit=${snapshot.experimentSearchCandidateHeadCommit ?? "unset"}, last_result=${snapshot.experimentSearchLastGitOpResult ?? "unset"}`
+      );
+    }
   }
   if (
     snapshot.experimentReviewMode === "reviewed_auto" ||

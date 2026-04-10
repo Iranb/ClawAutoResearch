@@ -13,6 +13,7 @@ import {
   getCitationIntegrityStateSummary,
   getIdeationContractStateSummary,
   getExperimentSearchStateSummary,
+  getExperimentGitReviewSummary,
   getExperimentReviewStateSummary,
   getExternalReviewStateSummary,
   getExperimentMemorySummary,
@@ -26,6 +27,7 @@ import {
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
   materializeIdeationContract,
+  materializeExperimentMemoryPacket,
   materializeExperimentReviewState,
   materializeLiteratureDiscoveryPacket,
   materializePlanState,
@@ -57,9 +59,12 @@ import {
   recordWorkflowContactEvent,
   runBrainstormCycle,
   runWorkflowAutoIterator,
+  requestExperimentGitOp,
+  applyExperimentGitOp,
   setBrainstormCycleState,
   setCitationCollectionState,
   setExperimentSearchState,
+  setExperimentGitReviewState,
   setExperimentReviewState,
   setExternalReviewState,
   setFigureQcState,
@@ -269,9 +274,14 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_review_issue_tracker: "getReviewIssueTrackerStateSummary",
   set_review_issue_tracker: "setReviewIssueTrackerState",
   get_experiment_search: "getExperimentSearchStateSummary",
+  get_experiment_git_review: "getExperimentGitReviewSummary",
   get_experiment_review_state: "getExperimentReviewStateSummary",
   set_experiment_search: "setExperimentSearchState",
+  request_experiment_git_op: "requestExperimentGitOp",
+  set_experiment_git_review: "setExperimentGitReviewState",
+  apply_experiment_git_op: "applyExperimentGitOp",
   set_experiment_review_state: "setExperimentReviewState",
+  materialize_experiment_memory_packet: "materializeExperimentMemoryPacket",
   materialize_experiment_review_state: "materializeExperimentReviewState",
   get_external_review_state: "getExternalReviewStateSummary",
   set_external_review_state: "setExternalReviewState",
@@ -846,9 +856,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_review_issue_tracker",
               "set_review_issue_tracker",
               "get_experiment_search",
+              "get_experiment_git_review",
               "get_experiment_review_state",
               "set_experiment_search",
+              "request_experiment_git_op",
+              "set_experiment_git_review",
+              "apply_experiment_git_op",
               "set_experiment_review_state",
+              "materialize_experiment_memory_packet",
               "get_external_review_state",
               "set_external_review_state",
               "get_gate_state",
@@ -1018,6 +1033,18 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           experimentSearch: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentGitRequest: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentGitReview: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentMemoryMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -2456,6 +2483,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_experiment_git_review": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getExperimentGitReviewSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "get_experiment_review_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getExperimentReviewStateSummary({
@@ -2471,6 +2505,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   params.experimentSearch,
                   "experimentSearch"
                 ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "request_experiment_git_op": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await requestExperimentGitOp({
+                projectRoot: resolvedProjectRoot,
+                agentId: state.bindingRole,
+                request: requireObject(
+                  params.experimentGitRequest,
+                  "experimentGitRequest"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "set_experiment_git_review": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setExperimentGitReviewState({
+                projectRoot: resolvedProjectRoot,
+                experimentGitReview: requireObject(
+                  params.experimentGitReview,
+                  "experimentGitReview"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "apply_experiment_git_op": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await applyExperimentGitOp({
+                projectRoot: resolvedProjectRoot,
+                agentId: state.bindingRole,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -2494,6 +2559,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ) ?? undefined,
                 trigger: readString(params.trigger) ?? null,
                 agentId: state.bindingRole,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_experiment_memory_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeExperimentMemoryPacket({
+                projectRoot: resolvedProjectRoot,
+                experimentMemoryMaterialization:
+                  asObject(params.experimentMemoryMaterialization) ?? undefined,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

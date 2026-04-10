@@ -89,6 +89,25 @@ export function getExperimentSearchPath(projectRoot: string): string {
   return path.join(projectRoot, DEFAULT_EXPERIMENT_SEARCH_PATH);
 }
 
+function resolveConfiguredExperimentSearchPath(params: {
+  projectRoot: string;
+  manifest?: Record<string, unknown> | null;
+  stateSearchPath?: string | null;
+}): string {
+  const manifestRecord = asRecord(params.manifest);
+  const manifestSearch = asRecord(manifestRecord?.experiment_search);
+  const configuredPath =
+    params.stateSearchPath?.trim() ||
+    pickString(manifestSearch ?? {}, ["searchStatePath", "search_state_path"]) ||
+    null;
+  if (!configuredPath) {
+    return getExperimentSearchPath(params.projectRoot);
+  }
+  return path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.join(params.projectRoot, configuredPath);
+}
+
 export function createEmptyExperimentLedger(
   projectId: string | null
 ): ExperimentLedgerLike {
@@ -431,8 +450,9 @@ export async function loadExperimentSearchState(params: {
   manifest?: Record<string, unknown> | null;
   readJsonIfExists: <T>(targetPath: string) => Promise<T | null>;
 }): Promise<ReturnType<typeof normalizeExperimentSearchState>> {
+  const targetPath = resolveConfiguredExperimentSearchPath(params);
   const raw = await params.readJsonIfExists<Record<string, unknown>>(
-    getExperimentSearchPath(params.projectRoot)
+    targetPath
   );
   if (raw) return normalizeExperimentSearchState(raw);
   return normalizeExperimentSearchState(params.manifest?.experiment_search);
@@ -443,8 +463,12 @@ export async function saveExperimentSearchStateFile(params: {
   state: ReturnType<typeof normalizeExperimentSearchState>;
   writeJsonEnsured: (targetPath: string, value: unknown) => Promise<void>;
 }): Promise<void> {
+  const targetPath = resolveConfiguredExperimentSearchPath({
+    projectRoot: params.projectRoot,
+    stateSearchPath: params.state.searchStatePath,
+  });
   await params.writeJsonEnsured(
-    getExperimentSearchPath(params.projectRoot),
+    targetPath,
     serializeExperimentSearchState(params.state)
   );
 }

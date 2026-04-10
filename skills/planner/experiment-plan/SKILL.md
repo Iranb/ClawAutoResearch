@@ -20,6 +20,7 @@ Build or revise the workflow-owned pre-launch packet for a reviewed-auto experim
 ## Goals
 
 - Turn the active track into a bounded launch packet with one clear variable under test.
+- Turn the active track into a bounded search envelope when the innovation direction is fixed enough for coder-side local search.
 - Make claim coverage explicit before Analyzer or Cross-Reviewer is asked to judge launch-worthiness.
 - Use PaperNexus-backed norms when available so the packet reflects real baselines, metrics, controls, and common confounds.
 
@@ -31,6 +32,8 @@ Build or revise the workflow-owned pre-launch packet for a reviewed-auto experim
 - `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md`
 - `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md`
 - `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json` if it already exists
+- `{PROJ}/researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json` if it exists
+- `{PROJ}/researcher/INNOVATION_REFLECTION.md` if it exists
 - PaperNexus packets when present:
   - `{PROJ}/researcher/papernexus/MECHANISM_BRIDGE_PACKET.json`
   - `{PROJ}/researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json`
@@ -53,6 +56,7 @@ The packet must make these fields concrete:
 - compute budget
 - expected artifact targets
 - graph-grounded norms or contradictions from PaperNexus packets
+- search envelope, git retention policy, and explicit non-promotion signals when coder-side search is enabled
 
 ## Review Constitution
 
@@ -62,6 +66,8 @@ The packet must make these fields concrete:
 - **Compute must be bounded.** If the budget is vague, the packet is not ready.
 - **Claim coverage is explicit.** Every launch-worthy claim needs a matching experiment or artifact target.
 - **Graph-grounded context beats intuition.** Prefer PaperNexus evidence about common baselines, metrics, or confounds over free-form assumptions.
+- **Git retention policy must be explicit.** If coder search is enabled, define what enters the incumbent branch and what must remain only as discarded candidate history.
+- **Secondary signals do not keep code by default.** Gap reduction, smoother curves, or generic stability should guide diagnosis only unless they are the named primary metric.
 
 ## Persistence Rules
 
@@ -77,3 +83,4 @@ After updating the packet/plan, mirror durable state through `research_workflow.
 - `pending_reason` when the packet is still incomplete
 
 Do not mark the packet ready if baseline fairness, falsifiers, stop rules, or compute budget are still vague.
+Do not mark the packet ready if the search envelope is enabled but incumbent/candidate git policy or non-promotion signals are still ambiguous.

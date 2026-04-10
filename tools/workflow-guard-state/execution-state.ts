@@ -11,20 +11,49 @@ const DEFAULT_REVIEW_ISSUES_PATH = "reviewer/REVIEW_ISSUES.json";
 
 type ExperimentSearchStateLike = {
   status: string;
+  projectId: string | null;
+  trackId: string | null;
   currentMainStage: string | null;
   currentSubstage: string | null;
+  searchSessionId: string | null;
+  searchSpecPath: string | null;
+  searchStatePath: string | null;
+  baselineExperimentId: string | null;
   frontierNodeIds: string[];
+  frontierExperimentIds: string[];
   bestNodeId: string | null;
+  incumbentExperimentId: string | null;
+  incumbentBranch: string | null;
+  incumbentCommit: string | null;
   completedNodeIds: string[];
+  completedExperimentIds: string[];
   failedNodeIds: string[];
+  failedExperimentIds: string[];
+  discardedExperimentIds: string[];
   triedHyperparams: string[];
   completedAblations: string[];
+  lastCandidateExperimentId: string | null;
+  lastCandidateBranch: string | null;
+  lastCandidateCommit: string | null;
+  requestedGitOp: string | null;
+  gitOpStatus: string | null;
+  gitReviewStorePath: string | null;
+  gitReviewPacketPath: string | null;
+  candidateWorktreePath: string | null;
+  candidateBaseCommit: string | null;
+  candidateHeadCommit: string | null;
+  lastGitOpResult: string | null;
+  lastDecision: string | null;
   multiSeedStatus: string;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
   stageProgressPath: string | null;
   checkpointPath: string | null;
+  graphMemoryPacketPath: string | null;
+  graphMemorySyncStatus: string;
+  lastGraphMemoryRefreshAt: string | null;
+  createdAt: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
 };
@@ -155,24 +184,97 @@ export function normalizeExperimentSearchState(
   const record = asRecord(value) ?? {};
   return {
     status: normalizeStage(record.status) ?? "not_started",
+    projectId: pickString(record, ["projectId", "project_id"]),
+    trackId: pickString(record, ["trackId", "track_id"]),
     currentMainStage:
       normalizeStage(record.currentMainStage ?? record.current_main_stage) ?? null,
     currentSubstage:
       normalizeStage(record.currentSubstage ?? record.current_substage) ?? null,
+    searchSessionId: pickString(record, ["searchSessionId", "search_session_id"]),
+    searchSpecPath: pickString(record, ["searchSpecPath", "search_spec_path"]),
+    searchStatePath: pickString(record, ["searchStatePath", "search_state_path"]),
+    baselineExperimentId: pickString(record, [
+      "baselineExperimentId",
+      "baseline_experiment_id",
+    ]),
     frontierNodeIds: asStringArray(
       record.frontierNodeIds ?? record.frontier_node_ids
     ),
+    frontierExperimentIds: asStringArray(
+      record.frontierExperimentIds ?? record.frontier_experiment_ids
+    ),
     bestNodeId: pickString(record, ["bestNodeId", "best_node_id"]),
+    incumbentExperimentId: pickString(record, [
+      "incumbentExperimentId",
+      "incumbent_experiment_id",
+    ]),
+    incumbentBranch: pickString(record, [
+      "incumbentBranch",
+      "incumbent_branch",
+    ]),
+    incumbentCommit: pickString(record, [
+      "incumbentCommit",
+      "incumbent_commit",
+    ]),
     completedNodeIds: asStringArray(
       record.completedNodeIds ?? record.completed_node_ids
     ),
+    completedExperimentIds: asStringArray(
+      record.completedExperimentIds ?? record.completed_experiment_ids
+    ),
     failedNodeIds: asStringArray(record.failedNodeIds ?? record.failed_node_ids),
+    failedExperimentIds: asStringArray(
+      record.failedExperimentIds ?? record.failed_experiment_ids
+    ),
+    discardedExperimentIds: asStringArray(
+      record.discardedExperimentIds ?? record.discarded_experiment_ids
+    ),
     triedHyperparams: asStringArray(
       record.triedHyperparams ?? record.tried_hyperparams
     ),
     completedAblations: asStringArray(
       record.completedAblations ?? record.completed_ablations
     ),
+    lastCandidateExperimentId: pickString(record, [
+      "lastCandidateExperimentId",
+      "last_candidate_experiment_id",
+    ]),
+    lastCandidateBranch: pickString(record, [
+      "lastCandidateBranch",
+      "last_candidate_branch",
+    ]),
+    lastCandidateCommit: pickString(record, [
+      "lastCandidateCommit",
+      "last_candidate_commit",
+    ]),
+    requestedGitOp: pickString(record, ["requestedGitOp", "requested_git_op"]),
+    gitOpStatus:
+      normalizeStage(record.gitOpStatus ?? record.git_op_status) ?? null,
+    gitReviewStorePath: pickString(record, [
+      "gitReviewStorePath",
+      "git_review_store_path",
+    ]),
+    gitReviewPacketPath: pickString(record, [
+      "gitReviewPacketPath",
+      "git_review_packet_path",
+    ]),
+    candidateWorktreePath: pickString(record, [
+      "candidateWorktreePath",
+      "candidate_worktree_path",
+    ]),
+    candidateBaseCommit: pickString(record, [
+      "candidateBaseCommit",
+      "candidate_base_commit",
+    ]),
+    candidateHeadCommit: pickString(record, [
+      "candidateHeadCommit",
+      "candidate_head_commit",
+    ]),
+    lastGitOpResult: pickString(record, [
+      "lastGitOpResult",
+      "last_git_op_result",
+    ]),
+    lastDecision: pickString(record, ["lastDecision", "last_decision"]),
     multiSeedStatus:
       normalizeStage(record.multiSeedStatus ?? record.multi_seed_status) ??
       "pending",
@@ -189,6 +291,18 @@ export function normalizeExperimentSearchState(
       "stage_progress_path",
     ]),
     checkpointPath: pickString(record, ["checkpointPath", "checkpoint_path"]),
+    graphMemoryPacketPath: pickString(record, [
+      "graphMemoryPacketPath",
+      "graph_memory_packet_path",
+    ]),
+    graphMemorySyncStatus:
+      normalizeStage(record.graphMemorySyncStatus ?? record.graph_memory_sync_status) ??
+      "unknown",
+    lastGraphMemoryRefreshAt: pickString(record, [
+      "lastGraphMemoryRefreshAt",
+      "last_graph_memory_refresh_at",
+    ]),
+    createdAt: pickString(record, ["createdAt", "created_at"]),
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
     lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
   };
@@ -199,20 +313,49 @@ export function serializeExperimentSearchState(
 ): Record<string, unknown> {
   return {
     status: state.status,
+    project_id: state.projectId,
+    track_id: state.trackId,
     current_main_stage: state.currentMainStage,
     current_substage: state.currentSubstage,
+    search_session_id: state.searchSessionId,
+    search_spec_path: state.searchSpecPath,
+    search_state_path: state.searchStatePath,
+    baseline_experiment_id: state.baselineExperimentId,
     frontier_node_ids: state.frontierNodeIds,
+    frontier_experiment_ids: state.frontierExperimentIds,
     best_node_id: state.bestNodeId,
+    incumbent_experiment_id: state.incumbentExperimentId,
+    incumbent_branch: state.incumbentBranch,
+    incumbent_commit: state.incumbentCommit,
     completed_node_ids: state.completedNodeIds,
+    completed_experiment_ids: state.completedExperimentIds,
     failed_node_ids: state.failedNodeIds,
+    failed_experiment_ids: state.failedExperimentIds,
+    discarded_experiment_ids: state.discardedExperimentIds,
     tried_hyperparams: state.triedHyperparams,
     completed_ablations: state.completedAblations,
+    last_candidate_experiment_id: state.lastCandidateExperimentId,
+    last_candidate_branch: state.lastCandidateBranch,
+    last_candidate_commit: state.lastCandidateCommit,
+    requested_git_op: state.requestedGitOp,
+    git_op_status: state.gitOpStatus,
+    git_review_store_path: state.gitReviewStorePath,
+    git_review_packet_path: state.gitReviewPacketPath,
+    candidate_worktree_path: state.candidateWorktreePath,
+    candidate_base_commit: state.candidateBaseCommit,
+    candidate_head_commit: state.candidateHeadCommit,
+    last_git_op_result: state.lastGitOpResult,
+    last_decision: state.lastDecision,
     multi_seed_status: state.multiSeedStatus,
     evaluation_summary_path: state.evaluationSummaryPath,
     plot_pack_status: state.plotPackStatus,
     plot_pack_path: state.plotPackPath,
     stage_progress_path: state.stageProgressPath,
     checkpoint_path: state.checkpointPath,
+    graph_memory_packet_path: state.graphMemoryPacketPath,
+    graph_memory_sync_status: state.graphMemorySyncStatus,
+    last_graph_memory_refresh_at: state.lastGraphMemoryRefreshAt,
+    created_at: state.createdAt,
     pending_reason: state.pendingReason,
     last_updated_at: state.lastUpdatedAt,
   };

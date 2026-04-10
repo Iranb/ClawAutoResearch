@@ -37,6 +37,11 @@ Every project is controlled by four mandatory state files:
 - `{PROJ}/CLAIM_POLICY.md` — how support labels constrain writing and advancement
 - `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — restart-safe structured memory for queued, running, completed, failed, and PaperNexus-synced experiments
 
+When coder-driven local experiment search is enabled, the workflow also expects:
+
+- `{PROJ}/planner/EXPERIMENT_SEARCH_SPEC.json` — approved search envelope, git retention policy, and non-promotion signals
+- `{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/SEARCH_STATE.json` — incumbent/candidate runtime state for the active search session
+
 The workflow advances only when:
 
 1. the current stage's mandatory artifacts exist
@@ -142,10 +147,25 @@ Minimum structure:
 
 - `coder/EXPERIMENT_INDEX.md`
 - `coder/experiments/<track-id>/<experiment-id>__<slug>/EXPERIMENT_MANIFEST.json`
+- `planner/EXPERIMENT_SEARCH_SPEC.json` when coder-side search is enabled
+- bundle-local `SEARCH_STATE.json` when coder-side search is enabled
 - one local `README.md` per bundle
 - one `REMOTE_RUN.json` per launched bundle
 
 Flat, ambiguous experiment dumping under `coder/` is not allowed for new work.
+
+### Git Ratchet Contract
+
+When experiment search is active, git is part of the scientific control surface:
+
+- `experiment/<track-id>/incumbent` stores only promoted changes
+- disposable candidate branches or worktrees store one trial each
+- candidate worktree creation plus promote/discard branch actions must go through workflow-owned multi-agent review before any git mutation happens
+- only primary-metric wins, or explicit equal-but-simpler wins allowed by the packet, may advance the incumbent line
+- gap reduction, smoother curves, nicer runtime, or optimistic intermediate checkpoints are diagnostic signals only unless the packet explicitly makes them primary
+
+The ledger should remember all candidate outcomes, but the incumbent branch should remember only accepted ones.
+Workflow, not Coder, owns the durable ledger update and experiment-memory / graph-sync materialization that follows a reviewed promote or discard decision.
 
 ### Workflow Guard Code Map
 
@@ -404,6 +424,7 @@ Before a stage can be considered complete, the durable state files must be struc
 - `{PROJ}/TRACK_REGISTRY.json` must carry explicit per-track fields for status, hypothesis, graph grounding, reasoning packet location, working memory location, synthesis packet location, evidence pointers, failure signature, retry condition, and last decision.
 - `{PROJ}/researcher/EXPERIMENT_LEDGER.json` must carry a structured per-experiment record with experiment id, track id, kind, status, checkpoint stage, config reference, result pointers, decision, and PaperNexus sync status.
 - `PROJECT_MANIFEST.json.experiment_memory` must mirror the latest ledger summary (`ledger_path`, `last_ledger_update_at`, `last_completed_experiment_id`, `last_failed_experiment_id`, `best_known_config_ref`, `papernexus_sync_status`, `papernexus_sync_required`).
+- when graph-backed experiment memory is enabled, `PROJECT_MANIFEST.json.experiment_memory` should also point at the distilled experiment-memory packet and sync-status artifact used by planner/coder/reflection flows.
 - If a required field is missing, the stage is incomplete even if the narrative report exists.
 - Researcher is the top-level state steward: sub-agents emit structured handoff summaries in their own folders; Researcher mirrors the authoritative handoff state into `{PROJ}/PROJECT_MANIFEST.json`.
 
@@ -842,6 +863,8 @@ Researcher should trigger Lobster handoff only when EXPERIMENT has produced the 
 - `{PROJ}/coder/{experiment-name}/` — runnable code
 - `{PROJ}/coder/{experiment-name}/README.md` — setup + run instructions
 - `{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/EXPERIMENT_MANIFEST.json` — baseline-grounded experiment contract
+- `{PROJ}/planner/EXPERIMENT_SEARCH_SPEC.json` — approved search envelope when coder-side local search is allowed
+- `{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/SEARCH_STATE.json` — search-session runtime memory when coder-side local search is allowed
 
 **Precondition (mandatory):** Before spawning Coder, both `{PROJ}/orchestrator/PLAN.md` and `{PROJ}/orchestrator/TODOS.md` must exist. If either is missing, do **not** spawn Coder; go back to Stage 2 (PLAN), spawn Orchestrator, and wait for both files to be written.
 
@@ -855,6 +878,7 @@ Procedure:
   3c. The manifest must also declare the baseline contract: `baseline_reference`, `primary_baseline_metric`, `target_improvement`, `baseline_training_protocol`, `baseline_eval_protocol`, `innovation_points`, `validation_steps`, and `ablation_plan`
   3d. Validation must stay incremental: every innovation point must be covered by at least one validation step or ablation instead of hiding multiple novelties in one opaque run
   3e. Unless the manifest explicitly documents an allowed deviation, Coder must preserve the baseline training setup and evaluation method
+  3f. If coder-side search is enabled, Coder must initialize git lineage explicitly: incumbent branch, base commit, search-state path, and promotion policy must be visible before EXPERIMENT can safely recurse
   4. Coder marks TODOS.md item as complete
   5. Coder does local dry-run validation and reports the launch command
   5a. If quick sanity-check figures or baseline-vs-proposed plots would reduce implementation risk, Coder may use `/scientific-visualization` under `{PROJ}/coder/.../figures/` before handoff
@@ -873,7 +897,7 @@ When CODE is complete and the required experiment bundle exists, Coder should tr
 
 ### Stage 4 · EXPERIMENT
 **Owner:** Researcher
-**Skills:** `/experiment-phase` → reviewed-auto prelaunch review (`/experiment-plan`, `/experiment-design-review`, `/experiment-attack`) → spawned Coder `/run-experiment` → `/monitor-experiment`
+**Skills:** `/experiment-phase` → reviewed-auto prelaunch review (`/experiment-plan`, `/experiment-design-review`, `/experiment-attack`) → spawned Coder `/run-experiment` or `/search-experiment` → `/monitor-experiment`
 **Inputs:** `{PROJ}/coder/{experiment-name}/`, `{PROJ}/orchestrator/PLAN.md`  
 **Outputs:**
 - `{PROJ}/researcher/artifacts/results/` — raw results
@@ -902,6 +926,8 @@ Procedure:
      - repair experiment
   4. Dispatch experiments (use /parallel-experiments if N>1; per-bundle launch is assigned to Coder via /run-experiment)
      - in reviewed-auto mode, Coder must launch strictly from the approved planner packet fingerprint and launch decision
+     - if the approved packet also includes a bounded search envelope, prefer delegating the inner loop to Coder via `/search-experiment` instead of hand-queuing each micro-candidate
+     - inside `/search-experiment`, candidate worktree creation plus promote/discard branch actions must be requested through workflow review tools and may execute only after planner + analyzer + cross-reviewer approve the git action
   5. Monitor with /monitor-experiment
      - once remote runs exist, this becomes the default experiment-stage heartbeat
      - auto mode should keep re-entering `/monitor-experiment` on bounded passes until the remote runs are terminal and the result bundle is analysis-ready
@@ -914,7 +940,9 @@ Procedure:
      - failure signature or decision (`advance` / `merge` / `park` / `kill`)
      - `papernexus_sync.status`
   9. Mirror the latest experiment-memory summary into `{PROJ}/PROJECT_MANIFEST.json.experiment_memory`
+     - reviewed promote/discard actions should trigger this through workflow-owned ledger + memory materialization, not ad hoc manual edits
   10. If the project has a PaperNexus corpus, use idle time or post-run reconciliation to sync important experiment details into PaperNexus and mark sync status in the ledger
+      - sync the distilled retained-vs-discarded experiment memory, not raw logs
   11. Mark `{PROJ}/PROJECT_MANIFEST.json.innovation_reflection` as pending whenever the latest experiment evidence changes future ideation assumptions
   12. Run a track decision pass:
      - `advance`

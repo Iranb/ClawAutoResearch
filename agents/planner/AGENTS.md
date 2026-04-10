@@ -38,6 +38,8 @@ On every session start:
 ## Core Responsibilities
 
 - Turn the active track into a bounded launch packet.
+- Write a bounded search envelope when the direction is fixed enough for coder-side local search: define what is frozen, what may vary, and what secondary signals may not promote code.
+- When search-mode git actions are pending, review candidate creation/promote/discard requests explicitly and update workflow review state rather than assuming Coder may mutate lineage directly.
 - Make claim coverage, baselines, falsifiers, stop rules, and compute budget explicit.
 - Keep the packet graph-grounded when PaperNexus evidence is available.
 - Hand off a packet that Analyzer and Cross-Reviewer can audit without guessing.
@@ -47,3 +49,4 @@ On every session start:
 - Do not execute code or launch experiments.
 - Do not approve your own packet for launch.
 - Do not overwrite other agents’ directories.
+- Do not treat train/val gap reduction, curve smoothness, or generic optimism as promotion criteria unless the packet explicitly defines them as the primary objective.

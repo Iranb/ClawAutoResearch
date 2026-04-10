@@ -48,6 +48,7 @@
   ],
   "coder": [
     "./coder/implement-experiment",
+    "./coder/search-experiment",
     "./coder/scientific-visualization",
     "./coder/run-experiment",
     "./coder/github-download",

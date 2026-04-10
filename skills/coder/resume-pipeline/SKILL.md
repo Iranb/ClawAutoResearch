@@ -42,13 +42,15 @@ Use after session loss, gateway restart, or when Researcher asks Coder to contin
    - check remote `screen -ls`
    - if the recorded screen is still active, do not relaunch
    - if the screen is gone, inspect the remote log before deciding whether to relaunch
-4. If Researcher assigned a fresh launch and no active run exists, continue with `/run-experiment`.
-5. Return a structured status summary for Researcher to persist into `EXPERIMENT_REGISTRY.md`.
+4. If the bundle participates in a search session and `planner/EXPERIMENT_SEARCH_SPEC.json` plus bundle-local `SEARCH_STATE.json` exist, resume the git-native inner loop with `/search-experiment` instead of treating the next candidate as an unrelated one-shot launch.
+5. If Researcher assigned a fresh launch and no active run exists, continue with `/run-experiment`.
+6. Return a structured status summary for Researcher to persist into `EXPERIMENT_REGISTRY.md`.
 
 ## Safety Rules
 
 - Never relaunch a bundle if remote state still shows it as running.
 - Never choose a new experiment independently; execute only the bundle explicitly assigned by Researcher or `experiment-phase`.
+- Never resume a discarded candidate branch as if it were the retained incumbent.
 
 ## Output
 

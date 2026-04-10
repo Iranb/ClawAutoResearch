@@ -24,6 +24,7 @@ Write reproducible, self-contained experiment code from a research plan specific
 - Preserve **one variable per experiment**: each bundle should implement one hypothesis or one clearly named repair, not a grab bag of changes.
 - **Baseline-first alignment**: implement and keep a clean baseline path/config first, then express proposed changes as minimal deltas on top of that baseline so later monitoring can compare apples to apples.
 - **Record everything**: experiment id, changed files, configs, run command, and assumptions must stay visible in manifests and README notes.
+- **Prepare for git-native search.** If the bundle may enter a coder search loop, initialize the search-spec and search-state pointers plus incumbent git lineage fields up front instead of retrofitting them after launch.
 - Keep the **experiment and code change linked** so later analysis can trace a result back to an exact diff and config.
 - **Verify before claiming** readiness: dry-run, shape checks, and minimal validation come before "implementation complete".
 - **Never manipulate evaluation** by quietly changing metrics, splits, baselines, or fixed settings in code.
@@ -143,6 +144,7 @@ Rules:
 - folder names must make the project/track/experiment relationship obvious
 - never dump many unrelated runs into one flat folder
 - do not delete old bundle folders when iterating; create a new experiment id or record the revision in the manifest
+- if the bundle will participate in approved local search, point it at one incumbent branch and one search-state file rather than letting candidate history sprawl across the main branch
 
 ### 3. Implement Core Components
 
@@ -292,6 +294,14 @@ Every bundle must include `EXPERIMENT_MANIFEST.json` with:
 - `claim_ids_supported`
 - `proposal_basis`
 - `allowed_deviations`
+- `search_spec_path`
+- `search_state_path`
+- `graph_memory_packet_path`
+- `git.incumbent_branch`
+- `git.base_commit`
+- `git.last_candidate_branch`
+- `git.last_candidate_commit`
+- `git.promotion_reason`
 
 Update `{PROJ}/coder/EXPERIMENT_INDEX.md` so Coder can later recover:
 
@@ -332,6 +342,7 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 - Remote deployment is handled separately by `/run-experiment` on the Coder agent when Researcher / `experiment-phase` explicitly assigns it
 - Never modify baseline code from other papers without flagging it
 - Never change the baseline experiment setting or eval method unless the manifest records an explicit allowed deviation and the plan approved it
+- Never leave the bundle ambiguous about its incumbent branch or search state when reviewed-auto search is enabled
 - If a specification is ambiguous, use the most conservative interpretation and flag it
 
 ## Stage Closeout

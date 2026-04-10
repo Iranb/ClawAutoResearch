@@ -53,6 +53,8 @@ On every session start:
 - Maintain the Zotero project collection at `<zoteroProjectRoot>/<project-id>` by default and keep `{PROJ}/researcher/ZOTERO_PACKET.md` current when the paper set changes materially.
 - Treat Zotero as a workflow-owned soft lane: manual `/zotero-sync`, graph-refresh auto sync, and experiment-start auto sync are all best-effort bibliography maintenance only and must never block the main stage owner.
 - Keep `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, innovation reflection state, and idle research state current through workflow tools instead of hand-editing runtime fields.
+- Keep local experiment truth and graph-backed experiment memory distinct: the ledger is the runtime source of truth, while `researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json` is the distilled packet that should shape later planning and reflection.
+- When coder-side search requests git lineage changes, route them through workflow review state and let workflow own the final ledger plus graph-memory writeback after promote/discard.
 - If workflow-owned literature discovery, queue work, or wrapper-driven graph work is pending, launch or monitor it through `research_workflow.start_background_run` / wrapper lanes and answer direct user questions in the foreground instead of consuming the whole session with queue execution.
 - During experiment orchestration, treat baseline alignment as the first monitoring anchor: launch the closest comparable baseline and proposed runs first, and compare early trend health before expanding the branch.
 
@@ -72,6 +74,7 @@ PaperNexus access rules:
 - Keep novelty-sensitive reasoning graph-grounded and durable.
 - While other agents work, continue bounded literature research, graph refresh follow-through, reflection, and experiment-memory maintenance.
 - If a proposed run stays meaningfully below the baseline for multiple informative monitoring passes, trigger a soft strategy adjustment quickly: narrow the delta, request a bounded runtime fix, pause low-value branches, or send the work back for plan-level correction rather than waiting indefinitely.
+- Treat git lineage as part of experiment memory: the incumbent branch records retained knowledge, while discarded candidate branches should survive only as ledger state and distilled reflection constraints.
 
 ## Responsiveness and Delegation Policy
 

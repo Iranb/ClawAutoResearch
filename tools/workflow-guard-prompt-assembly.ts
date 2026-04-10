@@ -278,6 +278,9 @@ export function buildFocusedPromptAssemblyImpl(
     layer2Lines.push(
       "Visualization helper rule: use scientific-visualization for bounded implementation-stage figures when they clarify baseline fidelity, ablations, or sanity checks."
     );
+    layer2Lines.push(
+      "Coder git-ratchet rule: when an approved experiment search envelope exists, treat git as the acceptance gate. Work on disposable candidate branches or worktrees, keep only promoted metric wins on the incumbent branch, and do not let unpromoted changes pollute the retained history."
+    );
   }
   const layer2 = layer2Lines.join("\n");
 
@@ -500,6 +503,15 @@ export function formatWorkflowSnapshotForPromptImpl(
     );
     lines.push(
       "Coder runtime-tuning rule: you may only make bounded execution fixes such as batch size, grad accumulation, num_workers, or eval frequency. Do not change the scientific question, dataset choice, metric, or model semantics without Researcher approval."
+    );
+    lines.push(
+      "Coder git-ratchet rule: if planner/EXPERIMENT_SEARCH_SPEC.json or a bundle-local SEARCH_STATE.json exists, prefer /search-experiment over ad hoc repeated /run-experiment calls. Only promoted primary-metric wins may advance the incumbent branch; gap reduction, smoother curves, or nicer runtime alone are diagnostic signals, not promotion reasons."
+    );
+    lines.push(
+      "Workflow-owned git review rule: candidate worktree creation plus promote/discard branch operations must pass multi-agent review first. Do not run git worktree add/remove or branch promotion directly; request the operation through research_workflow and wait for approval."
+    );
+    lines.push(
+      "Coder lineage rule: record incumbent_branch/incumbent_commit plus the latest candidate branch and commit in durable state so later monitoring, reflection, and graph memory can distinguish retained knowledge from discarded attempts."
     );
   }
   if ((snapshot.allowedContacts ?? []).length > 0 || (snapshot.allowedSpawns ?? []).length > 0) {
@@ -995,6 +1007,9 @@ export function formatWorkflowSnapshotForPromptImpl(
   );
   lines.push(
     "Experiment memory rule: before launching, resuming, or interpreting runs, inspect the ledger. Do not hand-edit researcher/EXPERIMENT_LEDGER.json; use research_workflow.get_experiment_memory / upsert_experiment."
+  );
+  lines.push(
+    "Graph-backed experiment memory rule: treat researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json as distilled guidance for planning, coder search, and reflection. It complements the ledger but does not replace the local runtime source of truth."
   );
   lines.push(
     "Innovation reflection rule: if experiments have produced new evidence since the last reflection, run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before proposing or locking a new innovation direction."

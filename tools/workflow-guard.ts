@@ -170,11 +170,16 @@ import {
   serializeWritePackageState,
 } from "./workflow-guard-state/execution-state";
 import {
+  getExperimentSearchReviewStatePath,
+  loadExperimentSearchReviewState,
+} from "./workflow-auto-experiment-search-review.js";
+import {
   normalizeAutonomousExecutionState,
   normalizeExperimentReviewState,
   serializeAutonomousExecutionState,
   serializeExperimentReviewState,
 } from "./workflow-guard-state/experiment-review";
+import { normalizeExperimentSearchReviewState } from "./workflow-guard-state/experiment-search-review.js";
 import {
   deriveGraphBuildMicroStage,
   hasActiveWorkflowOwnedPaperUpload,
@@ -244,7 +249,14 @@ import { materializeLiteratureDiscoveryPacketImpl } from "./literature-discovery
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeIdeationContractImpl } from "./workflow-guard-materializers/ideation-contract-materializer";
+import { materializeExperimentMemoryPacketImpl } from "./workflow-guard-materializers/experiment-memory-materializer.js";
 import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
+import {
+  applyExperimentGitOpImpl,
+  getExperimentGitReviewSummaryImpl,
+  requestExperimentGitOpImpl,
+  setExperimentGitReviewStateImpl,
+} from "./workflow-experiment-git-review.js";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
 import { materializePlanStateImpl } from "./workflow-guard-materializers/plan-state-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
@@ -922,20 +934,49 @@ type ExternalReviewState = {
 
 type ExperimentSearchState = {
   status: string;
+  projectId: string | null;
+  trackId: string | null;
   currentMainStage: string | null;
   currentSubstage: string | null;
+  searchSessionId: string | null;
+  searchSpecPath: string | null;
+  searchStatePath: string | null;
+  baselineExperimentId: string | null;
   frontierNodeIds: string[];
+  frontierExperimentIds: string[];
   bestNodeId: string | null;
+  incumbentExperimentId: string | null;
+  incumbentBranch: string | null;
+  incumbentCommit: string | null;
   completedNodeIds: string[];
+  completedExperimentIds: string[];
   failedNodeIds: string[];
+  failedExperimentIds: string[];
+  discardedExperimentIds: string[];
   triedHyperparams: string[];
   completedAblations: string[];
+  lastCandidateExperimentId: string | null;
+  lastCandidateBranch: string | null;
+  lastCandidateCommit: string | null;
+  requestedGitOp: string | null;
+  gitOpStatus: string | null;
+  gitReviewStorePath: string | null;
+  gitReviewPacketPath: string | null;
+  candidateWorktreePath: string | null;
+  candidateBaseCommit: string | null;
+  candidateHeadCommit: string | null;
+  lastGitOpResult: string | null;
+  lastDecision: string | null;
   multiSeedStatus: string;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
   stageProgressPath: string | null;
   checkpointPath: string | null;
+  graphMemoryPacketPath: string | null;
+  graphMemorySyncStatus: string;
+  lastGraphMemoryRefreshAt: string | null;
+  createdAt: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
 };
@@ -1599,9 +1640,31 @@ export type WorkflowSnapshot = {
   experimentSearchStatus: string | null;
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
+  experimentSearchSessionId: string | null;
+  experimentSearchSpecPath: string | null;
+  experimentSearchStatePath: string | null;
   experimentSearchBestNodeId: string | null;
+  experimentSearchIncumbentExperimentId: string | null;
+  experimentSearchIncumbentBranch: string | null;
+  experimentSearchIncumbentCommit: string | null;
+  experimentSearchLastCandidateExperimentId: string | null;
+  experimentSearchLastCandidateBranch: string | null;
+  experimentSearchLastCandidateCommit: string | null;
+  experimentSearchRequestedGitOp: string | null;
+  experimentSearchGitOpStatus: string | null;
+  experimentSearchGitReviewStorePath: string | null;
+  experimentSearchGitReviewPacketPath: string | null;
+  experimentSearchCandidateWorktreePath: string | null;
+  experimentSearchCandidateBaseCommit: string | null;
+  experimentSearchCandidateHeadCommit: string | null;
+  experimentSearchLastGitOpResult: string | null;
   experimentSearchMultiSeedStatus: string | null;
   experimentSearchPlotPackStatus: string | null;
+  experimentSearchGraphMemoryPacketPath: string | null;
+  experimentSearchGraphMemorySyncStatus: string | null;
+  experimentMemoryGraphPacketPath: string | null;
+  experimentMemoryGraphSyncStatusPath: string | null;
+  experimentMemoryGraphLastMaterializedAt: string | null;
   writePackageStatus: string | null;
   writePackageAssemblyStatus: string | null;
   writePackageAssemblyMode: string | null;
@@ -2177,7 +2240,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Launch, monitor, and reconcile the approved experiments.",
     command:
-      "If launches are still pending, run /experiment-phase or wake Coder /run-experiment. Once remote runs exist, switch to /monitor-experiment, reconcile EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json, and mark experiment_search ready_for_analysis only when evaluation and plot-pack artifacts are complete.",
+      "If launches are still pending, run /experiment-phase or wake Coder /run-experiment; if an approved search envelope exists, prefer waking Coder /search-experiment for the bounded inner loop. Once remote runs exist, switch to /monitor-experiment, reconcile EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json, and mark experiment_search ready_for_analysis only when evaluation and plot-pack artifacts are complete.",
   },
   analyze: {
     owner: "analyzer",
@@ -3257,7 +3320,7 @@ function hasFinishedExperimentWorkAwaitingReconciliation(params: {
 }
 
 function buildExperimentMonitorCommand(): string {
-  return "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis.";
+  return "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis. If coder-side search is active, keep retained incumbent history and discarded candidate history distinct.";
 }
 
 function isPaperQcHardFailure(state: PaperQcState): boolean {
@@ -7263,7 +7326,11 @@ export async function getExperimentSearchStateSummary(params: {
     projectRoot: params.projectRoot,
     manifest,
   });
-  const stateFilePath = getExperimentSearchPath(params.projectRoot);
+  const stateFilePath = state.searchStatePath
+    ? path.isAbsolute(state.searchStatePath)
+      ? state.searchStatePath
+      : path.join(params.projectRoot, state.searchStatePath)
+    : getExperimentSearchPath(params.projectRoot);
   const evaluationSummaryResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     state.evaluationSummaryPath
@@ -7285,6 +7352,140 @@ export async function getExperimentSearchStateSummary(params: {
       ? await pathExists(plotPackResolvedPath)
       : false,
     readyForAnalysis: isExperimentSearchReadyForAnalysis(state),
+  };
+}
+
+export async function getExperimentGitReviewSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  reviewState: ReturnType<typeof normalizeExperimentSearchReviewState>;
+  reviewSummary: string;
+  reviewStatePath: string;
+  reviewStateExists: boolean;
+  searchState: ExperimentSearchState;
+}> {
+  const result = await getExperimentGitReviewSummaryImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+  });
+  const reviewStatePath = getExperimentSearchReviewStatePath(
+    params.projectRoot,
+    result.reviewState.stateFilePath
+  );
+  return {
+    reviewState: normalizeExperimentSearchReviewState(result.reviewState),
+    reviewSummary: result.reviewSummary,
+    reviewStatePath,
+    reviewStateExists: await pathExists(reviewStatePath),
+    searchState: result.searchState as ExperimentSearchState,
+  };
+}
+
+export async function requestExperimentGitOp(params: {
+  projectRoot: string;
+  agentId?: string | null;
+  request: Record<string, unknown>;
+}): Promise<{
+  reviewState: ReturnType<typeof normalizeExperimentSearchReviewState>;
+  reviewSummary: string;
+  searchState: ExperimentSearchState;
+}> {
+  const result = await requestExperimentGitOpImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+  });
+  return {
+    reviewState: normalizeExperimentSearchReviewState(result.reviewState),
+    reviewSummary: result.reviewSummary,
+    searchState: result.searchState as ExperimentSearchState,
+  };
+}
+
+export async function setExperimentGitReviewState(params: {
+  projectRoot: string;
+  experimentGitReview: Record<string, unknown>;
+}): Promise<{
+  reviewState: ReturnType<typeof normalizeExperimentSearchReviewState>;
+  reviewSummary: string;
+  searchState: ExperimentSearchState;
+}> {
+  const result = await setExperimentGitReviewStateImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+  });
+  return {
+    reviewState: normalizeExperimentSearchReviewState(result.reviewState),
+    reviewSummary: result.reviewSummary,
+    searchState: result.searchState as ExperimentSearchState,
+  };
+}
+
+export async function applyExperimentGitOp(params: {
+  projectRoot: string;
+  agentId?: string | null;
+}): Promise<{
+  gitResult: Record<string, unknown>;
+  reviewState: ReturnType<typeof normalizeExperimentSearchReviewState>;
+  searchState: ExperimentSearchState;
+  ledgerEntry: ExperimentLedgerEntry | null;
+}> {
+  const result = await applyExperimentGitOpImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+  });
+  let ledgerEntry: ExperimentLedgerEntry | null = null;
+  const experimentId =
+    result.reviewState.experimentId ??
+    result.searchState.lastCandidateExperimentId ??
+    result.searchState.incumbentExperimentId ??
+    result.searchState.completedExperimentIds.at(-1) ??
+    result.searchState.discardedExperimentIds.at(-1) ??
+    result.gitResult.candidateBranch?.split("/").filter(Boolean).at(-1) ??
+    null;
+  if (
+    experimentId &&
+    (result.gitResult.actionType === "promote_candidate" ||
+      result.gitResult.actionType === "discard_candidate")
+  ) {
+    const ledgerResult = await upsertExperimentLedgerEntry({
+      projectRoot: params.projectRoot,
+      agentId: params.agentId ?? undefined,
+      experiment: {
+        experimentId,
+        trackId:
+          result.reviewState.trackId ?? result.searchState.trackId ?? null,
+        status:
+          result.gitResult.actionType === "promote_candidate"
+            ? "merged"
+            : "completed",
+        decision:
+          result.gitResult.actionType === "promote_candidate"
+            ? "advance"
+            : "discard",
+        summary: result.gitResult.summary,
+        metadata: {
+          searchGit: {
+            incumbentBranch: result.gitResult.incumbentBranch,
+            incumbentCommit: result.gitResult.incumbentCommit,
+            candidateBranch: result.gitResult.candidateBranch,
+            candidateCommit: result.gitResult.candidateHeadCommit,
+            candidateBaseCommit: result.gitResult.candidateBaseCommit,
+            retained: result.gitResult.actionType === "promote_candidate",
+            worktreePath: result.gitResult.candidateWorktreePath,
+          },
+        },
+      },
+    });
+    ledgerEntry = ledgerResult.entry;
+  }
+  const refreshedSearch = await getExperimentSearchStateSummary({
+    projectRoot: params.projectRoot,
+  });
+  return {
+    gitResult: result.gitResult,
+    reviewState: normalizeExperimentSearchReviewState(result.reviewState),
+    searchState: refreshedSearch.state,
+    ledgerEntry,
   };
 }
 
@@ -8599,11 +8800,31 @@ export async function upsertExperimentLedgerEntry(params: {
     syncManifestExperimentMemory,
     normalizeRole,
   } as any);
+  await materializeExperimentMemoryPacket({
+    projectRoot: params.projectRoot,
+  });
   return {
     entry: result.entry as ExperimentLedgerEntry,
     summary: result.summary as ExperimentLedgerSummary,
     recentExperiments: result.recentExperiments as ExperimentMemoryDigest[],
   };
+}
+
+export async function materializeExperimentMemoryPacket(params: {
+  projectRoot: string;
+  experimentMemoryMaterialization?: Record<string, unknown>;
+}): Promise<{
+  packetPath: string;
+  syncStatusPath: string;
+  packet: Record<string, unknown>;
+  syncStatus: Record<string, unknown>;
+  searchStatePath: string;
+}> {
+  return await materializeExperimentMemoryPacketImpl(params, {
+    readManifestEnsured,
+    saveManifest,
+    readExperimentLedgerEnsured,
+  });
 }
 
 export async function runWorkflowAutoIterator(params: {

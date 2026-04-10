@@ -72,9 +72,10 @@ PaperNexus 在这里承担的是 shared research substrate，而不是附属工�
 - `memory/experiment-memory.md`
 - `memory/YYYY-MM-DD.md`
 - `researcher/EXPERIMENT_LEDGER.json`
+- `researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json`
 - `PROJECT_MANIFEST.json.innovation_reflection`
 
-其中最重要的是 `EXPERIMENT_LEDGER.json`。它是 experiment lifecycle 的权威来源，而不是随手记在日报里的经验总结。
+其中最重要的是 `EXPERIMENT_LEDGER.json`。它是 experiment lifecycle 的权威来源，而不是随手记在日报里的经验总结。`EXPERIMENT_MEMORY_PACKET.json` 则是它的 distilled graph bridge，用来给 planner、coder search loop 和 innovation reflection 提供可复用的结构化实验记忆。
 
 ## 7. innovation reflection：为什么 ideation 不是一次性动作
 
@@ -89,6 +90,7 @@ PaperNexus 在这里承担的是 shared research substrate，而不是附属工�
 - 哪些假设已经失败
 - 哪些约束变得更强
 - 哪些迁移方向出现了新的证据
+- 哪些 retained git lineage 真正值得成为下轮搜索的 incumbent 基础
 
 ## 8. idle research：后台调研为什么不是自由漂移
 

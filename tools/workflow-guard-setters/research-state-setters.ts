@@ -1269,18 +1269,39 @@ export async function setExperimentSearchState(params: {
   const next: ExperimentSearchState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
+    projectId:
+      pickString(patch, ["projectId", "project_id"]) ?? current.projectId,
+    trackId: pickString(patch, ["trackId", "track_id"]) ?? current.trackId,
     currentMainStage:
       normalizeStage(patch.currentMainStage ?? patch.current_main_stage) ??
       current.currentMainStage,
     currentSubstage:
       normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
       current.currentSubstage,
+    searchSessionId:
+      pickString(patch, ["searchSessionId", "search_session_id"]) ??
+      current.searchSessionId,
+    searchSpecPath:
+      pickString(patch, ["searchSpecPath", "search_spec_path"]) ??
+      current.searchSpecPath,
+    searchStatePath:
+      pickString(patch, ["searchStatePath", "search_state_path"]) ??
+      current.searchStatePath,
     frontierNodeIds:
       patch.frontierNodeIds || patch.frontier_node_ids
         ? asStringArray(patch.frontierNodeIds ?? patch.frontier_node_ids)
         : current.frontierNodeIds,
     bestNodeId:
       pickString(patch, ["bestNodeId", "best_node_id"]) ?? current.bestNodeId,
+    incumbentExperimentId:
+      pickString(patch, ["incumbentExperimentId", "incumbent_experiment_id"]) ??
+      current.incumbentExperimentId,
+    incumbentBranch:
+      pickString(patch, ["incumbentBranch", "incumbent_branch"]) ??
+      current.incumbentBranch,
+    incumbentCommit:
+      pickString(patch, ["incumbentCommit", "incumbent_commit"]) ??
+      current.incumbentCommit,
     completedNodeIds:
       patch.completedNodeIds || patch.completed_node_ids
         ? asStringArray(patch.completedNodeIds ?? patch.completed_node_ids)
@@ -1297,6 +1318,39 @@ export async function setExperimentSearchState(params: {
       patch.completedAblations || patch.completed_ablations
         ? asStringArray(patch.completedAblations ?? patch.completed_ablations)
         : current.completedAblations,
+    lastCandidateExperimentId:
+      pickString(patch, ["lastCandidateExperimentId", "last_candidate_experiment_id"]) ??
+      current.lastCandidateExperimentId,
+    lastCandidateBranch:
+      pickString(patch, ["lastCandidateBranch", "last_candidate_branch"]) ??
+      current.lastCandidateBranch,
+    lastCandidateCommit:
+      pickString(patch, ["lastCandidateCommit", "last_candidate_commit"]) ??
+      current.lastCandidateCommit,
+    requestedGitOp:
+      pickString(patch, ["requestedGitOp", "requested_git_op"]) ??
+      current.requestedGitOp,
+    gitOpStatus:
+      normalizeStage(patch.gitOpStatus ?? patch.git_op_status) ??
+      current.gitOpStatus,
+    gitReviewStorePath:
+      pickString(patch, ["gitReviewStorePath", "git_review_store_path"]) ??
+      current.gitReviewStorePath,
+    gitReviewPacketPath:
+      pickString(patch, ["gitReviewPacketPath", "git_review_packet_path"]) ??
+      current.gitReviewPacketPath,
+    candidateWorktreePath:
+      pickString(patch, ["candidateWorktreePath", "candidate_worktree_path"]) ??
+      current.candidateWorktreePath,
+    candidateBaseCommit:
+      pickString(patch, ["candidateBaseCommit", "candidate_base_commit"]) ??
+      current.candidateBaseCommit,
+    candidateHeadCommit:
+      pickString(patch, ["candidateHeadCommit", "candidate_head_commit"]) ??
+      current.candidateHeadCommit,
+    lastGitOpResult:
+      pickString(patch, ["lastGitOpResult", "last_git_op_result"]) ??
+      current.lastGitOpResult,
     multiSeedStatus:
       normalizeStage(patch.multiSeedStatus ?? patch.multi_seed_status) ??
       current.multiSeedStatus,
@@ -1317,6 +1371,12 @@ export async function setExperimentSearchState(params: {
     checkpointPath:
       pickString(patch, ["checkpointPath", "checkpoint_path"]) ??
       current.checkpointPath,
+    graphMemoryPacketPath:
+      pickString(patch, ["graphMemoryPacketPath", "graph_memory_packet_path"]) ??
+      current.graphMemoryPacketPath,
+    graphMemorySyncStatus:
+      normalizeStage(patch.graphMemorySyncStatus ?? patch.graph_memory_sync_status) ??
+      current.graphMemorySyncStatus,
     pendingReason:
       pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
     lastUpdatedAt:
@@ -1332,7 +1392,11 @@ export async function setExperimentSearchState(params: {
   });
   await saveManifest(params.projectRoot, manifest);
 
-  const stateFilePath = getExperimentSearchPath(params.projectRoot);
+  const stateFilePath = next.searchStatePath
+    ? path.isAbsolute(next.searchStatePath)
+      ? next.searchStatePath
+      : path.join(params.projectRoot, next.searchStatePath)
+    : getExperimentSearchPath(params.projectRoot);
   return {
     state: next,
     stateFilePath,

@@ -1,0 +1,52 @@
+{
+  "search_session_id": "search_xxx",
+  "project_id": "proj_xxx",
+  "track_id": "track_xxx",
+  "basis_packet_path": "planner/EXPERIMENT_REVIEW_PACKET.json",
+  "search_mode": "local_hillclimb",
+  "git_strategy": {
+    "incumbent_branch": "experiment/track_xxx/incumbent",
+    "candidate_branch_prefix": "experiment/track_xxx/candidate/",
+    "require_clean_candidate_history": true,
+    "promotion_commit_policy": "keep_only_metric_wins",
+    "discard_unpromoted_candidates": true
+  },
+  "frozen_contract": {
+    "dataset": null,
+    "primary_metric": null,
+    "baseline_reference": null,
+    "baseline_training_protocol": null,
+    "baseline_eval_protocol": null,
+    "claim_ids": []
+  },
+  "search_envelope": {
+    "allowed_hyperparams": [],
+    "allowed_switches": [],
+    "allowed_repairs": [],
+    "forbidden_changes": []
+  },
+  "comparison_policy": {
+    "compare_against": "baseline_then_incumbent",
+    "promotion_rule": "beat_incumbent_or_equal_simpler",
+    "rollback_rule": "worse_or_unattributable",
+    "non_promotion_signals": [
+      "gap_reduction_only",
+      "loss_curve_smoother_only",
+      "runtime_nicer_without_metric_gain"
+    ],
+    "under_baseline_patience": 2,
+    "no_improvement_patience": 3
+  },
+  "budget": {
+    "max_runs": 8,
+    "max_gpu_hours": 12,
+    "max_parallel_runs": 1
+  },
+  "graph_memory_basis": {
+    "packet_path": "researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json",
+    "sync_status_path": "researcher/papernexus/EXPERIMENT_MEMORY_SYNC_STATUS.json",
+    "reflection_path": "researcher/INNOVATION_REFLECTION.md"
+  },
+  "created_at": "1970-01-01T00:00:00Z",
+  "updated_at": "1970-01-01T00:00:00Z"
+}

@@ -1,6 +1,6 @@
 ---
 name: experiment-phase
-description: "Orchestrate remote experiment execution across tracks and GPUs. Researcher owns scheduling and monitoring; atomic remote launch is delegated to Coder via /run-experiment."
+description: "Orchestrate remote experiment execution across tracks and GPUs. Researcher owns scheduling and monitoring; atomic launch or bounded search execution is delegated to Coder via /run-experiment or /search-experiment."
 argument-hint: "[experiment plan or empty to read from PLAN.md]"
 allowed-tools:
   - Bash(*)
@@ -39,6 +39,7 @@ Workflow soft Zotero rule:
 - Preserve **one variable per experiment** when building launch groups; if a run combines multiple hypothesis changes, split it or label it as non-attributable.
 - **Baseline-first orchestration**: when a track still needs baseline alignment, prioritize the baseline-faithful comparison path before broad sweeps, extra seeds, or speculative repair branches.
 - **Record everything** in the registry and ledger: hypothesis, bundle id, GPU assignment, status, failures, and follow-up decisions.
+- **Separate runtime truth from retained code truth**: the ledger records all candidate outcomes, but only promoted metric wins should remain on the incumbent git branch.
 - Keep the **experiment and code change linked** by dispatching only named bundles with durable manifests and config references.
 - **Verify before claiming** success: a launched run is not evidence until logs, outputs, and required checks are present.
 - **Never manipulate evaluation** through opportunistic reruns, metric swaps, or selective stage advancement.
@@ -213,6 +214,13 @@ Coder may apply only bounded runtime fixes needed to keep the assigned runs aliv
 
 Coder may not silently change the scientific question, dataset, metric, or core model semantics.
 
+If the approved packet includes a bounded `EXPERIMENT_SEARCH_SPEC.json`, Researcher should prefer waking Coder for `/search-experiment` rather than hand-queuing many micro-launches one by one. In that mode:
+
+- Researcher owns the outer loop: budget, envelope, stop rules, and track decision
+- Coder owns the inner loop: candidate branch, run, compare, keep-or-discard
+- only promoted changes belong on the incumbent branch
+- discarded candidates stay in ledger/search-state/graph memory, not on the retained git line
+
 In `reviewed_auto` mode, do not dispatch Coder until these artifacts are durable and aligned:
 
 - `{PROJ}/planner/EXPERIMENT_REVIEW_PACKET.json`
@@ -333,6 +341,7 @@ After phase completes, update project-isolated memory files (`{PMEM}` = `{PROJ}/
   - Method name, failure mode, do-not-retry condition
 
 The markdown memories are summaries. `{PROJ}/researcher/EXPERIMENT_LEDGER.json` remains the authoritative run-by-run memory that restart and resume flows must trust first.
+Graph-backed `EXPERIMENT_MEMORY_PACKET.json` is the distilled bridge into later planning and ideation, not a replacement for the ledger.
 
 ## Error Recovery
 

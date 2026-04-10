@@ -26,6 +26,7 @@ Deploy one approved experiment bundle, or a small explicitly assigned set of ind
 - Keep **one variable per experiment** at launch time: do not bundle unrelated hypothesis changes into one remote run.
 - **Baseline-first runtime rule**: if the packet includes a baseline or baseline-equivalent anchor, prioritize bringing that run into a trustworthy state before spending long GPU time on broader ablations or speculative repairs.
 - **Record everything** about each launch: exact bundle, config, GPU, command, remote path, and restart status.
+- **Respect git ratchet boundaries.** If the bundle belongs to a coder search loop, remote launch should happen from a disposable candidate branch/worktree unless the run is explicitly the retained incumbent.
 - Keep the **experiment and code change linked** by launching only named bundles with durable manifests and run metadata.
 - **Verify before claiming** a run started correctly: confirm screen/process state, log creation, and first-step sanity.
 - **Never manipulate evaluation** through launch-time flag changes that alter the agreed metric, dataset, or baseline protocol.
@@ -48,6 +49,8 @@ Read before launch:
 - `{PROJ}/coder/<experiment-name>/requirements.txt`
 - `{PROJ}/coder/EXPERIMENT_INDEX.md`
 - `{PROJ}/coder/.../EXPERIMENT_MANIFEST.json`
+- `{PROJ}/planner/EXPERIMENT_SEARCH_SPEC.json` when search-loop launch is enabled
+- bundle-local `SEARCH_STATE.json` when it exists
 
 Write after launch:
 - `{PROJ}/coder/<experiment-name>/REMOTE_RUN.json`
@@ -64,6 +67,13 @@ If `{PROJ}/researcher/EXPERIMENT_LAUNCH_DECISION.json` exists, require all of th
 - stop rules and expected artifact targets are explicit
 
 If any of these are missing, stop and hand control back to Researcher instead of guessing.
+
+If `EXPERIMENT_SEARCH_SPEC.json` exists, also require:
+
+- an explicit incumbent branch
+- a disposable candidate branch/worktree policy
+- promotion criteria that name the primary metric
+- no reliance on gap-reduction-only or similar secondary signals as a keep rule
 
 ### 1. Determine Dataset Path
 
@@ -183,6 +193,7 @@ Also update:
 
 - the bundle's `EXPERIMENT_MANIFEST.json` status and remote pointers
 - `{PROJ}/coder/EXPERIMENT_INDEX.md` so the local folder tree and remote run stay linked
+- bundle-local `SEARCH_STATE.json` when this launch belongs to a search session
 
 Return a short structured summary so Researcher can update `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`.
 If you can identify `experimentId`, `trackId`, `server`, `gpu_id`, `screen_name`, and `REMOTE_RUN.json`, also call `research_workflow.upsert_experiment` so the shared ledger records the atomic launch immediately.
@@ -225,6 +236,7 @@ Coder may not, without Researcher approval:
 
 In reviewed-auto mode, Coder must refuse launch when the approved packet or launch decision is missing, stale, or still mixes multiple hypothesis changes.
 Coder should also avoid repeatedly relaunching a run that stays well below baseline without a fresh diagnosis or Researcher-approved strategy change.
+Coder should not promote or retain code solely because gap reduction, stability, or intermediate curves looked better if the approved primary metric did not justify it.
 
 ## Error Recovery
 
