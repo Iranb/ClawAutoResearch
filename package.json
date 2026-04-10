@@ -14,7 +14,7 @@
     "./openclaw.plugin.json": "./openclaw.plugin.json"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/prepare-dist-runtime.mjs && node scripts/verify-dist-runtime.mjs",
     "dashboard:dev": "npm --prefix apps/workflow-dashboard run dev",
     "dashboard:build": "npm --prefix apps/workflow-dashboard run build",
     "dashboard:test": "npm --prefix apps/workflow-dashboard run test",
