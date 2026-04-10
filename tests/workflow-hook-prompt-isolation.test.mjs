@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowHooks } from "../tools/register-workflow-hooks.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 function createHookHarness(pluginConfig = {}) {
   const handlers = new Map();
@@ -115,6 +116,73 @@ test("before_prompt_build still injects Workflow Guard into workflow agents", as
   );
 
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+});
+
+test("before_prompt_build follows the explicit dashboard channel binding instead of a generic main session", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-dashboard-binding-"));
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+    enableChannelProjectBindings: true,
+    projectsRoot,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const dashboardSessionKey = "agent:researcher:dashboard:main";
+  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-survey-tpami-2026",
+    current_stage: "survey_review",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+    survey_review: {
+      status: "ready",
+      topic: "Generalized Category Discovery Survey",
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: dashboardSessionKey,
+    messageChannel: "discord",
+    channelKey: reviewChannelKey,
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const result = await beforePromptBuild(
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "continue the survey workflow" }],
+        },
+      ],
+    },
+    {
+      agentId: "researcher",
+      workspaceDir: "/Users/iranb/.openclaw/workspace-researcher",
+      sessionKey: dashboardSessionKey,
+      sessionId: "session-researcher",
+      messageChannel: "discord",
+      channelKey: reviewChannelKey,
+      trigger: "user",
+    }
+  );
+
+  assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+  assert.match(result?.prependContext ?? "", /Project:\s+gcd-survey-tpami-2026/);
+  assert.match(result?.prependContext ?? "", /channel_binding_key=binding:discord:default:channel:1491811255814586530/);
 });
 
 test("before_prompt_build does not materialize stage contracts while reading workflow state", async (t) => {

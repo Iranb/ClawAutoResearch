@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeWorkflowSubagentParentSessionKey } from "./workflow-subagent-sessions";
+import { normalizeWorkflowBindingChannelKey } from "./workflow-commands/parsers.js";
 import {
   inferBackgroundRunTerminalStateFromDurableState,
   reconcileBackgroundRunTerminalState,
@@ -261,9 +262,14 @@ export async function clearBackgroundWorkflowRunRegistryForTests(): Promise<void
 }
 
 export function deriveBackgroundRunChannelKey(params: {
+  channelKey?: string;
   sessionKey?: string;
   messageChannel?: string;
 }): string | null {
+  const explicit = normalizeWorkflowBindingChannelKey(readString(params.channelKey) ?? null);
+  if (explicit) {
+    return explicit;
+  }
   const normalizedParent = normalizeWorkflowSubagentParentSessionKey(params.sessionKey);
   const sessionKey = readString(normalizedParent ?? params.sessionKey);
   if (sessionKey?.startsWith("agent:")) {
@@ -805,6 +811,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
+  channelKey?: string | null;
   preferredSessionKey?: string | null;
   family?: string | null;
   kind?: string | null;
@@ -819,6 +826,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   const projectId = readString(params.projectId) ?? null;
   const projectRoot = readString(params.projectRoot) ?? null;
   const channelKey = deriveBackgroundRunChannelKey({
+    channelKey: readString(params.channelKey) ?? undefined,
     sessionKey: params.requesterSessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
   });

@@ -10,6 +10,100 @@ export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeBindingToken(value: unknown): string | null {
+  if (value == null) {
+    return null;
+  }
+  const stringValue =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : readString(value);
+  return stringValue ? stringValue.trim().toLowerCase() : null;
+}
+
+export function normalizeWorkflowBindingChannelKey(
+  value: string | null | undefined
+): string | null {
+  const normalized = normalizeBindingToken(value);
+  if (!normalized) {
+    return null;
+  }
+  const subagentMarker = normalized.indexOf(":subagent:");
+  return subagentMarker > 0 ? normalized.slice(0, subagentMarker) : normalized;
+}
+
+export function isWeakWorkflowBindingChannelKey(
+  value: string | null | undefined
+): boolean {
+  const normalized = normalizeWorkflowBindingChannelKey(value);
+  if (!normalized) {
+    return true;
+  }
+  if (normalized.startsWith("agent:")) {
+    return true;
+  }
+  if (normalized === "main" || normalized === "dashboard") {
+    return true;
+  }
+  if (normalized.endsWith(":main")) {
+    return true;
+  }
+  return false;
+}
+
+export function isSpecificWorkflowBindingChannelKey(
+  value: string | null | undefined
+): boolean {
+  const normalized = normalizeWorkflowBindingChannelKey(value);
+  if (!normalized || isWeakWorkflowBindingChannelKey(normalized)) {
+    return false;
+  }
+  if (
+    normalized.startsWith("binding:") ||
+    normalized.startsWith("channel:") ||
+    normalized.startsWith("user:") ||
+    normalized.includes(":thread:")
+  ) {
+    return true;
+  }
+  return normalized.split(":").filter(Boolean).length >= 2;
+}
+
+export function buildWorkflowConversationBindingKey(params: {
+  channel?: string | null;
+  accountId?: string | number | null;
+  conversationId?: string | null;
+  threadId?: string | number | null;
+}): string | null {
+  const channel = normalizeBindingToken(params.channel);
+  const conversationId = normalizeWorkflowBindingChannelKey(params.conversationId);
+  if (!channel || !conversationId) {
+    return null;
+  }
+  const accountId = normalizeBindingToken(params.accountId ?? "default") ?? "default";
+  const threadId = normalizeBindingToken(params.threadId);
+  return threadId
+    ? `binding:${channel}:${accountId}:${conversationId}:thread:${threadId}`
+    : `binding:${channel}:${accountId}:${conversationId}`;
+}
+
+export function buildWorkflowConversationBindingKeyFromConversation(
+  conversation: ConversationRef | null | undefined
+): string | null {
+  if (!conversation) {
+    return null;
+  }
+  return buildWorkflowConversationBindingKey({
+    channel: conversation.channel,
+    accountId: conversation.accountId,
+    conversationId: conversation.conversationId,
+    threadId:
+      typeof conversation.threadId === "number" || typeof conversation.threadId === "string"
+        ? conversation.threadId
+        : null,
+  });
+}
+
 export function stripDiscordPrefix(raw: string): string {
   return raw.startsWith("discord:") ? raw.slice("discord:".length) : raw;
 }
@@ -135,6 +229,55 @@ export function resolveBindingConversationFromCommandContext(
   }
 
   return null;
+}
+
+export function resolveBindingChannelKeyFromContext(
+  ctx: Partial<
+    Pick<
+      PluginCommandContext,
+      "channel" | "from" | "to" | "accountId" | "messageThreadId"
+    >
+  > & {
+    messageChannel?: string | null;
+    channelKey?: string | null;
+    conversationId?: string | null;
+    threadId?: string | number | null;
+  }
+): string | null {
+  const explicit = normalizeWorkflowBindingChannelKey(readString(ctx.channelKey));
+  if (explicit && isSpecificWorkflowBindingChannelKey(explicit)) {
+    return explicit;
+  }
+
+  const channel = readString(ctx.messageChannel) ?? readString(ctx.channel);
+  const explicitConversationId = readString(ctx.conversationId);
+  const explicitThreadId =
+    ctx.threadId ??
+    (typeof ctx.messageThreadId === "number" || typeof ctx.messageThreadId === "string"
+      ? ctx.messageThreadId
+      : null);
+  if (channel && explicitConversationId) {
+    return buildWorkflowConversationBindingKey({
+      channel,
+      accountId: readString(ctx.accountId) ?? "default",
+      conversationId: explicitConversationId,
+      threadId: explicitThreadId,
+    });
+  }
+
+  const conversation = resolveBindingConversationFromCommandContext({
+    channel: readString(ctx.channel) ?? readString(ctx.messageChannel) ?? "",
+    from: readString(ctx.from),
+    to: readString(ctx.to),
+    accountId: readString(ctx.accountId),
+    messageThreadId:
+      typeof ctx.messageThreadId === "number"
+        ? ctx.messageThreadId
+        : typeof explicitThreadId === "number"
+          ? explicitThreadId
+          : undefined,
+  });
+  return buildWorkflowConversationBindingKeyFromConversation(conversation);
 }
 
 export function resolveRoutePeerFromCommandContext(

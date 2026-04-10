@@ -150,6 +150,74 @@ test("dashboard workspace agents do not inherit workflow bindings from reused re
   assert.equal(snapshot.projectResolutionSource, "none");
 });
 
+test("dashboard workflow sessions prefer explicit conversation bindings and refuse weak cross-project main-session fallback", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const reviewProjectRoot = await makeTempProject(workspaceRoot, "gcd-survey-tpami-2026");
+  const labProjectRoot = await makeTempProject(workspaceRoot, "gcd-part-manifold-2026");
+  const dashboardSessionKey = "agent:researcher:dashboard:main";
+  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: dashboardSessionKey,
+    messageChannel: "discord",
+    channelKey: reviewChannelKey,
+    projectRoot: reviewProjectRoot,
+    boundByAgent: "researcher",
+  });
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: dashboardSessionKey,
+    messageChannel: "main",
+    projectRoot: labProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const explicitSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey: dashboardSessionKey,
+    messageChannel: "discord",
+    channelKey: reviewChannelKey,
+  });
+  assert.equal(explicitSnapshot.projectRoot, reviewProjectRoot);
+  assert.equal(explicitSnapshot.projectId, "gcd-survey-tpami-2026");
+  assert.equal(explicitSnapshot.projectResolutionSource, "channel_binding");
+
+  const weakSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey: dashboardSessionKey,
+    messageChannel: "main",
+  });
+  assert.equal(weakSnapshot.projectRoot, null);
+  assert.equal(weakSnapshot.projectId, null);
+  assert.equal(weakSnapshot.projectResolutionSource, "none");
+});
+
 test("workflow snapshot does not inherit channel project bindings when agent identity is missing", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "missing-agent-track");

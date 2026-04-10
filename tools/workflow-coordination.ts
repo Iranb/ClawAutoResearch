@@ -70,14 +70,24 @@ function normalizeText(value: string | null | undefined): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function resolveWorkflowProjectQueueKey(projectRoot: string): string {
-  return `workflow:project:${path.resolve(projectRoot)}`;
+export function resolveWorkflowProjectQueueKey(
+  projectRoot: string,
+  channelKey?: string | null
+): string {
+  const base = `workflow:project:${path.resolve(projectRoot)}`;
+  const normalizedChannelKey = normalizeText(channelKey);
+  return normalizedChannelKey
+    ? `${base}:${normalizedChannelKey.toLowerCase()}`
+    : base;
 }
 
 export function resolveWorkflowQueueKey(params: WorkflowQueueContext): string {
   const projectRoot = normalizeText(params.projectRoot);
   if (projectRoot) {
-    return resolveWorkflowProjectQueueKey(projectRoot);
+    return resolveWorkflowProjectQueueKey(
+      projectRoot,
+      normalizeText(params.channelKey) ?? normalizeText(params.messageChannel)
+    );
   }
 
   const parts: string[] = [];

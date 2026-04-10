@@ -428,6 +428,7 @@ function resolveWorkflowRequesterBinding(params: {
 }): {
   sessionKey: string | null;
   messageChannel: string | null;
+  channelKey: string | null;
 } {
   const bindings = params.deps.listChannelProjectBindingsForWorkflow({
     policy: params.workflowPolicy,
@@ -443,6 +444,7 @@ function resolveWorkflowRequesterBinding(params: {
   return {
     sessionKey: resolveWorkflowBroadcastSessionKey(binding) ?? null,
     messageChannel: binding?.messageChannel ?? null,
+    channelKey: binding?.channelKey ?? null,
   };
 }
 
@@ -1453,6 +1455,7 @@ async function launchWorkflowDispatchTransition(params: {
   projectId: string | null;
   requesterSessionKey: string;
   requesterChannel?: string | null;
+  requesterChannelKey?: string | null;
   preferredSessionKeys: string[];
   family: string;
   kind: string;
@@ -1473,7 +1476,10 @@ async function launchWorkflowDispatchTransition(params: {
       source: params.source,
       entryType: "dispatch_task",
       ownerAgent: params.owner,
-      channelKey: params.requesterChannel ?? params.requesterSessionKey,
+      channelKey:
+        readString(params.requesterChannelKey) ??
+        params.requesterChannel ??
+        params.requesterSessionKey,
       requesterSessionKey: params.requesterSessionKey,
       messageChannel: params.requesterChannel ?? null,
       preferredSessionKey: params.preferredSessionKeys[0] ?? null,
@@ -1483,7 +1489,7 @@ async function launchWorkflowDispatchTransition(params: {
       parentSessionKey: params.requesterSessionKey,
       depth: 1,
       dispatchPayload: {
-        requesterChannel: params.requesterChannel ?? null,
+          requesterChannel: params.requesterChannel ?? null,
         requesterAccountId: null,
         preferredSessionKeys: params.preferredSessionKeys,
         fromRole: params.fromRole ?? "researcher",
@@ -1874,6 +1880,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           runtimeSubagent: params.runtimeSubagent,
           ownerAgent: "researcher",
           requesterSessionKey: defaultResearcherRequesterSessionKey,
+          channelKey: requesterBinding.channelKey ?? undefined,
           preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
           family: "research",
           kind: "workflow_stage_dispatch",
@@ -1886,6 +1893,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             source: "workflow_auto_stage",
             ownerAgent: "researcher",
             requesterSessionKey: defaultResearcherRequesterSessionKey,
+            channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
             family: "research",
             kind: "workflow_stage_dispatch",
@@ -1946,6 +1954,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         projectId: params.projectId,
         requesterSessionKey: requesterSessionKey ?? defaultResearcherRequesterSessionKey,
         requesterChannel: requesterBinding.messageChannel ?? undefined,
+        requesterChannelKey: requesterBinding.channelKey ?? undefined,
         preferredSessionKeys:
           action.owner === "researcher"
             ? [
@@ -3156,11 +3165,12 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         };
       }
 
-      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+      const requesterBinding = resolveWorkflowRequesterBinding({
         projectRoot: params.projectRoot,
         workflowPolicy: params.workflowPolicy,
         deps,
       });
+      const requesterSessionKey = requesterBinding.sessionKey;
       const attempts: AutoModeDiscussionReviewAttempt[] = [];
       for (const reviewerRole of defaultAutoModeDiscussionPanel()) {
         let sessionKey: string | null =
@@ -3197,6 +3207,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             runtimeSubagent: params.runtimeSubagent,
             ownerAgent: "researcher",
             requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+            channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: sessionKey,
             family: "research",
             kind: "workflow_auto_discussion",
@@ -3209,6 +3220,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               source: "workflow_auto_discussion",
               ownerAgent: "researcher",
               requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+              channelKey: requesterBinding.channelKey ?? undefined,
               preferredSessionKey: sessionKey,
               family: "research",
               kind: "workflow_auto_discussion",
@@ -3515,6 +3527,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           runtimeSubagent: params.runtimeSubagent,
           ownerAgent: "researcher",
           requesterSessionKey: defaultResearcherRequesterSessionKey,
+          channelKey: requesterBinding.channelKey ?? undefined,
           preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
           family: "research",
           kind: "workflow_mitigation_dispatch",
@@ -3527,6 +3540,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             source: "workflow_auto_mitigation",
             ownerAgent: "researcher",
             requesterSessionKey: defaultResearcherRequesterSessionKey,
+            channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
             family: "research",
             kind: "workflow_mitigation_dispatch",
@@ -3595,6 +3609,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         projectId: params.projectId,
         requesterSessionKey: requesterSessionKey ?? defaultResearcherRequesterSessionKey,
         requesterChannel: requesterBinding.messageChannel ?? undefined,
+        requesterChannelKey: requesterBinding.channelKey ?? undefined,
         preferredSessionKeys:
           owner === "researcher"
             ? [

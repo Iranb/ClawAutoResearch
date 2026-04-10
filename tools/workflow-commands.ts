@@ -55,6 +55,7 @@ import {
 import {
   readString,
   resolveBindingConversationFromCommandContext,
+  buildWorkflowConversationBindingKeyFromConversation,
   resolveRoutePeerFromCommandContext,
   extractAgentIdFromSessionKey,
   extractQuotedSegment,
@@ -385,11 +386,14 @@ export function resolveWorkflowCommandSessionTarget(
     agentId && typeof api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
       ? api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, agentId)
       : null;
+  const bindingChannelKey =
+    buildWorkflowConversationBindingKeyFromConversation(bindingConversation) ?? null;
   return {
     sessionKey,
     agentId,
     workspaceDir: readString(workspaceDir) ?? null,
     bindingConversation,
+    bindingChannelKey,
   };
 }
 
@@ -448,6 +452,7 @@ function createBackgroundWorkflowCommandHandler(
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: targetSessionKey,
         messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
       });
       const requiresProjectBoundConversation =
         kind === "graph_build" || kind === "zotero_sync" || kind === "literature_review";
@@ -485,7 +490,7 @@ function createBackgroundWorkflowCommandHandler(
           workspaceDir: target.workspaceDir,
           sessionKey: targetSessionKey,
           messageChannel: ctx.channel,
-          channelKey: target.bindingConversation?.conversationId,
+          channelKey: target.bindingChannelKey,
         }),
         label: `workflow_command:${kind}`,
         logger: api.logger,
@@ -496,6 +501,7 @@ function createBackgroundWorkflowCommandHandler(
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: targetSessionKey,
             messageChannel: ctx.channel,
+            channelKey: target.bindingChannelKey ?? undefined,
           });
           const commandSnapshot =
             explicitProject != null
@@ -538,6 +544,7 @@ function createBackgroundWorkflowCommandHandler(
               workspaceDir: resolvedBackgroundWorkspaceDir,
               sessionKey: targetSessionKey,
               messageChannel: ctx.channel,
+              channelKey: target.bindingChannelKey ?? undefined,
             },
             snapshot: commandSnapshot,
             backgroundRun: buildBackgroundRunRequest(kind, ctx, {
@@ -598,6 +605,7 @@ function createProjectInitCommandHandler(
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: target.sessionKey,
             messageChannel: ctx.channel,
+            channelKey: target.bindingChannelKey ?? undefined,
           })
         : null;
       const ensuredProject = await ensureWorkflowProjectRoot({
@@ -605,7 +613,7 @@ function createProjectInitCommandHandler(
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: target.sessionKey ?? undefined,
         messageChannel: ctx.channel,
-        channelKey: target.bindingConversation?.conversationId,
+        channelKey: target.bindingChannelKey ?? undefined,
         projectRoot: snapshot?.projectRoot ?? null,
         projectId: snapshot?.projectId ?? null,
         title: topic ?? snapshot?.projectId ?? null,
@@ -696,6 +704,7 @@ function createWorkflowStatusCommandHandler(
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: targetSessionKey,
         messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
       });
 
       const statusState = await enqueueWorkflowTask({
@@ -704,7 +713,7 @@ function createWorkflowStatusCommandHandler(
           workspaceDir: target.workspaceDir,
           sessionKey: targetSessionKey,
           messageChannel: ctx.channel,
-          channelKey: target.bindingConversation?.conversationId,
+          channelKey: target.bindingChannelKey,
         }),
         label: "workflow_command:workflow_status",
         logger: api.logger,
@@ -715,6 +724,7 @@ function createWorkflowStatusCommandHandler(
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: targetSessionKey,
             messageChannel: ctx.channel,
+            channelKey: target.bindingChannelKey ?? undefined,
           });
           const resolvedProjectRoot = snapshot.projectRoot ?? null;
           const autoIteratorResult = resolvedProjectRoot

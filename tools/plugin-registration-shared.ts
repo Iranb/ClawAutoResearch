@@ -8,6 +8,7 @@ import type {
   OpenClawPluginService,
 } from "../runtime-api.js";
 import { enqueueWorkflowTask } from "./workflow-coordination";
+import { resolveBindingChannelKeyFromContext } from "./workflow-commands/parsers.js";
 
 export type ToolContext = {
   workspaceDir?: string;
@@ -15,6 +16,7 @@ export type ToolContext = {
   sessionKey?: string;
   sessionId?: string;
   messageChannel?: string;
+  channelKey?: string;
   sandboxed?: boolean;
 };
 
@@ -166,6 +168,23 @@ function inferAgentIdFromPath(value: string | undefined): string | undefined {
 
 export function getToolContext(ctx: Record<string, unknown>): ToolContext {
   const workspaceDir = readString(ctx.workspaceDir) ?? readString(ctx.cwd);
+  const messageChannel = readString(ctx.messageChannel) ?? readString(ctx.channel);
+  const channelKey =
+    resolveBindingChannelKeyFromContext({
+      channel: readString(ctx.channel),
+      messageChannel,
+      from: readString(ctx.from),
+      to: readString(ctx.to),
+      accountId: readString(ctx.accountId),
+      conversationId: readString(ctx.conversationId),
+      messageThreadId:
+        typeof ctx.messageThreadId === "number" ? ctx.messageThreadId : undefined,
+      threadId:
+        typeof ctx.threadId === "number" || typeof ctx.threadId === "string"
+          ? ctx.threadId
+          : null,
+      channelKey: readString(ctx.channelKey) ?? readString(ctx.threadBindingKey),
+    }) ?? undefined;
   const agentId =
     readString(ctx.agentId) ??
     readString(ctx.agentName) ??
@@ -179,7 +198,8 @@ export function getToolContext(ctx: Record<string, unknown>): ToolContext {
     agentId,
     sessionKey: readString(ctx.sessionKey),
     sessionId: readString(ctx.sessionId),
-    messageChannel: readString(ctx.messageChannel),
+    messageChannel,
+    ...(channelKey ? { channelKey } : {}),
     sandboxed: ctx.sandboxed === true,
   };
 }
@@ -210,6 +230,9 @@ export async function maybeAutoBindChannelProject(params: {
   if (params.snapshot.projectResolutionSource === "channel_binding") {
     return;
   }
+  if (!readString(params.agentCtx.channelKey)) {
+    return;
+  }
   await enqueueWorkflowTask({
     label: "workflow:auto_bind_channel_project",
     queueContext: {
@@ -227,6 +250,7 @@ export async function maybeAutoBindChannelProject(params: {
         sessionKey: params.agentCtx.sessionKey,
         sessionId: params.agentCtx.sessionId,
         messageChannel: params.agentCtx.messageChannel,
+        channelKey: params.agentCtx.channelKey,
         projectRoot: params.snapshot.projectRoot,
         projectId: params.snapshot.projectId,
         boundByAgent: params.agentCtx.agentId ?? "workflow",

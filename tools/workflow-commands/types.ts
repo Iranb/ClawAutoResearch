@@ -65,6 +65,7 @@ export type ResolvedWorkflowCommandTarget = {
   agentId: string | null;
   workspaceDir: string | null;
   bindingConversation: ConversationRef | null;
+  bindingChannelKey: string | null;
 };
 
 export type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;

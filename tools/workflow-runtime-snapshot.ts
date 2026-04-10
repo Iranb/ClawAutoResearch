@@ -55,7 +55,7 @@ export async function resolveWorkflowSnapshotContext(params: {
       sessionKey: params.agentCtx.sessionKey,
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
-      channelKey: params.channelKey ?? undefined,
+      channelKey: params.channelKey ?? params.agentCtx.channelKey ?? undefined,
     });
 
   let snapshot = await buildSnapshot();

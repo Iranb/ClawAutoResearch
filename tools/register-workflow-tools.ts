@@ -325,7 +325,10 @@ async function resolveWorkflowToolState(params: {
   const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotContext({
     plugin: params.plugin,
     agentCtx: params.agentCtx,
-    channelKey: readString(channelBinding?.channelKey) ?? null,
+    channelKey:
+      readString(channelBinding?.channelKey) ??
+      readString(params.agentCtx.channelKey) ??
+      null,
     autoBind: params.autoBind,
     stagePreflight: false,
     preflightTrigger: params.action ? `workflow_tool:${params.action}` : "workflow_tool",
@@ -345,16 +348,24 @@ async function resolveWorkflowToolState(params: {
     }
   })();
 
+  const allowWorkspaceProjectFallback =
+    workflowPolicy.enableChannelProjectBindings !== true ||
+    (!readString(params.agentCtx.sessionKey) &&
+      !readString(params.agentCtx.sessionId) &&
+      !readString(params.agentCtx.channelKey));
+
   const projectRoot =
     snapshot.projectRoot ??
-    workspaceProjectRoot ??
+    (allowWorkspaceProjectFallback ? workspaceProjectRoot : null) ??
     getProjectRootForWorkflow({
       policy: workflowPolicy,
       workspaceDir: params.agentCtx.workspaceDir,
       sessionKey: params.agentCtx.sessionKey,
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
-      channelKey: readString(channelBinding?.channelKey),
+      channelKey:
+        readString(channelBinding?.channelKey) ??
+        readString(params.agentCtx.channelKey),
     });
 
   return {
@@ -390,6 +401,7 @@ function resolveWorkflowToolQueueContext(
     messageChannel: agentCtx.messageChannel,
     channelKey:
       readString(state.channelBinding?.channelKey) ??
+      readString(agentCtx.channelKey) ??
       state.snapshot.channelProjectBindingKey,
   });
 }
@@ -1272,7 +1284,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 sessionKey: ctx.sessionKey,
                 sessionId: ctx.sessionId,
                 messageChannel: ctx.messageChannel,
-                channelKey: readString(channelBinding?.channelKey),
+                channelKey:
+                  readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey),
               });
               return textResponse(JSON.stringify(binding, null, 2));
             }
@@ -1295,7 +1309,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 sessionKey: ctx.sessionKey,
                 sessionId: ctx.sessionId,
                 messageChannel: ctx.messageChannel,
-                channelKey: readString(channelBinding?.channelKey),
+                channelKey:
+                  readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey),
                 projectRoot:
                   readString(channelBinding?.projectRoot) ??
                   readString(channelBinding?.project_path) ??
@@ -1326,7 +1342,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 sessionKey: ctx.sessionKey,
                 sessionId: ctx.sessionId,
                 messageChannel: ctx.messageChannel,
-                channelKey: readString(channelBinding?.channelKey),
+                channelKey:
+                  readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey),
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -1709,6 +1727,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
                   readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey) ??
                   snapshot.channelProjectBindingKey,
                 family: readString(backgroundSessions?.family),
                 projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
@@ -1725,6 +1744,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
                   readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey) ??
                   snapshot.channelProjectBindingKey,
                 family: readString(backgroundSessions?.family),
                 projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,
@@ -1743,6 +1763,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
                   readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey) ??
                   snapshot.channelProjectBindingKey,
                 family: readString(backgroundSessions?.family),
                 projectId: readString(backgroundSessions?.projectId) ?? snapshot.projectId,

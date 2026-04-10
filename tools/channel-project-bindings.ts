@@ -19,6 +19,12 @@ import {
   assertProjectRootWithinProjectsRoot,
   isProjectRootWithinProjectsRoot,
 } from "./workflow-guard-project-state";
+import {
+  isSpecificWorkflowBindingChannelKey,
+  isWeakWorkflowBindingChannelKey,
+  normalizeWorkflowBindingChannelKey,
+  resolveBindingChannelKeyFromContext,
+} from "./workflow-commands/parsers.js";
 
 export interface ChannelProjectBindingPolicy {
   enableChannelProjectBindings?: boolean;
@@ -32,6 +38,9 @@ export interface ChannelProjectBindingContext {
   sessionId?: string;
   messageChannel?: string;
   channelKey?: string;
+  accountId?: string;
+  conversationId?: string;
+  threadId?: string | number;
   projectRoot?: string;
   role?: string;
   agentId?: string;
@@ -130,12 +139,7 @@ function normalizeChannelKey(value: string | null): string | null {
 }
 
 function normalizeBindingChannelKey(value: string | null): string | null {
-  const normalized = normalizeChannelKey(value);
-  if (!normalized) {
-    return null;
-  }
-  const subagentMarker = normalized.indexOf(":subagent:");
-  return subagentMarker > 0 ? normalized.slice(0, subagentMarker) : normalized;
+  return normalizeWorkflowBindingChannelKey(value);
 }
 
 function sessionKeyToChannelKey(sessionKey: string | null): string | null {
@@ -153,6 +157,128 @@ function sessionKeyToChannelKey(sessionKey: string | null): string | null {
     return normalized;
   }
   return parts.slice(2).join(":");
+}
+
+type ChannelProjectBindingLookup = {
+  primaryKey: string | null;
+  lookupKeys: string[];
+  projectScanKeys: string[];
+  strength: "explicit" | "session" | "session_id" | "none";
+};
+
+function uniqueBindingKeys(values: Array<string | null | undefined>): string[] {
+  const keys: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeBindingChannelKey(value ?? null);
+    if (normalized && !keys.includes(normalized)) {
+      keys.push(normalized);
+    }
+  }
+  return keys;
+}
+
+function isExplicitThreadBindingKey(value: string | null | undefined): boolean {
+  const normalized = normalizeBindingChannelKey(value ?? null);
+  return Boolean(normalized && !normalized.startsWith("agent:"));
+}
+
+function isStrongExplicitChannelKey(value: string | null | undefined): boolean {
+  return isSpecificWorkflowBindingChannelKey(normalizeBindingChannelKey(value ?? null));
+}
+
+function isProjectScannableSessionChannelKey(
+  value: string | null | undefined
+): boolean {
+  const normalized = normalizeBindingChannelKey(value ?? null);
+  return Boolean(normalized && !isWeakWorkflowBindingChannelKey(normalized));
+}
+
+function resolveChannelProjectLookup(
+  context: ChannelProjectBindingContext | undefined
+): ChannelProjectBindingLookup {
+  if (!context) {
+    return {
+      primaryKey: null,
+      lookupKeys: [],
+      projectScanKeys: [],
+      strength: "none",
+    };
+  }
+
+  const explicitDerivedKey = resolveBindingChannelKeyFromContext({
+    messageChannel: asString(context.messageChannel) ?? null,
+    channelKey: asString(context.channelKey) ?? null,
+    accountId: asString(context.accountId) ?? undefined,
+    conversationId: asString(context.conversationId) ?? null,
+    threadId:
+      typeof context.threadId === "number" || typeof context.threadId === "string"
+        ? context.threadId
+        : null,
+  });
+  const explicitThreadBindingKey = isExplicitThreadBindingKey(context.threadBindingKey)
+    ? normalizeBindingChannelKey(asString(context.threadBindingKey) ?? null)
+    : null;
+  const explicitKeys = uniqueBindingKeys([
+    explicitDerivedKey,
+    explicitThreadBindingKey,
+    isStrongExplicitChannelKey(asString(context.channelKey) ?? null)
+      ? asString(context.channelKey) ?? null
+      : null,
+    asString(context.conversationId) ?? null,
+  ]);
+  const fromSessionKey = sessionKeyToChannelKey(asString(context.sessionKey));
+  const sessionId = normalizeChannelKey(asString(context.sessionId) ?? null);
+  if (explicitKeys.length > 0) {
+    return {
+      primaryKey: explicitKeys[0] ?? null,
+      lookupKeys: uniqueBindingKeys([
+        ...explicitKeys,
+        fromSessionKey,
+        sessionId ? `session:${sessionId}` : null,
+      ]),
+      projectScanKeys: explicitKeys,
+      strength: "explicit",
+    };
+  }
+  if (fromSessionKey) {
+    return {
+      primaryKey: fromSessionKey,
+      lookupKeys: [fromSessionKey],
+      projectScanKeys: isProjectScannableSessionChannelKey(fromSessionKey)
+        ? [fromSessionKey]
+        : [],
+      strength: isProjectScannableSessionChannelKey(fromSessionKey)
+        ? "session"
+        : "none",
+    };
+  }
+  if (sessionId) {
+    return {
+      primaryKey: `session:${sessionId}`,
+      lookupKeys: [`session:${sessionId}`],
+      projectScanKeys: [],
+      strength: "session_id",
+    };
+  }
+  return {
+    primaryKey: null,
+    lookupKeys: [],
+    projectScanKeys: [],
+    strength: "none",
+  };
+}
+
+function findBindingByKeys(
+  bindings: ChannelProjectBindingRecord[],
+  lookupKeys: string[]
+): ChannelProjectBindingRecord | null {
+  for (const key of lookupKeys) {
+    const match = bindings.find((entry) => entry.channelKey === key) ?? null;
+    if (match) {
+      return match;
+    }
+  }
+  return null;
 }
 
 function getWorkspaceRoot(context: ChannelProjectBindingContext): string {
@@ -310,22 +436,7 @@ export function resolveChannelProjectBindingsPath(params: {
 export function resolveChannelProjectKey(
   context: ChannelProjectBindingContext | undefined
 ): string | null {
-  if (!context) {
-    return null;
-  }
-  const explicit = normalizeBindingChannelKey(asString(context.channelKey) ?? null);
-  if (explicit) {
-    return explicit;
-  }
-  const fromSessionKey = sessionKeyToChannelKey(asString(context.sessionKey));
-  if (fromSessionKey) {
-    return fromSessionKey;
-  }
-  const sessionId = normalizeChannelKey(asString(context.sessionId) ?? null);
-  if (sessionId) {
-    return `session:${sessionId}`;
-  }
-  return null;
+  return resolveChannelProjectLookup(context).primaryKey;
 }
 
 export function getDirectProjectRootFromEnv(): string | null {
@@ -349,18 +460,17 @@ export function getChannelProjectBinding(params: {
     channelKey: params.channelKey ?? params.context?.channelKey,
   };
   const storePath = resolveChannelProjectBindingsPath({ policy, context });
-  const channelKey = resolveChannelProjectKey(context);
-  if (!policy.enableChannelProjectBindings || !channelKey) {
+  const lookup = resolveChannelProjectLookup(context);
+  if (!policy.enableChannelProjectBindings || !lookup.primaryKey) {
     return {
       enabled: policy.enableChannelProjectBindings,
       storePath,
-      channelKey,
+      channelKey: lookup.primaryKey,
       binding: null,
     };
   }
   const store = readStore(storePath);
-  const directBinding =
-    store.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
+  const directBinding = findBindingByKeys(store.bindings, lookup.lookupKeys);
   const projectsRoot = getProjectsRoot(policy);
   if (
     directBinding &&
@@ -373,11 +483,11 @@ export function getChannelProjectBinding(params: {
     return {
       enabled: true,
       storePath,
-      channelKey,
+      channelKey: lookup.primaryKey,
       binding: directBinding,
     };
   }
-  if (projectsRoot) {
+  if (projectsRoot && lookup.projectScanKeys.length > 0) {
     try {
       const candidateStorePaths = fs
         .readdirSync(projectsRoot, { withFileTypes: true })
@@ -391,12 +501,16 @@ export function getChannelProjectBinding(params: {
           )
         )
         .filter((candidate) => candidate !== storePath);
-      let matchedBinding: ChannelProjectBindingRecord | null = null;
-      let matchedStorePath = storePath;
+      const matchedCandidates: Array<{
+        binding: ChannelProjectBindingRecord;
+        storePath: string;
+      }> = [];
       for (const candidatePath of candidateStorePaths) {
         const candidateStore = readStore(candidatePath);
-        const candidateBinding =
-          candidateStore.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
+        const candidateBinding = findBindingByKeys(
+          candidateStore.bindings,
+          lookup.projectScanKeys
+        );
         if (!candidateBinding) {
           continue;
         }
@@ -408,21 +522,33 @@ export function getChannelProjectBinding(params: {
         ) {
           continue;
         }
-        if (
-          !matchedBinding ||
-          new Date(candidateBinding.updatedAt).getTime() >
-            new Date(matchedBinding.updatedAt).getTime()
-        ) {
-          matchedBinding = candidateBinding;
-          matchedStorePath = candidatePath;
-        }
+        matchedCandidates.push({
+          binding: candidateBinding,
+          storePath: candidatePath,
+        });
       }
-      if (matchedBinding) {
+      const uniqueMatchedProjectRoots = new Set(
+        matchedCandidates.map((entry) => path.resolve(entry.binding.projectRoot))
+      );
+      if (uniqueMatchedProjectRoots.size > 1) {
         return {
           enabled: true,
-          storePath: matchedStorePath,
-          channelKey,
-          binding: matchedBinding,
+          storePath,
+          channelKey: lookup.primaryKey,
+          binding: null,
+        };
+      }
+      const matchedCandidate = matchedCandidates.sort(
+        (left, right) =>
+          new Date(right.binding.updatedAt).getTime() -
+          new Date(left.binding.updatedAt).getTime()
+      )[0];
+      if (matchedCandidate) {
+        return {
+          enabled: true,
+          storePath: matchedCandidate.storePath,
+          channelKey: lookup.primaryKey,
+          binding: matchedCandidate.binding,
         };
       }
     } catch {
@@ -432,7 +558,7 @@ export function getChannelProjectBinding(params: {
   return {
     enabled: true,
     storePath,
-    channelKey,
+    channelKey: lookup.primaryKey,
     binding: null,
   };
 }
@@ -746,16 +872,17 @@ export async function clearChannelProjectBinding(params: {
     channelKey: params.channelKey ?? params.context?.channelKey,
   };
   const storePath = resolveChannelProjectBindingsPath({ policy, context });
-  const channelKey = resolveChannelProjectKey(context);
+  const lookup = resolveChannelProjectLookup(context);
   const projectsRoot = getProjectsRoot(policy);
-  if (!channelKey) {
+  if (!lookup.primaryKey) {
     throw new Error("Unable to resolve the current channel key for project unbinding.");
   }
   let effectiveStorePath = storePath;
   let store = readStore(storePath);
   if (
-    !store.bindings.some((entry) => entry.channelKey === channelKey) &&
-    projectsRoot
+    !findBindingByKeys(store.bindings, lookup.lookupKeys) &&
+    projectsRoot &&
+    lookup.projectScanKeys.length > 0
   ) {
     const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
     for (const candidatePath of candidateStorePaths) {
@@ -763,14 +890,15 @@ export async function clearChannelProjectBinding(params: {
         continue;
       }
       const candidateStore = readStore(candidatePath);
-      if (candidateStore.bindings.some((entry) => entry.channelKey === channelKey)) {
+      if (findBindingByKeys(candidateStore.bindings, lookup.projectScanKeys)) {
         effectiveStorePath = candidatePath;
         store = candidateStore;
         break;
       }
     }
   }
-  const nextBindings = store.bindings.filter((entry) => entry.channelKey !== channelKey);
+  const removableKeys = new Set(lookup.lookupKeys);
+  const nextBindings = store.bindings.filter((entry) => !removableKeys.has(entry.channelKey));
   const removed = nextBindings.length !== store.bindings.length;
   if (removed) {
     store.bindings = nextBindings;
@@ -779,7 +907,7 @@ export async function clearChannelProjectBinding(params: {
   return {
     enabled: true,
     storePath: effectiveStorePath,
-    channelKey,
+    channelKey: lookup.primaryKey,
     removed,
   };
 }

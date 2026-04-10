@@ -33,6 +33,7 @@ import {
   buildSurveyReviewBackgroundCommand,
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
+import { resolveBindingChannelKeyFromContext } from "./workflow-commands/parsers.js";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
 import { isLiteratureDiscoveryTriggerKind } from "./literature-discovery/workflow-bridge";
@@ -200,6 +201,27 @@ function buildRequesterToolContext(
     sessionKey: readString(hookCtx.requesterSessionKey),
     sessionId: readString(hookCtx.requesterSessionId),
     messageChannel: readString(hookCtx.messageChannel),
+    channelKey:
+      resolveBindingChannelKeyFromContext({
+        channel: readString(hookCtx.channel),
+        messageChannel: readString(hookCtx.messageChannel),
+        from: readString(hookCtx.from),
+        to: readString(hookCtx.to),
+        accountId: readString(hookCtx.accountId),
+        conversationId: readString(hookCtx.conversationId),
+        messageThreadId:
+          typeof hookCtx.messageThreadId === "number"
+            ? hookCtx.messageThreadId
+            : undefined,
+        threadId:
+          typeof hookCtx.threadId === "number" || typeof hookCtx.threadId === "string"
+            ? hookCtx.threadId
+            : null,
+        channelKey:
+          readString(hookCtx.channelKey) ??
+          readString(hookCtx.threadBindingKey) ??
+          readString(hookCtx.bindingConversationId),
+      }) ?? undefined,
   };
 }
 
@@ -573,6 +595,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
         plugin,
         agentCtx,
+        autoBind: false,
       });
       const trigger = readString(hookCtx.trigger);
       if (!workflowPolicy.injectWorkflowContext) {

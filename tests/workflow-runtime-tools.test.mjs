@@ -68,6 +68,7 @@ function createResearchWorkflowTool(params = {}) {
           sessionKey: params.sessionKey ?? "agent:researcher:test",
           sessionId: params.sessionId ?? "session-test",
           messageChannel: params.messageChannel ?? "discord",
+          channelKey: params.channelKey,
         })
       : registeredTool;
   assert.equal(tool?.name, "research_workflow");
@@ -2371,6 +2372,85 @@ test("research_workflow auto_iterator_tick follows the bound channel project eve
   assert.equal(result.stageBefore, "idea");
   assert.notEqual(result.projectRoot, workspaceProjectRoot);
   assert.notEqual(result.stageBefore, "graph_build");
+});
+
+test("research_workflow auto_iterator_tick follows an explicit dashboard channel binding even when the session key is generic", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-runtime-dashboard-binding-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const reviewProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const workspaceProjectRoot = path.join(workspaceRoot, "gcd-part-manifold-2026");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const sessionKey = "agent:researcher:dashboard:main";
+  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.OPENCLAW_PROJECT;
+  await seedMinimalProject(reviewProjectRoot, {
+    project_id: "gcd-survey-tpami-2026",
+    current_stage: "survey_review",
+    owner_agent: "researcher",
+  });
+  await seedMinimalProject(workspaceProjectRoot, {
+    project_id: "gcd-part-manifold-2026",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    channelKey: reviewChannelKey,
+    projectRoot: reviewProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: workspaceProjectRoot,
+    sessionKey,
+    sessionId: "session-dashboard-main",
+    messageChannel: "discord",
+    channelKey: reviewChannelKey,
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+  assert.equal(snapshot.projectRoot, reviewProjectRoot);
+  assert.equal(snapshot.projectId, "gcd-survey-tpami-2026");
+  assert.equal(snapshot.projectResolutionSource, "channel_binding");
+
+  const result = await executeWorkflowTool(tool, {
+    action: "auto_iterator_tick",
+    iterator: {
+      mode: "test",
+      queueMailbox: false,
+      dispatchTasks: false,
+      broadcastStageChange: false,
+    },
+  });
+
+  assert.equal(result.projectRoot, reviewProjectRoot);
+  assert.equal(result.projectId, "gcd-survey-tpami-2026");
+  assert.notEqual(result.projectRoot, workspaceProjectRoot);
 });
 
 test("research_workflow diagnose_track_evidence reports canonical graph evidence resolution", async (t) => {

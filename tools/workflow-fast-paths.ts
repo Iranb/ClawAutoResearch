@@ -29,6 +29,7 @@ import {
   looksLikePapernexusHeavyCommand,
   normalizeWorkflowSubagentParentSessionKey,
 } from "./workflow-subagent-sessions";
+import { normalizeWorkflowBindingChannelKey } from "./workflow-commands/parsers.js";
 import {
   appendWorkflowRuntimeEvent,
   listWorkflowRuntimeProjectRoots,
@@ -244,6 +245,7 @@ export type BackgroundRunAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   messageChannel?: string;
+  channelKey?: string;
 };
 
 export type BackgroundRunSnapshot = {
@@ -673,9 +675,14 @@ export async function clearBackgroundWorkflowQueueForTests(): Promise<void> {
 }
 
 function deriveBackgroundRunChannelKey(params: {
+  channelKey?: string | null;
   sessionKey?: string;
   messageChannel?: string;
 }): string | null {
+  const explicit = normalizeWorkflowBindingChannelKey(readString(params.channelKey) ?? null);
+  if (explicit) {
+    return explicit;
+  }
   const normalizedParent = normalizeWorkflowSubagentParentSessionKey(params.sessionKey);
   const sessionKey = readString(normalizedParent ?? params.sessionKey);
   if (sessionKey?.startsWith("agent:")) {
@@ -1557,6 +1564,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
+  channelKey?: string | null;
   preferredSessionKey?: string | null;
   family?: string | null;
   kind?: string | null;
@@ -1608,6 +1616,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
+  channelKey?: string | null;
   preferredSessionKey?: string | null;
   family?: string | null;
   kind?: string | null;
@@ -1627,6 +1636,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
     readString(params.requesterSessionKey) ?? "agent:researcher:main";
   const messageChannel = readString(params.messageChannel) ?? null;
   const channelKey = deriveBackgroundRunChannelKey({
+    channelKey: readString(params.channelKey) ?? null,
     sessionKey: requesterSessionKey,
     messageChannel: messageChannel ?? undefined,
   });
@@ -2692,6 +2702,7 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
     ownerAgent: params.ownerAgent,
     requesterSessionKey: params.agentCtx.sessionKey,
     messageChannel: params.agentCtx.messageChannel,
+    channelKey: params.agentCtx.channelKey,
     preferredSessionKey: params.preferredSessionKey,
     family: params.family,
     kind: params.kind,
@@ -2796,6 +2807,7 @@ export async function startBackgroundWorkflowRun(params: {
       sessionKey: params.agentCtx.sessionKey,
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
+      channelKey: params.agentCtx.channelKey,
       projectRoot: readString(params.backgroundRun.projectRoot) ?? params.snapshot.projectRoot,
       projectId: resolvedBackgroundProjectId,
       title: resolvedBackgroundTitle,
@@ -2812,6 +2824,7 @@ export async function startBackgroundWorkflowRun(params: {
         sessionKey: params.agentCtx.sessionKey,
         sessionId: params.agentCtx.sessionId,
         messageChannel: params.agentCtx.messageChannel,
+        channelKey: params.agentCtx.channelKey,
         projectRoot: ensuredProject.projectRoot,
         projectId: ensuredProject.projectId,
         title: ensuredProject.title,
@@ -2870,6 +2883,7 @@ export async function startBackgroundWorkflowRun(params: {
   const ownerAgent =
     normalizeAgentId(params.agentCtx.agentId) ?? normalizeAgentId(params.snapshot.role);
   const channelKey = deriveBackgroundRunChannelKey({
+    channelKey: params.agentCtx.channelKey,
     sessionKey: params.agentCtx.sessionKey,
     messageChannel: params.agentCtx.messageChannel,
   });
@@ -3042,6 +3056,7 @@ export async function startBackgroundWorkflowRun(params: {
     ownerAgent,
     requesterSessionKey: params.agentCtx.sessionKey,
     messageChannel: params.agentCtx.messageChannel,
+    channelKey: params.agentCtx.channelKey,
     preferredSessionKey: preferredBackgroundSessionKey,
     family: normalizedFamily,
     kind: normalizedKind,
@@ -3060,6 +3075,7 @@ export async function startBackgroundWorkflowRun(params: {
       ownerAgent,
       requesterSessionKey: params.agentCtx.sessionKey,
       messageChannel: params.agentCtx.messageChannel,
+      channelKey: params.agentCtx.channelKey,
       preferredSessionKey: preferredBackgroundSessionKey,
       family: normalizedFamily,
       kind: normalizedKind,
