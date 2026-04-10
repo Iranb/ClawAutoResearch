@@ -63,6 +63,32 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function acknowledgePendingWorkflowMailboxes(projectRoots) {
+  for (const projectRoot of projectRoots) {
+    const mailboxPath = path.join(
+      projectRoot,
+      ".openclaw-research",
+      "workflow-mailbox.json"
+    );
+    try {
+      const mailbox = JSON.parse(await fs.readFile(mailboxPath, "utf8"));
+      let changed = false;
+      for (const entry of mailbox.messages ?? []) {
+        if (entry?.status === "pending") {
+          entry.status = "acknowledged";
+          entry.acknowledgedAt = "2026-04-10T12:00:00.000Z";
+          changed = true;
+        }
+      }
+      if (changed) {
+        await fs.writeFile(mailboxPath, `${JSON.stringify(mailbox, null, 2)}\n`, "utf8");
+      }
+    } catch {
+      // Some tests do not materialize a mailbox; ignore those cases.
+    }
+  }
+}
+
 async function makeProject(projectsRoot, projectId, stage = "setup") {
   const projectRoot = path.join(projectsRoot, projectId);
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -178,6 +204,7 @@ test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STAT
       source: "projects_state",
       stage: "code",
       updatedAt: "2026-03-25T09:00:00.000Z",
+      channelKey: null,
     },
   ]);
 });
@@ -369,7 +396,7 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
   assert.equal(runs.length, 1);
 });
 
-test("maybeLaunchIdleResearchForProject reports channel capacity pressure instead of masking it as runtime failure", async (t) => {
+test("maybeLaunchIdleResearchForProject keeps researcher background capacity isolated per project on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
   const betaRoot = path.join(projectsRoot, "beta");
@@ -549,10 +576,9 @@ test("maybeLaunchIdleResearchForProject reports channel capacity pressure instea
     },
   });
 
-  assert.equal(blocked.launched, false);
-  assert.equal(blocked.reason, "channel_capacity_reached");
-  assert.equal(blocked.activeResearcherSessionsInChannel, 2);
-  assert.match(blocked.summary ?? "", /already has 2 active researcher background subagents/i);
+  assert.equal(blocked.launched, true);
+  assert.equal(blocked.reason, "started");
+  assert.equal(runCalls.length, 3);
 });
 
 test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto mode", async (t) => {
@@ -567,6 +593,7 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
         return { runId: `stage-run-${runs.length}` };
       },
     },
@@ -643,6 +670,7 @@ test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair gu
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
         return { runId: `stage-run-${runs.length}` };
       },
     },
@@ -731,6 +759,7 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
         return { runId: `stage-run-${runs.length}` };
       },
     },
@@ -824,6 +853,7 @@ test("maybeLaunchAutoStageForProject honors configured experiment monitor cooldo
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
         return { runId: `monitor-run-${runs.length}` };
       },
     },
@@ -1088,7 +1118,7 @@ test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway 
   assert.equal(launch.trigger, "auto_graph_refresh");
 });
 
-test("maybeLaunchAutoStageForProject shares the researcher service session pool across projects", async (t) => {
+test("maybeLaunchAutoStageForProject keeps the researcher service session pool isolated per project", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
   const betaRoot = path.join(projectsRoot, "beta");
@@ -1118,6 +1148,7 @@ test("maybeLaunchAutoStageForProject shares the researcher service session pool 
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
         return { runId: `stage-run-${runs.length}` };
       },
     },
@@ -1166,13 +1197,11 @@ test("maybeLaunchAutoStageForProject shares the researcher service session pool 
 
   assert.equal(first.launched, true);
   assert.equal(second.launched, true);
-  assert.equal(third.launched, false);
-  assert.equal(third.reason, "session_pool_full");
-  assert.match(third.error ?? "", /session pool is at capacity/i);
-  assert.equal(runs.length, 2);
+  assert.equal(third.launched, true);
+  assert.equal(runs.length, 3);
 });
 
-test("queued aggressive auto-stage handoffs replay through workflow handoff routing with the bound channel", async (t) => {
+test("aggressive auto-stage handoffs no longer queue purely because another project is active on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
   const betaRoot = path.join(projectsRoot, "beta");
@@ -1211,6 +1240,7 @@ test("queued aggressive auto-stage handoffs replay through workflow handoff rout
         params.sessionKey,
         (sessionMessageCounts.get(params.sessionKey) ?? 0) + 1
       );
+      await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
       return { runId: `seed-run-${runtimeRuns.length}` };
     },
     async waitForRun({ runId }) {
@@ -1289,8 +1319,9 @@ test("queued aggressive auto-stage handoffs replay through workflow handoff rout
 
   assert.equal(first.launched, true);
   assert.equal(second.launched, true);
-  assert.equal(queued.launched, false);
-  assert.equal(queued.reason, "session_pool_full");
+  assert.equal(queued.launched, true);
+  assert.equal(runtimeRuns.length, 3);
+  assert.equal(handoffCalls.length, 0);
 
   const alphaSessions = await readWorkflowRuntimeSessionsStore(alphaRoot);
   const alphaQueue = await readWorkflowRuntimeQueueStore(alphaRoot);
@@ -1299,38 +1330,8 @@ test("queued aggressive auto-stage handoffs replay through workflow handoff rout
   assert.equal(alphaSessions.entries[0].status, "active");
   assert.equal(alphaQueue.entries.length, 1);
   assert.equal(alphaQueue.entries[0].status, "running");
-  assert.equal(alphaQueue.entries[0].entryType, "dispatch_task");
   assert.equal(gammaQueue.entries.length, 1);
-  assert.equal(gammaQueue.entries[0].status, "queued");
-
-  allowDrain = true;
-  const drained = await drainQueuedBackgroundWorkflowRuns({
-    runtimeSubagent,
-    workflowPolicy: makeStageParams(gammaRoot, "gamma").workflowPolicy,
-    handoffWorkflowTaskToAgent: async (params) => {
-      handoffCalls.push(params);
-      return {
-        dispatched: true,
-        sessionKey:
-          "agent:researcher:telegram:topic:paper-lab:subagent:workflow-stage:gamma:experiment",
-        runId: "handoff-run-1",
-        waitStatus: "ok",
-        channel: "sessions_send",
-        strategy: "direct_session",
-        attempts: [],
-        fallbackSpawned: false,
-        error: null,
-        backend: "native",
-        lobsterStatus: null,
-        fallbackReason: null,
-      };
-    },
-  });
-
-  assert.equal(drained.started.length, 1);
-  assert.equal(handoffCalls.length, 1);
-  assert.equal(handoffCalls[0].requesterChannel, "telegram");
-  assert.equal(handoffCalls[0].autoModeActive, true);
+  assert.equal(gammaQueue.entries[0].status, "running");
 });
 
 test("maybeLaunchAutoStageForProject waits for risk discussion before generic stage dispatch", async (t) => {
@@ -1678,7 +1679,7 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
   assert.equal(resolvedStore.currentRound?.aggregate?.reviewCount, 3);
 });
 
-test("maybeAdvanceAutoModeDiscussionForProject queues and replays the researcher reviewer when the shared service pool is full", async (t) => {
+test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher reviewer for another project on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
   const betaRoot = path.join(projectsRoot, "beta");
@@ -1832,27 +1833,19 @@ test("maybeAdvanceAutoModeDiscussionForProject queues and replays the researcher
 
   assert.equal(start.launched, true);
   assert.equal(start.reason, "started");
-  assert.equal(runtimeCalls.length, 2);
+  assert.equal(runtimeCalls.length, 3);
   assert.equal(
     runtimeCalls.some((call) => String(call.sessionKey).startsWith("agent:researcher:")),
-    false
+    true
   );
   const store = await readAutoModeDiscussionStore(gammaRoot);
   assert.equal(store.currentRound?.attempts.length, 3);
   const queuedResearcherAttempt = store.currentRound?.attempts.find(
     (attempt) => attempt.reviewerRole === "researcher"
   );
-  assert.equal(queuedResearcherAttempt?.runId, null);
-  assert.match(queuedResearcherAttempt?.queueKey ?? "", /^auto-discussion:/);
-
-  allowQueueDrain = true;
-  const drained = await drainQueuedBackgroundWorkflowRuns({
-    runtimeSubagent: discussionRuntimeSubagent,
-    projectsRoot,
-  });
-  assert.equal(drained.started.length, 1);
-  assert.equal(drained.remaining.length, 0);
-  assert.match(drained.started[0].summary, /queued/i);
+  assert.equal(typeof queuedResearcherAttempt?.runId, "string");
+  assert.equal(typeof queuedResearcherAttempt?.queueKey, "string");
+  assert.equal(queuedResearcherAttempt?.status, "pending");
 
   const updated = await maybeAdvanceAutoModeDiscussionForProject({
     runtimeSubagent: discussionRuntimeSubagent,
@@ -1897,7 +1890,7 @@ test("maybeAdvanceAutoModeDiscussionForProject queues and replays the researcher
   const replayedResearcherAttempt = updatedStore.currentRound?.attempts.find(
     (attempt) => attempt.reviewerRole === "researcher"
   );
-  assert.equal(replayedResearcherAttempt?.runId, "discussion-run-3");
+  assert.equal(replayedResearcherAttempt?.runId, queuedResearcherAttempt?.runId);
 });
 
 test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to the chosen owner", async (t) => {
@@ -1913,6 +1906,7 @@ test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to t
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
         return { runId: `mitigation-run-${runs.length}` };
       },
     },
@@ -1988,7 +1982,7 @@ test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to t
   assert.match(runs[0].message, /bounded remediation pass/i);
 });
 
-test("maybeDispatchAutoModeMitigationForProject respects the shared researcher service session pool", async (t) => {
+test("maybeDispatchAutoModeMitigationForProject does not block another project on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
   const betaRoot = path.join(projectsRoot, "beta");
@@ -2018,6 +2012,7 @@ test("maybeDispatchAutoModeMitigationForProject respects the shared researcher s
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
         return { runId: `seed-run-${runs.length}` };
       },
     },
@@ -2068,6 +2063,7 @@ test("maybeDispatchAutoModeMitigationForProject respects the shared researcher s
     runtimeSubagent: {
       async run(params) {
         runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
         return { runId: `mitigation-run-${runs.length}` };
       },
     },
@@ -2123,10 +2119,9 @@ test("maybeDispatchAutoModeMitigationForProject respects the shared researcher s
     },
   });
 
-  assert.equal(dispatch.launched, false);
-  assert.equal(dispatch.reason, "session_pool_full");
-  assert.match(dispatch.error ?? "", /session pool is at capacity/i);
-  assert.equal(runs.length, 0);
+  assert.equal(dispatch.launched, true);
+  assert.equal(dispatch.reason, "started");
+  assert.equal(runs.length, 1);
 });
 
 test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states", () => {
@@ -2464,6 +2459,7 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
         subagent: {
           async run(params) {
             runs.push(params);
+            await acknowledgePendingWorkflowMailboxes([projectRoot]);
             return { runId: `run-${runs.length}` };
           },
         },

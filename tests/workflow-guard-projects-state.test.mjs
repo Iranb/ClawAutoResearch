@@ -66,3 +66,59 @@ test("projects state entries are written into the parent PROJECTS_STATE.json", a
   assert.equal(state.projects[0].estimated_gpu_h_remaining, 12);
 });
 
+test("projects state updates keep concurrent sibling project entries under the shared registry", async (t) => {
+  const projectsRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-projects-state-siblings-")
+  );
+  const alphaRoot = path.join(projectsRoot, "alpha");
+  const betaRoot = path.join(projectsRoot, "beta");
+  await fs.mkdir(path.join(alphaRoot, "researcher"), { recursive: true });
+  await fs.mkdir(path.join(betaRoot, "researcher"), { recursive: true });
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await Promise.all([
+    syncWorkflowProjectsStateEntry(
+      {
+        projectRoot: alphaRoot,
+        projectId: "alpha",
+        manifest: { title: "Alpha Project" },
+        trackRegistry: { tracks: [{ status: "active" }] },
+        stage: "idea",
+        nextAction: "/idea-phase",
+        blockingReason: null,
+      },
+      {
+        readJsonIfExists,
+        writeJsonEnsured,
+        getActiveTracks(trackRegistry) {
+          return Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+        },
+      }
+    ),
+    syncWorkflowProjectsStateEntry(
+      {
+        projectRoot: betaRoot,
+        projectId: "beta",
+        manifest: { title: "Beta Project" },
+        trackRegistry: { tracks: [{ status: "active" }] },
+        stage: "plan",
+        nextAction: "/plan-research",
+        blockingReason: null,
+      },
+      {
+        readJsonIfExists,
+        writeJsonEnsured,
+        getActiveTracks(trackRegistry) {
+          return Array.isArray(trackRegistry?.tracks) ? trackRegistry.tracks : [];
+        },
+      }
+    ),
+  ]);
+
+  const state = await readJsonIfExists(path.join(projectsRoot, "PROJECTS_STATE.json"));
+  const ids = state.projects.map((entry) => entry.id).sort();
+  assert.deepEqual(ids, ["alpha", "beta"]);
+});

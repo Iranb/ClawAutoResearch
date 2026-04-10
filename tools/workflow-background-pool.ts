@@ -25,8 +25,8 @@ function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
 }
 
-const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
-const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
+const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
+const BACKGROUND_RUN_STALE_MS = 60 * 60 * 1000;
 const BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS = 15 * 1000;
 const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
 
@@ -864,17 +864,18 @@ export async function acquireBackgroundWorkflowSession(params: {
         entry.family === family &&
         backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot)
     )?.backgroundSessionKey ?? null;
-  const activeChannelEntries = registryEntries.filter(
+  const activeScopeEntries = registryEntries.filter(
     (entry) =>
       entry.ownerAgent === "researcher" &&
       entry.channelKey === channelKey &&
       entry.status === "active" &&
+      backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot) &&
       entry.backgroundSessionKey !== reusableBackgroundSessionKey
   );
-  const activeResearcherSessionsInChannel = activeChannelEntries.length;
+  const activeResearcherSessionsInChannel = activeScopeEntries.length;
   if (
     !reusableBackgroundSessionKey &&
-    activeChannelEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL
+    activeScopeEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE
   ) {
     return {
       acquired: false,

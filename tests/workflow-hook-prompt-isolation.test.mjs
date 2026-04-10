@@ -118,6 +118,81 @@ test("before_prompt_build still injects Workflow Guard into workflow agents", as
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
 });
 
+test("before_prompt_build auto-acknowledges pending handoff mailbox items for the current workflow agent", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-hook-mailbox-ack-")
+  );
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-mailbox.json"), {
+    schemaVersion: 1,
+    updatedAt: "2026-04-10T10:00:00.000Z",
+    messages: [
+      {
+        id: "msg-handoff-1",
+        fromAgent: "orchestrator",
+        toAgent: "researcher",
+        subject: "auto-iterator: idea owner handoff",
+        body: "Please resume idea stage.",
+        kind: "handoff",
+        priority: "high",
+        status: "pending",
+        createdAt: "2026-04-10T10:00:00.000Z",
+      },
+    ],
+  });
+
+  const result = await beforePromptBuild(
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "continue the workflow" }],
+        },
+      ],
+    },
+    {
+      agentId: "researcher",
+      workspaceDir: projectRoot,
+      sessionKey: "agent:researcher:dashboard:main",
+      sessionId: "session-researcher",
+      messageChannel: "main",
+      trigger: "user",
+    }
+  );
+
+  assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+  const mailbox = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "workflow-mailbox.json"),
+      "utf8"
+    )
+  );
+  assert.equal(mailbox.messages[0].status, "acknowledged");
+  assert.equal(typeof mailbox.messages[0].acknowledgedAt, "string");
+});
+
 test("before_prompt_build follows the explicit dashboard channel binding instead of a generic main session", async (t) => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-dashboard-binding-"));
   const projectsRoot = path.join(workspaceRoot, "projects");

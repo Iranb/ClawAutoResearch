@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
@@ -7,6 +10,7 @@ import {
   normalizeWorkflowLobsterHandoffConfig,
   shouldUseLobsterForWorkflowHandoff,
 } from "../tools/lobster-handoff.ts";
+import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 
 function buildDispatchResult(overrides = {}) {
   return {
@@ -18,6 +22,7 @@ function buildDispatchResult(overrides = {}) {
     strategy: "direct_session",
     attempts: [],
     fallbackSpawned: false,
+    acknowledgedByMailbox: false,
     error: null,
     ...overrides,
   };
@@ -135,40 +140,53 @@ test("handoffWorkflowTaskToAgent uses Lobster when enabled for auto mode", async
 
 test("handoffWorkflowTaskToAgent falls back to native when Lobster fails", async () => {
   const nativeCalls = [];
-
-  const result = await handoffWorkflowTaskToAgent(
-    {
-      workflowPolicy: {
-        lobsterHandoff: {
-          ...DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
-          enabled: true,
-          fallbackToNative: true,
-        },
-      },
-      requesterSessionKey: "agent:researcher:discord:group:paper-lab",
-      requesterChannel: "discord",
-      fromRole: "researcher",
-      toRole: "coder",
-      projectRoot: "/tmp/projects/demo",
-      projectId: "demo",
-      stage: "code",
-      summary: "Implement the approved experiment bundle.",
-      command: "/implement-experiment",
-      autoModeActive: true,
-    },
-    {
-      nativeDispatch: async (params) => {
-        nativeCalls.push(params);
-        return buildDispatchResult({ runId: "native-run-2" });
-      },
-      invokeLobsterDispatch: async () => {
-        throw new Error("tool lobster is not allowed");
-      },
-    }
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-lobster-fallback-")
   );
 
-  assert.equal(nativeCalls.length, 1);
-  assert.equal(result.backend, "native");
-  assert.match(result.fallbackReason, /tool lobster is not allowed/i);
-  assert.equal(result.runId, "native-run-2");
+  try {
+    const result = await handoffWorkflowTaskToAgent(
+      {
+        workflowPolicy: {
+          lobsterHandoff: {
+            ...DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
+            enabled: true,
+            fallbackToNative: true,
+          },
+        },
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        requesterChannel: "discord",
+        fromRole: "researcher",
+        toRole: "coder",
+        projectRoot,
+        projectId: "demo",
+        stage: "code",
+        summary: "Implement the approved experiment bundle.",
+        command: "/implement-experiment",
+        autoModeActive: true,
+      },
+      {
+        nativeDispatch: async (params) => {
+          nativeCalls.push(params);
+          return buildDispatchResult({ runId: "native-run-2" });
+        },
+        invokeLobsterDispatch: async () => {
+          throw new Error("tool lobster is not allowed");
+        },
+      }
+    );
+
+    assert.equal(nativeCalls.length, 1);
+    assert.equal(result.backend, "native");
+    assert.match(result.fallbackReason, /tool lobster is not allowed/i);
+    assert.equal(result.runId, "native-run-2");
+
+    const incidents = await readWorkflowRuntimeIncidentsStore(projectRoot, "demo");
+    assert.equal(
+      incidents.entries.some((entry) => entry.kind === "lobster_fallback"),
+      true
+    );
+  } finally {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  }
 });

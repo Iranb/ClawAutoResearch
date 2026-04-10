@@ -191,6 +191,7 @@ type BackgroundWorkflowQueueDispatchPayload = {
   summary: string;
   command: string | null;
   mailboxMessageId: string | null;
+  requireMailboxAcknowledgement: boolean;
   extraBody: string | null;
   waitTimeoutMs: number | null;
   retryOnTimeout: boolean;
@@ -255,8 +256,8 @@ export type BackgroundRunSnapshot = {
   channelProjectBindingsEnabled: boolean;
 };
 
-const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL = 2;
-const BACKGROUND_RUN_STALE_MS = 6 * 60 * 60 * 1000;
+const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
+const BACKGROUND_RUN_STALE_MS = 60 * 60 * 1000;
 const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
 
@@ -591,6 +592,7 @@ function toPersistedQueueEntry(
     projectRoot: entry.projectRoot,
     queuedAt: entry.queuedAt,
     lastAttemptedAt: entry.lastAttemptedAt,
+    lastCheckedAt: entry.lastAttemptedAt,
     attemptCount: entry.attemptCount,
     summary: entry.summary,
     status: entry.status,
@@ -651,6 +653,8 @@ function fromPersistedQueueEntry(
       ? {
           ...entry.dispatchPayload,
           toRole: entry.dispatchPayload.toRole as DispatchableWorkflowRole,
+          requireMailboxAcknowledgement:
+            entry.dispatchPayload.requireMailboxAcknowledgement === true,
         }
       : null,
   };
@@ -899,6 +903,11 @@ async function readBackgroundWorkflowQueue(
                   readString(
                     (record.dispatchPayload as Record<string, unknown>).mailboxMessageId
                   ) ?? null,
+                requireMailboxAcknowledgement:
+                  (record.dispatchPayload as Record<string, unknown>)
+                    .requireMailboxAcknowledgement === true ||
+                  (record.dispatchPayload as Record<string, unknown>)
+                    .require_mailbox_acknowledgement === true,
                 extraBody:
                   readString((record.dispatchPayload as Record<string, unknown>).extraBody) ??
                   null,
@@ -1836,6 +1845,8 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                       summary: dispatchPayload.summary,
                       command: dispatchPayload.command,
                       mailboxMessageId: dispatchPayload.mailboxMessageId,
+                      requireMailboxAcknowledgement:
+                        dispatchPayload.requireMailboxAcknowledgement,
                       extraBody: dispatchPayload.extraBody,
                       waitTimeoutMs:
                         dispatchPayload.waitTimeoutMs ?? undefined,
@@ -1858,6 +1869,8 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                       summary: dispatchPayload.summary,
                       command: dispatchPayload.command,
                       mailboxMessageId: dispatchPayload.mailboxMessageId,
+                      requireMailboxAcknowledgement:
+                        dispatchPayload.requireMailboxAcknowledgement,
                       extraBody: dispatchPayload.extraBody,
                       waitTimeoutMs:
                         dispatchPayload.waitTimeoutMs ?? undefined,
@@ -1921,6 +1934,8 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                 summary: entry.dispatchPayload.summary,
                 command: entry.dispatchPayload.command,
                 mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+                requireMailboxAcknowledgement:
+                  entry.dispatchPayload.requireMailboxAcknowledgement,
                 extraBody: entry.dispatchPayload.extraBody,
                 waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
                 retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
@@ -1941,6 +1956,8 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                 summary: entry.dispatchPayload.summary,
                 command: entry.dispatchPayload.command,
                 mailboxMessageId: entry.dispatchPayload.mailboxMessageId,
+                requireMailboxAcknowledgement:
+                  entry.dispatchPayload.requireMailboxAcknowledgement,
                 extraBody: entry.dispatchPayload.extraBody,
                 waitTimeoutMs: entry.dispatchPayload.waitTimeoutMs ?? undefined,
                 retryOnTimeout: entry.dispatchPayload.retryOnTimeout,
@@ -3104,7 +3121,7 @@ export async function startBackgroundWorkflowRun(params: {
       projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
       summary:
         `Queued background workflow because this channel already has ` +
-        `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_CHANNEL} active Researcher background subagents. ` +
+        `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE} active Researcher background subagents are already running for this project on the current channel. ` +
         `It will auto-start when a pooled session becomes idle${queued.queuePosition > 0 ? ` (queue position ${queued.queuePosition})` : ""}.`,
       reusedIdleSession: false,
       activeResearcherSessionsInChannel,

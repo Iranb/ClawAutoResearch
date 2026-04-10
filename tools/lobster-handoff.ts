@@ -7,6 +7,7 @@ import {
   type DispatchableWorkflowRole,
   type WorkflowTaskDispatchResult,
 } from "./agent-task-dispatch";
+import { recordWorkflowRuntimeIncident } from "./workflow-runtime-incidents.js";
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -125,6 +126,7 @@ type HandoffWorkflowTaskParams = {
   summary: string;
   command?: string | null;
   mailboxMessageId?: string | null;
+  requireMailboxAcknowledgement?: boolean;
   extraBody?: string | null;
   waitTimeoutMs?: number;
   retryOnTimeout?: boolean;
@@ -393,6 +395,8 @@ export async function handoffWorkflowTaskToAgent(
   const lobsterConfig = normalizeWorkflowLobsterHandoffConfig(
     params.workflowPolicy?.lobsterHandoff
   );
+  const requireMailboxAcknowledgement =
+    params.requireMailboxAcknowledgement !== false;
   const useLobster = shouldUseLobsterForWorkflowHandoff({
     config: lobsterConfig,
     autoModeActive: params.autoModeActive,
@@ -400,24 +404,46 @@ export async function handoffWorkflowTaskToAgent(
 
   const runNative = async (reason: string | null) =>
     buildFallbackResult(
-      await nativeDispatch({
-        runtimeSubagent: params.runtimeSubagent,
-        requesterSessionKey: params.requesterSessionKey,
-        requesterChannel: params.requesterChannel ?? undefined,
-        preferredSessionKeys: params.preferredSessionKeys ?? undefined,
-        fromRole: params.fromRole,
-        toRole: params.toRole,
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
-        stage: params.stage,
-        summary: params.summary,
-        command: params.command,
-        mailboxMessageId: params.mailboxMessageId,
-        extraBody: params.extraBody,
-        waitTimeoutMs: params.waitTimeoutMs,
-        retryOnTimeout: params.retryOnTimeout,
-        enableSpawnFallback: params.enableSpawnFallback,
-      }),
+      await (async () => {
+        if (reason) {
+          await recordWorkflowRuntimeIncident({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            idempotencyKey: `lobster-fallback:${params.toRole}:${params.stage ?? "unknown"}:${reason}`,
+            kind: "lobster_fallback",
+            severity: "warning",
+            summary: `Lobster handoff fell back to native dispatch for ${params.toRole}.`,
+            queueKey: null,
+            sessionKey: params.requesterSessionKey ?? null,
+            backend: "lobster",
+            error: reason,
+            details: {
+              toRole: params.toRole,
+              stage: params.stage,
+              command: params.command,
+            },
+          });
+        }
+        return nativeDispatch({
+          runtimeSubagent: params.runtimeSubagent,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterChannel: params.requesterChannel ?? undefined,
+          preferredSessionKeys: params.preferredSessionKeys ?? undefined,
+          fromRole: params.fromRole,
+          toRole: params.toRole,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          stage: params.stage,
+          summary: params.summary,
+          command: params.command,
+          mailboxMessageId: params.mailboxMessageId,
+          requireMailboxAcknowledgement,
+          extraBody: params.extraBody,
+          waitTimeoutMs: params.waitTimeoutMs,
+          retryOnTimeout: params.retryOnTimeout,
+          enableSpawnFallback: params.enableSpawnFallback,
+        });
+      })(),
       reason
     );
 
@@ -475,6 +501,7 @@ export async function handoffWorkflowTaskToAgent(
         strategy: null,
         attempts: [],
         fallbackSpawned: false,
+        acknowledgedByMailbox: false,
         error: reason,
         backend: "lobster",
         lobsterStatus: normalizeLobsterStatus(status),
@@ -507,6 +534,7 @@ export async function handoffWorkflowTaskToAgent(
       strategy: null,
       attempts: [],
       fallbackSpawned: false,
+      acknowledgedByMailbox: false,
       error: reason,
       backend: "lobster",
       lobsterStatus: "error",

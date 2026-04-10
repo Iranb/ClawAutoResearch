@@ -547,6 +547,7 @@ export async function createWorkflowTransitionIntent(
     projectRoot,
     queuedAt: nowIso(),
     lastAttemptedAt: null,
+    lastCheckedAt: null,
     attemptCount: 0,
     summary: readString(params.summary),
     status: "queued",

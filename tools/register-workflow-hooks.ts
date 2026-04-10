@@ -34,7 +34,9 @@ import {
   hasBackgroundContinuationMarker,
 } from "./workflow-fast-paths";
 import { resolveBindingChannelKeyFromContext } from "./workflow-commands/parsers.js";
+import { ensureProjectsBindingIndex } from "./channel-project-bindings";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { autoAcknowledgeWorkflowMailboxForAgent } from "./workflow-handoff-runtime";
 import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
 import { isLiteratureDiscoveryTriggerKind } from "./literature-discovery/workflow-bridge";
 import {
@@ -597,6 +599,21 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         agentCtx,
         autoBind: false,
       });
+      if (
+        workflowPolicy.enableChannelProjectBindings &&
+        workflowPolicy.projectsRoot
+      ) {
+        await ensureProjectsBindingIndex({
+          projectsRoot: workflowPolicy.projectsRoot,
+        });
+      }
+      if (snapshot.projectRoot && snapshot.role) {
+        await autoAcknowledgeWorkflowMailboxForAgent({
+          projectRoot: snapshot.projectRoot,
+          agentId: snapshot.role,
+          handoffOnly: true,
+        });
+      }
       const trigger = readString(hookCtx.trigger);
       if (!workflowPolicy.injectWorkflowContext) {
         return;

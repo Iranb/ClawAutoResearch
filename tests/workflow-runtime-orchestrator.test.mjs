@@ -83,6 +83,7 @@ function buildTransitionInput(projectRoot, projectId = "alpha") {
       summary: "Run the next frontier-mapping stage handoff.",
       command: "/frontier-mapping",
       mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
       extraBody: "Continue only the assigned stage.",
       waitTimeoutMs: 5_000,
       retryOnTimeout: true,

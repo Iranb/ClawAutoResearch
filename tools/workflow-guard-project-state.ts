@@ -17,6 +17,11 @@ import {
   normalizeWritingContractState,
   serializeWritingContractState,
 } from "./workflow-guard-state/writing-contract";
+import {
+  getProjectsStatePath as getProjectsStatePathFromRegistry,
+  readProjectsStateRaw as readProjectsStateRawFromRegistry,
+  syncProjectsStateEntry as syncProjectsStateEntryFromRegistry,
+} from "./workflow-project-registry";
 
 type WorkflowGuardPolicyLike = {
   projectsRoot?: string | null;
@@ -707,23 +712,15 @@ export async function setGateStateForWorkflowImpl(params: {
 }
 
 export function getProjectsStatePath(projectRoot: string): string {
-  return path.join(path.dirname(projectRoot), "PROJECTS_STATE.json");
+  return getProjectsStatePathFromRegistry(projectRoot);
 }
 
 export async function readProjectsStateRaw(params: {
   projectRoot: string;
   readJsonIfExists: <T>(targetPath: string) => Promise<T | null>;
 }): Promise<Record<string, unknown>> {
-  return (
-    (await params.readJsonIfExists<Record<string, unknown>>(
-      getProjectsStatePath(params.projectRoot)
-    )) ?? {
-      updated_at: null,
-      gpu_allocation: {},
-      total_gpu_hours_used: 0,
-      projects: [],
-    }
-  );
+  void params.readJsonIfExists;
+  return readProjectsStateRawFromRegistry(params.projectRoot);
 }
 
 export function formatProjectDirEntry(projectId: string | null): string | null {
@@ -750,64 +747,16 @@ export async function syncProjectsStateEntryImpl(params: {
   writeJsonEnsured: (targetPath: string, value: unknown) => Promise<void>;
   getActiveTracks: (trackRegistry: Record<string, unknown> | null) => unknown[];
 }): Promise<boolean> {
-  if (!params.projectId) {
-    return false;
-  }
-  const projectsState = await readProjectsStateRaw({
+  void deps.readJsonIfExists;
+  void deps.writeJsonEnsured;
+  return syncProjectsStateEntryFromRegistry({
     projectRoot: params.projectRoot,
-    readJsonIfExists: deps.readJsonIfExists,
-  });
-  const projects = Array.isArray(projectsState.projects)
-    ? projectsState.projects.filter(
-        (entry): entry is Record<string, unknown> => Boolean(asRecord(entry))
-      )
-    : [];
-  const now = new Date().toISOString();
-  const existing =
-    projects.find((entry) => pickString(entry, ["id"]) === params.projectId) ?? null;
-  const nextEntry: Record<string, unknown> = {
-    ...(existing ?? {}),
-    id: params.projectId,
-    title:
-      pickString(params.manifest, ["title", "project_title"]) ??
-      pickString(existing ?? {}, ["title"]) ??
-      params.projectId,
+    projectId: params.projectId,
+    manifest: params.manifest,
+    trackRegistry: params.trackRegistry,
     stage: params.stage,
-    active_tracks: deps.getActiveTracks(params.trackRegistry).length,
-    dir: pickString(existing ?? {}, ["dir"]) ?? formatProjectDirEntry(params.projectId),
-    created:
-      pickString(existing ?? {}, ["created"]) ??
-      pickString(params.manifest, ["created_at"])?.slice(0, 10) ??
-      dateOnly(now),
-    updated: now,
-    status: params.stage === "done" ? "completed" : "active",
-    next_action: params.nextAction,
-    blocked_by: params.blockingReason,
-    estimated_gpu_h_remaining:
-      pickNumber(asRecord(params.manifest.budget) ?? {}, [
-        "remaining_gpu_hours",
-        "remaining_gpu_h",
-      ]) ??
-      pickNumber(existing ?? {}, ["estimated_gpu_h_remaining"]),
-  };
-
-  const nextProjects = projects.filter(
-    (entry) => pickString(entry, ["id"]) !== params.projectId
-  );
-  nextProjects.push(nextEntry);
-  nextProjects.sort((left, right) => {
-    const leftPriority = pickNumber(left, ["priority"]) ?? Number.MAX_SAFE_INTEGER;
-    const rightPriority = pickNumber(right, ["priority"]) ?? Number.MAX_SAFE_INTEGER;
-    if (leftPriority !== rightPriority) {
-      return leftPriority - rightPriority;
-    }
-    const leftUpdated = pickString(left, ["updated"]) ?? "";
-    const rightUpdated = pickString(right, ["updated"]) ?? "";
-    return rightUpdated.localeCompare(leftUpdated);
+    nextAction: params.nextAction,
+    blockingReason: params.blockingReason,
+    getActiveTracks: deps.getActiveTracks,
   });
-
-  projectsState.projects = nextProjects;
-  projectsState.updated_at = now;
-  await deps.writeJsonEnsured(getProjectsStatePath(params.projectRoot), projectsState);
-  return true;
 }

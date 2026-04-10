@@ -18,6 +18,7 @@ import {
   deriveWorkflowSubagentImmediateParentSessionKey,
   normalizeWorkflowSubagentParentSessionKey,
 } from "../tools/workflow-subagent-sessions.ts";
+import { ensureProjectsBindingIndex } from "../tools/channel-project-bindings.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-channel-bindings-"));
@@ -256,6 +257,50 @@ test("workflow snapshot does not inherit channel project bindings when agent ide
   assert.equal(snapshot.projectResolutionSource, "none");
 });
 
+test("binding updates maintain a projects-root binding index", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "indexed-track");
+  const sessionKey = "agent:researcher:discord:group:index-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const indexPath = path.join(
+    projectsRoot,
+    ".openclaw-research",
+    "channel-project-bindings.index.json"
+  );
+  const index = JSON.parse(await fs.readFile(indexPath, "utf8"));
+  assert.equal(Array.isArray(index.bindings), true);
+  assert.equal(index.bindings.some((entry) => entry.projectRoot === projectRoot), true);
+
+  const lookup = await getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    agentId: "researcher",
+  });
+  assert.equal(lookup.binding?.projectRoot, projectRoot);
+});
+
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");
@@ -397,6 +442,9 @@ test("legacy subagent-scoped channel bindings still resolve against the root wor
     )}\n`,
     "utf8"
   );
+  await ensureProjectsBindingIndex({
+    projectsRoot,
+  });
 
   const rootSnapshot = await buildWorkflowSnapshot({
     policy: {

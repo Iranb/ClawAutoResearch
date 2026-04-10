@@ -26,21 +26,24 @@ import {
   orchestrateWorkflowTransition,
   recordWorkflowAnnounceEvent,
 } from "./workflow-session-orchestrator.js";
-import { recoverWorkflowRuntimeState } from "./workflow-runtime-recovery.js";
+import { runWorkflowRuntimeMaintenancePass } from "./workflow-runtime-maintenance.js";
 import {
   getIdleResearchStateSummary,
   listChannelProjectBindingsForWorkflow,
   recordWorkflowContactEvent,
   runWorkflowAutoIterator,
 } from "./workflow-guard";
+import { ensureProjectsBindingIndex } from "./channel-project-bindings";
 import {
   selectDispatchableAutoStageAction,
 } from "./workflow-guard-runtime/auto-iterator";
+import { listActiveProjectsFromRegistry } from "./workflow-project-registry";
 import {
   deriveAgentSessionKeyForRole,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
+import { ensureWorkflowDispatchMailboxMessage } from "./workflow-handoff-runtime";
 import { maybeBroadcastWorkflowStatusUpdate } from "./stage-broadcast";
 import {
   aggregateGateReviewRound,
@@ -99,6 +102,7 @@ type WorkflowCoordinatorProject = {
   source: "projects_state" | "scan";
   stage: string | null;
   updatedAt: string | null;
+  channelKey: string | null;
 };
 
 type WorkflowCoordinatorDependencies = {
@@ -106,7 +110,26 @@ type WorkflowCoordinatorDependencies = {
   listWorkflowCoordinatorProjects: typeof listWorkflowCoordinatorProjects;
   getIdleResearchStateSummary: typeof getIdleResearchStateSummary;
   listChannelProjectBindingsForWorkflow: typeof listChannelProjectBindingsForWorkflow;
+  runWorkflowRuntimeMaintenancePass: typeof runWorkflowRuntimeMaintenancePass;
 };
+
+function resolveWorkflowCoordinatorDependencies(
+  overrides?: Partial<WorkflowCoordinatorDependencies>
+): WorkflowCoordinatorDependencies {
+  return {
+    runWorkflowAutoIterator:
+      overrides?.runWorkflowAutoIterator ?? runWorkflowAutoIterator,
+    listWorkflowCoordinatorProjects:
+      overrides?.listWorkflowCoordinatorProjects ?? listWorkflowCoordinatorProjects,
+    getIdleResearchStateSummary:
+      overrides?.getIdleResearchStateSummary ?? getIdleResearchStateSummary,
+    listChannelProjectBindingsForWorkflow:
+      overrides?.listChannelProjectBindingsForWorkflow ??
+      listChannelProjectBindingsForWorkflow,
+    runWorkflowRuntimeMaintenancePass:
+      overrides?.runWorkflowRuntimeMaintenancePass ?? runWorkflowRuntimeMaintenancePass,
+  };
+}
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -415,22 +438,23 @@ function readAutoModeDiscussionAnnounceResult(params: {
 
 function resolveWorkflowRequesterSessionKey(params: {
   projectRoot: string;
-  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
-  deps: WorkflowCoordinatorDependencies;
+  workflowPolicy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
 }): string | null {
   return resolveWorkflowRequesterBinding(params).sessionKey;
 }
 
 function resolveWorkflowRequesterBinding(params: {
   projectRoot: string;
-  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
-  deps: WorkflowCoordinatorDependencies;
+  workflowPolicy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
 }): {
   sessionKey: string | null;
   messageChannel: string | null;
   channelKey: string | null;
 } {
-  const bindings = params.deps.listChannelProjectBindingsForWorkflow({
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
+  const bindings = deps.listChannelProjectBindingsForWorkflow({
     policy: params.workflowPolicy,
   });
   const binding = bindings.bindings
@@ -448,6 +472,15 @@ function resolveWorkflowRequesterBinding(params: {
   };
 }
 
+function resolveWorkflowCoordinationKey(params: {
+  projectRoot: string;
+  workflowPolicy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}): string {
+  const binding = resolveWorkflowRequesterBinding(params);
+  return resolveWorkflowProjectQueueKey(params.projectRoot, binding.channelKey);
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -460,59 +493,23 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function resolveProjectRootFromStateEntry(
-  projectsRoot: string,
-  entry: Record<string, unknown>
-): string | null {
-  const dir = readString(entry.dir);
-  if (dir) {
-    return path.isAbsolute(dir) ? path.resolve(dir) : path.resolve(projectsRoot, dir);
-  }
-  const projectId = readString(entry.id);
-  return projectId ? path.resolve(projectsRoot, projectId) : null;
-}
-
 async function listProjectsFromStateFile(params: {
   projectsRoot: string;
   maxProjects: number;
 }): Promise<WorkflowCoordinatorProject[]> {
-  const projectsStatePath = path.join(params.projectsRoot, "PROJECTS_STATE.json");
-  const state = await readJsonIfExists<Record<string, unknown>>(projectsStatePath);
-  const projects = Array.isArray(state?.projects)
-    ? state.projects.filter(
-        (entry): entry is Record<string, unknown> =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
-      )
-    : [];
-  const results: WorkflowCoordinatorProject[] = [];
-
-  for (const entry of projects) {
-    if (readString(entry.status)?.toLowerCase() === "completed") {
-      continue;
-    }
-    if (readString(entry.stage)?.toLowerCase() === "done") {
-      continue;
-    }
-    const projectRoot = resolveProjectRootFromStateEntry(params.projectsRoot, entry);
-    if (!projectRoot) {
-      continue;
-    }
-    if (!(await fileExists(path.join(projectRoot, "PROJECT_MANIFEST.json")))) {
-      continue;
-    }
-    results.push({
-      projectId: readString(entry.id),
-      projectRoot,
-      source: "projects_state",
-      stage: readString(entry.stage),
-      updatedAt: readString(entry.updated),
-    });
-    if (results.length >= params.maxProjects) {
-      break;
-    }
-  }
-
-  return results;
+  const projects = await listActiveProjectsFromRegistry({
+    projectsRoot: params.projectsRoot,
+    maxProjects: params.maxProjects,
+    pathExists: fileExists,
+  });
+  return projects.map((entry) => ({
+    projectId: entry.projectId,
+    projectRoot: entry.projectRoot,
+    source: "projects_state",
+    stage: entry.stage,
+    updatedAt: entry.updatedAt,
+    channelKey: null,
+  }));
 }
 
 async function listProjectsFromDirectoryScan(params: {
@@ -552,6 +549,7 @@ async function listProjectsFromDirectoryScan(params: {
       source: "scan",
       stage: readString(manifest.current_stage),
       updatedAt: readString(manifest.last_heartbeat_at),
+      channelKey: null,
     });
     if (results.length >= params.maxProjects) {
       break;
@@ -592,13 +590,7 @@ export async function runWorkflowCoordinatorPass(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
   const projects = await deps.listWorkflowCoordinatorProjects({
     projectsRoot: params.projectsRoot,
     maxProjects: params.maxProjects,
@@ -607,7 +599,11 @@ export async function runWorkflowCoordinatorPass(params: {
 
   for (const project of projects) {
     const result = await enqueueWorkflowTask({
-      key: resolveWorkflowProjectQueueKey(project.projectRoot),
+      key: resolveWorkflowCoordinationKey({
+        projectRoot: project.projectRoot,
+        workflowPolicy: params.policy,
+        deps,
+      }),
       label: "workflow_coordinator_tick",
       logger: params.logger,
       task: () =>
@@ -1045,16 +1041,14 @@ export async function maybeLaunchIdleResearchForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_idle_research_launch",
     logger: params.logger,
     task: async (): Promise<IdleResearchLaunchAttempt> => {
@@ -1270,16 +1264,14 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_zotero_sync",
     logger: params.logger,
     task: async (): Promise<AutoZoteroSyncAttempt> => {
@@ -1468,6 +1460,18 @@ async function launchWorkflowDispatchTransition(params: {
   fromRole?: string | null;
   logger?: WorkflowCoordinatorLogger;
 }) {
+  const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
+    projectRoot: params.projectRoot,
+    fromAgent: params.fromRole ?? "researcher",
+    toAgent: params.owner,
+    projectId: params.projectId,
+    stage: params.stage,
+    summary: params.summary,
+    command: params.command ?? null,
+    extraBody: params.extraBody ?? null,
+    queueKey: params.queueKey,
+    existingMessageId: params.mailboxMessageId ?? null,
+  });
   return orchestrateWorkflowTransition({
     transition: {
       projectRoot: params.projectRoot,
@@ -1499,7 +1503,8 @@ async function launchWorkflowDispatchTransition(params: {
         stage: params.stage,
         summary: params.summary,
         command: params.command ?? null,
-        mailboxMessageId: params.mailboxMessageId ?? null,
+        mailboxMessageId,
+        requireMailboxAcknowledgement: true,
         extraBody: params.extraBody ?? null,
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
@@ -1522,7 +1527,8 @@ async function launchWorkflowDispatchTransition(params: {
         stage: params.stage,
         summary: params.summary,
         command: params.command ?? null,
-        mailboxMessageId: params.mailboxMessageId ?? null,
+        mailboxMessageId,
+        requireMailboxAcknowledgement: true,
         extraBody: params.extraBody ?? null,
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
@@ -1646,16 +1652,14 @@ export async function maybeLaunchAutoStageForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_stage_launch",
     logger: params.logger,
     task: async (): Promise<AutoStageLaunchAttempt> => {
@@ -1915,6 +1919,7 @@ export async function maybeLaunchAutoStageForProject(params: {
               summary: action.summary,
               command: action.command,
               mailboxMessageId: action.mailboxMessageId ?? null,
+              requireMailboxAcknowledgement: true,
               extraBody:
                 "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
               waitTimeoutMs: 5000,
@@ -2539,16 +2544,14 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_code_review",
     logger: params.logger,
     task: async (): Promise<AutoCodeReviewAttempt> => {
@@ -2835,16 +2838,14 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_gate_review",
     logger: params.logger,
     task: async (): Promise<AutoGateReviewAttempt> => {
@@ -2939,16 +2940,14 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_mode_discussion",
     logger: params.logger,
     task: async (): Promise<AutoModeDiscussionAttempt> => {
@@ -3414,16 +3413,14 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }) {
-  const deps: WorkflowCoordinatorDependencies = {
-    runWorkflowAutoIterator,
-    listWorkflowCoordinatorProjects,
-    getIdleResearchStateSummary,
-    listChannelProjectBindingsForWorkflow,
-    ...params.deps,
-  };
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
 
   return enqueueWorkflowTask({
-    key: resolveWorkflowProjectQueueKey(params.projectRoot),
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
     label: "workflow_auto_mode_mitigation",
     logger: params.logger,
     task: async (): Promise<AutoModeMitigationDispatchAttempt> => {
@@ -3566,6 +3563,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
                 params.autoIteratorResult.nextAction ??
                 "Run research_workflow.auto_iterator_tick after the mitigation pass.",
               mailboxMessageId: null,
+              requireMailboxAcknowledgement: true,
               extraBody: buildAutoMitigationExtraBody({
                 packetPath: params.discussionAttempt.packetPath,
                 summary: params.discussionAttempt.summary,
@@ -3745,6 +3743,15 @@ export function createWorkflowCoordinatorService(
     inFlightTick = (async () => {
       try {
         const workflowPolicy = plugin.getWorkflowPolicy();
+        const resolvedDeps = resolveWorkflowCoordinatorDependencies(deps);
+        if (
+          workflowPolicy.enableChannelProjectBindings &&
+          workflowPolicy.projectsRoot
+        ) {
+          await ensureProjectsBindingIndex({
+            projectsRoot: workflowPolicy.projectsRoot,
+          });
+        }
         const drainedQueue = await drainQueuedBackgroundWorkflowRuns({
           runtimeSubagent: plugin.api.runtime?.subagent,
           workflowPolicy,
@@ -3757,14 +3764,17 @@ export function createWorkflowCoordinatorService(
           queueMailbox: workflowPolicy.enableWorkflowMailbox,
           maxProjects: DEFAULT_WORKFLOW_COORDINATOR_MAX_PROJECTS,
           logger,
-          deps,
+          deps: resolvedDeps,
         });
         await Promise.all(
           results.map((entry) =>
-            recoverWorkflowRuntimeState({
+            resolvedDeps.runWorkflowRuntimeMaintenancePass({
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
               staleSessionAgeMs: 15 * 60 * 1000,
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              logger,
               sendBroadcast: async (broadcastEntry) => {
                 const result = await maybeBroadcastWorkflowStatusUpdate({
                   runtimeSubagent: plugin.api.runtime?.subagent,
@@ -3799,7 +3809,7 @@ export function createWorkflowCoordinatorService(
               projectId: entry.projectId,
               autoIteratorResult: entry.result,
               logger,
-              deps,
+              deps: resolvedDeps,
             })
           )
         );
@@ -3809,7 +3819,11 @@ export function createWorkflowCoordinatorService(
               return entry;
             }
             const refreshed = await enqueueWorkflowTask({
-              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              key: resolveWorkflowCoordinationKey({
+                projectRoot: entry.projectRoot,
+                workflowPolicy,
+                deps,
+              }),
               label: "workflow_post_code_review_reconcile",
               logger,
               task: () =>
@@ -3837,7 +3851,7 @@ export function createWorkflowCoordinatorService(
               projectId: entry.projectId,
               autoIteratorResult: entry.result,
               logger,
-              deps,
+              deps: resolvedDeps,
             })
           )
         );
@@ -3847,7 +3861,11 @@ export function createWorkflowCoordinatorService(
               return entry;
             }
             const refreshed = await enqueueWorkflowTask({
-              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              key: resolveWorkflowCoordinationKey({
+                projectRoot: entry.projectRoot,
+                workflowPolicy,
+                deps,
+              }),
               label: "workflow_post_gate_reconcile",
               logger,
               task: () =>
@@ -3875,7 +3893,7 @@ export function createWorkflowCoordinatorService(
               projectId: entry.projectId,
               autoIteratorResult: entry.result,
               logger,
-              deps,
+              deps: resolvedDeps,
             })
           )
         );
@@ -3885,7 +3903,11 @@ export function createWorkflowCoordinatorService(
               return entry;
             }
             const refreshed = await enqueueWorkflowTask({
-              key: resolveWorkflowProjectQueueKey(entry.projectRoot),
+              key: resolveWorkflowCoordinationKey({
+                projectRoot: entry.projectRoot,
+                workflowPolicy,
+                deps,
+              }),
               label: "workflow_post_discussion_reconcile",
               logger,
               task: () =>
@@ -3987,13 +4009,7 @@ export function createWorkflowCoordinatorService(
             const requesterSessionKey = resolveWorkflowRequesterSessionKey({
               projectRoot: entry.projectRoot,
               workflowPolicy,
-              deps: {
-                runWorkflowAutoIterator,
-                listWorkflowCoordinatorProjects,
-                getIdleResearchStateSummary,
-                listChannelProjectBindingsForWorkflow,
-                ...deps,
-              },
+              deps: resolveWorkflowCoordinatorDependencies(deps),
             });
             return maybeBroadcastWorkflowStatusUpdate({
               runtimeSubagent: plugin.api.runtime?.subagent,

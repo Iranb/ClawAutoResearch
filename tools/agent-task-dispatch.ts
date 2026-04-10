@@ -4,6 +4,10 @@ import {
   derivePapernexusTaskLabel,
   looksLikePapernexusHeavyCommand,
 } from "./workflow-subagent-sessions";
+import {
+  ensureWorkflowDispatchMailboxMessage,
+  waitForWorkflowMailboxAcknowledgement,
+} from "./workflow-handoff-runtime";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -44,6 +48,7 @@ export type WorkflowTaskDispatchAttempt = {
   runId: string | null;
   waitStatus: "ok" | "error" | "timeout" | null;
   dispatched: boolean;
+  acceptedByMailbox: boolean;
   acceptedByTranscript: boolean;
   error: string | null;
 };
@@ -57,15 +62,12 @@ export type WorkflowTaskDispatchResult = {
   strategy: "direct_session" | "alternate_session" | "spawn_fallback" | null;
   attempts: WorkflowTaskDispatchAttempt[];
   fallbackSpawned: boolean;
+  acknowledgedByMailbox: boolean;
   error: string | null;
 };
 
 function toAgentId(role: DispatchableWorkflowRole): string {
   return role;
-}
-
-function formatRoleMention(role: DispatchableWorkflowRole): string {
-  return `@${String(role).replace(/_/g, "-")}`;
 }
 
 export function deriveAgentSessionKeyForRole(params: {
@@ -166,8 +168,8 @@ export function buildWorkflowDispatchMessage(params: {
     `[HANDOFF] next owner: ${params.toRole}`,
     "[ARTIFACTS] <durable files, packets, manifests, or reports you updated>",
     `[NEXT] ${params.command ?? "<one immediate next action>"}`,
-    `${formatRoleMention(params.toRole)} only if an immediate wake-up is required; otherwise omit the raw mention.`,
-    "Reply style after receiving a handoff: acknowledge with plain text or a role label, do not repeat the raw @mention, and only send a new raw @mention if a later wake-up is genuinely required.",
+    `Target owner label: [${params.toRole}]. Avoid raw @mentions inside workflow dispatch payloads.`,
+    "Reply style after receiving a handoff: acknowledge with plain text or a role label, do not repeat raw @mentions, and only use mailbox-aware workflow handoff paths for follow-up routing.",
     "Then execute the assigned stage work, update durable state, and avoid decorative @mentions.",
   ]
     .filter(Boolean)
@@ -199,6 +201,9 @@ async function runSingleDispatchAttempt(params: {
   message: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
+  projectRoot: string;
+  mailboxMessageId?: string | null;
+  requireMailboxAcknowledgement?: boolean;
   waitTimeoutMs?: number;
   retryOnTimeout?: boolean;
   idempotencyKey: string;
@@ -230,6 +235,35 @@ async function runSingleDispatchAttempt(params: {
         .join("\n"),
     });
 
+    const mailboxWaitTimeoutMs =
+      typeof params.waitTimeoutMs === "number" && params.waitTimeoutMs > 0
+        ? params.waitTimeoutMs
+        : 5_000;
+    if (params.mailboxMessageId && params.projectRoot) {
+      const mailboxWait = await waitForWorkflowMailboxAcknowledgement({
+        projectRoot: params.projectRoot,
+        messageId: params.mailboxMessageId,
+        timeoutMs: params.runtimeSubagent.waitForRun
+          ? mailboxWaitTimeoutMs
+          : Math.min(mailboxWaitTimeoutMs, 500),
+      });
+      if (mailboxWait.acknowledged) {
+        return {
+          accepted: true,
+          attempt: {
+            strategy: params.strategy,
+            sessionKey: params.sessionKey,
+            runId: started.runId,
+            waitStatus: "ok",
+            dispatched: true,
+            acceptedByMailbox: true,
+            acceptedByTranscript: false,
+            error: null,
+          },
+        };
+      }
+    }
+
     if (
       typeof params.waitTimeoutMs === "number" &&
       params.waitTimeoutMs > 0 &&
@@ -240,6 +274,21 @@ async function runSingleDispatchAttempt(params: {
         timeoutMs: params.waitTimeoutMs,
       });
       if (waited.status === "ok") {
+        if (params.requireMailboxAcknowledgement === true && params.mailboxMessageId) {
+          return {
+            accepted: false,
+            attempt: {
+              strategy: params.strategy,
+              sessionKey: params.sessionKey,
+              runId: started.runId,
+              waitStatus: waited.status,
+              dispatched: false,
+              acceptedByMailbox: false,
+              acceptedByTranscript: false,
+              error: "workflow mailbox handoff was not acknowledged before the dispatch timeout",
+            },
+          };
+        }
         return {
           accepted: true,
           attempt: {
@@ -248,6 +297,7 @@ async function runSingleDispatchAttempt(params: {
             runId: started.runId,
             waitStatus: waited.status,
             dispatched: true,
+            acceptedByMailbox: false,
             acceptedByTranscript: false,
             error: null,
           },
@@ -257,7 +307,10 @@ async function runSingleDispatchAttempt(params: {
         const afterCount = await getMessageCount(params.runtimeSubagent, params.sessionKey);
         const acceptedByTranscript =
           beforeCount != null && afterCount != null && afterCount > beforeCount;
-        const accepted = acceptedByTranscript || params.retryOnTimeout !== true;
+        const accepted =
+          params.requireMailboxAcknowledgement === true && params.mailboxMessageId
+            ? false
+            : acceptedByTranscript || params.retryOnTimeout !== true;
         return {
           accepted,
           attempt: {
@@ -266,6 +319,7 @@ async function runSingleDispatchAttempt(params: {
             runId: started.runId,
             waitStatus: waited.status,
             dispatched: accepted,
+            acceptedByMailbox: false,
             acceptedByTranscript,
             error:
               accepted || acceptedByTranscript
@@ -282,12 +336,28 @@ async function runSingleDispatchAttempt(params: {
           runId: started.runId,
           waitStatus: waited.status,
           dispatched: false,
+          acceptedByMailbox: false,
           acceptedByTranscript: false,
           error: waited.error ?? "agent dispatch failed",
         },
       };
     }
 
+    if (params.requireMailboxAcknowledgement === true && params.mailboxMessageId) {
+      return {
+        accepted: false,
+        attempt: {
+          strategy: params.strategy,
+          sessionKey: params.sessionKey,
+          runId: started.runId,
+          waitStatus: null,
+          dispatched: false,
+          acceptedByMailbox: false,
+          acceptedByTranscript: false,
+          error: "workflow mailbox handoff was not acknowledged before returning control",
+        },
+      };
+    }
     return {
       accepted: true,
       attempt: {
@@ -296,6 +366,7 @@ async function runSingleDispatchAttempt(params: {
         runId: started.runId,
         waitStatus: null,
         dispatched: true,
+        acceptedByMailbox: false,
         acceptedByTranscript: false,
         error: null,
       },
@@ -309,6 +380,7 @@ async function runSingleDispatchAttempt(params: {
         runId: null,
         waitStatus: null,
         dispatched: false,
+        acceptedByMailbox: false,
         acceptedByTranscript: false,
         error: error instanceof Error ? error.message : String(error),
       },
@@ -329,6 +401,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
   summary: string;
   command?: string | null;
   mailboxMessageId?: string | null;
+  requireMailboxAcknowledgement?: boolean;
   extraBody?: string | null;
   waitTimeoutMs?: number;
   retryOnTimeout?: boolean;
@@ -345,9 +418,24 @@ export async function dispatchWorkflowTaskToAgent(params: {
       strategy: null,
       attempts: [],
       fallbackSpawned: false,
+      acknowledgedByMailbox: false,
       error: "Plugin runtime subagent API is unavailable.",
     };
   }
+  const requireMailboxAcknowledgement =
+    params.requireMailboxAcknowledgement !== false;
+
+  const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
+    projectRoot: params.projectRoot,
+    fromAgent: params.fromRole,
+    toAgent: params.toRole,
+    projectId: params.projectId,
+    stage: params.stage,
+    summary: params.summary,
+    command: params.command,
+    extraBody: params.extraBody,
+    existingMessageId: params.mailboxMessageId,
+  });
 
   const message = buildWorkflowDispatchMessage({
     projectRoot: params.projectRoot,
@@ -357,7 +445,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
     stage: params.stage,
     summary: params.summary,
     command: params.command,
-    mailboxMessageId: params.mailboxMessageId,
+    mailboxMessageId,
     extraBody: params.extraBody,
   });
   const attempts: WorkflowTaskDispatchAttempt[] = [];
@@ -395,6 +483,9 @@ export async function dispatchWorkflowTaskToAgent(params: {
       message,
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
+      projectRoot: params.projectRoot,
+      mailboxMessageId,
+      requireMailboxAcknowledgement,
       waitTimeoutMs: params.waitTimeoutMs,
       retryOnTimeout: params.retryOnTimeout,
       idempotencyKey: `${dispatchBatchId}:direct:${index}`,
@@ -410,6 +501,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         strategy: attemptResult.attempt.strategy,
         attempts,
         fallbackSpawned: false,
+        acknowledgedByMailbox: attemptResult.attempt.acceptedByMailbox,
         error: null,
       };
     }
@@ -424,6 +516,9 @@ export async function dispatchWorkflowTaskToAgent(params: {
       message,
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
+      projectRoot: params.projectRoot,
+      mailboxMessageId,
+      requireMailboxAcknowledgement,
       waitTimeoutMs: params.waitTimeoutMs,
       retryOnTimeout: params.retryOnTimeout,
       idempotencyKey: `${dispatchBatchId}:spawn`,
@@ -439,6 +534,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         strategy: attemptResult.attempt.strategy,
         attempts,
         fallbackSpawned: true,
+        acknowledgedByMailbox: attemptResult.attempt.acceptedByMailbox,
         error: null,
       };
     }
@@ -464,6 +560,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
     strategy: lastAttempt?.strategy ?? null,
     attempts,
     fallbackSpawned: attempts.some((attempt) => attempt.strategy === "spawn_fallback"),
+    acknowledgedByMailbox: attempts.some((attempt) => attempt.acceptedByMailbox),
     error: lastAttempt?.error ?? "Workflow agent dispatch failed.",
   };
 }

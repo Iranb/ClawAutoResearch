@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   buildWorkflowDispatchMessage,
@@ -44,7 +47,7 @@ test("buildWorkflowDispatchMessage includes project and mailbox context", () => 
   assert.match(message, /Immediate command: \/review-phase/);
   assert.match(message, /\[STATUS\] review complete/);
   assert.match(message, /\[HANDOFF\] next owner: reviewer/);
-  assert.match(message, /@reviewer only if an immediate wake-up is required/i);
+  assert.match(message, /Target owner label: \[reviewer\]/i);
 });
 
 test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the target session", async () => {
@@ -66,6 +69,7 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
     summary: "Implement the current experiment plan.",
     command: "/implement-experiment",
     mailboxMessageId: "msg-001",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
@@ -99,6 +103,7 @@ test("dispatchWorkflowTaskToAgent retries alternate direct session candidates be
     projectRoot: "/tmp/demo-project",
     projectId: "demo-project",
     summary: "Retry dispatch.",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
@@ -133,6 +138,7 @@ test("dispatchWorkflowTaskToAgent falls back to a spawned session when direct de
     projectRoot: "/tmp/demo-project",
     projectId: "demo-project",
     summary: "Spawn fallback dispatch.",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
@@ -171,12 +177,82 @@ test("dispatchWorkflowTaskToAgent retries timeout only when requested and transc
     summary: "Timeout retry dispatch.",
     waitTimeoutMs: 2000,
     retryOnTimeout: true,
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
   assert.equal(result.channel, "sessions_send");
   assert.equal(calls.length, 1);
+  assert.equal(result.attempts[0].acceptedByMailbox, false);
   assert.equal(result.attempts[0].acceptedByTranscript, true);
+});
+
+test("dispatchWorkflowTaskToAgent waits for workflow mailbox acknowledgement when a mailbox handoff exists", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-mailbox-")
+  );
+  const mailboxPath = path.join(projectRoot, ".openclaw-research", "workflow-mailbox.json");
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.dirname(mailboxPath), { recursive: true });
+  await fs.writeFile(
+    mailboxPath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-10T10:00:00.000Z",
+        messages: [
+          {
+            id: "msg-ack-1",
+            fromAgent: "researcher",
+            toAgent: "coder",
+            subject: "auto-iterator: code owner handoff",
+            body: "Please resume code stage.",
+            kind: "handoff",
+            priority: "high",
+            status: "pending",
+            createdAt: "2026-04-10T10:00:00.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run() {
+        setTimeout(async () => {
+          const mailbox = JSON.parse(await fs.readFile(mailboxPath, "utf8"));
+          mailbox.messages[0].status = "acknowledged";
+          mailbox.messages[0].acknowledgedAt = "2026-04-10T10:00:01.000Z";
+          await fs.writeFile(mailboxPath, `${JSON.stringify(mailbox, null, 2)}\n`, "utf8");
+        }, 50);
+        return { runId: "run-mailbox-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Continue the code stage.",
+    mailboxMessageId: "msg-ack-1",
+    waitTimeoutMs: 2000,
+    retryOnTimeout: true,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.acknowledgedByMailbox, true);
+  assert.equal(result.attempts[0].acceptedByMailbox, true);
+  assert.equal(result.attempts[0].acceptedByTranscript, false);
 });
 
 test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime is unavailable", async () => {
@@ -187,6 +263,7 @@ test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime 
     toRole: "coder",
     projectRoot: "/tmp/demo-project",
     summary: "Fallback dispatch test.",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, false);
@@ -212,6 +289,7 @@ test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for Paper
     stage: "frontier_mapping",
     summary: "Run PaperNexus reflection over the current frontier pack.",
     command: "/papernexus-reflection",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
@@ -247,6 +325,7 @@ test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as 
     summary: "Run a typed brainstorm brief against the shared graph.",
     command:
       "curl -X POST https://papernexus.example/api/brainstorm-brief -H 'Authorization: Bearer $PAPERNEXUS_API_TOKEN'",
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);
@@ -282,6 +361,7 @@ test("dispatchWorkflowTaskToAgent treats wrapper-based PaperNexus chains as heav
     summary: "Run wrapper-based evidence chain against the shared graph.",
     command:
       'python3 scripts/pn_research_chains.py --api-base "https://papernexus.example/api" --corpus "demo" evidence-chain "topic" --limit 5',
+    requireMailboxAcknowledgement: false,
   });
 
   assert.equal(result.dispatched, true);

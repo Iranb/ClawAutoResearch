@@ -718,6 +718,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
     summary: primaryAction.summary,
     command: primaryAction.command,
     mailboxMessageId: primaryAction.mailboxMessageId,
+    requireMailboxAcknowledgement: true,
     waitTimeoutMs: params.waitTimeoutMs,
     retryOnTimeout: params.retryOnTimeout,
     enableSpawnFallback: params.enableSpawnFallback,
@@ -770,6 +771,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
         summary: primaryAction.summary,
         command: primaryAction.command,
         mailboxMessageId: primaryAction.mailboxMessageId ?? null,
+        requireMailboxAcknowledgement: true,
         extraBody:
           "Workflow auto-mode queued dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
         waitTimeoutMs: params.waitTimeoutMs ?? 5000,
@@ -1856,6 +1858,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 stage: snapshot.currentStage,
                 summary: subject,
                 command,
+                requireMailboxAcknowledgement: false,
                 extraBody,
                 waitTimeoutMs: Math.max(
                   0,

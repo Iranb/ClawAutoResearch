@@ -25,6 +25,11 @@ import {
   normalizeWorkflowBindingChannelKey,
   resolveBindingChannelKeyFromContext,
 } from "./workflow-commands/parsers.js";
+import {
+  readJsonIfExists,
+  withAdvisoryLock,
+  writeJsonAtomicEnsured,
+} from "./workflow-guard-core/fs";
 
 export interface ChannelProjectBindingPolicy {
   enableChannelProjectBindings?: boolean;
@@ -82,6 +87,16 @@ type ChannelProjectBindingsStore = {
   bindings: ChannelProjectBindingRecord[];
 };
 
+type ChannelProjectBindingIndexEntry = ChannelProjectBindingRecord & {
+  storePath: string;
+};
+
+type ChannelProjectBindingIndexStore = {
+  schemaVersion: 1;
+  updatedAt: string;
+  bindings: ChannelProjectBindingIndexEntry[];
+};
+
 export type ResolvedProjectContext = {
   enabled: boolean;
   channelKey: string | null;
@@ -97,6 +112,12 @@ const DEFAULT_POLICY: Required<ChannelProjectBindingPolicy> = {
   channelProjectBindingsPath: "",
   projectsRoot: "",
 };
+
+const BINDING_INDEX_CACHE_TTL_MS = 30_000;
+const bindingIndexCache = new Map<
+  string,
+  { loadedAt: number; store: ChannelProjectBindingIndexStore }
+>();
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -310,6 +331,22 @@ function getProjectsScopedFallbackStorePath(projectsRoot: string): string {
   );
 }
 
+function emptyBindingIndexStore(): ChannelProjectBindingIndexStore {
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date(0).toISOString(),
+    bindings: [],
+  };
+}
+
+export function getProjectsBindingIndexPath(projectsRoot: string): string {
+  return path.join(
+    path.resolve(expandHome(projectsRoot)),
+    ".openclaw-research",
+    "channel-project-bindings.index.json"
+  );
+}
+
 async function listCandidateProjectBindingStorePaths(
   projectsRoot: string
 ): Promise<string[]> {
@@ -374,6 +411,230 @@ function normalizeRecord(record: Partial<ChannelProjectBindingRecord>): ChannelP
   };
 }
 
+function normalizeIndexEntry(
+  record: Partial<ChannelProjectBindingIndexEntry>
+): ChannelProjectBindingIndexEntry | null {
+  const binding = normalizeRecord(record);
+  const storePath = asString(record.storePath);
+  if (!binding || !storePath) {
+    return null;
+  }
+  return {
+    ...binding,
+    storePath: path.resolve(expandHome(storePath)),
+  };
+}
+
+function normalizeBindingIndexStore(
+  value: unknown
+): ChannelProjectBindingIndexStore {
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const bindings = Array.isArray(record.bindings)
+    ? record.bindings
+        .map((entry) => normalizeIndexEntry(entry as Partial<ChannelProjectBindingIndexEntry>))
+        .filter((entry): entry is ChannelProjectBindingIndexEntry => Boolean(entry))
+    : [];
+  return {
+    schemaVersion: 1,
+    updatedAt: asString(record.updatedAt) ?? new Date(0).toISOString(),
+    bindings,
+  };
+}
+
+function readBindingIndex(projectsRoot: string): ChannelProjectBindingIndexStore {
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  const cached = bindingIndexCache.get(indexPath);
+  if (cached && Date.now() - cached.loadedAt <= BINDING_INDEX_CACHE_TTL_MS) {
+    return cached.store;
+  }
+  let store: ChannelProjectBindingIndexStore;
+  try {
+    const raw = fs.readFileSync(indexPath, "utf8");
+    store = normalizeBindingIndexStore(JSON.parse(raw));
+  } catch {
+    store = emptyBindingIndexStore();
+  }
+  bindingIndexCache.set(indexPath, {
+    loadedAt: Date.now(),
+    store,
+  });
+  return store;
+}
+
+async function readStoreAsync(storePath: string): Promise<ChannelProjectBindingsStore> {
+  const parsed = await readJsonIfExists<{
+    updatedAt?: string;
+    bindings?: Array<Partial<ChannelProjectBindingRecord>>;
+  }>(storePath);
+  if (!parsed) {
+    return {
+      schemaVersion: 1,
+      updatedAt: new Date(0).toISOString(),
+      bindings: [],
+    };
+  }
+  const bindings = Array.isArray(parsed.bindings)
+    ? parsed.bindings
+        .map((entry) => normalizeRecord(entry))
+        .filter((entry): entry is ChannelProjectBindingRecord => Boolean(entry))
+    : [];
+  return {
+    schemaVersion: 1,
+    updatedAt: asString(parsed.updatedAt) ?? new Date(0).toISOString(),
+    bindings,
+  };
+}
+
+async function saveBindingIndex(
+  projectsRoot: string,
+  store: ChannelProjectBindingIndexStore
+): Promise<void> {
+  store.updatedAt = new Date().toISOString();
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  await writeJsonAtomicEnsured(indexPath, store);
+  bindingIndexCache.set(indexPath, {
+    loadedAt: Date.now(),
+    store,
+  });
+}
+
+export async function rebuildProjectsBindingIndex(params: {
+  projectsRoot: string;
+}): Promise<ChannelProjectBindingIndexStore> {
+  const projectsRoot = path.resolve(expandHome(params.projectsRoot));
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  return withAdvisoryLock({
+    lockPath: `${indexPath}.lock`,
+    task: async () => {
+      let entries: Array<fs.Dirent<string>> = [];
+      try {
+        entries = (await fsp.readdir(projectsRoot, {
+          withFileTypes: true,
+          encoding: "utf8",
+        })) as Array<fs.Dirent<string>>;
+      } catch (error) {
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as NodeJS.ErrnoException).code)
+            : null;
+        if (code === "ENOENT") {
+          const empty = emptyBindingIndexStore();
+          await saveBindingIndex(projectsRoot, empty);
+          return empty;
+        }
+        throw error;
+      }
+      const storePaths = entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) =>
+          path.join(
+            projectsRoot,
+            entry.name,
+            ".openclaw-research",
+            "channel-project-bindings.json"
+          )
+        );
+      const stores = await Promise.all(
+        storePaths.map(async (storePath) => ({
+          storePath,
+          store: await readStoreAsync(storePath),
+        }))
+      );
+      const bindings: ChannelProjectBindingIndexEntry[] = [];
+      for (const candidate of stores) {
+        for (const binding of candidate.store.bindings) {
+          if (
+            !isProjectRootWithinProjectsRoot({
+              projectRoot: binding.projectRoot,
+              projectsRoot,
+            })
+          ) {
+            continue;
+          }
+          bindings.push({
+            ...binding,
+            storePath: path.resolve(expandHome(candidate.storePath)),
+          });
+        }
+      }
+      const next: ChannelProjectBindingIndexStore = {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        bindings: bindings.sort((left, right) =>
+          left.channelKey.localeCompare(right.channelKey)
+        ),
+      };
+      await saveBindingIndex(projectsRoot, next);
+      return next;
+    },
+  });
+}
+
+export async function ensureProjectsBindingIndex(params: {
+  projectsRoot: string;
+  maxAgeMs?: number;
+}): Promise<ChannelProjectBindingIndexStore> {
+  const projectsRoot = path.resolve(expandHome(params.projectsRoot));
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  const maxAgeMs =
+    typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
+      ? Math.max(0, Math.floor(params.maxAgeMs))
+      : BINDING_INDEX_CACHE_TTL_MS;
+  const current = await readJsonIfExists<ChannelProjectBindingIndexStore>(indexPath);
+  const normalized = current ? normalizeBindingIndexStore(current) : null;
+  const updatedAtMs = normalized?.updatedAt ? Date.parse(normalized.updatedAt) : NaN;
+  if (
+    normalized &&
+    Number.isFinite(updatedAtMs) &&
+    Date.now() - updatedAtMs <= maxAgeMs
+  ) {
+    bindingIndexCache.set(indexPath, {
+      loadedAt: Date.now(),
+      store: normalized,
+    });
+    return normalized;
+  }
+  return rebuildProjectsBindingIndex({
+    projectsRoot,
+  });
+}
+
+async function updateBindingIndexForProjectStore(params: {
+  projectsRoot: string;
+  storePath: string;
+  store: ChannelProjectBindingsStore;
+}): Promise<void> {
+  const current = readBindingIndex(params.projectsRoot);
+  const normalizedStorePath = path.resolve(expandHome(params.storePath));
+  const nextBindings = current.bindings.filter(
+    (entry) => entry.storePath !== normalizedStorePath
+  );
+  for (const binding of params.store.bindings) {
+    if (
+      !isProjectRootWithinProjectsRoot({
+        projectRoot: binding.projectRoot,
+        projectsRoot: params.projectsRoot,
+      })
+    ) {
+      continue;
+    }
+    nextBindings.push({
+      ...binding,
+      storePath: normalizedStorePath,
+    });
+  }
+  await saveBindingIndex(params.projectsRoot, {
+    schemaVersion: 1,
+    updatedAt: current.updatedAt,
+    bindings: nextBindings.sort((left, right) =>
+      left.channelKey.localeCompare(right.channelKey)
+    ),
+  });
+}
+
 function readStore(storePath: string): ChannelProjectBindingsStore {
   try {
     const raw = fs.readFileSync(storePath, "utf8");
@@ -406,8 +667,7 @@ async function saveStore(
   store: ChannelProjectBindingsStore
 ): Promise<void> {
   store.updatedAt = new Date().toISOString();
-  await fsp.mkdir(path.dirname(storePath), { recursive: true });
-  await fsp.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  await writeJsonAtomicEnsured(storePath, store);
 }
 
 export function resolveChannelProjectBindingsPath(params: {
@@ -489,42 +749,29 @@ export function getChannelProjectBinding(params: {
   }
   if (projectsRoot && lookup.projectScanKeys.length > 0) {
     try {
-      const candidateStorePaths = fs
-        .readdirSync(projectsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) =>
-          path.join(
-            projectsRoot,
-            entry.name,
-            ".openclaw-research",
-            "channel-project-bindings.json"
-          )
-        )
-        .filter((candidate) => candidate !== storePath);
+      const index = readBindingIndex(projectsRoot);
       const matchedCandidates: Array<{
         binding: ChannelProjectBindingRecord;
         storePath: string;
       }> = [];
-      for (const candidatePath of candidateStorePaths) {
-        const candidateStore = readStore(candidatePath);
-        const candidateBinding = findBindingByKeys(
-          candidateStore.bindings,
-          lookup.projectScanKeys
-        );
-        if (!candidateBinding) {
+      for (const candidateEntry of index.bindings) {
+        if (candidateEntry.storePath === storePath) {
           continue;
         }
         if (
           !isProjectRootWithinProjectsRoot({
-            projectRoot: candidateBinding.projectRoot,
+            projectRoot: candidateEntry.projectRoot,
             projectsRoot,
           })
         ) {
           continue;
         }
+        if (!lookup.projectScanKeys.includes(candidateEntry.channelKey)) {
+          continue;
+        }
         matchedCandidates.push({
-          binding: candidateBinding,
-          storePath: candidatePath,
+          binding: candidateEntry,
+          storePath: candidateEntry.storePath,
         });
       }
       const uniqueMatchedProjectRoots = new Set(
@@ -579,41 +826,24 @@ export function listChannelProjectBindings(params: {
   const projectsRoot = getProjectsRoot(policy);
   if (projectsRoot) {
     const bindingsByKey = new Map<string, ChannelProjectBindingRecord>();
-    try {
-      const storePaths = fs
-        .readdirSync(projectsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) =>
-          path.join(
-            projectsRoot,
-            entry.name,
-            ".openclaw-research",
-            "channel-project-bindings.json"
-          )
-        );
-      for (const candidatePath of storePaths) {
-        const candidateStore = readStore(candidatePath);
-        for (const binding of candidateStore.bindings) {
-          if (
-            !isProjectRootWithinProjectsRoot({
-              projectRoot: binding.projectRoot,
-              projectsRoot,
-            })
-          ) {
-            continue;
-          }
-          const existing = bindingsByKey.get(binding.channelKey);
-          if (
-            !existing ||
-            new Date(binding.updatedAt).getTime() >
-              new Date(existing.updatedAt).getTime()
-          ) {
-            bindingsByKey.set(binding.channelKey, binding);
-          }
-        }
+    const index = readBindingIndex(projectsRoot);
+    for (const binding of index.bindings) {
+      if (
+        !isProjectRootWithinProjectsRoot({
+          projectRoot: binding.projectRoot,
+          projectsRoot,
+        })
+      ) {
+        continue;
       }
-    } catch {
-      // Ignore scan failures and fall back to the local store.
+      const existing = bindingsByKey.get(binding.channelKey);
+      if (
+        !existing ||
+        new Date(binding.updatedAt).getTime() >
+          new Date(existing.updatedAt).getTime()
+      ) {
+        bindingsByKey.set(binding.channelKey, binding);
+      }
     }
     if (bindingsByKey.size > 0) {
       return {
@@ -846,6 +1076,13 @@ export async function setChannelProjectBinding(params: {
     binding,
   ].sort((left, right) => left.channelKey.localeCompare(right.channelKey));
   await saveStore(storePath, store);
+  if (projectsRoot) {
+    await updateBindingIndexForProjectStore({
+      projectsRoot,
+      storePath,
+      store,
+    });
+  }
   return {
     enabled: true,
     storePath,
@@ -884,16 +1121,25 @@ export async function clearChannelProjectBinding(params: {
     projectsRoot &&
     lookup.projectScanKeys.length > 0
   ) {
-    const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
-    for (const candidatePath of candidateStorePaths) {
-      if (candidatePath === storePath) {
-        continue;
-      }
-      const candidateStore = readStore(candidatePath);
-      if (findBindingByKeys(candidateStore.bindings, lookup.projectScanKeys)) {
-        effectiveStorePath = candidatePath;
-        store = candidateStore;
-        break;
+    const indexMatch =
+      readBindingIndex(projectsRoot).bindings.find((entry) =>
+        lookup.projectScanKeys.includes(entry.channelKey)
+      ) ?? null;
+    if (indexMatch && indexMatch.storePath !== storePath) {
+      effectiveStorePath = indexMatch.storePath;
+      store = readStore(indexMatch.storePath);
+    } else {
+      const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
+      for (const candidatePath of candidateStorePaths) {
+        if (candidatePath === storePath) {
+          continue;
+        }
+        const candidateStore = readStore(candidatePath);
+        if (findBindingByKeys(candidateStore.bindings, lookup.projectScanKeys)) {
+          effectiveStorePath = candidatePath;
+          store = candidateStore;
+          break;
+        }
       }
     }
   }
@@ -903,6 +1149,13 @@ export async function clearChannelProjectBinding(params: {
   if (removed) {
     store.bindings = nextBindings;
     await saveStore(effectiveStorePath, store);
+    if (projectsRoot) {
+      await updateBindingIndexForProjectStore({
+        projectsRoot,
+        storePath: effectiveStorePath,
+        store,
+      });
+    }
   }
   return {
     enabled: true,

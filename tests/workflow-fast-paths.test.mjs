@@ -48,6 +48,11 @@ async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fast-paths-"));
 }
 
+async function writeJson(targetPath, value) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
 test.beforeEach(async () => {
   await clearBackgroundWorkflowRunRegistryForTests();
   await clearBackgroundWorkflowQueueForTests();
@@ -1292,6 +1297,7 @@ test("startBackgroundWorkflowRun can bootstrap a research-queue continuation", a
 test("startBackgroundWorkflowRun caps researcher background subagents at two per channel", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
+  const sharedProjectRoot = path.join(projectsRoot, "birds-room-project");
   const runCalls = [];
   const runtimeSubagent = {
     async run(params) {
@@ -1302,6 +1308,13 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(sharedProjectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "birds-room-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
   });
 
   const baseParams = {
@@ -1319,8 +1332,8 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
       channelProjectBindingsEnabled: true,
     },
   };
@@ -1330,6 +1343,8 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
     backgroundRun: {
       kind: "research_pipeline",
       topic: "bird species discovery",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
   const second = await startBackgroundWorkflowRun({
@@ -1337,6 +1352,8 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
     backgroundRun: {
       kind: "research_pipeline",
       topic: "avian migration drift",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
   const third = await startBackgroundWorkflowRun({
@@ -1344,6 +1361,8 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
     backgroundRun: {
       kind: "research_pipeline",
       topic: "wetland morphology signals",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
 
@@ -1361,6 +1380,7 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
 test("queued researcher background runs persist and auto-replay when a pooled session becomes idle", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
+  const sharedProjectRoot = path.join(projectsRoot, "birds-room-project");
   const runCalls = [];
   const completedRunIds = new Set();
   const runtimeSubagent = {
@@ -1379,6 +1399,13 @@ test("queued researcher background runs persist and auto-replay when a pooled se
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   });
 
+  await writeJson(path.join(sharedProjectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "birds-room-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+  });
+
   const baseParams = {
     runtimeSubagent,
     workflowPolicy: {
@@ -1394,8 +1421,8 @@ test("queued researcher background runs persist and auto-replay when a pooled se
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
       channelProjectBindingsEnabled: true,
     },
   };
@@ -1405,6 +1432,8 @@ test("queued researcher background runs persist and auto-replay when a pooled se
     backgroundRun: {
       kind: "research_pipeline",
       topic: "bird species discovery",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
   const second = await startBackgroundWorkflowRun({
@@ -1412,6 +1441,8 @@ test("queued researcher background runs persist and auto-replay when a pooled se
     backgroundRun: {
       kind: "research_pipeline",
       topic: "avian migration drift",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
   const queued = await startBackgroundWorkflowRun({
@@ -1419,6 +1450,8 @@ test("queued researcher background runs persist and auto-replay when a pooled se
     backgroundRun: {
       kind: "research_pipeline",
       topic: "wetland morphology signals",
+      projectRoot: sharedProjectRoot,
+      projectId: "birds-room-project",
     },
   });
 
@@ -1442,15 +1475,37 @@ test("queued researcher background runs persist and auto-replay when a pooled se
 
   const firstSessions = await readWorkflowRuntimeSessionsStore(first.projectRoot);
   const queuedQueue = await readWorkflowRuntimeQueueStore(queued.projectRoot);
-  assert.equal(firstSessions.entries.length, 1);
-  assert.equal(firstSessions.entries[0].status, "idle");
-  assert.equal(queuedQueue.entries.length, 1);
-  assert.equal(queuedQueue.entries[0].status, "running");
+  assert.equal(firstSessions.entries.length, 2);
+  assert.equal(
+    firstSessions.entries.some(
+      (entry) => entry.sessionKey === first.sessionKey && entry.runId === "bg-run-3"
+    ),
+    true
+  );
+  assert.equal(
+    firstSessions.entries.some(
+      (entry) => entry.sessionKey === second.sessionKey && entry.status === "active"
+    ),
+    true
+  );
+  assert.equal(
+    queuedQueue.entries.find((entry) => entry.queueKey === first.queueKey)?.status,
+    "completed"
+  );
+  assert.equal(
+    queuedQueue.entries.find((entry) => entry.queueKey === second.queueKey)?.status,
+    "running"
+  );
+  assert.equal(
+    queuedQueue.entries.find((entry) => entry.queueKey === queued.queueKey)?.status,
+    "running"
+  );
 });
 
 test("queued background workflow lifecycle is recorded in workflow-events.jsonl", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
+  const sharedProjectRoot = path.join(projectsRoot, "audit-room-project");
   const runCalls = [];
   const completedRunIds = new Set();
   const runtimeSubagent = {
@@ -1469,6 +1524,13 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   });
 
+  await writeJson(path.join(sharedProjectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "audit-room-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+  });
+
   const baseParams = {
     runtimeSubagent,
     workflowPolicy: {
@@ -1484,8 +1546,8 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: sharedProjectRoot,
+      projectId: "audit-room-project",
       channelProjectBindingsEnabled: true,
     },
   };
@@ -1495,6 +1557,8 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
     backgroundRun: {
       kind: "research_pipeline",
       topic: "bird species discovery",
+      projectRoot: sharedProjectRoot,
+      projectId: "audit-room-project",
     },
   });
   await startBackgroundWorkflowRun({
@@ -1502,6 +1566,8 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
     backgroundRun: {
       kind: "research_pipeline",
       topic: "avian migration drift",
+      projectRoot: sharedProjectRoot,
+      projectId: "audit-room-project",
     },
   });
   const queued = await startBackgroundWorkflowRun({
@@ -1509,6 +1575,8 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
     backgroundRun: {
       kind: "research_pipeline",
       topic: "wetland morphology signals",
+      projectRoot: sharedProjectRoot,
+      projectId: "audit-room-project",
     },
   });
 
@@ -1567,6 +1635,7 @@ test("drainQueuedBackgroundWorkflowRuns marks projectless workflow dispatch entr
       summary: "Run one bounded experiment pass.",
       command: "/run-experiments",
       mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
       extraBody: null,
       waitTimeoutMs: 5000,
       retryOnTimeout: true,
@@ -1593,6 +1662,7 @@ test("drainQueuedBackgroundWorkflowRuns marks projectless workflow dispatch entr
         strategy: "direct_session",
         attempts: [],
         fallbackSpawned: false,
+        acknowledgedByMailbox: false,
         error: null,
         backend: "native",
         lobsterStatus: null,
@@ -1608,9 +1678,11 @@ test("drainQueuedBackgroundWorkflowRuns marks projectless workflow dispatch entr
   assert.equal(drained.remaining[0].status, "needs_repair");
 });
 
-test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel", async (t) => {
+test("startBackgroundWorkflowRun scopes the researcher subagent cap per project within the same channel", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
+  const alphaProjectRoot = path.join(projectsRoot, "alpha");
+  const betaProjectRoot = path.join(projectsRoot, "beta");
   const runCalls = [];
   const runtimeSubagent = {
     async run(params) {
@@ -1621,6 +1693,19 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel"
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(alphaProjectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+  });
+  await writeJson(path.join(betaProjectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "beta",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
   });
 
   await startBackgroundWorkflowRun({
@@ -1638,13 +1723,15 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel"
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: alphaProjectRoot,
+      projectId: "alpha",
       channelProjectBindingsEnabled: true,
     },
     backgroundRun: {
       kind: "research_pipeline",
       topic: "bird species discovery",
+      projectRoot: alphaProjectRoot,
+      projectId: "alpha",
     },
   });
   await startBackgroundWorkflowRun({
@@ -1662,17 +1749,19 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel"
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: alphaProjectRoot,
+      projectId: "alpha",
       channelProjectBindingsEnabled: true,
     },
     backgroundRun: {
       kind: "research_pipeline",
       topic: "avian migration drift",
+      projectRoot: alphaProjectRoot,
+      projectId: "alpha",
     },
   });
 
-  const otherChannel = await startBackgroundWorkflowRun({
+  const otherProjectSameChannel = await startBackgroundWorkflowRun({
     runtimeSubagent,
     workflowPolicy: {
       projectsRoot,
@@ -1681,23 +1770,25 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per channel"
     agentCtx: {
       agentId: "researcher",
       workspaceDir: workspaceRoot,
-      sessionKey: "agent:researcher:discord:group:wetland-room",
+      sessionKey: "agent:researcher:discord:group:birds-room",
       sessionId: "session-bg-limit-c",
       messageChannel: "discord",
     },
     snapshot: {
       role: "researcher",
-      projectRoot: null,
-      projectId: null,
+      projectRoot: betaProjectRoot,
+      projectId: "beta",
       channelProjectBindingsEnabled: true,
     },
     backgroundRun: {
       kind: "research_pipeline",
       topic: "wetland morphology signals",
+      projectRoot: betaProjectRoot,
+      projectId: "beta",
     },
   });
 
-  assert.equal(otherChannel.started, true);
+  assert.equal(otherProjectSameChannel.started, true);
   assert.equal(runCalls.length, 3);
 });
 

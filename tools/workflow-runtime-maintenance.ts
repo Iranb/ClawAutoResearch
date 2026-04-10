@@ -1,0 +1,676 @@
+import path from "node:path";
+import {
+  dispatchWorkflowTaskToAgent,
+  type DispatchableWorkflowRole,
+} from "./agent-task-dispatch";
+import {
+  handoffWorkflowTaskToAgent,
+  type WorkflowLobsterHandoffConfig,
+} from "./lobster-handoff";
+import {
+  recordWorkflowRuntimeIncident,
+  type WorkflowRuntimeIncidentEntry,
+} from "./workflow-runtime-incidents.js";
+import {
+  recoverWorkflowRuntimeState,
+  type WorkflowRuntimeRecoveryResult,
+} from "./workflow-runtime-recovery.js";
+import {
+  appendWorkflowRuntimeEvent,
+  readWorkflowRuntimeQueueStore,
+  readWorkflowRuntimeSessionsStore,
+  type WorkflowRuntimeBroadcastEntry,
+  type WorkflowRuntimeQueueDispatchPayload,
+  type WorkflowRuntimeQueueEntry,
+  type WorkflowRuntimeSessionEntry,
+  writeWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeSessionsStore,
+} from "./workflow-runtime-state.js";
+import { resumeWorkflowTransition } from "./workflow-session-orchestrator.js";
+
+type RuntimeSubagentApi = {
+  run: (params: {
+    sessionKey: string;
+    message: string;
+    lane?: string;
+    deliver?: boolean;
+    idempotencyKey?: string;
+    extraSystemPrompt?: string;
+  }) => Promise<{ runId: string }>;
+  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
+    status: "ok" | "error" | "timeout";
+    error?: string;
+  }>;
+  getSessionMessages?: (params: {
+    sessionKey: string;
+    limit?: number;
+  }) => Promise<{ messages: unknown[] }>;
+  deleteSession?: (params: {
+    sessionKey: string;
+    deleteTranscript?: boolean;
+  }) => Promise<void>;
+};
+
+type LoggerLike = {
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
+  info?: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+type WorkflowPolicyLike = {
+  lobsterHandoff?: WorkflowLobsterHandoffConfig;
+} | null;
+
+export type WorkflowRuntimeMaintenanceResult = {
+  projectId: string | null;
+  projectRoot: string;
+  recovery: WorkflowRuntimeRecoveryResult;
+  replayedQueueKeys: string[];
+  exhaustedQueueKeys: string[];
+  repairedSessionKeys: string[];
+  exhaustedSessionKeys: string[];
+  incidents: WorkflowRuntimeIncidentEntry[];
+  watchdogSummary: {
+    queueRepairPending: number;
+    sessionRepairPending: number;
+    replayedQueueCount: number;
+    exhaustedQueueCount: number;
+    exhaustedSessionCount: number;
+    incidentCount: number;
+  };
+};
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const normalized = readString(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
+function toDispatchableRole(value: unknown): DispatchableWorkflowRole {
+  const normalized = readString(value)?.toLowerCase();
+  switch (normalized) {
+    case "planner":
+    case "orchestrator":
+    case "coder":
+    case "analyzer":
+    case "academic_writer":
+    case "reviewer":
+    case "cross-reviewer":
+    case "researcher":
+      return normalized;
+    default:
+      return "researcher";
+  }
+}
+
+async function updateQueueEntry(
+  projectRoot: string,
+  queueKey: string,
+  updater: (entry: WorkflowRuntimeQueueEntry) => WorkflowRuntimeQueueEntry
+): Promise<WorkflowRuntimeQueueEntry | null> {
+  const store = await readWorkflowRuntimeQueueStore(projectRoot);
+  const index = store.entries.findIndex((entry) => entry.queueKey === queueKey);
+  if (index < 0) {
+    return null;
+  }
+  const nextEntries = [...store.entries];
+  nextEntries[index] = updater(nextEntries[index]);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: store.projectId,
+    entries: nextEntries,
+  });
+  return nextEntries[index];
+}
+
+async function updateSessions(
+  projectRoot: string,
+  updater: (entry: WorkflowRuntimeSessionEntry) => WorkflowRuntimeSessionEntry
+): Promise<WorkflowRuntimeSessionEntry[]> {
+  const store = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const nextEntries = store.entries.map(updater);
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: store.projectId,
+    entries: nextEntries,
+  });
+  return nextEntries;
+}
+
+async function markQueueFailed(params: {
+  projectRoot: string;
+  projectId: string | null;
+  entry: WorkflowRuntimeQueueEntry;
+  error: string;
+}) {
+  return updateQueueEntry(params.projectRoot, params.entry.queueKey, (entry) => ({
+    ...entry,
+    status: "failed",
+    lastAttemptedAt: nowIso(),
+    lastCheckedAt: nowIso(),
+    lastError: params.error,
+  }));
+}
+
+async function markLinkedSessionsFailed(params: {
+  projectRoot: string;
+  queueKey: string;
+  error: string;
+}) {
+  const currentAt = nowIso();
+  await updateSessions(params.projectRoot, (entry) => {
+    if (entry.queueKey !== params.queueKey) {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: "failed",
+      lastCheckedAt: currentAt,
+      lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+      lastError: params.error,
+    };
+  });
+}
+
+async function markSessionFailed(params: {
+  projectRoot: string;
+  sessionKey: string;
+  error: string;
+}) {
+  const currentAt = nowIso();
+  await updateSessions(params.projectRoot, (entry) => {
+    if (entry.sessionKey !== params.sessionKey) {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: "failed",
+      lastCheckedAt: currentAt,
+      lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+      lastError: params.error,
+    };
+  });
+}
+
+async function reconcileSupersededRepairSessions(params: {
+  projectRoot: string;
+  queueKey: string;
+  survivorSessionKey: string | null;
+}) {
+  const currentAt = nowIso();
+  await updateSessions(params.projectRoot, (entry) => {
+    if (entry.queueKey !== params.queueKey) {
+      return entry;
+    }
+    if (params.survivorSessionKey && entry.sessionKey === params.survivorSessionKey) {
+      return entry;
+    }
+    if (entry.status !== "needs_repair") {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: "failed",
+      lastCheckedAt: currentAt,
+      lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+      lastError:
+        entry.lastError ??
+        "Superseded by a newer repaired workflow transition session.",
+    };
+  });
+}
+
+function buildPreferredSessionKeys(
+  entry: WorkflowRuntimeQueueEntry,
+  dispatchPayload: WorkflowRuntimeQueueDispatchPayload
+): string[] {
+  return uniqueStrings([
+    entry.preferredSessionKey,
+    ...dispatchPayload.preferredSessionKeys,
+  ]);
+}
+
+async function replayQueueEntry(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy?: WorkflowPolicyLike;
+  logger?: LoggerLike;
+}) {
+  if (!params.runtimeSubagent) {
+    return {
+      launched: false,
+      error: "Runtime subagent API is unavailable for workflow repair.",
+      sessionKey: null,
+    };
+  }
+  const entry = params.entry;
+  const dispatchPayload = entry.dispatchPayload;
+  const preferredSessionKeys =
+    dispatchPayload != null ? buildPreferredSessionKeys(entry, dispatchPayload) : [];
+  const resumed = await resumeWorkflowTransition({
+    projectRoot: String(entry.projectRoot),
+    projectId: entry.projectId,
+    queueKey: entry.queueKey,
+    spawn: async () => {
+      if (entry.entryType === "background_run") {
+        const runPayload = entry.runPayload;
+        const sessionKey =
+          readString(entry.preferredSessionKey) ??
+          readString(entry.requesterSessionKey) ??
+          `agent:${entry.ownerAgent}:main`;
+        if (!runPayload?.message) {
+          throw new Error("Background workflow repair is missing a durable run payload.");
+        }
+        const started = await params.runtimeSubagent!.run({
+          sessionKey,
+          message: runPayload.message,
+          lane: runPayload.lane,
+          deliver: runPayload.deliver,
+          idempotencyKey:
+            runPayload.idempotencyKey ??
+            `workflow-repair:${entry.queueKey}:${Date.now()}`,
+          extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+        });
+        return {
+          runId: started.runId,
+          sessionKey,
+          runtime: "subagent",
+          role: entry.ownerAgent,
+          agentId: entry.ownerAgent,
+          ownerAgent: entry.ownerAgent,
+          parentSessionKey: entry.requesterSessionKey,
+          depth: entry.depth,
+        };
+      }
+
+      if (!dispatchPayload) {
+        throw new Error("Workflow repair is missing a durable dispatch payload.");
+      }
+
+      const dispatch = dispatchPayload.useWorkflowHandoff
+        ? await handoffWorkflowTaskToAgent({
+            runtimeSubagent: params.runtimeSubagent,
+            workflowPolicy: params.workflowPolicy ?? undefined,
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterChannel: dispatchPayload.requesterChannel ?? undefined,
+            requesterAccountId: dispatchPayload.requesterAccountId ?? undefined,
+            preferredSessionKeys,
+            fromRole: dispatchPayload.fromRole,
+            toRole: toDispatchableRole(dispatchPayload.toRole),
+            projectRoot: dispatchPayload.projectRoot,
+            projectId: dispatchPayload.projectId,
+            stage: dispatchPayload.stage,
+            summary: dispatchPayload.summary,
+            command: dispatchPayload.command,
+            mailboxMessageId: dispatchPayload.mailboxMessageId,
+            requireMailboxAcknowledgement:
+              dispatchPayload.requireMailboxAcknowledgement,
+            extraBody: dispatchPayload.extraBody,
+            waitTimeoutMs: dispatchPayload.waitTimeoutMs ?? undefined,
+            retryOnTimeout: dispatchPayload.retryOnTimeout,
+            enableSpawnFallback: dispatchPayload.enableSpawnFallback,
+            autoModeActive: dispatchPayload.autoModeActive,
+            logger: params.logger,
+          })
+        : await dispatchWorkflowTaskToAgent({
+            runtimeSubagent: params.runtimeSubagent,
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterChannel: dispatchPayload.requesterChannel ?? undefined,
+            preferredSessionKeys,
+            fromRole: dispatchPayload.fromRole,
+            toRole: toDispatchableRole(dispatchPayload.toRole),
+            projectRoot: dispatchPayload.projectRoot,
+            projectId: dispatchPayload.projectId,
+            stage: dispatchPayload.stage,
+            summary: dispatchPayload.summary,
+            command: dispatchPayload.command,
+            mailboxMessageId: dispatchPayload.mailboxMessageId,
+            requireMailboxAcknowledgement:
+              dispatchPayload.requireMailboxAcknowledgement,
+            extraBody: dispatchPayload.extraBody,
+            waitTimeoutMs: dispatchPayload.waitTimeoutMs ?? undefined,
+            retryOnTimeout: dispatchPayload.retryOnTimeout,
+            enableSpawnFallback: dispatchPayload.enableSpawnFallback,
+          });
+      if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+        throw new Error(dispatch.error ?? "Workflow repair dispatch did not start.");
+      }
+      return {
+        runId: dispatch.runId,
+        sessionKey: dispatch.sessionKey,
+        runtime:
+          dispatch.channel === "sessions_spawn" ? "subagent" : "legacy_dispatch",
+        role: dispatchPayload.toRole,
+        agentId: dispatchPayload.toRole,
+        ownerAgent: entry.ownerAgent,
+        strategy: dispatch.strategy ?? "workflow_dispatch",
+        parentSessionKey: entry.requesterSessionKey,
+        depth: entry.depth,
+      };
+    },
+  });
+  return {
+    launched: resumed.launched,
+    error: resumed.error,
+    sessionKey: resumed.sessionKey,
+  };
+}
+
+async function recordBroadcastFailures(params: {
+  projectRoot: string;
+  projectId: string | null;
+  failedBroadcasts: WorkflowRuntimeBroadcastEntry[];
+}): Promise<WorkflowRuntimeIncidentEntry[]> {
+  const incidents: WorkflowRuntimeIncidentEntry[] = [];
+  for (const entry of params.failedBroadcasts) {
+    incidents.push(
+      await recordWorkflowRuntimeIncident({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        idempotencyKey: `broadcast:${entry.idempotencyKey}`,
+        kind: "broadcast_delivery_failed",
+        severity: "warning",
+        summary: `Workflow runtime broadcast ${entry.status} could not be delivered.`,
+        sessionKey: entry.sessionKey,
+        error: entry.lastError,
+        details: {
+          broadcastId: entry.broadcastId,
+          stage: entry.stage,
+          deliveryStatus: entry.deliveryStatus,
+        },
+      })
+    );
+  }
+  return incidents;
+}
+
+export async function runWorkflowRuntimeMaintenancePass(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  staleSessionAgeMs?: number;
+  maxRepairAttempts?: number;
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy?: WorkflowPolicyLike;
+  logger?: LoggerLike;
+  sendBroadcast?: (entry: WorkflowRuntimeBroadcastEntry) => Promise<{
+    runId: string;
+    sessionKey?: string | null;
+  }>;
+}): Promise<WorkflowRuntimeMaintenanceResult> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const projectId = readString(params.projectId) ?? path.basename(projectRoot);
+  const maxRepairAttempts =
+    typeof params.maxRepairAttempts === "number" && Number.isFinite(params.maxRepairAttempts)
+      ? Math.max(1, Math.floor(params.maxRepairAttempts))
+      : 3;
+
+  const recovery = await recoverWorkflowRuntimeState({
+    projectRoot,
+    projectId,
+    staleSessionAgeMs: params.staleSessionAgeMs,
+    sendBroadcast: params.sendBroadcast,
+  });
+
+  const incidents = await recordBroadcastFailures({
+    projectRoot,
+    projectId,
+    failedBroadcasts: recovery.broadcast.failed,
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const replayCandidates = queueStore.entries.filter(
+    (entry) => entry.status === "needs_repair" || entry.status === "degraded"
+  );
+  const replayedQueueKeys: string[] = [];
+  const exhaustedQueueKeys: string[] = [];
+
+  for (const entry of replayCandidates) {
+    if (entry.attemptCount >= maxRepairAttempts) {
+      const error =
+        entry.lastError ??
+        `Workflow transition exhausted the repair budget (${maxRepairAttempts}).`;
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: entry.queueKey,
+        error,
+      });
+      exhaustedQueueKeys.push(entry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `repair-exhausted:${entry.queueKey}`,
+          kind: "repair_exhausted",
+          severity: "error",
+          summary: `Workflow transition ${entry.queueKey} exhausted the repair budget.`,
+          queueKey: entry.queueKey,
+          error,
+          details: {
+            attemptCount: entry.attemptCount,
+            maxRepairAttempts,
+            source: entry.source,
+            kind: entry.kind,
+          },
+        })
+      );
+      continue;
+    }
+
+    const replay = await replayQueueEntry({
+      entry,
+      runtimeSubagent: params.runtimeSubagent,
+      workflowPolicy: params.workflowPolicy,
+      logger: params.logger,
+    });
+    if (replay.launched) {
+      replayedQueueKeys.push(entry.queueKey);
+      await reconcileSupersededRepairSessions({
+        projectRoot,
+        queueKey: entry.queueKey,
+        survivorSessionKey: replay.sessionKey,
+      });
+      continue;
+    }
+
+    const refreshedStore = await readWorkflowRuntimeQueueStore(projectRoot);
+    const refreshedEntry =
+      refreshedStore.entries.find((candidate) => candidate.queueKey === entry.queueKey) ?? entry;
+    const exhausted = refreshedEntry.attemptCount >= maxRepairAttempts;
+    const error =
+      readString(replay.error) ??
+      refreshedEntry.lastError ??
+      "Workflow runtime repair replay failed.";
+    if (exhausted) {
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry: refreshedEntry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: refreshedEntry.queueKey,
+        error,
+      });
+      exhaustedQueueKeys.push(refreshedEntry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `repair-exhausted:${refreshedEntry.queueKey}`,
+          kind: "repair_exhausted",
+          severity: "error",
+          summary: `Workflow transition ${refreshedEntry.queueKey} exhausted the repair budget.`,
+          queueKey: refreshedEntry.queueKey,
+          error,
+          details: {
+            attemptCount: refreshedEntry.attemptCount,
+            maxRepairAttempts,
+            source: refreshedEntry.source,
+            kind: refreshedEntry.kind,
+          },
+        })
+      );
+    } else {
+      await updateQueueEntry(projectRoot, refreshedEntry.queueKey, (candidate) => ({
+        ...candidate,
+        status: "needs_repair",
+        lastCheckedAt: nowIso(),
+        lastError: error,
+      }));
+    }
+  }
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const queueStoreAfterReplay = await readWorkflowRuntimeQueueStore(projectRoot);
+  const queueByKey = new Map(
+    queueStoreAfterReplay.entries.map((entry) => [entry.queueKey, entry] as const)
+  );
+  const exhaustedSessionKeys: string[] = [];
+
+  for (const session of sessionsStore.entries) {
+    if (session.status !== "needs_repair") {
+      continue;
+    }
+    const queueKey = readString(session.queueKey);
+    if (!queueKey) {
+      const error =
+        session.lastError ??
+        "Workflow session has no durable queue linkage and cannot be repaired.";
+      await markSessionFailed({
+        projectRoot,
+        sessionKey: session.sessionKey,
+        error,
+      });
+      exhaustedSessionKeys.push(session.sessionKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `orphan-session:${session.sessionKey}`,
+          kind: "repair_orphan_session",
+          severity: "error",
+          summary: `Workflow session ${session.sessionKey} became orphaned without a queue link.`,
+          sessionKey: session.sessionKey,
+          error,
+          details: {
+            ownerAgent: session.ownerAgent,
+            runtime: session.runtime,
+          },
+        })
+      );
+      continue;
+    }
+    const queueEntry = queueByKey.get(queueKey) ?? null;
+    if (!queueEntry) {
+      const error =
+        session.lastError ??
+        `Workflow session references missing transition ${queueKey}.`;
+      await markSessionFailed({
+        projectRoot,
+        sessionKey: session.sessionKey,
+        error,
+      });
+      exhaustedSessionKeys.push(session.sessionKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `orphan-session:${session.sessionKey}:${queueKey}`,
+          kind: "repair_orphan_session",
+          severity: "error",
+          summary: `Workflow session ${session.sessionKey} references missing transition ${queueKey}.`,
+          queueKey,
+          sessionKey: session.sessionKey,
+          error,
+        })
+      );
+      continue;
+    }
+    if (queueEntry.status === "failed") {
+      await markSessionFailed({
+        projectRoot,
+        sessionKey: session.sessionKey,
+        error:
+          queueEntry.lastError ??
+          session.lastError ??
+          `Workflow transition ${queueKey} failed during repair.`,
+      });
+      exhaustedSessionKeys.push(session.sessionKey);
+    }
+  }
+
+  const repairedSessionKeys = (
+    await readWorkflowRuntimeSessionsStore(projectRoot)
+  ).entries
+    .filter((entry) => replayedQueueKeys.includes(entry.queueKey ?? "") && entry.status === "active")
+    .map((entry) => entry.sessionKey);
+
+  const finalQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const finalSessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const watchdogSummary = {
+    queueRepairPending: finalQueueStore.entries.filter((entry) =>
+      entry.status === "needs_repair" || entry.status === "degraded"
+    ).length,
+    sessionRepairPending: finalSessionsStore.entries.filter(
+      (entry) => entry.status === "needs_repair"
+    ).length,
+    replayedQueueCount: replayedQueueKeys.length,
+    exhaustedQueueCount: exhaustedQueueKeys.length,
+    exhaustedSessionCount: exhaustedSessionKeys.length,
+    incidentCount: incidents.length,
+  };
+
+  await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId,
+    kind: "runtime_watchdog_summary",
+    summary:
+      `Runtime maintenance completed with ${watchdogSummary.replayedQueueCount} replay(s), ` +
+      `${watchdogSummary.exhaustedQueueCount} exhausted queue(s), and ` +
+      `${watchdogSummary.sessionRepairPending} pending session repair(s).`,
+    details: {
+      replayedQueueKeys,
+      exhaustedQueueKeys,
+      exhaustedSessionKeys,
+      queueRepairPending: watchdogSummary.queueRepairPending,
+      sessionRepairPending: watchdogSummary.sessionRepairPending,
+      incidentCount: watchdogSummary.incidentCount,
+    },
+  });
+
+  return {
+    projectId,
+    projectRoot,
+    recovery,
+    replayedQueueKeys,
+    exhaustedQueueKeys,
+    repairedSessionKeys,
+    exhaustedSessionKeys,
+    incidents,
+    watchdogSummary,
+  };
+}

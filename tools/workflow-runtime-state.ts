@@ -85,6 +85,7 @@ export type WorkflowRuntimeQueueDispatchPayload = {
   summary: string;
   command: string | null;
   mailboxMessageId: string | null;
+  requireMailboxAcknowledgement: boolean;
   extraBody: string | null;
   waitTimeoutMs: number | null;
   retryOnTimeout: boolean;
@@ -110,6 +111,7 @@ export type WorkflowRuntimeQueueEntry = {
   projectRoot: string | null;
   queuedAt: string;
   lastAttemptedAt: string | null;
+  lastCheckedAt: string | null;
   attemptCount: number;
   summary: string | null;
   status: WorkflowRuntimeQueueEntryStatus;
@@ -538,6 +540,7 @@ function normalizeQueueEntry(value: unknown): WorkflowRuntimeQueueEntry | null {
     projectRoot: readString(record.projectRoot ?? record.project_root),
     queuedAt,
     lastAttemptedAt: readString(record.lastAttemptedAt ?? record.last_attempted_at),
+    lastCheckedAt: readString(record.lastCheckedAt ?? record.last_checked_at),
     attemptCount: Math.max(
       0,
       Math.floor(readNumber(record.attemptCount ?? record.attempt_count) ?? 0)
@@ -609,6 +612,9 @@ function normalizeQueueEntry(value: unknown): WorkflowRuntimeQueueEntry | null {
             dispatchPayloadRecord.mailboxMessageId ??
               dispatchPayloadRecord.mailbox_message_id
           ),
+          requireMailboxAcknowledgement:
+            dispatchPayloadRecord.requireMailboxAcknowledgement === true ||
+            dispatchPayloadRecord.require_mailbox_acknowledgement === true,
           extraBody: readString(
             dispatchPayloadRecord.extraBody ?? dispatchPayloadRecord.extra_body
           ),
