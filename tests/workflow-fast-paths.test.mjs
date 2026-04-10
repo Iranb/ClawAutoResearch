@@ -246,6 +246,37 @@ test("ensureWorkflowProjectRoot creates a project from configured projectsRoot a
   assert.equal(manifest.papernexus_corpus, null);
 });
 
+test("ensureWorkflowProjectRoot bootstraps survey projects onto the survey_review line", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const ensured = await ensureWorkflowProjectRoot({
+    policy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:researcher:discord:group:survey-room",
+    messageChannel: "discord",
+    topic: "Graph reasoning survey",
+    workflowLine: "survey",
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(ensured.projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.owner_agent, "researcher");
+  assert.equal(manifest.survey_review.topic, "Graph reasoning survey");
+  assert.equal(manifest.survey_review.status, "searching");
+  assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.match(manifest.next_action, /^\/survey-pipeline\b/);
+});
+
 test("ensureWorkflowProjectRoot fails fast when projectsRoot is missing and workspace fallback is disabled", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
 
@@ -722,6 +753,62 @@ test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-bl
   assert.match(runCalls[0].extraSystemPrompt ?? "", /ZOTERO_API_KEY|ZOTERO_USER_ID/i);
   assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /zoteroApiKey|zoteroApiKeyEnv|zoteroUserId/);
   assert.doesNotMatch(runCalls[0].extraSystemPrompt ?? "", /plugin_config|configured Zotero API key|configured Zotero user id/i);
+});
+
+test("startBackgroundWorkflowRun keeps survey continuations on the survey line and seeds survey bootstrap state", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-survey-1" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:survey-room",
+      sessionId: "session-bg-survey-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "survey_review",
+      topic: "Graph reasoning survey",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^\/survey-pipeline\b/);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /survey_review -> write/i);
+  assert.match(runCalls[0].extraSystemPrompt ?? "", /set_survey_review/i);
+
+  const manifest = JSON.parse(
+    await fs.readFile(
+      path.join(projectsRoot, "survey-graph-reasoning-survey", "PROJECT_MANIFEST.json"),
+      "utf8"
+    )
+  );
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.survey_review.topic, "Graph reasoning survey");
+  assert.equal(manifest.writing_contract.paper_mode, "survey");
 });
 
 test("buildLiteratureReviewBackgroundCommand appends the background continuation marker once", () => {

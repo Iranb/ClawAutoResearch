@@ -132,6 +132,11 @@ import {
   normalizeSurveyReviewState,
 } from "./workflow-guard-state/survey-review";
 import {
+  isSurveyWorkflow,
+  resolveNextStageForWorkflow,
+  resolveStageForWorkflowLine,
+} from "./workflow-line-routing.js";
+import {
   normalizeCitationIntegrityState,
   normalizeExternalReviewState,
   normalizeGraphGuidedWritingState,
@@ -2300,16 +2305,7 @@ function getPreviousStagesForRegression(params: {
     return candidates;
   }
 
-  const writingContract = normalizeWritingContractState(
-    params.manifest?.writing_contract
-  );
-  const surveyReview = normalizeSurveyReviewState(params.manifest?.survey_review);
-  const preferSurveyBranch =
-    normalizeStage(params.manifest?.current_stage) === "survey_review" ||
-    writingContract.paperMode === "survey" ||
-    (surveyReview.status !== "missing" && Boolean(surveyReview.topic));
-
-  const preferredOrder = preferSurveyBranch
+  const preferredOrder = isSurveyWorkflow(params.manifest)
     ? ["survey_review", "review", "revise"]
     : ["review", "revise", "survey_review"];
 
@@ -2502,6 +2498,7 @@ export async function ensureWorkflowProjectRoot(params: {
   projectId?: string | null;
   title?: string | null;
   topic?: string | null;
+  workflowLine?: "experiment" | "survey";
 }): Promise<EnsuredWorkflowProject> {
   return (await ensureWorkflowProjectRootFromModule(params)) as EnsuredWorkflowProject;
 }
@@ -8897,6 +8894,9 @@ export async function runWorkflowAutoIterator(params: {
       readAutoModeDiscussionStore,
       resolveEffectiveWorkflowAutoMode,
       evaluateGateBlocking,
+      isSurveyWorkflow,
+      resolveStageForWorkflowLine,
+      resolveNextStageForWorkflow,
       STAGE_REQUIREMENTS,
       stageOwner,
       normalizeExperimentSearchState,

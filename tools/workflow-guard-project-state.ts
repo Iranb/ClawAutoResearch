@@ -9,12 +9,90 @@ import {
 } from "./workflow-guard-core/coercion";
 import { pathExists } from "./workflow-guard-core/fs";
 import { expandHome } from "./workflow-guard-core/paths";
+import {
+  normalizeSurveyReviewState,
+  serializeSurveyReviewState,
+} from "./workflow-guard-state/survey-review";
+import {
+  normalizeWritingContractState,
+  serializeWritingContractState,
+} from "./workflow-guard-state/writing-contract";
 
 type WorkflowGuardPolicyLike = {
   projectsRoot?: string | null;
   allowWorkspaceFallback?: boolean;
   zoteroProjectRoot?: string | null;
 };
+
+const SURVEY_BOOTSTRAP_PENDING_REASON =
+  "Start the survey retrieval rounds and update SURVEY_QUERY_REGISTRY.json before synthesis.";
+
+const SURVEY_BOOTSTRAP_RESETTABLE_STAGES = new Set([
+  "setup",
+  "graph_build",
+  "frontier_mapping",
+  "idea",
+  "plan",
+  "code",
+  "experiment",
+  "analyze",
+  "review",
+  "survey_review",
+]);
+
+function formatSurveyPipelineCommand(topic: string): string {
+  return `/survey-pipeline ${JSON.stringify(topic)}`;
+}
+
+function shouldResetToSurveyReviewStage(stage: string | null): boolean {
+  return !stage || SURVEY_BOOTSTRAP_RESETTABLE_STAGES.has(stage);
+}
+
+function applySurveyWorkflowBootstrapToManifest(params: {
+  manifest: Record<string, unknown>;
+  topic: string;
+  now: string;
+}): Record<string, unknown> {
+  const currentStage = normalizeStage(params.manifest.current_stage);
+  const currentSurveyReview = normalizeSurveyReviewState(params.manifest.survey_review);
+  const currentWritingContract = normalizeWritingContractState(
+    params.manifest.writing_contract
+  );
+  const nextSurveyReview = normalizeSurveyReviewState({
+    ...serializeSurveyReviewState(currentSurveyReview),
+    topic: currentSurveyReview.topic ?? params.topic,
+    mode: currentSurveyReview.mode ?? "survey",
+    status: currentSurveyReview.status === "missing" ? "searching" : currentSurveyReview.status,
+    current_phase: currentSurveyReview.currentPhase ?? "retrieval",
+    pending_reason: currentSurveyReview.pendingReason ?? SURVEY_BOOTSTRAP_PENDING_REASON,
+    last_updated_at: params.now,
+  });
+  const nextManifest = {
+    ...params.manifest,
+    survey_review: serializeSurveyReviewState(nextSurveyReview),
+    writing_contract: serializeWritingContractState(
+      normalizeWritingContractState({
+        ...serializeWritingContractState(currentWritingContract),
+        paper_mode: "survey",
+      })
+    ),
+    updated_at: params.now,
+  };
+
+  if (!shouldResetToSurveyReviewStage(currentStage)) {
+    return nextManifest;
+  }
+
+  return {
+    ...nextManifest,
+    owner_agent: "researcher",
+    current_stage: "survey_review",
+    current_micro_stage: nextSurveyReview.currentPhase ?? "survey_requested",
+    next_action: formatSurveyPipelineCommand(params.topic),
+    resume_action: '/resume-pipeline "<project_id>"',
+    blocking_reason: nextSurveyReview.pendingReason ?? SURVEY_BOOTSTRAP_PENDING_REASON,
+  };
+}
 
 type EnsuredWorkflowProjectLike = {
   projectRoot: string;
@@ -269,6 +347,7 @@ export async function ensureWorkflowProjectRootImpl(params: {
   projectId?: string | null;
   title?: string | null;
   topic?: string | null;
+  workflowLine?: "experiment" | "survey";
 }, deps: {
   templatesRoot: string;
   readJsonIfExists: <T>(targetPath: string) => Promise<T | null>;
@@ -416,6 +495,18 @@ export async function ensureWorkflowProjectRootImpl(params: {
     path.join(projectRoot, "memory", "experiment-memory.md"),
     (await fs.readFile(path.join(memoryTemplatesRoot, "experiment-memory.md"), "utf8")).toString()
   );
+
+  if (params.workflowLine === "survey") {
+    const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+    const manifest = (await deps.readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+    const surveyTopic = asString(params.topic) ?? title;
+    const nextManifest = applySurveyWorkflowBootstrapToManifest({
+      manifest,
+      topic: surveyTopic,
+      now,
+    });
+    await deps.writeJsonEnsured(manifestPath, nextManifest);
+  }
 
   return {
     projectRoot,

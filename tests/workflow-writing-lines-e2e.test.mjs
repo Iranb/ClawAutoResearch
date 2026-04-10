@@ -160,3 +160,40 @@ test("end-to-end survey paper line advances survey review into survey-mode write
     ),
   );
 });
+
+test("misrouted survey projects self-heal back onto survey_review instead of looping through experiment stages", async (t) => {
+  const projectRoot = await makeProjectRoot(
+    "openclaw-research-writing-line-survey-recovery-",
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await seedSurveyReviewProject(projectRoot);
+
+  const manifest = await readManifest(projectRoot);
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "judging";
+  manifest.owner_agent = "researcher";
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "survey",
+  };
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  const healedManifest = await readManifest(projectRoot);
+
+  assert.equal(result.stageBefore, "survey_review");
+  assert.equal(result.stageAfter, "write");
+  assert.equal(healedManifest.current_stage, "write");
+  assert.equal(healedManifest.owner_agent, "academic_writer");
+  assert.equal(healedManifest.writing_contract.paper_mode, "survey");
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /graph-backed innovation evidence|active track .*missing/i.test(signal),
+    ),
+  );
+});

@@ -2267,6 +2267,8 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     normalizedKind === "zotero_sync" || /^\/zotero-sync\b/i.test(commandText ?? "");
   const literatureReviewContinuation =
     normalizedKind === "literature_review" || /^\/literature-review\b/i.test(commandText ?? "");
+  const surveyReviewContinuation =
+    normalizedKind === "survey_review" || /^\/survey-pipeline\b/i.test(commandText ?? "");
   const graphBuildRepairContinuation =
     graphBuildContinuation &&
     /--repair-import(?:\s+|=)(?:true|1|yes)\b/i.test(commandText ?? "");
@@ -2350,6 +2352,17 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     );
     lines.push(
       "Foreground responsiveness rule: keep the foreground chat interruptible while this review pass runs; summarize progress durably rather than monopolizing the session."
+    );
+  }
+  if (surveyReviewContinuation) {
+    lines.push(
+      "Survey workflow rule: keep the project on the survey_review -> write line. Do not steer this continuation into graph_build, frontier_mapping, idea, plan, code, or experiment unless a human explicitly switches the workflow line."
+    );
+    lines.push(
+      "Use research_workflow.set_survey_review and research_workflow.materialize_survey_review_state to keep survey_review durable while retrieval, screening, and synthesis progress."
+    );
+    lines.push(
+      "If survey literature imports or discovery runs are needed, treat them as bounded substeps inside survey_review instead of clearing paper_ingestion by hand or rewriting experiment-track artifacts."
     );
   }
   if (importLifecycleCommand) {
@@ -2713,6 +2726,7 @@ export async function startBackgroundWorkflowRun(params: {
       projectId: resolvedBackgroundProjectId,
       title: resolvedBackgroundTitle,
       topic,
+      workflowLine: normalizedKind === "survey_review" ? "survey" : undefined,
     });
     if (
       params.snapshot.channelProjectBindingsEnabled &&

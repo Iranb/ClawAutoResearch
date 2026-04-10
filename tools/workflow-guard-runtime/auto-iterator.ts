@@ -186,6 +186,15 @@ type AutoIteratorDeps = {
     autoGate: NonNullable<WorkflowGuardPolicy["autoGate"]>;
     now: string;
   }) => Promise<GateEvaluationLike>;
+  isSurveyWorkflow: (manifest: ManifestLike | null) => boolean;
+  resolveStageForWorkflowLine: (params: {
+    stage: string | null;
+    manifest: ManifestLike | null;
+  }) => string | null;
+  resolveNextStageForWorkflow: (params: {
+    stage: string | null;
+    manifest: ManifestLike | null;
+  }) => string | null;
   STAGE_REQUIREMENTS: Record<string, { nextStage?: string | null }>;
   stageOwner: (stage: string | null) => AutoIteratorAction["owner"];
   normalizeExperimentSearchState: (value: unknown) => Record<string, unknown>;
@@ -424,8 +433,14 @@ export async function runWorkflowAutoIteratorImpl(
   const now = params.now ?? new Date().toISOString();
   const projectId = deps.inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
-  const stageBefore =
-    normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  let stageBefore = normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  if (deps.isSurveyWorkflow(manifest)) {
+    stageBefore =
+      deps.resolveStageForWorkflowLine({
+        stage: stageBefore,
+        manifest,
+      }) ?? stageBefore;
+  }
   const stagePreflight = await maybePrepareWorkflowStageContracts({
     projectRoot,
     manifest,
@@ -453,6 +468,7 @@ export async function runWorkflowAutoIteratorImpl(
     (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
     trackRegistry;
   const writePackageBefore = deps.normalizeWritePackageState(manifest.write_package);
+  const surveyWorkflow = deps.isSurveyWorkflow(manifest);
   if (
     workflowPolicy.autoMode === "aggressive" &&
     (stageBefore === "write" || stageBefore === "submit") &&
@@ -516,7 +532,8 @@ export async function runWorkflowAutoIteratorImpl(
       paperIngestion: paperIngestionStateBeforeRouting,
     });
   const requestedGraphReentry =
-    catalystRequestedGraphReentry || literatureDiscoveryRequestedGraphReentry;
+    !surveyWorkflow &&
+    (catalystRequestedGraphReentry || literatureDiscoveryRequestedGraphReentry);
   let stageEffective = requestedGraphReentry ? "graph_build" : stageBefore;
   let regressed = requestedGraphReentry;
   const visited = new Set<string>();
@@ -626,7 +643,10 @@ export async function runWorkflowAutoIteratorImpl(
     effectiveMissingSignals.length === 0 &&
     stageEffective !== "done"
   ) {
-    const nextStage = deps.STAGE_REQUIREMENTS[stageEffective]?.nextStage;
+    const nextStage = deps.resolveNextStageForWorkflow({
+      stage: stageEffective,
+      manifest,
+    });
     if (nextStage) {
       stageAfter = nextStage;
     }

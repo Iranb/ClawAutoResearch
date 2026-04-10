@@ -1218,7 +1218,10 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
-  assert.match(result.text ?? "", /Experiment search: status=running, main_stage=creative_research, substage=branch_expansion, best_node=node-7, multi_seed=running, plot_pack=pending/);
+  assert.match(
+    result.text ?? "",
+    /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/
+  );
   assert.match(result.text ?? "", /Paper story: status=ready, track=track-idea-1, story_spine=academic_writer\/story\/STORY_SPINE\.md, claim_map=academic_writer\/story\/CLAIM_TO_EXPERIMENT_MAP\.md, fallback=academic_writer\/story\/FALLBACK_NARRATIVE\.md/);
   assert.match(result.text ?? "", /Paper story support: status=partial, supported=2, partial=1, unsupported=1/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);

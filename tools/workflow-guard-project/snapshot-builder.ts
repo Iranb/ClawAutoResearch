@@ -35,6 +35,7 @@ import {
   filterStaleAutoIteratorMailboxItems,
   inboxForRole,
 } from "../workflow-guard-collaboration";
+import { resolveStageForWorkflowLine } from "../workflow-line-routing.js";
 import {
   loadPapernexusProgress,
   summarizePapernexusProgress,
@@ -795,7 +796,10 @@ export async function buildWorkflowSnapshotFromProjectState(
   const policy = params.policy;
   const projectState = params.projectState;
   const role = normalizeWorkflowRole(params.agentId);
-  const currentStage = normalizeStage(projectState.manifest?.current_stage);
+  const currentStage = resolveStageForWorkflowLine({
+    stage: normalizeStage(projectState.manifest?.current_stage),
+    manifest: projectState.manifest,
+  });
   const missingStageSignals =
     projectState.projectRoot && currentStage && deps.getMissingStageSignals
       ? await deps.getMissingStageSignals({

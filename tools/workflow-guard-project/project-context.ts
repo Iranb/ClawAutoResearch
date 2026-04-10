@@ -48,6 +48,7 @@ export type WorkflowProjectBootstrapParams = {
   projectId?: string | null;
   title?: string | null;
   topic?: string | null;
+  workflowLine?: "experiment" | "survey";
 };
 
 export async function ensureWorkflowProjectRoot(
