@@ -5002,6 +5002,7 @@ async function loadProjectState(options?: {
   messageChannel?: string;
   channelKey?: string;
   role?: string;
+  invalidEnvProjectRootMode?: "throw" | "ignore";
   policy?: WorkflowGuardPolicy;
 }): Promise<ProjectState> {
   return (await loadProjectStateFromModule(options)) as ProjectState;
@@ -6177,6 +6178,7 @@ export async function buildWorkflowSnapshot(params: {
     messageChannel: params.messageChannel,
     channelKey: params.channelKey,
     role: params.agentId,
+    invalidEnvProjectRootMode: "ignore",
   });
   return await buildWorkflowSnapshotFromProjectState(
     {

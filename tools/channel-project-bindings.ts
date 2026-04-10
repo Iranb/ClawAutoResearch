@@ -40,6 +40,8 @@ export interface ChannelProjectBindingContext {
   depth?: number;
 }
 
+export type InvalidEnvProjectRootMode = "throw" | "ignore";
+
 export interface ChannelProjectBindingRecord {
   channelKey: string;
   projectRoot: string;
@@ -507,6 +509,7 @@ export function listChannelProjectBindings(params: {
 export function resolveProjectContext(params: {
   policy?: ChannelProjectBindingPolicy;
   context?: ChannelProjectBindingContext;
+  invalidEnvProjectRootMode?: InvalidEnvProjectRootMode;
 }): ResolvedProjectContext {
   const policy = normalizePolicy(params.policy);
   const projectsRoot = getProjectsRoot(policy);
@@ -543,14 +546,29 @@ export function resolveProjectContext(params: {
 
   const envProjectRoot = getDirectProjectRootFromEnv();
   if (envProjectRoot) {
-    const validatedProjectRoot =
-      projectsRoot
-        ? assertProjectRootWithinProjectsRoot({
-            projectRoot: envProjectRoot,
-            projectsRoot,
-            sourceLabel: "OPENCLAW_PROJECT",
-          })
-        : envProjectRoot;
+    let validatedProjectRoot = envProjectRoot;
+    if (projectsRoot) {
+      try {
+        validatedProjectRoot = assertProjectRootWithinProjectsRoot({
+          projectRoot: envProjectRoot,
+          projectsRoot,
+          sourceLabel: "OPENCLAW_PROJECT",
+        });
+      } catch (error) {
+        if (params.invalidEnvProjectRootMode === "ignore") {
+          return {
+            enabled: policy.enableChannelProjectBindings,
+            channelKey: resolveChannelProjectKey(params.context),
+            projectRoot: null,
+            projectId: null,
+            source: "none",
+            storePath,
+            binding: null,
+          };
+        }
+        throw error;
+      }
+    }
     return {
       enabled: policy.enableChannelProjectBindings,
       channelKey: resolveChannelProjectKey(params.context),

@@ -16,6 +16,7 @@ import {
   resolveProjectContext as resolveChannelProjectContext,
   type ChannelProjectBindingContext,
   type ChannelProjectBindingPolicy,
+  type InvalidEnvProjectRootMode,
   type ResolvedProjectContext,
 } from "../channel-project-bindings";
 
@@ -35,6 +36,7 @@ export type WorkflowProjectState = {
 
 export type WorkflowProjectContextOptions = ChannelProjectBindingContext & {
   policy?: ChannelProjectBindingPolicy;
+  invalidEnvProjectRootMode?: InvalidEnvProjectRootMode;
 };
 
 export type WorkflowProjectBootstrapParams = {
@@ -80,6 +82,7 @@ export function resolveWorkflowProjectContext(
   params: {
     policy?: ChannelProjectBindingPolicy;
     context?: ChannelProjectBindingContext;
+    invalidEnvProjectRootMode?: InvalidEnvProjectRootMode;
   }
 ): ResolvedProjectContext {
   return resolveChannelProjectContext(params);
@@ -91,6 +94,7 @@ export function getWorkflowProjectRoot(
   return resolveWorkflowProjectContext({
     policy: options?.policy,
     context: options,
+    invalidEnvProjectRootMode: options?.invalidEnvProjectRootMode,
   }).projectRoot;
 }
 
@@ -111,6 +115,7 @@ export async function loadWorkflowProjectState(
   const resolvedProject = resolveWorkflowProjectContext({
     policy: options?.policy,
     context: options,
+    invalidEnvProjectRootMode: options?.invalidEnvProjectRootMode,
   });
   const projectRoot = resolvedProject.projectRoot;
   if (!projectRoot) {

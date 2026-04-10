@@ -182,6 +182,48 @@ test("before_prompt_build does not materialize stage contracts while reading wor
   await assert.rejects(fs.stat(ideationPacketPath));
 });
 
+test("before_prompt_build ignores an out-of-root OPENCLAW_PROJECT instead of crashing", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-invalid-env-"));
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+    projectsRoot: path.join(workspaceDir, "projects"),
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+  process.env.OPENCLAW_PROJECT = path.join(os.tmpdir(), "openclaw-stray-project");
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  const result = await beforePromptBuild(
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "continue the workflow" }],
+        },
+      ],
+    },
+    {
+      agentId: "researcher",
+      workspaceDir,
+      sessionKey: "agent:researcher:dashboard:main",
+      sessionId: "session-researcher",
+      messageChannel: "main",
+      trigger: "user",
+    }
+  );
+
+  assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+  assert.match(result?.prependContext ?? "", /Project:\s+unset/);
+});
+
 test("before_tool_call ignores workflow-specific guards for custom agents that inherit a workflow-like session key", async () => {
   const harness = createHookHarness({
     blockDiscordAgentMentions: true,
