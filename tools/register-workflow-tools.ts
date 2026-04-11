@@ -1945,6 +1945,70 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   toAgent,
                   channel: dispatch.channel ?? "sessions_send",
                 });
+                if (dispatch.sessionKey) {
+                  try {
+                    const claimedTask = await claimNextWorkflowTaskForOwner({
+                      projectRoot: resolvedProjectRoot,
+                      owner: toAgent,
+                      sessionKey: dispatch.sessionKey,
+                    });
+                    if (claimedTask.claimed && claimedTask.task) {
+                      let teamRound = await recordWorkflowTeamRoundClaim({
+                        projectRoot: resolvedProjectRoot,
+                        sessionKey: dispatch.sessionKey,
+                        taskId: claimedTask.task.taskId,
+                      });
+                      if (!teamRound) {
+                        const taskGraphStore = await readWorkflowTaskGraphStore(
+                          resolvedProjectRoot
+                        );
+                        const taskGraphSummary =
+                          summarizeWorkflowTaskGraphStore(taskGraphStore);
+                        if (taskGraphStore) {
+                          await materializeWorkflowTeamRound({
+                            projectRoot: resolvedProjectRoot,
+                            projectId: snapshot.projectId ?? null,
+                            stage: snapshot.currentStage,
+                            leadRole: toAgent,
+                            topTierVerdict: taskGraphStore.topTierVerdict,
+                            evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+                            taskGraphPath: getWorkflowTaskGraphPath(resolvedProjectRoot),
+                            taskCount: taskGraphSummary.taskCount,
+                            claimableCount: taskGraphSummary.claimableCount,
+                            claimedCount: taskGraphSummary.claimedCount,
+                            satisfiedCount: taskGraphSummary.satisfiedCount,
+                            optionalCount: taskGraphSummary.optionalCount,
+                          });
+                          teamRound = await recordWorkflowTeamRoundClaim({
+                            projectRoot: resolvedProjectRoot,
+                            sessionKey: dispatch.sessionKey,
+                            taskId: claimedTask.task.taskId,
+                          });
+                        }
+                      }
+                    } else {
+                      plugin.api.logger?.warn?.(
+                        "No matching workflow task was claimed after explicit dispatch_task.",
+                        {
+                          projectRoot: resolvedProjectRoot,
+                          owner: toAgent,
+                          stage: snapshot.currentStage,
+                          reason: claimedTask.reason,
+                        }
+                      );
+                    }
+                  } catch (error) {
+                    plugin.api.logger?.warn?.(
+                      "Failed to claim workflow task after explicit dispatch_task.",
+                      {
+                        projectRoot: resolvedProjectRoot,
+                        owner: toAgent,
+                        stage: snapshot.currentStage,
+                        error: error instanceof Error ? error.message : String(error),
+                      }
+                    );
+                  }
+                }
               }
               return textResponse(JSON.stringify(dispatch, null, 2));
             }

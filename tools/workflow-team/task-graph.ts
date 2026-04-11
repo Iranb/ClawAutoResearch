@@ -182,6 +182,17 @@ function isLeaseExpired(lease: WorkflowTaskLease | null, now = Date.now()): bool
   return !Number.isFinite(expiresAt) || expiresAt <= now;
 }
 
+function releaseExpiredTask(task: WorkflowTaskGraphTask, now = Date.now()): WorkflowTaskGraphTask {
+  if (task.status !== "claimed" || !isLeaseExpired(task.lease, now)) {
+    return task;
+  }
+  return {
+    ...task,
+    status: "claimable",
+    lease: null,
+  };
+}
+
 export function getWorkflowTaskGraphPath(projectRoot: string): string {
   return path.join(projectRoot, ".openclaw-research", TASK_GRAPH_FILENAME);
 }
@@ -304,7 +315,7 @@ export async function claimWorkflowTask(params: {
       if (!store) {
         return { claimed: false, reason: "task_graph_missing", task: null };
       }
-      const nextTasks = [...store.tasks];
+      const nextTasks = store.tasks.map((task) => releaseExpiredTask(task));
       const taskIndex = nextTasks.findIndex((task) => task.taskId === params.taskId);
       if (taskIndex < 0) {
         return { claimed: false, reason: "task_missing", task: null };
@@ -437,6 +448,83 @@ export async function releaseWorkflowTaskClaim(params: {
   });
 }
 
+export async function releaseWorkflowTasksForSession(params: {
+  projectRoot: string;
+  sessionKey: string;
+}): Promise<{
+  releasedTaskIds: string[];
+}> {
+  return withAdvisoryLock({
+    lockPath: getWorkflowTaskGraphLockPath(params.projectRoot),
+    task: async () => {
+      const store = await readWorkflowTaskGraphStore(params.projectRoot);
+      if (!store) {
+        return { releasedTaskIds: [] };
+      }
+      const releasedTaskIds: string[] = [];
+      const nextTasks = store.tasks.map((task) => {
+        if (
+          task.status === "claimed" &&
+          task.lease?.sessionKey === params.sessionKey
+        ) {
+          releasedTaskIds.push(task.taskId);
+          return {
+            ...task,
+            status: "claimable" as const,
+            lease: null,
+          };
+        }
+        return task;
+      });
+      if (releasedTaskIds.length > 0) {
+        await writeJsonAtomicEnsured(getWorkflowTaskGraphPath(params.projectRoot), {
+          ...store,
+          generatedAt: nowIso(),
+          tasks: nextTasks,
+        });
+      }
+      return { releasedTaskIds };
+    },
+  });
+}
+
+export async function reconcileWorkflowTaskGraphLeases(params: {
+  projectRoot: string;
+}): Promise<{
+  releasedTaskIds: string[];
+}> {
+  return withAdvisoryLock({
+    lockPath: getWorkflowTaskGraphLockPath(params.projectRoot),
+    task: async () => {
+      const store = await readWorkflowTaskGraphStore(params.projectRoot);
+      if (!store) {
+        return { releasedTaskIds: [] };
+      }
+      const now = Date.now();
+      const releasedTaskIds: string[] = [];
+      const nextTasks = store.tasks.map((task) => {
+        if (task.status === "claimed" && isLeaseExpired(task.lease, now)) {
+          releasedTaskIds.push(task.taskId);
+          return {
+            ...task,
+            status: "claimable" as const,
+            lease: null,
+          };
+        }
+        return task;
+      });
+      if (releasedTaskIds.length > 0) {
+        await writeJsonAtomicEnsured(getWorkflowTaskGraphPath(params.projectRoot), {
+          ...store,
+          generatedAt: nowIso(),
+          tasks: nextTasks,
+        });
+      }
+      return { releasedTaskIds };
+    },
+  });
+}
+
 export async function claimNextWorkflowTaskForOwner(params: {
   projectRoot: string;
   owner: string;
@@ -454,8 +542,9 @@ export async function claimNextWorkflowTaskForOwner(params: {
       if (!store) {
         return { claimed: false, reason: "task_graph_missing", task: null };
       }
+      const nextTasks = store.tasks.map((task) => releaseExpiredTask(task));
       const existingOwned =
-        store.tasks.find(
+        nextTasks.find(
           (task) =>
             task.status === "claimed" &&
             task.lease?.sessionKey === params.sessionKey
@@ -464,7 +553,7 @@ export async function claimNextWorkflowTaskForOwner(params: {
         return { claimed: true, reason: "already_owned", task: existingOwned };
       }
       const nextTask =
-        store.tasks.find(
+        nextTasks.find(
           (task) =>
             task.status === "claimable" &&
             task.owner === params.owner
@@ -472,7 +561,7 @@ export async function claimNextWorkflowTaskForOwner(params: {
       if (!nextTask) {
         return { claimed: false, reason: "no_matching_claimable_task", task: null };
       }
-      const nextTasks = store.tasks.map((task) =>
+      const claimedTasks = nextTasks.map((task) =>
         task.taskId === nextTask.taskId
           ? {
               ...task,
@@ -486,11 +575,11 @@ export async function claimNextWorkflowTaskForOwner(params: {
           : task
       );
       const claimedTask =
-        nextTasks.find((task) => task.taskId === nextTask.taskId) ?? null;
+        claimedTasks.find((task) => task.taskId === nextTask.taskId) ?? null;
       await writeJsonAtomicEnsured(getWorkflowTaskGraphPath(params.projectRoot), {
         ...store,
         generatedAt: nowIso(),
-        tasks: nextTasks,
+        tasks: claimedTasks,
       });
       return { claimed: true, reason: null, task: claimedTask };
     },

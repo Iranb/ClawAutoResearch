@@ -25,6 +25,7 @@ import {
   getWorkflowRuntimeSessionsPath,
 } from "../tools/workflow-runtime-state.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
+import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
 
 async function makeProjectRoot() {
   const projectRoot = await fs.mkdtemp(
@@ -51,7 +52,7 @@ function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
   const api = {
     runtime: params.runtime ?? {},
-    logger: {},
+    logger: params.logger ?? {},
     pluginConfig: params.pluginConfig,
     registerTool(spec) {
       registeredTool = spec;
@@ -1038,6 +1039,84 @@ test("research_workflow get_snapshot reconciles finished uploads and refreshes g
     await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
   );
   assert.equal(graphPresence.status, "ready");
+});
+
+test("research_workflow dispatch_task claims the next matching team task for the target owner session", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "plan",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["benchmark protocol missing"],
+      experimentAnalyzeReady: false,
+      analyzeReviewReady: true,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "plan.write_canonical_packets",
+        title: "Write the canonical planning packets",
+        owner: "orchestrator",
+        status: "blocked",
+        reason: "Plan packets are still missing.",
+      },
+    ],
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      agentContactCooldownSeconds: 0,
+      enableChannelProjectBindings: false,
+      projectsRoot: path.dirname(projectRoot),
+    },
+    logger: {
+      warn(...args) {
+        console.error("dispatch_task_warn", ...args);
+      },
+    },
+    runtime: {
+      subagent: {
+        async run() {
+          return { runId: "dispatch-run-1" };
+        },
+      },
+    },
+    agentId: "researcher",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "dispatch_task",
+    toAgent: "orchestrator",
+    subject: "Workflow task dispatch",
+    command: "/plan-research",
+  });
+
+  assert.equal(result.dispatched, true, JSON.stringify(result, null, 2));
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(
+    store?.tasks[0].status,
+    "claimed",
+    JSON.stringify({ dispatch: result, store }, null, 2)
+  );
+  assert.equal(
+    store?.tasks[0].lease?.sessionKey,
+    "agent:orchestrator:discord:group:paper-lab"
+  );
 });
 
 test("research_workflow get_snapshot honors the plugin-configured shared corpus for remote graph refresh", async (t) => {

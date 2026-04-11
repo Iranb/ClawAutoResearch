@@ -23,6 +23,7 @@ import {
   recordBackgroundWorkflowRun,
 } from "./workflow-background-pool";
 import { readWorkflowAnnounceOutboxStore } from "./workflow-runtime-state.js";
+import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 import {
   orchestrateWorkflowTransition,
   recordWorkflowAnnounceEvent,
@@ -92,11 +93,13 @@ import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.j
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 import {
   claimNextWorkflowTaskForOwner,
+  releaseWorkflowTasksForSession,
 } from "./workflow-team/task-graph";
 import {
   recordWorkflowTeamRoundClaim,
   materializeWorkflowTeamRound,
   readWorkflowTeamRoundStore,
+  releaseWorkflowTeamRoundSession,
 } from "./workflow-team/team-round";
 import { appendWorkflowRuntimeEvent } from "./workflow-runtime-state.js";
 import {
@@ -143,6 +146,54 @@ function resolveWorkflowCoordinatorDependencies(
       listChannelProjectBindingsForWorkflow,
     runWorkflowRuntimeMaintenancePass:
       overrides?.runWorkflowRuntimeMaintenancePass ?? runWorkflowRuntimeMaintenancePass,
+  };
+}
+
+const TEAM_CLAIM_RELEASE_SESSION_STATUSES = new Set(["completed", "failed", "needs_repair"]);
+
+export async function reconcileClaimedWorkflowTasksForProject(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<{
+  releasedTaskIds: string[];
+  releasedSessionKeys: string[];
+}> {
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot);
+  const staleSessionKeys = sessionsStore.entries
+    .filter((entry) => TEAM_CLAIM_RELEASE_SESSION_STATUSES.has(entry.status))
+    .map((entry) => entry.sessionKey);
+
+  const releasedTaskIds: string[] = [];
+  const releasedSessionKeys: string[] = [];
+
+  for (const sessionKey of staleSessionKeys) {
+    const released = await releaseWorkflowTasksForSession({
+      projectRoot: params.projectRoot,
+      sessionKey,
+    });
+    if (released.releasedTaskIds.length > 0) {
+      releasedTaskIds.push(...released.releasedTaskIds);
+      releasedSessionKeys.push(sessionKey);
+      await releaseWorkflowTeamRoundSession({
+        projectRoot: params.projectRoot,
+        sessionKey,
+      });
+      await appendWorkflowRuntimeEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId ?? null,
+        kind: "team_task_released",
+        summary: `Released ${released.releasedTaskIds.length} task claim(s) from ${sessionKey}.`,
+        details: {
+          sessionKey,
+          taskIds: released.releasedTaskIds,
+        },
+      });
+    }
+  }
+
+  return {
+    releasedTaskIds,
+    releasedSessionKeys,
   };
 }
 
@@ -4026,6 +4077,14 @@ export function createWorkflowCoordinatorService(
                   sessionKey: result.sessionKey,
                 };
               },
+            })
+          )
+        );
+        await Promise.all(
+          results.map((entry) =>
+            reconcileClaimedWorkflowTasksForProject({
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
             })
           )
         );

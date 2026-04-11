@@ -23,10 +23,15 @@ import {
   readWorkflowRuntimeSessionsStore,
 } from "../tools/workflow-runtime-state.ts";
 import {
+  claimWorkflowTask,
   materializeWorkflowTaskGraph,
   readWorkflowTaskGraphStore,
 } from "../tools/workflow-team/task-graph.ts";
-import { readWorkflowTeamRoundStore } from "../tools/workflow-team/team-round.ts";
+import {
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+  recordWorkflowTeamRoundClaim,
+} from "../tools/workflow-team/team-round.ts";
 import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
@@ -39,6 +44,7 @@ import {
   maybeLaunchAutoZoteroSyncForProject,
   maybeLaunchIdleResearchForProject,
   maybeLaunchPaperIngestionWorkerForProject,
+  reconcileClaimedWorkflowTasksForProject,
   runWorkflowCoordinatorPass,
 } from "../tools/register-workflow-service.ts";
 import {
@@ -765,6 +771,122 @@ test("maybeLaunchAutoStageForProject claims the next matching task for the launc
   const teamRound = await readWorkflowTeamRoundStore(projectRoot);
   assert.equal(teamRound?.activeSessionKeys.includes("agent:coder:discord:group:paper-lab"), true);
   assert.equal(teamRound?.lastClaimedTaskId, "code.implement_experiment_bundle");
+});
+
+test("reconcileClaimedWorkflowTasksForProject releases claimed tasks for completed runtime sessions", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "alpha",
+    stage: "code",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["benchmark protocol missing"],
+      experimentAnalyzeReady: false,
+      analyzeReviewReady: true,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "code.implement_experiment_bundle",
+        title: "Implement the approved experiment bundle",
+        owner: "coder",
+        status: "blocked",
+        reason: "Bundle implementation is pending.",
+      },
+    ],
+  });
+  await claimWorkflowTask({
+    projectRoot,
+    taskId: "code.implement_experiment_bundle",
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    role: "coder",
+  });
+  await materializeWorkflowTeamRound({
+    projectRoot,
+    projectId: "alpha",
+    stage: "code",
+    leadRole: "coder",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseoutStatus: "blocked",
+    taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
+    taskCount: 1,
+    claimableCount: 0,
+    claimedCount: 1,
+    satisfiedCount: 0,
+    optionalCount: 0,
+  });
+  await recordWorkflowTeamRoundClaim({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    taskId: "code.implement_experiment_bundle",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"), {
+    schemaVersion: 1,
+    runtimeFramework: "sessions_spawn_v1",
+    compatibilityMode: "sessions_spawn_runtime",
+    updatedAt: "2026-04-11T00:00:00.000Z",
+    migration: {
+      version: 1,
+      status: "completed",
+      compatibilityMode: "sessions_spawn_runtime",
+      migratedAt: "2026-04-11T00:00:00.000Z",
+      reason: null,
+      preservedFiles: [],
+      notes: [],
+    },
+    projectId: "alpha",
+    projectRoot,
+    entries: [
+      {
+        sessionKey: "agent:coder:discord:group:paper-lab",
+        sessionId: null,
+        runtime: "subagent",
+        role: "coder",
+        agentId: "coder",
+        ownerAgent: "coder",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "alpha",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "completed",
+        runId: "run-1",
+        queueKey: "alpha::code::coder",
+        startedAt: "2026-04-11T00:00:00.000Z",
+        lastHeartbeatAt: "2026-04-11T00:01:00.000Z",
+        lastAnnounceAt: null,
+        lastCheckedAt: "2026-04-11T00:01:00.000Z",
+        lastFinishedAt: "2026-04-11T00:02:00.000Z",
+        lastError: null,
+      },
+    ],
+  });
+
+  const released = await reconcileClaimedWorkflowTasksForProject({
+    projectRoot,
+    projectId: "alpha",
+  });
+
+  assert.deepEqual(released.releasedTaskIds, ["code.implement_experiment_bundle"]);
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(store?.tasks[0].status, "claimable");
+  const teamRound = await readWorkflowTeamRoundStore(projectRoot);
+  assert.equal(teamRound?.activeSessionKeys.includes("agent:coder:discord:group:paper-lab"), false);
 });
 
 test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair guidance instead of drive_stage handoff", async (t) => {

@@ -9,7 +9,9 @@ import {
   claimWorkflowTask,
   materializeWorkflowTaskGraph,
   readWorkflowTaskGraphStore,
+  reconcileWorkflowTaskGraphLeases,
   releaseWorkflowTaskClaim,
+  releaseWorkflowTasksForSession,
   renewWorkflowTaskLease,
   summarizeWorkflowTaskGraphStore,
 } from "../tools/workflow-team/task-graph.ts";
@@ -273,5 +275,146 @@ test("workflow team round persists lead, active sessions, and last claimed task"
   assert.deepEqual(summary, {
     status: "active",
     activeSessionCount: 1,
+  });
+});
+
+test("workflow task graph can release all tasks owned by one session", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-task-release-session-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "review",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["mechanism evidence missing"],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: false,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 1,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "review.reject_first_pass",
+        title: "Run reject-first review",
+        owner: "reviewer",
+        status: "blocked",
+        reason: "Review packet is pending.",
+      },
+      {
+        taskId: "review.citation_gate",
+        title: "Run citation gate",
+        owner: "reviewer",
+        status: "blocked",
+        reason: "Citation gate is pending.",
+      },
+    ],
+  });
+
+  await claimWorkflowTask({
+    projectRoot,
+    taskId: "review.reject_first_pass",
+    sessionKey: "agent:reviewer:discord:group:paper-lab",
+    role: "reviewer",
+  });
+  await claimWorkflowTask({
+    projectRoot,
+    taskId: "review.citation_gate",
+    sessionKey: "agent:reviewer:discord:group:paper-lab",
+    role: "reviewer",
+  });
+
+  const released = await releaseWorkflowTasksForSession({
+    projectRoot,
+    sessionKey: "agent:reviewer:discord:group:paper-lab",
+  });
+  assert.deepEqual(released.releasedTaskIds.sort(), [
+    "review.citation_gate",
+    "review.reject_first_pass",
+  ]);
+
+  const summary = summarizeWorkflowTaskGraphStore(
+    await readWorkflowTaskGraphStore(projectRoot)
+  );
+  assert.deepEqual(summary, {
+    taskCount: 2,
+    claimableCount: 2,
+    claimedCount: 0,
+    satisfiedCount: 0,
+    optionalCount: 0,
+  });
+});
+
+test("workflow task graph can reconcile expired leases back to claimable tasks", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-task-reconcile-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "submit",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["camera-ready captions not ready"],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "submit.camera_ready_package",
+        title: "Finish camera-ready evidence package",
+        owner: "reviewer",
+        status: "blocked",
+        reason: "Camera-ready evidence is pending.",
+      },
+    ],
+  });
+
+  await claimWorkflowTask({
+    projectRoot,
+    taskId: "submit.camera_ready_package",
+    sessionKey: "agent:reviewer:discord:group:paper-lab",
+    role: "reviewer",
+    ttlMs: 1000,
+  });
+
+  const storePath = path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json");
+  const store = JSON.parse(await fs.readFile(storePath, "utf8"));
+  store.tasks[0].lease.expiresAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+
+  const reconciled = await reconcileWorkflowTaskGraphLeases({ projectRoot });
+  assert.deepEqual(reconciled.releasedTaskIds, ["submit.camera_ready_package"]);
+
+  const summary = summarizeWorkflowTaskGraphStore(
+    await readWorkflowTaskGraphStore(projectRoot)
+  );
+  assert.deepEqual(summary, {
+    taskCount: 1,
+    claimableCount: 1,
+    claimedCount: 0,
+    satisfiedCount: 0,
+    optionalCount: 0,
   });
 });
