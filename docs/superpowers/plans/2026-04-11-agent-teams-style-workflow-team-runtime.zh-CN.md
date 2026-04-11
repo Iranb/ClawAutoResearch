@@ -1,6 +1,6 @@
 # Workflow Pipeline 重构与 Agent Teams Runtime 实施计划
 
-> **Status:** IMPLEMENTED — CORE RUNTIME, GUARDRAILS, RETRY INTERFACE, AND STRICT TODO PASS LANDED
+> **Status:** PARTIALLY IMPLEMENTED — CORE RUNTIME LANDED, SURVEY-LINE HARDENING AND PRODUCTION RECOVERY GAPS REMAIN
 
 > **For agentic workers:** 这份计划不是“继续往现有系统上加层”的指令，而是“先收束 pipeline 内核，再把 Agent Teams 风格推进机制落到新内核上”的重构路线。任何实现都必须先补回归，再做最小可逆变更，并优先删除重复表达而不是继续堆逻辑。
 
@@ -37,7 +37,7 @@
 - 已完成切片 W：service-side pooled session 从 researcher-only 扩展到 role-aware，auto-stage / auto-discussion / mitigation 主路径已能为 `orchestrator / coder / analyzer / academic_writer / reviewer / researcher` 复用同一套 pooled session policy。
 - 已完成切片 X：dashboard 项目详情页已增加 Team Round 概览、Task Board 与 Evidence Moat 概览；新增 `workflow-collaboration-kernel`、`workflow-execution-kernel`、`workflow-task-claim`、`workflow-team-recovery` 回归测试。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 当前状态：Evidence Runtime、Team Runtime 的核心运行面、Role-aware session pool、Dashboard 可观察性、长 EXEC guardrail、PaperNexus 失败论文顺序 retry 接口、feature flag、heartbeat idle continuation、evidence materializer module 分层与主要验证矩阵已经落地。
+- 当前状态：Evidence Runtime、Team Runtime 的核心运行面、Role-aware session pool、Dashboard 可观察性、长 EXEC guardrail、PaperNexus 失败论文顺序 retry 接口、feature flag、heartbeat idle continuation、evidence materializer module 分层与主要验证矩阵已经落地；但最新线上日志显示 survey / review-paper 流水线仍会在识别或状态一致性失败时掉回实验论文主线，因此必须继续补 survey-line hardening。
 
 ---
 
@@ -426,6 +426,289 @@ Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram
 - [x] **TODO-8: PaperNexus Failed Upload Retry Interface**
   - Implement failure classifier, retry manifest, workflow tool actions, service fallback, graph presence integration.
   - Make “重提交失败论文” a first-class workflow action.
+
+### 0.6 新增真实问题 C：综述项目被实验论文流水线吞掉
+
+#### 现象记录
+
+项目：
+
+- `gcd-survey-tpami-2026`
+- 项目路径：`/Users/iranb/Downloads/AutoResearchProjects/gcd-survey-tpami-2026`
+- 用户明确说明：“综述不需要 idea phase”
+- 用户要求启动 `/paper-plan` 并开启全自动模式
+
+实际日志暴露了几个连续故障：
+
+1. Workflow 先广播：
+   - `frontier mapping -> idea`
+   - `next_action: run /innovation-reflection first; then run /idea-phase`
+   - 这说明当时 workflow 走的是实验论文 ideation 主线，而不是 survey 主线。
+2. Researcher 之后手动表示：
+   - `paper_type: unset -> survey`
+   - `stage: idea -> plan`
+   - 这说明 survey identity 没有在 workflow truth 里提前锁定，而是由 agent 在对话中补救。
+3. 用户启动 `/paper-plan` 后触发长 EXEC 封控：
+   - `Obfuscated command detected: Command too long`
+   - 说明 paper-plan / auto-mode 启动路径还可能把过长执行文本送进 Discord-visible exec surface。
+4. 后续 Researcher/Coder 试图通过补 stub 的方式穿过实验论文主线：
+   - plan 生成随机 track id
+   - plan -> code
+   - code innovation review gate
+   - code -> experiment
+   - experiment cooldown
+   - 手动 manifest stage 改写被 auto iterator 回滚
+5. Coder 最终报告：
+   - code artifacts 已补齐
+   - code review 通过
+   - workflow 仍回退到 `graph_build`
+   - `paper_ingestion.graph_presence_status` 被 tick 后覆盖为 `missing_sources`
+
+#### 代码证据
+
+当前代码中已经有 survey line routing，但它依赖 `isSurveyWorkflow(manifest)` 能在 tick 前识别 survey：
+
+- `tools/workflow-line-routing.js`
+  - `isSurveyWorkflow(...)` 会检查：
+    - `workflow_line`
+    - `project_type`
+    - `paper_type`
+    - `writing_contract.paperMode`
+    - `survey_review`
+    - `project_id` 是否包含 `survey`
+    - `research_program.goal/problem_statement` 是否包含 survey / literature review / systematic review / 综述
+  - `resolveStageForWorkflowLine(...)` 会把 survey 项目的 `setup / graph_build / frontier_mapping / idea / plan / code / experiment / analyze / review` 统一恢复成 `survey_review`
+  - `resolveNextStageForWorkflow(...)` 对 survey 项目应走：
+    - recovery stages -> `survey_review`
+    - `survey_review -> write`
+    - `write -> submit`
+    - `submit -> done`
+- `tools/workflow-guard-runtime/auto-iterator.ts`
+  - tick 开始时会先读 manifest，然后如果 `deps.isSurveyWorkflow(manifest)` 为 true，才会调用 `resolveStageForWorkflowLine(...)`
+  - 如果 manifest 没有被识别为 survey，就会继续使用实验论文阶段机。
+- `tools/workflow-guard-policies/role-policy.ts`
+  - `STAGE_REQUIREMENTS` 仍包含实验主线 `plan -> code -> experiment -> analyze -> review -> write`
+  - survey 只有独立 `survey_review -> write`
+
+#### 根因判断
+
+这不是单一 bug，而是 **survey identity lock 缺失 + survey route 不够强制 + agent 手动改状态破坏 durable truth** 的组合问题。
+
+根因 1：Survey identity 没有在项目创建/graph_build 早期成为 durable truth
+
+- 日志里 Researcher 说 `paper_type unset -> survey`，说明关键 survey marker 是在 workflow 已经进入 `idea` 后才被补上。
+- 如果 `PROJECT_MANIFEST.json.project_id`、`paper_type`、`workflow_line`、`writing_contract.paper_mode`、`survey_review.status/topic` 任一关键字段缺失，旧版本或当前不完整状态都可能被当作实验论文处理。
+
+根因 2：`/paper-plan` 没有被映射到 survey-native stage
+
+- 用户说 `/paper-plan`，Researcher 将其解释为综述大纲规划。
+- 但 workflow 阶段机仍可能把它映射到 `plan`，而不是 `survey_review` 或 `write_package`。
+- 一旦进入 `plan`，就会触发实验论文 `research_program.plan_selection` / `tracks` / `task_graph` 约束。
+
+根因 3：实验论文 stage gates 对 survey 项目没有强制 bypass
+
+- 进入 `code` 后，系统要求：
+  - `coder/experiments/.../train.py`
+  - `EXPERIMENT_MANIFEST.json`
+  - `coder/EXPERIMENT_INDEX.md`
+  - code innovation review gate
+- 进入 `experiment` 后，又要求实验结果、ledger、analysis readiness。
+- 对综述论文，这些都是错误的 stage gates。
+
+根因 4：Auto iterator 是 durable truth，手动改 manifest 会被回滚
+
+- Coder 尝试手动改 `current_stage` 跳过 code/experiment。
+- 但 auto iterator 下一次会重新根据 graph presence、missingStageSignals、gate state、owner/stage truth 计算，导致回滚。
+- 这说明“手动改 stage”不是安全恢复路径，必须提供 workflow-owned survey skip/recovery action。
+
+根因 5：Graph presence 与 survey route 耦合不清
+
+- Coder 报告 `paper_ingestion.graph_presence_status` 被覆盖为 `missing_sources`。
+- 对 survey 项目，graph presence 仍然重要，但 graph repair 完成后应有明确的 `check_graph_presence / refresh_graph_presence / accept_remote_graph_ready` workflow action。
+- 不能让 agent 通过手动写 manifest 来宣称 ready。
+
+#### 为什么当前最新框架仍可能出现综述流程问题
+
+即使当前代码已有 `isSurveyWorkflow`，仍可能在以下条件下复现：
+
+- `project_id` 没有持久化为 `gcd-survey-tpami-2026`，或者 runtime 读到的是另一个 project/root。
+- `paper_type` / `workflow_line` / `writing_contract.paper_mode` 没有在 project-init 阶段写入 manifest。
+- `/paper-plan` 仍调用实验论文 `plan` 阶段工具，而不是 survey-native `survey_review`。
+- auto-mode service 根据 `drive_stage` dispatch，而不是根据 `workflow_line=survey` 改写到 survey route。
+- graph presence remote 状态修复后没有通过 workflow-owned graph presence refresh 重新落盘。
+- foreground agent 手动修改 manifest，触发 auto iterator 在下一轮按旧 truth 回滚。
+
+#### Survey 流水线目标设计
+
+综述论文应明确走独立主线：
+
+```text
+setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/surface_qc -> submit -> done
+```
+
+其中：
+
+- `idea`：默认跳过，除非用户显式要求“提出原创实验方向”。
+- `plan`：不应复用实验论文 plan gate；应映射成 survey outline planning。
+- `code`：默认跳过。
+- `experiment`：默认跳过。
+- `analyze`：默认跳过实验 analysis；survey 可选使用 literature synthesis / taxonomy analysis。
+- `review`：可保留为 survey manuscript review / coverage review，而不是实验 code/research review。
+
+#### TODO C1：Survey identity lock
+
+- Modify:
+  - project init / bind / survey init paths
+  - `templates/PROJECT_MANIFEST.json`
+  - `tools/workflow-line-routing.js`
+- Add durable fields:
+  - `workflow_line: "survey"`
+  - `paper_type: "survey"`
+  - `writing_contract.paper_mode: "survey"`
+  - `survey_review.status`
+  - `survey_review.topic`
+  - `survey_review.target_venue`
+- Acceptance:
+  - 一旦 project id、topic、user command、writing contract 任一信号表明 survey，workflow 必须持久化 survey identity。
+  - 后续 tick 不再回到实验论文 `idea / plan / code / experiment / analyze`。
+
+#### TODO C2：Survey route hardening in auto_iterator
+
+- Modify:
+  - `tools/workflow-guard-runtime/auto-iterator.ts`
+  - `tools/workflow-line-routing.js`
+- Required behavior:
+  - 如果 `isSurveyWorkflow(manifest)` 为 true，并且 `current_stage` 属于 `idea / plan / code / experiment / analyze / review`，auto iterator 必须：
+    - set `stageAfter = survey_review` 或 survey-specific stage
+    - set owner = `researcher`
+    - clear experiment-only next_action
+    - emit reason: `survey_route_recovery`
+  - 不允许 survey 项目生成：
+    - `/idea-phase`
+    - experiment track repair
+    - code experiment bundle handoff
+    - code innovation review gate
+    - experiment monitor gate
+- Acceptance:
+  - `frontier_mapping` 完成后的 survey 项目进入 `survey_review`，不是 `idea`。
+
+#### TODO C3：`/paper-plan` 映射为 survey-native planning
+
+- Modify:
+  - command parser / prompt fast path / workflow tools
+  - `register-workflow-hooks.ts`
+  - `register-workflow-tools.ts`
+- Behavior:
+  - 对 survey 项目，`/paper-plan` 应 materialize:
+    - survey outline
+    - taxonomy plan
+    - coverage matrix
+    - section responsibility map
+  - 不应调用实验论文 `plan` stage validator。
+- Acceptance:
+  - 用户说“启动 /paper-plan”不会进入 `plan -> code`。
+
+#### TODO C4：Survey-specific stage signals
+
+- Create:
+  - `tools/workflow-guard-stages/survey-stage-signals.ts`
+- Survey `survey_review` required signals:
+  - `researcher/SURVEY_TAXONOMY.md`
+  - `researcher/SURVEY_COVERAGE_MATRIX.json`
+  - `researcher/SURVEY_OUTLINE.md`
+  - `researcher/SURVEY_READING_MATRIX.json`
+  - graph-grounded coverage status
+  - target venue / paper mode
+- Survey `write` required signals:
+  - survey outline locked
+  - coverage matrix ready
+  - citation collection ready
+  - section packet plan ready
+- Bypass:
+  - code experiment bundle
+  - experiment ledger
+  - multi-seed statistics
+  - ablation evidence
+  - mechanism evidence, unless explicitly configured for survey+experiment hybrid
+
+#### TODO C5：Survey auto-mode gate bypass
+
+- Modify:
+  - code review auto gate
+  - experiment launch/review gate
+  - auto-mode discussion / mitigation dispatch
+- Behavior:
+  - Survey route should not run code innovation review.
+  - Survey route should not require experiment launch approval.
+  - Survey route can run survey quality review:
+    - coverage sufficiency
+    - taxonomy coherence
+    - citation integrity
+    - novelty of survey perspective
+- Acceptance:
+  - aggressive auto-mode on survey does not dispatch Coder for experiment bundle unless explicitly configured as hybrid.
+
+#### TODO C6：Graph presence recovery action for survey
+
+- Add tool action:
+  - `refresh_graph_presence`
+  - `accept_remote_graph_ready`
+  - or extend `check_graph_presence` with `persist=true`
+- Behavior:
+  - 当用户说“远程 Graph 状态修复完成”，Researcher 应调用 workflow-owned graph refresh action。
+  - 不允许手动改 `paper_ingestion.graph_presence_status`。
+  - If remote graph is ready, persist:
+    - `graph_presence_status=ready`
+    - `graph_presence_checked_at`
+    - `graph_presence_present_papers`
+    - `graph_presence_missing_papers=[]`
+- Acceptance:
+  - 修复远程 graph 后，下一次 tick 不会重新覆盖为 `missing_sources`，除非远程检查确实失败。
+
+#### TODO C7：Manual stage mutation guard
+
+- Modify:
+  - prompt guidance
+  - tool guards
+  - maybe `set_orchestration_state`
+- Behavior:
+  - Agent 不应直接改 `PROJECT_MANIFEST.json.current_stage` 来跳过阶段。
+  - 如果需要跳过，必须调用 workflow-owned action:
+    - `recover_survey_route`
+    - `skip_experiment_stages_for_survey`
+    - `auto_iterator_tick` with survey recovery
+- Acceptance:
+  - Coder 不会再创建 stub `train.py` / fake experiment manifest 作为 survey 跳关手段。
+
+#### TODO C8：Tests for survey route
+
+- Add:
+  - `tests/workflow-survey-route.test.mjs`
+  - `tests/auto-iterator.test.mjs` survey regressions
+  - `tests/workflow-runtime-tools.test.mjs` `/paper-plan` survey mapping
+  - `tests/workflow-hook-prompt-isolation.test.mjs` survey guidance
+- Test cases:
+  - `project_id=gcd-survey-tpami-2026` with `frontier_mapping` advances to `survey_review`, not `idea`.
+  - `paper_type=survey` and `current_stage=plan` recovers to `survey_review`, not `code`.
+  - `workflow_line=survey` bypasses code/experiment/analyze gates.
+  - `/paper-plan` creates survey outline artifacts, not experiment plan state.
+  - remote graph ready persistence prevents regression to `graph_build`.
+  - manual stage mutation is rejected or repaired through survey recovery.
+
+#### Immediate operator guidance
+
+如果线上再次发生同类问题，正确操作顺序应是：
+
+1. 不要手动改 `current_stage`。
+2. 先确保 manifest 有：
+   - `workflow_line=survey`
+   - `paper_type=survey`
+   - `writing_contract.paper_mode=survey`
+   - `survey_review.topic`
+3. 运行 workflow-owned graph presence refresh，而不是手写 `graph_presence_status`.
+4. 运行 survey recovery / auto iterator，让 stage 回到 `survey_review`.
+5. 在 `survey_review` 里生成 survey outline / taxonomy / coverage matrix。
+6. 再进入 `write`。
 
 ---
 
