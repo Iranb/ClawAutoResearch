@@ -28,6 +28,7 @@
 - 已完成切片 N：让 tool 侧 `maybeDispatchAutoIteratorTask(...)` 也在 dispatch 成功后消费 task graph + claim state，至此 auto iterator 的 tool/service 两条主要 handoff 路都已开始依赖 Team Runtime state。
 - 已完成切片 O：dashboard/read-model 开始读取 `top-tier verdict`、`team round`、`task graph` 摘要，Team Runtime 与 Evidence Runtime 已进入项目详情主摘要层。
 - 已完成切片 P：引入 runtime-session 驱动的 claim 回收链路，当 session 进入 `completed / failed / needs_repair` 时自动释放 task claim 与 team round session，避免任务永久卡死在 `claimed`。
+- 已完成切片 Q：修复 channel-project binding 的跨进程缓存一致性问题，binding index 现在会在文件 mtime 变化后主动失效并重读，不再单纯依赖 30s 内存 TTL；新增 stale-cache 回归测试。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
 - 下一切片目标：继续把更多 runtime surface（尤其是任务完成后的 verify/satisfy）接到 task graph + claim state 上，并把 team round 从摘要状态推进到真正的 round lifecycle。
 
@@ -293,6 +294,28 @@
 
 它是今天 `workflow-runtime-state.ts + workflow-session-orchestrator.ts + workflow-fast-paths.ts + workflow-background-pool.ts + lobster-handoff.ts + agent-task-dispatch.ts` 的统一内核。
 
+### 3.2.1 Lobster 的定位
+
+`Lobster` 应明确视为 **Execution Kernel 内的可选 delivery adapter**，而不是：
+
+- workflow truth source
+- project binding source
+- Team Runtime state source
+
+因此本计划对 `Lobster` 的裁决是：
+
+- **应该继续保留并纳入 delivery-adapter 统一收束**
+- **不应让 Lobster 负责 project binding 解析**
+- **不应让 Lobster 单独定义 handoff 是否成功**
+- **应让 Lobster 消费 task graph / claim state，而不是反过来定义它们**
+
+换句话说：
+
+- `Lobster` 解决的是 handoff transport / orchestration backend
+- binding coherency 解决的是 project resolution / runtime visibility
+
+两者相关，但不是同一层问题。
+
 #### Layer D: Workflow Projection Kernel
 
 职责：
@@ -303,6 +326,22 @@
 - runtime health projection
 
 它是今天 `snapshot-builder.ts + workflow-commands/formatters.ts + dashboard read-models` 的统一内核。
+
+### 3.2.2 Binding Coherency 是独立工作流面
+
+当前系统必须把下面这个问题当成独立目标，而不是顺带靠其它重构“自然解决”：
+
+- bind/unbind 文件写入成功后，tool / hook / service / snapshot 解析是否能立即看到最新 binding
+
+这条工作流面与 Team Runtime 同样重要，因为：
+
+- 如果 project resolution 不稳定，后续 task graph / team round / evidence gate 可能落在错误项目上
+- 它不是 handoff transport 问题，而是 runtime state visibility 问题
+
+因此本计划将 `Binding Coherency` 视为：
+
+- Workflow Collaboration Kernel 与 Execution Kernel 之间的基础一致性要求
+- 其成功标准是“fresh binding 在下一次解析时可见”，而不是“30s 内缓存最终会过期”
 
 #### Layer E: Workflow Evidence Kernel
 

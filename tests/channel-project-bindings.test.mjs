@@ -18,7 +18,10 @@ import {
   deriveWorkflowSubagentImmediateParentSessionKey,
   normalizeWorkflowSubagentParentSessionKey,
 } from "../tools/workflow-subagent-sessions.ts";
-import { ensureProjectsBindingIndex } from "../tools/channel-project-bindings.ts";
+import {
+  ensureProjectsBindingIndex,
+  getProjectsBindingIndexPath,
+} from "../tools/channel-project-bindings.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-channel-bindings-"));
@@ -887,4 +890,128 @@ test("nested workflow runtime bindings keep the immediate parent session while p
     }),
     `${nestedSessionKey}:subagent:artifact-sync`
   );
+});
+
+test("binding resolution reloads a freshly updated projects index instead of serving a stale empty cache", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "fresh-binding-track");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const channelKey = "discord:group:paper-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const initialSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(initialSnapshot.projectRoot, null);
+  assert.equal(initialSnapshot.projectResolutionSource, "none");
+
+  const projectStorePath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "channel-project-bindings.json"
+  );
+  await fs.mkdir(path.dirname(projectStorePath), { recursive: true });
+  await fs.writeFile(
+    projectStorePath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-11T09:00:00.000Z",
+        bindings: [
+          {
+            channelKey,
+            projectRoot,
+            projectId: "fresh-binding-track",
+            messageChannel: "discord",
+            sessionKeySample: sessionKey,
+            sessionId: null,
+            boundAt: "2026-04-11T09:00:00.000Z",
+            updatedAt: "2026-04-11T09:00:00.000Z",
+            boundByAgent: "researcher",
+            workflowRole: "researcher",
+            workflowSessionKey: sessionKey,
+            workflowSessionId: null,
+            parentWorkflowSessionKey: null,
+            threadBindingKey: null,
+            depth: 0,
+            lineageKey: null,
+            workflowBindingMode: "channel_only",
+            workflowIsolationMode: "channel_shared",
+            workflowAllowedRoles: [],
+            workflowAllowedAgentIds: [],
+            workflowBroadcastSessionKey: sessionKey,
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(
+    indexPath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-11T09:00:01.000Z",
+        bindings: [
+          {
+            channelKey,
+            projectRoot,
+            projectId: "fresh-binding-track",
+            messageChannel: "discord",
+            sessionKeySample: sessionKey,
+            sessionId: null,
+            boundAt: "2026-04-11T09:00:00.000Z",
+            updatedAt: "2026-04-11T09:00:00.000Z",
+            boundByAgent: "researcher",
+            workflowRole: "researcher",
+            workflowSessionKey: sessionKey,
+            workflowSessionId: null,
+            parentWorkflowSessionKey: null,
+            threadBindingKey: null,
+            depth: 0,
+            lineageKey: null,
+            workflowBindingMode: "channel_only",
+            workflowIsolationMode: "channel_shared",
+            workflowAllowedRoles: [],
+            workflowAllowedAgentIds: [],
+            workflowBroadcastSessionKey: sessionKey,
+            storePath: projectStorePath,
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const refreshedSnapshot = await buildWorkflowSnapshot({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    agentId: "researcher",
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(refreshedSnapshot.projectRoot, projectRoot);
+  assert.equal(refreshedSnapshot.projectId, "fresh-binding-track");
+  assert.equal(refreshedSnapshot.projectResolutionSource, "channel_binding");
 });

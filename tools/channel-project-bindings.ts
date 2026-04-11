@@ -116,7 +116,7 @@ const DEFAULT_POLICY: Required<ChannelProjectBindingPolicy> = {
 const BINDING_INDEX_CACHE_TTL_MS = 30_000;
 const bindingIndexCache = new Map<
   string,
-  { loadedAt: number; store: ChannelProjectBindingIndexStore }
+  { loadedAt: number; fileMtimeMs: number | null; store: ChannelProjectBindingIndexStore }
 >();
 
 function asString(value: unknown): string | null {
@@ -446,8 +446,18 @@ function normalizeBindingIndexStore(
 
 function readBindingIndex(projectsRoot: string): ChannelProjectBindingIndexStore {
   const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  let fileMtimeMs: number | null = null;
+  try {
+    fileMtimeMs = fs.statSync(indexPath).mtimeMs;
+  } catch {
+    fileMtimeMs = null;
+  }
   const cached = bindingIndexCache.get(indexPath);
-  if (cached && Date.now() - cached.loadedAt <= BINDING_INDEX_CACHE_TTL_MS) {
+  if (
+    cached &&
+    Date.now() - cached.loadedAt <= BINDING_INDEX_CACHE_TTL_MS &&
+    cached.fileMtimeMs === fileMtimeMs
+  ) {
     return cached.store;
   }
   let store: ChannelProjectBindingIndexStore;
@@ -459,6 +469,7 @@ function readBindingIndex(projectsRoot: string): ChannelProjectBindingIndexStore
   }
   bindingIndexCache.set(indexPath, {
     loadedAt: Date.now(),
+    fileMtimeMs,
     store,
   });
   return store;
@@ -495,8 +506,15 @@ async function saveBindingIndex(
   store.updatedAt = new Date().toISOString();
   const indexPath = getProjectsBindingIndexPath(projectsRoot);
   await writeJsonAtomicEnsured(indexPath, store);
+  let fileMtimeMs: number | null = null;
+  try {
+    fileMtimeMs = (await fsp.stat(indexPath)).mtimeMs;
+  } catch {
+    fileMtimeMs = null;
+  }
   bindingIndexCache.set(indexPath, {
     loadedAt: Date.now(),
+    fileMtimeMs,
     store,
   });
 }
@@ -591,8 +609,15 @@ export async function ensureProjectsBindingIndex(params: {
     Number.isFinite(updatedAtMs) &&
     Date.now() - updatedAtMs <= maxAgeMs
   ) {
+    let fileMtimeMs: number | null = null;
+    try {
+      fileMtimeMs = (await fsp.stat(indexPath)).mtimeMs;
+    } catch {
+      fileMtimeMs = null;
+    }
     bindingIndexCache.set(indexPath, {
       loadedAt: Date.now(),
+      fileMtimeMs,
       store: normalized,
     });
     return normalized;
@@ -600,6 +625,11 @@ export async function ensureProjectsBindingIndex(params: {
   return rebuildProjectsBindingIndex({
     projectsRoot,
   });
+}
+
+export function invalidateProjectsBindingIndexCache(projectsRoot: string): void {
+  const indexPath = getProjectsBindingIndexPath(path.resolve(expandHome(projectsRoot)));
+  bindingIndexCache.delete(indexPath);
 }
 
 async function updateBindingIndexForProjectStore(params: {
