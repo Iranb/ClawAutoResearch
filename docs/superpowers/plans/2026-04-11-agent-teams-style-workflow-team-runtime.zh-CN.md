@@ -15,8 +15,9 @@
 - 已完成切片 A：引入 `tools/workflow-kernel/graph-context.ts`，把 `auto_iterator` 的 graph-sensitive refresh / routing / repair 判断统一到 graph context adapter；新增 `tests/workflow-kernel-refactor.test.mjs`，并通过 `tests/auto-iterator.test.mjs` 全量回归。
 - 已完成切片 B：引入 `tools/workflow-evidence/papernexus-bridge.ts`，把 stage-preflight 对 workflow-owned PaperNexus packet/bundle 的存在性判断收束到统一 bridge；新增 `tests/workflow-evidence-kernel.test.mjs`。
 - 已完成切片 C：引入最小 evidence contract state schema（template blocks + normalizer + snapshot/status projection），使 `benchmark_protocol`、`statistical_evidence`、`venue_competition`、`ablation_evidence`、`mechanism_evidence`、`reproducibility_pack`、`camera_ready_evidence`、`opportunity_scorecard` 成为真正可见的 workflow state；新增 snapshot/status 回归。
+- 已完成切片 D：将 `worth_top_tier_bet` 路径下的最小 top-tier gate 接入 `write/submit` 阶段信号，要求 `venue_competition` 与 `opportunity_scorecard` 的 graph context 不能处于 `unverified_graph_context` / `graph_unavailable`；新增 auto-iterator 回归验证。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：把 evidence contracts 从“可见 state”推进到 “closeout / gate 会真正消费的 state”，优先从 benchmark / venue competition / opportunity scorecard 的最小 gate 接入开始。
+- 下一切片目标：从最小 top-tier gate 继续向前推进，把 `benchmark_protocol` / `statistical_evidence` / `ablation_evidence` 接入 `experiment -> analyze`，并开始形成真正的 evidence-driven closeout contract。
 
 ---
 
@@ -1066,6 +1067,11 @@ PaperNexus 说明：
 ### 14.1 合理性判断
 
 如果不把 closeout 接到 evidence contracts，上面的新增状态最终只会变成“更完整的元数据”，而不是 workflow 真正会用来推进/阻塞的 contracts。
+
+当前进展：
+
+- 已完成最小接入：`worth_top_tier_bet` 时，`write/submit` 已开始消费 `venue_competition` 与 `opportunity_scorecard` 的 graph context。
+- 未完成：`experiment -> analyze`、`analyze -> review`、`review -> write` 的 benchmark / statistics / mechanism / reproducibility 完整 gate 仍未落地。
 
 ---
 

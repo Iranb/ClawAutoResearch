@@ -28,6 +28,8 @@ export interface WritingStageDeps {
   getWritePackageValidationErrors: (state: any) => string[];
   normalizeGraphGuidedWritingState: (value: unknown) => any;
   isGraphGuidedWritingReadyForSubmit: (state: any) => boolean;
+  normalizeVenueCompetitionState: (value: unknown) => any;
+  normalizeOpportunityScorecardState: (value: unknown) => any;
   hydrateReviewIssueTrackerState: (params: {
     projectRoot: string;
     value: unknown;
@@ -62,6 +64,47 @@ async function pushMissingNonEmptyArtifact(
   const resolvedPath = deps.resolveProjectArtifactPath(projectRoot, relativePath);
   if (!(await deps.fileHasNonWhitespaceContent(resolvedPath))) {
     missing.push(`{PROJ}/${relativePath}`);
+  }
+}
+
+function appendTopTierOpportunitySignals(params: {
+  missing: string[];
+  manifest: Record<string, unknown> | null;
+  deps: Pick<
+    WritingStageDeps,
+    "normalizeVenueCompetitionState" | "normalizeOpportunityScorecardState"
+  >;
+}) {
+  const opportunityScorecard = params.deps.normalizeOpportunityScorecardState(
+    params.manifest?.opportunity_scorecard
+  );
+  if (opportunityScorecard.verdict !== "worth_top_tier_bet") {
+    return;
+  }
+
+  const venueCompetition = params.deps.normalizeVenueCompetitionState(
+    params.manifest?.venue_competition
+  );
+  if (venueCompetition.status === "missing") {
+    params.missing.push(
+      "PROJECT_MANIFEST.json.venue_competition.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+    );
+  }
+  if (
+    venueCompetition.graphContextStatus === "unverified_graph_context" ||
+    venueCompetition.graphContextStatus === "graph_unavailable"
+  ) {
+    params.missing.push(
+      `PROJECT_MANIFEST.json.venue_competition.graph_context_status must be graph-grounded before top-tier WRITE/SUBMIT handoff (current: ${venueCompetition.graphContextStatus})`
+    );
+  }
+  if (
+    opportunityScorecard.graphContextStatus === "unverified_graph_context" ||
+    opportunityScorecard.graphContextStatus === "graph_unavailable"
+  ) {
+    params.missing.push(
+      `PROJECT_MANIFEST.json.opportunity_scorecard.graph_context_status must be graph-grounded before top-tier WRITE/SUBMIT handoff (current: ${opportunityScorecard.graphContextStatus})`
+    );
   }
 }
 
@@ -312,6 +355,11 @@ export async function collectWriteStageMissingSignals(
   if (!(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "cross-reviewer")))) {
     missing.push("{PROJ}/cross-reviewer/");
   }
+  appendTopTierOpportunitySignals({
+    missing,
+    manifest: ctx.manifest,
+    deps,
+  });
   return missing;
 }
 
@@ -407,6 +455,12 @@ export async function collectSubmitStageMissingSignals(
       "{PROJ}/reviewer/SIMULATED_EXTERNAL_REVIEW.md — run simulated external review before SUBMIT"
     );
   }
+
+  appendTopTierOpportunitySignals({
+    missing,
+    manifest: ctx.manifest,
+    deps,
+  });
 
   return missing;
 }

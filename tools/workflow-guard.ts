@@ -70,6 +70,10 @@ import {
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
 import {
+  normalizeOpportunityScorecardState,
+  normalizeVenueCompetitionState,
+} from "./workflow-evidence/contracts";
+import {
   collectFrontierMappingStageMissingSignals,
   collectGraphBuildStageMissingSignals,
   collectSetupStageMissingSignals,
@@ -6150,6 +6154,8 @@ async function getMissingStageSignals(params: {
           getWritePackageValidationErrors,
           normalizeGraphGuidedWritingState,
           isGraphGuidedWritingReadyForSubmit,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
@@ -6190,6 +6196,8 @@ async function getMissingStageSignals(params: {
           getWritePackageValidationErrors,
           normalizeGraphGuidedWritingState,
           isGraphGuidedWritingReadyForSubmit,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
