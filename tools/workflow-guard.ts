@@ -1728,6 +1728,11 @@ export type WorkflowSnapshot = {
     status: "ready" | "blocked" | "optional";
     reason: string | null;
   }>;
+  teamTaskGraphPath: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
+  teamTaskGraphOptionalCount: number | null;
   zoteroSyncStatus: string | null;
   zoteroSyncTrigger: string | null;
   zoteroSyncTriggerReason: string | null;

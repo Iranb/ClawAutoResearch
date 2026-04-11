@@ -25,6 +25,9 @@ import {
   deriveWorkflowGraphContext,
   shouldRefreshWorkflowGraphPresence,
 } from "../workflow-kernel/graph-context";
+import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
+import { materializeWorkflowTaskGraph } from "../workflow-team/task-graph";
+import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
@@ -799,6 +802,21 @@ export async function runWorkflowAutoIteratorImpl(
     manifest.last_handoff_at = now;
   }
   await deps.saveManifest(projectRoot, manifest);
+
+  const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
+  const teamTaskPreview = buildWorkflowStageTaskPreview({
+    currentStage: stageAfter,
+    topTierVerdict: evidenceCloseout.topTierVerdict,
+    evidenceCloseout,
+  });
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId,
+    stage: stageAfter,
+    topTierVerdict: evidenceCloseout.topTierVerdict,
+    evidenceCloseout,
+    previewTasks: teamTaskPreview,
+  });
 
   const nextGateState: GateStateLike = {
     ...gateState,

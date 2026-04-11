@@ -11,6 +11,7 @@ import {
 import {
   buildWorkflowSnapshotFromProjectState,
 } from "../tools/workflow-guard-project/snapshot-builder.ts";
+import { materializeWorkflowTaskGraph } from "../tools/workflow-team/task-graph.ts";
 
 async function makeWorkspace() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-snapshot-builder-"));
@@ -189,6 +190,32 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
     graph_context_status: "ready",
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "workflow-evidence-contracts",
+    stage: "experiment",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["benchmark protocol missing"],
+      experimentAnalyzeReady: false,
+      analyzeReviewReady: false,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "experiment.lock_benchmark_protocol",
+        title: "Lock the benchmark protocol",
+        owner: "orchestrator",
+        status: "blocked",
+        reason: "Benchmark/statistical/ablation evidence is still incomplete.",
+      },
+    ],
+  });
 
   await setChannelProjectBinding({
     policy: {
@@ -263,6 +290,9 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
       task.taskId === "experiment.lock_benchmark_protocol"
     )
   );
+  assert.equal(snapshot.teamTaskGraphTaskCount, 1);
+  assert.equal(snapshot.teamTaskGraphClaimableCount, 1);
+  assert.equal(snapshot.teamTaskGraphSatisfiedCount, 0);
 });
 
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {

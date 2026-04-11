@@ -463,6 +463,11 @@ export function formatWorkflowStatusText(params: {
         .join(", ")}`
     );
   }
+  if ((snapshot.teamTaskGraphTaskCount ?? 0) > 0) {
+    lines.push(
+      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
+    );
+  }
   if (snapshot.paperStoryStatus) {
     lines.push(
       `Paper story: status=${snapshot.paperStoryStatus}, track=${snapshot.paperStoryTrackId ?? "unset"}, story_spine=${snapshot.paperStoryStorySpinePath ?? "unset"}, claim_map=${snapshot.paperStoryClaimToExperimentMapPath ?? "unset"}, fallback=${snapshot.paperStoryFallbackNarrativePath ?? "unset"}`

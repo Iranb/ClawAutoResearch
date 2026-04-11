@@ -21,8 +21,9 @@
 - 已完成切片 G：将 `worth_top_tier_bet` 路径下的最小 reproducibility / camera-ready gate 接入 `write -> submit` 与 `submit`，要求 `reproducibility_pack` 至少进入可用状态，且 `camera_ready_evidence` 的 figures/tables/captions 状态达到 ready；新增 auto-iterator 回归验证。
 - 已完成切片 H：引入 evidence closeout summary，把分散的 evidence contract 状态聚合成 snapshot/status 可消费的统一输出，用于后续 closeout packet 与 Team Runtime 任务分解。
 - 已完成切片 I：引入最小 `workflow-team/stage-profiles.ts`，基于 `evidence closeout summary` 生成 stage task preview，并接入 snapshot 与 `/workflow-status`，作为 Team Runtime 的第一刀语义层。
+- 已完成切片 J：引入最小 `workflow-team/task-graph.ts`，把 `stage task preview` 落盘为 project-local task graph store，并把摘要接进 snapshot 与 `/workflow-status`，作为后续 claim/lease 的持久化底座。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：把 `evidence closeout summary` 升级成更正式的 decision packet，并把 `stage task preview` 持久化成最小 task graph 存储，开始引入真正的 Team Runtime state。
+- 下一切片目标：在 task graph store 之上引入最小 claim/lease 语义，并把 current stage owner 的一条真实 handoff 流改成消费 task graph，而不是只消费 preview。
 
 ---
 
@@ -1082,7 +1083,8 @@ PaperNexus 说明：
   - `worth_top_tier_bet` 时，`write/submit` 已开始消费 `reproducibility_pack` / `camera_ready_evidence`
 - 已完成聚合输出：snapshot 与 `/workflow-status` 已能给出统一的 `evidence closeout` 状态、阶段 readiness 和 blocker 摘要。
 - 已完成 Team Runtime 第一刀：snapshot 与 `/workflow-status` 已能给出 evidence-aware 的 `stage task preview`。
-- 未完成：这些 gates 目前仍是最小字段级约束，且 task preview 还没有持久化成真正的 task graph / claimable runtime state。
+- 已完成持久化底座：`stage task preview` 已能落盘成最小 task graph store，并通过 snapshot/status 暴露其摘要。
+- 未完成：这些 gates 目前仍是最小字段级约束，task graph 还没有真正的 claim/lease/runtime ownership 语义。
 
 ---
 

@@ -48,6 +48,11 @@ import {
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
 import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import {
+  getWorkflowTaskGraphPath,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "../workflow-team/task-graph";
+import {
   normalizeAblationEvidenceState,
   normalizeBenchmarkProtocolState,
   normalizeCameraReadyEvidenceState,
@@ -955,6 +960,10 @@ export async function buildWorkflowSnapshotFromProjectState(
     topTierVerdict: opportunityScorecard.verdict,
     evidenceCloseout,
   });
+  const taskGraphStore = projectState.projectRoot
+    ? await readWorkflowTaskGraphStore(projectState.projectRoot)
+    : null;
+  const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1498,6 +1507,13 @@ export async function buildWorkflowSnapshotFromProjectState(
     evidenceCloseoutSubmitReady: evidenceCloseout.submitReady,
     evidenceCloseoutTopBlockers: evidenceCloseout.blockers.slice(0, 5),
     teamTaskPreview,
+    teamTaskGraphPath: projectState.projectRoot
+      ? getWorkflowTaskGraphPath(projectState.projectRoot)
+      : null,
+    teamTaskGraphTaskCount: taskGraphSummary.taskCount,
+    teamTaskGraphClaimableCount: taskGraphSummary.claimableCount,
+    teamTaskGraphSatisfiedCount: taskGraphSummary.satisfiedCount,
+    teamTaskGraphOptionalCount: taskGraphSummary.optionalCount,
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,
