@@ -123,7 +123,21 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 
 这能把 `current_stage`、owner、blocking reason、missing signals 和建议动作重新拉回到代码驱动的现场。
 
-## 9. 两个高频故障信号
+## 9. 阶段完成后如何 handoff
+
+当前项目里，stage closeout 不是“谁做完谁顺手喊下一位”，而是：
+
+1. 当前 owner 先把 durable artifacts 写完
+2. workflow 通过 `auto_iterator_tick` 判断阶段是否真的 ready
+3. 如果结果是 `drive_stage`，才会进入 handoff
+4. handoff 先写 mailbox，再执行 dispatch
+5. dispatch hop 默认可以走 native，也可以在 auto mode 下走 Lobster backend
+
+如果你在排查“为什么下一位 agent 没接上”，建议直接看：
+
+- [Lobster Handoffs](../architecture/lobster-handoffs.md)
+
+## 10. 两个高频故障信号
 
 ### 一直回到 `graph_build`
 

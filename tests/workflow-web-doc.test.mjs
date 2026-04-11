@@ -26,6 +26,7 @@ test("VitePress config defines the unified docs portal and GitHub Pages base han
   assert.match(config, /ClawAutoResearch Docs/);
   assert.match(config, /Get Started|快速开始/);
   assert.match(config, /Workflow|工作流/);
+  assert.match(config, /Lobster Handoffs|lobster-handoffs/);
   assert.match(config, /Graph & Memory|图谱与记忆/);
   assert.match(config, /Agents & Skills|角色与技能/);
   assert.match(config, /Runtime & Reference|运行时与参考/);
@@ -52,7 +53,11 @@ test("home page and detailed docs pages cover the current system design", async 
     ],
     [
       "docs/architecture/workflow-control-plane.md",
-      [/auto_iterator_tick/, /graph_build/, /frontier_mapping/, /research_program/],
+      [/auto_iterator_tick/, /graph_build/, /frontier_mapping/, /research_program/, /Lobster|handoff/],
+    ],
+    [
+      "docs/architecture/lobster-handoffs.md",
+      [/Lobster/, /dispatch_task/, /auto_iterator_tick/, /fallbackToNative/, /workflow-mailbox/],
     ],
     [
       "docs/architecture/graph-memory.md",
@@ -72,7 +77,11 @@ test("home page and detailed docs pages cover the current system design", async 
     ],
     [
       "docs/reference/module-map.md",
-      [/tools\/workflow-guard\.ts/, /tools\/register-workflow-tools\.ts/, /tools\/graph-presence\.ts/, /tools\/research-writing/],
+      [/tools\/workflow-guard\.ts/, /tools\/lobster-handoff\.ts/, /tools\/graph-presence\.ts/, /tools\/research-writing/],
+    ],
+    [
+      "docs/reference/configuration.md",
+      [/projectsRoot/, /enableWorkflowMailbox/, /lobsterHandoff/, /papernexusAccessMode/, /papernexusSharedCorpus/],
     ],
     [
       "docs/operations/github-pages.md",

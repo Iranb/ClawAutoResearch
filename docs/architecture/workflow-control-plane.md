@@ -73,7 +73,31 @@
 
 它们让系统在高风险处先讨论、先补救、再决定是否降档，而不是一旦出问题就完全中断或完全放开。
 
-## 7. plan 阶段的特别更新
+## 7. stage closeout 与 Lobster handoff backend
+
+当前系统里，“阶段完成”不是简单地发一条 `@next-owner` 消息，而是一个结构化 closeout：
+
+1. 当前 owner 先写完 durable artifacts
+2. `auto_iterator_tick` 计算 stage readiness 与 `ownerAfter`
+3. 只有 `handoffMode = drive_stage` 才允许真正的 forward handoff
+4. runtime 先写 mailbox handoff，再执行 dispatch
+5. dispatch hop 可以走：
+   - native dispatch
+   - Lobster backend
+6. stage broadcast 继续由 workflow runtime 负责
+
+Lobster 在这里的角色是：
+
+- 把 handoff hop 做成更确定的 backend
+- 不是替代 `workflow-guard`
+- 不是替代 mailbox
+- 不是新的阶段真相源
+
+如果你要深入理解这条链路，直接读：
+
+- [Lobster Handoffs](./lobster-handoffs.md)
+
+## 8. plan 阶段的特别更新
 
 现在 `plan` 阶段的权威产物已经从旧的 `PLAN.md` 转向 `research_program`。这意味着：
 
@@ -85,7 +109,7 @@
 > [!NOTE]
 > 这条要求只适用于实验论文主线。综述主线默认不进入 `plan`，而是通过 `survey_review` 的 query registry、screening packet、coverage summary 和 `SURVEY_BRIEF.md` 直接 handoff 到 `write`。
 
-## 8. 对系统贡献者最重要的判断标准
+## 9. 对系统贡献者最重要的判断标准
 
 当你新增一个能力时，不要只问“能不能让 Agent 做成某件事”，还要问：
 
