@@ -83,7 +83,10 @@ test("workflow task graph store persists preview tasks as claimable/satisfied su
   assert.deepEqual(summary, {
     taskCount: 3,
     claimableCount: 1,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 1,
     optionalCount: 1,
   });
@@ -165,7 +168,10 @@ test("workflow task graph supports claim, renew, and release semantics", async (
   assert.deepEqual(finalSummary, {
     taskCount: 1,
     claimableCount: 1,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 0,
     optionalCount: 0,
   });
@@ -230,7 +236,10 @@ test("workflow task graph can assign the next claimable task for an owner sessio
   assert.deepEqual(summary, {
     taskCount: 2,
     claimableCount: 0,
+    blockedCount: 0,
     claimedCount: 1,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 1,
     optionalCount: 0,
   });
@@ -255,7 +264,10 @@ test("workflow team round persists lead, active sessions, and last claimed task"
     taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
     taskCount: 2,
     claimableCount: 1,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 1,
     optionalCount: 0,
   });
@@ -349,7 +361,10 @@ test("workflow task graph can release all tasks owned by one session", async (t)
   assert.deepEqual(summary, {
     taskCount: 2,
     claimableCount: 2,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 0,
     optionalCount: 0,
   });
@@ -413,7 +428,10 @@ test("workflow task graph can reconcile expired leases back to claimable tasks",
   assert.deepEqual(summary, {
     taskCount: 1,
     claimableCount: 1,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 0,
     optionalCount: 0,
   });

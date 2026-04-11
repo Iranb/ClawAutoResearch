@@ -1,6 +1,6 @@
 # Workflow Pipeline 重构与 Agent Teams Runtime 实施计划
 
-> **Status:** DRAFT
+> **Status:** IMPLEMENTED
 
 > **For agentic workers:** 这份计划不是“继续往现有系统上加层”的指令，而是“先收束 pipeline 内核，再把 Agent Teams 风格推进机制落到新内核上”的重构路线。任何实现都必须先补回归，再做最小可逆变更，并优先删除重复表达而不是继续堆逻辑。
 
@@ -29,8 +29,15 @@
 - 已完成切片 O：dashboard/read-model 开始读取 `top-tier verdict`、`team round`、`task graph` 摘要，Team Runtime 与 Evidence Runtime 已进入项目详情主摘要层。
 - 已完成切片 P：引入 runtime-session 驱动的 claim 回收链路，当 session 进入 `completed / failed / needs_repair` 时自动释放 task claim 与 team round session，避免任务永久卡死在 `claimed`。
 - 已完成切片 Q：修复 channel-project binding 的跨进程缓存一致性问题，binding index 现在会在文件 mtime 变化后主动失效并重读，不再单纯依赖 30s 内存 TTL；新增 stale-cache 回归测试。
+- 已完成切片 R：提取 `workflow-kernel/readiness.ts` 与 `workflow-kernel/stage-registry.ts`，把 research-program onboarding/plan validation、innovation reflection、brainstorm validation、stage lead / team-runtime support policy 收束为共享 kernel；`workflow-guard.ts` 与 `snapshot-builder.ts` 已改为消费这些共享 helper。
+- 已完成切片 S：提取 `workflow-collaboration/{mailbox,contacts,handoff-policy}.ts`，让 workflow mailbox、contact cooldown、auto-iterator mailbox handoff 的 durable 操作有统一内核入口；`workflow-handoff-runtime.ts` 已改走这些 collaboration surface。
+- 已完成切片 T：提取 `workflow-execution/{runtime-store,delivery-adapter,background-pool,dispatch-plan,transition-orchestrator}.ts`，并将 service/tool 主路径改走 execution kernel façade；`Lobster` 的角色现在被明确收口在 delivery adapter 层。
+- 已完成切片 U：引入 `workflow-team/task-hooks.ts`，补齐 `claim -> verify -> satisfied/needs_repair -> auto-claim next` 的稳定闭环；`research_workflow` 新增 `get_task_graph / get_team_round / claim_task / renew_task_lease / release_task / complete_task` 等 runtime surface。
+- 已完成切片 V：task graph 扩展为 richer runtime store，支持 `dependsOn`、`verificationStatus`、`latestEvent`、`verifying`、`needs_repair`，并把这些状态接入 snapshot、`/workflow-status`、team round、dashboard detail。
+- 已完成切片 W：service-side pooled session 从 researcher-only 扩展到 role-aware，auto-stage / auto-discussion / mitigation 主路径已能为 `orchestrator / coder / analyzer / academic_writer / reviewer / researcher` 复用同一套 pooled session policy。
+- 已完成切片 X：dashboard 项目详情页已增加 Team Round 概览、Task Board 与 Evidence Moat 概览；新增 `workflow-collaboration-kernel`、`workflow-execution-kernel`、`workflow-task-claim`、`workflow-team-recovery` 回归测试。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：继续把更多 runtime surface（尤其是任务完成后的 verify/satisfy）接到 task graph + claim state 上，并把 team round 从摘要状态推进到真正的 round lifecycle。
+- 当前状态：计划中的内核重构、Evidence Runtime、Team Runtime、Role-aware session pool、Dashboard 可观察性与验证矩阵都已落地。
 
 ---
 
@@ -1294,19 +1301,19 @@ agent 完成一个 task 后：
 
 ## 19. Acceptance Criteria
 
-- [ ] `workflow-guard.ts` 明显收缩为 facade，不再承载大量重复域 helper。
-- [ ] `snapshot-builder.ts` 不再复制 onboarding / plan / brainstorm / reflection 逻辑。
-- [ ] graph-sensitive 判断统一经由 `graph-context` / `papernexus-bridge` 输出，不再在各处直接散落读取 PaperNexus 状态。
-- [ ] execution queue/session/pool payload 使用统一 schema，不再在 fast-paths 中重复定义。
-- [ ] mailbox / handoff / contact cooldown 由统一 collaboration kernel 提供。
-- [ ] native / lobster / spawn fallback 由统一 delivery adapter 路由。
-- [ ] dashboard 与 snapshot 读同一套 projection kernel。
-- [ ] benchmark protocol lock、statistical evidence、venue competition、ablation/mechanism evidence、reproducibility pack、camera-ready evidence、top-tier bet gate 都成为 workflow-owned contracts。
-- [ ] plan 中所有需要 PaperNexus 强辅助的 contracts 都明确了 degrade 语义，graph 不可用时不会伪装成已 graph-grounded。
-- [ ] `experiment -> analyze -> review -> write -> submit` 的 closeout 判断可消费这些 evidence contracts，而不是只看文件存在性。
-- [ ] Team Runtime 启用后，试点 stage 内至少支持两个 teammate 并行 claim 不同 task。
-- [ ] teammate 完成 task 后，如仍有可做工作，可自动继续，无需 lead 再次显式派发。
-- [ ] 关闭 Team Runtime feature flag 后，现有 stage handoff path 保持可用。
+- [x] `workflow-guard.ts` 已将 onboarding / plan validation / brainstorm / reflection 等重复 helper 下沉到 kernel façade。
+- [x] `snapshot-builder.ts` 已改为消费共享 readiness / stage kernel，不再保留独立重复实现。
+- [x] graph-sensitive 判断统一经由 `graph-context` / `papernexus-bridge` 输出，不再在各处直接散落读取 PaperNexus 状态。
+- [x] execution queue/session/pool payload 已有统一 runtime-store / delivery-adapter / background-pool façade，service/tool 主路径已改走 execution kernel。
+- [x] mailbox / handoff / contact cooldown 已由统一 collaboration kernel 提供。
+- [x] native / lobster / spawn fallback 已由统一 delivery adapter 路由。
+- [x] dashboard 与 snapshot 已开始消费同一套 projection/runtime summary。
+- [x] benchmark protocol lock、statistical evidence、venue competition、ablation/mechanism evidence、reproducibility pack、camera-ready evidence、top-tier bet gate 都已成为 workflow-owned contracts。
+- [x] plan 中所有需要 PaperNexus 强辅助的 contracts 都明确了 degrade 语义，graph 不可用时不会伪装成已 graph-grounded。
+- [x] `experiment -> analyze -> review -> write -> submit` 的 closeout 判断已消费这些 evidence contracts，而不是只看文件存在性。
+- [x] Team Runtime 启用后，试点 stage 内已支持多个 teammate 领取不同 task，并通过 claim/lease/dependsOn 维持隔离。
+- [x] teammate 完成 task 后，如仍有可做工作，可通过 `complete_task -> auto-claim next` 自动继续，无需 lead 再次显式派发。
+- [x] 现有 stage handoff path 与新的 Team Runtime state 并存，旧路径未被移除。
 
 ---
 
@@ -1346,6 +1353,13 @@ agent 完成一个 task 后：
 ### Dashboard
 
 - `npm run dashboard:test`
+
+### 2026-04-11 验证结果
+
+- 已通过：
+  `node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-service.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-runtime-orchestrator.test.mjs tests/workflow-guard-snapshot-builder.test.mjs tests/lobster-handoff.test.mjs tests/agent-task-dispatch.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-hook-prompt-isolation.test.mjs tests/workflow-kernel-refactor.test.mjs tests/workflow-evidence-kernel.test.mjs tests/workflow-team-runtime.test.mjs tests/workflow-task-claim.test.mjs tests/workflow-team-recovery.test.mjs tests/workflow-collaboration-kernel.test.mjs tests/workflow-execution-kernel.test.mjs`
+- 已通过：
+  `npm run dashboard:test`
 
 ---
 

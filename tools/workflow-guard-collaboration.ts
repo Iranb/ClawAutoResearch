@@ -11,7 +11,7 @@ type WorkflowRoleLike =
   | "reviewer"
   | "cross-reviewer";
 
-type WorkflowMailboxItemLike = {
+export type WorkflowMailboxItemLike = {
   id: string;
   fromAgent: string;
   toAgent: string;
@@ -24,20 +24,20 @@ type WorkflowMailboxItemLike = {
   acknowledgedAt?: string;
 };
 
-type WorkflowMailboxStoreLike = {
+export type WorkflowMailboxStoreLike = {
   schemaVersion: 1;
   updatedAt: string;
   messages: WorkflowMailboxItemLike[];
 };
 
-type WorkflowContactEventLike = {
+export type WorkflowContactEventLike = {
   fromAgent: string;
   toAgent: string;
   channel: "mailbox" | "sessions_send" | "sessions_spawn";
   createdAt: string;
 };
 
-type WorkflowContactStoreLike = {
+export type WorkflowContactStoreLike = {
   schemaVersion: 1;
   updatedAt: string;
   events: WorkflowContactEventLike[];

@@ -20,11 +20,15 @@ export type WorkflowTeamRoundStore = {
   taskGraphPath: string | null;
   taskCount: number;
   claimableCount: number;
+  blockedCount: number;
   claimedCount: number;
+  verifyingCount: number;
+  needsRepairCount: number;
   satisfiedCount: number;
   optionalCount: number;
   activeSessionKeys: string[];
   lastClaimedTaskId: string | null;
+  lastCompletedTaskId: string | null;
   generatedAt: string;
   updatedAt: string;
 };
@@ -85,8 +89,17 @@ export async function readWorkflowTeamRoundStore(
     claimableCount: Number.isFinite(store.claimableCount)
       ? Math.max(0, Math.floor(store.claimableCount))
       : 0,
+    blockedCount: Number.isFinite(store.blockedCount)
+      ? Math.max(0, Math.floor(store.blockedCount))
+      : 0,
     claimedCount: Number.isFinite(store.claimedCount)
       ? Math.max(0, Math.floor(store.claimedCount))
+      : 0,
+    verifyingCount: Number.isFinite(store.verifyingCount)
+      ? Math.max(0, Math.floor(store.verifyingCount))
+      : 0,
+    needsRepairCount: Number.isFinite(store.needsRepairCount)
+      ? Math.max(0, Math.floor(store.needsRepairCount))
       : 0,
     satisfiedCount: Number.isFinite(store.satisfiedCount)
       ? Math.max(0, Math.floor(store.satisfiedCount))
@@ -102,6 +115,10 @@ export async function readWorkflowTeamRoundStore(
     lastClaimedTaskId:
       typeof store.lastClaimedTaskId === "string" && store.lastClaimedTaskId.trim()
         ? store.lastClaimedTaskId.trim()
+        : null,
+    lastCompletedTaskId:
+      typeof store.lastCompletedTaskId === "string" && store.lastCompletedTaskId.trim()
+        ? store.lastCompletedTaskId.trim()
         : null,
     generatedAt:
       typeof store.generatedAt === "string" && store.generatedAt.trim()
@@ -119,15 +136,29 @@ function deriveTeamRoundStatus(params: {
   evidenceCloseoutStatus: EvidenceCloseoutSummary["status"];
   taskCount: number;
   claimableCount: number;
+  blockedCount: number;
   claimedCount: number;
+  verifyingCount: number;
+  needsRepairCount: number;
 }): WorkflowTeamRoundStatus {
   if (params.topTierVerdict !== "worth_top_tier_bet" && params.taskCount === 0) {
     return "not_applicable";
   }
-  if (params.evidenceCloseoutStatus === "blocked" && params.claimedCount === 0) {
+  if (
+    params.evidenceCloseoutStatus === "blocked" &&
+    params.claimedCount === 0 &&
+    params.verifyingCount === 0 &&
+    params.needsRepairCount === 0
+  ) {
     return "blocked";
   }
-  if (params.claimableCount === 0 && params.claimedCount === 0) {
+  if (
+    params.claimableCount === 0 &&
+    params.claimedCount === 0 &&
+    params.verifyingCount === 0 &&
+    params.needsRepairCount === 0 &&
+    params.blockedCount === 0
+  ) {
     return "ready";
   }
   return "active";
@@ -143,7 +174,10 @@ export async function materializeWorkflowTeamRound(params: {
   taskGraphPath: string | null;
   taskCount: number;
   claimableCount: number;
+  blockedCount: number;
   claimedCount: number;
+  verifyingCount: number;
+  needsRepairCount: number;
   satisfiedCount: number;
   optionalCount: number;
 }): Promise<WorkflowTeamRoundStore> {
@@ -162,11 +196,15 @@ export async function materializeWorkflowTeamRound(params: {
     taskGraphPath: params.taskGraphPath,
     taskCount: params.taskCount,
     claimableCount: params.claimableCount,
+    blockedCount: params.blockedCount,
     claimedCount: params.claimedCount,
+    verifyingCount: params.verifyingCount,
+    needsRepairCount: params.needsRepairCount,
     satisfiedCount: params.satisfiedCount,
     optionalCount: params.optionalCount,
     activeSessionKeys: sameStage ? existing?.activeSessionKeys ?? [] : [],
     lastClaimedTaskId: sameStage ? existing?.lastClaimedTaskId ?? null : null,
+    lastCompletedTaskId: sameStage ? existing?.lastCompletedTaskId ?? null : null,
     generatedAt: sameStage ? existing?.generatedAt ?? now : now,
     updatedAt: now,
   };
@@ -197,6 +235,8 @@ export async function recordWorkflowTeamRoundClaim(params: {
         lastClaimedTaskId: params.taskId,
         claimableCount: alreadyTracked ? store.claimableCount : Math.max(0, store.claimableCount - 1),
         claimedCount: alreadyTracked ? store.claimedCount : store.claimedCount + 1,
+        verifyingCount: alreadyTracked ? store.verifyingCount : store.verifyingCount,
+        needsRepairCount: alreadyTracked ? store.needsRepairCount : store.needsRepairCount,
         updatedAt: nowIso(),
       };
       await writeJsonAtomicEnsured(getWorkflowTeamRoundPath(params.projectRoot), nextStore);
@@ -222,6 +262,8 @@ export async function releaseWorkflowTeamRoundSession(params: {
         activeSessionKeys: store.activeSessionKeys.filter((key) => key !== params.sessionKey),
         claimableCount: existed ? store.claimableCount + 1 : store.claimableCount,
         claimedCount: existed ? Math.max(0, store.claimedCount - 1) : store.claimedCount,
+        verifyingCount: store.verifyingCount,
+        needsRepairCount: store.needsRepairCount,
         updatedAt: nowIso(),
       };
       await writeJsonAtomicEnsured(getWorkflowTeamRoundPath(params.projectRoot), nextStore);
@@ -247,7 +289,36 @@ export function summarizeWorkflowTeamRoundStore(store: WorkflowTeamRoundStore | 
       taskCount: store.taskCount,
       claimableCount: store.claimableCount,
       claimedCount: store.claimedCount,
+      blockedCount: store.blockedCount,
+      verifyingCount: store.verifyingCount,
+      needsRepairCount: store.needsRepairCount,
     }),
     activeSessionCount: store.activeSessionKeys.length,
   };
+}
+
+export async function recordWorkflowTeamRoundCompletion(params: {
+  projectRoot: string;
+  sessionKey: string;
+  taskId: string;
+}): Promise<WorkflowTeamRoundStore | null> {
+  return withAdvisoryLock({
+    lockPath: getWorkflowTeamRoundLockPath(params.projectRoot),
+    task: async () => {
+      const store = await readWorkflowTeamRoundStore(params.projectRoot);
+      if (!store) {
+        return null;
+      }
+      const nextStore: WorkflowTeamRoundStore = {
+        ...store,
+        activeSessionKeys: store.activeSessionKeys.filter((key) => key !== params.sessionKey),
+        claimedCount: Math.max(0, store.claimedCount - 1),
+        satisfiedCount: store.satisfiedCount + 1,
+        lastCompletedTaskId: params.taskId,
+        updatedAt: nowIso(),
+      };
+      await writeJsonAtomicEnsured(getWorkflowTeamRoundPath(params.projectRoot), nextStore);
+      return nextStore;
+    },
+  });
 }

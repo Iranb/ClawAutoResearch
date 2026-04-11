@@ -3,6 +3,7 @@ import path from "node:path";
 import { getWorkflowStageIndex } from "../constants/workflow-stages.js";
 import { readJsonFile } from "../file-access/fs.js";
 import { resolveExistingProjectRoot } from "../file-access/project-root.js";
+import { readWorkflowDashboardSummary } from "../../../../tools/workflow-projection/dashboard-summary.js";
 
 type ManifestFile = {
   project_id?: string | null;
@@ -39,18 +40,6 @@ type PapernexusProgressFile = {
   } | null;
 };
 
-type TeamRoundFile = {
-  leadRole?: string | null;
-  activeSessionKeys?: string[] | null;
-  lastClaimedTaskId?: string | null;
-} | null;
-
-type TaskGraphFile = {
-  tasks?: Array<{
-    status?: string | null;
-  }> | null;
-} | null;
-
 export type ProjectDetailSummary = {
   id: string;
   title: string | null;
@@ -73,10 +62,45 @@ export type ProjectDetailSummary = {
   teamRoundLead: string | null;
   teamRoundActiveSessions: number | null;
   teamRoundLastClaimedTaskId: string | null;
+  teamRoundLastCompletedTaskId: string | null;
   teamTaskGraphTaskCount: number | null;
   teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphBlockedCount: number | null;
   teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphVerifyingCount: number | null;
+  teamTaskGraphNeedsRepairCount: number | null;
   teamTaskGraphSatisfiedCount: number | null;
+  taskBoard: Array<{
+    taskId: string;
+    title: string;
+    owner: string | null;
+    status: string;
+    claimant: string | null;
+    dependsOn: string[];
+    verificationStatus: string;
+    latestEvent: string | null;
+    latestEventAt: string | null;
+  }>;
+  evidenceBoard: {
+    benchmarkProtocolStatus: string | null;
+    benchmarkProtocolLocked: boolean;
+    statisticalEvidenceStatus: string | null;
+    statisticalEvidenceClaimStrength: string | null;
+    venueCompetitionStatus: string | null;
+    venueCompetitionGraphContextStatus: string | null;
+    ablationEvidenceStatus: string | null;
+    ablationEvidenceSufficiency: string | null;
+    mechanismEvidenceStatus: string | null;
+    mechanismEvidenceGraphContextStatus: string | null;
+    reproducibilityPackStatus: string | null;
+    reproducibilityEnvironmentStatus: string | null;
+    cameraReadyEvidenceStatus: string | null;
+    cameraReadyFiguresStatus: string | null;
+    cameraReadyTablesStatus: string | null;
+    cameraReadyCaptionsStatus: string | null;
+    topTierVerdict: string | null;
+    evidenceCloseoutStatus: string | null;
+  };
   source: Array<"manifest" | "papernexus_progress" | "fallback">;
 };
 
@@ -99,12 +123,7 @@ export async function readProjectDetailSummary(params: {
   const progress = await readJsonFile<PapernexusProgressFile>(
     path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
   );
-  const teamRound = await readJsonFile<TeamRoundFile>(
-    path.join(projectRoot, ".openclaw-research", "workflow-team-round.json"),
-  );
-  const taskGraph = await readJsonFile<TaskGraphFile>(
-    path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
-  );
+  const dashboardSummary = await readWorkflowDashboardSummary(projectRoot);
   const source: ProjectDetailSummary["source"] = [];
 
   if (manifest) {
@@ -148,15 +167,45 @@ export async function readProjectDetailSummary(params: {
     papernexusPhase: asString(progress?.phase),
     papernexusProgressSummary: formatPapernexusProgressSummary(progress?.progress),
     topTierVerdict: asString(manifest?.opportunity_scorecard?.verdict),
-    teamRoundLead: asString(teamRound?.leadRole),
-    teamRoundActiveSessions: Array.isArray(teamRound?.activeSessionKeys)
-      ? teamRound.activeSessionKeys.length
-      : null,
-    teamRoundLastClaimedTaskId: asString(teamRound?.lastClaimedTaskId),
-    teamTaskGraphTaskCount: Array.isArray(taskGraph?.tasks) ? taskGraph.tasks.length : null,
-    teamTaskGraphClaimableCount: countTaskStatus(taskGraph?.tasks, "claimable"),
-    teamTaskGraphClaimedCount: countTaskStatus(taskGraph?.tasks, "claimed"),
-    teamTaskGraphSatisfiedCount: countTaskStatus(taskGraph?.tasks, "satisfied"),
+    teamRoundLead: dashboardSummary.teamRound.leadRole,
+    teamRoundActiveSessions: dashboardSummary.teamRound.activeSessionCount,
+    teamRoundLastClaimedTaskId: dashboardSummary.teamRound.lastClaimedTaskId,
+    teamRoundLastCompletedTaskId: dashboardSummary.teamRound.lastCompletedTaskId,
+    teamTaskGraphTaskCount: dashboardSummary.teamTaskGraph.taskCount,
+    teamTaskGraphClaimableCount: dashboardSummary.teamTaskGraph.claimableCount,
+    teamTaskGraphBlockedCount: dashboardSummary.teamTaskGraph.blockedCount,
+    teamTaskGraphClaimedCount: dashboardSummary.teamTaskGraph.claimedCount,
+    teamTaskGraphVerifyingCount: dashboardSummary.teamTaskGraph.verifyingCount,
+    teamTaskGraphNeedsRepairCount: dashboardSummary.teamTaskGraph.needsRepairCount,
+    teamTaskGraphSatisfiedCount: dashboardSummary.teamTaskGraph.satisfiedCount,
+    taskBoard: dashboardSummary.taskBoard,
+    evidenceBoard: {
+      benchmarkProtocolStatus: dashboardSummary.evidenceBoard.benchmarkProtocol.status,
+      benchmarkProtocolLocked: dashboardSummary.evidenceBoard.benchmarkProtocol.locked,
+      statisticalEvidenceStatus: dashboardSummary.evidenceBoard.statisticalEvidence.status,
+      statisticalEvidenceClaimStrength:
+        dashboardSummary.evidenceBoard.statisticalEvidence.claimStrengthStatus,
+      venueCompetitionStatus: dashboardSummary.evidenceBoard.venueCompetition.status,
+      venueCompetitionGraphContextStatus:
+        dashboardSummary.evidenceBoard.venueCompetition.graphContextStatus,
+      ablationEvidenceStatus: dashboardSummary.evidenceBoard.ablationEvidence.status,
+      ablationEvidenceSufficiency:
+        dashboardSummary.evidenceBoard.ablationEvidence.sufficiencyStatus,
+      mechanismEvidenceStatus: dashboardSummary.evidenceBoard.mechanismEvidence.status,
+      mechanismEvidenceGraphContextStatus:
+        dashboardSummary.evidenceBoard.mechanismEvidence.graphContextStatus,
+      reproducibilityPackStatus: dashboardSummary.evidenceBoard.reproducibilityPack.status,
+      reproducibilityEnvironmentStatus:
+        dashboardSummary.evidenceBoard.reproducibilityPack.environmentCaptureStatus,
+      cameraReadyEvidenceStatus: dashboardSummary.evidenceBoard.cameraReadyEvidence.status,
+      cameraReadyFiguresStatus:
+        dashboardSummary.evidenceBoard.cameraReadyEvidence.figuresStatus,
+      cameraReadyTablesStatus: dashboardSummary.evidenceBoard.cameraReadyEvidence.tablesStatus,
+      cameraReadyCaptionsStatus:
+        dashboardSummary.evidenceBoard.cameraReadyEvidence.captionsStatus,
+      topTierVerdict: dashboardSummary.evidenceBoard.opportunityScorecard.verdict,
+      evidenceCloseoutStatus: dashboardSummary.evidenceCloseout.status,
+    },
     source,
   };
 }
@@ -254,14 +303,4 @@ function asNumber(value: unknown): number | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function countTaskStatus(
-  tasks: TaskGraphFile["tasks"],
-  status: string,
-): number | null {
-  if (!Array.isArray(tasks)) {
-    return null;
-  }
-  return tasks.filter((task) => asString(task?.status) === status).length;
 }

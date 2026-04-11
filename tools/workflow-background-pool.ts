@@ -25,7 +25,7 @@ function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
 }
 
-const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
+const MAX_POOLED_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
 const BACKGROUND_RUN_STALE_MS = 60 * 60 * 1000;
 const BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS = 15 * 1000;
 const BACKGROUND_RUN_REGISTRY_FILENAME = "openclaw-research-background-runs.json";
@@ -63,6 +63,7 @@ export type BackgroundWorkflowSessionLease = {
   reason: "acquired" | "channel_capacity_reached";
   sessionKey: string | null;
   reusedIdleSession: boolean;
+  activeOwnerSessionsInChannel: number | null;
   activeResearcherSessionsInChannel: number | null;
   channelKey: string | null;
   ownerAgent: string | null;
@@ -831,7 +832,7 @@ export async function acquireBackgroundWorkflowSession(params: {
     messageChannel: params.messageChannel ?? undefined,
   });
 
-  if (ownerAgent !== "researcher" || !channelKey) {
+  if (!ownerAgent || !channelKey) {
     return {
       acquired: true,
       reason: "acquired",
@@ -840,6 +841,7 @@ export async function acquireBackgroundWorkflowSession(params: {
         readString(params.requesterSessionKey) ??
         null,
       reusedIdleSession: false,
+      activeOwnerSessionsInChannel: null,
       activeResearcherSessionsInChannel: null,
       channelKey,
       ownerAgent,
@@ -858,7 +860,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   const reusableBackgroundSessionKey =
     registryEntries.find(
       (entry) =>
-        entry.ownerAgent === "researcher" &&
+        entry.ownerAgent === ownerAgent &&
         entry.channelKey === channelKey &&
         entry.status === "idle" &&
         entry.family === family &&
@@ -866,23 +868,24 @@ export async function acquireBackgroundWorkflowSession(params: {
     )?.backgroundSessionKey ?? null;
   const activeScopeEntries = registryEntries.filter(
     (entry) =>
-      entry.ownerAgent === "researcher" &&
+      entry.ownerAgent === ownerAgent &&
       entry.channelKey === channelKey &&
       entry.status === "active" &&
       backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot) &&
       entry.backgroundSessionKey !== reusableBackgroundSessionKey
   );
-  const activeResearcherSessionsInChannel = activeScopeEntries.length;
+  const activeOwnerSessionsInChannel = activeScopeEntries.length;
   if (
     !reusableBackgroundSessionKey &&
-    activeScopeEntries.length >= MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE
+    activeScopeEntries.length >= MAX_POOLED_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE
   ) {
     return {
       acquired: false,
       reason: "channel_capacity_reached",
       sessionKey: null,
       reusedIdleSession: false,
-      activeResearcherSessionsInChannel,
+      activeOwnerSessionsInChannel,
+      activeResearcherSessionsInChannel: activeOwnerSessionsInChannel,
       channelKey,
       ownerAgent,
       family,
@@ -900,7 +903,8 @@ export async function acquireBackgroundWorkflowSession(params: {
       readString(params.requesterSessionKey) ??
       null,
     reusedIdleSession: Boolean(reusableBackgroundSessionKey),
-    activeResearcherSessionsInChannel,
+    activeOwnerSessionsInChannel,
+    activeResearcherSessionsInChannel: activeOwnerSessionsInChannel,
     channelKey,
     ownerAgent,
     family,
@@ -927,13 +931,7 @@ export async function recordBackgroundWorkflowRun(params: {
   const requesterSessionKey = readString(params.requesterSessionKey);
   const backgroundSessionKey = readString(params.backgroundSessionKey);
   const runId = readString(params.runId);
-  if (
-    ownerAgent !== "researcher" ||
-    !channelKey ||
-    !requesterSessionKey ||
-    !backgroundSessionKey ||
-    !runId
-  ) {
+  if (!ownerAgent || !channelKey || !requesterSessionKey || !backgroundSessionKey || !runId) {
     return;
   }
   await upsertBackgroundRunRegistryEntry({

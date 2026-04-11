@@ -1,12 +1,8 @@
 import {
-  queueWorkflowMailboxMessageImpl,
-  acknowledgeWorkflowMailboxMessageImpl,
-  readMailbox,
-} from "./workflow-guard-collaboration";
-import {
-  readJsonIfExists,
-  writeJsonAtomicEnsured,
-} from "./workflow-guard-core/fs";
+  acknowledgeWorkflowMailboxMessage,
+  queueWorkflowMailboxMessage,
+  readWorkflowMailbox,
+} from "./workflow-collaboration/mailbox";
 
 type WorkflowMailboxRole =
   | "researcher"
@@ -87,22 +83,19 @@ export async function ensureWorkflowDispatchMailboxMessage(params: {
   queueKey?: string | null;
   existingMessageId?: string | null;
 }): Promise<string | null> {
-  const existingMessageId = readString(params.existingMessageId);
+    const existingMessageId = readString(params.existingMessageId);
   const toAgent = normalizeRole(params.toAgent);
   if (!params.projectRoot || !toAgent) {
     return null;
   }
   if (existingMessageId) {
-    const mailbox = await readMailbox({
-      projectRoot: params.projectRoot,
-      readJsonIfExists,
-    });
+    const mailbox = await readWorkflowMailbox(params.projectRoot);
     const existing = mailbox.messages.find((entry) => entry.id === existingMessageId) ?? null;
     if (existing) {
       return existingMessageId;
     }
   }
-  const queued = await queueWorkflowMailboxMessageImpl({
+  const queued = await queueWorkflowMailboxMessage({
     projectRoot: params.projectRoot,
     fromAgent: readString(params.fromAgent) ?? "researcher",
     toAgent,
@@ -121,8 +114,6 @@ export async function ensureWorkflowDispatchMailboxMessage(params: {
     }),
     kind: "handoff",
     priority: "normal",
-    readJsonIfExists,
-    writeJsonEnsured: writeJsonAtomicEnsured,
   });
   return queued.id;
 }
@@ -147,10 +138,7 @@ export async function waitForWorkflowMailboxAcknowledgement(params: {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const mailbox = await readMailbox({
-      projectRoot: params.projectRoot,
-      readJsonIfExists,
-    });
+    const mailbox = await readWorkflowMailbox(params.projectRoot);
     const item = mailbox.messages.find((entry) => entry.id === params.messageId) ?? null;
     if (item?.status === "acknowledged") {
       return {
@@ -175,10 +163,7 @@ export async function autoAcknowledgeWorkflowMailboxForAgent(params: {
 }): Promise<{
   acknowledgedIds: string[];
 }> {
-  const mailbox = await readMailbox({
-    projectRoot: params.projectRoot,
-    readJsonIfExists,
-  });
+  const mailbox = await readWorkflowMailbox(params.projectRoot);
   const allowedIds = new Set(
     Array.isArray(params.messageIds)
       ? params.messageIds
@@ -202,13 +187,10 @@ export async function autoAcknowledgeWorkflowMailboxForAgent(params: {
 
   const acknowledgedIds: string[] = [];
   for (const item of pendingTargets) {
-    const acknowledged = await acknowledgeWorkflowMailboxMessageImpl({
+    const acknowledged = await acknowledgeWorkflowMailboxMessage({
       projectRoot: params.projectRoot,
       messageId: item.id,
       agentId: params.agentId ?? undefined,
-      readJsonIfExists,
-      writeJsonEnsured: writeJsonAtomicEnsured,
-      normalizeRole,
     });
     if (acknowledged) {
       acknowledgedIds.push(acknowledged.id);

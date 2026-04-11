@@ -465,12 +465,12 @@ export function formatWorkflowStatusText(params: {
   }
   if ((snapshot.teamTaskGraphTaskCount ?? 0) > 0) {
     lines.push(
-      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, claimed=${snapshot.teamTaskGraphClaimedCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
+      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, blocked=${snapshot.teamTaskGraphBlockedCount ?? 0}, claimed=${snapshot.teamTaskGraphClaimedCount ?? 0}, verifying=${snapshot.teamTaskGraphVerifyingCount ?? 0}, needs_repair=${snapshot.teamTaskGraphNeedsRepairCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
     );
   }
   if (snapshot.teamRoundPath) {
     lines.push(
-      `Team round: status=${snapshot.teamRoundStatus ?? "not_applicable"}, lead=${snapshot.teamRoundLeadRole ?? "unset"}, active_sessions=${snapshot.teamRoundActiveSessionCount ?? 0}, last_claimed_task=${snapshot.teamRoundLastClaimedTaskId ?? "none"}`
+      `Team round: status=${snapshot.teamRoundStatus ?? "not_applicable"}, lead=${snapshot.teamRoundLeadRole ?? "unset"}, active_sessions=${snapshot.teamRoundActiveSessionCount ?? 0}, last_claimed_task=${snapshot.teamRoundLastClaimedTaskId ?? "none"}, last_completed_task=${snapshot.teamRoundLastCompletedTaskId ?? "none"}`
     );
   }
   if (snapshot.paperStoryStatus) {

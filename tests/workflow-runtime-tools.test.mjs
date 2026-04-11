@@ -1119,6 +1119,88 @@ test("research_workflow dispatch_task claims the next matching team task for the
   );
 });
 
+test("research_workflow complete_task verifies the current task and auto-claims the next task", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "experiment",
+    topTierVerdict: null,
+    evidenceCloseout: {
+      status: "not_applicable",
+      topTierVerdict: null,
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: true,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "experiment.prepare_bundle",
+        title: "Prepare the bundle",
+        owner: "researcher",
+        status: "blocked",
+        reason: "Bundle still needs a first pass.",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+      {
+        taskId: "experiment.publish_bundle",
+        title: "Publish the bundle",
+        owner: "researcher",
+        status: "blocked",
+        reason: "Wait until the bundle is prepared.",
+        dependsOn: ["experiment.prepare_bundle"],
+        verificationRule: "none",
+      },
+    ],
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      agentContactCooldownSeconds: 0,
+      enableChannelProjectBindings: false,
+      projectsRoot: path.dirname(projectRoot),
+    },
+    agentId: "researcher",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+
+  const claimed = await executeWorkflowTool(tool, {
+    action: "claim_task",
+    taskId: "experiment.prepare_bundle",
+  });
+  assert.equal(claimed.claimed, true);
+
+  const completed = await executeWorkflowTool(tool, {
+    action: "complete_task",
+    taskId: "experiment.prepare_bundle",
+    completionNote: "Prepared the bundle.",
+  });
+  assert.equal(completed.completed, true);
+  assert.equal(completed.nextTask?.taskId, "experiment.publish_bundle");
+
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(
+    store?.tasks.find((task) => task.taskId === "experiment.prepare_bundle")?.status,
+    "satisfied"
+  );
+  assert.equal(
+    store?.tasks.find((task) => task.taskId === "experiment.publish_bundle")?.status,
+    "claimed"
+  );
+});
+
 test("research_workflow get_snapshot honors the plugin-configured shared corpus for remote graph refresh", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

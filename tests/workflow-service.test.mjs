@@ -822,7 +822,10 @@ test("reconcileClaimedWorkflowTasksForProject releases claimed tasks for complet
     taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
     taskCount: 1,
     claimableCount: 0,
+    blockedCount: 0,
     claimedCount: 1,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 0,
     optionalCount: 0,
   });

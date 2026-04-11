@@ -227,7 +227,10 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
     taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
     taskCount: 1,
     claimableCount: 1,
+    blockedCount: 0,
     claimedCount: 0,
+    verifyingCount: 0,
+    needsRepairCount: 0,
     satisfiedCount: 0,
     optionalCount: 0,
   });

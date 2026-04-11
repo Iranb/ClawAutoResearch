@@ -29,6 +29,8 @@ import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-su
 import {
   getWorkflowTaskGraphPath,
   materializeWorkflowTaskGraph,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
 } from "../workflow-team/task-graph";
 import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
@@ -821,6 +823,8 @@ export async function runWorkflowAutoIteratorImpl(
     evidenceCloseout,
     previewTasks: teamTaskPreview,
   });
+  const taskGraphStore = await readWorkflowTaskGraphStore(projectRoot);
+  const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
   await materializeWorkflowTeamRound({
     projectRoot,
     projectId,
@@ -829,11 +833,14 @@ export async function runWorkflowAutoIteratorImpl(
     topTierVerdict: evidenceCloseout.topTierVerdict,
     evidenceCloseoutStatus: evidenceCloseout.status,
     taskGraphPath: getWorkflowTaskGraphPath(projectRoot),
-    taskCount: teamTaskPreview.length,
-    claimableCount: teamTaskPreview.filter((task) => task.status === "blocked").length,
-    claimedCount: 0,
-    satisfiedCount: teamTaskPreview.filter((task) => task.status === "ready").length,
-    optionalCount: teamTaskPreview.filter((task) => task.status === "optional").length,
+    taskCount: taskGraphSummary.taskCount,
+    claimableCount: taskGraphSummary.claimableCount,
+    blockedCount: taskGraphSummary.blockedCount,
+    claimedCount: taskGraphSummary.claimedCount,
+    verifyingCount: taskGraphSummary.verifyingCount,
+    needsRepairCount: taskGraphSummary.needsRepairCount,
+    satisfiedCount: taskGraphSummary.satisfiedCount,
+    optionalCount: taskGraphSummary.optionalCount,
   });
 
   const nextGateState: GateStateLike = {

@@ -115,7 +115,7 @@ import {
   maybeBroadcastAutoIteratorStageChange,
   maybeBroadcastWorkflowStatusUpdate,
 } from "./stage-broadcast";
-import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
+import { handoffWorkflowTaskToAgent } from "./workflow-execution/delivery-adapter";
 import {
   buildPapernexusWrapperBackgroundRunRequest,
   enqueueQueuedBackgroundWorkflowRun,
@@ -127,13 +127,13 @@ import {
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   retireBackgroundWorkflowRuns,
-} from "./workflow-background-pool";
-import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
+} from "./workflow-execution/background-pool";
+import { migrateWorkflowRuntimeState } from "./workflow-execution/runtime-store";
 import {
   getWorkflowRuntimeQueuePath,
   getWorkflowRuntimeSessionsPath,
   readWorkflowRuntimeEvents,
-} from "./workflow-runtime-state.js";
+} from "./workflow-execution/runtime-store";
 import {
   asObject,
   readNumber,
@@ -151,12 +151,15 @@ import {
   enqueueWorkflowTask,
 } from "./workflow-coordination";
 import {
+  claimWorkflowTask,
   claimNextWorkflowTaskForOwner,
-} from "./workflow-team/task-graph";
+  } from "./workflow-team/task-graph";
 import {
   materializeWorkflowTeamRound,
   readWorkflowTeamRoundStore,
   recordWorkflowTeamRoundClaim,
+  recordWorkflowTeamRoundCompletion,
+  releaseWorkflowTeamRoundSession,
 } from "./workflow-team/team-round";
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
@@ -168,9 +171,12 @@ import {
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
 import {
   getWorkflowTaskGraphPath,
+  releaseWorkflowTaskClaim,
+  renewWorkflowTaskLease,
   readWorkflowTaskGraphStore,
   summarizeWorkflowTaskGraphStore,
 } from "./workflow-team/task-graph";
+import { completeWorkflowTaskAndContinue } from "./workflow-team/task-hooks";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -219,6 +225,12 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "bind_channel_project",
   "unbind_channel_project",
   "dispatch_task",
+  "get_task_graph",
+  "get_team_round",
+  "claim_task",
+  "renew_task_lease",
+  "release_task",
+  "complete_task",
   "read_mailbox",
   "send_mailbox",
   "ack_mailbox",
@@ -327,6 +339,12 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   unbind_channel_project: "unbindChannelProjectForWorkflow",
   list_channel_project_bindings: "listChannelProjectBindingsForWorkflow",
   dispatch_task: "dispatchWorkflowTaskToAgent",
+  get_task_graph: "readWorkflowTaskGraphStore",
+  get_team_round: "readWorkflowTeamRoundStore",
+  claim_task: "claimWorkflowTask",
+  renew_task_lease: "renewWorkflowTaskLease",
+  release_task: "releaseWorkflowTaskClaim",
+  complete_task: "completeWorkflowTaskAndContinue",
   read_mailbox: "readWorkflowMailboxForAgent",
   send_mailbox: "queueWorkflowMailboxMessage",
   ack_mailbox: "acknowledgeWorkflowMailboxMessage",
@@ -779,7 +797,10 @@ export async function maybeDispatchAutoIteratorTask(params: {
                 taskGraphPath: getWorkflowTaskGraphPath(params.snapshot.projectRoot),
                 taskCount: taskGraphSummary.taskCount,
                 claimableCount: taskGraphSummary.claimableCount,
+                blockedCount: taskGraphSummary.blockedCount,
                 claimedCount: taskGraphSummary.claimedCount,
+                verifyingCount: taskGraphSummary.verifyingCount,
+                needsRepairCount: taskGraphSummary.needsRepairCount,
                 satisfiedCount: taskGraphSummary.satisfiedCount,
                 optionalCount: taskGraphSummary.optionalCount,
               });
@@ -977,6 +998,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "unbind_channel_project",
               "list_channel_project_bindings",
               "dispatch_task",
+              "get_task_graph",
+              "get_team_round",
+              "claim_task",
+              "renew_task_lease",
+              "release_task",
+              "complete_task",
               "read_mailbox",
               "send_mailbox",
               "ack_mailbox",
@@ -1203,6 +1230,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           messageId: {
             type: "string",
           },
+          taskId: {
+            type: "string",
+          },
+          completionNote: {
+            type: "string",
+          },
           waitSeconds: {
             type: "number",
             minimum: 0,
@@ -1258,6 +1291,54 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             });
           };
           await traceAction("started");
+
+          const syncTeamRoundFromTaskGraph = async (params: {
+            projectRoot: string;
+            stage: string | null;
+            leadRole: string | null;
+            sessionKey?: string | null;
+            claimedTaskId?: string | null;
+            completedTaskId?: string | null;
+          }) => {
+            const taskGraphStore = await readWorkflowTaskGraphStore(params.projectRoot);
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (!taskGraphStore) {
+              return { taskGraphStore: null, taskGraphSummary, teamRound: null };
+            }
+            const existingRound = await readWorkflowTeamRoundStore(params.projectRoot);
+            const teamRound = await materializeWorkflowTeamRound({
+              projectRoot: params.projectRoot,
+              projectId: snapshot.projectId ?? taskGraphStore.projectId ?? null,
+              stage: params.stage ?? taskGraphStore.stage ?? null,
+              leadRole: params.leadRole ?? existingRound?.leadRole ?? null,
+              topTierVerdict: taskGraphStore.topTierVerdict,
+              evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+              taskGraphPath: getWorkflowTaskGraphPath(params.projectRoot),
+              taskCount: taskGraphSummary.taskCount,
+              claimableCount: taskGraphSummary.claimableCount,
+              blockedCount: taskGraphSummary.blockedCount,
+              claimedCount: taskGraphSummary.claimedCount,
+              verifyingCount: taskGraphSummary.verifyingCount,
+              needsRepairCount: taskGraphSummary.needsRepairCount,
+              satisfiedCount: taskGraphSummary.satisfiedCount,
+              optionalCount: taskGraphSummary.optionalCount,
+            });
+            if (params.sessionKey && params.claimedTaskId) {
+              await recordWorkflowTeamRoundClaim({
+                projectRoot: params.projectRoot,
+                sessionKey: params.sessionKey,
+                taskId: params.claimedTaskId,
+              });
+            }
+            if (params.sessionKey && params.completedTaskId) {
+              await recordWorkflowTeamRoundCompletion({
+                projectRoot: params.projectRoot,
+                sessionKey: params.sessionKey,
+                taskId: params.completedTaskId,
+              });
+            }
+            return { taskGraphStore, taskGraphSummary, teamRound };
+          };
 
           try {
             switch (action) {
@@ -1868,6 +1949,112 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "get_task_graph": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowTaskGraphStore(resolvedProjectRoot);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    path: getWorkflowTaskGraphPath(resolvedProjectRoot),
+                    summary: summarizeWorkflowTaskGraphStore(store),
+                    store,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "get_team_round": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowTeamRoundStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "claim_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for claim_task.");
+              }
+              if (!snapshot.role) {
+                throw new Error("Cannot determine the current workflow role for claim_task.");
+              }
+              const claimed = await claimWorkflowTask({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+                role: snapshot.role,
+              });
+              if (claimed.claimed && claimed.task) {
+                await syncTeamRoundFromTaskGraph({
+                  projectRoot: resolvedProjectRoot,
+                  stage: snapshot.currentStage,
+                  leadRole: snapshot.ownerAgent ?? snapshot.role,
+                  sessionKey: ctx.sessionKey,
+                  claimedTaskId: claimed.task.taskId,
+                });
+              }
+              return textResponse(JSON.stringify(claimed, null, 2));
+            }
+            case "renew_task_lease": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for renew_task_lease.");
+              }
+              const renewed = await renewWorkflowTaskLease({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+              });
+              return textResponse(JSON.stringify(renewed, null, 2));
+            }
+            case "release_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for release_task.");
+              }
+              const released = await releaseWorkflowTaskClaim({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+              });
+              if (released.released) {
+                await releaseWorkflowTeamRoundSession({
+                  projectRoot: resolvedProjectRoot,
+                  sessionKey: ctx.sessionKey,
+                });
+                await syncTeamRoundFromTaskGraph({
+                  projectRoot: resolvedProjectRoot,
+                  stage: snapshot.currentStage,
+                  leadRole: snapshot.ownerAgent ?? snapshot.role,
+                });
+              }
+              return textResponse(JSON.stringify(released, null, 2));
+            }
+            case "complete_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for complete_task.");
+              }
+              if (!snapshot.role) {
+                throw new Error("Cannot determine the current workflow role for complete_task.");
+              }
+              const completion = await completeWorkflowTaskAndContinue({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+                role: snapshot.role,
+                completionNote: readString(params.completionNote),
+              });
+              await syncTeamRoundFromTaskGraph({
+                projectRoot: resolvedProjectRoot,
+                stage: snapshot.currentStage,
+                leadRole: snapshot.ownerAgent ?? snapshot.role,
+              });
+              return textResponse(JSON.stringify(completion, null, 2));
+            }
             case "dispatch_task": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               if (!snapshot.role) {
@@ -1953,39 +2140,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       sessionKey: dispatch.sessionKey,
                     });
                     if (claimedTask.claimed && claimedTask.task) {
-                      let teamRound = await recordWorkflowTeamRoundClaim({
+                      await syncTeamRoundFromTaskGraph({
                         projectRoot: resolvedProjectRoot,
+                        stage: snapshot.currentStage,
+                        leadRole: toAgent,
                         sessionKey: dispatch.sessionKey,
-                        taskId: claimedTask.task.taskId,
+                        claimedTaskId: claimedTask.task.taskId,
                       });
-                      if (!teamRound) {
-                        const taskGraphStore = await readWorkflowTaskGraphStore(
-                          resolvedProjectRoot
-                        );
-                        const taskGraphSummary =
-                          summarizeWorkflowTaskGraphStore(taskGraphStore);
-                        if (taskGraphStore) {
-                          await materializeWorkflowTeamRound({
-                            projectRoot: resolvedProjectRoot,
-                            projectId: snapshot.projectId ?? null,
-                            stage: snapshot.currentStage,
-                            leadRole: toAgent,
-                            topTierVerdict: taskGraphStore.topTierVerdict,
-                            evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
-                            taskGraphPath: getWorkflowTaskGraphPath(resolvedProjectRoot),
-                            taskCount: taskGraphSummary.taskCount,
-                            claimableCount: taskGraphSummary.claimableCount,
-                            claimedCount: taskGraphSummary.claimedCount,
-                            satisfiedCount: taskGraphSummary.satisfiedCount,
-                            optionalCount: taskGraphSummary.optionalCount,
-                          });
-                          teamRound = await recordWorkflowTeamRoundClaim({
-                            projectRoot: resolvedProjectRoot,
-                            sessionKey: dispatch.sessionKey,
-                            taskId: claimedTask.task.taskId,
-                          });
-                        }
-                      }
                     } else {
                       plugin.api.logger?.warn?.(
                         "No matching workflow task was claimed after explicit dispatch_task.",
