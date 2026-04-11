@@ -66,10 +66,19 @@
 ### Experiment / QC / review
 
 - `upsert_experiment`
+- `refresh_gpu_monitor`
+- `get_gpu_monitor`
 - `get_paper_qc`
 - `get_figure_qc`
 - `get_citation_collection`
 - `get_review_issue_tracker`
+
+`refresh_gpu_monitor` / `get_gpu_monitor` 这一组专门服务 experiment monitor：
+
+- 读取项目里的活跃 `REMOTE_RUN.json`
+- 通过 SSH 采集服务器 GPU 使用率与 `screen -ls`
+- 生成 durable 的 GPU monitor snapshot
+- 帮 Coder / Researcher 判断“run 还在忙”还是“GPU 已空闲，应该转去 `/monitor-experiment` 做 reconciliation”
 
 ## 4. 为什么 `auto_iterator_tick` 是最重要的入口
 

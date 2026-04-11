@@ -41,6 +41,13 @@ Also read the active bundles' `REMOTE_RUN.json` files first so you know:
 - `results_path`
 - which experiment id / track id each remote run belongs to
 
+If the workflow GPU monitor is available, refresh it before concluding that a run is still active:
+
+- call `research_workflow.refresh_gpu_monitor`
+- then read `research_workflow.get_gpu_monitor`
+
+This gives you one durable server/GPU snapshot instead of forcing every future turn to rediscover GPU occupancy from scratch.
+
 ### 2. Read Recent Logs
 
 ```bash
@@ -70,6 +77,7 @@ Experiment completion signals:
 - result files have been generated
 - the bundle's `REMOTE_RUN.json` can be updated from `running` to a terminal state with concrete artifact paths
 - the workflow ledger / guard reports `active_runs=0` with `finished_unreconciled>0`
+- the workflow GPU monitor shows the assigned GPU as idle and the tracked `screen_name` missing, which is a strong "likely finished" cue even before manual reconciliation
 
 ### 5. Polling Strategy
 

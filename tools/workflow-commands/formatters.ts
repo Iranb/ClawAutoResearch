@@ -329,6 +329,14 @@ export function formatWorkflowStatusText(params: {
     lines.push(
       `Experiment monitor: active_runs=${snapshot.experimentActiveRunCount ?? 0}, terminal_runs=${snapshot.experimentTerminalRunCount ?? 0}, finished_unreconciled=${snapshot.experimentFinishedUnreconciledCount ?? 0}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
     );
+    if (
+      snapshot.experimentGpuMonitorStatus &&
+      snapshot.experimentGpuMonitorStatus !== "missing"
+    ) {
+      lines.push(
+        `GPU monitor: status=${snapshot.experimentGpuMonitorStatus}, checked_at=${snapshot.experimentGpuMonitorCheckedAt ?? "never"}, servers=${snapshot.experimentGpuMonitorServerCount ?? 0}, busy_assigned=${snapshot.experimentGpuMonitorBusyAssignedGpuCount ?? 0}, idle_assigned=${snapshot.experimentGpuMonitorIdleAssignedGpuCount ?? 0}, likely_finished=${snapshot.experimentGpuMonitorLikelyFinishedRunCount ?? 0}, recommendation=${snapshot.experimentGpuMonitorRecommendation ?? "none"}`
+      );
+    }
   }
   if (snapshot.experimentSearchStatus && snapshot.experimentSearchStatus !== "missing") {
     lines.push(

@@ -296,6 +296,14 @@ test("formatWorkflowSnapshotForPrompt tells coder when a remote run finished and
       experimentFinishedUnreconciledCount: 1,
       experimentNeedsMonitorPass: true,
       experimentMonitorRecommendedCommand: "/monitor-experiment",
+      experimentGpuMonitorStatus: "fresh",
+      experimentGpuMonitorCheckedAt: "2026-04-09T10:05:00.000Z",
+      experimentGpuMonitorServerCount: 1,
+      experimentGpuMonitorBusyAssignedGpuCount: 0,
+      experimentGpuMonitorIdleAssignedGpuCount: 1,
+      experimentGpuMonitorLikelyFinishedRunCount: 1,
+      experimentGpuMonitorRecommendation: "reconcile_finished",
+      experimentGpuMonitorPath: "researcher/EXPERIMENT_GPU_MONITOR.json",
       recentExperiments: [
         {
           experimentId: "exp-1",
@@ -320,6 +328,14 @@ test("formatWorkflowSnapshotForPrompt tells coder when a remote run finished and
   assert.match(
     prompt,
     /Experiment completion cue: if active_runs falls to 0 while finished_unreconciled stays above 0/i
+  );
+  assert.match(
+    prompt,
+    /GPU monitor: status=fresh, checked_at=2026-04-09T10:05:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished, path=researcher\/EXPERIMENT_GPU_MONITOR\.json/
+  );
+  assert.match(
+    prompt,
+    /GPU completion cue: one or more tracked runs now sit on idle assigned GPUs with missing screens/i
   );
 });
 

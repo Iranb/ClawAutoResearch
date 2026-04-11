@@ -108,6 +108,12 @@ async function writeText(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
 }
 
+async function writeExecutable(targetPath, value) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value, "utf8");
+  await fs.chmod(targetPath, 0o755);
+}
+
 async function seedSparseIdeationRepairScenario(projectRoot, tool) {
   await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
   await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
@@ -807,6 +813,86 @@ test("research_workflow plan_citation_expansion writes a bounded seed packet", a
   assert.equal(result.packet.queries.some((entry) => entry.type === "forward_citations"), true);
   assert.ok(result.packet.packetPath);
   assert.ok(result.packet.markdownPath);
+});
+
+test("research_workflow refresh_gpu_monitor persists idle-vs-busy GPU state for tracked runs", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousPath = process.env.PATH;
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fake-ssh-"));
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    [
+      "#!/bin/sh",
+      "printf '0, NVIDIA RTX 4090, 200, 24576, 0\\n'",
+      "printf '1, NVIDIA RTX 4090, 18000, 24576, 72\\n'",
+      "printf '\\n---SCREENS---\\n'",
+      "printf 'There is a screen on:\\n'",
+      "printf '\\t5678.other-run\\t(Detached)\\n'",
+      "printf '1 Socket in /run/screen.\\n'",
+      "",
+    ].join("\n")
+  );
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  await writeJson(path.join(projectRoot, "coder", "demo-exp", "REMOTE_RUN.json"), {
+    experiment_id: "exp-1",
+    experiment_name: "baseline",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "baseline-run",
+    status: "running",
+  });
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const refreshed = await executeWorkflowTool(tool, {
+    action: "refresh_gpu_monitor",
+  });
+
+  assert.equal(refreshed.state.status, "fresh");
+  assert.equal(refreshed.state.serverCount, 1);
+  assert.equal(refreshed.state.activeTrackedRunCount, 1);
+  assert.equal(refreshed.state.likelyFinishedRunCount, 1);
+  assert.equal(refreshed.state.recommendation, "reconcile_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].conclusion, "likely_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].gpuId, "0");
+
+  const summary = await executeWorkflowTool(tool, {
+    action: "get_gpu_monitor",
+  });
+
+  assert.equal(summary.state.status, "fresh");
+  assert.equal(summary.state.monitorPath, "researcher/EXPERIMENT_GPU_MONITOR.json");
+  assert.equal(summary.state.idleAssignedGpuCount, 1);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+
+  assert.equal(snapshot.experimentGpuMonitorStatus, "fresh");
+  assert.equal(snapshot.experimentGpuMonitorServerCount, 1);
+  assert.equal(snapshot.experimentGpuMonitorLikelyFinishedRunCount, 1);
+  assert.equal(
+    snapshot.experimentGpuMonitorRecommendation,
+    "reconcile_finished"
+  );
 });
 
 test("research_workflow get_snapshot reconciles finished uploads and refreshes graph presence during graph_build", async (t) => {

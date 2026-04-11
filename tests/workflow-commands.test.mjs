@@ -1161,6 +1161,13 @@ test("workflow-status command returns a readable workflow summary", async () => 
         experimentFinishedUnreconciledCount: 1,
         experimentNeedsMonitorPass: true,
         experimentMonitorRecommendedCommand: "/monitor-experiment",
+        experimentGpuMonitorStatus: "fresh",
+        experimentGpuMonitorCheckedAt: "2026-04-11T12:00:00.000Z",
+        experimentGpuMonitorServerCount: 1,
+        experimentGpuMonitorBusyAssignedGpuCount: 0,
+        experimentGpuMonitorIdleAssignedGpuCount: 1,
+        experimentGpuMonitorLikelyFinishedRunCount: 1,
+        experimentGpuMonitorRecommendation: "reconcile_finished",
         experimentSearchStatus: "running",
         experimentSearchCurrentMainStage: "creative_research",
         experimentSearchCurrentSubstage: "branch_expansion",
@@ -1288,6 +1295,7 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
+  assert.match(result.text ?? "", /GPU monitor: status=fresh, checked_at=2026-04-11T12:00:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished/);
   assert.match(
     result.text ?? "",
     /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/

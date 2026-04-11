@@ -209,6 +209,7 @@ Treat the run as having crossed from **launch** into **monitor / reconcile** whe
 - `REMOTE_RUN.json` can be updated to a terminal status
 - the workflow ledger / guard shows `active_runs=0` and `finished_unreconciled>0`
 - the workflow `next_action` or monitor summary points at `/monitor-experiment`
+- `research_workflow.refresh_gpu_monitor` followed by `research_workflow.get_gpu_monitor` shows the assigned GPU idle with the tracked `screen_name` missing, which is a strong likely-finished signal
 
 When those signals appear:
 

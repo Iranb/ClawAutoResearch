@@ -324,6 +324,10 @@ import {
   syncManifestExperimentMemoryImpl,
 } from "./workflow-guard-experiment-history";
 import {
+  getExperimentGpuMonitorStateSummary as getExperimentGpuMonitorStateSummaryImpl,
+  refreshExperimentGpuMonitor as refreshExperimentGpuMonitorImpl,
+} from "./workflow-gpu-monitor.js";
+import {
   buildIdleResearchTemplateForBootstrap as buildIdleResearchTemplateForBootstrapImpl,
   computeGateConfirmationDeadline as computeGateConfirmationDeadlineImpl,
   dateOnly as dateOnlyImpl,
@@ -1566,6 +1570,14 @@ export type WorkflowSnapshot = {
   experimentFinishedUnreconciledCount: number | null;
   experimentNeedsMonitorPass: boolean;
   experimentMonitorRecommendedCommand: string | null;
+  experimentGpuMonitorStatus: string | null;
+  experimentGpuMonitorCheckedAt: string | null;
+  experimentGpuMonitorServerCount: number | null;
+  experimentGpuMonitorBusyAssignedGpuCount: number | null;
+  experimentGpuMonitorIdleAssignedGpuCount: number | null;
+  experimentGpuMonitorLikelyFinishedRunCount: number | null;
+  experimentGpuMonitorRecommendation: string | null;
+  experimentGpuMonitorPath: string | null;
   experimentSyncRequired: boolean;
   experimentPapernexusSyncStatus: string | null;
   innovationReflectionStatus: string | null;
@@ -8970,6 +8982,29 @@ export async function getExperimentMemorySummary(params: {
     summary: result.summary as ExperimentLedgerSummary,
     recentExperiments: result.recentExperiments as ExperimentMemoryDigest[],
   };
+}
+
+export async function getExperimentGpuMonitorStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: Awaited<
+    ReturnType<typeof getExperimentGpuMonitorStateSummaryImpl>
+  >["state"];
+  ready: boolean;
+}> {
+  return getExperimentGpuMonitorStateSummaryImpl(params);
+}
+
+export async function refreshExperimentGpuMonitor(params: {
+  projectRoot: string;
+  server?: string | null;
+  servers?: string[] | null;
+  sshTimeoutMs?: number;
+}): Promise<{
+  state: Awaited<ReturnType<typeof refreshExperimentGpuMonitorImpl>>["state"];
+  monitorPath: string;
+}> {
+  return refreshExperimentGpuMonitorImpl(params);
 }
 
 export async function upsertExperimentLedgerEntry(params: {

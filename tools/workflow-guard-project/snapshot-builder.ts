@@ -16,6 +16,7 @@ import {
   isTerminalExperimentStatus,
   loadExperimentSearchState,
 } from "../workflow-guard-experiment-history";
+import { getExperimentGpuMonitorStateSummary } from "../workflow-gpu-monitor.js";
 import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
@@ -1012,6 +1013,23 @@ export async function buildWorkflowSnapshotFromProjectState(
   const experimentLedgerSummary = asRecord(
     (projectState.experimentLedger as Record<string, unknown> | null)?.summary
   );
+  const experimentGpuMonitor = projectState.projectRoot
+    ? await getExperimentGpuMonitorStateSummary({
+        projectRoot: projectState.projectRoot,
+      })
+    : {
+        state: {
+          status: "missing",
+          checkedAt: null,
+          serverCount: 0,
+          busyAssignedGpuCount: 0,
+          idleAssignedGpuCount: 0,
+          likelyFinishedRunCount: 0,
+          recommendation: "none",
+          monitorPath: null,
+        } as any,
+        ready: false,
+      };
   const experimentActiveRunCount =
     Array.isArray(experimentLedgerSummary?.activeExperimentIds)
       ? experimentLedgerSummary.activeExperimentIds.length
@@ -1257,6 +1275,18 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentMonitorRecommendedCommand: experimentNeedsMonitorPass
       ? "/monitor-experiment"
       : null,
+    experimentGpuMonitorStatus: experimentGpuMonitor.state.status,
+    experimentGpuMonitorCheckedAt: experimentGpuMonitor.state.checkedAt,
+    experimentGpuMonitorServerCount: experimentGpuMonitor.state.serverCount,
+    experimentGpuMonitorBusyAssignedGpuCount:
+      experimentGpuMonitor.state.busyAssignedGpuCount,
+    experimentGpuMonitorIdleAssignedGpuCount:
+      experimentGpuMonitor.state.idleAssignedGpuCount,
+    experimentGpuMonitorLikelyFinishedRunCount:
+      experimentGpuMonitor.state.likelyFinishedRunCount,
+    experimentGpuMonitorRecommendation:
+      experimentGpuMonitor.state.recommendation,
+    experimentGpuMonitorPath: experimentGpuMonitor.state.monitorPath,
     experimentSyncRequired,
     experimentPapernexusSyncStatus,
     innovationReflectionStatus: innovationReflection.status,

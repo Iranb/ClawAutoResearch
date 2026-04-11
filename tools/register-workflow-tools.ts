@@ -17,6 +17,7 @@ import {
   getExperimentReviewStateSummary,
   getExternalReviewStateSummary,
   getExperimentMemorySummary,
+  getExperimentGpuMonitorStateSummary,
   getFigureQcStateSummary,
   getGateStateSummary,
   getGraphGuidedWritingStateSummary,
@@ -59,6 +60,7 @@ import {
   recordInnovationReflection,
   recordTheoryState,
   recordWorkflowContactEvent,
+  refreshExperimentGpuMonitor,
   runBrainstormCycle,
   runWorkflowAutoIterator,
   requestExperimentGitOp,
@@ -192,6 +194,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_survey_review_state",
   "materialize_idea_catalyst_state",
   "set_survey_review",
+  "refresh_gpu_monitor",
   "set_ideation_contract",
   "set_experiment_review_state",
   "set_idea_catalyst_state",
@@ -229,10 +232,12 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_idle_research: "setIdleResearchState",
   record_idle_research_run: "recordIdleResearchRun",
   get_experiment_memory: "getExperimentMemorySummary",
+  get_gpu_monitor: "getExperimentGpuMonitorStateSummary",
   get_innovation_reflection: "getInnovationReflectionStateSummary",
   get_brainstorm_cycle: "getBrainstormCycleStateSummary",
   get_survey_review: "getSurveyReviewStateSummary",
   set_brainstorm_cycle: "setBrainstormCycleState",
+  refresh_gpu_monitor: "refreshExperimentGpuMonitor",
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
@@ -831,12 +836,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_idle_research",
               "set_idle_research",
               "record_idle_research_run",
-              "get_experiment_memory",
-              "get_innovation_reflection",
+  "get_experiment_memory",
+  "get_gpu_monitor",
+  "get_innovation_reflection",
               "get_brainstorm_cycle",
               "get_survey_review",
-              "set_brainstorm_cycle",
-              "run_brainstorm_cycle",
+  "set_brainstorm_cycle",
+  "refresh_gpu_monitor",
+  "run_brainstorm_cycle",
               "materialize_ideation_contract",
               "materialize_experiment_review_state",
               "materialize_literature_discovery_packet",
@@ -1913,6 +1920,31 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     : 6,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_gpu_monitor": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getExperimentGpuMonitorStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "refresh_gpu_monitor": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await refreshExperimentGpuMonitor({
+                projectRoot: resolvedProjectRoot,
+                server: readString(params.server),
+                servers: Array.isArray(params.servers)
+                  ? params.servers
+                      .map((entry) => readString(entry))
+                      .filter((entry): entry is string => Boolean(entry))
+                  : null,
+                sshTimeoutMs:
+                  typeof params.sshTimeoutMs === "number" &&
+                  Number.isFinite(params.sshTimeoutMs)
+                    ? Math.floor(params.sshTimeoutMs)
+                    : undefined,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_innovation_reflection": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

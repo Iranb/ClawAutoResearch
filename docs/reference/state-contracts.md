@@ -15,11 +15,12 @@
 
 - `researcher/GATE_STATE.json`
 - `researcher/EXPERIMENT_LEDGER.json`
+- `researcher/EXPERIMENT_GPU_MONITOR.json`
 - `researcher/EXPERIMENT_REGISTRY.md`
 - `researcher/INNOVATION_REFLECTION.md`
 - `researcher/IDEA_TOURNAMENT_STATE.json`
 
-其中 `EXPERIMENT_LEDGER.json` 是最重要的执行记忆来源，`INNOVATION_REFLECTION.md` 则把实验结果如何反过来影响下一轮 ideation 显式写下来。
+其中 `EXPERIMENT_LEDGER.json` 是最重要的执行记忆来源，`EXPERIMENT_GPU_MONITOR.json` 则把“远程 GPU 现在到底忙不忙、哪个分配的 GPU 已经空闲、哪些 run 很可能已经结束”写成 durable 状态，`INNOVATION_REFLECTION.md` 则把实验结果如何反过来影响下一轮 ideation 显式写下来。
 
 ## 3. Graph 与 memory 合同
 

@@ -931,12 +931,25 @@ export function formatWorkflowSnapshotForPromptImpl(
         `Experiment monitor: active_runs=${experimentMonitorActiveRuns}, terminal_runs=${experimentMonitorTerminalRuns}, finished_unreconciled=${experimentMonitorFinishedUnreconciled}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
       );
       if (
+        snapshot.experimentGpuMonitorStatus &&
+        snapshot.experimentGpuMonitorStatus !== "missing"
+      ) {
+        lines.push(
+          `GPU monitor: status=${snapshot.experimentGpuMonitorStatus}, checked_at=${snapshot.experimentGpuMonitorCheckedAt ?? "never"}, servers=${snapshot.experimentGpuMonitorServerCount ?? 0}, busy_assigned=${snapshot.experimentGpuMonitorBusyAssignedGpuCount ?? 0}, idle_assigned=${snapshot.experimentGpuMonitorIdleAssignedGpuCount ?? 0}, likely_finished=${snapshot.experimentGpuMonitorLikelyFinishedRunCount ?? 0}, recommendation=${snapshot.experimentGpuMonitorRecommendation ?? "none"}, path=${snapshot.experimentGpuMonitorPath ?? "unset"}`
+        );
+      }
+      if (
         (snapshot.role === "coder" || snapshot.role === "researcher") &&
         snapshot.experimentNeedsMonitorPass
       ) {
         lines.push(
           "Experiment completion cue: if active_runs falls to 0 while finished_unreconciled stays above 0, remote execution is effectively done for now. Stop treating the branch as a fresh launch problem and switch to /monitor-experiment style reconciliation, ledger updates, and result promotion."
         );
+        if ((snapshot.experimentGpuMonitorLikelyFinishedRunCount ?? 0) > 0) {
+          lines.push(
+            "GPU completion cue: one or more tracked runs now sit on idle assigned GPUs with missing screens. Treat them as likely finished and prioritize /monitor-experiment reconciliation over fresh launch work."
+          );
+        }
       }
     }
     lines.push("Recent experiments:");
@@ -964,6 +977,14 @@ export function formatWorkflowSnapshotForPromptImpl(
     lines.push(
       `Experiment monitor: active_runs=${snapshot.experimentActiveRunCount ?? 0}, terminal_runs=${snapshot.experimentTerminalRunCount ?? 0}, finished_unreconciled=${snapshot.experimentFinishedUnreconciledCount ?? 0}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
     );
+    if (
+      snapshot.experimentGpuMonitorStatus &&
+      snapshot.experimentGpuMonitorStatus !== "missing"
+    ) {
+      lines.push(
+        `GPU monitor: status=${snapshot.experimentGpuMonitorStatus}, checked_at=${snapshot.experimentGpuMonitorCheckedAt ?? "never"}, servers=${snapshot.experimentGpuMonitorServerCount ?? 0}, busy_assigned=${snapshot.experimentGpuMonitorBusyAssignedGpuCount ?? 0}, idle_assigned=${snapshot.experimentGpuMonitorIdleAssignedGpuCount ?? 0}, likely_finished=${snapshot.experimentGpuMonitorLikelyFinishedRunCount ?? 0}, recommendation=${snapshot.experimentGpuMonitorRecommendation ?? "none"}, path=${snapshot.experimentGpuMonitorPath ?? "unset"}`
+      );
+    }
     lines.push(
       "Recent experiments: none recorded yet; initialize the ledger before launching or rerunning experiments."
     );
