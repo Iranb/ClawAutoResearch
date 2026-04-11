@@ -8,6 +8,8 @@ import {
   derivePapernexusEvidenceStatus,
   inspectPapernexusBridgeArtifacts,
 } from "../tools/workflow-evidence/papernexus-bridge.ts";
+import { materializeBenchmarkRegistry } from "../tools/workflow-evidence/benchmark-registry.ts";
+import { materializeStatisticalEvidence } from "../tools/workflow-evidence/statistics.ts";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -77,4 +79,44 @@ test("derivePapernexusEvidenceStatus distinguishes graph unavailability from mis
     }),
     "ready"
   );
+});
+
+test("top-tier evidence materializers own manifest evidence blocks", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-evidence-materializer-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "demo-project" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const benchmark = await materializeBenchmarkRegistry({
+    projectRoot,
+    patch: {
+      status: "ready",
+      benchmark_family: "CIFAR",
+      locked: true,
+      drift_status: "pass",
+    },
+  });
+  const statistics = await materializeStatisticalEvidence({
+    projectRoot,
+    patch: {
+      status: "ready",
+      claim_strength_status: "strong",
+      significant_result_count: 2,
+    },
+  });
+
+  assert.equal(benchmark.locked, true);
+  assert.equal(statistics.claimStrengthStatus, "strong");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.benchmark_protocol.benchmark_family, "CIFAR");
+  assert.equal(manifest.statistical_evidence.significant_result_count, 2);
 });

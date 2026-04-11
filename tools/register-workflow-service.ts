@@ -2267,7 +2267,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         key: launchKey,
         launchedAt: Date.now(),
       });
-      try {
+      if (params.workflowPolicy.teamRuntime?.enabled !== false) try {
         const claimedTask = await claimNextWorkflowTaskForOwner({
           projectRoot: params.projectRoot,
           owner: String(action.owner),

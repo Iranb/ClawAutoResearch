@@ -168,6 +168,12 @@ import {
   isTrackedPapernexusImportWrapper,
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
+import {
+  collectPaperIngestionFailures,
+  materializePaperIngestionRetry,
+  readProjectManifestForRetry,
+} from "./paper-ingestion-failures";
+import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
 import {
   getWorkflowTaskGraphPath,
@@ -231,6 +237,12 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "renew_task_lease",
   "release_task",
   "complete_task",
+  "get_paper_ingestion_failures",
+  "classify_paper_ingestion_failures",
+  "materialize_paper_ingestion_retry",
+  "queue_paper_ingestion_retry",
+  "get_paper_ingestion_retry_status",
+  "cancel_paper_ingestion_retry",
   "read_mailbox",
   "send_mailbox",
   "ack_mailbox",
@@ -345,6 +357,12 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   renew_task_lease: "renewWorkflowTaskLease",
   release_task: "releaseWorkflowTaskClaim",
   complete_task: "completeWorkflowTaskAndContinue",
+  get_paper_ingestion_failures: "collectPaperIngestionFailures",
+  classify_paper_ingestion_failures: "collectPaperIngestionFailures",
+  materialize_paper_ingestion_retry: "materializePaperIngestionRetry",
+  queue_paper_ingestion_retry: "queuePaperIngestionRequest",
+  get_paper_ingestion_retry_status: "getPaperIngestionStateSummary",
+  cancel_paper_ingestion_retry: "setPaperIngestionState",
   read_mailbox: "readWorkflowMailboxForAgent",
   send_mailbox: "queueWorkflowMailboxMessage",
   ack_mailbox: "acknowledgeWorkflowMailboxMessage",
@@ -768,7 +786,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       toAgent: ownerAfter,
       channel: dispatch.channel ?? "sessions_send",
     });
-    if (dispatch.sessionKey) {
+    if (dispatch.sessionKey && params.workflowPolicy.teamRuntime?.enabled !== false) {
       try {
         const claimedTask = await claimNextWorkflowTaskForOwner({
           projectRoot: params.snapshot.projectRoot,
@@ -1004,6 +1022,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "renew_task_lease",
               "release_task",
               "complete_task",
+              "get_paper_ingestion_failures",
+              "classify_paper_ingestion_failures",
+              "materialize_paper_ingestion_retry",
+              "queue_paper_ingestion_retry",
+              "get_paper_ingestion_retry_status",
+              "cancel_paper_ingestion_retry",
               "read_mailbox",
               "send_mailbox",
               "ack_mailbox",
@@ -1803,6 +1827,178 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 )
               );
             }
+            case "get_paper_ingestion_failures":
+            case "classify_paper_ingestion_failures": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifest = await readProjectManifestForRetry(resolvedProjectRoot);
+              const ingestionState = normalizePaperIngestionState(manifest.paper_ingestion);
+              const failures = collectPaperIngestionFailures({ state: ingestionState });
+              const retryableFailures = failures.filter(
+                (entry) => entry.retryable && !entry.alreadyInGraph
+              );
+              const nonRetryableFailures = failures.filter(
+                (entry) => !entry.retryable || entry.alreadyInGraph
+              );
+              await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  failed_papers: failures,
+                  retryable_failed_papers: retryableFailures,
+                  non_retryable_failed_papers: nonRetryableFailures,
+                  last_failure_scan_at: new Date().toISOString(),
+                },
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    failedCount: failures.length,
+                    retryableCount: retryableFailures.length,
+                    nonRetryableCount: nonRetryableFailures.length,
+                    failures,
+                    retryableFailures,
+                    nonRetryableFailures,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "materialize_paper_ingestion_retry":
+            case "queue_paper_ingestion_retry": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const requestPayload = asObject(params.paperIngestionRequest);
+              const materialized = await materializePaperIngestionRetry({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId ?? null,
+                manifest: await readProjectManifestForRetry(resolvedProjectRoot),
+                intervalSeconds:
+                  readNumber(
+                    requestPayload?.intervalSeconds ?? requestPayload?.interval_seconds
+                  ) ?? null,
+                maxAttempts:
+                  readNumber(requestPayload?.maxAttempts ?? requestPayload?.max_attempts) ??
+                  null,
+              });
+              if (action === "materialize_paper_ingestion_retry") {
+                await setPaperIngestionState({
+                  projectRoot: resolvedProjectRoot,
+                  paperIngestion: {
+                    failed_papers: materialized.failures,
+                    retryable_failed_papers: materialized.retryableFailures,
+                    non_retryable_failed_papers: materialized.nonRetryableFailures,
+                    last_failure_scan_at: new Date().toISOString(),
+                    last_retry_manifest_path: materialized.retryManifestPath,
+                    retry_policy: {
+                      mode: "sequential",
+                      interval_seconds: materialized.retryManifest.intervalSeconds,
+                      max_attempts: materialized.retryManifest.maxAttempts,
+                    },
+                    retry_status:
+                      materialized.retryableFailures.length > 0
+                        ? "manifest_ready"
+                        : "no_retryable_failures",
+                    sequential_retry_interval_seconds:
+                      materialized.retryManifest.intervalSeconds,
+                  },
+                });
+                return textResponse(JSON.stringify(materialized, null, 2));
+              }
+              if (materialized.retryableFailures.length === 0) {
+                await setPaperIngestionState({
+                  projectRoot: resolvedProjectRoot,
+                  paperIngestion: {
+                    failed_papers: materialized.failures,
+                    retryable_failed_papers: [],
+                    non_retryable_failed_papers: materialized.nonRetryableFailures,
+                    last_failure_scan_at: new Date().toISOString(),
+                    last_retry_manifest_path: materialized.retryManifestPath,
+                    retry_status: "no_retryable_failures",
+                  },
+                });
+                return textResponse(JSON.stringify(materialized, null, 2));
+              }
+              const queued = await queuePaperIngestionRequest({
+                projectRoot: resolvedProjectRoot,
+                paperIngestionRequest: {
+                  wrapper: "pn_batch_import.py",
+                  args: [
+                    "--manifest",
+                    materialized.retryManifestPath,
+                    "submit",
+                    "--sequential",
+                    "--interval",
+                    String(materialized.retryManifest.intervalSeconds),
+                  ],
+                  command_text: materialized.commandText,
+                  manifest_path: materialized.retryManifestPath,
+                  paper_count: materialized.retryableFailures.length,
+                  summary: `Sequentially retry ${materialized.retryableFailures.length} failed PaperNexus paper import(s).`,
+                  trigger_kind: "failed_paper_retry",
+                  status: "queued",
+                },
+              });
+              await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  failed_papers: materialized.failures,
+                  retryable_failed_papers: materialized.retryableFailures,
+                  non_retryable_failed_papers: materialized.nonRetryableFailures,
+                  last_failure_scan_at: new Date().toISOString(),
+                  last_retry_manifest_path: materialized.retryManifestPath,
+                  retry_policy: {
+                    mode: "sequential",
+                    interval_seconds: materialized.retryManifest.intervalSeconds,
+                    max_attempts: materialized.retryManifest.maxAttempts,
+                  },
+                  retry_status: "queued",
+                  retry_attempt_count: 0,
+                  sequential_retry_interval_seconds:
+                    materialized.retryManifest.intervalSeconds,
+                },
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...materialized,
+                    queuedRequest: queued.request,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "get_paper_ingestion_retry_status": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifest = await readProjectManifestForRetry(resolvedProjectRoot);
+              const ingestionState = normalizePaperIngestionState(manifest.paper_ingestion);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    retryStatus: ingestionState.retryStatus,
+                    retryRunId: ingestionState.retryRunId,
+                    retryAttemptCount: ingestionState.retryAttemptCount,
+                    lastRetryManifestPath: ingestionState.lastRetryManifestPath,
+                    retryableFailedCount: ingestionState.retryableFailedPapers.length,
+                    nonRetryableFailedCount: ingestionState.nonRetryableFailedPapers.length,
+                    sequentialRetryIntervalSeconds:
+                      ingestionState.sequentialRetryIntervalSeconds,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "cancel_paper_ingestion_retry": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  retry_status: "cancelled",
+                  last_updated_at: new Date().toISOString(),
+                },
+              });
+              return textResponse(JSON.stringify(result.state, null, 2));
+            }
             case "queue_idea_catalyst_requisition": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await queueIdeaCatalystRequisition({
@@ -1971,6 +2167,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "claim_task": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
               const taskId = readString(params.taskId);
               if (!taskId) {
                 throw new Error("taskId is required for claim_task.");
@@ -1997,6 +2196,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "renew_task_lease": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
               const taskId = readString(params.taskId);
               if (!taskId) {
                 throw new Error("taskId is required for renew_task_lease.");
@@ -2010,6 +2212,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "release_task": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
               const taskId = readString(params.taskId);
               if (!taskId) {
                 throw new Error("taskId is required for release_task.");
@@ -2034,6 +2239,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "complete_task": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
               const taskId = readString(params.taskId);
               if (!taskId) {
                 throw new Error("taskId is required for complete_task.");

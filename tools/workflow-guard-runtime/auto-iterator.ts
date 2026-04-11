@@ -809,39 +809,41 @@ export async function runWorkflowAutoIteratorImpl(
   }
   await deps.saveManifest(projectRoot, manifest);
 
-  const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
-  const teamTaskPreview = buildWorkflowStageTaskPreview({
-    currentStage: stageAfter,
-    topTierVerdict: evidenceCloseout.topTierVerdict,
-    evidenceCloseout,
-  });
-  await materializeWorkflowTaskGraph({
-    projectRoot,
-    projectId,
-    stage: stageAfter,
-    topTierVerdict: evidenceCloseout.topTierVerdict,
-    evidenceCloseout,
-    previewTasks: teamTaskPreview,
-  });
-  const taskGraphStore = await readWorkflowTaskGraphStore(projectRoot);
-  const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
-  await materializeWorkflowTeamRound({
-    projectRoot,
-    projectId,
-    stage: stageAfter,
-    leadRole: ownerAfter,
-    topTierVerdict: evidenceCloseout.topTierVerdict,
-    evidenceCloseoutStatus: evidenceCloseout.status,
-    taskGraphPath: getWorkflowTaskGraphPath(projectRoot),
-    taskCount: taskGraphSummary.taskCount,
-    claimableCount: taskGraphSummary.claimableCount,
-    blockedCount: taskGraphSummary.blockedCount,
-    claimedCount: taskGraphSummary.claimedCount,
-    verifyingCount: taskGraphSummary.verifyingCount,
-    needsRepairCount: taskGraphSummary.needsRepairCount,
-    satisfiedCount: taskGraphSummary.satisfiedCount,
-    optionalCount: taskGraphSummary.optionalCount,
-  });
+  if (workflowPolicy.teamRuntime?.enabled !== false) {
+    const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
+    const teamTaskPreview = buildWorkflowStageTaskPreview({
+      currentStage: stageAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseout,
+    });
+    await materializeWorkflowTaskGraph({
+      projectRoot,
+      projectId,
+      stage: stageAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseout,
+      previewTasks: teamTaskPreview,
+    });
+    const taskGraphStore = await readWorkflowTaskGraphStore(projectRoot);
+    const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+    await materializeWorkflowTeamRound({
+      projectRoot,
+      projectId,
+      stage: stageAfter,
+      leadRole: ownerAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseoutStatus: evidenceCloseout.status,
+      taskGraphPath: getWorkflowTaskGraphPath(projectRoot),
+      taskCount: taskGraphSummary.taskCount,
+      claimableCount: taskGraphSummary.claimableCount,
+      blockedCount: taskGraphSummary.blockedCount,
+      claimedCount: taskGraphSummary.claimedCount,
+      verifyingCount: taskGraphSummary.verifyingCount,
+      needsRepairCount: taskGraphSummary.needsRepairCount,
+      satisfiedCount: taskGraphSummary.satisfiedCount,
+      optionalCount: taskGraphSummary.optionalCount,
+    });
+  }
 
   const nextGateState: GateStateLike = {
     ...gateState,

@@ -84,6 +84,46 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
   assert.match(calls[0].message, /Implement the current experiment plan/);
 });
 
+test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packets", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-exec-packet-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const longCommand = `python3 scripts/do_work.py --payload ${"x".repeat(2200)}`;
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-long-command" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Run a long command safely.",
+    command: longCommand,
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.match(calls[0].message, /file-backed exec packet/i);
+  assert.doesNotMatch(calls[0].message, /x{500}/);
+
+  const packetDir = path.join(projectRoot, ".openclaw-research", "exec-packets");
+  const files = await fs.readdir(packetDir);
+  assert.ok(files.some((entry) => entry.endsWith(".json")));
+  assert.ok(files.some((entry) => entry.endsWith(".sh")));
+});
+
 test("dispatchWorkflowTaskToAgent retries alternate direct session candidates before giving up", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({

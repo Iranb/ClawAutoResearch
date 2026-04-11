@@ -58,6 +58,8 @@ import {
 } from "./workflow-coordination";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+import { claimNextWorkflowTaskForOwner } from "./workflow-team/task-graph";
+import { recordWorkflowTeamRoundClaim } from "./workflow-team/team-round";
 
 const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "researcher",
@@ -615,6 +617,28 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         });
       }
       const trigger = readString(hookCtx.trigger);
+      let heartbeatClaimedTaskId: string | null = null;
+      if (
+        trigger === "heartbeat" &&
+        workflowPolicy.teamRuntime?.enabled !== false &&
+        snapshot.projectRoot &&
+        snapshot.role &&
+        agentCtx.sessionKey
+      ) {
+        const claimed = await claimNextWorkflowTaskForOwner({
+          projectRoot: snapshot.projectRoot,
+          owner: snapshot.role,
+          sessionKey: agentCtx.sessionKey,
+        }).catch(() => null);
+        if (claimed?.claimed && claimed.task) {
+          heartbeatClaimedTaskId = claimed.task.taskId;
+          await recordWorkflowTeamRoundClaim({
+            projectRoot: snapshot.projectRoot,
+            sessionKey: agentCtx.sessionKey,
+            taskId: claimed.task.taskId,
+          }).catch(() => null);
+        }
+      }
       if (!workflowPolicy.injectWorkflowContext) {
         return;
       }
@@ -630,6 +654,14 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
           : null;
       const extraContext: string[] = [];
+      if (heartbeatClaimedTaskId) {
+        extraContext.push(
+          "[TeammateIdle Continuation]",
+          `A claimable workflow team task was assigned during heartbeat: ${heartbeatClaimedTaskId}.`,
+          "Continue that task now. When the durable outputs are ready, call research_workflow.complete_task with this taskId so verification can either mark it satisfied or return repair feedback, then auto-claim the next task if one is available.",
+          "[/TeammateIdle Continuation]"
+        );
+      }
       if (
         snapshot.role === "researcher" &&
         looksLikeResearchPipelineCommand(latestPromptLikeText) &&

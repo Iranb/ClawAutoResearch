@@ -57,6 +57,7 @@ import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
+import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
@@ -2853,7 +2854,7 @@ export async function startBackgroundWorkflowRun(params: {
     }
   }
 
-  const commandText =
+  let commandText =
     requestedCommandText ??
     (normalizedKind === "research_pipeline"
       ? buildResearchPipelineBackgroundCommand(
@@ -2948,6 +2949,19 @@ export async function startBackgroundWorkflowRun(params: {
           packetPrompt
         )
       : packetPrompt;
+  }
+  const execPayload = await materializeExecPacketIfNeeded({
+    projectRoot: resolvedProjectRoot,
+    projectId: resolvedProjectId,
+    stage: normalizedKind,
+    ownerRole: ownerAgent,
+    commandText,
+    extraBody: backgroundRunExtraSystemPrompt,
+    budgetKind: "background_command",
+  });
+  if (execPayload.materialized || execPayload.commandForDispatch !== commandText) {
+    commandText = execPayload.commandForDispatch;
+    backgroundRunExtraSystemPrompt = execPayload.extraBodyForDispatch;
   }
   const queueKey = buildBackgroundRunQueueKey({
     requesterSessionKey: params.agentCtx.sessionKey,

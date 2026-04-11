@@ -540,7 +540,12 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
+  teamRuntime?: WorkflowTeamRuntimeConfig;
 }
+
+export type WorkflowTeamRuntimeConfig = {
+  enabled: boolean;
+};
 
 export interface WorkflowToolContext {
   agentId?: string;
@@ -1307,6 +1312,16 @@ export type PaperIngestionState = {
   activeBatches: PaperIngestionBatchRun[];
   batchItems: PaperIngestionBatchItem[];
   queuedRequests: PaperIngestionQueuedRequest[];
+  failedPapers: PaperIngestionFailedPaper[];
+  retryableFailedPapers: PaperIngestionFailedPaper[];
+  nonRetryableFailedPapers: PaperIngestionFailedPaper[];
+  lastFailureScanAt: string | null;
+  lastRetryManifestPath: string | null;
+  retryPolicy: PaperIngestionRetryPolicy | null;
+  retryRunId: string | null;
+  retryStatus: string | null;
+  retryAttemptCount: number;
+  sequentialRetryIntervalSeconds: number | null;
   lastBatchManifestPath: string | null;
   graphVersionSeen: string | null;
   reconcileRequired: boolean;
@@ -1314,6 +1329,27 @@ export type PaperIngestionState = {
   repairReason: string | null;
   repairTargetCorpus: string | null;
   lastUpdatedAt: string | null;
+};
+
+export type PaperIngestionRetryPolicy = {
+  mode: "sequential" | "batch";
+  intervalSeconds: number;
+  maxAttempts: number;
+};
+
+export type PaperIngestionFailedPaper = {
+  paperId: string | null;
+  title: string | null;
+  sourceKey: string | null;
+  inputPath: string | null;
+  failureSignature: string | null;
+  failureMessage: string | null;
+  failedAt: string | null;
+  retryable: boolean;
+  retryReason: string | null;
+  alreadyInGraph: boolean;
+  lastRetryAt: string | null;
+  retryCount: number;
 };
 
 export type PaperIngestionCompletedPaper = {
@@ -2051,6 +2087,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
   lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
+  teamRuntime: { enabled: true },
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -2576,6 +2613,18 @@ function normalizePolicy(
             (config as Record<string, unknown>).lobsterHandoff
           )
         : DEFAULT_POLICY.lobsterHandoff,
+    teamRuntime:
+      config && typeof config === "object" &&
+      (config as Record<string, unknown>).teamRuntime &&
+      typeof (config as Record<string, unknown>).teamRuntime === "object"
+        ? {
+            enabled:
+              ((config as Record<string, unknown>).teamRuntime as Record<string, unknown>)
+                .enabled === false
+                ? false
+                : true,
+          }
+        : DEFAULT_POLICY.teamRuntime,
   };
 }
 

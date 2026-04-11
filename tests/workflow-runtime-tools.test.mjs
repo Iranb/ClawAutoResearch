@@ -1201,6 +1201,69 @@ test("research_workflow complete_task verifies the current task and auto-claims 
   );
 });
 
+test("research_workflow queue_paper_ingestion_retry creates a sequential retry request for failed papers", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+    paper_ingestion: {
+      batch_items: [
+        {
+          paper_id: "paper:retry-1",
+          title: "Retryable Paper",
+          status: "failed",
+          error: "Another PaperNexus run committed newer corpus state",
+        },
+        {
+          paper_id: "paper:bad-1",
+          title: "Invalid Paper",
+          status: "failed",
+          error: "invalid markdown",
+        },
+      ],
+    },
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      enableChannelProjectBindings: false,
+      projectsRoot: path.dirname(projectRoot),
+    },
+    agentId: "researcher",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+
+  const queued = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion_retry",
+    paperIngestionRequest: {
+      intervalSeconds: 45,
+      maxAttempts: 3,
+    },
+  });
+
+  assert.equal(queued.retryableFailures.length, 1);
+  assert.equal(queued.nonRetryableFailures.length, 1);
+  assert.match(queued.commandText, /--sequential/);
+  assert.equal(queued.queuedRequest.wrapper, "pn_batch_import.py");
+  assert.equal(queued.queuedRequest.paperCount, 1);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.retry_status, "queued");
+  assert.equal(manifest.paper_ingestion.retryable_failed_papers.length, 1);
+  assert.equal(manifest.paper_ingestion.non_retryable_failed_papers.length, 1);
+});
+
 test("research_workflow get_snapshot honors the plugin-configured shared corpus for remote graph refresh", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

@@ -365,6 +365,16 @@ export async function setPaperIngestionState(params: {
   const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
   const batchItemsRaw = patch.batch_items ?? patch.batchItems;
   const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
+  const patchState = normalizePaperIngestionState(patch);
+  const hasFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "failedPapers");
+  const hasRetryableFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "retryable_failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "retryableFailedPapers");
+  const hasNonRetryableFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "non_retryable_failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "nonRetryableFailedPapers");
   const completedPaperUpdate = mergeCompletedPaperEntries({
     current: current.completedPapers,
     patch: completedPapersRaw,
@@ -408,6 +418,32 @@ export async function setPaperIngestionState(params: {
     activeBatches: batchRunUpdate.activeBatches,
     batchItems: batchItemUpdate.batchItems,
     queuedRequests: queuedRequestUpdate.queuedRequests,
+    failedPapers: hasFailedPapersPatch ? patchState.failedPapers : current.failedPapers,
+    retryableFailedPapers: hasRetryableFailedPapersPatch
+      ? patchState.retryableFailedPapers
+      : current.retryableFailedPapers,
+    nonRetryableFailedPapers: hasNonRetryableFailedPapersPatch
+      ? patchState.nonRetryableFailedPapers
+      : current.nonRetryableFailedPapers,
+    lastFailureScanAt:
+      pickString(patch, ["lastFailureScanAt", "last_failure_scan_at"]) ??
+      current.lastFailureScanAt,
+    lastRetryManifestPath:
+      pickString(patch, ["lastRetryManifestPath", "last_retry_manifest_path"]) ??
+      current.lastRetryManifestPath,
+    retryPolicy: patchState.retryPolicy ?? current.retryPolicy,
+    retryRunId:
+      pickString(patch, ["retryRunId", "retry_run_id"]) ?? current.retryRunId,
+    retryStatus:
+      pickString(patch, ["retryStatus", "retry_status"]) ?? current.retryStatus,
+    retryAttemptCount:
+      pickNumber(patch, ["retryAttemptCount", "retry_attempt_count"]) ??
+      current.retryAttemptCount,
+    sequentialRetryIntervalSeconds:
+      pickNumber(patch, [
+        "sequentialRetryIntervalSeconds",
+        "sequential_retry_interval_seconds",
+      ]) ?? current.sequentialRetryIntervalSeconds,
     lastBatchManifestPath:
       pickString(patch, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
       batchRunUpdate.activeBatches[batchRunUpdate.activeBatches.length - 1]?.manifestPath ??

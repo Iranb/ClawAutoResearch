@@ -8,6 +8,8 @@ import {
   ensureWorkflowDispatchMailboxMessage,
   waitForWorkflowMailboxAcknowledgement,
 } from "./workflow-handoff-runtime";
+import { isExecApprovalRequiredError } from "./workflow-execution/exec-budget";
+import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -372,6 +374,7 @@ async function runSingleDispatchAttempt(params: {
       },
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       accepted: false,
       attempt: {
@@ -382,7 +385,9 @@ async function runSingleDispatchAttempt(params: {
         dispatched: false,
         acceptedByMailbox: false,
         acceptedByTranscript: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: isExecApprovalRequiredError(error)
+          ? `exec_packet_required: ${errorMessage}`
+          : errorMessage,
       },
     };
   }
@@ -424,6 +429,15 @@ export async function dispatchWorkflowTaskToAgent(params: {
   }
   const requireMailboxAcknowledgement =
     params.requireMailboxAcknowledgement !== false;
+  const execPayload = await materializeExecPacketIfNeeded({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    stage: params.stage,
+    ownerRole: params.toRole,
+    commandText: params.command,
+    extraBody: params.extraBody,
+    budgetKind: "dispatch_command",
+  });
 
   const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
     projectRoot: params.projectRoot,
@@ -432,8 +446,8 @@ export async function dispatchWorkflowTaskToAgent(params: {
     projectId: params.projectId,
     stage: params.stage,
     summary: params.summary,
-    command: params.command,
-    extraBody: params.extraBody,
+    command: execPayload.commandForDispatch || params.command,
+    extraBody: execPayload.extraBodyForDispatch,
     existingMessageId: params.mailboxMessageId,
   });
 
@@ -444,9 +458,9 @@ export async function dispatchWorkflowTaskToAgent(params: {
     toRole: params.toRole,
     stage: params.stage,
     summary: params.summary,
-    command: params.command,
+    command: execPayload.commandForDispatch || params.command,
     mailboxMessageId,
-    extraBody: params.extraBody,
+    extraBody: execPayload.extraBodyForDispatch,
   });
   const attempts: WorkflowTaskDispatchAttempt[] = [];
   const dispatchBatchId = randomUUID();

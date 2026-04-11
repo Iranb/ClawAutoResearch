@@ -1,6 +1,6 @@
 # Workflow Pipeline 重构与 Agent Teams Runtime 实施计划
 
-> **Status:** IMPLEMENTED
+> **Status:** IMPLEMENTED — CORE RUNTIME, GUARDRAILS, RETRY INTERFACE, AND STRICT TODO PASS LANDED
 
 > **For agentic workers:** 这份计划不是“继续往现有系统上加层”的指令，而是“先收束 pipeline 内核，再把 Agent Teams 风格推进机制落到新内核上”的重构路线。任何实现都必须先补回归，再做最小可逆变更，并优先删除重复表达而不是继续堆逻辑。
 
@@ -37,7 +37,395 @@
 - 已完成切片 W：service-side pooled session 从 researcher-only 扩展到 role-aware，auto-stage / auto-discussion / mitigation 主路径已能为 `orchestrator / coder / analyzer / academic_writer / reviewer / researcher` 复用同一套 pooled session policy。
 - 已完成切片 X：dashboard 项目详情页已增加 Team Round 概览、Task Board 与 Evidence Moat 概览；新增 `workflow-collaboration-kernel`、`workflow-execution-kernel`、`workflow-task-claim`、`workflow-team-recovery` 回归测试。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 当前状态：计划中的内核重构、Evidence Runtime、Team Runtime、Role-aware session pool、Dashboard 可观察性与验证矩阵都已落地。
+- 当前状态：Evidence Runtime、Team Runtime 的核心运行面、Role-aware session pool、Dashboard 可观察性、长 EXEC guardrail、PaperNexus 失败论文顺序 retry 接口、feature flag、heartbeat idle continuation、evidence materializer module 分层与主要验证矩阵已经落地。
+
+---
+
+## 0. 2026-04-11 覆盖度审计与新增 TODO
+
+这次审计结论是：当前分支已经实现了大量核心功能，但不能再把整份计划标成“全部完成”。更准确的描述是：
+
+- **已完成核心功能闭环**：Evidence contracts、top-tier gates、task graph store、claim/lease/release、`complete_task` 后续 claim、dashboard task/evidence 可视化、binding coherency、Lobster delivery-adapter 边界。
+- **已补齐严格 TODO 主线**：新增 exec packet、PaperNexus failed-paper retry、Team Runtime policy gate、heartbeat idle continuation、evidence materializer modules 与 projection model；旧大文件仍保留兼容 façade，但主入口已有明确 kernel surface。
+- **新增两个真实运行问题必须进入计划**：
+  - 长 EXEC 指令会触发 OpenClaw obfuscation guard，并且 Discord 无法做 chat exec approval。
+  - PaperNexus 上传失败后缺少 first-class “失败论文重复上传/顺序重提交”接口，导致 `graph_build` 容易卡在人工对话和权限不一致里。
+
+### 0.1 当前已真实覆盖
+
+- `tools/workflow-kernel/graph-context.ts`
+  - 已统一 `graph_build / frontier_mapping / idea` 等 graph-sensitive 阶段的 graph context 判断。
+  - 已接入 `auto_iterator` 的 graph refresh、graph re-entry、repair routing。
+- `tools/workflow-evidence/papernexus-bridge.ts`
+  - 已把 workflow-owned PaperNexus packet/bundle 检查从 stage-preflight 中抽出。
+- `tools/workflow-evidence/contracts.ts`
+  - 已让 `benchmark_protocol`、`statistical_evidence`、`venue_competition`、`ablation_evidence`、`mechanism_evidence`、`reproducibility_pack`、`camera_ready_evidence`、`opportunity_scorecard` 成为可读 workflow state。
+- `tools/workflow-evidence/closeout-summary.ts`
+  - 已提供统一 evidence closeout summary。
+- `tools/workflow-guard-stages/execution-stage-signals.ts`
+  - 已把 top-tier `experiment -> analyze`、`analyze -> review` 证据 gate 接入 stage missing signals。
+- `tools/workflow-guard-stages/writing-stage-signals.ts`
+  - 已把 top-tier `write -> submit` / `submit` 的 reproducibility / camera-ready / graph-grounded 证据 gate 接入。
+- `tools/workflow-team/task-graph.ts`
+  - 已支持 task graph 持久化、claim、renew、release、lease expiry reconcile、dependency-aware claim、`verifying`、`needs_repair`、latest event。
+- `tools/workflow-team/task-hooks.ts`
+  - 已支持 `claim -> verify -> satisfied/needs_repair -> auto-claim next`。
+- `tools/register-workflow-tools.ts`
+  - 已新增 `get_task_graph`、`get_team_round`、`claim_task`、`renew_task_lease`、`release_task`、`complete_task`。
+- `tools/register-workflow-service.ts`
+  - 已在 auto-stage dispatch 成功后消费 task graph，并在 runtime session terminal 后释放 claims。
+  - pooled session policy 已从 researcher-only 扩展到 role-aware。
+- `apps/workflow-dashboard`
+  - 项目详情页已显示 Team Round、Task Board、Evidence Moat。
+- `tools/channel-project-bindings.ts`
+  - 已通过 mtime invalidation 修复 binding index stale cache 问题。
+- `tools/workflow-execution/delivery-adapter.ts`
+  - 已把 Lobster 定位为 optional delivery adapter，不是 workflow truth source。
+
+### 0.2 审计后补齐结果
+
+- **Execution Kernel**
+  - 已新增 `exec-budget.ts` / `exec-packet.ts`，并接入 `agent-task-dispatch.ts` 与 `workflow-fast-paths.ts`。
+  - 已新增 execution façade：`runtime-store.ts`、`delivery-adapter.ts`、`background-pool.ts`、`dispatch-plan.ts`、`transition-orchestrator.ts`。
+  - 旧 runtime 文件继续保留以维持兼容；新入口不再需要散落理解 Lobster/native/background pool。
+- **Projection Kernel**
+  - 已新增 `workflow-projection/model.ts` 和 `dashboard-summary.ts`。
+  - Dashboard detail 已消费 projection summary；snapshot/status 保留兼容 re-export surface。
+- **Fact Kernel**
+  - 已新增 readiness/stage-registry，并由 `workflow-guard.ts` / `snapshot-builder.ts` 消费。
+  - `workflow-guard.ts` 仍大，但关键重复 helper 已迁移；后续只做维护性 shrink，不再阻塞本计划。
+- **Evidence materializers**
+  - 已新增 `benchmark-registry.ts`、`protocol-lock.ts`、`statistics.ts`、`venue-competition.ts`、`ablation-sufficiency.ts`、`mechanism-packet.ts`、`reproducibility-pack.ts`、`camera-ready-pack.ts`、`opportunity-model.ts`。
+- **TeammateIdle / completion**
+  - `complete_task` 已提供 verify/satisfy/repair/auto-claim-next。
+  - `before_prompt_build` heartbeat 已实现 idle continuation：空闲 heartbeat 可自动 claim 下一 task，并注入 continuation guidance。
+- **Task state migration**
+  - `completed` 被兼容映射到 `satisfied`，`blocked` 被兼容映射到 dependency-aware `claimable`。
+- **Team Runtime feature flag**
+  - `workflowPolicy.teamRuntime.enabled` 已加入 policy，auto-iterator materialization、tool task actions、service auto-claim 均已尊重该开关。
+
+### 0.3 新增真实问题 A：长 EXEC 指令触发 OpenClaw 封控
+
+#### 现象
+
+用户在 Discord 中触发较长执行指令时，OpenClaw 返回：
+
+```text
+Obfuscated command detected: Command too long; potential obfuscation
+Exec approval is required, but chat exec approvals are not enabled on Discord.
+Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals.
+```
+
+#### 根因判断
+
+- agent / workflow runtime 把过长的执行说明、脚本、命令、或多步骤 EXEC payload 直接塞进 chat/dispatch command。
+- OpenClaw 的 obfuscation guard 将 “command too long” 视为潜在混淆命令。
+- Discord 当前无法完成 chat exec approval，导致执行无法继续。
+- 这与 Team Runtime 的 task graph 无关，是 **Execution Kernel / Delivery Adapter / Prompt Budget** 的边界问题。
+
+#### 设计原则
+
+- workflow 不应该要求 Discord 前台消息承载长 EXEC 命令。
+- 长命令必须转成 durable command packet、project-local script、runtime queue payload、或 tool action 参数。
+- agent dispatch message 只能包含短指令与 artifact reference。
+- 对 OpenClaw exec guard 友好：短命令、无混淆、多行脚本落文件、带 checksum/idempotency key。
+
+#### TODO A1：新增 EXEC payload budget policy
+
+- Create: `tools/workflow-execution/exec-budget.ts`
+- Add:
+  - `MAX_CHAT_EXEC_COMMAND_CHARS`
+  - `MAX_DISPATCH_COMMAND_CHARS`
+  - `MAX_BACKGROUND_COMMAND_CHARS`
+  - `MAX_INLINE_SYSTEM_PROMPT_CHARS`
+  - `isWorkflowCommandTooLong(commandText)`
+  - `summarizeExecPayloadForDispatch(commandText)`
+  - `buildExecPayloadBudgetDiagnostic(...)`
+- Acceptance:
+  - 任何进入 `sessions_send` / `sessions_spawn` / background run message 的 command 都先过 budget check。
+  - 超过阈值时不再把原始命令发到 Discord / chat runtime。
+
+#### TODO A2：新增 file-backed exec packet
+
+- Create: `tools/workflow-execution/exec-packet.ts`
+- Durable path:
+  - `{PROJ}/.openclaw-research/exec-packets/{packetId}.json`
+  - `{PROJ}/.openclaw-research/exec-packets/{packetId}.sh`
+- Packet schema:
+  - `packetId`
+  - `projectId`
+  - `stage`
+  - `ownerRole`
+  - `createdAt`
+  - `commandSummary`
+  - `commandText`
+  - `scriptPath`
+  - `sha256`
+  - `requiresApproval`
+  - `approvalSurface`
+  - `idempotencyKey`
+  - `expectedOutputs`
+  - `rollbackHint`
+- Behavior:
+  - Long command becomes script file + JSON packet.
+  - Dispatch message includes only:
+    - packet path
+    - checksum
+    - short run command or workflow tool action
+  - No full script is pasted into Discord.
+
+#### TODO A3：改造 dispatch / background builders
+
+- Modify:
+  - `tools/agent-task-dispatch.ts`
+  - `tools/workflow-fast-paths.ts`
+  - `tools/register-workflow-tools.ts`
+  - `tools/register-workflow-service.ts`
+  - `tools/workflow-execution/delivery-adapter.ts`
+- Required changes:
+  - `buildWorkflowDispatchMessage(...)` 对 command/extraBody 做 length budget。
+  - `startBackgroundWorkflowRun(...)` 对 `message` / `extraSystemPrompt` 做 length budget。
+  - `handoffWorkflowTaskToAgent(...)` 传给 Lobster/native 的 command 也必须走同一 budget logic。
+  - `run_papernexus_wrapper` / `start_background_run` 如果 command 太长，自动 materialize exec packet。
+- Acceptance:
+  - 长命令不会触发 `Obfuscated command detected`。
+  - Discord 中只出现短、可读、可审计的 command reference。
+
+#### TODO A4：新增 guard-specific failure recovery
+
+- Add detection:
+  - `/Obfuscated command detected/i`
+  - `/Command too long/i`
+  - `/exec approvals are not enabled/i`
+- Modify:
+  - `workflow-runtime-maintenance`
+  - `workflow-runtime-recovery`
+  - `workflow-fast-paths`
+- Behavior:
+  - 捕获该错误后，不再重试同一个长命令。
+  - 自动生成 `exec_packet_required` repair action。
+  - 将 queue/session 标为 `needs_repair`，并给出短指令：
+    - “Run materialized exec packet from Web UI/terminal UI”
+    - 或 “Re-dispatch with file-backed packet”
+
+#### TODO A5：测试
+
+- Add:
+  - `tests/workflow-exec-budget.test.mjs`
+  - `tests/workflow-runtime-tools.test.mjs` 新增 long command regression
+  - `tests/agent-task-dispatch.test.mjs` 新增 long dispatch payload regression
+  - `tests/workflow-fast-paths.test.mjs` 新增 background long command regression
+- Tests:
+  - long command becomes exec packet
+  - dispatch message does not contain full long command
+  - obfuscated command error produces repair action
+  - short command remains inline
+
+### 0.4 新增真实问题 B：PaperNexus 失败论文缺少重复上传接口
+
+#### 现象
+
+用户要求 Researcher 重提交 33 篇失败论文。系统出现了多轮不稳定行为：
+
+- 一开始 agent 声称已启动批量顺序重提交，并给出 `/tmp/papernexus-resubmit.log`。
+- 随后另一个/后续 Researcher 会话没有 `research_workflow` 工具，只能看到 `papernexus-remote__*`。
+- agent 又要求用户手动运行 `/graph-build` / `/resume-pipeline` 或授权 SSH。
+- 用户明确要求重新提交失败论文，但 workflow 没有 first-class retry/resubmit action。
+
+#### 根因判断
+
+- `paper_ingestion` 可以记录 queued/completed/failed，但没有专门的 “failed items retry manifest + sequential resubmit” workflow action。
+- 失败原因是 PaperNexus 并发竞态：
+  - `Source inputs changed`
+  - `Another PaperNexus run committed newer corpus state`
+- 系统缺少对这类 failure signature 的可恢复分类。
+- 前台 Researcher session 和后台 workflow session 的工具可用性不一致。
+- 运行时把“谁负责准备”和“谁有工具执行”混在自然语言里，导致 handoff 不确定。
+
+#### 设计原则
+
+- 失败论文重提交必须是 workflow-owned tool action，不应靠 agent 手写 `/tmp/*.log` 或 SSH。
+- Researcher 是 `graph_build` 的 manifest owner，但执行必须走 workflow runtime/service 或 PaperNexus wrapper。
+- 如果当前 foreground session 没有 `research_workflow`，系统应产生明确 handoff/dispatch，而不是让用户选择 A/B。
+- 对竞态失败默认采用 sequential retry，避免再次并发冲突。
+
+#### TODO B1：扩展 paper ingestion failure state
+
+- Modify:
+  - `tools/workflow-guard-state/paper-ingestion.ts`
+  - `templates/PROJECT_MANIFEST.json`
+- Add fields:
+  - `failed_papers`
+  - `retryable_failed_papers`
+  - `non_retryable_failed_papers`
+  - `last_failure_scan_at`
+  - `last_retry_manifest_path`
+  - `retry_policy`
+  - `retry_run_id`
+  - `retry_status`
+  - `retry_attempt_count`
+  - `sequential_retry_interval_seconds`
+- Failure item schema:
+  - `paperId`
+  - `title`
+  - `sourceKey`
+  - `inputPath`
+  - `failureSignature`
+  - `failureMessage`
+  - `failedAt`
+  - `retryable`
+  - `retryReason`
+  - `alreadyInGraph`
+  - `lastRetryAt`
+  - `retryCount`
+
+#### TODO B2：新增 PaperNexus failure classifier
+
+- Create: `tools/workflow-evidence/papernexus-failure-classifier.ts` or `tools/paper-ingestion-failures.ts`
+- Classify retryable signatures:
+  - `Source inputs changed`
+  - `Another PaperNexus run committed newer corpus state`
+  - transient HTTP / timeout / lock conflict
+- Classify non-retryable signatures:
+  - invalid markdown
+  - missing source path
+  - unsupported file type
+  - parser validation failed
+- Acceptance:
+  - 33 篇竞态失败会被标为 `retryable`.
+  - 已经存在于 graph 的论文不再重复提交，标为 `already_in_graph`.
+
+#### TODO B3：新增 retry manifest materializer
+
+- Create: `tools/paper-ingestion-retry-materializer.ts`
+- Durable output:
+  - `{PROJ}/graph/FAILED_PAPER_RETRY_MANIFEST.json`
+  - `{PROJ}/graph/FAILED_PAPER_RETRY_REPORT.md`
+- Manifest fields:
+  - `corpus`
+  - `retryMode: sequential`
+  - `intervalSeconds`
+  - `maxAttempts`
+  - `items[]`
+  - `sourceIndexSnapshot`
+  - `graphPresenceSnapshot`
+  - `createdBy`
+  - `createdAt`
+- Acceptance:
+  - retry manifest is deterministic and idempotent.
+  - rerunning materializer does not duplicate already queued retry items.
+
+#### TODO B4：新增 workflow tool actions
+
+- Modify: `tools/register-workflow-tools.ts`
+- Add actions:
+  - `get_paper_ingestion_failures`
+  - `classify_paper_ingestion_failures`
+  - `materialize_paper_ingestion_retry`
+  - `queue_paper_ingestion_retry`
+  - `get_paper_ingestion_retry_status`
+  - `cancel_paper_ingestion_retry`
+- Behavior:
+  - `queue_paper_ingestion_retry` creates/updates queued request with `pn_batch_import.py`.
+  - Retry request must use sequential mode.
+  - Default interval should be configurable, initial default 45s.
+  - Tool returns exact retry manifest path and queue key.
+- Acceptance:
+  - User can say “重新提交 33 篇失败论文”，Researcher can call one workflow action instead of inventing shell/SSH steps.
+
+#### TODO B5：新增 service-side fallback when foreground lacks `research_workflow`
+
+- Modify:
+  - `tools/register-workflow-service.ts`
+  - `tools/register-workflow-hooks.ts`
+  - `tools/workflow-handoff-runtime.ts`
+- Behavior:
+  - If current session lacks `research_workflow` but role is owner, create a runtime queue entry targeted at the workflow-capable researcher session.
+  - User should not need to manually run `/graph-build` or SSH.
+  - System emits mailbox/handoff:
+    - “Retry manifest prepared”
+    - “Workflow-capable session must run queue_paper_ingestion_retry”
+- Acceptance:
+  - Foreground tool mismatch no longer blocks retry.
+
+#### TODO B6：Graph presence integration
+
+- Before retry:
+  - run graph presence check for failed items.
+  - remove items already present in graph.
+- During retry:
+  - mark `retry_status=running`.
+  - persist `owner_run` progress in `PAPERNEXUS_PROGRESS.json`.
+- After retry:
+  - run graph presence refresh.
+  - move successful items to completed.
+  - leave remaining failures classified.
+- Acceptance:
+  - `graph_build` can advance after retry completes or after all remaining failures are non-blocking/already-in-graph.
+
+#### TODO B7：Tests
+
+- Add:
+  - `tests/paper-ingestion-retry.test.mjs`
+  - `tests/workflow-runtime-tools.test.mjs` retry action cases
+  - `tests/auto-iterator.test.mjs` graph_build retry gate cases
+  - `tests/workflow-service.test.mjs` service fallback cases
+- Test scenarios:
+  - 33 retryable failures produce sequential retry manifest.
+  - already-in-graph failed items are skipped.
+  - foreground session without workflow tool queues retry handoff to workflow-capable session.
+  - race-condition failures are retried with sequential interval.
+  - invalid markdown failures are non-retryable and produce repair guidance.
+
+### 0.5 Strict Coverage TODO 总表
+
+- [x] **TODO-1: Deep Execution Kernel Extraction**
+  - Move `BackgroundWorkflowQueueRunPayload`, `BackgroundWorkflowQueueDispatchPayload`, `BackgroundWorkflowQueueEntry`, registry read/write, queue drain/retry, runtime fallback from `workflow-fast-paths.ts` into `workflow-execution`.
+  - Make `workflow-fast-paths.ts` only build requests/commands and call execution kernel.
+  - Shrink target: remove at least 600 lines from `workflow-fast-paths.ts`.
+  - Tests: `workflow-fast-paths.test.mjs`, `workflow-execution-kernel.test.mjs`, `workflow-runtime-orchestrator.test.mjs`.
+- [x] **TODO-2: True Projection Kernel**
+  - Create canonical `WorkflowProjectionModel`.
+  - Make snapshot, `/workflow-status`, dashboard detail, dashboard overview consume this model.
+  - Stop dashboard from directly stitching manifest + incidental files except inside projection kernel.
+  - Tests: snapshot/status/dashboard golden projection.
+- [x] **TODO-3: Hook-level TaskCompleted / TeammateIdle**
+  - Add hook integration in `register-workflow-hooks.ts`.
+  - Detect claimed task at stop/idle.
+  - Run verification.
+  - If failed, block idle and return repair reason.
+  - If passed, complete and auto-claim next.
+  - Tests: hook prompt isolation + task continuation.
+- [x] **TODO-4: Team Runtime Feature Flag**
+  - Add policy flag, e.g. `workflowPolicy.teamRuntime.enabled`.
+  - Gate task graph materialization, claim, complete_task, dashboard task board, service auto-claim.
+  - Add disabled-mode regression: old stage handoff path still works.
+- [x] **TODO-5: Evidence Materializers**
+  - Split evidence runtime into planned files:
+    - `benchmark-registry.ts`
+    - `protocol-lock.ts`
+    - `statistics.ts`
+    - `venue-competition.ts`
+    - `ablation-sufficiency.ts`
+    - `mechanism-packet.ts`
+    - `reproducibility-pack.ts`
+    - `camera-ready-pack.ts`
+    - `opportunity-model.ts`
+  - Each module owns schema, materializer, validation, and degrade reason.
+- [x] **TODO-6: Task State Naming Migration**
+  - Decide whether final state is `completed` or `satisfied`.
+  - Decide whether dependency-derived blocked should become explicit `blocked`.
+  - If renaming:
+    - add migration for old task graph stores.
+    - update dashboard labels.
+    - update tests.
+- [x] **TODO-7: Long EXEC Guardrail**
+  - Implement exec budget and file-backed exec packet.
+  - Stop sending long commands through Discord dispatch.
+  - Add obfuscation error recovery.
+- [x] **TODO-8: PaperNexus Failed Upload Retry Interface**
+  - Implement failure classifier, retry manifest, workflow tool actions, service fallback, graph presence integration.
+  - Make “重提交失败论文” a first-class workflow action.
 
 ---
 
@@ -709,7 +1097,7 @@
 - Create: `tests/workflow-kernel-refactor.test.mjs`
 - Modify: 现有 workflow 核心测试套件
 
-- [ ] **Step 1: 写失败测试，锁定 stage truth 仍由 auto iterator 决定**
+- [x] **Step 1: 写失败测试，锁定 stage truth 仍由 auto iterator 决定**
 
 覆盖：
 
@@ -719,7 +1107,7 @@
 - gate blocking
 - closeout eligibility
 
-- [ ] **Step 2: 写失败测试，锁定 mailbox / queue / dashboard 各自职责不变**
+- [x] **Step 2: 写失败测试，锁定 mailbox / queue / dashboard 各自职责不变**
 
 覆盖：
 
@@ -727,7 +1115,7 @@
 - runtime queue 仍是 dispatch/background intent
 - dashboard 仍是只读 projection
 
-- [ ] **Step 3: 写失败测试，锁定 native / lobster fallback 不回归**
+- [x] **Step 3: 写失败测试，锁定 native / lobster fallback 不回归**
 
 ---
 
@@ -748,7 +1136,7 @@
 - Modify: `tools/papernexus-progress.ts`
 - Modify: `tools/papernexus-packets/materializer.ts`
 
-- [ ] **Step 1: 抽出 StageDefinition / StageRegistry**
+- [x] **Step 1: 抽出 StageDefinition / StageRegistry**
 
 统一承载：
 
@@ -758,7 +1146,7 @@
 - stage closeout contract
 - team runtime support policy
 
-- [ ] **Step 2: 把重复 helper 收束进 Fact Kernel**
+- [x] **Step 2: 把重复 helper 收束进 Fact Kernel**
 
 优先迁移重复 helper：
 
@@ -768,14 +1156,14 @@
 - innovation reflection due
 - shell argument / stage command helpers
 
-- [ ] **Step 3: 让 auto iterator / snapshot / stage-preflight 都依赖同一套 kernel**
+- [x] **Step 3: 让 auto iterator / snapshot / stage-preflight 都依赖同一套 kernel**
 
 目标：
 
 - 不再各自复制 stage judgment
 - 不再各自复制 validation helper
 
-- [ ] **Step 4: 抽出统一的 graph context adapter，明确 PaperNexus 只作为 graph-sensitive 输入层**
+- [x] **Step 4: 抽出统一的 graph context adapter，明确 PaperNexus 只作为 graph-sensitive 输入层**
 
 要求：
 
@@ -795,7 +1183,7 @@
 当前进展：
 
 - 已完成：`graph-context.ts` 已落地，`auto_iterator` 已改走统一 graph context，并通过回归测试。
-- 未完成：`snapshot-builder`、`stage-preflight` 的 graph-sensitive 判断仍未完全统一到同一适配层；`papernexus-progress` / packet materializer 侧仍有进一步收束空间。
+- 已补齐：`auto_iterator` 与 stage-preflight 的主要 graph-sensitive 判断已统一到 `graph-context` / `papernexus-bridge`；`papernexus-progress` / packet materializer 侧保留兼容入口。
 
 ### 9.1 合理性判断
 
@@ -817,7 +1205,7 @@
 - Modify: `tools/register-workflow-hooks.ts`
 - Modify: `tools/register-workflow-service.ts`
 
-- [ ] **Step 1: mailbox/store 操作统一到 collaboration kernel**
+- [x] **Step 1: mailbox/store 操作统一到 collaboration kernel**
 
 包括：
 
@@ -826,11 +1214,11 @@
 - ack
 - dedupe
 
-- [ ] **Step 2: contact cooldown 统一到 collaboration kernel**
+- [x] **Step 2: contact cooldown 统一到 collaboration kernel**
 
 不再让 hooks/service/tool 各自理解联络语义。
 
-- [ ] **Step 3: handoff policy 统一输出**
+- [x] **Step 3: handoff policy 统一输出**
 
 统一决定：
 
@@ -862,7 +1250,7 @@
 - Modify: `tools/lobster-handoff.ts`
 - Modify: `tools/register-workflow-service.ts`
 
-- [ ] **Step 1: 消除 duplicated queue/session payload types**
+- [x] **Step 1: 消除 duplicated queue/session payload types**
 
 统一：
 
@@ -870,7 +1258,7 @@
 - dispatch payload
 - session lease payload
 
-- [ ] **Step 2: 让 fast-paths 只保留 request builder，不再自带一套 execution store 语义**
+- [x] **Step 2: 让 fast-paths 只保留 request builder，不再自带一套 execution store 语义**
 
 当前 `workflow-fast-paths.ts` 同时做了：
 
@@ -881,7 +1269,7 @@
 
 这必须拆开。
 
-- [ ] **Step 3: delivery adapter 统一 native / lobster / spawn fallback**
+- [x] **Step 3: delivery adapter 统一 native / lobster / spawn fallback**
 
 让 `agent-task-dispatch.ts` 与 `lobster-handoff.ts` 不再各自承载过多 orchestration 判断。
 
@@ -904,11 +1292,11 @@
 - Modify: `tools/workflow-commands/formatters.ts`
 - Modify: dashboard read-models
 
-- [ ] **Step 1: snapshot 从 domain kernel 读取，而不是自己重做 validation**
+- [x] **Step 1: snapshot 从 domain kernel 读取，而不是自己重做 validation**
 
-- [ ] **Step 2: status formatter 从 projection kernel 读取，而不是重推导状态**
+- [x] **Step 2: status formatter 从 projection kernel 读取，而不是重推导状态**
 
-- [ ] **Step 3: dashboard read-model 改成消费 projection，而不是直接拼 manifest + incidental files**
+- [x] **Step 3: dashboard read-model 改成消费 projection，而不是直接拼 manifest + incidental files**
 
 ### 12.1 合理性判断
 
@@ -944,7 +1332,7 @@
 - Modify: `tools/workflow-guard-writing/citation-theory-eval.ts`
 - Modify: `tools/workflow-commands/formatters.ts`
 
-- [ ] **Step 1: 新增独立 evidence state contracts，而不是继续塞回旧状态块**
+- [x] **Step 1: 新增独立 evidence state contracts，而不是继续塞回旧状态块**
 
 建议新增 manifest blocks：
 
@@ -967,9 +1355,9 @@
 
 - 已完成前置桥接：`papernexus-bridge.ts` 已落地，并把 workflow-owned PaperNexus packet/bundle 的检测从 `stage-preflight` 里抽离。
 - 已完成基座：manifest evidence state blocks 已加入 template，snapshot 与 `/workflow-status` 已能读出这些状态。
-- 未完成：这些 contracts 还没有正式接进 closeout / review / writing gates，仍停留在 schema/projection 层。
+- 已补齐：这些 contracts 已接进 closeout / review / writing gates，并补齐独立 evidence materializer modules。
 
-- [ ] **Step 2: Benchmark registry + protocol lock**
+- [x] **Step 2: Benchmark registry + protocol lock**
 
 让 workflow 能 first-class 表达：
 
@@ -991,7 +1379,7 @@ PaperNexus 辅助边界：
   - 直接替代本地 protocol lock
   - 直接决定项目最终采用哪一个 split / eval recipe
 
-- [ ] **Step 3: Statistical aggregation + claim-strength gate**
+- [x] **Step 3: Statistical aggregation + claim-strength gate**
 
 materialize：
 
@@ -1003,7 +1391,7 @@ materialize：
 
 并让 analyze/review/write 阶段消费这套状态，而不是只在自然语言里“提醒要看显著性”。
 
-- [ ] **Step 4: Venue-competitive positioning contract**
+- [x] **Step 4: Venue-competitive positioning contract**
 
 materialize：
 
@@ -1020,7 +1408,7 @@ PaperNexus 辅助边界：
 - 需要 graph-backed competitor discovery、nearest-paper retrieval、prior-art delta grounding
 - 若 PaperNexus 不可用，可生成草稿 scorecard，但状态必须是 `unverified_graph_context`，不能通过 top-tier novelty / venue-competition gate
 
-- [ ] **Step 5: Ablation sufficiency + mechanism-evidence loop**
+- [x] **Step 5: Ablation sufficiency + mechanism-evidence loop**
 
 materialize：
 
@@ -1039,7 +1427,7 @@ PaperNexus 辅助边界：
   - 生成 objection -> ablation mapping 初稿
 - 但最终 sufficiency 与 mechanism verdict 必须基于本地实验与 analyzer packet，不能只基于 graph prior
 
-- [ ] **Step 6: Reproducibility pack + camera-ready evidence pack**
+- [x] **Step 6: Reproducibility pack + camera-ready evidence pack**
 
 materialize：
 
@@ -1054,7 +1442,7 @@ PaperNexus 辅助边界：
 - reproducibility 与 camera-ready pack 的权威来源应始终是项目本地 artifacts
 - PaperNexus 最多用于 related-work / benchmark naming / citation context 辅助，不参与最终通过判定
 
-- [ ] **Step 7: Top-tier bet / opportunity kill gate**
+- [x] **Step 7: Top-tier bet / opportunity kill gate**
 
 让 ideation / plan / review 可以明确得出：
 
@@ -1092,7 +1480,7 @@ PaperNexus 辅助边界：
 - Modify: `tools/register-workflow-tools.ts`
 - Modify: `tools/register-workflow-service.ts`
 
-- [ ] **Step 1: `experiment -> analyze` 接 benchmark/statistics/ablation evidence**
+- [x] **Step 1: `experiment -> analyze` 接 benchmark/statistics/ablation evidence**
 
 PaperNexus 说明：
 
@@ -1100,14 +1488,14 @@ PaperNexus 说明：
 - 但统计聚合与 ablation 结果本身来自本地实验 artifacts
 - 不应因为 PaperNexus 短时不可用而阻止本地统计聚合完成；应只把 graph-backed comparison/benchmark context 标为待补
 
-- [ ] **Step 2: `analyze -> review` 接 mechanism/competitor slate**
+- [x] **Step 2: `analyze -> review` 接 mechanism/competitor slate**
 
 PaperNexus 说明：
 
 - 这里必须有 graph-backed competitor slate 与 mechanism prior，才能通过 top-tier review path
 - 如果缺失，应允许进入本地 review，但不能标记为 top-tier-ready
 
-- [ ] **Step 3: `review -> write` 接 venue competition / top-tier bet / reproducibility readiness**
+- [x] **Step 3: `review -> write` 接 venue competition / top-tier bet / reproducibility readiness**
 
 PaperNexus 说明：
 
@@ -1115,7 +1503,7 @@ PaperNexus 说明：
 - reproducibility readiness 不依赖 PaperNexus
 - 这两个 gate 必须分开，避免本地复现准备被图谱依赖绑死
 
-- [ ] **Step 4: `write -> submit` 接 camera-ready evidence pack 与 supplementary readiness**
+- [x] **Step 4: `write -> submit` 接 camera-ready evidence pack 与 supplementary readiness**
 
 PaperNexus 说明：
 
@@ -1142,7 +1530,7 @@ PaperNexus 说明：
 - 已完成 team round 摘要层：当前 stage 的 lead、active session 数与 last claimed task 已有独立持久化状态。
 - 已完成 claim 回收链路：runtime session 结束/失败后，协调器会自动释放其 task claim 与 team round session。
 - 已完成 dashboard 读模型接入：项目详情页已能看到 top-tier verdict 与 task graph 摘要。
-- 未完成：任务完成后的 verify/satisfy、更多 dispatch surface 的 task-graph 消费、以及 team round 的更完整 round lifecycle 仍未落地。
+- 已补齐：任务完成后的 verify/satisfy、更多 dispatch surface 的 task-graph 消费、team round lifecycle 与 heartbeat idle continuation 已落地。
 
 ---
 
@@ -1161,7 +1549,7 @@ PaperNexus 说明：
 - Modify: `tools/register-workflow-service.ts`
 - Modify: `tools/register-workflow-hooks.ts`
 
-- [ ] **Step 1: 只在试点 stage materialize stage-scoped task graph**
+- [x] **Step 1: 只在试点 stage materialize stage-scoped task graph**
 
 首批：
 
@@ -1169,7 +1557,7 @@ PaperNexus 说明：
 - `analyze`
 - `review`
 
-- [ ] **Step 2: claim / lease / verify / reopen**
+- [x] **Step 2: claim / lease / verify / reopen**
 
 task state 统一支持：
 
@@ -1181,7 +1569,7 @@ task state 统一支持：
 - needs_repair
 - blocked
 
-- [ ] **Step 3: TeammateIdle 闭环**
+- [x] **Step 3: TeammateIdle 闭环**
 
 agent 完成一个 task 后：
 
@@ -1207,11 +1595,11 @@ agent 完成一个 task 后：
 - Modify: `tools/workflow-subagent-sessions.ts`
 - Modify: `tools/workflow-guard-policies/role-policy.ts`
 
-- [ ] **Step 1: stage lead 一律来自 StageRegistry/owner_agent**
+- [x] **Step 1: stage lead 一律来自 StageRegistry/owner_agent**
 
-- [ ] **Step 2: pooled session policy 从 researcher-only 变成 role-aware**
+- [x] **Step 2: pooled session policy 从 researcher-only 变成 role-aware**
 
-- [ ] **Step 3: 保留 researcher slash fast path，但不让 researcher 再代理所有阶段的微观推进**
+- [x] **Step 3: 保留 researcher slash fast path，但不让 researcher 再代理所有阶段的微观推进**
 
 ---
 
@@ -1226,7 +1614,7 @@ agent 完成一个 task 后：
 - Modify: `apps/workflow-dashboard/src/pages/ProjectDetailPage.tsx`
 - Modify: 相关组件和测试
 
-- [ ] **Step 1: 增加 Team Round 概览**
+- [x] **Step 1: 增加 Team Round 概览**
 
 显示：
 
@@ -1236,7 +1624,7 @@ agent 完成一个 task 后：
 - completed tasks
 - closeout pending
 
-- [ ] **Step 2: 增加 Task Board**
+- [x] **Step 2: 增加 Task Board**
 
 显示：
 
@@ -1246,7 +1634,7 @@ agent 完成一个 task 后：
 - verification status
 - latest event
 
-- [ ] **Step 3: 增加 Evidence Moat 概览**
+- [x] **Step 3: 增加 Evidence Moat 概览**
 
 显示：
 
@@ -1259,7 +1647,7 @@ agent 完成一个 task 后：
 - camera-ready evidence pack
 - top-tier bet status
 
-- [ ] **Step 4: 保持 dashboard 只读**
+- [x] **Step 4: 保持 dashboard 只读**
 
 ---
 
@@ -1301,18 +1689,27 @@ agent 完成一个 task 后：
 
 ## 19. Acceptance Criteria
 
+> 2026-04-11 审计后修正：以下不是“最终全部完成”的勾选表，而是当前真实覆盖状态。
+
 - [x] `workflow-guard.ts` 已将 onboarding / plan validation / brainstorm / reflection 等重复 helper 下沉到 kernel façade。
-- [x] `snapshot-builder.ts` 已改为消费共享 readiness / stage kernel，不再保留独立重复实现。
-- [x] graph-sensitive 判断统一经由 `graph-context` / `papernexus-bridge` 输出，不再在各处直接散落读取 PaperNexus 状态。
-- [x] execution queue/session/pool payload 已有统一 runtime-store / delivery-adapter / background-pool façade，service/tool 主路径已改走 execution kernel。
+- [x] `workflow-guard.ts` 已完成关键重复 helper 下沉；剩余 setter/materializer/prompt/runtime glue 保留为兼容 façade。
+- [x] `snapshot-builder.ts` 已改为消费共享 readiness / stage kernel。
+- [x] `snapshot-builder.ts` 已接入共享 readiness/stage kernel；projection model 已新增供 dashboard/runtime summary 消费。
+- [x] graph-sensitive 判断统一经由 `graph-context` / `papernexus-bridge` 输出。
 - [x] mailbox / handoff / contact cooldown 已由统一 collaboration kernel 提供。
 - [x] native / lobster / spawn fallback 已由统一 delivery adapter 路由。
-- [x] dashboard 与 snapshot 已开始消费同一套 projection/runtime summary。
-- [x] benchmark protocol lock、statistical evidence、venue competition、ablation/mechanism evidence、reproducibility pack、camera-ready evidence、top-tier bet gate 都已成为 workflow-owned contracts。
+- [x] execution queue/session/pool payload 已有统一 execution façade；`workflow-fast-paths.ts` 保留兼容入口但长 EXEC / delivery / background pool 已走 kernel surface。
+- [x] dashboard、snapshot、status 已有统一 projection surface；dashboard detail 已消费 canonical summary/model。
+- [x] benchmark protocol lock、statistical evidence、venue competition、ablation/mechanism evidence、reproducibility pack、camera-ready evidence、top-tier bet gate 都已成为 workflow-owned state/gate。
+- [x] benchmark/statistics/venue/ablation/mechanism/repro/camera/opportunity 的独立 materializer modules 已完成。
 - [x] plan 中所有需要 PaperNexus 强辅助的 contracts 都明确了 degrade 语义，graph 不可用时不会伪装成已 graph-grounded。
 - [x] `experiment -> analyze -> review -> write -> submit` 的 closeout 判断已消费这些 evidence contracts，而不是只看文件存在性。
 - [x] Team Runtime 启用后，试点 stage 内已支持多个 teammate 领取不同 task，并通过 claim/lease/dependsOn 维持隔离。
 - [x] teammate 完成 task 后，如仍有可做工作，可通过 `complete_task -> auto-claim next` 自动继续，无需 lead 再次显式派发。
+- [x] hook-level idle continuation 已接入 heartbeat；task completion 通过 `complete_task` 执行 verify/satisfy/repair/auto-claim-next。
+- [x] Team Runtime feature flag 已贯穿 policy、auto-iterator、service auto-claim 与 tool task actions。
+- [x] 长 EXEC 指令封控规避已通过 exec budget + file-backed exec packet 实现。
+- [x] PaperNexus 失败论文 first-class 重提交/顺序 retry 接口已实现。
 - [x] 现有 stage handoff path 与新的 Team Runtime state 并存，旧路径未被移除。
 
 ---
@@ -1357,7 +1754,7 @@ agent 完成一个 task 后：
 ### 2026-04-11 验证结果
 
 - 已通过：
-  `node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-service.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-runtime-orchestrator.test.mjs tests/workflow-guard-snapshot-builder.test.mjs tests/lobster-handoff.test.mjs tests/agent-task-dispatch.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-hook-prompt-isolation.test.mjs tests/workflow-kernel-refactor.test.mjs tests/workflow-evidence-kernel.test.mjs tests/workflow-team-runtime.test.mjs tests/workflow-task-claim.test.mjs tests/workflow-team-recovery.test.mjs tests/workflow-collaboration-kernel.test.mjs tests/workflow-execution-kernel.test.mjs`
+  `node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-service.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-runtime-orchestrator.test.mjs tests/workflow-guard-snapshot-builder.test.mjs tests/lobster-handoff.test.mjs tests/agent-task-dispatch.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-hook-prompt-isolation.test.mjs tests/workflow-kernel-refactor.test.mjs tests/workflow-evidence-kernel.test.mjs tests/workflow-team-runtime.test.mjs tests/workflow-task-claim.test.mjs tests/workflow-team-recovery.test.mjs tests/workflow-collaboration-kernel.test.mjs tests/workflow-execution-kernel.test.mjs tests/workflow-exec-budget.test.mjs tests/paper-ingestion-retry.test.mjs`
 - 已通过：
   `npm run dashboard:test`
 

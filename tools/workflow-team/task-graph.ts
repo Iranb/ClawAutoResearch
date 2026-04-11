@@ -127,13 +127,17 @@ function normalizeTask(
       ? record.status.trim().toLowerCase()
       : "claimable";
   const status: WorkflowTaskGraphTaskStatus =
-    statusRaw === "claimed" ||
-    statusRaw === "verifying" ||
-    statusRaw === "needs_repair" ||
-    statusRaw === "satisfied" ||
-    statusRaw === "optional"
-      ? (statusRaw as WorkflowTaskGraphTaskStatus)
-      : "claimable";
+    statusRaw === "completed"
+      ? "satisfied"
+      : statusRaw === "blocked"
+        ? "claimable"
+        : statusRaw === "claimed" ||
+            statusRaw === "verifying" ||
+            statusRaw === "needs_repair" ||
+            statusRaw === "satisfied" ||
+            statusRaw === "optional"
+          ? (statusRaw as WorkflowTaskGraphTaskStatus)
+          : "claimable";
   const leaseRecord =
     record.lease && typeof record.lease === "object" && !Array.isArray(record.lease)
       ? (record.lease as Record<string, unknown>)
