@@ -30,6 +30,8 @@ export interface WritingStageDeps {
   isGraphGuidedWritingReadyForSubmit: (state: any) => boolean;
   normalizeVenueCompetitionState: (value: unknown) => any;
   normalizeOpportunityScorecardState: (value: unknown) => any;
+  normalizeReproducibilityPackState: (value: unknown) => any;
+  normalizeCameraReadyEvidenceState: (value: unknown) => any;
   hydrateReviewIssueTrackerState: (params: {
     projectRoot: string;
     value: unknown;
@@ -105,6 +107,60 @@ function appendTopTierOpportunitySignals(params: {
     params.missing.push(
       `PROJECT_MANIFEST.json.opportunity_scorecard.graph_context_status must be graph-grounded before top-tier WRITE/SUBMIT handoff (current: ${opportunityScorecard.graphContextStatus})`
     );
+  }
+}
+
+function appendTopTierDeliverySignals(params: {
+  missing: string[];
+  manifest: Record<string, unknown> | null;
+  phase: "write" | "submit";
+  deps: Pick<
+    WritingStageDeps,
+    "normalizeOpportunityScorecardState" | "normalizeReproducibilityPackState" | "normalizeCameraReadyEvidenceState"
+  >;
+}) {
+  const opportunityScorecard = params.deps.normalizeOpportunityScorecardState(
+    params.manifest?.opportunity_scorecard
+  );
+  if (opportunityScorecard.verdict !== "worth_top_tier_bet") {
+    return;
+  }
+
+  if (params.phase === "write") {
+    const reproducibilityPack = params.deps.normalizeReproducibilityPackState(
+      params.manifest?.reproducibility_pack
+    );
+    if (reproducibilityPack.status === "missing") {
+      params.missing.push(
+        "PROJECT_MANIFEST.json.reproducibility_pack.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (!reproducibilityPack.environmentCaptureStatus) {
+      params.missing.push(
+        "PROJECT_MANIFEST.json.reproducibility_pack.environment_capture_status must be set before top-tier WRITE handoff"
+      );
+    }
+    return;
+  }
+
+  const cameraReadyEvidence = params.deps.normalizeCameraReadyEvidenceState(
+    params.manifest?.camera_ready_evidence
+  );
+  if (cameraReadyEvidence.status === "missing") {
+    params.missing.push(
+      "PROJECT_MANIFEST.json.camera_ready_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+    );
+  }
+  for (const [label, value] of [
+    ["figures_status", cameraReadyEvidence.figuresStatus],
+    ["tables_status", cameraReadyEvidence.tablesStatus],
+    ["captions_status", cameraReadyEvidence.captionsStatus],
+  ] as const) {
+    if (!["ready", "pass", "complete", "completed"].includes(String(value ?? "").trim().toLowerCase())) {
+      params.missing.push(
+        `PROJECT_MANIFEST.json.camera_ready_evidence.${label} must be ready before top-tier SUBMIT handoff (current: ${value ?? "unset"})`
+      );
+    }
   }
 }
 
@@ -360,6 +416,12 @@ export async function collectWriteStageMissingSignals(
     manifest: ctx.manifest,
     deps,
   });
+  appendTopTierDeliverySignals({
+    missing,
+    manifest: ctx.manifest,
+    phase: "write",
+    deps,
+  });
   return missing;
 }
 
@@ -459,6 +521,12 @@ export async function collectSubmitStageMissingSignals(
   appendTopTierOpportunitySignals({
     missing,
     manifest: ctx.manifest,
+    deps,
+  });
+  appendTopTierDeliverySignals({
+    missing,
+    manifest: ctx.manifest,
+    phase: "submit",
     deps,
   });
 

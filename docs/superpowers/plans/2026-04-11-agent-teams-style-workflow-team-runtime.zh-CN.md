@@ -18,8 +18,9 @@
 - 已完成切片 D：将 `worth_top_tier_bet` 路径下的最小 top-tier gate 接入 `write/submit` 阶段信号，要求 `venue_competition` 与 `opportunity_scorecard` 的 graph context 不能处于 `unverified_graph_context` / `graph_unavailable`；新增 auto-iterator 回归验证。
 - 已完成切片 E：将 `worth_top_tier_bet` 路径下的最小 top-tier experiment gate 接入 `experiment -> analyze`，要求 `benchmark_protocol`、`statistical_evidence`、`ablation_evidence` 不能缺失；新增 auto-iterator 回归验证。
 - 已完成切片 F：将 `worth_top_tier_bet` 路径下的最小 top-tier analyze gate 接入 `analyze -> review`，要求 `mechanism_evidence` 与 `venue_competition` 的 graph context 不能处于 `unverified_graph_context` / `graph_unavailable`；新增 auto-iterator 回归验证。
+- 已完成切片 G：将 `worth_top_tier_bet` 路径下的最小 reproducibility / camera-ready gate 接入 `write -> submit` 与 `submit`，要求 `reproducibility_pack` 至少进入可用状态，且 `camera_ready_evidence` 的 figures/tables/captions 状态达到 ready；新增 auto-iterator 回归验证。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：继续从最小 top-tier gate 向前推进，把 `reproducibility_pack` / `camera_ready_evidence` 接到 `review -> write` / `write -> submit` 的 closeout contract，并开始把 evidence state 从 gate condition 扩到真正的 closeout summaries。
+- 下一切片目标：把这些最小 gate 从单独字段检查推进到真正的 closeout summary / decision packet，并开始为 Team Runtime 提供 evidence-aware task decomposition。
 
 ---
 
@@ -1076,7 +1077,8 @@ PaperNexus 说明：
   - `worth_top_tier_bet` 时，`experiment -> analyze` 已开始消费 `benchmark_protocol` / `statistical_evidence` / `ablation_evidence`
   - `worth_top_tier_bet` 时，`analyze -> review` 已开始消费 `mechanism_evidence` / `venue_competition`
   - `worth_top_tier_bet` 时，`write/submit` 已开始消费 `venue_competition` 与 `opportunity_scorecard` 的 graph context
-- 未完成：`review -> write`、`write -> submit` 的 reproducibility / camera-ready 完整 gate 仍未落地。
+  - `worth_top_tier_bet` 时，`write/submit` 已开始消费 `reproducibility_pack` / `camera_ready_evidence`
+- 未完成：这些 gates 目前仍是最小字段级约束，尚未升级成 richer closeout packet / summary contract。
 
 ---
 

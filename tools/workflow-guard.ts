@@ -70,6 +70,8 @@ import {
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
 import {
+  normalizeCameraReadyEvidenceState,
+  normalizeReproducibilityPackState,
   normalizeMechanismEvidenceState,
   normalizeOpportunityScorecardState,
   normalizeAblationEvidenceState,
@@ -6172,6 +6174,8 @@ async function getMissingStageSignals(params: {
           isGraphGuidedWritingReadyForSubmit,
           normalizeVenueCompetitionState,
           normalizeOpportunityScorecardState,
+          normalizeReproducibilityPackState,
+          normalizeCameraReadyEvidenceState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
@@ -6214,6 +6218,8 @@ async function getMissingStageSignals(params: {
           isGraphGuidedWritingReadyForSubmit,
           normalizeVenueCompetitionState,
           normalizeOpportunityScorecardState,
+          normalizeReproducibilityPackState,
+          normalizeCameraReadyEvidenceState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
