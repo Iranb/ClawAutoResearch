@@ -22,8 +22,9 @@
 - 已完成切片 H：引入 evidence closeout summary，把分散的 evidence contract 状态聚合成 snapshot/status 可消费的统一输出，用于后续 closeout packet 与 Team Runtime 任务分解。
 - 已完成切片 I：引入最小 `workflow-team/stage-profiles.ts`，基于 `evidence closeout summary` 生成 stage task preview，并接入 snapshot 与 `/workflow-status`，作为 Team Runtime 的第一刀语义层。
 - 已完成切片 J：引入最小 `workflow-team/task-graph.ts`，把 `stage task preview` 落盘为 project-local task graph store，并把摘要接进 snapshot 与 `/workflow-status`，作为后续 claim/lease 的持久化底座。
+- 已完成切片 K：在 `workflow-team/task-graph.ts` 上引入最小 `claim / renew / release` 语义，并把 claimed 数量接进 snapshot 与 `/workflow-status`，作为后续 service-side Team Runtime 消费的最小 ownership 底座。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：在 task graph store 之上引入最小 claim/lease 语义，并把 current stage owner 的一条真实 handoff 流改成消费 task graph，而不是只消费 preview。
+- 下一切片目标：让 current stage owner 的至少一条真实 handoff / continuation 流开始消费 task graph + claim state，而不是只消费 preview/store 摘要。
 
 ---
 
@@ -1084,7 +1085,8 @@ PaperNexus 说明：
 - 已完成聚合输出：snapshot 与 `/workflow-status` 已能给出统一的 `evidence closeout` 状态、阶段 readiness 和 blocker 摘要。
 - 已完成 Team Runtime 第一刀：snapshot 与 `/workflow-status` 已能给出 evidence-aware 的 `stage task preview`。
 - 已完成持久化底座：`stage task preview` 已能落盘成最小 task graph store，并通过 snapshot/status 暴露其摘要。
-- 未完成：这些 gates 目前仍是最小字段级约束，task graph 还没有真正的 claim/lease/runtime ownership 语义。
+- 已完成最小 ownership 语义：task graph 已支持 `claim / renew / release`，且 snapshot/status 能看到 claimed 数量。
+- 未完成：service / dispatcher 还没有真正按 task graph claim state 驱动 handoff 与继续执行。
 
 ---
 

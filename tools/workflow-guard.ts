@@ -1731,6 +1731,7 @@ export type WorkflowSnapshot = {
   teamTaskGraphPath: string | null;
   teamTaskGraphTaskCount: number | null;
   teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
   teamTaskGraphSatisfiedCount: number | null;
   teamTaskGraphOptionalCount: number | null;
   zoteroSyncStatus: string | null;

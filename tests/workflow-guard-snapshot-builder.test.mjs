@@ -292,6 +292,7 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   );
   assert.equal(snapshot.teamTaskGraphTaskCount, 1);
   assert.equal(snapshot.teamTaskGraphClaimableCount, 1);
+  assert.equal(snapshot.teamTaskGraphClaimedCount, 0);
   assert.equal(snapshot.teamTaskGraphSatisfiedCount, 0);
 });
 

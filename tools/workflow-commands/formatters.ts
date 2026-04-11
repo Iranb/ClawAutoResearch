@@ -465,7 +465,7 @@ export function formatWorkflowStatusText(params: {
   }
   if ((snapshot.teamTaskGraphTaskCount ?? 0) > 0) {
     lines.push(
-      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
+      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, claimed=${snapshot.teamTaskGraphClaimedCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
     );
   }
   if (snapshot.paperStoryStatus) {

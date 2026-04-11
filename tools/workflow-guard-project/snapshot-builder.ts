@@ -1512,6 +1512,7 @@ export async function buildWorkflowSnapshotFromProjectState(
       : null,
     teamTaskGraphTaskCount: taskGraphSummary.taskCount,
     teamTaskGraphClaimableCount: taskGraphSummary.claimableCount,
+    teamTaskGraphClaimedCount: taskGraphSummary.claimedCount,
     teamTaskGraphSatisfiedCount: taskGraphSummary.satisfiedCount,
     teamTaskGraphOptionalCount: taskGraphSummary.optionalCount,
     zoteroSyncStatus: zoteroSyncState.status,
