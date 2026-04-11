@@ -16,8 +16,9 @@
 - 已完成切片 B：引入 `tools/workflow-evidence/papernexus-bridge.ts`，把 stage-preflight 对 workflow-owned PaperNexus packet/bundle 的存在性判断收束到统一 bridge；新增 `tests/workflow-evidence-kernel.test.mjs`。
 - 已完成切片 C：引入最小 evidence contract state schema（template blocks + normalizer + snapshot/status projection），使 `benchmark_protocol`、`statistical_evidence`、`venue_competition`、`ablation_evidence`、`mechanism_evidence`、`reproducibility_pack`、`camera_ready_evidence`、`opportunity_scorecard` 成为真正可见的 workflow state；新增 snapshot/status 回归。
 - 已完成切片 D：将 `worth_top_tier_bet` 路径下的最小 top-tier gate 接入 `write/submit` 阶段信号，要求 `venue_competition` 与 `opportunity_scorecard` 的 graph context 不能处于 `unverified_graph_context` / `graph_unavailable`；新增 auto-iterator 回归验证。
+- 已完成切片 E：将 `worth_top_tier_bet` 路径下的最小 top-tier experiment gate 接入 `experiment -> analyze`，要求 `benchmark_protocol`、`statistical_evidence`、`ablation_evidence` 不能缺失；新增 auto-iterator 回归验证。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：从最小 top-tier gate 继续向前推进，把 `benchmark_protocol` / `statistical_evidence` / `ablation_evidence` 接入 `experiment -> analyze`，并开始形成真正的 evidence-driven closeout contract。
+- 下一切片目标：继续从最小 top-tier gate 向前推进，把 `mechanism_evidence` / `venue_competition` 接入 `analyze -> review`，再把 `reproducibility_pack` / `camera_ready_evidence` 接到 `review -> write` / `write -> submit` 的 closeout contract。
 
 ---
 
@@ -1070,8 +1071,10 @@ PaperNexus 说明：
 
 当前进展：
 
-- 已完成最小接入：`worth_top_tier_bet` 时，`write/submit` 已开始消费 `venue_competition` 与 `opportunity_scorecard` 的 graph context。
-- 未完成：`experiment -> analyze`、`analyze -> review`、`review -> write` 的 benchmark / statistics / mechanism / reproducibility 完整 gate 仍未落地。
+- 已完成最小接入：
+  - `worth_top_tier_bet` 时，`experiment -> analyze` 已开始消费 `benchmark_protocol` / `statistical_evidence` / `ablation_evidence`
+  - `worth_top_tier_bet` 时，`write/submit` 已开始消费 `venue_competition` 与 `opportunity_scorecard` 的 graph context
+- 未完成：`analyze -> review`、`review -> write` 的 mechanism / reproducibility / camera-ready 完整 gate 仍未落地。
 
 ---
 

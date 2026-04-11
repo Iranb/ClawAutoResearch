@@ -5620,6 +5620,101 @@ test("auto iterator advances code to experiment when aggressive code innovation 
   assert.equal(result.gateBlocking, false);
 });
 
+test("auto iterator keeps top-tier experiment stage blocked until benchmark, statistics, and ablation evidence are present", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "ready_for_analysis";
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    plot_pack_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: "2026-04-11T00:00:00.000Z",
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.benchmark_protocol = {
+    status: "missing",
+    locked: false,
+    drift_status: null,
+  };
+  manifest.statistical_evidence = {
+    status: "missing",
+    claim_strength_status: null,
+  };
+  manifest.ablation_evidence = {
+    status: "missing",
+    sufficiency_status: null,
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: "2026-04-11T00:00:00.000Z",
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-1",
+      lastFailedExperimentId: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId: "track-main",
+        status: "completed",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /benchmark_protocol\.status must not be missing/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /statistical_evidence\.status must not be missing/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /ablation_evidence\.status must not be missing/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator points experiment stage at monitor-experiment while remote runs are still active", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

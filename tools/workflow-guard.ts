@@ -71,6 +71,9 @@ import {
 } from "./papernexus-progress";
 import {
   normalizeOpportunityScorecardState,
+  normalizeAblationEvidenceState,
+  normalizeBenchmarkProtocolState,
+  normalizeStatisticalEvidenceState,
   normalizeVenueCompetitionState,
 } from "./workflow-evidence/contracts";
 import {
@@ -6065,6 +6068,10 @@ async function getMissingStageSignals(params: {
           hasActiveExperimentRuns: (ledger) =>
             hasActiveExperimentRuns(ledger as ExperimentLedger | null),
           normalizeAutonomousExecutionState,
+          normalizeBenchmarkProtocolState,
+          normalizeStatisticalEvidenceState,
+          normalizeAblationEvidenceState,
+          normalizeOpportunityScorecardState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,

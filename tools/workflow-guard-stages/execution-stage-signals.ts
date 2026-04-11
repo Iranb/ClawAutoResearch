@@ -40,6 +40,10 @@ export interface ExecutionStageDeps {
     requireAnalyzerReview: boolean;
     requireCrossReview: boolean;
   };
+  normalizeBenchmarkProtocolState: (value: unknown) => any;
+  normalizeStatisticalEvidenceState: (value: unknown) => any;
+  normalizeAblationEvidenceState: (value: unknown) => any;
+  normalizeOpportunityScorecardState: (value: unknown) => any;
   readJsonIfExists: (targetPath: string) => Promise<Record<string, unknown> | null>;
   normalizeStage: (value: unknown) => string | null;
   normalizeFigureQcState: (value: unknown) => any;
@@ -154,6 +158,61 @@ export async function collectExperimentStageMissingSignals(
     missing.push(
       `PROJECT_MANIFEST.json.experiment_search must be ready_for_analysis with multi_seed + plot pack complete before ANALYZE (current: status=${experimentSearch.status}, multi_seed=${experimentSearch.multiSeedStatus}, plot_pack=${experimentSearch.plotPackStatus})`
     );
+  }
+
+  const opportunityScorecard = deps.normalizeOpportunityScorecardState(
+    ctx.manifest?.opportunity_scorecard
+  );
+  if (
+    opportunityScorecard.verdict === "worth_top_tier_bet" &&
+    deps.isExperimentSearchReadyForAnalysis(experimentSearch) &&
+    !deps.hasActiveExperimentRuns(ctx.experimentLedger)
+  ) {
+    const benchmarkProtocol = deps.normalizeBenchmarkProtocolState(
+      ctx.manifest?.benchmark_protocol
+    );
+    const statisticalEvidence = deps.normalizeStatisticalEvidenceState(
+      ctx.manifest?.statistical_evidence
+    );
+    const ablationEvidence = deps.normalizeAblationEvidenceState(
+      ctx.manifest?.ablation_evidence
+    );
+
+    if (benchmarkProtocol.status === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (benchmarkProtocol.locked !== true) {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.locked = true before top-tier ANALYZE handoff"
+      );
+    }
+    if (benchmarkProtocol.driftStatus === "fail") {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.drift_status must not be fail before top-tier ANALYZE handoff"
+      );
+    }
+    if (statisticalEvidence.status === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.statistical_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (!statisticalEvidence.claimStrengthStatus) {
+      missing.push(
+        "PROJECT_MANIFEST.json.statistical_evidence.claim_strength_status must be set before top-tier ANALYZE handoff"
+      );
+    }
+    if (ablationEvidence.status === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.ablation_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (!ablationEvidence.sufficiencyStatus) {
+      missing.push(
+        "PROJECT_MANIFEST.json.ablation_evidence.sufficiency_status must be set before top-tier ANALYZE handoff"
+      );
+    }
   }
   return missing;
 }
