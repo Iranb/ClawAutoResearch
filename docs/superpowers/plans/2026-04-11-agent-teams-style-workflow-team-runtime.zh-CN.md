@@ -1,6 +1,6 @@
 # Workflow Pipeline 重构与 Agent Teams Runtime 实施计划
 
-> **Status:** PARTIALLY IMPLEMENTED — CORE RUNTIME LANDED, SURVEY-LINE HARDENING AND PRODUCTION RECOVERY GAPS REMAIN
+> **Status:** IMPLEMENTED — CORE RUNTIME, PRODUCTION RECOVERY, AND SURVEY-LINE HARDENING LANDED
 
 > **For agentic workers:** 这份计划不是“继续往现有系统上加层”的指令，而是“先收束 pipeline 内核，再把 Agent Teams 风格推进机制落到新内核上”的重构路线。任何实现都必须先补回归，再做最小可逆变更，并优先删除重复表达而不是继续堆逻辑。
 
@@ -37,7 +37,7 @@
 - 已完成切片 W：service-side pooled session 从 researcher-only 扩展到 role-aware，auto-stage / auto-discussion / mitigation 主路径已能为 `orchestrator / coder / analyzer / academic_writer / reviewer / researcher` 复用同一套 pooled session policy。
 - 已完成切片 X：dashboard 项目详情页已增加 Team Round 概览、Task Board 与 Evidence Moat 概览；新增 `workflow-collaboration-kernel`、`workflow-execution-kernel`、`workflow-task-claim`、`workflow-team-recovery` 回归测试。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 当前状态：Evidence Runtime、Team Runtime 的核心运行面、Role-aware session pool、Dashboard 可观察性、长 EXEC guardrail、PaperNexus 失败论文顺序 retry 接口、feature flag、heartbeat idle continuation、evidence materializer module 分层与主要验证矩阵已经落地；但最新线上日志显示 survey / review-paper 流水线仍会在识别或状态一致性失败时掉回实验论文主线，因此必须继续补 survey-line hardening。
+- 当前状态：Evidence Runtime、Team Runtime 的核心运行面、Role-aware session pool、Dashboard 可观察性、长 EXEC guardrail、PaperNexus 失败论文顺序 retry 接口、feature flag、heartbeat idle continuation、evidence materializer module 分层与主要验证矩阵已经落地；最新 survey / review-paper 流水线 hardening 也已落地。
 
 ---
 
@@ -502,7 +502,7 @@ Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram
 根因 2：`/paper-plan` 没有被映射到 survey-native stage
 
 - 用户说 `/paper-plan`，Researcher 将其解释为综述大纲规划。
-- 但 workflow 阶段机仍可能把它映射到 `plan`，而不是 `survey_review` 或 `write_package`。
+- 旧版本 workflow 阶段机可能把它映射到 `plan`，而不是 `survey_review` 或 `write_package`。
 - 一旦进入 `plan`，就会触发实验论文 `research_program.plan_selection` / `tracks` / `task_graph` 约束。
 
 根因 3：实验论文 stage gates 对 survey 项目没有强制 bypass
@@ -527,9 +527,34 @@ Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram
 - 对 survey 项目，graph presence 仍然重要，但 graph repair 完成后应有明确的 `check_graph_presence / refresh_graph_presence / accept_remote_graph_ready` workflow action。
 - 不能让 agent 通过手动写 manifest 来宣称 ready。
 
-#### 为什么当前最新框架仍可能出现综述流程问题
+#### 修复状态
 
-即使当前代码已有 `isSurveyWorkflow`，仍可能在以下条件下复现：
+已在当前分支补齐：
+
+- `tools/workflow-line-routing.js`
+  - 新增 `ensureSurveyWorkflowIdentity(...)`，把 survey identity 持久化为 `workflow_line=survey`、`paper_type=survey`、`writing_contract.paper_mode=survey`、`survey_review.topic/status/current_phase`。
+- `tools/workflow-guard-runtime/auto-iterator.ts`
+  - 在 tick 早期执行 survey identity lock，并在 stage preflight 前保存，避免 materializer 读取旧 manifest。
+- `tools/workflow-guard-project-state.ts`
+  - survey bootstrap 现在会写入 `workflow_line=survey` 与 `paper_type=survey`。
+- `tools/workflow-guard-materializers/survey-review-materializer.ts`
+  - survey materializer 现在锁定 survey writing contract，并生成 `researcher/SURVEY_OUTLINE.md` / `SURVEY_OUTLINE.packet.json`。
+- `tools/workflow-guard-stages/survey-stage-signals.ts`
+  - survey stage signal 已拆成独立模块。
+- `tools/register-workflow-hooks.ts`
+  - `/paper-plan` 在 survey 项目中注入 survey-native planning guidance，禁止进入实验 plan/code/experiment。
+  - workflow prompt 会提示不要手动改 `current_stage`，应使用 `recover_survey_route` / `materialize_survey_review_state`。
+- `tools/register-workflow-tools.ts`
+  - 新增 `refresh_graph_presence` / `accept_remote_graph_ready` aliases。
+  - 新增 `recover_survey_route` / `skip_experiment_stages_for_survey` workflow-owned recovery actions。
+- `tools/workflow-guard-setters/research-state-setters.ts`
+  - `set_orchestration_state` 对 survey 项目的 `next_transition_candidate=code/experiment/analyze/idea/plan` 会修正为 `survey_review`。
+- `tests/workflow-survey-route.test.mjs`
+  - 覆盖 survey 项目从 `frontier_mapping` 恢复到 `survey_review`、完成 survey review 进入 `write`、生成 survey outline、拦截 survey -> code mutation。
+
+#### 为什么旧版本框架会出现综述流程问题
+
+旧版本即使已有 `isSurveyWorkflow`，仍可能在以下条件下复现：
 
 - `project_id` 没有持久化为 `gcd-survey-tpami-2026`，或者 runtime 读到的是另一个 project/root。
 - `paper_type` / `workflow_line` / `writing_contract.paper_mode` 没有在 project-init 阶段写入 manifest。
@@ -555,7 +580,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - `analyze`：默认跳过实验 analysis；survey 可选使用 literature synthesis / taxonomy analysis。
 - `review`：可保留为 survey manuscript review / coverage review，而不是实验 code/research review。
 
-#### TODO C1：Survey identity lock
+#### DONE C1：Survey identity lock
 
 - Modify:
   - project init / bind / survey init paths
@@ -572,7 +597,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
   - 一旦 project id、topic、user command、writing contract 任一信号表明 survey，workflow 必须持久化 survey identity。
   - 后续 tick 不再回到实验论文 `idea / plan / code / experiment / analyze`。
 
-#### TODO C2：Survey route hardening in auto_iterator
+#### DONE C2：Survey route hardening in auto_iterator
 
 - Modify:
   - `tools/workflow-guard-runtime/auto-iterator.ts`
@@ -592,7 +617,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - Acceptance:
   - `frontier_mapping` 完成后的 survey 项目进入 `survey_review`，不是 `idea`。
 
-#### TODO C3：`/paper-plan` 映射为 survey-native planning
+#### DONE C3：`/paper-plan` 映射为 survey-native planning
 
 - Modify:
   - command parser / prompt fast path / workflow tools
@@ -608,7 +633,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - Acceptance:
   - 用户说“启动 /paper-plan”不会进入 `plan -> code`。
 
-#### TODO C4：Survey-specific stage signals
+#### DONE C4：Survey-specific stage signals
 
 - Create:
   - `tools/workflow-guard-stages/survey-stage-signals.ts`
@@ -631,7 +656,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
   - ablation evidence
   - mechanism evidence, unless explicitly configured for survey+experiment hybrid
 
-#### TODO C5：Survey auto-mode gate bypass
+#### DONE C5：Survey auto-mode gate bypass
 
 - Modify:
   - code review auto gate
@@ -648,7 +673,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - Acceptance:
   - aggressive auto-mode on survey does not dispatch Coder for experiment bundle unless explicitly configured as hybrid.
 
-#### TODO C6：Graph presence recovery action for survey
+#### DONE C6：Graph presence recovery action for survey
 
 - Add tool action:
   - `refresh_graph_presence`
@@ -665,7 +690,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - Acceptance:
   - 修复远程 graph 后，下一次 tick 不会重新覆盖为 `missing_sources`，除非远程检查确实失败。
 
-#### TODO C7：Manual stage mutation guard
+#### DONE C7：Manual stage mutation guard
 
 - Modify:
   - prompt guidance
@@ -680,7 +705,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 - Acceptance:
   - Coder 不会再创建 stub `train.py` / fake experiment manifest 作为 survey 跳关手段。
 
-#### TODO C8：Tests for survey route
+#### DONE C8：Tests for survey route
 
 - Add:
   - `tests/workflow-survey-route.test.mjs`
@@ -2037,7 +2062,7 @@ agent 完成一个 task 后：
 ### 2026-04-11 验证结果
 
 - 已通过：
-  `node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-service.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-runtime-orchestrator.test.mjs tests/workflow-guard-snapshot-builder.test.mjs tests/lobster-handoff.test.mjs tests/agent-task-dispatch.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-hook-prompt-isolation.test.mjs tests/workflow-kernel-refactor.test.mjs tests/workflow-evidence-kernel.test.mjs tests/workflow-team-runtime.test.mjs tests/workflow-task-claim.test.mjs tests/workflow-team-recovery.test.mjs tests/workflow-collaboration-kernel.test.mjs tests/workflow-execution-kernel.test.mjs tests/workflow-exec-budget.test.mjs tests/paper-ingestion-retry.test.mjs`
+  `node --test tests/auto-iterator.test.mjs tests/workflow-runtime-tools.test.mjs tests/workflow-service.test.mjs tests/workflow-fast-paths.test.mjs tests/workflow-runtime-orchestrator.test.mjs tests/workflow-guard-snapshot-builder.test.mjs tests/lobster-handoff.test.mjs tests/agent-task-dispatch.test.mjs tests/channel-project-bindings.test.mjs tests/workflow-hook-prompt-isolation.test.mjs tests/workflow-kernel-refactor.test.mjs tests/workflow-evidence-kernel.test.mjs tests/workflow-team-runtime.test.mjs tests/workflow-task-claim.test.mjs tests/workflow-team-recovery.test.mjs tests/workflow-collaboration-kernel.test.mjs tests/workflow-execution-kernel.test.mjs tests/workflow-exec-budget.test.mjs tests/paper-ingestion-retry.test.mjs tests/workflow-survey-route.test.mjs tests/workflow-writing-lines-e2e.test.mjs tests/survey-review-materializer.test.mjs`
 - 已通过：
   `npm run dashboard:test`
 

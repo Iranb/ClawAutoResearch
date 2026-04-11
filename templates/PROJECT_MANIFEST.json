@@ -3,6 +3,8 @@
   "project_id": "proj_xxx",
   "title": "replace me",
   "domain": null,
+  "workflow_line": "experiment",
+  "paper_type": null,
   "status": "active",
   "owner_agent": "researcher",
   "current_stage": "setup",

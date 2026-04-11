@@ -138,6 +138,10 @@ function looksLikeSurveyPipelineCommand(text: string | null | undefined): boolea
   return Boolean(text && /^\s*\/survey-pipeline\b/i.test(text));
 }
 
+function looksLikePaperPlanCommand(text: string | null | undefined): boolean {
+  return Boolean(text && /^\s*\/paper-plan\b/i.test(text));
+}
+
 export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
   paperIngestion: unknown;
 }): {
@@ -654,6 +658,14 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
           : null;
       const extraContext: string[] = [];
+      if (snapshot.currentStage === "survey_review" || snapshot.writingPaperMode === "survey") {
+        extraContext.push(
+          "[Survey Route Guard]",
+          "This is a survey workflow. Do not hand-edit PROJECT_MANIFEST.json.current_stage to skip stages, and do not create coder/experiments stubs or fake experiment manifests.",
+          "Use research_workflow.recover_survey_route or research_workflow.materialize_survey_review_state when the workflow drifts toward idea/plan/code/experiment/analyze.",
+          "[/Survey Route Guard]"
+        );
+      }
       if (heartbeatClaimedTaskId) {
         extraContext.push(
           "[TeammateIdle Continuation]",
@@ -722,6 +734,19 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           )}`,
           "After the tool returns, reply briefly that the background survey pipeline has started and stop. The background continuation will materialize the real survey packet.",
           "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role === "researcher" &&
+        snapshot.currentStage === "survey_review" &&
+        looksLikePaperPlanCommand(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Survey Paper Plan]",
+          "This is a survey workflow. Do not route /paper-plan through the experiment-paper plan/code/experiment stages.",
+          "First call research_workflow.materialize_survey_review_state to reconcile SURVEY_QUERY_REGISTRY.json, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, COVERAGE_SUMMARY.md, and SURVEY_BRIEF.md.",
+          "Then draft or update the survey outline/taxonomy plan under researcher/SURVEY_OUTLINE.md or academic_writer/PAPER_PLAN.md using the survey_review packet as the source of truth.",
+          "Do not create coder/experiments stubs or fake experiment manifests for survey papers.",
+          "[/Survey Paper Plan]"
         );
       } else if (
         snapshot.role &&

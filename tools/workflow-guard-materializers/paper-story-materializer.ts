@@ -699,7 +699,11 @@ ${deps.renderMarkdownBulletList(
     }
   }
 
-  if (surveyWritingBridgeReady && !currentWritingContract.paperMode) {
+  if (
+    surveyWritingBridgeReady &&
+    (currentWritingContract.paperMode !== "survey" ||
+      !currentWritingContract.requiredSections.includes("scope_and_protocol"))
+  ) {
     manifest.writing_contract = serializeWritingContractState(
       normalizeWritingContractState({
         ...serializeWritingContractState(currentWritingContract),

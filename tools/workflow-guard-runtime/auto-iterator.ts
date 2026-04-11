@@ -199,6 +199,10 @@ type AutoIteratorDeps = {
     now: string;
   }) => Promise<GateEvaluationLike>;
   isSurveyWorkflow: (manifest: ManifestLike | null) => boolean;
+  ensureSurveyWorkflowIdentity?: (manifest: ManifestLike | null) => {
+    manifest: ManifestLike;
+    updated: boolean;
+  };
   resolveStageForWorkflowLine: (params: {
     stage: string | null;
     manifest: ManifestLike | null;
@@ -407,6 +411,16 @@ export async function runWorkflowAutoIteratorImpl(
   const projectId = deps.inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
   let stageBefore = normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  if (deps.ensureSurveyWorkflowIdentity) {
+    const surveyIdentity = deps.ensureSurveyWorkflowIdentity(manifest);
+    if (surveyIdentity.updated) {
+      manifest = {
+        ...manifest,
+        ...surveyIdentity.manifest,
+      };
+      await deps.saveManifest(projectRoot, manifest);
+    }
+  }
   if (deps.isSurveyWorkflow(manifest)) {
     stageBefore =
       deps.resolveStageForWorkflowLine({

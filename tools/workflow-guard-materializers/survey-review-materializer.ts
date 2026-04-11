@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import {
   asRecord,
 } from "../workflow-guard-core/coercion";
@@ -204,13 +205,50 @@ export async function materializeSurveyReviewStateImpl(params: {
   });
 
   manifest.survey_review = serializeSurveyReviewState(next);
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(asRecord(manifest.writing_contract) ?? {}),
+    paper_mode: "survey",
+  };
   manifest.current_stage = "survey_review";
   manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
   manifest.owner_agent = "researcher";
+  const outlinePath = path.join(projectRoot, "researcher", "SURVEY_OUTLINE.md");
+  if (!(await hasNonWhitespaceContent(outlinePath))) {
+    await writeJsonEnsured(
+      path.join(projectRoot, "researcher", "SURVEY_OUTLINE.packet.json"),
+      {
+        schema_version: 1,
+        source: "survey_review_state",
+        topic: next.topic,
+        survey_brief_path: next.surveyBriefPath,
+        coverage_summary_path: next.coverageSummaryPath,
+        generated_at: new Date().toISOString(),
+      }
+    );
+    await fs.mkdir(path.dirname(outlinePath), { recursive: true });
+    await fs.writeFile(
+      outlinePath,
+      [
+        "# Survey Outline",
+        "",
+        `Topic: ${next.topic ?? "unset"}`,
+        "",
+        "## Taxonomy Plan",
+        "- Derive taxonomy from SURVEY_BRIEF.md, SOTA_MATRIX.md, and COVERAGE_SUMMARY.md.",
+        "",
+        "## Coverage Plan",
+        "- Keep section coverage aligned with INCLUDED_PAPERS.json and GAP_SYNTHESIS.md.",
+        "",
+      ].join("\n"),
+      "utf8"
+    );
+  }
   await writeJsonEnsured(manifestPath, manifest);
 
   return {
     state: getSurveyReviewStateSummary(manifest).state,
-    generatedFiles: [diagnostics.diagnosticsPath],
+    generatedFiles: [diagnostics.diagnosticsPath, "researcher/SURVEY_OUTLINE.md"],
   };
 }

@@ -949,6 +949,12 @@ export async function setSurveyReviewState(params: {
       new Date().toISOString(),
   });
   manifest.survey_review = serializeSurveyReviewState(next);
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(asRecord(manifest.writing_contract) ?? {}),
+    paper_mode: "survey",
+  };
   manifest.current_stage = "survey_review";
   manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
   manifest.owner_agent = STAGE_REQUIREMENTS.survey_review?.owner ?? "researcher";
@@ -1092,6 +1098,21 @@ export async function setOrchestrationState(params: {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeOrchestrationState(manifest.orchestration_state);
   const patch = asRecord(params.orchestrationState) ?? {};
+  const surveyProject =
+    normalizeStage(manifest.current_stage) === "survey_review" ||
+    normalizeSurveyReviewState(manifest.survey_review).status !== "missing" ||
+    normalizeStage((asRecord(manifest.writing_contract) ?? {}).paper_mode) === "survey" ||
+    normalizeStage(manifest.workflow_line) === "survey" ||
+    normalizeStage(manifest.paper_type) === "survey";
+  const requestedTransition = pickString(patch, [
+    "nextTransitionCandidate",
+    "next_transition_candidate",
+  ]);
+  const surveyUnsafeTransition =
+    surveyProject &&
+    ["idea", "plan", "code", "experiment", "analyze"].includes(
+      normalizeStage(requestedTransition) ?? ""
+    );
   const next: OrchestrationState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
@@ -1105,10 +1126,9 @@ export async function setOrchestrationState(params: {
     nextOwner:
       pickString(patch, ["nextOwner", "next_owner"]) ?? current.nextOwner,
     nextTransitionCandidate:
-      pickString(patch, [
-        "nextTransitionCandidate",
-        "next_transition_candidate",
-      ]) ?? current.nextTransitionCandidate,
+      surveyUnsafeTransition
+        ? "survey_review"
+        : requestedTransition ?? current.nextTransitionCandidate,
     blockingCategory:
       pickString(patch, ["blockingCategory", "blocking_category"]) ??
       current.blockingCategory,

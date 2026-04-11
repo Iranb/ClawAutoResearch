@@ -143,8 +143,9 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
-import { readJsonIfExists, pathExists } from "./workflow-guard-core/fs";
+import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { ensureSurveyWorkflowIdentity } from "./workflow-line-routing.js";
 import { loadTrackInnovationEvidence } from "./workflow-derived-state/track-evidence";
 import {
   buildWorkflowQueueContext,
@@ -255,6 +256,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
   check_graph_presence: "checkGraphPresenceForWorkflow",
+  refresh_graph_presence: "checkGraphPresenceForWorkflow",
+  accept_remote_graph_ready: "checkGraphPresenceForWorkflow",
   audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
@@ -363,6 +366,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   queue_paper_ingestion_retry: "queuePaperIngestionRequest",
   get_paper_ingestion_retry_status: "getPaperIngestionStateSummary",
   cancel_paper_ingestion_retry: "setPaperIngestionState",
+  recover_survey_route: "ensureSurveyWorkflowIdentity",
+  skip_experiment_stages_for_survey: "ensureSurveyWorkflowIdentity",
   read_mailbox: "readWorkflowMailboxForAgent",
   send_mailbox: "queueWorkflowMailboxMessage",
   ack_mailbox: "acknowledgeWorkflowMailboxMessage",
@@ -927,6 +932,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_papernexus_remote_access",
               "get_papernexus_progress",
               "check_graph_presence",
+              "refresh_graph_presence",
+              "accept_remote_graph_ready",
               "audit_literature_coverage",
               "plan_citation_expansion",
               "auto_iterator_tick",
@@ -1028,6 +1035,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "queue_paper_ingestion_retry",
               "get_paper_ingestion_retry_status",
               "cancel_paper_ingestion_retry",
+              "recover_survey_route",
+              "skip_experiment_stages_for_survey",
               "read_mailbox",
               "send_mailbox",
               "ack_mailbox",
@@ -1411,12 +1420,18 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(progress, null, 2));
             }
-            case "check_graph_presence": {
+            case "check_graph_presence":
+            case "refresh_graph_presence":
+            case "accept_remote_graph_ready": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const graphPresenceCheck = asObject(params.graphPresenceCheck);
               const result = await checkGraphPresenceForWorkflow({
                 projectRoot: resolvedProjectRoot,
                 updateManifest:
+                  action === "refresh_graph_presence" ||
+                  action === "accept_remote_graph_ready"
+                    ? true
+                    :
                   graphPresenceCheck?.updateManifest === false ||
                   graphPresenceCheck?.update_manifest === false
                     ? false
@@ -1435,6 +1450,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
                 },
               });
+              if (action === "accept_remote_graph_ready" && result.status !== "ready") {
+                throw new Error(
+                  `Remote graph is not ready; graph presence status=${result.status}, missing=${result.missingPaperCount}.`
+                );
+              }
               return textResponse(JSON.stringify(result, null, 2));
             }
             case "audit_literature_coverage": {
@@ -2590,6 +2610,45 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 surveyReview: requireObject(params.surveyReview, "surveyReview"),
               });
               return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "recover_survey_route":
+            case "skip_experiment_stages_for_survey": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifestPath = path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json");
+              const manifest =
+                (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+              const surveyIdentity = ensureSurveyWorkflowIdentity({
+                ...manifest,
+                workflow_line: "survey",
+                paper_type: "survey",
+              });
+              const surveyReview = asObject(surveyIdentity.manifest.survey_review);
+              const nextManifest = {
+                ...manifest,
+                ...surveyIdentity.manifest,
+                current_stage: "survey_review",
+                current_micro_stage:
+                  readString(surveyReview?.current_phase) ?? "survey_route_recovery",
+                owner_agent: "researcher",
+                next_action:
+                  "Materialize survey_review state, then produce survey taxonomy, coverage matrix, and outline before write.",
+                blocking_reason: null,
+                updated_at: new Date().toISOString(),
+              };
+              await writeJsonAtomicEnsured(manifestPath, nextManifest);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    recovered: true,
+                    action,
+                    stage: nextManifest.current_stage,
+                    workflowLine: nextManifest.workflow_line,
+                    paperType: nextManifest.paper_type,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "set_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
