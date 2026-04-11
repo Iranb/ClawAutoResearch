@@ -10,6 +10,13 @@
 
 **Tech Stack:** TypeScript、Node.js built-in test runner、现有 workflow runtime state 文件、dashboard 读模型、OpenClaw plugin/tool/service/hook 入口。
 
+**Progress Snapshot (2026-04-11):**
+
+- 已完成切片 A：引入 `tools/workflow-kernel/graph-context.ts`，把 `auto_iterator` 的 graph-sensitive refresh / routing / repair 判断统一到 graph context adapter；新增 `tests/workflow-kernel-refactor.test.mjs`，并通过 `tests/auto-iterator.test.mjs` 全量回归。
+- 已完成切片 B：引入 `tools/workflow-evidence/papernexus-bridge.ts`，把 stage-preflight 对 workflow-owned PaperNexus packet/bundle 的存在性判断收束到统一 bridge；新增 `tests/workflow-evidence-kernel.test.mjs`。
+- 当前实现分支：`codex/workflow-kernel-graph-context`
+- 下一切片目标：把 graph-context / papernexus-bridge 接到更多 projection 和 evidence contracts，而不是继续在调用侧散落硬编码。
+
 ---
 
 ## 1. 为什么上一个版本还不够
@@ -725,6 +732,11 @@
   - `missing`
   - `unavailable`
 
+当前进展：
+
+- 已完成：`graph-context.ts` 已落地，`auto_iterator` 已改走统一 graph context，并通过回归测试。
+- 未完成：`snapshot-builder`、`stage-preflight` 的 graph-sensitive 判断仍未完全统一到同一适配层；`papernexus-progress` / packet materializer 侧仍有进一步收束空间。
+
 ### 9.1 合理性判断
 
 这一步是 **高价值且低争议** 的，因为当前重复已经是明牌问题。
@@ -890,6 +902,11 @@
 - 不重载 `research_program`
 - 不重载 `experiment_review_state`
 - 不让 `paper_story_state` / `paper_qc` / `figure_qc` 继续兼任证据真相源
+
+当前进展：
+
+- 已完成前置桥接：`papernexus-bridge.ts` 已落地，并把 workflow-owned PaperNexus packet/bundle 的检测从 `stage-preflight` 里抽离。
+- 未完成：manifest evidence state blocks 还没有正式加到 schema，也还没接进 closeout / review / writing gates。
 
 - [ ] **Step 2: Benchmark registry + protocol lock**
 
