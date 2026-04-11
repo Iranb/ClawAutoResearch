@@ -2,7 +2,6 @@ import * as path from "node:path";
 import {
   asRecord,
   asString,
-  normalizeGraphPresenceStatus,
   normalizeStage,
   pickNumber,
   pickString,
@@ -22,6 +21,10 @@ import {
   shouldRouteIdeaCatalystToGraphBuild,
 } from "../idea-catalyst/workflow-bridge";
 import { shouldRouteLiteratureDiscoveryToGraphBuild } from "../literature-discovery/workflow-bridge";
+import {
+  deriveWorkflowGraphContext,
+  shouldRefreshWorkflowGraphPresence,
+} from "../workflow-kernel/graph-context";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
@@ -354,45 +357,6 @@ type AutoIteratorDeps = {
 
 const MAX_REGRESSION_DEPTH = 3;
 
-function readIsoTimestamp(value: unknown): number | null {
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function shouldRefreshGraphPresenceDuringAutoIterator(params: {
-  manifest: ManifestLike;
-  stage: string;
-  nowIso: string;
-}): boolean {
-  if (!["graph_build", "frontier_mapping", "idea"].includes(params.stage)) {
-    return false;
-  }
-  const paperIngestion = asRecord(params.manifest.paper_ingestion);
-  const graphPresenceStatus = normalizeGraphPresenceStatus(
-    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
-  );
-  const refreshRequired =
-    paperIngestion?.refresh_required === true || paperIngestion?.refreshRequired === true;
-  const checkedAtMs = readIsoTimestamp(
-    pickString(paperIngestion ?? {}, [
-      "graph_presence_checked_at",
-      "graphPresenceCheckedAt",
-    ])
-  );
-  const nowMs = readIsoTimestamp(params.nowIso) ?? Date.now();
-  const recentlyChecked =
-    checkedAtMs !== null &&
-    nowMs - checkedAtMs < AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS;
-
-  if (graphPresenceStatus === "ready" && !refreshRequired) {
-    return false;
-  }
-  if (recentlyChecked && !refreshRequired) {
-    return false;
-  }
-  return graphPresenceStatus !== "ready" || refreshRequired || checkedAtMs === null;
-}
-
 export async function runWorkflowAutoIteratorImpl(
   params: {
     projectRoot: string;
@@ -489,10 +453,11 @@ export async function runWorkflowAutoIteratorImpl(
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
   if (
-    shouldRefreshGraphPresenceDuringAutoIterator({
+    shouldRefreshWorkflowGraphPresence({
       manifest,
       stage: stageBefore,
       nowIso: now,
+      minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
     })
   ) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
@@ -517,9 +482,14 @@ export async function runWorkflowAutoIteratorImpl(
       manifest;
   }
 
-  const paperIngestionStateBeforeRouting = normalizePaperIngestionState(
-    manifest.paper_ingestion
-  );
+  const graphContextBeforeRouting = deriveWorkflowGraphContext({
+    manifest,
+    stage: stageBefore,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    graphPresenceCheck,
+  });
+  const paperIngestionStateBeforeRouting = graphContextBeforeRouting.paperIngestionState;
   const ideaCatalystStateBeforeRouting = normalizeIdeaCatalystState(manifest.idea_catalyst);
   const catalystRequestedGraphReentry = shouldRouteIdeaCatalystToGraphBuild({
     currentStage: stageBefore,
@@ -530,9 +500,7 @@ export async function runWorkflowAutoIteratorImpl(
     shouldRouteLiteratureDiscoveryToGraphBuild({
       currentStage: stageBefore,
       paperIngestion: paperIngestionStateBeforeRouting,
-      graphPresenceStatus:
-        asRecord(manifest.paper_ingestion)?.graph_presence_status ??
-        asRecord(manifest.paper_ingestion)?.graphPresenceStatus,
+      graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
     });
   const requestedGraphReentry =
     !surveyWorkflow &&
@@ -667,9 +635,14 @@ export async function runWorkflowAutoIteratorImpl(
       : effectiveMissingSignals;
 
   const ownerBefore = asString(manifest.owner_agent);
-  const paperIngestionStateForActions = normalizePaperIngestionState(
-    manifest.paper_ingestion
-  );
+  const graphContextForActions = deriveWorkflowGraphContext({
+    manifest,
+    stage: stageAfter,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    graphPresenceCheck,
+  });
+  const paperIngestionStateForActions = graphContextForActions.paperIngestionState;
   const experimentSearchState = deps.normalizeExperimentSearchState(
     manifest.experiment_search
   );
@@ -728,9 +701,9 @@ export async function runWorkflowAutoIteratorImpl(
       ? "Run /project-init to complete the onboarding contract and lock the baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path before graph grounding."
       : null;
   const graphImportRepairCommand =
-    stageAfter === "graph_build" && paperIngestionStateForActions.repairRequired
+    stageAfter === "graph_build" && graphContextForActions.repairRequired
       ? deps.buildGraphImportRepairGuidance(
-          paperIngestionStateForActions.repairTargetCorpus
+          graphContextForActions.repairTargetCorpus
         )
       : null;
   const ideaCatalystStateForActions = normalizeIdeaCatalystState(manifest.idea_catalyst);
@@ -782,10 +755,8 @@ export async function runWorkflowAutoIteratorImpl(
       ? deriveGraphBuildMicroStage({
           paperIngestionState: paperIngestionStateForActions,
           graphPresenceStatus:
-            normalizeGraphPresenceStatus(
-              asRecord(manifest.paper_ingestion)?.graph_presence_status ??
-                asRecord(manifest.paper_ingestion)?.graphPresenceStatus
-            ) ?? graphPresenceCheck?.status ?? null,
+            graphContextForActions.graphPresenceStatus ??
+            graphContextForActions.graphPresenceCheckStatus,
         })
       : stageAfter === "experiment" &&
           reviewedAutoExperimentLaunchEnabled &&
