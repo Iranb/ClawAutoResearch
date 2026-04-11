@@ -43,6 +43,8 @@ export interface ExecutionStageDeps {
   normalizeBenchmarkProtocolState: (value: unknown) => any;
   normalizeStatisticalEvidenceState: (value: unknown) => any;
   normalizeAblationEvidenceState: (value: unknown) => any;
+  normalizeMechanismEvidenceState: (value: unknown) => any;
+  normalizeVenueCompetitionState: (value: unknown) => any;
   normalizeOpportunityScorecardState: (value: unknown) => any;
   readJsonIfExists: (targetPath: string) => Promise<Record<string, unknown> | null>;
   normalizeStage: (value: unknown) => string | null;
@@ -247,6 +249,45 @@ export async function collectAnalyzeStageMissingSignals(
       !(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "analyzer", "proof-packets")))
     ) {
       missing.push("{PROJ}/analyzer/proof-packets/");
+    }
+  }
+
+  const opportunityScorecard = deps.normalizeOpportunityScorecardState(
+    ctx.manifest?.opportunity_scorecard
+  );
+  if (opportunityScorecard.verdict === "worth_top_tier_bet") {
+    const mechanismEvidence = deps.normalizeMechanismEvidenceState(
+      ctx.manifest?.mechanism_evidence
+    );
+    const venueCompetition = deps.normalizeVenueCompetitionState(
+      ctx.manifest?.venue_competition
+    );
+
+    if (mechanismEvidence.status === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.mechanism_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (
+      mechanismEvidence.graphContextStatus === "unverified_graph_context" ||
+      mechanismEvidence.graphContextStatus === "graph_unavailable"
+    ) {
+      missing.push(
+        `PROJECT_MANIFEST.json.mechanism_evidence.graph_context_status must be graph-grounded before top-tier REVIEW handoff (current: ${mechanismEvidence.graphContextStatus})`
+      );
+    }
+    if (venueCompetition.status === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.venue_competition.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (
+      venueCompetition.graphContextStatus === "unverified_graph_context" ||
+      venueCompetition.graphContextStatus === "graph_unavailable"
+    ) {
+      missing.push(
+        `PROJECT_MANIFEST.json.venue_competition.graph_context_status must be graph-grounded before top-tier REVIEW handoff (current: ${venueCompetition.graphContextStatus})`
+      );
     }
   }
   return missing;

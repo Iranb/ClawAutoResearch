@@ -4294,6 +4294,97 @@ test("auto iterator advances analyze without theory appendix artifacts when proo
   );
 });
 
+test("auto iterator keeps top-tier analyze stage blocked until mechanism and venue competition evidence are graph-grounded", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.benchmark_protocol = {
+    status: "ready",
+    benchmark_family: "OpenWorldGraphBench",
+    protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
+    locked: true,
+    drift_status: "pass",
+  };
+  manifest.statistical_evidence = {
+    status: "ready",
+    aggregate_path: "analyzer/STATISTICAL_EVIDENCE.json",
+    claim_strength_status: "strong",
+    significant_result_count: 3,
+    insufficient_seed_count: 0,
+  };
+  manifest.ablation_evidence = {
+    status: "ready",
+    summary_path: "researcher/ABLATION_EVIDENCE.json",
+    sufficiency_status: "sufficient",
+    publication_critical_count: 2,
+  };
+  manifest.mechanism_evidence = {
+    status: "partial",
+    packet_path: "researcher/MECHANISM_EVIDENCE.json",
+    evidence_tier: "moderate",
+    graph_context_status: "unverified_graph_context",
+  };
+  manifest.venue_competition = {
+    status: "partial",
+    target_venues: ["ICLR"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "unverified_graph_context",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "analyze");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /mechanism_evidence\.graph_context_status/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /venue_competition\.graph_context_status/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator regresses frontier_mapping back to graph_build when graph misses canonical papers", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

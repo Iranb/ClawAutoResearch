@@ -70,6 +70,7 @@ import {
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
 import {
+  normalizeMechanismEvidenceState,
   normalizeOpportunityScorecardState,
   normalizeAblationEvidenceState,
   normalizeBenchmarkProtocolState,
@@ -6071,6 +6072,8 @@ async function getMissingStageSignals(params: {
           normalizeBenchmarkProtocolState,
           normalizeStatisticalEvidenceState,
           normalizeAblationEvidenceState,
+          normalizeMechanismEvidenceState,
+          normalizeVenueCompetitionState,
           normalizeOpportunityScorecardState,
           readJsonIfExists,
           normalizeStage,
@@ -6099,6 +6102,12 @@ async function getMissingStageSignals(params: {
           hasActiveExperimentRuns: (ledger) =>
             hasActiveExperimentRuns(ledger as ExperimentLedger | null),
           normalizeAutonomousExecutionState,
+          normalizeBenchmarkProtocolState,
+          normalizeStatisticalEvidenceState,
+          normalizeAblationEvidenceState,
+          normalizeMechanismEvidenceState,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
