@@ -45,6 +45,7 @@ import {
   deriveAutoZoteroSyncCandidate,
   readZoteroSyncStateSummary,
 } from "../workflow-zotero-sync";
+import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
 import {
   normalizeAblationEvidenceState,
   normalizeBenchmarkProtocolState,
@@ -947,6 +948,7 @@ export async function buildWorkflowSnapshotFromProjectState(
   const opportunityScorecard = normalizeOpportunityScorecardState(
     asRecord(projectState.manifest?.opportunity_scorecard)
   );
+  const evidenceCloseout = summarizeEvidenceCloseoutState(projectState.manifest);
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1475,6 +1477,20 @@ export async function buildWorkflowSnapshotFromProjectState(
     opportunityScorecardGraphContextStatus:
       opportunityScorecard.graphContextStatus,
     opportunityScorecardPendingReason: opportunityScorecard.pendingReason,
+    evidenceCloseoutStatus: evidenceCloseout.status,
+    evidenceCloseoutTopTierVerdict: evidenceCloseout.topTierVerdict,
+    evidenceCloseoutBlockerCount: evidenceCloseout.blockers.length,
+    evidenceCloseoutGraphDependentBlockerCount:
+      evidenceCloseout.graphDependentBlockerCount,
+    evidenceCloseoutLocalEvidenceBlockerCount:
+      evidenceCloseout.localEvidenceBlockerCount,
+    evidenceCloseoutExperimentAnalyzeReady:
+      evidenceCloseout.experimentAnalyzeReady,
+    evidenceCloseoutAnalyzeReviewReady:
+      evidenceCloseout.analyzeReviewReady,
+    evidenceCloseoutWriteReady: evidenceCloseout.writeReady,
+    evidenceCloseoutSubmitReady: evidenceCloseout.submitReady,
+    evidenceCloseoutTopBlockers: evidenceCloseout.blockers.slice(0, 5),
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,

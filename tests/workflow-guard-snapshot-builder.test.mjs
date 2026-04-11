@@ -247,6 +247,14 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   assert.equal(snapshot.opportunityScorecardStatus, "ready");
   assert.equal(snapshot.opportunityScorecardVerdict, "worth_top_tier_bet");
   assert.equal(snapshot.opportunityScorecardGraphContextStatus, "ready");
+  assert.equal(snapshot.evidenceCloseoutStatus, "blocked");
+  assert.equal(snapshot.evidenceCloseoutTopTierVerdict, "worth_top_tier_bet");
+  assert.equal(snapshot.evidenceCloseoutExperimentAnalyzeReady, false);
+  assert.equal(snapshot.evidenceCloseoutAnalyzeReviewReady, false);
+  assert.equal(snapshot.evidenceCloseoutWriteReady, false);
+  assert.equal(snapshot.evidenceCloseoutSubmitReady, false);
+  assert.equal(snapshot.evidenceCloseoutGraphDependentBlockerCount, 0);
+  assert.ok((snapshot.evidenceCloseoutTopBlockers ?? []).length >= 1);
 });
 
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {

@@ -1193,6 +1193,19 @@ test("workflow-status command returns a readable workflow summary", async () => 
         opportunityScorecardVerdict: "strong_but_incremental",
         opportunityScorecardPath: "researcher/TOP_TIER_OPPORTUNITY.json",
         opportunityScorecardGraphContextStatus: "ready",
+        evidenceCloseoutStatus: "blocked",
+        evidenceCloseoutTopTierVerdict: "worth_top_tier_bet",
+        evidenceCloseoutBlockerCount: 4,
+        evidenceCloseoutGraphDependentBlockerCount: 1,
+        evidenceCloseoutLocalEvidenceBlockerCount: 3,
+        evidenceCloseoutExperimentAnalyzeReady: false,
+        evidenceCloseoutAnalyzeReviewReady: true,
+        evidenceCloseoutWriteReady: false,
+        evidenceCloseoutSubmitReady: false,
+        evidenceCloseoutTopBlockers: [
+          "benchmark protocol missing",
+          "statistical evidence missing",
+        ],
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
         experimentActiveRunCount: 1,
@@ -1341,6 +1354,9 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Reproducibility pack: status=draft, environment=ready, regenerate_tables=pending/);
   assert.match(result.text ?? "", /Camera-ready evidence: status=draft, figures=ready, tables=pending, captions=pending/);
   assert.match(result.text ?? "", /Top-tier opportunity: status=partial, verdict=strong_but_incremental, graph_context=ready/);
+  assert.match(result.text ?? "", /Evidence closeout: status=blocked, verdict=worth_top_tier_bet, blockers=4, graph_blockers=1, local_blockers=3/);
+  assert.match(result.text ?? "", /Evidence closeout stages: experiment_to_analyze=blocked, analyze_to_review=ready, write=blocked, submit=blocked/);
+  assert.match(result.text ?? "", /Evidence closeout blockers: benchmark protocol missing; statistical evidence missing/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
   assert.match(result.text ?? "", /GPU monitor: status=fresh, checked_at=2026-04-11T12:00:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished/);
   assert.match(

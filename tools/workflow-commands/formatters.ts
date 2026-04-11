@@ -440,6 +440,19 @@ export function formatWorkflowStatusText(params: {
       `Top-tier opportunity: status=${snapshot.opportunityScorecardStatus}, verdict=${snapshot.opportunityScorecardVerdict ?? "unset"}, graph_context=${snapshot.opportunityScorecardGraphContextStatus ?? "unset"}`
     );
   }
+  if (snapshot.evidenceCloseoutStatus) {
+    lines.push(
+      `Evidence closeout: status=${snapshot.evidenceCloseoutStatus}, verdict=${snapshot.evidenceCloseoutTopTierVerdict ?? "unset"}, blockers=${snapshot.evidenceCloseoutBlockerCount ?? 0}, graph_blockers=${snapshot.evidenceCloseoutGraphDependentBlockerCount ?? 0}, local_blockers=${snapshot.evidenceCloseoutLocalEvidenceBlockerCount ?? 0}`
+    );
+    lines.push(
+      `Evidence closeout stages: experiment_to_analyze=${snapshot.evidenceCloseoutExperimentAnalyzeReady ? "ready" : "blocked"}, analyze_to_review=${snapshot.evidenceCloseoutAnalyzeReviewReady ? "ready" : "blocked"}, write=${snapshot.evidenceCloseoutWriteReady ? "ready" : "blocked"}, submit=${snapshot.evidenceCloseoutSubmitReady ? "ready" : "blocked"}`
+    );
+    if ((snapshot.evidenceCloseoutTopBlockers ?? []).length > 0) {
+      lines.push(
+        `Evidence closeout blockers: ${(snapshot.evidenceCloseoutTopBlockers ?? []).join("; ")}`
+      );
+    }
+  }
   if (snapshot.paperStoryStatus) {
     lines.push(
       `Paper story: status=${snapshot.paperStoryStatus}, track=${snapshot.paperStoryTrackId ?? "unset"}, story_spine=${snapshot.paperStoryStorySpinePath ?? "unset"}, claim_map=${snapshot.paperStoryClaimToExperimentMapPath ?? "unset"}, fallback=${snapshot.paperStoryFallbackNarrativePath ?? "unset"}`

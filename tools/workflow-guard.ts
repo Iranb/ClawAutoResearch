@@ -1711,6 +1711,16 @@ export type WorkflowSnapshot = {
   opportunityScorecardPath: string | null;
   opportunityScorecardGraphContextStatus: string | null;
   opportunityScorecardPendingReason: string | null;
+  evidenceCloseoutStatus: "not_applicable" | "blocked" | "ready";
+  evidenceCloseoutTopTierVerdict: string | null;
+  evidenceCloseoutBlockerCount: number | null;
+  evidenceCloseoutGraphDependentBlockerCount: number | null;
+  evidenceCloseoutLocalEvidenceBlockerCount: number | null;
+  evidenceCloseoutExperimentAnalyzeReady: boolean;
+  evidenceCloseoutAnalyzeReviewReady: boolean;
+  evidenceCloseoutWriteReady: boolean;
+  evidenceCloseoutSubmitReady: boolean;
+  evidenceCloseoutTopBlockers: string[];
   zoteroSyncStatus: string | null;
   zoteroSyncTrigger: string | null;
   zoteroSyncTriggerReason: string | null;
