@@ -12,6 +12,7 @@ import type {
 import type {
   buildWorkflowSnapshot,
   runWorkflowAutoIterator,
+  unbindChannelProjectForWorkflow,
 } from "../workflow-guard.js";
 import type {
   startBackgroundWorkflowRun,
@@ -38,6 +39,7 @@ export type WorkflowBackgroundCommandKind =
 export type WorkflowCommandKind =
   | WorkflowBackgroundCommandKind
   | "project_init"
+  | "clear_project_binding"
   | "workflow_status"
   | "show_commands";
 
@@ -48,6 +50,7 @@ export type WorkflowCommandDependencies = {
   buildWorkflowSnapshot: typeof buildWorkflowSnapshot;
   runWorkflowAutoIterator: typeof runWorkflowAutoIterator;
   startBackgroundWorkflowRun: typeof startBackgroundWorkflowRun;
+  unbindChannelProjectForWorkflow: typeof unbindChannelProjectForWorkflow;
 };
 
 export type WorkflowCommandApi = Pick<
@@ -88,6 +91,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   literature_review: "/literature-review",
   survey_review: "/survey-pipeline",
   project_init: "/project-init",
+  clear_project_binding: "/clear-project-binding",
   workflow_status: "/workflow-status",
   show_commands: "/show-commands",
 };

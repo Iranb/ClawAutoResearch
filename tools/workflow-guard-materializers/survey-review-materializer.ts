@@ -14,7 +14,7 @@ import {
   serializeSurveyReviewState,
   type SurveyReviewState,
 } from "../workflow-guard-state/survey-review";
-import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.ts";
+import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.js";
 
 function countPaperEntries(value: unknown): number {
   if (Array.isArray(value)) {

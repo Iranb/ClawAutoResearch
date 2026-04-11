@@ -16,6 +16,7 @@ import {
   inferTargetRoleFromToolParams,
   runWorkflowAutoIterator,
   setResearchProgramState,
+  unbindChannelProjectForWorkflow,
 } from "./workflow-guard.js";
 import {
   buildGraphBuildBackgroundCommand,
@@ -109,6 +110,7 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   buildWorkflowSnapshot,
   runWorkflowAutoIterator,
   startBackgroundWorkflowRun,
+  unbindChannelProjectForWorkflow,
 };
 
 let cachedConversationRuntime:
@@ -269,6 +271,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
   {
     label: COMMAND_LABELS.project_init,
     intro: "初始化或刷新当前项目的 research program onboarding。",
+  },
+  {
+    label: COMMAND_LABELS.clear_project_binding,
+    intro: "清空当前频道的 workflow 项目绑定，适合频道绑错项目时在原频道内执行。",
   },
   {
     label: COMMAND_LABELS.research_pipeline,
@@ -674,6 +680,63 @@ function createProjectInitCommandHandler(
   };
 }
 
+function createClearProjectBindingCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.clear_project_binding;
+    try {
+      const routePeer = resolveRoutePeerFromCommandContext(ctx);
+      if (!routePeer || routePeer.kind === "direct") {
+        return {
+          text:
+            `❌ ${commandLabel} 必须在要清理绑定的频道或群组会话里调用，` +
+            "不能在私聊里代替其他频道执行。",
+        };
+      }
+
+      const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      const target = resolveWorkflowCommandSessionTarget(
+        api,
+        ctx,
+        deps.resolveConversationBindingRecord
+      );
+      const channelKey = target.bindingChannelKey;
+      if (!channelKey) {
+        return {
+          text:
+            `❌ ${commandLabel} 无法解析当前频道的 workflow binding key。` +
+            "请在目标频道内直接调用这个命令。",
+        };
+      }
+
+      const result = await deps.unbindChannelProjectForWorkflow({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: target.sessionKey ?? undefined,
+        messageChannel: ctx.channel,
+        channelKey,
+      });
+
+      return {
+        text: result.removed
+          ? `Cleared the workflow project binding for this channel.\nchannel_key=${result.channelKey ?? channelKey}`
+          : `No workflow project binding is currently set for this channel.\nchannel_key=${result.channelKey ?? channelKey}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to clear the workflow channel project binding.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to clear the workflow project binding: ${message}`,
+      };
+    }
+  };
+}
+
 function createWorkflowStatusCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -820,6 +883,13 @@ export function createResearchWorkflowCommands(
         "Initialize or refresh the guided workflow onboarding contract for the current project.",
       acceptsArgs: true,
       handler: createProjectInitCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "clear-project-binding",
+      description:
+        "Clear the current channel's workflow project binding. Must be called inside the channel you want to unbind.",
+      acceptsArgs: false,
+      handler: createClearProjectBindingCommandHandler(api, resolvedDeps),
     },
     {
       name: "research-pipeline",

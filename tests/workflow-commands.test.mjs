@@ -278,8 +278,78 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/project-init/);
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
+  assert.match(result.text, /\/clear-project-binding/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("clear-project-binding command removes the workflow project binding for the current channel", async () => {
+  let captured = null;
+  const api = makeApi();
+  const clearBinding = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async unbindChannelProjectForWorkflow(params) {
+        captured = params;
+        return {
+          enabled: true,
+          storePath: "/tmp/channel-project-bindings.json",
+          channelKey: params.channelKey ?? null,
+          removed: true,
+        };
+      },
+    }),
+    "clear-project-binding"
+  );
+
+  const result = await clearBinding.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/clear-project-binding",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /Cleared the workflow project binding for this channel\./);
+  assert.equal(captured.messageChannel, "discord");
+  assert.equal(
+    captured.channelKey,
+    "binding:discord:default:channel:paper-lab"
+  );
+});
+
+test("clear-project-binding command rejects direct conversations", async () => {
+  const api = makeApi();
+  const clearBinding = getCommand(
+    createResearchWorkflowCommands(api),
+    "clear-project-binding"
+  );
+
+  const result = await clearBinding.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/clear-project-binding",
+    args: undefined,
+    config: {},
+    from: "discord:user:12345",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /必须在要清理绑定的频道或群组会话里调用/);
 });
 
 test("literature-review command starts a project-bound background continuation on the bound researcher session", async () => {
