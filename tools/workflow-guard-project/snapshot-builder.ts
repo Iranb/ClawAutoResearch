@@ -46,6 +46,16 @@ import {
   readZoteroSyncStateSummary,
 } from "../workflow-zotero-sync";
 import {
+  normalizeAblationEvidenceState,
+  normalizeBenchmarkProtocolState,
+  normalizeCameraReadyEvidenceState,
+  normalizeMechanismEvidenceState,
+  normalizeOpportunityScorecardState,
+  normalizeReproducibilityPackState,
+  normalizeStatisticalEvidenceState,
+  normalizeVenueCompetitionState,
+} from "../workflow-evidence/contracts";
+import {
   buildWorkflowRuntimeSessionBinding,
 } from "../workflow-subagent-sessions";
 import {
@@ -913,6 +923,30 @@ export async function buildWorkflowSnapshotFromProjectState(
   const researchProgram = normalizeResearchProgramState(
     asRecord(projectState.manifest?.research_program)
   );
+  const benchmarkProtocol = normalizeBenchmarkProtocolState(
+    asRecord(projectState.manifest?.benchmark_protocol)
+  );
+  const statisticalEvidence = normalizeStatisticalEvidenceState(
+    asRecord(projectState.manifest?.statistical_evidence)
+  );
+  const venueCompetition = normalizeVenueCompetitionState(
+    asRecord(projectState.manifest?.venue_competition)
+  );
+  const ablationEvidence = normalizeAblationEvidenceState(
+    asRecord(projectState.manifest?.ablation_evidence)
+  );
+  const mechanismEvidence = normalizeMechanismEvidenceState(
+    asRecord(projectState.manifest?.mechanism_evidence)
+  );
+  const reproducibilityPack = normalizeReproducibilityPackState(
+    asRecord(projectState.manifest?.reproducibility_pack)
+  );
+  const cameraReadyEvidence = normalizeCameraReadyEvidenceState(
+    asRecord(projectState.manifest?.camera_ready_evidence)
+  );
+  const opportunityScorecard = normalizeOpportunityScorecardState(
+    asRecord(projectState.manifest?.opportunity_scorecard)
+  );
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1384,6 +1418,63 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    benchmarkProtocolStatus: benchmarkProtocol.status,
+    benchmarkProtocolFamily: benchmarkProtocol.benchmarkFamily,
+    benchmarkProtocolLocked: benchmarkProtocol.locked,
+    benchmarkProtocolDriftStatus: benchmarkProtocol.driftStatus,
+    benchmarkProtocolPath: benchmarkProtocol.protocolLockPath,
+    benchmarkProtocolPendingReason: benchmarkProtocol.pendingReason,
+    statisticalEvidenceStatus: statisticalEvidence.status,
+    statisticalEvidenceAggregatePath: statisticalEvidence.aggregatePath,
+    statisticalEvidenceClaimStrengthStatus:
+      statisticalEvidence.claimStrengthStatus,
+    statisticalEvidenceSignificantResultCount:
+      statisticalEvidence.significantResultCount,
+    statisticalEvidenceInsufficientSeedCount:
+      statisticalEvidence.insufficientSeedCount,
+    statisticalEvidencePendingReason: statisticalEvidence.pendingReason,
+    venueCompetitionStatus: venueCompetition.status,
+    venueCompetitionTargetVenues: venueCompetition.targetVenues,
+    venueCompetitionCompetitorSlatePath:
+      venueCompetition.competitorSlatePath,
+    venueCompetitionAcceptanceRiskStatus:
+      venueCompetition.acceptanceRiskStatus,
+    venueCompetitionGraphContextStatus:
+      venueCompetition.graphContextStatus,
+    venueCompetitionPendingReason: venueCompetition.pendingReason,
+    ablationEvidenceStatus: ablationEvidence.status,
+    ablationEvidenceSummaryPath: ablationEvidence.summaryPath,
+    ablationEvidenceSufficiencyStatus:
+      ablationEvidence.sufficiencyStatus,
+    ablationEvidencePublicationCriticalCount:
+      ablationEvidence.publicationCriticalCount,
+    ablationEvidencePendingReason: ablationEvidence.pendingReason,
+    mechanismEvidenceStatus: mechanismEvidence.status,
+    mechanismEvidencePacketPath: mechanismEvidence.packetPath,
+    mechanismEvidenceTier: mechanismEvidence.evidenceTier,
+    mechanismEvidenceGraphContextStatus:
+      mechanismEvidence.graphContextStatus,
+    mechanismEvidencePendingReason: mechanismEvidence.pendingReason,
+    reproducibilityPackStatus: reproducibilityPack.status,
+    reproducibilityPackBundlePath: reproducibilityPack.bundlePath,
+    reproducibilityPackEnvironmentCaptureStatus:
+      reproducibilityPack.environmentCaptureStatus,
+    reproducibilityPackRegenerateTablesStatus:
+      reproducibilityPack.regenerateTablesStatus,
+    reproducibilityPackPendingReason: reproducibilityPack.pendingReason,
+    cameraReadyEvidenceStatus: cameraReadyEvidence.status,
+    cameraReadyEvidencePackagePath: cameraReadyEvidence.packagePath,
+    cameraReadyEvidenceFiguresStatus: cameraReadyEvidence.figuresStatus,
+    cameraReadyEvidenceTablesStatus: cameraReadyEvidence.tablesStatus,
+    cameraReadyEvidenceCaptionsStatus:
+      cameraReadyEvidence.captionsStatus,
+    cameraReadyEvidencePendingReason: cameraReadyEvidence.pendingReason,
+    opportunityScorecardStatus: opportunityScorecard.status,
+    opportunityScorecardVerdict: opportunityScorecard.verdict,
+    opportunityScorecardPath: opportunityScorecard.scorecardPath,
+    opportunityScorecardGraphContextStatus:
+      opportunityScorecard.graphContextStatus,
+    opportunityScorecardPendingReason: opportunityScorecard.pendingReason,
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,

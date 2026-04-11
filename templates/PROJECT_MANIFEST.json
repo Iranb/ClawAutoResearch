@@ -163,6 +163,67 @@
     "last_updated_at": null,
     "pending_reason": null
   },
+  "benchmark_protocol": {
+    "status": "missing",
+    "benchmark_family": null,
+    "protocol_lock_path": "researcher/BENCHMARK_PROTOCOL.json",
+    "official_eval_recipe": null,
+    "locked": false,
+    "drift_status": null,
+    "pending_reason": null
+  },
+  "statistical_evidence": {
+    "status": "missing",
+    "aggregate_path": "analyzer/STATISTICAL_EVIDENCE.json",
+    "claim_strength_status": null,
+    "significant_result_count": 0,
+    "insufficient_seed_count": 0,
+    "pending_reason": null
+  },
+  "venue_competition": {
+    "status": "missing",
+    "target_venues": [],
+    "competitor_slate_path": "researcher/VENUE_COMPETITION.json",
+    "acceptance_risk_status": null,
+    "graph_context_status": null,
+    "pending_reason": null
+  },
+  "ablation_evidence": {
+    "status": "missing",
+    "summary_path": "researcher/ABLATION_EVIDENCE.json",
+    "sufficiency_status": null,
+    "publication_critical_count": 0,
+    "pending_reason": null
+  },
+  "mechanism_evidence": {
+    "status": "missing",
+    "packet_path": "researcher/MECHANISM_EVIDENCE.json",
+    "evidence_tier": null,
+    "graph_context_status": null,
+    "pending_reason": null
+  },
+  "reproducibility_pack": {
+    "status": "missing",
+    "bundle_path": "academic_writer/REPRODUCIBILITY_PACK.json",
+    "environment_capture_status": null,
+    "regenerate_tables_status": null,
+    "pending_reason": null
+  },
+  "camera_ready_evidence": {
+    "status": "missing",
+    "package_path": "academic_writer/CAMERA_READY_EVIDENCE.json",
+    "figures_status": null,
+    "tables_status": null,
+    "captions_status": null,
+    "pending_reason": null
+  },
+  "opportunity_scorecard": {
+    "status": "missing",
+    "verdict": null,
+    "scorecard_path": "researcher/TOP_TIER_OPPORTUNITY.json",
+    "graph_context_status": null,
+    "pending_reason": null
+  },
   "orchestration_state": {
     "status": "missing",
     "active_ticket_id": null,

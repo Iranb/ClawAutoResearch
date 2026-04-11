@@ -1154,6 +1154,45 @@ test("workflow-status command returns a readable workflow summary", async () => 
         researchProgramSuccessCriteriaCount: 1,
         researchProgramZoteroProjectPath:
           "bot/gcd-confirmation-bias-mitigation",
+        benchmarkProtocolStatus: "ready",
+        benchmarkProtocolFamily: "OpenWorldGraphBench",
+        benchmarkProtocolLocked: true,
+        benchmarkProtocolDriftStatus: "pass",
+        benchmarkProtocolPath: "researcher/BENCHMARK_PROTOCOL.json",
+        statisticalEvidenceStatus: "partial",
+        statisticalEvidenceAggregatePath: "analyzer/STATISTICAL_EVIDENCE.json",
+        statisticalEvidenceClaimStrengthStatus: "moderate",
+        statisticalEvidenceSignificantResultCount: 2,
+        statisticalEvidenceInsufficientSeedCount: 1,
+        venueCompetitionStatus: "partial",
+        venueCompetitionTargetVenues: ["ICLR", "NeurIPS"],
+        venueCompetitionCompetitorSlatePath:
+          "researcher/VENUE_COMPETITION.json",
+        venueCompetitionAcceptanceRiskStatus: "moderate",
+        venueCompetitionGraphContextStatus: "ready",
+        ablationEvidenceStatus: "ready",
+        ablationEvidenceSummaryPath: "researcher/ABLATION_EVIDENCE.json",
+        ablationEvidenceSufficiencyStatus: "partial",
+        ablationEvidencePublicationCriticalCount: 2,
+        mechanismEvidenceStatus: "partial",
+        mechanismEvidencePacketPath: "researcher/MECHANISM_EVIDENCE.json",
+        mechanismEvidenceTier: "moderate",
+        mechanismEvidenceGraphContextStatus: "unverified_graph_context",
+        reproducibilityPackStatus: "draft",
+        reproducibilityPackBundlePath:
+          "academic_writer/REPRODUCIBILITY_PACK.json",
+        reproducibilityPackEnvironmentCaptureStatus: "ready",
+        reproducibilityPackRegenerateTablesStatus: "pending",
+        cameraReadyEvidenceStatus: "draft",
+        cameraReadyEvidencePackagePath:
+          "academic_writer/CAMERA_READY_EVIDENCE.json",
+        cameraReadyEvidenceFiguresStatus: "ready",
+        cameraReadyEvidenceTablesStatus: "pending",
+        cameraReadyEvidenceCaptionsStatus: "pending",
+        opportunityScorecardStatus: "partial",
+        opportunityScorecardVerdict: "strong_but_incremental",
+        opportunityScorecardPath: "researcher/TOP_TIER_OPPORTUNITY.json",
+        opportunityScorecardGraphContextStatus: "ready",
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
         experimentActiveRunCount: 1,
@@ -1294,6 +1333,14 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
+  assert.match(result.text ?? "", /Benchmark protocol: status=ready, family=OpenWorldGraphBench, locked=true, drift=pass/);
+  assert.match(result.text ?? "", /Statistical evidence: status=partial, claim_strength=moderate, significant=2, insufficient_seeds=1/);
+  assert.match(result.text ?? "", /Venue competition: status=partial, venues=ICLR,NeurIPS, risk=moderate, graph_context=ready/);
+  assert.match(result.text ?? "", /Ablation evidence: status=ready, sufficiency=partial, publication_critical=2/);
+  assert.match(result.text ?? "", /Mechanism evidence: status=partial, tier=moderate, graph_context=unverified_graph_context/);
+  assert.match(result.text ?? "", /Reproducibility pack: status=draft, environment=ready, regenerate_tables=pending/);
+  assert.match(result.text ?? "", /Camera-ready evidence: status=draft, figures=ready, tables=pending, captions=pending/);
+  assert.match(result.text ?? "", /Top-tier opportunity: status=partial, verdict=strong_but_incremental, graph_context=ready/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
   assert.match(result.text ?? "", /GPU monitor: status=fresh, checked_at=2026-04-11T12:00:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished/);
   assert.match(

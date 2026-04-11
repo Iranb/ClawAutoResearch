@@ -14,8 +14,9 @@
 
 - 已完成切片 A：引入 `tools/workflow-kernel/graph-context.ts`，把 `auto_iterator` 的 graph-sensitive refresh / routing / repair 判断统一到 graph context adapter；新增 `tests/workflow-kernel-refactor.test.mjs`，并通过 `tests/auto-iterator.test.mjs` 全量回归。
 - 已完成切片 B：引入 `tools/workflow-evidence/papernexus-bridge.ts`，把 stage-preflight 对 workflow-owned PaperNexus packet/bundle 的存在性判断收束到统一 bridge；新增 `tests/workflow-evidence-kernel.test.mjs`。
+- 已完成切片 C：引入最小 evidence contract state schema（template blocks + normalizer + snapshot/status projection），使 `benchmark_protocol`、`statistical_evidence`、`venue_competition`、`ablation_evidence`、`mechanism_evidence`、`reproducibility_pack`、`camera_ready_evidence`、`opportunity_scorecard` 成为真正可见的 workflow state；新增 snapshot/status 回归。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：把 graph-context / papernexus-bridge 接到更多 projection 和 evidence contracts，而不是继续在调用侧散落硬编码。
+- 下一切片目标：把 evidence contracts 从“可见 state”推进到 “closeout / gate 会真正消费的 state”，优先从 benchmark / venue competition / opportunity scorecard 的最小 gate 接入开始。
 
 ---
 
@@ -906,7 +907,8 @@
 当前进展：
 
 - 已完成前置桥接：`papernexus-bridge.ts` 已落地，并把 workflow-owned PaperNexus packet/bundle 的检测从 `stage-preflight` 里抽离。
-- 未完成：manifest evidence state blocks 还没有正式加到 schema，也还没接进 closeout / review / writing gates。
+- 已完成基座：manifest evidence state blocks 已加入 template，snapshot 与 `/workflow-status` 已能读出这些状态。
+- 未完成：这些 contracts 还没有正式接进 closeout / review / writing gates，仍停留在 schema/projection 层。
 
 - [ ] **Step 2: Benchmark registry + protocol lock**
 

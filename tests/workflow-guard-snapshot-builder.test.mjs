@@ -148,6 +148,107 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.ok(snapshot.backgroundTasks.some((task) => task.includes("Continue literature survey")));
 });
 
+test("snapshot builder surfaces evidence contract summaries from manifest state", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-evidence-contracts");
+  const sessionKey = "agent:researcher:discord:group:evidence-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.benchmark_protocol = {
+    status: "ready",
+    benchmark_family: "OpenWorldGraphBench",
+    protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
+    locked: true,
+    drift_status: "pass",
+  };
+  manifest.statistical_evidence = {
+    status: "ready",
+    aggregate_path: "analyzer/STATISTICAL_EVIDENCE.json",
+    claim_strength_status: "strong",
+    significant_result_count: 3,
+    insufficient_seed_count: 1,
+  };
+  manifest.venue_competition = {
+    status: "partial",
+    target_venues: ["ICLR", "NeurIPS"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "ready",
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+    graph_context_status: "ready",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "researcher",
+    },
+    projectRoot,
+    projectId: "workflow-evidence-contracts",
+    messageChannel: "discord",
+    boundByAgent: "researcher",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "researcher",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+        maxWorkflowInboxMessages: 3,
+      },
+      agentId: "researcher",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.benchmarkProtocolStatus, "ready");
+  assert.equal(snapshot.benchmarkProtocolFamily, "OpenWorldGraphBench");
+  assert.equal(snapshot.benchmarkProtocolLocked, true);
+  assert.equal(snapshot.benchmarkProtocolDriftStatus, "pass");
+  assert.equal(snapshot.statisticalEvidenceStatus, "ready");
+  assert.equal(snapshot.statisticalEvidenceClaimStrengthStatus, "strong");
+  assert.equal(snapshot.statisticalEvidenceSignificantResultCount, 3);
+  assert.equal(snapshot.statisticalEvidenceInsufficientSeedCount, 1);
+  assert.equal(snapshot.venueCompetitionStatus, "partial");
+  assert.deepEqual(snapshot.venueCompetitionTargetVenues, ["ICLR", "NeurIPS"]);
+  assert.equal(snapshot.venueCompetitionAcceptanceRiskStatus, "moderate");
+  assert.equal(snapshot.venueCompetitionGraphContextStatus, "ready");
+  assert.equal(snapshot.opportunityScorecardStatus, "ready");
+  assert.equal(snapshot.opportunityScorecardVerdict, "worth_top_tier_bet");
+  assert.equal(snapshot.opportunityScorecardGraphContextStatus, "ready");
+});
+
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-blocker");
