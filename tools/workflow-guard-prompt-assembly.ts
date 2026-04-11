@@ -724,6 +724,20 @@ export function formatWorkflowSnapshotForPromptImpl(
       "Brainstorm selection rule: multiple brainstorm rounds may coexist, but aggressive auto mode should keep all candidates and promote the highest-scoring option to the selected durable bundle."
     );
   }
+  if (snapshot.surveyReviewStatus) {
+    lines.push(
+      `Survey review: status=${snapshot.surveyReviewStatus}, phase=${snapshot.surveyReviewCurrentPhase ?? "unset"}, topic=${snapshot.surveyReviewTopic ?? "unset"}, mode=${snapshot.surveyReviewMode ?? "unset"}, candidates=${snapshot.surveyReviewCandidatePaperCount ?? 0}, included=${snapshot.surveyReviewIncludedPaperCount ?? 0}, excluded=${snapshot.surveyReviewExcludedPaperCount ?? 0}, query_rounds=${snapshot.surveyReviewQueryRoundCount ?? 0}, graph_brief_ready=${snapshot.surveyReviewGraphGroundedBriefReady ? "true" : "false"}, gates_ready=${snapshot.surveyReviewGateReady ? "true" : "false"}`
+    );
+    lines.push(
+      `Survey gates: coverage=${snapshot.surveyReviewCoverageStatus ?? "missing"}, taxonomy=${snapshot.surveyReviewTaxonomyStabilityStatus ?? "missing"}, representative_methods=${snapshot.surveyReviewRepresentativeMethodsStatus ?? "missing"}, benchmark_alignment=${snapshot.surveyReviewBenchmarkAlignmentStatus ?? "missing"}, gap_closure=${snapshot.surveyReviewGapClosureStatus ?? "missing"}, blockers=${snapshot.surveyReviewGateBlockingIssueCount ?? 0}`
+    );
+    if (snapshot.surveyReviewDiagnosticsPath) {
+      lines.push(`Survey diagnostics: ${snapshot.surveyReviewDiagnosticsPath}`);
+    }
+    if (snapshot.surveyReviewPendingReason) {
+      lines.push(`Survey review pending_reason: ${snapshot.surveyReviewPendingReason}`);
+    }
+  }
   if (snapshot.ideationContractStatus) {
     lines.push(
       `Ideation contract: status=${snapshot.ideationContractStatus}, track=${snapshot.ideationContractSelectedTrackId ?? "unset"}, direction=${snapshot.ideationContractSelectedDirectionId ?? "unset"}, idea_tree=${snapshot.ideationContractIdeaTreePath ?? "unset"}, proposal=${snapshot.ideationContractResearchProposalPath ?? "unset"}, ranking=${snapshot.ideationContractRankingHistoryPath ?? "unset"}, scoreboard=${snapshot.ideationContractTournamentScoreboardPath ?? "unset"}, top3=${snapshot.ideationContractTop3SummaryPath ?? "unset"}, graph_packet=${snapshot.ideationContractGraphPacketPath ?? "unset"}`

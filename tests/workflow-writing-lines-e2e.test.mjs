@@ -47,12 +47,16 @@ async function seedSurveyReviewProject(projectRoot) {
   await writeJson(
     path.join(projectRoot, "researcher", "SURVEY_QUERY_REGISTRY.json"),
     {
-      rounds: [{ query: "graph reasoning survey", provider: "papers-cool" }],
+      rounds: [
+        { query: "graph reasoning survey", provider: "papers-cool" },
+        { query: "graph reasoning review", provider: "pasa-paper-search" },
+      ],
+      candidate_paper_count: 12,
     },
   );
   await writeText(
     path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"),
-    "# Review Protocol\n",
+    "# Review Protocol\n\n- Main benchmarks: SurveyBench, GraphArena.\n- Main metrics: Accuracy, F1.\n",
   );
   await writeJson(
     path.join(projectRoot, "researcher", "INCLUDED_PAPERS.json"),
@@ -60,6 +64,10 @@ async function seedSurveyReviewProject(projectRoot) {
       papers: [
         { canonical_id: "arxiv:2501.00001" },
         { canonical_id: "arxiv:2501.00002" },
+        { canonical_id: "arxiv:2501.00004" },
+        { canonical_id: "arxiv:2501.00005" },
+        { canonical_id: "arxiv:2501.00006" },
+        { canonical_id: "arxiv:2501.00007" },
       ],
     },
   );
@@ -81,16 +89,28 @@ async function seedSurveyReviewProject(projectRoot) {
   );
   await writeText(path.join(projectRoot, "researcher", "SOTA_MATRIX.md"), "# SOTA Matrix\n");
   await writeText(
+    path.join(projectRoot, "researcher", "SOTA_MATRIX.md"),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Paper | Family | Dataset | Metric |",
+      "| --- | --- | --- | --- |",
+      "| A | Graph pretraining | SurveyBench | Accuracy |",
+      "| B | Reasoning agents | GraphArena | F1 |",
+      "| C | Hybrid systems | TaskGraph | mAP |",
+    ].join("\n"),
+  );
+  await writeText(
     path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"),
-    "# Gap Synthesis\n\n- Benchmark coverage remains fragmented.\n",
+    "# Gap Synthesis\n\n## Open Problems\n- Benchmark coverage remains fragmented.\n- Cross-family comparison is still weak.\n",
   );
   await writeText(
     path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"),
-    "# Coverage Summary\n\n- Included papers cover three benchmark families.\n",
+    "# Coverage Summary\n\n- Search coverage spans core venues.\n- Included papers cover three benchmark families.\n- Blind spots are documented.\n",
   );
   await writeText(
     path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"),
-    "# Survey Brief\n\n- The area clusters into a few recurring method families.\n",
+    "# Survey Brief\n\n## Themes\n- Graph pretraining\n- Graph reasoning agents\n- Hybrid systems\n\n## Open Problems\n- Benchmark coverage remains fragmented.\n",
   );
 }
 

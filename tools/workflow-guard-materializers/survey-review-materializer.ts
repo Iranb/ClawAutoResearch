@@ -14,6 +14,7 @@ import {
   serializeSurveyReviewState,
   type SurveyReviewState,
 } from "../workflow-guard-state/survey-review";
+import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.ts";
 
 function countPaperEntries(value: unknown): number {
   if (Array.isArray(value)) {
@@ -135,19 +136,31 @@ export async function materializeSurveyReviewStateImpl(params: {
           includedPaperCount + excludedPaperCount,
           merged.candidatePaperCount ?? 0
         );
+  const diagnostics = await materializeSurveyReviewDiagnostics({
+    projectRoot,
+    state: {
+      ...merged,
+      candidatePaperCount,
+      includedPaperCount,
+      excludedPaperCount,
+      queryRoundCount,
+    },
+  });
 
   let status = merged.status;
   let currentPhase = merged.currentPhase;
   let pendingReason = merged.pendingReason;
 
-  if (surveyBriefExists) {
+  if (surveyBriefExists && diagnostics.ready) {
     status = "completed";
     currentPhase = "complete";
     pendingReason = null;
   } else if (literatureReviewExists || sotaExists || gapExists) {
     status = "synthesizing";
     currentPhase = "synthesis";
-    pendingReason = surveyBriefExists ? null : "Finalize the survey brief.";
+    pendingReason =
+      diagnostics.blockingIssues[0] ??
+      (surveyBriefExists ? "Resolve the remaining survey-quality blockers." : "Finalize the survey brief.");
   } else if (protocolExists || includedPaperCount > 0 || excludedPaperCount > 0) {
     status = "screening";
     currentPhase = "screening";
@@ -172,6 +185,20 @@ export async function materializeSurveyReviewStateImpl(params: {
     excluded_paper_count: excludedPaperCount,
     graph_grounded_brief_ready:
       surveyBriefExists || (coverageExists && literatureReviewExists && gapExists),
+    diagnostics_path: diagnostics.diagnosticsPath,
+    gate_ready: diagnostics.ready,
+    gate_blocking_issues: diagnostics.blockingIssues,
+    gate_warnings: diagnostics.warnings,
+    coverage_status: diagnostics.coverage.status,
+    coverage_summary: diagnostics.coverage.summary,
+    taxonomy_stability_status: diagnostics.taxonomyStability.status,
+    taxonomy_stability_summary: diagnostics.taxonomyStability.summary,
+    representative_methods_status: diagnostics.representativeMethods.status,
+    representative_methods_summary: diagnostics.representativeMethods.summary,
+    benchmark_alignment_status: diagnostics.benchmarkAlignment.status,
+    benchmark_alignment_summary: diagnostics.benchmarkAlignment.summary,
+    gap_closure_status: diagnostics.gapClosure.status,
+    gap_closure_summary: diagnostics.gapClosure.summary,
     pending_reason: pendingReason,
     last_updated_at: new Date().toISOString(),
   });
@@ -184,6 +211,6 @@ export async function materializeSurveyReviewStateImpl(params: {
 
   return {
     state: getSurveyReviewStateSummary(manifest).state,
-    generatedFiles: [],
+    generatedFiles: [diagnostics.diagnosticsPath],
   };
 }

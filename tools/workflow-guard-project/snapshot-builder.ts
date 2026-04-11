@@ -1287,7 +1287,17 @@ export async function buildWorkflowSnapshotFromProjectState(
     surveyReviewExcludedPaperCount: surveyReview.excludedPaperCount,
     surveyReviewQueryRoundCount: surveyReview.queryRoundCount,
     surveyReviewGraphGroundedBriefReady: surveyReview.graphGroundedBriefReady,
+    surveyReviewDiagnosticsPath: surveyReview.diagnosticsPath,
+    surveyReviewGateReady: surveyReview.gateReady,
+    surveyReviewCoverageStatus: surveyReview.coverageStatus,
+    surveyReviewTaxonomyStabilityStatus: surveyReview.taxonomyStabilityStatus,
+    surveyReviewRepresentativeMethodsStatus:
+      surveyReview.representativeMethodsStatus,
+    surveyReviewBenchmarkAlignmentStatus:
+      surveyReview.benchmarkAlignmentStatus,
+    surveyReviewGapClosureStatus: surveyReview.gapClosureStatus,
     surveyReviewSurveyBriefPath: surveyReview.surveyBriefPath,
+    surveyReviewGateBlockingIssueCount: surveyReview.gateBlockingIssues.length,
     surveyReviewPendingReason: surveyReview.pendingReason,
     ideationContractStatus: ideationContract.status,
     ideationContractSelectedDirectionId: ideationContract.selectedDirectionId,

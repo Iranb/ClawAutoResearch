@@ -28,6 +28,20 @@ export type SurveyReviewState = {
   excludedPaperCount: number | null;
   queryRoundCount: number | null;
   graphGroundedBriefReady: boolean;
+  diagnosticsPath: string | null;
+  gateReady: boolean;
+  gateBlockingIssues: string[];
+  gateWarnings: string[];
+  coverageStatus: string | null;
+  coverageSummary: string | null;
+  taxonomyStabilityStatus: string | null;
+  taxonomyStabilitySummary: string | null;
+  representativeMethodsStatus: string | null;
+  representativeMethodsSummary: string | null;
+  benchmarkAlignmentStatus: string | null;
+  benchmarkAlignmentSummary: string | null;
+  gapClosureStatus: string | null;
+  gapClosureSummary: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
 };
@@ -49,6 +63,8 @@ export const DEFAULT_SURVEY_GAP_SYNTHESIS_PATH =
 export const DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH =
   `${DEFAULT_SURVEY_DIR}/COVERAGE_SUMMARY.md`;
 export const DEFAULT_SURVEY_BRIEF_PATH = `${DEFAULT_SURVEY_DIR}/SURVEY_BRIEF.md`;
+export const DEFAULT_SURVEY_DIAGNOSTICS_PATH =
+  `${DEFAULT_SURVEY_DIR}/SURVEY_GATE_DIAGNOSTICS.json`;
 
 function normalizeOptionalCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
@@ -67,6 +83,14 @@ function normalizeStringArray(value: unknown): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function normalizeOptionalStatus(value: unknown): string | null {
+  const normalized = normalizeStage(value);
+  if (normalized) {
+    return normalized;
+  }
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export function normalizeSurveyReviewState(value: unknown): SurveyReviewState {
@@ -126,6 +150,50 @@ export function normalizeSurveyReviewState(value: unknown): SurveyReviewState {
         "graphGroundedBriefReady",
         "graph_grounded_brief_ready",
       ]) ?? false,
+    diagnosticsPath:
+      pickString(record, ["diagnosticsPath", "diagnostics_path"]) ??
+      DEFAULT_SURVEY_DIAGNOSTICS_PATH,
+    gateReady:
+      pickBoolean(record, ["gateReady", "gate_ready"]) ?? false,
+    gateBlockingIssues: normalizeStringArray(
+      record.gateBlockingIssues ?? record.gate_blocking_issues
+    ),
+    gateWarnings: normalizeStringArray(
+      record.gateWarnings ?? record.gate_warnings
+    ),
+    coverageStatus: normalizeOptionalStatus(
+      record.coverageStatus ?? record.coverage_status
+    ),
+    coverageSummary: pickString(record, ["coverageSummary", "coverage_summary"]),
+    taxonomyStabilityStatus: normalizeOptionalStatus(
+      record.taxonomyStabilityStatus ?? record.taxonomy_stability_status
+    ),
+    taxonomyStabilitySummary: pickString(record, [
+      "taxonomyStabilitySummary",
+      "taxonomy_stability_summary",
+    ]),
+    representativeMethodsStatus: normalizeOptionalStatus(
+      record.representativeMethodsStatus ??
+        record.representative_methods_status
+    ),
+    representativeMethodsSummary: pickString(record, [
+      "representativeMethodsSummary",
+      "representative_methods_summary",
+    ]),
+    benchmarkAlignmentStatus: normalizeOptionalStatus(
+      record.benchmarkAlignmentStatus ?? record.benchmark_alignment_status
+    ),
+    benchmarkAlignmentSummary: pickString(record, [
+      "benchmarkAlignmentSummary",
+      "benchmark_alignment_summary",
+    ]),
+    gapClosureStatus: normalizeOptionalStatus(
+      record.gapClosureStatus ?? record.gap_closure_status
+    ),
+    gapClosureSummary: pickString(record, [
+      "gapClosureSummary",
+      "gap_closure_summary",
+    ]),
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
     lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
   };
@@ -156,6 +224,20 @@ export function serializeSurveyReviewState(
     excluded_paper_count: state.excludedPaperCount,
     query_round_count: state.queryRoundCount,
     graph_grounded_brief_ready: state.graphGroundedBriefReady,
+    diagnostics_path: state.diagnosticsPath,
+    gate_ready: state.gateReady,
+    gate_blocking_issues: state.gateBlockingIssues,
+    gate_warnings: state.gateWarnings,
+    coverage_status: state.coverageStatus,
+    coverage_summary: state.coverageSummary,
+    taxonomy_stability_status: state.taxonomyStabilityStatus,
+    taxonomy_stability_summary: state.taxonomyStabilitySummary,
+    representative_methods_status: state.representativeMethodsStatus,
+    representative_methods_summary: state.representativeMethodsSummary,
+    benchmark_alignment_status: state.benchmarkAlignmentStatus,
+    benchmark_alignment_summary: state.benchmarkAlignmentSummary,
+    gap_closure_status: state.gapClosureStatus,
+    gap_closure_summary: state.gapClosureSummary,
     pending_reason: state.pendingReason,
     last_updated_at: state.lastUpdatedAt,
   };
@@ -171,6 +253,6 @@ export function getSurveyReviewStateSummary(value: unknown): {
   );
   return {
     state,
-    ready: state.status === "completed",
+    ready: state.status === "completed" && state.gateReady === true,
   };
 }

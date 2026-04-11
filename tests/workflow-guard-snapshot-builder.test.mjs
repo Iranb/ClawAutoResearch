@@ -476,6 +476,16 @@ test("snapshot builder surfaces survey review state for projectless review workf
           included_paper_count: 24,
           excluded_paper_count: 31,
           graph_grounded_brief_ready: false,
+          gate_ready: false,
+          coverage_status: "partial",
+          taxonomy_stability_status: "unstable",
+          representative_methods_status: "partial",
+          benchmark_alignment_status: "partial",
+          gap_closure_status: "partial",
+          gate_blocking_issues: [
+            "Expand SOTA matrix coverage before write handoff.",
+          ],
+          diagnostics_path: "researcher/SURVEY_GATE_DIAGNOSTICS.json",
           survey_brief_path: "researcher/SURVEY_BRIEF.md",
         },
       },
@@ -538,6 +548,17 @@ test("snapshot builder surfaces survey review state for projectless review workf
   assert.equal(snapshot.surveyReviewIncludedPaperCount, 24);
   assert.equal(snapshot.surveyReviewExcludedPaperCount, 31);
   assert.equal(snapshot.surveyReviewGraphGroundedBriefReady, false);
+  assert.equal(snapshot.surveyReviewGateReady, false);
+  assert.equal(snapshot.surveyReviewCoverageStatus, "partial");
+  assert.equal(snapshot.surveyReviewTaxonomyStabilityStatus, "unstable");
+  assert.equal(snapshot.surveyReviewRepresentativeMethodsStatus, "partial");
+  assert.equal(snapshot.surveyReviewBenchmarkAlignmentStatus, "partial");
+  assert.equal(snapshot.surveyReviewGapClosureStatus, "partial");
+  assert.equal(snapshot.surveyReviewGateBlockingIssueCount, 1);
+  assert.equal(
+    snapshot.surveyReviewDiagnosticsPath,
+    "researcher/SURVEY_GATE_DIAGNOSTICS.json"
+  );
   assert.equal(snapshot.surveyReviewSurveyBriefPath, "researcher/SURVEY_BRIEF.md");
 });
 

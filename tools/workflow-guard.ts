@@ -1594,7 +1594,15 @@ export type WorkflowSnapshot = {
   surveyReviewExcludedPaperCount: number | null;
   surveyReviewQueryRoundCount: number | null;
   surveyReviewGraphGroundedBriefReady: boolean;
+  surveyReviewDiagnosticsPath: string | null;
+  surveyReviewGateReady: boolean;
+  surveyReviewCoverageStatus: string | null;
+  surveyReviewTaxonomyStabilityStatus: string | null;
+  surveyReviewRepresentativeMethodsStatus: string | null;
+  surveyReviewBenchmarkAlignmentStatus: string | null;
+  surveyReviewGapClosureStatus: string | null;
   surveyReviewSurveyBriefPath: string | null;
+  surveyReviewGateBlockingIssueCount: number | null;
   surveyReviewPendingReason: string | null;
   ideationContractStatus: string | null;
   ideationContractSelectedDirectionId: string | null;
@@ -2232,7 +2240,7 @@ const STAGE_EXECUTION_HINTS: Record<
     owner: "researcher",
     summary: "Run the survey loop until the review packet is saturated, then hand off into survey-mode writing.",
     command:
-      'Run /survey-pipeline "topic" to expand retrieval coverage, maintain the durable screening packet, and synthesize SURVEY_BRIEF.md plus the survey review artifacts before WRITE handoff.',
+      'Run /survey-pipeline "topic" to expand retrieval coverage, stabilize taxonomy, complete representative-method + benchmark alignment coverage, and synthesize SURVEY_BRIEF.md plus the survey review artifacts before WRITE handoff.',
   },
   graph_build: {
     owner: "researcher",
@@ -5689,6 +5697,51 @@ async function collectSurveyReviewStageMissingSignals(params: {
         : `survey_review must reach completed before WRITE handoff (current: ${state.status})`
     );
   }
+  if (!state.gateReady) {
+    missing.push(
+      `survey_review quality gates must be ready before WRITE handoff: coverage=${state.coverageStatus ?? "missing"}, taxonomy=${state.taxonomyStabilityStatus ?? "missing"}, representative_methods=${state.representativeMethodsStatus ?? "missing"}, benchmark_alignment=${state.benchmarkAlignmentStatus ?? "missing"}, gap_closure=${state.gapClosureStatus ?? "missing"}`
+    );
+  }
+  if (state.coverageStatus !== "ready") {
+    missing.push(
+      state.coverageSummary
+        ? `survey coverage gate is not ready: ${state.coverageSummary}`
+        : "survey coverage gate is not ready"
+    );
+  }
+  if (state.taxonomyStabilityStatus !== "stable") {
+    missing.push(
+      state.taxonomyStabilitySummary
+        ? `survey taxonomy gate is not stable: ${state.taxonomyStabilitySummary}`
+        : "survey taxonomy gate is not stable"
+    );
+  }
+  if (state.representativeMethodsStatus !== "ready") {
+    missing.push(
+      state.representativeMethodsSummary
+        ? `survey representative-methods gate is not ready: ${state.representativeMethodsSummary}`
+        : "survey representative-methods gate is not ready"
+    );
+  }
+  if (state.benchmarkAlignmentStatus !== "aligned") {
+    missing.push(
+      state.benchmarkAlignmentSummary
+        ? `survey benchmark-alignment gate is not aligned: ${state.benchmarkAlignmentSummary}`
+        : "survey benchmark-alignment gate is not aligned"
+    );
+  }
+  if (state.gapClosureStatus !== "closed") {
+    missing.push(
+      state.gapClosureSummary
+        ? `survey gap-closure gate is not closed: ${state.gapClosureSummary}`
+        : "survey gap-closure gate is not closed"
+    );
+  }
+  if (state.gateBlockingIssues.length > 0) {
+    missing.push(
+      `survey_review blocking issues: ${state.gateBlockingIssues.join(" | ")}`
+    );
+  }
   const queryRegistryResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     state.queryRegistryPath
@@ -5712,6 +5765,10 @@ async function collectSurveyReviewStageMissingSignals(params: {
   const surveyBriefResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     state.surveyBriefPath
+  );
+  const diagnosticsResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.diagnosticsPath
   );
 
   const requiresQueryRegistry = ["searching", "screening", "synthesizing", "completed"].includes(
@@ -5752,6 +5809,12 @@ async function collectSurveyReviewStageMissingSignals(params: {
   }
   if (requiresSurveyBrief && !(await fileHasNonWhitespaceContent(surveyBriefResolvedPath))) {
     missing.push(`${state.surveyBriefPath ?? "researcher/SURVEY_BRIEF.md"} is required when survey_review.status=completed`);
+  }
+  if (
+    requiresSynthesisPacket &&
+    !(await fileHasMeaningfulJsonContent(diagnosticsResolvedPath))
+  ) {
+    missing.push(`${state.diagnosticsPath ?? "researcher/SURVEY_GATE_DIAGNOSTICS.json"} should record the survey-quality gate diagnostics`);
   }
   return missing;
 }

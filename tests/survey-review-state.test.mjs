@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SURVEY_BRIEF_PATH,
   DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH,
+  DEFAULT_SURVEY_DIAGNOSTICS_PATH,
   DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH,
   DEFAULT_SURVEY_GAP_SYNTHESIS_PATH,
   DEFAULT_SURVEY_INCLUDED_PAPERS_PATH,
@@ -36,6 +37,9 @@ test("normalizeSurveyReviewState provides durable survey defaults", () => {
   assert.equal(state.gapSynthesisPath, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH);
   assert.equal(state.coverageSummaryPath, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH);
   assert.equal(state.surveyBriefPath, DEFAULT_SURVEY_BRIEF_PATH);
+  assert.equal(state.diagnosticsPath, DEFAULT_SURVEY_DIAGNOSTICS_PATH);
+  assert.equal(state.gateReady, false);
+  assert.deepEqual(state.gateBlockingIssues, []);
 });
 
 test("serializeSurveyReviewState preserves survey counts and durable paths", () => {
@@ -48,6 +52,13 @@ test("serializeSurveyReviewState preserves survey counts and durable paths", () 
     included_paper_count: 19,
     excluded_paper_count: 21,
     graph_grounded_brief_ready: true,
+    diagnostics_path: "researcher/SURVEY_GATE_DIAGNOSTICS.json",
+    gate_ready: true,
+    coverage_status: "ready",
+    taxonomy_stability_status: "stable",
+    representative_methods_status: "ready",
+    benchmark_alignment_status: "aligned",
+    gap_closure_status: "closed",
   });
 
   const serialized = serializeSurveyReviewState(state);
@@ -58,6 +69,10 @@ test("serializeSurveyReviewState preserves survey counts and durable paths", () 
   assert.equal(serialized.included_paper_count, 19);
   assert.equal(serialized.excluded_paper_count, 21);
   assert.equal(serialized.graph_grounded_brief_ready, true);
+  assert.equal(serialized.gate_ready, true);
+  assert.equal(serialized.coverage_status, "ready");
+  assert.equal(serialized.taxonomy_stability_status, "stable");
+  assert.equal(serialized.benchmark_alignment_status, "aligned");
   assert.equal(serialized.survey_brief_path, DEFAULT_SURVEY_BRIEF_PATH);
 });
 
@@ -72,6 +87,12 @@ test("getSurveyReviewStateSummary exposes survey readiness and artifact counts",
       included_paper_count: 42,
       excluded_paper_count: 51,
       graph_grounded_brief_ready: true,
+      gate_ready: true,
+      coverage_status: "ready",
+      taxonomy_stability_status: "stable",
+      representative_methods_status: "ready",
+      benchmark_alignment_status: "aligned",
+      gap_closure_status: "closed",
     },
   });
 
@@ -83,4 +104,6 @@ test("getSurveyReviewStateSummary exposes survey readiness and artifact counts",
   assert.equal(summary.state.includedPaperCount, 42);
   assert.equal(summary.state.excludedPaperCount, 51);
   assert.equal(summary.state.graphGroundedBriefReady, true);
+  assert.equal(summary.state.gateReady, true);
+  assert.equal(summary.ready, true);
 });

@@ -157,7 +157,9 @@ export async function materializePaperStoryStateImpl(
     ideationState.selectedTrackId ??
     brainstormState.trackId ??
     (surveyWritingBridgeReady ? `survey-${slugSurveyTopic(surveyReviewState.topic)}` : null) ??
-    pickString(activeTracks[0], ["track_id", "trackId"]);
+    (activeTracks[0]
+      ? pickString(activeTracks[0], ["track_id", "trackId"])
+      : null);
   const selectedTrack =
     activeTracks.find(
       (track) => pickString(track, ["track_id", "trackId"]) === storylineSourceTrackId

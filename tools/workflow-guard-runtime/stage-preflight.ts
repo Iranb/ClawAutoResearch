@@ -381,8 +381,9 @@ async function shouldMaterializeSurveyReviewState(params: {
     state.queryRegistryPath,
     state.literaturePath,
     state.reviewProtocolPath,
+    state.diagnosticsPath,
   ]);
-  return state.status !== "completed" || artifactMissing;
+  return state.status !== "completed" || !state.gateReady || artifactMissing;
 }
 
 async function shouldMaterializeIdeaCatalyst(params: {

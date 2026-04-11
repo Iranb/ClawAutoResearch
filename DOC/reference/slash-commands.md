@@ -22,8 +22,8 @@
 - `/workflow-status`  
   当前 workflow 快照入口。除了 stage / owner / gate，也会显示 PaperNexus 的 graph refresh 与 paper ingestion 摘要；看到 `graph refresh required` 时，要结合 `PaperNexus ingestion` 一行判断是“真的缺论文”还是“wrapper 驱动的导入/重算仍在进行中”。
 
-- `/survey-review`
-  面向综述 / survey 写作的 projectless 入口。给一个主题后，系统会创建一个轻量 survey workspace，并停留在 `survey_review` 这一个顶层 stage 内部推进 `retrieval -> screening -> synthesis -> complete`，不会进入实验环节。它复用现有 PaperNexus、workflow manifest、状态快照和 durable review packet，但把权威状态集中在 `PROJECT_MANIFEST.json.survey_review`，避免“文件已经生成了但 workflow 仍卡住”的老问题。
+- `/survey-pipeline`
+  面向综述 / survey 写作的 projectless 入口。给一个主题后，系统会创建一个轻量 survey workspace，并停留在 `survey_review` 这一个顶层 stage 内部推进 `retrieval -> screening -> synthesis -> complete`，不会进入实验环节。它复用现有 PaperNexus、workflow manifest、状态快照和 durable review packet，但把权威状态集中在 `PROJECT_MANIFEST.json.survey_review`，避免“文件已经生成了但 workflow 仍卡住”的老问题。现在 `survey_review -> write` 的 handoff 不再只看文件是否存在，而是会检查 5 个 survey gate：coverage、taxonomy stability、representative methods、benchmark alignment、gap closure。
 
 ## 3. 文献与图谱
 
@@ -45,8 +45,17 @@
 - `GAP_SYNTHESIS.md`
 - `COVERAGE_SUMMARY.md`
 - `SURVEY_BRIEF.md`
+- `SURVEY_GATE_DIAGNOSTICS.json`
 
 这些文件会被 `survey_review` materializer 反向汇总到 `PROJECT_MANIFEST.json.survey_review`，所以 slash command、`/workflow-status`、background continuation 和后续人工检查都读同一份权威状态。
+
+其中 `SURVEY_GATE_DIAGNOSTICS.json` 会把以下 5 个 gate 变成 durable workflow state：
+
+- coverage breadth
+- taxonomy stability
+- representative method completeness
+- benchmark / dataset / metric alignment
+- gap synthesis closure
 
 - `/papers-cool`  
   粗粒度检索论文入口。

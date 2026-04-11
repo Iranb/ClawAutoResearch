@@ -78,3 +78,4 @@ install.sh.bak
 # Testing
 jest-results/
 test-results/
+.omx/

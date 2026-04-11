@@ -216,8 +216,15 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
     owner_agent: "researcher",
     idle_research: { enabled: false },
     survey_review: {
-      status: "ready",
+      status: "synthesizing",
       topic: "Generalized Category Discovery Survey",
+      gate_ready: false,
+      coverage_status: "partial",
+      taxonomy_stability_status: "unstable",
+      representative_methods_status: "partial",
+      benchmark_alignment_status: "partial",
+      gap_closure_status: "partial",
+      gate_blocking_issues: ["Expand SOTA matrix coverage before write handoff."],
     },
   });
   await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
@@ -258,6 +265,8 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
   assert.match(result?.prependContext ?? "", /Project:\s+gcd-survey-tpami-2026/);
   assert.match(result?.prependContext ?? "", /channel_binding_key=binding:discord:default:channel:1491811255814586530/);
+  assert.match(result?.prependContext ?? "", /Survey review: status=synthesizing/i);
+  assert.match(result?.prependContext ?? "", /Survey gates: coverage=partial, taxonomy=unstable/i);
 });
 
 test("before_prompt_build does not materialize stage contracts while reading workflow state", async (t) => {

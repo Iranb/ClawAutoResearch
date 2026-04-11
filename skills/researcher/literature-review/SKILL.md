@@ -60,6 +60,7 @@ Write these files under `{PROJ}/researcher/`:
 - `EXCLUDED_PAPERS.json` — screened-out papers with reasons
 - `SOTA_MATRIX.md` — baseline / method / dataset / metric matrix
 - `GAP_SYNTHESIS.md` — unresolved gaps, weak spots, contradictions, and innovation hooks
+- `COVERAGE_SUMMARY.md` — search breadth, blind spots, benchmark coverage, and confidence note
 - `ZOTERO_PACKET.md` — Zotero `bot/<project-id>` sync note when local Zotero MCP is available
 
 These files are intended to become durable upstream context for `/frontier-mapping`, `/idea-phase`, `/plan-research`, and later code / experiment review.
@@ -127,6 +128,12 @@ The matrix should make it obvious:
 - which evaluation settings later code must stay compatible with
 - where novelty claims are genuinely still open
 
+For survey-mode projects, the matrix should also make it obvious:
+
+- which method families are the representative anchors
+- which benchmark families are reused across the field
+- which comparisons are invalid because datasets / metrics / settings do not line up
+
 ### 4. Write the gap synthesis
 
 Write `{PROJ}/researcher/GAP_SYNTHESIS.md` with:
@@ -143,6 +150,18 @@ Every candidate hook should include:
 - which baseline or prior method it is relative to
 - one plausible validation path
 - one likely failure mode
+
+### 4.5. Write the coverage summary
+
+Write `{PROJ}/researcher/COVERAGE_SUMMARY.md` with:
+
+- search breadth and venue coverage
+- known blind spots or exclusion biases
+- whether the included set is broad enough to support a stable taxonomy
+- whether representative methods are covered per major family
+- whether benchmark / dataset / metric comparisons are aligned enough for a trustworthy synthesis
+
+For survey-mode workflows, this file is part of the write handoff gate.
 
 ### 5. Refresh graph-grounded context
 
@@ -161,6 +180,14 @@ The review packet is not complete unless it clearly supports downstream decision
 - Coder should be able to identify the true baseline family and eval protocol from `SOTA_MATRIX.md`
 - Orchestrator should be able to trace each active track back to a real gap in `GAP_SYNTHESIS.md`
 - Reviewer should be able to see which claims are backed by included papers and which are speculative
+
+For survey-mode workflows, the packet must also satisfy five quality gates before `survey_review -> write`:
+
+- coverage breadth is ready
+- taxonomy is stable
+- representative methods are complete enough
+- benchmark alignment is explicit
+- gap synthesis is carried forward into the survey brief / open-problems framing
 
 Avoid:
 
