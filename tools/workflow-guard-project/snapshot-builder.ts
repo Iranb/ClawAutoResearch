@@ -53,6 +53,11 @@ import {
   summarizeWorkflowTaskGraphStore,
 } from "../workflow-team/task-graph";
 import {
+  getWorkflowTeamRoundPath,
+  readWorkflowTeamRoundStore,
+  summarizeWorkflowTeamRoundStore,
+} from "../workflow-team/team-round";
+import {
   normalizeAblationEvidenceState,
   normalizeBenchmarkProtocolState,
   normalizeCameraReadyEvidenceState,
@@ -964,6 +969,10 @@ export async function buildWorkflowSnapshotFromProjectState(
     ? await readWorkflowTaskGraphStore(projectState.projectRoot)
     : null;
   const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+  const teamRoundStore = projectState.projectRoot
+    ? await readWorkflowTeamRoundStore(projectState.projectRoot)
+    : null;
+  const teamRoundSummary = summarizeWorkflowTeamRoundStore(teamRoundStore);
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1515,6 +1524,13 @@ export async function buildWorkflowSnapshotFromProjectState(
     teamTaskGraphClaimedCount: taskGraphSummary.claimedCount,
     teamTaskGraphSatisfiedCount: taskGraphSummary.satisfiedCount,
     teamTaskGraphOptionalCount: taskGraphSummary.optionalCount,
+    teamRoundPath: projectState.projectRoot
+      ? getWorkflowTeamRoundPath(projectState.projectRoot)
+      : null,
+    teamRoundStatus: teamRoundSummary.status,
+    teamRoundLeadRole: teamRoundStore?.leadRole ?? null,
+    teamRoundActiveSessionCount: teamRoundSummary.activeSessionCount,
+    teamRoundLastClaimedTaskId: teamRoundStore?.lastClaimedTaskId ?? null,
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,

@@ -13,6 +13,12 @@ import {
   renewWorkflowTaskLease,
   summarizeWorkflowTaskGraphStore,
 } from "../tools/workflow-team/task-graph.ts";
+import {
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+  recordWorkflowTeamRoundClaim,
+  summarizeWorkflowTeamRoundStore,
+} from "../tools/workflow-team/team-round.ts";
 
 test("workflow task graph store persists preview tasks as claimable/satisfied summary state", async (t) => {
   const projectRoot = await fs.mkdtemp(
@@ -225,5 +231,47 @@ test("workflow task graph can assign the next claimable task for an owner sessio
     claimedCount: 1,
     satisfiedCount: 1,
     optionalCount: 0,
+  });
+});
+
+test("workflow team round persists lead, active sessions, and last claimed task", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-team-round-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTeamRound({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    leadRole: "coder",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseoutStatus: "blocked",
+    taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
+    taskCount: 2,
+    claimableCount: 1,
+    claimedCount: 0,
+    satisfiedCount: 1,
+    optionalCount: 0,
+  });
+  await recordWorkflowTeamRoundClaim({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    taskId: "code.implement_experiment_bundle",
+  });
+
+  const store = await readWorkflowTeamRoundStore(projectRoot);
+  assert.ok(store);
+  assert.equal(store?.leadRole, "coder");
+  assert.equal(store?.activeSessionKeys.includes("agent:coder:discord:group:paper-lab"), true);
+  assert.equal(store?.lastClaimedTaskId, "code.implement_experiment_bundle");
+
+  const summary = summarizeWorkflowTeamRoundStore(store);
+  assert.deepEqual(summary, {
+    status: "active",
+    activeSessionCount: 1,
   });
 });

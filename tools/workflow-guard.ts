@@ -1734,6 +1734,11 @@ export type WorkflowSnapshot = {
   teamTaskGraphClaimedCount: number | null;
   teamTaskGraphSatisfiedCount: number | null;
   teamTaskGraphOptionalCount: number | null;
+  teamRoundPath: string | null;
+  teamRoundStatus: "not_applicable" | "blocked" | "active" | "ready";
+  teamRoundLeadRole: string | null;
+  teamRoundActiveSessionCount: number | null;
+  teamRoundLastClaimedTaskId: string | null;
   zoteroSyncStatus: string | null;
   zoteroSyncTrigger: string | null;
   zoteroSyncTriggerReason: string | null;

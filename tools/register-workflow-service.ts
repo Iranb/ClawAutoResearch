@@ -93,7 +93,17 @@ import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 import {
   claimNextWorkflowTaskForOwner,
 } from "./workflow-team/task-graph";
+import {
+  recordWorkflowTeamRoundClaim,
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+} from "./workflow-team/team-round";
 import { appendWorkflowRuntimeEvent } from "./workflow-runtime-state.js";
+import {
+  getWorkflowTaskGraphPath,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "./workflow-team/task-graph";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -2193,6 +2203,36 @@ export async function maybeLaunchAutoStageForProject(params: {
           sessionKey: dispatchLaunch.sessionKey,
         });
         if (claimedTask.claimed && claimedTask.task) {
+          let teamRound = await recordWorkflowTeamRoundClaim({
+            projectRoot: params.projectRoot,
+            sessionKey: dispatchLaunch.sessionKey,
+            taskId: claimedTask.task.taskId,
+          });
+          if (!teamRound) {
+            const taskGraphStore = await readWorkflowTaskGraphStore(params.projectRoot);
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (taskGraphStore) {
+              await materializeWorkflowTeamRound({
+                projectRoot: params.projectRoot,
+                projectId: params.projectId ?? null,
+                stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+                leadRole: String(action.owner),
+                topTierVerdict: taskGraphStore.topTierVerdict,
+                evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+                taskGraphPath: getWorkflowTaskGraphPath(params.projectRoot),
+                taskCount: taskGraphSummary.taskCount,
+                claimableCount: taskGraphSummary.claimableCount,
+                claimedCount: taskGraphSummary.claimedCount,
+                satisfiedCount: taskGraphSummary.satisfiedCount,
+                optionalCount: taskGraphSummary.optionalCount,
+              });
+              teamRound = await recordWorkflowTeamRoundClaim({
+                projectRoot: params.projectRoot,
+                sessionKey: dispatchLaunch.sessionKey,
+                taskId: claimedTask.task.taskId,
+              });
+            }
+          }
           await appendWorkflowRuntimeEvent({
             projectRoot: params.projectRoot,
             projectId: params.projectId ?? null,

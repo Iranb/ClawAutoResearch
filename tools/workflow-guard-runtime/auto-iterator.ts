@@ -26,8 +26,12 @@ import {
   shouldRefreshWorkflowGraphPresence,
 } from "../workflow-kernel/graph-context";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
-import { materializeWorkflowTaskGraph } from "../workflow-team/task-graph";
+import {
+  getWorkflowTaskGraphPath,
+  materializeWorkflowTaskGraph,
+} from "../workflow-team/task-graph";
 import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
+import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
@@ -816,6 +820,20 @@ export async function runWorkflowAutoIteratorImpl(
     topTierVerdict: evidenceCloseout.topTierVerdict,
     evidenceCloseout,
     previewTasks: teamTaskPreview,
+  });
+  await materializeWorkflowTeamRound({
+    projectRoot,
+    projectId,
+    stage: stageAfter,
+    leadRole: ownerAfter,
+    topTierVerdict: evidenceCloseout.topTierVerdict,
+    evidenceCloseoutStatus: evidenceCloseout.status,
+    taskGraphPath: getWorkflowTaskGraphPath(projectRoot),
+    taskCount: teamTaskPreview.length,
+    claimableCount: teamTaskPreview.filter((task) => task.status === "blocked").length,
+    claimedCount: 0,
+    satisfiedCount: teamTaskPreview.filter((task) => task.status === "ready").length,
+    optionalCount: teamTaskPreview.filter((task) => task.status === "optional").length,
   });
 
   const nextGateState: GateStateLike = {

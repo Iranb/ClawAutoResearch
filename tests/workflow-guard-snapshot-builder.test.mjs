@@ -12,6 +12,7 @@ import {
   buildWorkflowSnapshotFromProjectState,
 } from "../tools/workflow-guard-project/snapshot-builder.ts";
 import { materializeWorkflowTaskGraph } from "../tools/workflow-team/task-graph.ts";
+import { materializeWorkflowTeamRound } from "../tools/workflow-team/team-round.ts";
 
 async function makeWorkspace() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-snapshot-builder-"));
@@ -216,6 +217,20 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
       },
     ],
   });
+  await materializeWorkflowTeamRound({
+    projectRoot,
+    projectId: "workflow-evidence-contracts",
+    stage: "experiment",
+    leadRole: "researcher",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseoutStatus: "blocked",
+    taskGraphPath: path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
+    taskCount: 1,
+    claimableCount: 1,
+    claimedCount: 0,
+    satisfiedCount: 0,
+    optionalCount: 0,
+  });
 
   await setChannelProjectBinding({
     policy: {
@@ -294,6 +309,9 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   assert.equal(snapshot.teamTaskGraphClaimableCount, 1);
   assert.equal(snapshot.teamTaskGraphClaimedCount, 0);
   assert.equal(snapshot.teamTaskGraphSatisfiedCount, 0);
+  assert.equal(snapshot.teamRoundStatus, "blocked");
+  assert.equal(snapshot.teamRoundLeadRole, "researcher");
+  assert.equal(snapshot.teamRoundActiveSessionCount, 0);
 });
 
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {

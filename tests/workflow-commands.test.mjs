@@ -1229,6 +1229,12 @@ test("workflow-status command returns a readable workflow summary", async () => 
         teamTaskGraphClaimedCount: 0,
         teamTaskGraphSatisfiedCount: 1,
         teamTaskGraphOptionalCount: 0,
+        teamRoundPath:
+          "/tmp/projects/paper-lab/.openclaw-research/workflow-team-round.json",
+        teamRoundStatus: "active",
+        teamRoundLeadRole: "researcher",
+        teamRoundActiveSessionCount: 1,
+        teamRoundLastClaimedTaskId: "experiment.lock_benchmark_protocol",
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
         experimentActiveRunCount: 1,
@@ -1382,6 +1388,7 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Evidence closeout blockers: benchmark protocol missing; statistical evidence missing/);
   assert.match(result.text ?? "", /Stage task preview: experiment\.lock_benchmark_protocol\[blocked\]@orchestrator, experiment\.aggregate_statistics\[blocked\]@analyzer/);
   assert.match(result.text ?? "", /Stage task graph: tasks=2, claimable=1, claimed=0, satisfied=1, optional=0/);
+  assert.match(result.text ?? "", /Team round: status=active, lead=researcher, active_sessions=1, last_claimed_task=experiment\.lock_benchmark_protocol/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
   assert.match(result.text ?? "", /GPU monitor: status=fresh, checked_at=2026-04-11T12:00:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished/);
   assert.match(

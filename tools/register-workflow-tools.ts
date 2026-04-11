@@ -150,6 +150,14 @@ import {
   buildWorkflowQueueContext,
   enqueueWorkflowTask,
 } from "./workflow-coordination";
+import {
+  claimNextWorkflowTaskForOwner,
+} from "./workflow-team/task-graph";
+import {
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+  recordWorkflowTeamRoundClaim,
+} from "./workflow-team/team-round";
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { inspectPapernexusRemoteAccess } from "./papernexus-secret";
@@ -158,6 +166,11 @@ import {
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+import {
+  getWorkflowTaskGraphPath,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "./workflow-team/task-graph";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -737,6 +750,57 @@ export async function maybeDispatchAutoIteratorTask(params: {
       toAgent: ownerAfter,
       channel: dispatch.channel ?? "sessions_send",
     });
+    if (dispatch.sessionKey) {
+      try {
+        const claimedTask = await claimNextWorkflowTaskForOwner({
+          projectRoot: params.snapshot.projectRoot,
+          owner: ownerAfter,
+          sessionKey: dispatch.sessionKey,
+        });
+        if (claimedTask.claimed && claimedTask.task) {
+          let teamRound = await recordWorkflowTeamRoundClaim({
+            projectRoot: params.snapshot.projectRoot,
+            sessionKey: dispatch.sessionKey,
+            taskId: claimedTask.task.taskId,
+          });
+          if (!teamRound) {
+            const taskGraphStore = await readWorkflowTaskGraphStore(
+              params.snapshot.projectRoot
+            );
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (taskGraphStore) {
+              await materializeWorkflowTeamRound({
+                projectRoot: params.snapshot.projectRoot,
+                projectId: params.snapshot.projectId ?? null,
+                stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+                leadRole: ownerAfter,
+                topTierVerdict: taskGraphStore.topTierVerdict,
+                evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+                taskGraphPath: getWorkflowTaskGraphPath(params.snapshot.projectRoot),
+                taskCount: taskGraphSummary.taskCount,
+                claimableCount: taskGraphSummary.claimableCount,
+                claimedCount: taskGraphSummary.claimedCount,
+                satisfiedCount: taskGraphSummary.satisfiedCount,
+                optionalCount: taskGraphSummary.optionalCount,
+              });
+              teamRound = await recordWorkflowTeamRoundClaim({
+                projectRoot: params.snapshot.projectRoot,
+                sessionKey: dispatch.sessionKey,
+                taskId: claimedTask.task.taskId,
+              });
+            }
+          }
+        }
+      } catch (error) {
+        params.plugin.api.logger?.warn?.("Failed to claim workflow task after tool-side auto dispatch.", {
+          projectRoot: params.snapshot.projectRoot,
+          owner: ownerAfter,
+          stage:
+            primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
   if (!dispatch.dispatched && autoModeActive) {
     const requesterSessionKey =

@@ -468,6 +468,11 @@ export function formatWorkflowStatusText(params: {
       `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, claimed=${snapshot.teamTaskGraphClaimedCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
     );
   }
+  if (snapshot.teamRoundPath) {
+    lines.push(
+      `Team round: status=${snapshot.teamRoundStatus ?? "not_applicable"}, lead=${snapshot.teamRoundLeadRole ?? "unset"}, active_sessions=${snapshot.teamRoundActiveSessionCount ?? 0}, last_claimed_task=${snapshot.teamRoundLastClaimedTaskId ?? "none"}`
+    );
+  }
   if (snapshot.paperStoryStatus) {
     lines.push(
       `Paper story: status=${snapshot.paperStoryStatus}, track=${snapshot.paperStoryTrackId ?? "unset"}, story_spine=${snapshot.paperStoryStorySpinePath ?? "unset"}, claim_map=${snapshot.paperStoryClaimToExperimentMapPath ?? "unset"}, fallback=${snapshot.paperStoryFallbackNarrativePath ?? "unset"}`

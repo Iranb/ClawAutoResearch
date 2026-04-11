@@ -26,6 +26,7 @@ import {
   materializeWorkflowTaskGraph,
   readWorkflowTaskGraphStore,
 } from "../tools/workflow-team/task-graph.ts";
+import { readWorkflowTeamRoundStore } from "../tools/workflow-team/team-round.ts";
 import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
@@ -761,6 +762,9 @@ test("maybeLaunchAutoStageForProject claims the next matching task for the launc
   const store = await readWorkflowTaskGraphStore(projectRoot);
   assert.equal(store?.tasks[0].status, "claimed");
   assert.equal(store?.tasks[0].lease?.sessionKey, "agent:coder:discord:group:paper-lab");
+  const teamRound = await readWorkflowTeamRoundStore(projectRoot);
+  assert.equal(teamRound?.activeSessionKeys.includes("agent:coder:discord:group:paper-lab"), true);
+  assert.equal(teamRound?.lastClaimedTaskId, "code.implement_experiment_bundle");
 });
 
 test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair guidance instead of drive_stage handoff", async (t) => {
