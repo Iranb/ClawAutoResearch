@@ -453,6 +453,16 @@ export function formatWorkflowStatusText(params: {
       );
     }
   }
+  if ((snapshot.teamTaskPreview ?? []).length > 0) {
+    lines.push(
+      `Stage task preview: ${(snapshot.teamTaskPreview ?? [])
+        .map(
+          (task) =>
+            `${task.taskId}[${task.status}]${task.owner ? `@${task.owner}` : ""}`
+        )
+        .join(", ")}`
+    );
+  }
   if (snapshot.paperStoryStatus) {
     lines.push(
       `Paper story: status=${snapshot.paperStoryStatus}, track=${snapshot.paperStoryTrackId ?? "unset"}, story_spine=${snapshot.paperStoryStorySpinePath ?? "unset"}, claim_map=${snapshot.paperStoryClaimToExperimentMapPath ?? "unset"}, fallback=${snapshot.paperStoryFallbackNarrativePath ?? "unset"}`

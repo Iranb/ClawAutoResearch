@@ -46,6 +46,7 @@ import {
   readZoteroSyncStateSummary,
 } from "../workflow-zotero-sync";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
+import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import {
   normalizeAblationEvidenceState,
   normalizeBenchmarkProtocolState,
@@ -949,6 +950,11 @@ export async function buildWorkflowSnapshotFromProjectState(
     asRecord(projectState.manifest?.opportunity_scorecard)
   );
   const evidenceCloseout = summarizeEvidenceCloseoutState(projectState.manifest);
+  const teamTaskPreview = buildWorkflowStageTaskPreview({
+    currentStage,
+    topTierVerdict: opportunityScorecard.verdict,
+    evidenceCloseout,
+  });
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1491,6 +1497,7 @@ export async function buildWorkflowSnapshotFromProjectState(
     evidenceCloseoutWriteReady: evidenceCloseout.writeReady,
     evidenceCloseoutSubmitReady: evidenceCloseout.submitReady,
     evidenceCloseoutTopBlockers: evidenceCloseout.blockers.slice(0, 5),
+    teamTaskPreview,
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,

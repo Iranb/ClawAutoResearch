@@ -159,6 +159,8 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "ready_for_analysis";
   manifest.benchmark_protocol = {
     status: "ready",
     benchmark_family: "OpenWorldGraphBench",
@@ -255,6 +257,12 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   assert.equal(snapshot.evidenceCloseoutSubmitReady, false);
   assert.equal(snapshot.evidenceCloseoutGraphDependentBlockerCount, 0);
   assert.ok((snapshot.evidenceCloseoutTopBlockers ?? []).length >= 1);
+  assert.ok(Array.isArray(snapshot.teamTaskPreview));
+  assert.ok(
+    snapshot.teamTaskPreview.some((task) =>
+      task.taskId === "experiment.lock_benchmark_protocol"
+    )
+  );
 });
 
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {

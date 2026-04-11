@@ -1206,6 +1206,22 @@ test("workflow-status command returns a readable workflow summary", async () => 
           "benchmark protocol missing",
           "statistical evidence missing",
         ],
+        teamTaskPreview: [
+          {
+            taskId: "experiment.lock_benchmark_protocol",
+            title: "Lock the benchmark protocol",
+            owner: "orchestrator",
+            status: "blocked",
+            reason: "Benchmark/statistical/ablation evidence is still incomplete.",
+          },
+          {
+            taskId: "experiment.aggregate_statistics",
+            title: "Materialize statistical evidence",
+            owner: "analyzer",
+            status: "blocked",
+            reason: null,
+          },
+        ],
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
         experimentActiveRunCount: 1,
@@ -1357,6 +1373,7 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Evidence closeout: status=blocked, verdict=worth_top_tier_bet, blockers=4, graph_blockers=1, local_blockers=3/);
   assert.match(result.text ?? "", /Evidence closeout stages: experiment_to_analyze=blocked, analyze_to_review=ready, write=blocked, submit=blocked/);
   assert.match(result.text ?? "", /Evidence closeout blockers: benchmark protocol missing; statistical evidence missing/);
+  assert.match(result.text ?? "", /Stage task preview: experiment\.lock_benchmark_protocol\[blocked\]@orchestrator, experiment\.aggregate_statistics\[blocked\]@analyzer/);
   assert.match(result.text ?? "", /Experiment monitor: active_runs=1, terminal_runs=2, finished_unreconciled=1, needs_monitor_pass=true, next=\/monitor-experiment/);
   assert.match(result.text ?? "", /GPU monitor: status=fresh, checked_at=2026-04-11T12:00:00.000Z, servers=1, busy_assigned=0, idle_assigned=1, likely_finished=1, recommendation=reconcile_finished/);
   assert.match(

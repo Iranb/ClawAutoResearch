@@ -1721,6 +1721,13 @@ export type WorkflowSnapshot = {
   evidenceCloseoutWriteReady: boolean;
   evidenceCloseoutSubmitReady: boolean;
   evidenceCloseoutTopBlockers: string[];
+  teamTaskPreview: Array<{
+    taskId: string;
+    title: string;
+    owner: string | null;
+    status: "ready" | "blocked" | "optional";
+    reason: string | null;
+  }>;
   zoteroSyncStatus: string | null;
   zoteroSyncTrigger: string | null;
   zoteroSyncTriggerReason: string | null;
