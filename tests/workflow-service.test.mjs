@@ -23,6 +23,10 @@ import {
   readWorkflowRuntimeSessionsStore,
 } from "../tools/workflow-runtime-state.ts";
 import {
+  materializeWorkflowTaskGraph,
+  readWorkflowTaskGraphStore,
+} from "../tools/workflow-team/task-graph.ts";
+import {
   createWorkflowCoordinatorService,
   deriveWorkflowCoordinatorStatusUpdate,
   maybeAdvanceAutoCodeReviewForProject,
@@ -656,6 +660,107 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   assert.equal(launch.dispatchStrategy, "sessions_spawn");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/implement-experiment/);
+});
+
+test("maybeLaunchAutoStageForProject claims the next matching task for the launched owner session", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "alpha",
+    stage: "code",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["benchmark protocol missing"],
+      experimentAnalyzeReady: false,
+      analyzeReviewReady: true,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "code.implement_experiment_bundle",
+        title: "Implement the approved experiment bundle",
+        owner: "coder",
+        status: "blocked",
+        reason: "Bundle implementation is pending.",
+      },
+    ],
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "code",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "coder",
+          stage: "code",
+          summary: "Implement the approved experiments as runnable bundles.",
+          command: "/implement-experiment",
+          mailboxMessageId: "mailbox-1",
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: "/tmp/projects",
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(store?.tasks[0].status, "claimed");
+  assert.equal(store?.tasks[0].lease?.sessionKey, "agent:coder:discord:group:paper-lab");
 });
 
 test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair guidance instead of drive_stage handoff", async (t) => {

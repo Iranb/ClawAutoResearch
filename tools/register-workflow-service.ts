@@ -90,6 +90,10 @@ import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
+import {
+  claimNextWorkflowTaskForOwner,
+} from "./workflow-team/task-graph";
+import { appendWorkflowRuntimeEvent } from "./workflow-runtime-state.js";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -2182,6 +2186,35 @@ export async function maybeLaunchAutoStageForProject(params: {
         key: launchKey,
         launchedAt: Date.now(),
       });
+      try {
+        const claimedTask = await claimNextWorkflowTaskForOwner({
+          projectRoot: params.projectRoot,
+          owner: String(action.owner),
+          sessionKey: dispatchLaunch.sessionKey,
+        });
+        if (claimedTask.claimed && claimedTask.task) {
+          await appendWorkflowRuntimeEvent({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId ?? null,
+            kind: "team_task_claimed",
+            summary: `Auto-stage dispatch claimed ${claimedTask.task.taskId} for ${action.owner}.`,
+            details: {
+              taskId: claimedTask.task.taskId,
+              owner: action.owner,
+              sessionKey: dispatchLaunch.sessionKey,
+              stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+              launchKey,
+            },
+          });
+        }
+      } catch (error) {
+        params.logger?.warn?.("Failed to claim workflow task after auto-stage dispatch.", {
+          projectRoot: params.projectRoot,
+          owner: action.owner,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await recordWorkflowContactEvent({
         projectRoot: params.projectRoot,
         fromAgent: "researcher",

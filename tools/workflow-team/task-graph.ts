@@ -436,3 +436,63 @@ export async function releaseWorkflowTaskClaim(params: {
     },
   });
 }
+
+export async function claimNextWorkflowTaskForOwner(params: {
+  projectRoot: string;
+  owner: string;
+  sessionKey: string;
+  ttlMs?: number;
+}): Promise<{
+  claimed: boolean;
+  reason: string | null;
+  task: WorkflowTaskGraphTask | null;
+}> {
+  return withAdvisoryLock({
+    lockPath: getWorkflowTaskGraphLockPath(params.projectRoot),
+    task: async () => {
+      const store = await readWorkflowTaskGraphStore(params.projectRoot);
+      if (!store) {
+        return { claimed: false, reason: "task_graph_missing", task: null };
+      }
+      const existingOwned =
+        store.tasks.find(
+          (task) =>
+            task.status === "claimed" &&
+            task.lease?.sessionKey === params.sessionKey
+        ) ?? null;
+      if (existingOwned) {
+        return { claimed: true, reason: "already_owned", task: existingOwned };
+      }
+      const nextTask =
+        store.tasks.find(
+          (task) =>
+            task.status === "claimable" &&
+            task.owner === params.owner
+        ) ?? null;
+      if (!nextTask) {
+        return { claimed: false, reason: "no_matching_claimable_task", task: null };
+      }
+      const nextTasks = store.tasks.map((task) =>
+        task.taskId === nextTask.taskId
+          ? {
+              ...task,
+              status: "claimed" as const,
+              lease: buildLease({
+                sessionKey: params.sessionKey,
+                role: params.owner,
+                ttlMs: params.ttlMs,
+              }),
+            }
+          : task
+      );
+      const claimedTask =
+        nextTasks.find((task) => task.taskId === nextTask.taskId) ?? null;
+      await writeJsonAtomicEnsured(getWorkflowTaskGraphPath(params.projectRoot), {
+        ...store,
+        generatedAt: nowIso(),
+        tasks: nextTasks,
+      });
+      return { claimed: true, reason: null, task: claimedTask };
+    },
+  });
+}

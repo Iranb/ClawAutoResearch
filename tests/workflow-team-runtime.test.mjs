@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  claimNextWorkflowTaskForOwner,
   claimWorkflowTask,
   materializeWorkflowTaskGraph,
   readWorkflowTaskGraphStore,
@@ -158,6 +159,71 @@ test("workflow task graph supports claim, renew, and release semantics", async (
     claimableCount: 1,
     claimedCount: 0,
     satisfiedCount: 0,
+    optionalCount: 0,
+  });
+});
+
+test("workflow task graph can assign the next claimable task for an owner session", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-task-claim-next-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "write",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: ["reproducibility pack missing"],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: false,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 1,
+    },
+    previewTasks: [
+      {
+        taskId: "write.complete_repro_pack",
+        title: "Finish reproducibility pack",
+        owner: "academic_writer",
+        status: "blocked",
+        reason: "Reproducibility pack is incomplete.",
+      },
+      {
+        taskId: "write.keep_story_and_evidence_aligned",
+        title: "Keep story aligned",
+        owner: "academic_writer",
+        status: "ready",
+        reason: null,
+      },
+    ],
+  });
+
+  const claim = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:group:paper-lab",
+  });
+
+  assert.equal(claim.claimed, true);
+  assert.equal(claim.task?.taskId, "write.complete_repro_pack");
+  assert.equal(claim.task?.status, "claimed");
+
+  const summary = summarizeWorkflowTaskGraphStore(
+    await readWorkflowTaskGraphStore(projectRoot)
+  );
+  assert.deepEqual(summary, {
+    taskCount: 2,
+    claimableCount: 0,
+    claimedCount: 1,
+    satisfiedCount: 1,
     optionalCount: 0,
   });
 });
