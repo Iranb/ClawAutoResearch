@@ -26,8 +26,9 @@
 - 已完成切片 L：让 `maybeLaunchAutoStageForProject(...)` 在真实 auto-stage dispatch 成功后尝试从 task graph 中为目标 owner session 自动 claim 下一任务，形成第一条真正消费 task graph + claim state 的 continuation 流。
 - 已完成切片 M：引入 `workflow-team/team-round.ts`，把当前 stage 的 lead、task graph 摘要、active session 和 last claimed task 落盘，并在 auto-stage dispatch claim 成功后自动维护 team round。
 - 已完成切片 N：让 tool 侧 `maybeDispatchAutoIteratorTask(...)` 也在 dispatch 成功后消费 task graph + claim state，至此 auto iterator 的 tool/service 两条主要 handoff 路都已开始依赖 Team Runtime state。
+- 已完成切片 O：dashboard/read-model 开始读取 `top-tier verdict`、`team round`、`task graph` 摘要，Team Runtime 与 Evidence Runtime 已进入项目详情主摘要层。
 - 当前实现分支：`codex/workflow-kernel-graph-context`
-- 下一切片目标：继续把更多 runtime surface（例如非 auto-stage handoff、任务完成后 release/verify）接到 task graph + claim state 上，并把 team round 从摘要状态推进到真正的 round lifecycle。
+- 下一切片目标：继续把更多 runtime surface（例如任务完成后的 release/verify、claim expiry / reconciliation）接到 task graph + claim state 上，并把 team round 从摘要状态推进到真正的 round lifecycle。
 
 ---
 
@@ -1092,7 +1093,8 @@ PaperNexus 说明：
 - 已完成第一条真实消费链路：auto-stage dispatch 成功后会自动 claim 一个匹配的 task graph 任务给目标 owner session。
 - 已完成第二条真实消费链路：tool 侧 auto iterator dispatch 成功后也会自动 claim 一个匹配的 task graph 任务给目标 owner session。
 - 已完成 team round 摘要层：当前 stage 的 lead、active session 数与 last claimed task 已有独立持久化状态。
-- 未完成：任务完成后的 release/verify、更多 dispatch surface 的 task-graph 消费、以及 team round 的更完整 round lifecycle 仍未落地。
+- 已完成 dashboard 读模型接入：项目详情页已能看到 top-tier verdict 与 task graph 摘要。
+- 未完成：任务完成后的 release/verify、claim expiry / reconciliation、更多 dispatch surface 的 task-graph 消费、以及 team round 的更完整 round lifecycle 仍未落地。
 
 ---
 

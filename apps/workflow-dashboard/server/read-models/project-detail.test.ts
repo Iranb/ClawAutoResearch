@@ -56,6 +56,14 @@ describe("readProjectDetailSummary", () => {
       surveyProgressSummary: null,
       papernexusPhase: "waiting_import",
       papernexusProgressSummary: "8/12 completed (4 remaining)",
+      topTierVerdict: null,
+      teamRoundLead: null,
+      teamRoundActiveSessions: null,
+      teamRoundLastClaimedTaskId: null,
+      teamTaskGraphTaskCount: null,
+      teamTaskGraphClaimableCount: null,
+      teamTaskGraphClaimedCount: null,
+      teamTaskGraphSatisfiedCount: null,
       source: ["manifest", "papernexus_progress"],
     });
   });
@@ -93,6 +101,14 @@ describe("readProjectDetailSummary", () => {
       surveyProgressSummary: null,
       papernexusPhase: null,
       papernexusProgressSummary: null,
+      topTierVerdict: null,
+      teamRoundLead: null,
+      teamRoundActiveSessions: null,
+      teamRoundLastClaimedTaskId: null,
+      teamTaskGraphTaskCount: null,
+      teamTaskGraphClaimableCount: null,
+      teamTaskGraphClaimedCount: null,
+      teamTaskGraphSatisfiedCount: null,
       source: ["manifest", "fallback"],
     });
   });
@@ -143,6 +159,78 @@ describe("readProjectDetailSummary", () => {
       surveyTopic: "multimodal reasoning survey",
       surveyProgressSummary: "42 candidates · 16 included · 9 excluded",
       status: "active",
+      topTierVerdict: null,
+      teamRoundLead: null,
+      teamRoundActiveSessions: null,
+      teamRoundLastClaimedTaskId: null,
+      teamTaskGraphTaskCount: null,
+      teamTaskGraphClaimableCount: null,
+      teamTaskGraphClaimedCount: null,
+      teamTaskGraphSatisfiedCount: null,
+    });
+  });
+
+  it("surfaces team round and task graph summaries when runtime artifacts exist", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const projectRoot = path.join(projectsRoot, "team-runtime-project");
+
+    await mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "team-runtime-project",
+          current_stage: "code",
+          owner_agent: "coder",
+          opportunity_scorecard: {
+            verdict: "worth_top_tier_bet",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectRoot, ".openclaw-research", "workflow-team-round.json"),
+      JSON.stringify(
+        {
+          leadRole: "coder",
+          activeSessionKeys: ["agent:coder:discord:group:paper-lab"],
+          lastClaimedTaskId: "code.implement_experiment_bundle",
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
+      JSON.stringify(
+        {
+          tasks: [
+            { status: "claimed" },
+            { status: "satisfied" },
+            { status: "claimable" },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectDetailSummary({
+      projectsRoot,
+      projectId: "team-runtime-project",
+    });
+
+    expect(result).toMatchObject({
+      topTierVerdict: "worth_top_tier_bet",
+      teamRoundLead: "coder",
+      teamRoundActiveSessions: 1,
+      teamRoundLastClaimedTaskId: "code.implement_experiment_bundle",
+      teamTaskGraphTaskCount: 3,
+      teamTaskGraphClaimableCount: 1,
+      teamTaskGraphClaimedCount: 1,
+      teamTaskGraphSatisfiedCount: 1,
     });
   });
 

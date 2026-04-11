@@ -31,6 +31,17 @@ export function SummaryCards(props: SummaryCardsProps) {
       label: "Updated",
       value: formatTimestamp(props.summary.updatedAt),
     },
+    {
+      label: "Top-tier verdict",
+      value: props.summary.topTierVerdict ?? "none",
+    },
+    {
+      label: "Task graph",
+      value:
+        props.summary.teamTaskGraphTaskCount !== null
+          ? `${props.summary.teamTaskGraphTaskCount} tasks`
+          : "none",
+    },
   ];
 
   return (

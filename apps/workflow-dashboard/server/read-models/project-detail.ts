@@ -25,6 +25,9 @@ type ManifestFile = {
     paper_mode?: string | null;
     paperMode?: string | null;
   } | null;
+  opportunity_scorecard?: {
+    verdict?: string | null;
+  } | null;
 };
 
 type PapernexusProgressFile = {
@@ -35,6 +38,18 @@ type PapernexusProgressFile = {
     remaining?: number | null;
   } | null;
 };
+
+type TeamRoundFile = {
+  leadRole?: string | null;
+  activeSessionKeys?: string[] | null;
+  lastClaimedTaskId?: string | null;
+} | null;
+
+type TaskGraphFile = {
+  tasks?: Array<{
+    status?: string | null;
+  }> | null;
+} | null;
 
 export type ProjectDetailSummary = {
   id: string;
@@ -54,6 +69,14 @@ export type ProjectDetailSummary = {
   surveyProgressSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
+  topTierVerdict: string | null;
+  teamRoundLead: string | null;
+  teamRoundActiveSessions: number | null;
+  teamRoundLastClaimedTaskId: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
   source: Array<"manifest" | "papernexus_progress" | "fallback">;
 };
 
@@ -75,6 +98,12 @@ export async function readProjectDetailSummary(params: {
   );
   const progress = await readJsonFile<PapernexusProgressFile>(
     path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
+  );
+  const teamRound = await readJsonFile<TeamRoundFile>(
+    path.join(projectRoot, ".openclaw-research", "workflow-team-round.json"),
+  );
+  const taskGraph = await readJsonFile<TaskGraphFile>(
+    path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
   );
   const source: ProjectDetailSummary["source"] = [];
 
@@ -118,6 +147,16 @@ export async function readProjectDetailSummary(params: {
     surveyProgressSummary: formatSurveyProgressSummary(manifest?.survey_review),
     papernexusPhase: asString(progress?.phase),
     papernexusProgressSummary: formatPapernexusProgressSummary(progress?.progress),
+    topTierVerdict: asString(manifest?.opportunity_scorecard?.verdict),
+    teamRoundLead: asString(teamRound?.leadRole),
+    teamRoundActiveSessions: Array.isArray(teamRound?.activeSessionKeys)
+      ? teamRound.activeSessionKeys.length
+      : null,
+    teamRoundLastClaimedTaskId: asString(teamRound?.lastClaimedTaskId),
+    teamTaskGraphTaskCount: Array.isArray(taskGraph?.tasks) ? taskGraph.tasks.length : null,
+    teamTaskGraphClaimableCount: countTaskStatus(taskGraph?.tasks, "claimable"),
+    teamTaskGraphClaimedCount: countTaskStatus(taskGraph?.tasks, "claimed"),
+    teamTaskGraphSatisfiedCount: countTaskStatus(taskGraph?.tasks, "satisfied"),
     source,
   };
 }
@@ -215,4 +254,14 @@ function asNumber(value: unknown): number | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function countTaskStatus(
+  tasks: TaskGraphFile["tasks"],
+  status: string,
+): number | null {
+  if (!Array.isArray(tasks)) {
+    return null;
+  }
+  return tasks.filter((task) => asString(task?.status) === status).length;
 }

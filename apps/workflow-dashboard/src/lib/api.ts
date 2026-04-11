@@ -33,6 +33,14 @@ export type ProjectDetailSummary = {
   surveyProgressSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
+  topTierVerdict: string | null;
+  teamRoundLead: string | null;
+  teamRoundActiveSessions: number | null;
+  teamRoundLastClaimedTaskId: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
   source: Array<"manifest" | "papernexus_progress" | "fallback">;
 };
 

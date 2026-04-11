@@ -22,6 +22,14 @@ const projectSummaryResponse = {
   surveyProgressSummary: null,
   papernexusPhase: "waiting_import",
   papernexusProgressSummary: "8/12 completed (4 remaining)",
+  topTierVerdict: "worth_top_tier_bet",
+  teamRoundLead: "researcher",
+  teamRoundActiveSessions: 1,
+  teamRoundLastClaimedTaskId: "experiment.lock_benchmark_protocol",
+  teamTaskGraphTaskCount: 2,
+  teamTaskGraphClaimableCount: 1,
+  teamTaskGraphClaimedCount: 0,
+  teamTaskGraphSatisfiedCount: 1,
   source: ["manifest", "papernexus_progress"],
 };
 
@@ -70,6 +78,10 @@ describe("ProjectDetailPage", () => {
     expect(screen.getByText(projectSummaryResponse.status)).toBeInTheDocument();
     expect(screen.getByText(/updated/i)).toBeInTheDocument();
     expect(screen.getByText(/2026/)).toBeInTheDocument();
+    expect(screen.getByText(/top-tier verdict/i)).toBeInTheDocument();
+    expect(screen.getByText(projectSummaryResponse.topTierVerdict)).toBeInTheDocument();
+    expect(screen.getByText(/task graph/i)).toBeInTheDocument();
+    expect(screen.getByText("2 tasks")).toBeInTheDocument();
 
     expect(screen.getByText(/blocking reason/i)).toBeInTheDocument();
     expect(screen.getByText(projectSummaryResponse.blockingReason)).toBeInTheDocument();
