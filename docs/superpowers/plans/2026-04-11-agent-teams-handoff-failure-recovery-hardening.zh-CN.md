@@ -898,7 +898,361 @@ Regression tests:
 
 ---
 
-## 8. Final acceptance criteria
+## 8. Cross-Domain Inspiration Contract
+
+### 8.1 为什么这是 workflow-owned contract
+
+用户明确希望跨域概念搜索不是 agent 自觉行为，而是 workflow 控制面的一部分，尤其优先考虑：
+
+- 人脑神经科学
+- 认知科学
+- 心理学
+- 快慢思考 / dual-process theory
+- System 1 / System 2
+- cognitive control
+- metacognition
+- predictive processing
+- attention gating
+- working memory
+- confidence monitoring
+- executive control
+
+这和 `Idea-Catalyst` 论文的核心思路一致：研究 idea / 写作故事线不应该只是后期润色，而应该从目标领域 unresolved challenge 抽象出 domain-agnostic question，再到外部领域找机制性概念，最后 recontextualize 回目标领域。
+
+因此，这部分不能只写在 prompt 里。它必须成为 workflow-owned contract：
+
+```text
+target-domain unresolved challenge
+-> domain-agnostic question
+-> preferred source-domain search
+-> bridge evidence
+-> recontextualized mechanism
+-> idea fragment
+-> story spine
+-> writing contract
+```
+
+### 8.2 新增 manifest block
+
+Add to `PROJECT_MANIFEST.json`:
+
+```json
+{
+  "cross_domain_inspiration": {
+    "status": "missing",
+    "enabled": true,
+    "target_domain": null,
+    "target_problem": null,
+    "preferred_source_domains": [
+      "Neuroscience",
+      "Cognitive Science",
+      "Psychology"
+    ],
+    "fallback_source_domains": [
+      "Control Theory",
+      "Sociology",
+      "Behavioral Science",
+      "Education",
+      "Philosophy"
+    ],
+    "priority_concepts": [
+      "dual-process theory",
+      "System 1 and System 2",
+      "fast and slow thinking",
+      "cognitive control",
+      "metacognition",
+      "predictive processing",
+      "attention gating",
+      "working memory",
+      "confidence monitoring",
+      "executive control"
+    ],
+    "minimum_sources_per_domain": 2,
+    "minimum_bridge_nodes": 3,
+    "minimum_recontextualized_fragments": 2,
+    "bridge_evidence_path": "researcher/ideation/CROSS_DOMAIN_BRIDGE_EVIDENCE.json",
+    "concept_map_path": "researcher/ideation/NEURO_COGNITIVE_CONCEPT_MAP.md",
+    "recontextualization_path": "researcher/ideation/CROSS_DOMAIN_RECONTEXTUALIZATION.md",
+    "idea_fragment_path": "researcher/idea-catalyst/IDEA_FRAGMENTS.json",
+    "storyline_bridge_path": "academic_writer/story/CROSS_DOMAIN_STORY_BRIDGE.md",
+    "missing_domains": [],
+    "satisfied_domains": [],
+    "blocked_reason": null,
+    "last_updated_at": null
+  }
+}
+```
+
+### 8.3 Required status vocabulary
+
+```text
+missing
+configured
+searching
+evidence_ready
+recontextualized
+story_ready
+waived
+blocked
+```
+
+Meaning:
+
+- `missing`: no contract exists.
+- `configured`: preferred domains/concepts are configured but not searched.
+- `searching`: literature discovery / PaperNexus acquisition is active.
+- `evidence_ready`: enough external-domain evidence exists.
+- `recontextualized`: evidence has been mapped back into target-domain mechanisms.
+- `story_ready`: story bridge has been written and can be consumed by paper story.
+- `waived`: explicitly skipped with rationale.
+- `blocked`: required cross-domain evidence is missing and cannot proceed without repair.
+
+### 8.4 Source domain priority rule
+
+Default priority:
+
+```text
+1. Neuroscience
+2. Cognitive Science
+3. Psychology
+4. Control Theory
+5. Sociology / Behavioral Science
+6. Education / Philosophy
+```
+
+Workflow must prefer high-priority source domains unless:
+
+- graph evidence says they are irrelevant
+- user explicitly disables them
+- retrieval fails and retry budget is exhausted
+- project is marked as non-cross-domain / purely engineering
+
+### 8.5 Query generation requirements
+
+For each unresolved target challenge, generate:
+
+- domain-specific target question
+- domain-agnostic question
+- at least 3 target-domain queries
+- at least 3 source-domain queries per preferred domain
+
+For neuroscience / cognition / psychology, query templates should include:
+
+```text
+<source domain> cognitive control uncertainty decision making transferable principle
+dual-process theory fast slow thinking confidence monitoring <target challenge>
+metacognition error monitoring adaptive control <target challenge>
+predictive processing attention gating uncertainty <target challenge>
+working memory consolidation interference forgetting <target challenge>
+executive control inhibition switching persistence flexibility <target challenge>
+```
+
+Example for GCD / pseudo-label confirmation bias:
+
+```text
+target challenge:
+  How can GCD avoid reinforcing incorrect pseudo-labels under uncertainty?
+
+domain-agnostic question:
+  How can an adaptive system decide when to trust fast approximate judgments and when to trigger slower evidence-based correction?
+
+source-domain concepts:
+  dual-process theory
+  cognitive control
+  confidence monitoring
+  predictive processing
+
+recontextualization:
+  fast path = pseudo-label assignment
+  slow path = graph / uncertainty verification
+  executive gate = confidence-aware override controller
+```
+
+### 8.6 Integration with IDEA-CATALYST
+
+Modify:
+
+```text
+tools/idea-catalyst/state.ts
+tools/idea-catalyst/materializers.ts
+tools/idea-catalyst/gatekeeper.ts
+tools/idea-catalyst/workflow-bridge.ts
+tools/literature-discovery/workflow-bridge.ts
+```
+
+Required behavior:
+
+- If `cross_domain_inspiration.enabled = true`, IDEA-CATALYST must seed candidate domains from `preferred_source_domains`.
+- Candidate domains from graph packets may add to the list but should not silently replace priority domains.
+- `sourceDomains` should preserve priority order unless graph evidence strongly prunes a domain.
+- `gatekeeper` must check:
+  - minimum sources per preferred domain
+  - minimum bridge nodes
+  - minimum recontextualized fragments
+- If insufficient:
+  - create `INVESTIGATION_REQUISITION.json`
+  - include `missing_domains`
+  - include priority concepts
+  - include concrete search queries
+  - enqueue bounded literature discovery / PaperNexus ingestion.
+
+Acceptance:
+
+- If neuroscience evidence is missing and contract requires it, IDEA cannot claim `story_ready`.
+- If user waives neuroscience with rationale, workflow can continue but records waiver.
+- Literature discovery receives explicit target domains and priority concepts.
+
+### 8.7 Integration with graph / PaperNexus
+
+PaperNexus should be used for:
+
+- source-domain paper retrieval
+- source-domain concept extraction
+- bridge evidence
+- domain-distance / mechanism-distance cues
+- storyline brief / research brief / evidence chain
+
+Workflow-owned artifacts:
+
+```text
+researcher/ideation/CROSS_DOMAIN_BRIDGE_EVIDENCE.json
+researcher/ideation/NEURO_COGNITIVE_CONCEPT_MAP.md
+researcher/ideation/CROSS_DOMAIN_RECONTEXTUALIZATION.md
+researcher/idea-catalyst/INVESTIGATION_REQUISITION.json
+researcher/idea-catalyst/SCOUTING_REPORT.json
+researcher/idea-catalyst/IDEA_FRAGMENTS.json
+researcher/idea-catalyst/RANKED_FRAGMENTS.json
+```
+
+Each bridge evidence item should include:
+
+```ts
+type CrossDomainBridgeEvidence = {
+  bridgeId: string;
+  sourceDomain: string;
+  sourceConcept: string;
+  sourcePapers: string[];
+  targetChallenge: string;
+  domainAgnosticQuestion: string;
+  transferableMechanism: string;
+  recontextualizedMechanism: string;
+  evidenceStrength: \"weak\" | \"partial\" | \"strong\";
+  limitations: string[];
+};
+```
+
+### 8.8 Integration with paper story
+
+Modify:
+
+```text
+tools/workflow-guard-materializers/paper-story-materializer.ts
+tools/workflow-guard-state/paper-story.ts
+tools/workflow-guard-stages/writing-stage-signals.ts
+skills/academic_writer/research-paper-writing/SKILL.md
+skills/reviewer/paper-review/SKILL.md
+```
+
+Paper story must consume cross-domain inspiration as:
+
+- `CROSS_DOMAIN_STORY_BRIDGE.md`
+- `MODULE_MOTIVATION_MAP.md`
+- `STORY_SPINE.md`
+- `CONTRIBUTION_TO_STORY_BRIDGE.md`
+- `FIGURE_ANCHOR_PLAN.md`
+
+Story spine should include:
+
+```text
+problem
+-> unresolved target challenge
+-> source-domain concept
+-> transferable mechanism
+-> target-domain adaptation
+-> evidence
+-> limitation
+```
+
+Example:
+
+```text
+Problem:
+  GCD pseudo-labeling reinforces early mistakes.
+
+Source-domain concept:
+  Dual-process theory separates fast intuitive decisions from slower deliberative correction.
+
+Transferred mechanism:
+  Add a confidence-aware gate that decides when to trust a fast pseudo-label and when to trigger graph/evidence verification.
+
+Target-domain adaptation:
+  Fast path assigns provisional labels; slow path checks uncertainty, graph-neighbor consistency, and prototype stability.
+
+Evidence:
+  multi-seed gains, ablation on the gate, and cross-dataset validation.
+
+Limitation:
+  slow-path verification adds compute and may depend on graph freshness.
+```
+
+### 8.9 Stage gates
+
+Experiment paper line:
+
+- Before `idea -> plan`, if cross-domain inspiration is enabled:
+  - require `cross_domain_inspiration.status in [recontextualized, story_ready, waived]`.
+  - if `blocked`, route repair to researcher.
+- Before `write`, require:
+  - `paper_story_state` includes source-domain bridge if headline story uses cross-domain framing.
+
+Survey line:
+
+- Cross-domain inspiration is optional by default for survey.
+- If enabled, it should enrich taxonomy / future directions, not force experiment-style idea generation.
+- Survey story should consume it as:
+  - taxonomy lens
+  - cognitive/neuroscience interpretation layer
+  - future directions
+
+### 8.10 Handoff / failure recovery interaction
+
+If cross-domain evidence is missing:
+
+- Create handoff intent:
+  - reason: `cross_domain_evidence_missing`
+  - toRole: `researcher`
+  - target action: queue literature discovery / PaperNexus acquisition
+- If PaperNexus unavailable:
+  - create repair intent
+  - allow waiver only with explicit rationale
+- If source-domain evidence is weak:
+  - keep idea/story status partial
+  - prevent strong cross-domain claim in abstract/introduction
+
+### 8.11 Tests
+
+Add:
+
+```text
+tests/workflow-cross-domain-inspiration.test.mjs
+tests/idea-catalyst-runtime-tools.test.mjs additions
+tests/workflow-runtime-tools.test.mjs additions
+tests/auto-iterator.test.mjs additions
+tests/workflow-writing-lines-e2e.test.mjs additions
+```
+
+Required cases:
+
+- Preferred domains default to Neuroscience / Cognitive Science / Psychology.
+- Missing Neuroscience evidence triggers requisition.
+- `minimum_sources_per_domain` enforced.
+- `CROSS_DOMAIN_RECONTEXTUALIZATION.md` required before `story_ready`.
+- Paper story consumes cross-domain bridge into `STORY_SPINE.md`.
+- Weak evidence blocks strong cross-domain headline claim.
+- Survey mode can use cross-domain inspiration as taxonomy/future-direction lens without entering experiment stages.
+
+---
+\n## 9. Final acceptance criteria
 
 - [ ] Stage owner change creates durable handoff intent.
 - [ ] Task completion that unlocks downstream work creates durable handoff intent.
@@ -911,4 +1265,6 @@ Regression tests:
 - [ ] Handoff/recovery cannot bypass experiment quality gates.
 - [ ] Handoff/recovery cannot push survey workflows into code/experiment/analyze.
 - [ ] Delivery and repair retries terminate deterministically.
-
+- [ ] Cross-domain inspiration contract can require Neuroscience / Cognitive Science / Psychology priority search.
+- [ ] Missing required source-domain bridge evidence creates recovery handoff instead of relying on agent prompt memory.
+- [ ] Cross-domain concepts are consumed by paper story before writer uses them as headline narrative.
