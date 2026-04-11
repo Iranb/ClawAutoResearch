@@ -1455,6 +1455,69 @@ test("auto iterator treats file-backed track evidence as repairable and advances
   );
 });
 
+test("auto iterator reconciles stale literature discovery requisitions once track evidence is satisfied", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await seedReadyBrainstormCycle(projectRoot, { trackId });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "frontiers_packaged";
+  manifest.owner_agent = "researcher";
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    queued_requests: [
+      {
+        request_id: "idea-track-graph-evidence-gap",
+        status: "queued",
+        wrapper: "pn_batch_import.py",
+        args: [],
+        trigger_kind: "idea_literature_discovery",
+        summary: "stale graph evidence gap",
+        created_at: "2026-04-10T08:29:10.804Z",
+        updated_at: "2026-04-10T08:29:10.804Z",
+        attempt_count: 0,
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    {
+      schema_version: 1,
+      discovery_id: "idea-track-graph-evidence-gap",
+      discovery_reason: "idea_track_graph_evidence_gap",
+      trigger_kind: "idea_literature_discovery",
+      target_track_ids: [trackId],
+      evidence_gap_closed: false,
+    }
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageAfter, "plan");
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.paper_ingestion.queued_requests[0].status, "completed");
+  const packet = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(packet.evidence_gap_closed, true);
+  assert.equal(packet.closure_reason, "workflow_state_satisfied");
+});
+
 test("auto iterator auto-materializes the ideation contract during idea before advancing", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -2662,6 +2725,155 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
   assert.equal(refreshedStatus.status, "ready");
   assert.equal(refreshedStatus.expected_paper_count, 198);
   assert.equal(refreshedStatus.present_paper_count, 198);
+});
+
+test("remote graph presence trusts a healthy remote corpus when no local source index exists", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    requests.push({
+      method: request.method,
+      pathname: url.pathname,
+      corpus: url.searchParams.get("name"),
+    });
+    const payload = {
+      rootPath: "/remote/corpora/GCD",
+      meta: {
+        name: "GCD",
+        paperCount: 112,
+        sourceCount: 112,
+      },
+      manifest: {
+        corpusName: "GCD",
+        activePaperCount: 112,
+        activeSourceCount: 112,
+      },
+      sources: [],
+    };
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify(payload));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
+
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.papernexus_corpus = "GCD";
+  await writeJson(manifestPath, manifest);
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: `http://127.0.0.1:${port}`,
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.expectedPaperCount, 112);
+  assert.equal(result.presentPaperCount, 112);
+  assert.equal(result.usedPaperSourceIndex, false);
+  assert.equal(requests.length, 1);
+
+  const refreshedStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(refreshedStatus.verification_mode, "remote_corpus_summary");
+  assert.equal(refreshedStatus.status, "ready");
+});
+
+test("remote graph presence preserves a prior ready remote summary across zero-count endpoint anomalies", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const server = http.createServer(async (_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        rootPath: "/remote/corpora/GCD",
+        meta: { name: "GCD", paperCount: 0, sourceCount: 0 },
+        manifest: { corpusName: "GCD", activePaperCount: 0, activeSourceCount: 0 },
+        sources: [],
+      })
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
+
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  const now = "2026-04-11T01:56:00.000Z";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-survey-tpami-2026",
+    title: "GCD Survey",
+    current_stage: "graph_build",
+    papernexus_corpus: "GCD",
+    paper_ingestion: {
+      graph_presence_checked_at: now,
+      graph_presence_status: "ready",
+      graph_presence_expected_papers: 111,
+      graph_presence_present_papers: 111,
+      graph_presence_missing_papers: [],
+      remote_paper_count: 111,
+      synced_papers: 111,
+      refresh_required: false,
+    },
+    research_program: {
+      goal: "Comprehensive survey on GCD",
+      problem_statement: "Systematic review of GCD literature.",
+      baseline_reference: "ProtoGCD",
+      primary_metric: "H-score",
+      datasets: ["CUB"],
+      success_criteria: ["survey coverage"],
+      zotero_project_path: "bot/gcd-survey-tpami-2026",
+    },
+    idle_research: { enabled: false },
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: `http://127.0.0.1:${port}`,
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.expectedPaperCount, 111);
+  assert.equal(result.presentPaperCount, 111);
 });
 
 test("graph presence check does not fall back to local corpus files when remote PaperNexus access is configured", async (t) => {
@@ -3956,6 +4168,69 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
   assert.equal(result.graphPresenceCheck?.status, "ready");
+});
+
+test("auto iterator ignores dormant queued PaperNexus requests after graph presence is ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "GCD",
+    expected_paper_count: 111,
+    present_paper_count: 111,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 111,
+    present_paper_count: 111,
+    missing_paper_count: 0,
+  });
+  await seedReadyBrainstormCycle(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    runtime_status: "completed",
+    queued_requests: [
+      {
+        request_id: "idea-track-graph-evidence-gap",
+        status: "queued",
+        wrapper: "pn_batch_import.py",
+        args: [],
+        trigger_kind: "idea_literature_discovery",
+        summary: "stale evidence gap request",
+        created_at: "2026-04-10T08:29:10.804Z",
+        updated_at: "2026-04-10T08:29:10.804Z",
+        attempt_count: 0,
+      },
+    ],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 111,
+    graph_presence_present_papers: 111,
+    graph_presence_missing_papers: [],
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /workflow-owned PaperNexus ingestion is still active|ingestion is queued/i.test(signal)
+    )
+  );
 });
 
 test("auto iterator advances analyze without theory appendix artifacts when proof appendix is not required", async (t) => {

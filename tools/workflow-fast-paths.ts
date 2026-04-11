@@ -2490,7 +2490,7 @@ function buildWorkflowOwnedIngestionRequestPrompt(params: {
   return `${lines.join("\n")}\n`;
 }
 
-async function maybeTriggerQueuedPaperIngestionRequest(params: {
+export async function maybeTriggerQueuedPaperIngestionRequest(params: {
   runtimeSubagent?: {
     run: (params: {
       sessionKey: string;
@@ -2515,6 +2515,7 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
   triggerKind: string;
   projectRoot: string | null;
   projectId: string | null;
+  ensureProjectBinding?: boolean;
 }): Promise<BackgroundRunStartResult | null> {
   if (!params.projectRoot) {
     return null;
@@ -2626,7 +2627,7 @@ async function maybeTriggerQueuedPaperIngestionRequest(params: {
         `Workflow-triggered paper ingestion request ${queuedCandidate.requestId}.`,
       projectId: params.projectId ?? undefined,
       projectRoot: params.projectRoot,
-      ensureProjectBinding: true,
+      ensureProjectBinding: params.ensureProjectBinding !== false,
       extraSystemPrompt: requestPrompt,
     },
   });

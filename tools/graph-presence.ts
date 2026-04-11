@@ -211,6 +211,10 @@ function resolvePaperSourceIndexCountHint(raw: unknown): number | null {
   }
   const sourceMode = pickString(record, ["source_mode", "sourceMode"])?.toLowerCase();
   const graphMode = pickString(record, ["graph_mode", "graphMode"])?.toLowerCase();
+  const graphPresenceStatus = pickString(record, [
+    "graph_presence_status",
+    "graphPresenceStatus",
+  ])?.toLowerCase();
   const candidateCount =
     pickCount(record, [
       "graph_presence_expected",
@@ -223,10 +227,41 @@ function resolvePaperSourceIndexCountHint(raw: unknown): number | null {
   if (!candidateCount || candidateCount <= 0) {
     return null;
   }
-  if (sourceMode === "remote_corpus" || graphMode === "remote_papernexus") {
+  if (
+    sourceMode === "remote_corpus" ||
+    graphMode === "remote_papernexus" ||
+    graphPresenceStatus === "ready"
+  ) {
     return candidateCount;
   }
   return null;
+}
+
+function maxPositiveCount(values: Array<number | null>): number | null {
+  const counts = values.filter(
+    (value): value is number => typeof value === "number" && value > 0
+  );
+  return counts.length > 0 ? Math.max(...counts) : null;
+}
+
+function resolveManifestGraphPresenceCountHint(manifest: ManifestLike): number | null {
+  const paperIngestion = asRecord(manifest.paper_ingestion);
+  return maxPositiveCount([
+    pickCount(paperIngestion, [
+      "graph_presence_expected_papers",
+      "graphPresenceExpectedPapers",
+      "graph_presence_expected",
+      "graphPresenceExpected",
+    ]),
+    pickCount(paperIngestion, [
+      "graph_presence_present_papers",
+      "graphPresencePresentPapers",
+      "graph_presence_present",
+      "graphPresencePresent",
+    ]),
+    pickCount(paperIngestion, ["remote_paper_count", "remotePaperCount"]),
+    pickCount(paperIngestion, ["synced_papers", "syncedPapers"]),
+  ]);
 }
 
 function collectTextContent(value: unknown): string[] {
@@ -943,14 +978,16 @@ async function resolveExpectedPapers(params: {
     };
   }
   const summaryCountHint = resolvePaperSourceIndexCountHint(paperSourceIndex);
+  const manifestCountHint = resolveManifestGraphPresenceCountHint(params.manifest);
+  const expectedPaperCountHint = summaryCountHint ?? manifestCountHint;
   return {
     papers: [],
     paperSourceIndexPath: await pathExists(paperSourceIndexPath)
       ? paperSourceIndexPath
       : null,
     usedPaperSourceIndex: summaryCountHint !== null,
-    expectedPaperCountHint: summaryCountHint,
-    summaryOnly: summaryCountHint !== null,
+    expectedPaperCountHint,
+    summaryOnly: expectedPaperCountHint !== null,
   };
 }
 
@@ -1711,10 +1748,6 @@ function buildRemoteStatusRecordFromSources(params: {
   const corpusEntries = sources.map((entry) => buildCorpusPaper(entry));
   const presentPapers: GraphPresenceMatch[] = [];
   const missingPapers: GraphPresenceMissingPaper[] = [];
-  const expectedPaperCount =
-    params.expectedPapers.length > 0
-      ? params.expectedPapers.length
-      : Math.max(0, params.expectedPaperCountHint ?? 0);
   const summaryReportedPaperCount =
     pickCount(meta, ["paperCount", "paper_count", "activePaperCount", "active_paper_count"]) ??
     pickCount(manifest, [
@@ -1728,6 +1761,14 @@ function buildRemoteStatusRecordFromSources(params: {
       "source_count",
     ]) ??
     sources.filter((entry) => entry.activeInGraph !== false).length;
+  const configuredExpectedPaperCount =
+    params.expectedPapers.length > 0
+      ? params.expectedPapers.length
+      : Math.max(0, params.expectedPaperCountHint ?? 0);
+  const expectedPaperCount =
+    configuredExpectedPaperCount > 0
+      ? configuredExpectedPaperCount
+      : Math.max(0, summaryReportedPaperCount);
 
   for (const paper of params.expectedPapers) {
     const match = matchExpectedPaper(paper, corpusEntries);
@@ -1756,6 +1797,10 @@ function buildRemoteStatusRecordFromSources(params: {
     checked_at: params.checkedAt,
     status,
     mode: params.mode,
+    verification_mode:
+      params.expectedPapers.length === 0 && expectedPaperCount > 0
+        ? "remote_corpus_summary"
+        : "canonical_paper_index",
     corpus_name:
       params.preferredCorpusName ??
       pickString(manifest, ["corpusName", "corpus_name"]) ??
@@ -1907,6 +1952,22 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const remoteEndpoint =
     remoteInspection.summary.apiBaseUrl ?? remoteInspection.summary.mcpUrl ?? null;
   const paperIngestionProgress = summarizePaperIngestionProgress(params.manifest);
+  const paperIngestionRecord = asRecord(params.manifest.paper_ingestion);
+  const manifestGraphPresenceStatus =
+    pickString(paperIngestionRecord, [
+      "graph_presence_status",
+      "graphPresenceStatus",
+    ])?.trim().toLowerCase() ?? null;
+  const manifestPresentHint = maxPositiveCount([
+    pickCount(paperIngestionRecord, [
+      "graph_presence_present_papers",
+      "graphPresencePresentPapers",
+      "graph_presence_present",
+      "graphPresencePresent",
+    ]),
+    pickCount(paperIngestionRecord, ["remote_paper_count", "remotePaperCount"]),
+    pickCount(paperIngestionRecord, ["synced_papers", "syncedPapers"]),
+  ]);
   const refreshedStatus = remoteInspection.tokenAvailable
     ? await refreshRemoteStatusRecord({
         projectRoot: params.projectRoot,
@@ -1927,12 +1988,45 @@ async function checkGraphPresenceViaRemoteStatus(params: {
 
   let status: GraphPresenceStatus = "ready";
   let refreshReason: string | null = null;
-  const expectedPaperCount = resolveExpectedPaperCount(params.expected);
+  let expectedPaperCount = resolveExpectedPaperCount(params.expected);
   let presentPaperCount = expectedPaperCount;
   let missingPapers: GraphPresenceMissingPaper[] = [];
 
   if (expectedPaperCount === 0) {
-    status = "missing_sources";
+    const remoteExpectedCount =
+      statusRecord
+        ? maxPositiveCount([
+            pickCount(statusRecord, ["expected_paper_count", "expectedPaperCount"]),
+            pickCount(statusRecord, ["present_paper_count", "presentPaperCount"]),
+          ])
+        : null;
+    if (remoteExpectedCount !== null) {
+      expectedPaperCount = remoteExpectedCount;
+      presentPaperCount = Math.min(
+        pickCount(statusRecord, ["present_paper_count", "presentPaperCount"]) ??
+          expectedPaperCount,
+        expectedPaperCount
+      );
+      const normalizedStatus =
+        pickString(statusRecord, ["status"])?.trim().toLowerCase() ?? null;
+      if (normalizedStatus === "missing_corpus") {
+        status = "missing_corpus";
+        refreshReason =
+          pickString(statusRecord, ["refresh_reason", "refreshReason"]) ??
+          buildBlockingReason("missing_corpus", [], expectedPaperCount, remoteEndpoint);
+      } else if (normalizedStatus === "missing_papers" || presentPaperCount < expectedPaperCount) {
+        status = "missing_papers";
+        refreshReason =
+          pickString(statusRecord, ["refresh_reason", "refreshReason"]) ??
+          buildBlockingReason("missing_papers", [], expectedPaperCount, remoteEndpoint);
+      } else {
+        status = "ready";
+        presentPaperCount = expectedPaperCount;
+        refreshReason = null;
+      }
+    } else {
+      status = "missing_sources";
+    }
   } else if (!remoteInspection.tokenAvailable) {
     status = "missing_corpus";
     refreshReason =
@@ -1970,8 +2064,20 @@ async function checkGraphPresenceViaRemoteStatus(params: {
       pickString(statusRecord, ["status"])?.trim().toLowerCase() ?? null;
     const statusRefreshReason =
       pickString(statusRecord, ["refresh_reason", "refreshReason"]) ?? null;
+    const remoteZeroCountAnomaly =
+      params.expected.papers.length === 0 &&
+      presentPaperCount === 0 &&
+      expectedPaperCount > 0 &&
+      (normalizedStatus === "missing_sources" || normalizedStatus === "missing_papers") &&
+      manifestGraphPresenceStatus === "ready" &&
+      (manifestPresentHint ?? 0) >= expectedPaperCount;
 
-    if (statusExpectedCount !== expectedPaperCount) {
+    if (remoteZeroCountAnomaly) {
+      status = "ready";
+      presentPaperCount = expectedPaperCount;
+      missingPapers = [];
+      refreshReason = null;
+    } else if (statusExpectedCount !== expectedPaperCount) {
       status = "missing_corpus";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({

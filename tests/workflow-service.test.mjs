@@ -33,6 +33,7 @@ import {
   maybeLaunchAutoStageForProject,
   maybeLaunchAutoZoteroSyncForProject,
   maybeLaunchIdleResearchForProject,
+  maybeLaunchPaperIngestionWorkerForProject,
   runWorkflowCoordinatorPass,
 } from "../tools/register-workflow-service.ts";
 import {
@@ -1116,6 +1117,123 @@ test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway 
   assert.equal(launch.queued, true);
   assert.equal(launch.reason, "queued");
   assert.equal(launch.trigger, "auto_graph_refresh");
+});
+
+test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads without a graph-build agent turn", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const batchManifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "batch-import.json"
+  );
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
+  const runs = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis markdown fixture is long enough for staged validation. ".repeat(30),
+    "utf8"
+  );
+  await writeJson(batchManifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "demo-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "req-batch-1",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            `python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest ${batchManifestPath} submit`,
+          manifest_path: batchManifestPath,
+          shared_corpus: "GCD",
+          paper_count: 1,
+          summary: "Queued corpus upload",
+          created_at: "2026-04-02T00:00:00.000Z",
+          updated_at: "2026-04-02T00:00:00.000Z",
+        },
+      ],
+    },
+  });
+
+  const launch = await maybeLaunchPaperIngestionWorkerForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `upload-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    triggerKind: "coordinator_heartbeat",
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(runs[0].extraSystemPrompt ?? "", /WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=req-batch-1/);
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "upload-run-1");
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].trigger_kind,
+    "coordinator_heartbeat"
+  );
 });
 
 test("maybeLaunchAutoStageForProject keeps the researcher service session pool isolated per project", async (t) => {

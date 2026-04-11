@@ -17,6 +17,15 @@ export interface FoundationStageDeps {
   normalizeGraphPresenceStatus: (value: unknown) => string | null;
   normalizePaperIngestionState: (value: unknown) => any;
   hasActiveWorkflowOwnedPaperUpload: (state: any) => boolean;
+  derivePaperIngestionWorkflowDecision?: (params: {
+    state: any;
+    graphPresenceStatus?: unknown;
+  }) => {
+    action: "continue" | "wait" | "repair";
+    blocking: boolean;
+    reason: string | null;
+    ignoredDormantQueuedRequestCount?: number;
+  };
   summarizeGraphPresenceMissing: (
     paperIngestion: Record<string, unknown> | null
   ) => string | null;
@@ -84,14 +93,22 @@ export async function collectGraphBuildStageMissingSignals(
 
   const paperIngestion = deps.asRecord(ctx.manifest?.paper_ingestion);
   const paperIngestionState = deps.normalizePaperIngestionState(paperIngestion);
-  if (deps.hasActiveWorkflowOwnedPaperUpload(paperIngestionState)) {
-    missing.push(
-      "workflow-owned PaperNexus ingestion is still active; wait for upload / graph sync completion before frontier mapping"
-    );
-  }
   const graphPresenceStatus = deps.normalizeGraphPresenceStatus(
     paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
   );
+  const ingestionDecision = deps.derivePaperIngestionWorkflowDecision?.({
+    state: paperIngestionState,
+    graphPresenceStatus,
+  });
+  if (
+    ingestionDecision?.blocking ||
+    (!ingestionDecision && deps.hasActiveWorkflowOwnedPaperUpload(paperIngestionState))
+  ) {
+    missing.push(
+      ingestionDecision?.reason ??
+        "workflow-owned PaperNexus ingestion is still active; wait for upload / graph sync completion before frontier mapping"
+    );
+  }
   if (graphPresenceStatus !== "ready") {
     missing.push(
       `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus ?? "unset"})`

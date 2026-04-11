@@ -133,7 +133,7 @@ export function buildPapernexusGuidance(
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     prepend.push(
-      "If new PDFs or Markdown arrive through a UI/API upload, queue the PaperNexus import wrappers from project-local staging through `research_workflow.queue_paper_ingestion`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. `/graph-build` and `/resume-pipeline` will launch the queued request for you."
+      "If new PDFs or Markdown arrive through a UI/API upload, queue the PaperNexus import wrappers from project-local staging through `research_workflow.queue_paper_ingestion`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. The workflow PaperNexus upload worker owns launching and retrying queued requests; agents should not run upload wrappers inline or clear queued_requests by hand."
     );
     if (resolvedAccessMode === "remote_mcp") {
       prepend.push(

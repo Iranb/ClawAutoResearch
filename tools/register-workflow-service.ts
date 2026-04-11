@@ -14,6 +14,7 @@ import {
   drainQueuedBackgroundWorkflowRuns,
   enqueueQueuedBackgroundWorkflowRun,
   hasPendingBackgroundWorkflowQueueKey,
+  maybeTriggerQueuedPaperIngestionRequest,
   startBackgroundWorkflowRun,
 } from "./workflow-fast-paths";
 import {
@@ -192,6 +193,24 @@ type AutoZoteroSyncAttempt = {
   zoteroProjectPath: string | null;
   packetPath: string | null;
   markdownPath: string | null;
+};
+
+type PaperIngestionWorkerAttempt = {
+  launched: boolean;
+  queued: boolean;
+  reason:
+    | "started"
+    | "queued"
+    | "no_runtime_subagent"
+    | "no_request"
+    | "already_active"
+    | "blocked";
+  projectId: string | null;
+  projectRoot: string;
+  sessionKey: string | null;
+  runId: string | null;
+  summary: string | null;
+  queueKey: string | null;
 };
 
 type AutoStageLaunchAttempt = {
@@ -763,6 +782,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   autoStageLaunch: AutoStageLaunchAttempt;
   idleResearchLaunch: IdleResearchLaunchAttempt;
   autoZoteroSync?: AutoZoteroSyncAttempt;
+  paperIngestionWorker?: PaperIngestionWorkerAttempt;
 }): WorkflowCoordinatorVisibleStatusUpdate | null {
   const autoCodeReview =
     params.autoCodeReview ??
@@ -823,6 +843,38 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         "timed-default",
         params.stageAfter ?? "unknown-stage",
         params.projectId ?? path.basename(params.projectRoot),
+      ].join(":"),
+    };
+  }
+  if (params.paperIngestionWorker?.launched) {
+    return {
+      status: "started",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.paperIngestionWorker.summary ??
+        `Started workflow-owned PaperNexus upload worker for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "paper-ingestion-worker",
+        "started",
+        params.paperIngestionWorker.queueKey ?? "no-queue-key",
+      ].join(":"),
+    };
+  }
+  if (params.paperIngestionWorker?.queued) {
+    return {
+      status: "queued",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.paperIngestionWorker.summary ??
+        `Queued workflow-owned PaperNexus upload worker for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "paper-ingestion-worker",
+        "queued",
+        params.paperIngestionWorker.queueKey ?? "no-queue-key",
       ].join(":"),
     };
   }
@@ -1414,6 +1466,110 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
         zoteroProjectPath: candidate.zoteroProjectPath,
         packetPath: candidate.packetPath,
         markdownPath: candidate.markdownPath,
+      };
+    },
+  });
+}
+
+export async function maybeLaunchPaperIngestionWorkerForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  triggerKind?: string;
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
+    label: "workflow_papernexus_upload_worker",
+    logger: params.logger,
+    task: async (): Promise<PaperIngestionWorkerAttempt> => {
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          queued: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          sessionKey: null,
+          runId: null,
+          summary: null,
+          queueKey: null,
+        };
+      }
+
+      const requesterBinding = resolveWorkflowRequesterBinding({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const requesterSessionKey =
+        requesterBinding.sessionKey ?? "agent:researcher:main";
+      const sessionKey = buildResearcherWorkflowSubagentSessionKey({
+        requesterSessionKey,
+        projectRoot: params.projectRoot,
+        purpose: "workflow-papernexus-upload-worker",
+        segments: [params.triggerKind ?? "heartbeat"],
+      });
+      const result = await maybeTriggerQueuedPaperIngestionRequest({
+        runtimeSubagent: params.runtimeSubagent,
+        workflowPolicy: params.workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: params.projectRoot,
+          sessionKey,
+          messageChannel: requesterBinding.messageChannel ?? "worker",
+          channelKey: requesterBinding.channelKey ?? undefined,
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          channelProjectBindingsEnabled:
+            params.workflowPolicy.enableChannelProjectBindings === true,
+        },
+        triggerKind: params.triggerKind ?? "worker_heartbeat",
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        ensureProjectBinding: false,
+      });
+      if (!result) {
+        return {
+          launched: false,
+          queued: false,
+          reason: "no_request",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          sessionKey: null,
+          runId: null,
+          summary: null,
+          queueKey: null,
+        };
+      }
+      const reason: PaperIngestionWorkerAttempt["reason"] = result.started
+        ? "started"
+        : result.queued
+          ? "queued"
+          : result.reason === "session_unavailable"
+            ? "already_active"
+            : "blocked";
+      return {
+        launched: result.started,
+        queued: result.queued,
+        reason,
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        sessionKey: result.sessionKey,
+        runId: result.runId,
+        summary: result.summary,
+        queueKey: result.queueKey,
       };
     },
   });
@@ -3987,6 +4143,22 @@ export function createWorkflowCoordinatorService(
         const autoZoteroSyncLaunches = autoZoteroSyncAttempts.filter(
           (entry) => entry.launched || entry.queued
         );
+        const paperIngestionWorkerAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry) =>
+            maybeLaunchPaperIngestionWorkerForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              triggerKind: "coordinator_heartbeat",
+              logger,
+              deps,
+            })
+          )
+        );
+        const paperIngestionWorkerLaunches = paperIngestionWorkerAttempts.filter(
+          (entry) => entry.launched || entry.queued
+        );
         await Promise.all(
           discussionRefreshedResults.map(async (entry, index) => {
             const statusUpdate = deriveWorkflowCoordinatorStatusUpdate({
@@ -4002,6 +4174,7 @@ export function createWorkflowCoordinatorService(
               autoStageLaunch: autoStageAttempts[index],
               idleResearchLaunch: idleResearchAttempts[index],
               autoZoteroSync: autoZoteroSyncAttempts[index],
+              paperIngestionWorker: paperIngestionWorkerAttempts[index],
             });
             if (!statusUpdate) {
               return null;
@@ -4036,6 +4209,7 @@ export function createWorkflowCoordinatorService(
           autoStageLaunches,
           idleResearchLaunches,
           autoZoteroSyncLaunches,
+          paperIngestionWorkerLaunches,
         });
         if (autoMitigationDispatches.length > 0) {
           logger.info?.("Workflow coordinator launched mitigation passes.", {

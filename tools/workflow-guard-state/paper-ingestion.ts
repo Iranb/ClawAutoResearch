@@ -306,8 +306,21 @@ export function serializePaperIngestionState(
 }
 
 export function hasActiveWorkflowOwnedPaperUpload(
-  state: PaperIngestionState
+  state: PaperIngestionState,
+  options?: {
+    graphPresenceStatus?: unknown;
+  }
 ): boolean {
+  const decision = derivePaperIngestionWorkflowDecision({
+    state,
+    graphPresenceStatus: options?.graphPresenceStatus,
+  });
+  if (decision.action === "wait") {
+    return true;
+  }
+  if (options?.graphPresenceStatus !== undefined) {
+    return false;
+  }
   if (
     ["waiting_import", "reconciling"].includes(
       normalizePaperIngestionRuntimeStatus(state.runtimeStatus) ?? ""
@@ -339,12 +352,212 @@ export function hasActiveWorkflowOwnedPaperUpload(
   return false;
 }
 
+export type PaperIngestionWorkflowDecisionAction =
+  | "continue"
+  | "wait"
+  | "repair";
+
+export type PaperIngestionWorkflowDecision = {
+  action: PaperIngestionWorkflowDecisionAction;
+  blocking: boolean;
+  reason: string | null;
+  graphPresenceReady: boolean;
+  queuedRequestCount: number;
+  launchingOrRunningRequestCount: number;
+  dormantQueuedRequestCount: number;
+  ignoredDormantQueuedRequestCount: number;
+  needsRepairRequestCount: number;
+  failedRequestCount: number;
+  activeBatchCount: number;
+  activeOperationCount: number;
+  failedOperationCount: number;
+};
+
+function isDormantQueuedRequest(request: PaperIngestionQueuedRequest): boolean {
+  return (
+    request.status === "queued" &&
+    !request.startedAt &&
+    !request.lastRunId &&
+    !request.lastSessionKey &&
+    !request.progress &&
+    !request.queueProgress &&
+    request.attemptCount === 0
+  );
+}
+
+export function derivePaperIngestionWorkflowDecision(params: {
+  state: PaperIngestionState;
+  graphPresenceStatus?: unknown;
+}): PaperIngestionWorkflowDecision {
+  const graphPresenceReady =
+    normalizeGraphPresenceStatus(params.graphPresenceStatus) === "ready";
+  const runtimeStatus = normalizePaperIngestionRuntimeStatus(
+    params.state.runtimeStatus
+  );
+  const runtimeActive =
+    runtimeStatus === "waiting_import" || runtimeStatus === "reconciling";
+  const queuedRequests = params.state.queuedRequests.filter(
+    (request) => request.status === "queued"
+  );
+  const launchingOrRunningRequests = params.state.queuedRequests.filter(
+    (request) => request.status === "launching" || request.status === "running"
+  );
+  const needsRepairRequests = params.state.queuedRequests.filter(
+    (request) => request.status === "needs_repair"
+  );
+  const failedRequests = params.state.queuedRequests.filter(
+    (request) => request.status === "failed"
+  );
+  const dormantQueuedRequests = queuedRequests.filter(isDormantQueuedRequest);
+  const activeBatches = params.state.activeBatches.filter((batch) =>
+    ["queued", "running"].includes(normalizeStage(batch.status) ?? "")
+  );
+  const activeOperations = params.state.paperOperations.filter((operation) =>
+    ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+  );
+  const failedOperations = params.state.paperOperations.filter((operation) =>
+    ["failed", "timed_out"].includes(normalizeStage(operation.status) ?? "")
+  );
+  const failedBatchItems = params.state.batchItems.filter((item) =>
+    ["failed", "submit_failed", "timed_out"].includes(normalizeStage(item.status) ?? "")
+  );
+
+  const terminalFailureCount =
+    failedRequests.length +
+    failedOperations.length +
+    failedBatchItems.length +
+    needsRepairRequests.length;
+  const hardActiveCount =
+    launchingOrRunningRequests.length +
+    activeBatches.length +
+    activeOperations.length +
+    (runtimeActive ? 1 : 0);
+
+  if (hardActiveCount > 0) {
+    return {
+      action: "wait",
+      blocking: true,
+      reason:
+        "workflow-owned PaperNexus ingestion is running; wait for upload / graph sync completion before frontier mapping",
+      graphPresenceReady,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
+  if (queuedRequests.length > 0) {
+    const allQueuedRequestsAreDormant =
+      dormantQueuedRequests.length === queuedRequests.length;
+    if (graphPresenceReady && allQueuedRequestsAreDormant) {
+      return {
+        action: "continue",
+        blocking: false,
+        reason:
+          "graph presence is ready; ignoring dormant queued PaperNexus requests that were never launched",
+        graphPresenceReady,
+        queuedRequestCount: queuedRequests.length,
+        launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+        dormantQueuedRequestCount: dormantQueuedRequests.length,
+        ignoredDormantQueuedRequestCount: dormantQueuedRequests.length,
+        needsRepairRequestCount: needsRepairRequests.length,
+        failedRequestCount: failedRequests.length,
+        activeBatchCount: activeBatches.length,
+        activeOperationCount: activeOperations.length,
+        failedOperationCount: failedOperations.length + failedBatchItems.length,
+      };
+    }
+    return {
+      action: "wait",
+      blocking: true,
+      reason:
+        "workflow-owned PaperNexus ingestion is queued; wait for the background import worker to launch or clear the request",
+      graphPresenceReady,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
+  if (terminalFailureCount > 0) {
+    if (graphPresenceReady) {
+      return {
+        action: "continue",
+        blocking: false,
+        reason:
+          "graph presence is ready; ignoring terminal PaperNexus ingestion failures that no longer block the current stage",
+        graphPresenceReady,
+        queuedRequestCount: queuedRequests.length,
+        launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+        dormantQueuedRequestCount: dormantQueuedRequests.length,
+        ignoredDormantQueuedRequestCount: 0,
+        needsRepairRequestCount: needsRepairRequests.length,
+        failedRequestCount: failedRequests.length,
+        activeBatchCount: activeBatches.length,
+        activeOperationCount: activeOperations.length,
+        failedOperationCount: failedOperations.length + failedBatchItems.length,
+      };
+    }
+    return {
+      action: "repair",
+      blocking: true,
+      reason:
+        "workflow-owned PaperNexus ingestion failed or needs repair; rerun a bounded repair/import pass or mark the request terminal before frontier mapping",
+      graphPresenceReady,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
+  return {
+    action: "continue",
+    blocking: false,
+    reason: null,
+    graphPresenceReady,
+    queuedRequestCount: 0,
+    launchingOrRunningRequestCount: 0,
+    dormantQueuedRequestCount: 0,
+    ignoredDormantQueuedRequestCount: 0,
+    needsRepairRequestCount: 0,
+    failedRequestCount: 0,
+    activeBatchCount: 0,
+    activeOperationCount: 0,
+    failedOperationCount: 0,
+  };
+}
+
 export function deriveGraphBuildMicroStage(params: {
   paperIngestionState: PaperIngestionState;
   graphPresenceStatus: string | null;
 }): string {
-  if (hasActiveWorkflowOwnedPaperUpload(params.paperIngestionState)) {
+  const decision = derivePaperIngestionWorkflowDecision({
+    state: params.paperIngestionState,
+    graphPresenceStatus: params.graphPresenceStatus,
+  });
+  if (decision.action === "wait") {
     return "uploading";
+  }
+  if (decision.action === "repair") {
+    return "needs_repair";
   }
   if (normalizeGraphPresenceStatus(params.graphPresenceStatus) !== "ready") {
     return "verifying";

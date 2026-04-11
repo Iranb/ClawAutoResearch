@@ -530,6 +530,9 @@ export async function runWorkflowAutoIteratorImpl(
     shouldRouteLiteratureDiscoveryToGraphBuild({
       currentStage: stageBefore,
       paperIngestion: paperIngestionStateBeforeRouting,
+      graphPresenceStatus:
+        asRecord(manifest.paper_ingestion)?.graph_presence_status ??
+        asRecord(manifest.paper_ingestion)?.graphPresenceStatus,
     });
   const requestedGraphReentry =
     !surveyWorkflow &&

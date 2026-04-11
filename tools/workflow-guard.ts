@@ -200,6 +200,7 @@ import {
 import { normalizeExperimentSearchReviewState } from "./workflow-guard-state/experiment-search-review.js";
 import {
   deriveGraphBuildMicroStage,
+  derivePaperIngestionWorkflowDecision,
   hasActiveWorkflowOwnedPaperUpload,
   mergeCompletedPaperEntries,
   mergePaperIngestionBatchItems,
@@ -5784,6 +5785,7 @@ async function getMissingStageSignals(params: {
           normalizeGraphPresenceStatus,
           normalizePaperIngestionState,
           hasActiveWorkflowOwnedPaperUpload,
+          derivePaperIngestionWorkflowDecision,
           summarizeGraphPresenceMissing,
           getBrainstormCycleMissingSignals,
           normalizeStage,
@@ -5810,6 +5812,7 @@ async function getMissingStageSignals(params: {
           normalizeGraphPresenceStatus,
           normalizePaperIngestionState,
           hasActiveWorkflowOwnedPaperUpload,
+          derivePaperIngestionWorkflowDecision,
           summarizeGraphPresenceMissing,
           getBrainstormCycleMissingSignals,
           normalizeStage,
@@ -5831,6 +5834,7 @@ async function getMissingStageSignals(params: {
           normalizeGraphPresenceStatus,
           normalizePaperIngestionState,
           hasActiveWorkflowOwnedPaperUpload,
+          derivePaperIngestionWorkflowDecision,
           summarizeGraphPresenceMissing,
           getBrainstormCycleMissingSignals,
           normalizeStage,

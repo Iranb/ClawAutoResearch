@@ -6,7 +6,10 @@ import {
   pickString,
 } from "./workflow-guard-core/coercion";
 import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
-import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
+import {
+  derivePaperIngestionWorkflowDecision,
+  normalizePaperIngestionState,
+} from "./workflow-guard-state/paper-ingestion";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -570,9 +573,16 @@ function derivePhase(params: {
     params.paperIngestionRecord.graph_presence_status ??
       params.paperIngestionRecord.graphPresenceStatus
   );
+  const ingestionDecision = derivePaperIngestionWorkflowDecision({
+    state: params.state,
+    graphPresenceStatus: graphStatus,
+  });
   const activeRequest = params.state.queuedRequests.find((entry) =>
     ["launching", "running"].includes(entry.status)
   );
+  if (ingestionDecision.action === "continue" && graphStatus === "ready") {
+    return "ready";
+  }
   if (params.state.repairRequired || graphStatus === "missing_corpus") {
     return "needs_repair";
   }

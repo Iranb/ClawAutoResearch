@@ -1,5 +1,11 @@
 import path from "node:path";
-import { asRecord, asString, pickNumber, pickString } from "../workflow-guard-core/coercion";
+import {
+  asRecord,
+  asString,
+  normalizeGraphPresenceStatus,
+  pickNumber,
+  pickString,
+} from "../workflow-guard-core/coercion";
 import { readJsonIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
@@ -55,18 +61,37 @@ export function isLiteratureDiscoveryTriggerKind(value: string | null | undefine
 
 export function hasActiveLiteratureDiscoveryRequest(params: {
   paperIngestion: unknown;
+  graphPresenceStatus?: unknown;
 }): boolean {
   const state = normalizePaperIngestionState(params.paperIngestion);
-  return state.queuedRequests.some(
+  const activeRequests = state.queuedRequests.filter(
     (entry) =>
       isLiteratureDiscoveryTriggerKind(entry.triggerKind) &&
       isActiveQueuedRequestStatus(entry.status)
   );
+  if (activeRequests.length === 0) {
+    return false;
+  }
+  const graphPresenceReady =
+    normalizeGraphPresenceStatus(params.graphPresenceStatus) === "ready";
+  const onlyDormantQueuedRequests = activeRequests.every(
+    (entry) =>
+      entry.status === "queued" &&
+      !entry.startedAt &&
+      !entry.lastRunId &&
+      !entry.lastSessionKey &&
+      entry.attemptCount === 0
+  );
+  if (graphPresenceReady && onlyDormantQueuedRequests) {
+    return false;
+  }
+  return true;
 }
 
 export function shouldRouteLiteratureDiscoveryToGraphBuild(params: {
   currentStage: string | null;
   paperIngestion: unknown;
+  graphPresenceStatus?: unknown;
 }): boolean {
   if (!params.currentStage) {
     return false;
@@ -76,6 +101,7 @@ export function shouldRouteLiteratureDiscoveryToGraphBuild(params: {
   }
   return hasActiveLiteratureDiscoveryRequest({
     paperIngestion: params.paperIngestion,
+    graphPresenceStatus: params.graphPresenceStatus,
   });
 }
 

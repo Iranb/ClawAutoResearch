@@ -17,6 +17,16 @@ const SURVEY_WORKFLOW_RECOVERY_STAGES = new Set([
 
 export function isSurveyWorkflow(manifest) {
   const record = manifest ?? {};
+  const explicitWorkflowLine =
+    asString(record.workflow_line) ??
+    asString(record.workflowLine) ??
+    asString(record.project_type) ??
+    asString(record.projectType) ??
+    asString(record.paper_type) ??
+    asString(record.paperType);
+  if (/^(survey|survey_review|review_paper|literature_review)$/i.test(explicitWorkflowLine ?? "")) {
+    return true;
+  }
   const currentStage = normalizeStage(record.current_stage);
   if (currentStage === "survey_review") {
     return true;
@@ -33,7 +43,25 @@ export function isSurveyWorkflow(manifest) {
   }
 
   const projectId = asString(record.project_id)?.toLowerCase() ?? "";
-  return projectId.startsWith("survey-");
+  if (/(^|[-_])survey([-_]|$)/.test(projectId)) {
+    return true;
+  }
+
+  const researchProgram =
+    record.research_program && typeof record.research_program === "object"
+      ? record.research_program
+      : {};
+  const researchProgramText = [
+    asString(researchProgram.goal),
+    asString(researchProgram.problem_statement),
+    asString(researchProgram.problemStatement),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /\b(survey|literature review|systematic review|综述)\b/.test(
+    researchProgramText
+  );
 }
 
 export function resolveStageForWorkflowLine(params) {

@@ -2,7 +2,10 @@ import * as fs from "node:fs/promises";
 import {
   normalizeIdeationContractState,
 } from "../workflow-guard-state/ideation-contract";
-import { normalizePaperIngestionState } from "../workflow-guard-state/paper-ingestion";
+import {
+  normalizePaperIngestionState,
+  serializePaperIngestionState,
+} from "../workflow-guard-state/paper-ingestion";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
 import {
@@ -20,6 +23,7 @@ import {
   getWorkflowLiteratureDiscoveryNeed,
 } from "../literature-discovery/materializer";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
+import { isLiteratureDiscoveryTriggerKind } from "../literature-discovery/workflow-bridge";
 import { materializeCycleMemory } from "../research-memory-cycle";
 import {
   DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH,
@@ -31,6 +35,7 @@ import {
   isNonEmptyDirectory,
   pathExists,
   readJsonIfExists,
+  writeJsonEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
@@ -705,15 +710,102 @@ async function shouldQueueLiteratureDiscoveryRequisition(params: {
     manifest: params.manifest,
     stage: params.stage,
   });
-  if (
-    !packetExists &&
-    !literatureDiscoveryNeed.required
-  ) {
+  if (!literatureDiscoveryNeed.required) {
     return false;
+  }
+  if (!packetExists) {
+    return true;
   }
   return !hasActiveLiteratureDiscoveryRequest({
     paperIngestion: normalizePaperIngestionState(params.manifest.paper_ingestion),
   });
+}
+
+async function reconcileSatisfiedLiteratureDiscoveryRequisition(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  if (!params.stage || !LITERATURE_DISCOVERY_PREP_STAGES.has(params.stage)) {
+    return { manifest: params.manifest, updated: false };
+  }
+  const literatureDiscoveryNeed = await getWorkflowLiteratureDiscoveryNeed({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    stage: params.stage,
+  });
+  if (literatureDiscoveryNeed.required) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  const now = new Date().toISOString();
+  let updated = false;
+  const queuedRequests = state.queuedRequests.map((request) => {
+    const dormantQueued =
+      request.status === "queued" &&
+      !request.startedAt &&
+      !request.lastRunId &&
+      !request.lastSessionKey &&
+      request.attemptCount === 0;
+    const obsoleteRepair = request.status === "needs_repair";
+    if (
+      !isLiteratureDiscoveryTriggerKind(request.triggerKind) ||
+      (!dormantQueued && !obsoleteRepair)
+    ) {
+      return request;
+    }
+    updated = true;
+    return {
+      ...request,
+      status: "completed" as const,
+      updatedAt: now,
+      finishedAt: request.finishedAt ?? now,
+      detail:
+        request.detail ??
+        "Literature discovery request was satisfied by current workflow state before launch.",
+      deadLetterReason: null,
+      lastError: null,
+    };
+  });
+
+  const packetResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+  );
+  if (packetResolvedPath && (await pathExists(packetResolvedPath))) {
+    const packet =
+      (await readJsonIfExists<Record<string, unknown>>(packetResolvedPath)) ?? {};
+    if (packet.evidence_gap_closed !== true) {
+      updated = true;
+      await writeJsonEnsured(packetResolvedPath, {
+        ...packet,
+        evidence_gap_closed: true,
+        closure_reason: "workflow_state_satisfied",
+        trigger: "workflow_preflight_reconciled",
+        last_updated_at: now,
+      });
+    }
+  }
+
+  if (!updated) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const manifest = {
+    ...params.manifest,
+    paper_ingestion: serializePaperIngestionState({
+      ...state,
+      queuedRequests,
+      lastUpdatedAt: now,
+    }),
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true };
 }
 
 async function shouldMaterializeWritingSupport(params: {
@@ -761,6 +853,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
   if (ideaCatalystReconciliation.updated) {
     manifest = ideaCatalystReconciliation.manifest;
     materializedContracts.push("idea_catalyst_requisition_reconciled");
+  }
+  const literatureDiscoveryReconciliation =
+    await reconcileSatisfiedLiteratureDiscoveryRequisition({
+      projectRoot,
+      manifest,
+      stage: params.stage,
+    });
+  if (literatureDiscoveryReconciliation.updated) {
+    manifest = literatureDiscoveryReconciliation.manifest;
+    materializedContracts.push("literature_discovery_requisition_reconciled");
   }
 
   const runStep = async (
