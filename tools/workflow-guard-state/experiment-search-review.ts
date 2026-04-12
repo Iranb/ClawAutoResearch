@@ -56,6 +56,10 @@ export type ExperimentSearchReviewStateLike = {
   actionApproved: boolean;
   blockerCount: number;
   blockers: string[];
+  promotionBasisSignals: string[];
+  promotionEvidenceSummary: string | null;
+  discardReason: string | null;
+  failureClass: string | null;
   appliedAt: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
@@ -204,6 +208,15 @@ export function normalizeExperimentSearchReviewState(
       Math.floor(pickNumber(record, ["blockerCount", "blocker_count"]) ?? 0)
     ),
     blockers: asStringArray(record.blockers),
+    promotionBasisSignals: asStringArray(
+      record.promotionBasisSignals ?? record.promotion_basis_signals
+    ),
+    promotionEvidenceSummary: pickString(record, [
+      "promotionEvidenceSummary",
+      "promotion_evidence_summary",
+    ]),
+    discardReason: pickString(record, ["discardReason", "discard_reason"]),
+    failureClass: pickString(record, ["failureClass", "failure_class"]),
     appliedAt: pickString(record, ["appliedAt", "applied_at"]),
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
     lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
@@ -248,6 +261,10 @@ export function serializeExperimentSearchReviewState(
     action_approved: value.actionApproved,
     blocker_count: value.blockerCount,
     blockers: value.blockers,
+    promotion_basis_signals: value.promotionBasisSignals,
+    promotion_evidence_summary: value.promotionEvidenceSummary,
+    discard_reason: value.discardReason,
+    failure_class: value.failureClass,
     applied_at: value.appliedAt,
     pending_reason: value.pendingReason,
     last_updated_at: value.lastUpdatedAt,

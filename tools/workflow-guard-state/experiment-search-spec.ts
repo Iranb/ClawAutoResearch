@@ -36,6 +36,27 @@ export type ExperimentSearchGraphMemoryBasisLike = {
   syncStatusPath: string | null;
 };
 
+export type ExperimentSearchMetricContractLike = {
+  metricName: string | null;
+  direction: string | null;
+  minimumImprovement: number | null;
+  primaryEvidence: string[];
+};
+
+export type ExperimentSearchBaselineFairnessContractLike = {
+  requireBaselineParity: boolean;
+  lockedDatasetProtocol: boolean;
+  lockedMetricProtocol: boolean;
+  lockedEvaluationHarness: boolean;
+};
+
+export type ExperimentSearchValidationStepLike = {
+  stepId: string | null;
+  kind: string | null;
+  required: boolean;
+  completionSignal: string | null;
+};
+
 export type ExperimentSearchSpecLike = {
   searchSessionId: string | null;
   projectId: string | null;
@@ -48,6 +69,12 @@ export type ExperimentSearchSpecLike = {
   comparisonPolicy: ExperimentSearchComparisonPolicyLike;
   budget: ExperimentSearchBudgetLike;
   graphMemoryBasis: ExperimentSearchGraphMemoryBasisLike;
+  primaryMetricContract: ExperimentSearchMetricContractLike;
+  baselineFairnessContract: ExperimentSearchBaselineFairnessContractLike;
+  requiredValidationSteps: ExperimentSearchValidationStepLike[];
+  innovationInvalidityCriteria: Record<string, unknown> | null;
+  tuningExhaustionCriteria: Record<string, unknown> | null;
+  searchLadder: string[];
 };
 
 export function normalizeExperimentSearchSpec(
@@ -60,6 +87,29 @@ export function normalizeExperimentSearchSpec(
   const budget = asRecord(record.budget) ?? {};
   const graphMemoryBasis =
     asRecord(record.graphMemoryBasis ?? record.graph_memory_basis) ?? {};
+  const primaryMetricContract =
+    asRecord(record.primaryMetricContract ?? record.primary_metric_contract) ?? {};
+  const baselineFairnessContract =
+    asRecord(
+      record.baselineFairnessContract ?? record.baseline_fairness_contract
+    ) ?? {};
+  const requiredValidationSteps = Array.isArray(
+    record.requiredValidationSteps ?? record.required_validation_steps
+  )
+    ? ((record.requiredValidationSteps ??
+        record.required_validation_steps) as unknown[])
+        .map((entry: unknown) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .map((entry: Record<string, unknown>) => ({
+          stepId: pickString(entry, ["stepId", "step_id"]),
+          kind: pickString(entry, ["kind"]),
+          required: pickBoolean(entry, ["required"]) ?? true,
+          completionSignal: pickString(entry, [
+            "completionSignal",
+            "completion_signal",
+          ]),
+        }))
+    : [];
   return {
     searchSessionId: pickString(record, ["searchSessionId", "search_session_id"]),
     projectId: pickString(record, ["projectId", "project_id"]),
@@ -159,6 +209,55 @@ export function normalizeExperimentSearchSpec(
         "sync_status_path",
       ]),
     },
+    primaryMetricContract: {
+      metricName: pickString(primaryMetricContract, [
+        "metricName",
+        "metric_name",
+      ]),
+      direction: pickString(primaryMetricContract, ["direction"]),
+      minimumImprovement:
+        pickNumber(primaryMetricContract, [
+          "minimumImprovement",
+          "minimum_improvement",
+        ]) ?? null,
+      primaryEvidence: asStringArray(
+        primaryMetricContract.primaryEvidence ??
+          primaryMetricContract.primary_evidence
+      ),
+    },
+    baselineFairnessContract: {
+      requireBaselineParity:
+        pickBoolean(baselineFairnessContract, [
+          "requireBaselineParity",
+          "require_baseline_parity",
+        ]) ?? true,
+      lockedDatasetProtocol:
+        pickBoolean(baselineFairnessContract, [
+          "lockedDatasetProtocol",
+          "locked_dataset_protocol",
+        ]) ?? true,
+      lockedMetricProtocol:
+        pickBoolean(baselineFairnessContract, [
+          "lockedMetricProtocol",
+          "locked_metric_protocol",
+        ]) ?? true,
+      lockedEvaluationHarness:
+        pickBoolean(baselineFairnessContract, [
+          "lockedEvaluationHarness",
+          "locked_evaluation_harness",
+        ]) ?? true,
+    },
+    requiredValidationSteps,
+    innovationInvalidityCriteria:
+      asRecord(
+        record.innovationInvalidityCriteria ??
+          record.innovation_invalidity_criteria
+      ) ?? null,
+    tuningExhaustionCriteria:
+      asRecord(
+        record.tuningExhaustionCriteria ?? record.tuning_exhaustion_criteria
+      ) ?? null,
+    searchLadder: asStringArray(record.searchLadder ?? record.search_ladder),
   };
 }
 

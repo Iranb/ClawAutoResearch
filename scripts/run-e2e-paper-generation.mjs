@@ -27,6 +27,14 @@ async function exists(filePath) {
   }
 }
 
+async function readTextIfExists(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function listJsonl(filePath) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -66,6 +74,16 @@ function statusFromChecks(checks) {
   return "fail";
 }
 
+function parseCountsFromText(rawText, labels) {
+  for (const label of labels) {
+    const match = rawText.match(new RegExp(`${label}\\s*[:：]\\s*(\\d+)`, "i"));
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  return 0;
+}
+
 const projectRoot = path.resolve(argValue("--project-root", process.env.OPENCLAW_PROJECT ?? ""));
 const lane = argValue("--lane", "survey");
 if (!projectRoot || projectRoot === process.cwd()) {
@@ -89,6 +107,56 @@ const incidentsStore =
   (await readJson(path.join(openclawDir, "workflow-runtime-incidents.json"))) ?? { entries: [] };
 const events = await listJsonl(path.join(openclawDir, "workflow-events.jsonl"));
 const handoffEvents = await listJsonl(path.join(openclawDir, "workflow-handoff-events.jsonl"));
+const mainTexPath = path.join(projectRoot, "academic_writer", "paper", "main.tex");
+const refsBibPath = path.join(projectRoot, "academic_writer", "paper", "refs.bib");
+const citationVerificationPath = path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md");
+const reviewIssuesPath = path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json");
+const mainPdfPath = path.join(projectRoot, "academic_writer", "paper", "main.pdf");
+const writingSignalsPath = path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md");
+const reviewPacketPath = path.join(projectRoot, "reviewer", "REVIEW_PACKET.json");
+
+const [mainTex, refsBib, citationVerificationText, reviewIssues] = await Promise.all([
+  readTextIfExists(mainTexPath),
+  readTextIfExists(refsBibPath),
+  readTextIfExists(citationVerificationPath),
+  readJson(reviewIssuesPath),
+]);
+
+const citeCount = (mainTex?.match(/\\cite[ptba]?\*?\{/g) ?? []).length;
+const sectionCount = (mainTex?.match(/\\section\*?\{/g) ?? []).length;
+const bibliographyCount = (refsBib?.match(/@\w+\s*\{/g) ?? []).length;
+const citationSuspicious = parseCountsFromText(citationVerificationText ?? "", ["suspicious"]);
+const citationHallucinated = parseCountsFromText(citationVerificationText ?? "", ["hallucinated"]);
+const reviewIssuesRaw = Array.isArray(reviewIssues?.issues) ? reviewIssues.issues : [];
+const openMediumOrHigherIssues = reviewIssuesRaw.filter((issue) => {
+  const status = String(issue?.status ?? "").toLowerCase();
+  const severity = String(issue?.severity ?? "").toLowerCase();
+  return status === "open" && ["critical", "high", "medium"].includes(severity);
+}).length;
+const currentStage = manifest.current_stage ?? "unknown";
+const paperMode =
+  manifest.writing_contract?.paper_mode ??
+  manifest.writing_contract?.paperMode ??
+  "unknown";
+const reviewCloseoutChecks = [
+  { name: "stage_not_setup", ok: currentStage !== "setup" },
+  {
+    name: "paper_mode_matches_lane",
+    ok:
+      (lane === "survey" && paperMode === "survey") ||
+      (lane === "experiment" && paperMode === "conference") ||
+      lane === "full",
+  },
+  { name: "main_tex_has_citations", ok: citeCount > 0 },
+  { name: "bibliography_nonempty", ok: bibliographyCount > 0 },
+  { name: "writing_signals_present", ok: await exists(writingSignalsPath) },
+  { name: "review_packet_present", ok: await exists(reviewPacketPath) },
+  { name: "review_issues_present", ok: await exists(reviewIssuesPath) },
+  { name: "main_pdf_present", ok: await exists(mainPdfPath) },
+  { name: "citation_suspicious_zero", ok: citationSuspicious === 0 },
+  { name: "citation_hallucinated_zero", ok: citationHallucinated === 0 },
+  { name: "no_open_medium_or_higher_review_issues", ok: openMediumOrHigherIssues === 0 },
+];
 
 const surveyChecks = [
   "researcher/SURVEY_QUERY_REGISTRY.json",
@@ -155,8 +223,14 @@ const activeWriteScopes = (writeScopeStore.claims ?? []).filter(
 );
 
 const artifactStatus = statusFromChecks(artifactChecklist);
+const reviewCloseoutStatus = reviewCloseoutChecks.every((entry) => entry.ok)
+  ? "pass"
+  : reviewCloseoutChecks.some((entry) => entry.ok)
+    ? "partial"
+    : "fail";
 const finalVerdict =
   artifactStatus === "pass" &&
+  reviewCloseoutStatus === "pass" &&
   openIncidents.length === 0 &&
   activeRepairs.length === 0
     ? "pass"
@@ -191,6 +265,9 @@ const report = `# E2E Run Report
 - owner_agent: ${manifest.owner_agent ?? "unknown"}
 - paper_mode: ${manifest.writing_contract?.paper_mode ?? manifest.writing_contract?.paperMode ?? "unknown"}
 - PaperNexus mode: ${manifest.papernexus_access?.mode ?? manifest.paper_ingestion?.papernexus_access_mode ?? "unknown"}
+- cite_count: ${citeCount}
+- section_count: ${sectionCount}
+- bibliography_count: ${bibliographyCount}
 - final_verdict: ${finalVerdict}
 
 ## Artifact Coverage
@@ -198,6 +275,15 @@ const report = `# E2E Run Report
 - required: ${artifactChecklist.filter((entry) => entry.required).length}
 - present: ${artifactChecklist.filter((entry) => entry.exists).length}
 - status: ${artifactStatus}
+
+## Review Closeout
+
+- status: ${reviewCloseoutStatus}
+- open_medium_or_higher_review_issues: ${openMediumOrHigherIssues}
+- citation_suspicious: ${citationSuspicious}
+- citation_hallucinated: ${citationHallucinated}
+
+${reviewCloseoutChecks.map((entry) => `- [${entry.ok ? "x" : " "}] ${entry.name}`).join("\n")}
 
 ## Handoff Summary
 

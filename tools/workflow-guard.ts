@@ -514,6 +514,7 @@ import {
   upsertExperimentLedgerEntryImpl,
 } from "./workflow-guard-recorders/state-recorders";
 import { runWorkflowAutoIteratorImpl } from "./workflow-guard-runtime/auto-iterator";
+import { evaluateExperimentSearchDecision } from "./workflow-experiment-decision";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -993,6 +994,7 @@ type ExperimentSearchState = {
   trackId: string | null;
   currentMainStage: string | null;
   currentSubstage: string | null;
+  validationStage: string | null;
   searchSessionId: string | null;
   searchSpecPath: string | null;
   searchStatePath: string | null;
@@ -1023,6 +1025,15 @@ type ExperimentSearchState = {
   lastGitOpResult: string | null;
   lastDecision: string | null;
   multiSeedStatus: string;
+  baselineFairnessStatus: string;
+  implementationConfidence: string;
+  searchExhaustionStatus: string;
+  ablationStatus: string;
+  innovationStatus: string;
+  decisionConfidence: string;
+  recommendedNextAction: string | null;
+  failureClusterIds: string[];
+  evidenceCleanlinessStatus: string;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
@@ -1827,6 +1838,7 @@ export type WorkflowSnapshot = {
   experimentSearchStatus: string | null;
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
+  experimentSearchValidationStage: string | null;
   experimentSearchSessionId: string | null;
   experimentSearchSpecPath: string | null;
   experimentSearchStatePath: string | null;
@@ -1846,6 +1858,16 @@ export type WorkflowSnapshot = {
   experimentSearchCandidateHeadCommit: string | null;
   experimentSearchLastGitOpResult: string | null;
   experimentSearchMultiSeedStatus: string | null;
+  experimentSearchBaselineFairnessStatus: string | null;
+  experimentSearchImplementationConfidence: string | null;
+  experimentSearchSearchExhaustionStatus: string | null;
+  experimentSearchAblationStatus: string | null;
+  experimentSearchInnovationStatus: string | null;
+  experimentSearchDecisionConfidence: string | null;
+  experimentSearchRecommendedNextAction: string | null;
+  experimentSearchFailureClusterIds: string[];
+  experimentSearchEvidenceCleanlinessStatus: string | null;
+  experimentSearchDecision: string | null;
   experimentSearchPlotPackStatus: string | null;
   experimentSearchGraphMemoryPacketPath: string | null;
   experimentSearchGraphMemorySyncStatus: string | null;
@@ -2043,6 +2065,9 @@ export type AutoIteratorResult = {
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;
+  experimentDecision: string | null;
+  experimentDecisionRationale: string | null;
+  experimentRollbackStage: string | null;
   graphPresenceCheck: GraphPresenceCheckResult | null;
   projectsStateUpdated: boolean;
   auditPath: string | null;
@@ -3507,7 +3532,7 @@ function hasFinishedExperimentWorkAwaitingReconciliation(params: {
 }
 
 function buildExperimentMonitorCommand(): string {
-  return "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis. If coder-side search is active, keep retained incumbent history and discarded candidate history distinct.";
+  return "Run /monitor-experiment to reconcile remote experiments from durable runtime artifacts first (REMOTE_RUN.json, RUN_HEARTBEAT.json, RUN_TERMINAL.json, RESULT_SUMMARY.json, FAILURE_SIGNATURE.json), persist missing watcher signals through research_workflow.record_experiment_runtime_signal when needed, and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis. If coder-side search is active, keep retained incumbent history and discarded candidate history distinct.";
 }
 
 function isPaperQcHardFailure(state: PaperQcState): boolean {
@@ -7288,6 +7313,20 @@ export async function applyExperimentGitOp(params: {
     (result.gitResult.actionType === "promote_candidate" ||
       result.gitResult.actionType === "discard_candidate")
   ) {
+    const searchFailureClass =
+      result.gitResult.actionType === "discard_candidate"
+        ? normalizeStage(result.reviewState.failureClass) ??
+          (() => {
+            const reviewText = `${result.reviewState.pendingReason ?? ""} ${result.reviewState.discardReason ?? ""}`.toLowerCase();
+            if (/\boom\b|timeout|ssh|disk full|killed|connection/i.test(reviewText)) {
+              return "runtime";
+            }
+            if (/baseline fairness|implementation|protocol drift|shape mismatch|nan|traceback/i.test(reviewText)) {
+              return "implementation";
+            }
+            return "scientific";
+          })()
+        : null;
     const ledgerResult = await upsertExperimentLedgerEntry({
       projectRoot: params.projectRoot,
       agentId: params.agentId ?? undefined,
@@ -7304,8 +7343,21 @@ export async function applyExperimentGitOp(params: {
             ? "advance"
             : "discard",
         summary: result.gitResult.summary,
+        note:
+          result.reviewState.promotionEvidenceSummary ??
+          result.reviewState.discardReason ??
+          result.reviewState.pendingReason,
         metadata: {
           searchGit: {
+            actionType: result.gitResult.actionType,
+            searchSessionId:
+              result.reviewState.searchSessionId ??
+              result.searchState.searchSessionId,
+            promotionBasisSignals: result.reviewState.promotionBasisSignals,
+            promotionEvidenceSummary:
+              result.reviewState.promotionEvidenceSummary,
+            discardReason: result.reviewState.discardReason,
+            failureClass: searchFailureClass,
             incumbentBranch: result.gitResult.incumbentBranch,
             incumbentCommit: result.gitResult.incumbentCommit,
             candidateBranch: result.gitResult.candidateBranch,
@@ -8893,6 +8945,7 @@ export async function runWorkflowAutoIterator(params: {
       buildExperimentReviewCommand,
       hasActiveExperimentRuns,
       hasFinishedExperimentWorkAwaitingReconciliation,
+      evaluateExperimentSearchDecision,
       buildExperimentMonitorCommand,
       buildGraphImportRepairGuidance,
       formatStageCommand,

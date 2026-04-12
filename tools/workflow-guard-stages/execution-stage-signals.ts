@@ -161,6 +161,42 @@ export async function collectExperimentStageMissingSignals(
       `PROJECT_MANIFEST.json.experiment_search must be ready_for_analysis with multi_seed + plot pack complete before ANALYZE (current: status=${experimentSearch.status}, multi_seed=${experimentSearch.multiSeedStatus}, plot_pack=${experimentSearch.plotPackStatus})`
     );
   }
+  if (
+    experimentSearch.status !== "ready_for_analysis" &&
+    deps.normalizeStage(experimentSearch.baselineFairnessStatus) !== "ready"
+  ) {
+    missing.push(
+      `PROJECT_MANIFEST.json.experiment_search.baseline_fairness_status must be ready before analysis (current: ${experimentSearch.baselineFairnessStatus})`
+    );
+  }
+  if (
+    experimentSearch.status !== "ready_for_analysis" &&
+    !["ready", "trusted"].includes(
+      deps.normalizeStage(experimentSearch.implementationConfidence) ?? ""
+    )
+  ) {
+    missing.push(
+      `PROJECT_MANIFEST.json.experiment_search.implementation_confidence must be trusted/ready before analysis (current: ${experimentSearch.implementationConfidence})`
+    );
+  }
+  if (
+    experimentSearch.status !== "ready_for_analysis" &&
+    deps.normalizeStage(experimentSearch.ablationStatus) === "pending"
+  ) {
+    missing.push(
+      `PROJECT_MANIFEST.json.experiment_search.ablation_status must be ready before analysis (current: ${experimentSearch.ablationStatus})`
+    );
+  }
+  if (
+    experimentSearch.status !== "ready_for_analysis" &&
+    ["innovation_invalidated", "rollback_to_plan", "rollback_to_idea"].includes(
+      deps.normalizeStage(experimentSearch.lastDecision) ?? ""
+    )
+  ) {
+    missing.push(
+      "Current experiment envelope has been invalidated; rollback to PLAN/IDEA instead of advancing toward ANALYZE."
+    );
+  }
 
   const opportunityScorecard = deps.normalizeOpportunityScorecardState(
     ctx.manifest?.opportunity_scorecard

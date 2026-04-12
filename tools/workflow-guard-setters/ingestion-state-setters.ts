@@ -160,6 +160,9 @@ export async function setExperimentSearchState(params: {
     currentSubstage:
       normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
       current.currentSubstage,
+    validationStage:
+      normalizeStage(patch.validationStage ?? patch.validation_stage) ??
+      current.validationStage,
     searchSessionId:
       pickString(patch, ["searchSessionId", "search_session_id"]) ??
       current.searchSessionId,
@@ -232,7 +235,44 @@ export async function setExperimentSearchState(params: {
     lastGitOpResult:
       pickString(patch, ["lastGitOpResult", "last_git_op_result"]) ??
       current.lastGitOpResult,
+    lastDecision:
+      pickString(patch, ["lastDecision", "last_decision"]) ??
+      current.lastDecision,
     multiSeedStatus: inferredMultiSeedStatus,
+    baselineFairnessStatus:
+      normalizeStage(
+        patch.baselineFairnessStatus ?? patch.baseline_fairness_status
+      ) ?? current.baselineFairnessStatus,
+    implementationConfidence:
+      normalizeStage(
+        patch.implementationConfidence ?? patch.implementation_confidence
+      ) ?? current.implementationConfidence,
+    searchExhaustionStatus:
+      normalizeStage(
+        patch.searchExhaustionStatus ?? patch.search_exhaustion_status
+      ) ?? current.searchExhaustionStatus,
+    ablationStatus:
+      normalizeStage(patch.ablationStatus ?? patch.ablation_status) ??
+      current.ablationStatus,
+    innovationStatus:
+      normalizeStage(patch.innovationStatus ?? patch.innovation_status) ??
+      current.innovationStatus,
+    decisionConfidence:
+      normalizeStage(patch.decisionConfidence ?? patch.decision_confidence) ??
+      current.decisionConfidence,
+    recommendedNextAction:
+      pickString(patch, [
+        "recommendedNextAction",
+        "recommended_next_action",
+      ]) ?? current.recommendedNextAction,
+    failureClusterIds:
+      patch.failureClusterIds || patch.failure_cluster_ids
+        ? asStringArray(patch.failureClusterIds ?? patch.failure_cluster_ids)
+        : current.failureClusterIds,
+    evidenceCleanlinessStatus:
+      normalizeStage(
+        patch.evidenceCleanlinessStatus ?? patch.evidence_cleanliness_status
+      ) ?? current.evidenceCleanlinessStatus,
     evaluationSummaryPath,
     plotPackStatus,
     plotPackPath,

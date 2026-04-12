@@ -160,6 +160,10 @@ function readDecisionJson(value: Record<string, unknown> | null): {
   actionApproved: boolean;
   blockers: string[];
   appliedAt: string | null;
+  promotionBasisSignals: string[];
+  promotionEvidenceSummary: string | null;
+  discardReason: string | null;
+  failureClass: string | null;
 } {
   const record = value ?? {};
   return {
@@ -169,6 +173,25 @@ function readDecisionJson(value: Record<string, unknown> | null): {
     appliedAt:
       pickString(record, ["appliedAt", "applied_at"]) ??
       pickString(record, ["executedAt", "executed_at"]),
+    promotionBasisSignals: asStringArray(
+      record.promotionBasisSignals ??
+        record.promotion_basis_signals ??
+        record.promotionSignals ??
+        record.promotion_signals
+    ),
+    promotionEvidenceSummary: pickString(record, [
+      "promotionEvidenceSummary",
+      "promotion_evidence_summary",
+      "promotionReason",
+      "promotion_reason",
+    ]),
+    discardReason: pickString(record, [
+      "discardReason",
+      "discard_reason",
+      "rollbackReason",
+      "rollback_reason",
+    ]),
+    failureClass: pickString(record, ["failureClass", "failure_class"]),
   };
 }
 
@@ -531,6 +554,30 @@ export async function materializeExperimentSearchReviewStateImpl(
           ...extractCriticalBlockers(crossText),
           ...decision.blockers,
         ]),
+    promotionBasisSignals: resetReviews
+      ? asStringArray(
+          patch.promotionBasisSignals ?? patch.promotion_basis_signals
+        )
+      : asStringArray(
+          patch.promotionBasisSignals ??
+            patch.promotion_basis_signals ??
+            decision.promotionBasisSignals ??
+            current.promotionBasisSignals
+        ),
+    promotionEvidenceSummary:
+      pickString(patch, [
+        "promotionEvidenceSummary",
+        "promotion_evidence_summary",
+      ]) ??
+      (resetReviews
+        ? null
+        : decision.promotionEvidenceSummary ?? current.promotionEvidenceSummary),
+    discardReason:
+      pickString(patch, ["discardReason", "discard_reason"]) ??
+      (resetReviews ? null : decision.discardReason ?? current.discardReason),
+    failureClass:
+      pickString(patch, ["failureClass", "failure_class"]) ??
+      (resetReviews ? null : decision.failureClass ?? current.failureClass),
     appliedAt: decision.appliedAt ?? current.appliedAt,
     pendingReason:
       pickString(patch, ["pendingReason", "pending_reason"]) ??

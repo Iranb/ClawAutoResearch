@@ -241,6 +241,8 @@ test("research_workflow enforces multi-agent review before creating and promotin
       cross_reviewer_status: "ready",
       cross_reviewer_verdict: "pass",
       action_approved: true,
+      promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+      promotion_evidence_summary: "Primary metric beat the incumbent under the approved promotion rule.",
     },
   });
 
@@ -278,6 +280,8 @@ test("research_workflow enforces multi-agent review before creating and promotin
       cross_reviewer_status: "ready",
       cross_reviewer_verdict: "pass",
       action_approved: true,
+      promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+      promotion_evidence_summary: "Primary metric beat the incumbent under the approved promotion rule.",
     },
   });
 
@@ -418,4 +422,157 @@ test("research_workflow can discard a reviewed candidate and keep the loss in wo
   );
   assert.equal(discardedEntry.decision, "discard");
   assert.equal(discardedEntry.status, "completed");
+});
+
+test("research_workflow blocks promotion when the recorded basis only cites non-promotion signals", async () => {
+  const { projectRoot, trackId, incumbentCommit, incumbentBranch } =
+    await makeSearchGitProject();
+  const tool = createResearchWorkflowTool(projectRoot);
+  const candidateWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-nonpromotion-${Date.now()}`
+  );
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "create_candidate_worktree",
+      experiment_id: "exp-cand-3",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+    },
+  });
+  await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+
+  await writeText(path.join(candidateWorktreePath, "model.txt"), "candidate\n");
+  await runGit(candidateWorktreePath, ["add", "model.txt"]);
+  await runGit(candidateWorktreePath, ["commit", "-m", "candidate change"]);
+  const candidateCommit = await runGit(candidateWorktreePath, ["rev-parse", "HEAD"]);
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "promote_candidate",
+      experiment_id: "exp-cand-3",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_branch: `candidate-${trackId}/exp-cand-3`,
+      candidate_commit: candidateCommit,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+      promotion_basis_signals: ["gap_reduction", "smoother_curve"],
+      promotion_evidence_summary: "The curve is smoother and the gap closed faster.",
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+    },
+    /non-promotion signals/i
+  );
+});
+
+test("research_workflow records search-session discard metadata in the ledger", async () => {
+  const { projectRoot, trackId, incumbentCommit, incumbentBranch } =
+    await makeSearchGitProject();
+  const tool = createResearchWorkflowTool(projectRoot);
+  const candidateWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-metadata-${Date.now()}`
+  );
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "create_candidate_worktree",
+      experiment_id: "exp-cand-4",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+    },
+  });
+  await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "discard_candidate",
+      experiment_id: "exp-cand-4",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_branch: `candidate-${trackId}/exp-cand-4`,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+      discard_reason: "Candidate stayed under the incumbent after a fair comparison.",
+      failure_class: "scientific",
+    },
+  });
+  await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+
+  const ledger = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"),
+      "utf8"
+    )
+  );
+  const discardedEntry = ledger.experiments.find(
+    (entry) => entry.experiment_id === "exp-cand-4"
+  );
+  assert.equal(
+    discardedEntry.metadata.searchGit.searchSessionId,
+    "search-demo"
+  );
+  assert.equal(
+    discardedEntry.metadata.searchGit.discardReason,
+    "Candidate stayed under the incumbent after a fair comparison."
+  );
+  assert.equal(discardedEntry.metadata.searchGit.failureClass, "scientific");
 });

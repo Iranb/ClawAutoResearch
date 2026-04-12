@@ -110,6 +110,11 @@ import { materializePapernexusPacketContracts } from "./papernexus-packets/mater
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
+import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
+import { runIdeaCatalystResearch30 } from "./research30/bridge";
+import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
+import { evaluateExperimentSearchDecisionForProject } from "./workflow-experiment-decision";
+import { recordExperimentRuntimeSignal } from "./workflow-experiment-runtime-watch";
 import {
   dispatchWorkflowTaskToAgent,
   deriveWorkflowDispatchSessionCandidates,
@@ -258,6 +263,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "start_background_run",
   "run_papernexus_wrapper",
   "queue_paper_ingestion",
+  "stage_papernexus_remote_sources",
   "queue_idea_catalyst_requisition",
   "queue_literature_discovery_requisition",
   "migrate_runtime_state",
@@ -270,9 +276,11 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
+  "reconcile_authoring_closeout",
   "materialize_cycle_memory",
   "materialize_survey_review_state",
   "materialize_idea_catalyst_state",
+  "run_idea_catalyst_research30",
   "set_survey_review",
   "refresh_gpu_monitor",
   "set_ideation_contract",
@@ -331,6 +339,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
   queue_paper_ingestion: "queuePaperIngestionRequest",
+  stage_papernexus_remote_sources: "stagePapernexusRemoteSources",
   validate_paper_ingestion: "validatePaperIngestionRequest",
   queue_idea_catalyst_requisition: "queueIdeaCatalystRequisition",
   queue_literature_discovery_requisition: "queueLiteratureDiscoveryRequisition",
@@ -345,14 +354,17 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_survey_review: "getSurveyReviewStateSummary",
   set_brainstorm_cycle: "setBrainstormCycleState",
   refresh_gpu_monitor: "refreshExperimentGpuMonitor",
+  record_experiment_runtime_signal: "recordExperimentRuntimeSignal",
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
   materialize_plan_state: "materializePlanState",
   materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
+  run_idea_catalyst_research30: "runIdeaCatalystResearch30",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
+  reconcile_authoring_closeout: "reconcileAuthoringCloseout",
   materialize_cycle_memory: "materializeCycleMemory",
   materialize_survey_review_state: "materializeSurveyReviewState",
   get_ideation_contract: "getIdeationContractStateSummary",
@@ -398,6 +410,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_review_issue_tracker: "getReviewIssueTrackerStateSummary",
   set_review_issue_tracker: "setReviewIssueTrackerState",
   get_experiment_search: "getExperimentSearchStateSummary",
+  evaluate_experiment_search_decision: "evaluateExperimentSearchDecisionForProject",
   get_experiment_git_review: "getExperimentGitReviewSummary",
   get_experiment_review_state: "getExperimentReviewStateSummary",
   set_experiment_search: "setExperimentSearchState",
@@ -1225,6 +1238,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "start_background_run",
               "run_papernexus_wrapper",
               "queue_paper_ingestion",
+              "stage_papernexus_remote_sources",
               "validate_paper_ingestion",
               "queue_literature_discovery_requisition",
               "migrate_runtime_state",
@@ -1238,6 +1252,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_survey_review",
   "set_brainstorm_cycle",
   "refresh_gpu_monitor",
+  "record_experiment_runtime_signal",
   "run_brainstorm_cycle",
               "materialize_ideation_contract",
               "materialize_experiment_review_state",
@@ -1246,8 +1261,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
+              "reconcile_authoring_closeout",
               "materialize_cycle_memory",
               "materialize_survey_review_state",
+              "run_idea_catalyst_research30",
               "get_cross_domain_inspiration",
               "set_cross_domain_inspiration",
               "materialize_cross_domain_requisition",
@@ -1287,6 +1304,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_review_issue_tracker",
               "set_review_issue_tracker",
               "get_experiment_search",
+              "evaluate_experiment_search_decision",
               "get_experiment_git_review",
               "get_experiment_review_state",
               "set_experiment_search",
@@ -1506,6 +1524,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          experimentSearchDecision: {
+            type: "object",
+            additionalProperties: true,
+          },
           experimentGitRequest: {
             type: "object",
             additionalProperties: true,
@@ -1515,6 +1537,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           experimentMemoryMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentRuntimeSignal: {
             type: "object",
             additionalProperties: true,
           },
@@ -1535,6 +1561,18 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           citationCalibration: {
+            type: "object",
+            additionalProperties: true,
+          },
+          ideaCatalystResearch30: {
+            type: "object",
+            additionalProperties: true,
+          },
+          papernexusRemoteStage: {
+            type: "object",
+            additionalProperties: true,
+          },
+          authoringCloseout: {
             type: "object",
             additionalProperties: true,
           },
@@ -2284,6 +2322,47 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   2
                 )
               );
+            }
+            case "stage_papernexus_remote_sources": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const stageParams = asObject(params.papernexusRemoteStage);
+              const result = await stagePapernexusRemoteSources({
+                projectRoot: resolvedProjectRoot,
+                sshTarget:
+                  readString(stageParams?.sshTarget) ??
+                  readString(stageParams?.ssh_target),
+                remoteBaseDir:
+                  readString(stageParams?.remoteBaseDir) ??
+                  readString(stageParams?.remote_base_dir),
+                projectId:
+                  readString(stageParams?.projectId) ??
+                  readString(stageParams?.project_id),
+                sourcePaths: Array.isArray(stageParams?.sourcePaths)
+                  ? stageParams.sourcePaths
+                      .map((entry) => readString(entry))
+                      .filter((entry): entry is string => Boolean(entry))
+                  : Array.isArray(stageParams?.source_paths)
+                    ? stageParams.source_paths
+                        .map((entry) => readString(entry))
+                        .filter((entry): entry is string => Boolean(entry))
+                    : undefined,
+                manifestPath:
+                  readString(stageParams?.manifestPath) ??
+                  readString(stageParams?.manifest_path),
+                rewriteManifestOut:
+                  readString(stageParams?.rewriteManifestOut) ??
+                  readString(stageParams?.rewrite_manifest_out),
+                reportPath:
+                  readString(stageParams?.reportPath) ??
+                  readString(stageParams?.report_path),
+                timeoutSeconds:
+                  typeof stageParams?.timeoutSeconds === "number"
+                    ? stageParams.timeoutSeconds
+                    : typeof stageParams?.timeout_seconds === "number"
+                      ? stageParams.timeout_seconds
+                      : undefined,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_paper_ingestion_failures":
             case "classify_paper_ingestion_failures": {
@@ -3039,6 +3118,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "record_experiment_runtime_signal": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await recordExperimentRuntimeSignal({
+                projectRoot: resolvedProjectRoot,
+                runtimeSignal: requireObject(
+                  params.experimentRuntimeSignal,
+                  "experimentRuntimeSignal"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "run_brainstorm_cycle": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await runBrainstormCycle({
@@ -3110,6 +3200,81 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "run_idea_catalyst_research30": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const searchParams = asObject(params.ideaCatalystResearch30);
+              const depthValue = readString(searchParams?.depth);
+              const result = await runIdeaCatalystResearch30({
+                projectRoot: resolvedProjectRoot,
+                scoutingReportPath:
+                  readString(searchParams?.scoutingReportPath) ??
+                  readString(searchParams?.scouting_report_path),
+                requisitionPath:
+                  readString(searchParams?.requisitionPath) ??
+                  readString(searchParams?.requisition_path),
+                reportJsonPath:
+                  readString(searchParams?.reportJsonPath) ??
+                  readString(searchParams?.report_json_path),
+                reportMarkdownPath:
+                  readString(searchParams?.reportMarkdownPath) ??
+                  readString(searchParams?.report_markdown_path),
+                days:
+                  typeof searchParams?.days === "number"
+                    ? searchParams.days
+                    : typeof searchParams?.day_horizon === "number"
+                      ? searchParams.day_horizon
+                      : undefined,
+                sources:
+                  readString(searchParams?.sources) ??
+                  readString(searchParams?.source_mode),
+                depth:
+                  depthValue === "quick" ||
+                  depthValue === "default" ||
+                  depthValue === "deep"
+                    ? depthValue
+                    : undefined,
+                topK:
+                  typeof searchParams?.topK === "number"
+                    ? searchParams.topK
+                    : typeof searchParams?.top_k === "number"
+                      ? searchParams.top_k
+                      : undefined,
+                mock:
+                  searchParams?.mock === true || searchParams?.use_mock === true,
+                updateScoutReport:
+                  searchParams?.updateScoutReport === false ||
+                  searchParams?.update_scout_report === false
+                    ? false
+                    : true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "reconcile_authoring_closeout": {
+              const closeoutParams = asObject(params.authoringCloseout);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(closeoutParams?.projectRoot) ??
+                  readString(closeoutParams?.project_root),
+              });
+              const result = await reconcileAuthoringCloseout({
+                projectRoot: resolvedProjectRoot,
+                compilePdf:
+                  closeoutParams?.compilePdf === false ||
+                  closeoutParams?.compile_pdf === false
+                    ? false
+                    : true,
+                autoInjectConferenceCitations:
+                  closeoutParams?.autoInjectConferenceCitations === false ||
+                  closeoutParams?.auto_inject_conference_citations === false
+                    ? false
+                    : true,
+                currentStageOverride:
+                  readString(closeoutParams?.currentStageOverride) ??
+                  readString(closeoutParams?.current_stage_override),
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -3813,6 +3978,24 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "evaluate_experiment_search_decision": {
+              const decisionParams = asObject(params.experimentSearchDecision);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(decisionParams?.projectRoot) ??
+                  readString(decisionParams?.project_root),
+              });
+              const result = await evaluateExperimentSearchDecisionForProject({
+                projectRoot: resolvedProjectRoot,
+                persist:
+                  decisionParams?.persist === false ||
+                  decisionParams?.write_back === false
+                    ? false
+                    : true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_experiment_git_review": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

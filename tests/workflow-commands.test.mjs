@@ -256,6 +256,63 @@ test("survey-pipeline command starts a projectless background continuation on th
   );
 });
 
+test("survey-graph-build command starts a non-blocking literature-review continuation with graph-missing and dedupe guidance", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:survey-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/survey-lab",
+          projectId: "survey-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = params;
+        return {
+          started: true,
+          runId: "bg-run-survey-graph-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background survey graph build started for survey-lab.",
+        };
+      },
+    }),
+    "survey-graph-build"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/survey-graph-build "graph reasoning survey"',
+    args: '"graph reasoning survey"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background survey graph build started for survey-lab.");
+  assert.equal(captured.backgroundRun.kind, "literature_review");
+  assert.equal(captured.backgroundRun.projectId, "survey-lab");
+  assert.match(captured.backgroundRun.commandText, /^\/literature-review\b/);
+  assert.match(captured.backgroundRun.extraSystemPrompt ?? "", /topic-focused survey graph candidate set/i);
+  assert.match(captured.backgroundRun.extraSystemPrompt ?? "", /Deduplicate aggressively/i);
+  assert.match(captured.backgroundRun.extraSystemPrompt ?? "", /missing from the current shared graph/i);
+  assert.match(captured.backgroundRun.extraSystemPrompt ?? "", /SURVEY_GRAPH_BUILD_PACKET\.md/i);
+});
+
 test("show-commands command lists the available slash commands and when to use them", async () => {
   const api = makeApi();
   const showCommands = getCommand(createResearchWorkflowCommands(api), "show-commands");
@@ -279,8 +336,224 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
   assert.match(result.text, /\/clear-project-binding/);
+  assert.match(result.text, /\/idea-catalyst-search/);
+  assert.match(result.text, /\/citation-calibrate/);
+  assert.match(result.text, /\/papernexus-stage-remote/);
+  assert.match(result.text, /\/authoring-closeout/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("idea-catalyst-search command runs project-bound research30 scouting", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async runIdeaCatalystResearch30(params) {
+        captured = params;
+        return {
+          queryCount: 4,
+          domainCount: 3,
+          scoutReportUpdated: true,
+          reportJsonPath: "researcher/idea-catalyst/RESEARCH30_SCOUT_REPORT.json",
+          reportMarkdownPath: "researcher/idea-catalyst/RESEARCH30_SCOUT_REPORT.md",
+        };
+      },
+    }),
+    "idea-catalyst-search"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/idea-catalyst-search --quick --days 3650",
+    args: "--quick --days 3650",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(captured.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.depth, "quick");
+  assert.equal(captured.days, 3650);
+  assert.match(result.text ?? "", /queries=4/);
+  assert.match(result.text ?? "", /RESEARCH30_SCOUT_REPORT\.json/);
+});
+
+test("citation-calibrate command runs citation calibration for the bound project", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:academic_writer:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "academic_writer",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async runCitationCalibration(params) {
+        captured = params;
+        return {
+          verifiedCount: 12,
+          needsReviewCount: 1,
+          suspiciousCount: 0,
+          hallucinatedCount: 0,
+          reportJsonPath: "reviewer/CITATION_CALIBRATION.json",
+          reportMarkdownPath: "reviewer/CITATION_CALIBRATION.md",
+        };
+      },
+    }),
+    "citation-calibrate"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/citation-calibrate --replace-arxiv",
+    args: "--replace-arxiv",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(captured.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.replaceArxiv, true);
+  assert.match(result.text ?? "", /verified=12/);
+  assert.match(result.text ?? "", /CITATION_CALIBRATION\.md/);
+});
+
+test("papernexus-stage-remote command stages the default manifest for the bound project", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async stagePapernexusRemoteSources(params) {
+        captured = params;
+        return {
+          available: true,
+          reportPath: "researcher/paper-staging/REMOTE_PAPERNEXUS_STAGE.json",
+          rewriteManifestOut: "researcher/paper-staging/batch-import.remote.json",
+        };
+      },
+    }),
+    "papernexus-stage-remote"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/papernexus-stage-remote --ssh-target hyq@10.0.0.1 --remote-base-dir /srv/pn",
+    args: "--ssh-target hyq@10.0.0.1 --remote-base-dir /srv/pn",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(captured.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.sshTarget, "hyq@10.0.0.1");
+  assert.equal(captured.remoteBaseDir, "/srv/pn");
+  assert.equal(captured.manifestPath, "researcher/paper-staging/batch-import.json");
+  assert.match(result.text ?? "", /REMOTE_PAPERNEXUS_STAGE\.json/);
+});
+
+test("authoring-closeout command runs deterministic closeout for the bound project", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:academic_writer:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "academic_writer",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async reconcileAuthoringCloseout(params) {
+        captured = params;
+        return {
+          paperMode: "conference",
+          nextStage: "submit",
+          citeCount: 7,
+          sectionCount: 8,
+          mainPdfExists: true,
+          citationIntegrity: { verificationStatus: "verified" },
+          reviewSession: { status: "completed" },
+        };
+      },
+    }),
+    "authoring-closeout"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/authoring-closeout --no-compile",
+    args: "--no-compile",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(captured.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.compilePdf, false);
+  assert.equal(captured.autoInjectConferenceCitations, true);
+  assert.match(result.text ?? "", /stage=submit/);
+  assert.match(result.text ?? "", /citation_status=verified/);
 });
 
 test("clear-project-binding command removes the workflow project binding for the current channel", async () => {

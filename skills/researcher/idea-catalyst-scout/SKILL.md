@@ -38,6 +38,37 @@ allowed-tools:
    - `selection_rationale`
    - `relevance_to_challenge`
    - `supporting_papers`
+6. 对跨域文献检索，优先使用 workflow-owned `research30` 集成，而不是只停留在 query 草案。
+
+## 与 research30 的关系
+
+`SCOUTING_REPORT.json` 里的 `cross_domain_searches` 现在不再只是给 Agent 的静态提示。
+
+当需要真正把 source-domain 检索跑起来时，优先调用：
+
+```json
+{
+  "action": "run_idea_catalyst_research30",
+  "ideaCatalystResearch30": {
+    "days": 3650,
+    "depth": "quick"
+  }
+}
+```
+
+它会：
+
+- 读取 `SCOUTING_REPORT.json` / `INVESTIGATION_REQUISITION.json` 中的 query
+- 通过 research30 的 OpenAlex / Semantic Scholar / PubMed / arXiv / HuggingFace 多源检索跑真实搜索
+- 写出：
+  - `{PROJ}/researcher/idea-catalyst/RESEARCH30_SCOUT_REPORT.json`
+  - `{PROJ}/researcher/idea-catalyst/RESEARCH30_SCOUT_REPORT.md`
+- 回写 `SCOUTING_REPORT.json.research30_validation`
+
+注意：
+
+- research30 适合做跨域文献的多源检索与 recent frontier 补强
+- foundational / canonical 理论仍要结合图谱与 PaperNexus，不能把它误当成唯一真相源
 
 ## Durable 输出
 

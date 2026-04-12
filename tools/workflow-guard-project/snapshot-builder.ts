@@ -17,6 +17,7 @@ import {
   loadExperimentSearchState,
 } from "../workflow-guard-experiment-history";
 import { getExperimentGpuMonitorStateSummary } from "../workflow-gpu-monitor.js";
+import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
 import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
@@ -734,6 +735,20 @@ export async function buildWorkflowSnapshotFromProjectState(
       : experimentLedgerSummary?.papernexusLastSyncAt
         ? "synced"
         : null);
+  const experimentSearchSpec = projectState.projectRoot
+    ? await readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(
+          projectState.projectRoot,
+          experimentSearch.searchSpecPath
+        ) ?? ""
+      )
+    : null;
+  const experimentSearchDecision = evaluateExperimentSearchDecision({
+    experimentSearch,
+    experimentSearchSpec,
+    experimentLedger: projectState.experimentLedger,
+    gpuMonitor: experimentGpuMonitor.state,
+  });
   const innovationReflectionDue = isInnovationReflectionDue({
     state: innovationReflection,
     ledger: projectState.experimentLedger,
@@ -1196,6 +1211,8 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchStatus: experimentSearch.status,
     experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
     experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
+    experimentSearchValidationStage:
+      experimentSearch.validationStage ?? experimentSearchDecision.validationStage,
     experimentSearchSessionId: experimentSearch.searchSessionId,
     experimentSearchSpecPath: experimentSearch.searchSpecPath,
     experimentSearchStatePath: experimentSearch.searchStatePath,
@@ -1215,6 +1232,26 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchCandidateHeadCommit: experimentSearch.candidateHeadCommit,
     experimentSearchLastGitOpResult: experimentSearch.lastGitOpResult,
     experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
+    experimentSearchBaselineFairnessStatus:
+      experimentSearch.baselineFairnessStatus,
+    experimentSearchImplementationConfidence:
+      experimentSearch.implementationConfidence,
+    experimentSearchSearchExhaustionStatus:
+      experimentSearch.searchExhaustionStatus,
+    experimentSearchAblationStatus: experimentSearch.ablationStatus,
+    experimentSearchInnovationStatus: experimentSearch.innovationStatus,
+    experimentSearchDecisionConfidence:
+      experimentSearch.decisionConfidence ?? experimentSearchDecision.decisionConfidence,
+    experimentSearchRecommendedNextAction:
+      experimentSearch.recommendedNextAction ??
+      experimentSearchDecision.recommendedNextAction,
+    experimentSearchFailureClusterIds:
+      experimentSearch.failureClusterIds.length > 0
+        ? experimentSearch.failureClusterIds
+        : experimentSearchDecision.failureClusters.map((cluster) => cluster.clusterId),
+    experimentSearchEvidenceCleanlinessStatus:
+      experimentSearch.evidenceCleanlinessStatus,
+    experimentSearchDecision: experimentSearchDecision.decision,
     experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
     experimentSearchGraphMemoryPacketPath: experimentSearch.graphMemoryPacketPath,
     experimentSearchGraphMemorySyncStatus: experimentSearch.graphMemorySyncStatus,

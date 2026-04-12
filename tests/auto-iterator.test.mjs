@@ -5944,6 +5944,174 @@ test("auto iterator points experiment stage at monitor-experiment while remote r
   );
 });
 
+test("auto iterator hands experiment implementation repair back to coder when baseline fairness is not ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "baseline_parity";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: null,
+    last_failed_experiment_id: null,
+    best_known_config_ref: null,
+    last_decision_summary: null,
+    papernexus_sync_required: false,
+    papernexus_sync_status: "clean",
+  };
+  manifest.experiment_search = {
+    status: "running",
+    current_main_stage: "baseline_tuning",
+    current_substage: "baseline_parity",
+    validation_stage: "baseline_parity",
+    baseline_fairness_status: "pending",
+    implementation_confidence: "unknown",
+    search_exhaustion_status: "active",
+    ablation_status: "pending",
+    innovation_status: "unknown",
+    evidence_cleanliness_status: "partial",
+    multi_seed_status: "pending",
+    plot_pack_status: "pending",
+    pending_reason: "Baseline parity has not been re-established yet.",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.ownerAfter, "coder");
+  assert.equal(result.experimentDecision, "repair_implementation");
+  assert.match(result.nextAction ?? "", /repair the bounded runtime \/ implementation issue/i);
+  assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
+  assert.equal(result.recommendedActions[0]?.owner, "coder");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.orchestration_state.current_owner, "coder");
+  assert.equal(repairedManifest.orchestration_state.next_transition_candidate, "analyze");
+});
+
+test("auto iterator rolls experiment stage back to plan when the innovation is invalidated", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now, trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "artifacts", "results", "metrics.json"),
+    "{}\n"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "decision";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: "exp-2",
+    last_failed_experiment_id: "exp-2",
+    best_known_config_ref: "planner/EXPERIMENT_SEARCH_SPEC.json",
+    last_decision_summary: "clean scientific failures keep repeating",
+    papernexus_sync_required: false,
+    papernexus_sync_status: "clean",
+  };
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "decision",
+    validation_stage: "decision",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    search_exhaustion_status: "exhausted",
+    ablation_status: "ready",
+    innovation_status: "unknown",
+    evidence_cleanliness_status: "clean",
+    multi_seed_status: "ready",
+    plot_pack_status: "ready",
+    evaluation_summary_path: "researcher/artifacts/results/metrics.json",
+    plot_pack_path: "researcher/artifacts/results/metrics.json",
+  };
+  manifest.orchestration_state = {
+    status: "running",
+    current_owner: "researcher",
+    next_owner: "analyzer",
+    next_transition_candidate: "analyze",
+    retry_budget_remaining: 1,
+    rollback_target_stage: "plan",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: now,
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-2",
+      lastFailedExperimentId: "exp-2",
+      bestKnownConfigRef: null,
+      lastDecisionSummary: "innovation invalidated",
+      papernexusSyncRequired: false,
+      papernexusLastSyncAt: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId,
+        name: "candidate-a",
+        kind: "train",
+        status: "failed",
+        stage: "analysis",
+        summary: "Under baseline after fair comparison.",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+      {
+        experimentId: "exp-2",
+        trackId,
+        name: "candidate-b",
+        kind: "train",
+        status: "failed",
+        stage: "analysis",
+        summary: "Under baseline after fair comparison.",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "plan");
+  assert.equal(result.ownerAfter, "orchestrator");
+  assert.equal(result.experimentDecision, "rollback_to_plan");
+  assert.equal(result.experimentRollbackStage, "plan");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.current_stage, "plan");
+  assert.equal(repairedManifest.orchestration_state.rollback_target_stage, "plan");
+  assert.equal(repairedManifest.orchestration_state.current_owner, "orchestrator");
+  assert.equal(repairedManifest.orchestration_state.next_transition_candidate, "code");
+});
+
 test("auto iterator keeps write stage blocked when theory appendix draft is missing", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

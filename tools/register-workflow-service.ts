@@ -1682,6 +1682,33 @@ function isExperimentMonitorCommand(command: string | null | undefined): boolean
   return /\/monitor-experiment\b/i.test(command ?? "");
 }
 
+function buildAutoStageDispatchExtraBody(params: {
+  stage: string | null;
+  owner: string | null;
+  command: string | null;
+}): string {
+  if (params.stage === "experiment" && isExperimentMonitorCommand(params.command)) {
+    return "Workflow auto-mode experiment reconciliation dispatch. Treat this as reconciliation-first work: read watcher artifacts before shell polling, persist missing watcher signals with research_workflow.record_experiment_runtime_signal, and do not relaunch or widen the search envelope until the ledger and experiment_search are coherent.";
+  }
+  if (
+    params.stage === "experiment" &&
+    params.owner === "coder" &&
+    /repair|baseline|implementation|runtime/i.test(params.command ?? "")
+  ) {
+    return "Workflow auto-mode experiment repair dispatch. Stay inside bounded runtime / implementation repair, keep baseline fairness intact, avoid inventing new experiments, and hand back once the repair evidence is durable.";
+  }
+  if (
+    params.stage === "experiment" &&
+    params.owner === "researcher" &&
+    /(multi-seed|ablation|search neighborhood|bounded search|rollback)/i.test(
+      params.command ?? ""
+    )
+  ) {
+    return "Workflow auto-mode experiment decision dispatch. Execute only the requested multi-seed / ablation / bounded-search / rollback follow-up, keep the incumbent-vs-candidate history clean, and do not mix scientific judgment with unrelated runtime babysitting.";
+  }
+  return "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.";
+}
+
 async function launchWorkflowDispatchTransition(params: {
   runtimeSubagent: RuntimeSubagentApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -2166,7 +2193,11 @@ export async function maybeLaunchAutoStageForProject(params: {
               mailboxMessageId: action.mailboxMessageId ?? null,
               requireMailboxAcknowledgement: true,
               extraBody:
-                "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+                buildAutoStageDispatchExtraBody({
+                  stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+                  owner: action.owner,
+                  command: action.command,
+                }),
               waitTimeoutMs: 5000,
               retryOnTimeout: true,
               enableSpawnFallback: true,
@@ -2221,7 +2252,11 @@ export async function maybeLaunchAutoStageForProject(params: {
         command: action.command,
         mailboxMessageId: action.mailboxMessageId ?? null,
         extraBody:
-          "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+          buildAutoStageDispatchExtraBody({
+            stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+            owner: action.owner,
+            command: action.command,
+          }),
         autoModeActive:
           (params.autoIteratorResult.effectiveAutoMode ??
             params.workflowPolicy.autoMode) !== "off",

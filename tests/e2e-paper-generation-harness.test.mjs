@@ -24,7 +24,7 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
     `${JSON.stringify(
       {
         project_id: "e2e-demo",
-        current_stage: "write",
+        current_stage: "submit",
         owner_agent: "academic_writer",
         writing_contract: { paper_mode: "survey" },
       },
@@ -47,11 +47,41 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
     "academic_writer/PAPER_PLAN.md",
     "academic_writer/story/STORY_SPINE.md",
     "academic_writer/story/CROSS_DOMAIN_STORY_BRIDGE.md",
+    "academic_writer/WRITING_SIGNALS.md",
+    "academic_writer/PAPER_QC.md",
     "academic_writer/paper/main.tex",
+    "academic_writer/paper/main.pdf",
     "academic_writer/paper/refs.bib",
     "reviewer/CITATION_VERIFICATION.md",
+    "reviewer/REVIEW_PACKET.json",
+    "reviewer/REVIEW_ISSUES.json",
   ]) {
-    await write(path.join(projectRoot, artifact), artifact.endsWith(".json") ? "{}\n" : "# ok\n");
+    const targetPath = path.join(projectRoot, artifact);
+    if (artifact.endsWith("main.tex")) {
+      await write(
+        targetPath,
+        "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nSee prior work \\cite{demo}.\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n"
+      );
+    } else if (artifact.endsWith("refs.bib")) {
+      await write(
+        targetPath,
+        "@article{demo,\n  title={Demo},\n  author={Tester, T.},\n  journal={Test Journal},\n  year={2026}\n}\n"
+      );
+    } else if (artifact.endsWith("CITATION_VERIFICATION.md")) {
+      await write(
+        targetPath,
+        "# Citation Verification\n\n- suspicious: 0\n- hallucinated: 0\n"
+      );
+    } else if (artifact.endsWith("REVIEW_ISSUES.json")) {
+      await write(
+        targetPath,
+        JSON.stringify({ issues: [], open_counts: { critical: 0, high: 0, medium: 0, low: 0 } }, null, 2) + "\n"
+      );
+    } else if (artifact.endsWith(".json")) {
+      await write(targetPath, "{}\n");
+    } else {
+      await write(targetPath, "# ok\n");
+    }
   }
 
   const { stdout } = await execFileAsync(process.execPath, [

@@ -73,10 +73,14 @@ python3 scripts/citation_calibrate.py \
   --report-md "{PROJ}/reviewer/CITATION_CALIBRATION.md"
 ```
 
-This helper is designed to use:
+This helper now prefers:
 
 - `reffix` for BibTeX repair / replacement
-- `bibtex-dblp` CLI tools such as `update_from_dblp` for DBLP-backed normalization
+- `research30`-backed multi-source validation for DOI / URL / venue grounding
+
+Optional fallback:
+
+- `update_from_dblp` may still be enabled as a secondary fallback, but it is not the main verifier anymore
 
 Reviewer rule:
 

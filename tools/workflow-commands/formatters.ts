@@ -343,6 +343,22 @@ export function formatWorkflowStatusText(params: {
       `Experiment search: status=${snapshot.experimentSearchStatus}, session=${snapshot.experimentSearchSessionId ?? "unset"}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, incumbent_exp=${snapshot.experimentSearchIncumbentExperimentId ?? "unset"}, incumbent_branch=${snapshot.experimentSearchIncumbentBranch ?? "unset"}, incumbent_commit=${snapshot.experimentSearchIncumbentCommit ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
     );
     lines.push(
+      `Experiment search decision: decision=${snapshot.experimentSearchDecision ?? "unset"}, validation_stage=${snapshot.experimentSearchValidationStage ?? "unset"}, fairness=${snapshot.experimentSearchBaselineFairnessStatus ?? "unset"}, impl_confidence=${snapshot.experimentSearchImplementationConfidence ?? "unset"}, ablation=${snapshot.experimentSearchAblationStatus ?? "unset"}, innovation=${snapshot.experimentSearchInnovationStatus ?? "unset"}, exhaustion=${snapshot.experimentSearchSearchExhaustionStatus ?? "unset"}, evidence=${snapshot.experimentSearchEvidenceCleanlinessStatus ?? "unset"}, confidence=${snapshot.experimentSearchDecisionConfidence ?? "unset"}`
+    );
+    if (snapshot.experimentSearchRecommendedNextAction) {
+      lines.push(
+        `Experiment search next action: ${snapshot.experimentSearchRecommendedNextAction}`
+      );
+    }
+    if (
+      Array.isArray(snapshot.experimentSearchFailureClusterIds) &&
+      snapshot.experimentSearchFailureClusterIds.length > 0
+    ) {
+      lines.push(
+        `Experiment search failure clusters: ${snapshot.experimentSearchFailureClusterIds.join(", ")}`
+      );
+    }
+    lines.push(
       `Experiment search artifacts: spec=${snapshot.experimentSearchSpecPath ?? "unset"}, state=${snapshot.experimentSearchStatePath ?? "unset"}, graph_memory_packet=${snapshot.experimentSearchGraphMemoryPacketPath ?? snapshot.experimentMemoryGraphPacketPath ?? "unset"}, graph_sync=${snapshot.experimentSearchGraphMemorySyncStatus ?? "unset"}`
     );
     if (snapshot.experimentSearchRequestedGitOp || snapshot.experimentSearchGitOpStatus) {

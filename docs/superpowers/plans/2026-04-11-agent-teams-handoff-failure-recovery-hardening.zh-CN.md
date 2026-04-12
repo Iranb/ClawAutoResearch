@@ -2078,3 +2078,214 @@ Implementation note:
 - 2026-04-12 live Lane C project validation (`/Users/iranb/Downloads/AutoResearchProjects/e2e-live-survey-2603-12226-20260412`) completed through the workflow-owned runtime surface and produced `Suspicious: 0`, `Hallucinated: 0`, with refreshed `reviewer/CITATION_CALIBRATION.{json,md}` and `reviewer/CITATION_VERIFICATION.md`.
 - Real runtime behavior showed `reffix` succeeding and `update_from_dblp` stalling long enough to require a per-tool timeout. The runtime now treats that stall as bounded `needs_review` evidence debt instead of hanging the entire lane.
 - Live `openclaw agent` CLI invocations were still prone to going silent in non-interactive automation paths, so the production proof here was executed via the same registered runtime action surface that the workflow tool uses, rather than relying on a chat-turn wrapper.
+
+### 11.10 Non-interactive OpenClaw agent CLI hang hardening
+
+- [x] Add a repo-local safe wrapper for `openclaw agent` that returns structured JSON instead of hanging forever when the child stays silent.
+- [x] Model the failure as `timed_out_silent` with explicit `startupGraceSeconds`, `silenceTimeoutSeconds`, `durationMs`, and captured `stdout` / `stderr`.
+- [x] Add tests for both the normal-output path and the silent-timeout path.
+
+Implementation note:
+
+- The hardening lives in `scripts/openclaw_agent_safe.mjs`.
+- This does not change OpenClaw core behavior; it adds a workflow-side automation wrapper so non-interactive invocations stop being opaque.
+- The wrapper is intentionally explicit rather than silently retrying, so future automation can decide whether to fall back to a runtime-tool path or escalate.
+- 2026-04-12 live probe still showed the underlying non-interactive slash-command transport going `timed_out_silent` for `/show-commands`, so a repo-local fallback runner `scripts/run_local_workflow_command.mjs` was added for direct command-handler execution during real validation / debugging. This does not replace fixing OpenClaw transport itself; it prevents handler-level verification from being blocked by transport silence.
+
+### 11.11 Local PDF -> remote PaperNexus staging hardening
+
+- [x] Add a workflow-owned remote staging helper that uploads project-local Markdown/PDF sources to a remote host over SSH.
+- [x] Add a runtime action to invoke that helper through `research_workflow` instead of requiring ad hoc manual SSH commands.
+- [x] Support manifest rewrite so staged batch manifests can carry `server_file_path` for remote-only PaperNexus import flows.
+- [x] Add tests for the raw staging helper and the workflow runtime action.
+
+Implementation note:
+
+- The hardening lives in `scripts/papernexus_remote_stage.py` plus `tools/papernexus-remote-stage.ts`.
+- `research_workflow.stage_papernexus_remote_sources` writes a durable `researcher/paper-staging/REMOTE_PAPERNEXUS_STAGE.json` report and can emit a sibling `*.remote.json` manifest with remote `server_file_path` fields.
+- This is a workflow-owned staging primitive, not a silent auto-side-effect inside `queue_paper_ingestion`; explicit invocation keeps remote uploads observable and reversible.
+
+### 11.12 Next Priority: Stable experiment tuning + innovation-validity decision system
+
+This is the next implementation priority after the handoff/recovery hardening pass.
+
+Goal:
+
+- make parameter tuning reliable enough to support high-throughput experiment search
+- separate "the experiment is still under-tuned" from "the innovation itself is weak"
+- stop relying on agents to babysit experiment completion
+- promote or discard candidates through a deterministic contract instead of ad hoc interpretation
+
+Why this is the next priority:
+
+- the current workflow already has most of the right primitives (`EXPERIMENT_SEARCH_SPEC.json`, `experiment_search`, git-native candidate/incumbent actions, monitor flow, multi-agent review)
+- but it still lacks a fully stable outer decision layer that can distinguish implementation instability, under-searched parameter neighborhoods, and genuine innovation invalidation
+- this is now the main blocker between "search loop exists" and "search loop is trustworthy"
+
+#### 11.12.1 Non-negotiable design principles
+
+- [x] **Agents must not be the primary experiment completion detector.** Completion should be derived from durable runtime artifacts first, and only interpreted by agents second.
+- [x] **Scientific judgment and parameter search must be split into two layers.** The inner loop may search; the outer loop decides whether the hypothesis still deserves search.
+- [x] **No innovation invalidation without clean evidence.** If baseline fairness, implementation stability, multi-seed, or ablation are not yet clean, the system must not conclude that the innovation is invalid.
+- [x] **Secondary diagnostics cannot promote candidates unless explicitly declared primary.** Better curves, nicer runtime, lower variance, or smaller train/val gaps may guide the next candidate, but they cannot keep a commit by themselves unless the search contract says so.
+- [x] **All keep/discard/rollback decisions must be durable.** No conclusion may exist only in chat memory.
+
+#### 11.12.2 Required architecture
+
+The implementation should be refactored into three layers:
+
+1. **Execution watcher layer**
+   - responsible only for detecting whether a run is alive, terminal, crashed, timed out, or result-stable
+   - must be service/runtime-owned, not agent-owned
+2. **Bounded search loop**
+   - responsible for candidate branch/worktree creation, one-change-per-trial execution, and promote/discard
+   - should be coder-owned and git-native
+3. **Scientific decision layer**
+   - responsible for determining whether the workflow should continue tuning, narrow search, run ablation, require multi-seed, repair implementation, or invalidate the innovation
+   - must be deterministic and state-backed
+
+#### 11.12.3 Execution watcher hardening
+
+- [x] Introduce durable watcher artifacts per active run, e.g. `RUN_HEARTBEAT.json`, `RUN_TERMINAL.json`, `RESULT_SUMMARY.json`, and `FAILURE_SIGNATURE.json`.
+- [x] Make `tools/workflow-gpu-monitor.ts` or a sibling runtime module treat `screen -ls` / GPU idle as secondary evidence, not the only completion signal.
+- [x] Completion must be resolved from this priority order:
+  1. explicit terminal artifact
+  2. result bundle exists and is stable
+  3. screen missing + GPU idle + no active process
+  4. timeout
+- [x] `/monitor-experiment` should become a reconciliation/interpretation surface, not the primary watcher.
+- [x] Add tests that a run can finish without any foreground agent still being alive, and the workflow still converges to the correct terminal experiment state.
+
+#### 11.12.4 Bounded search loop hardening
+
+- [x] Keep the current git-native incumbent/candidate model, but make it the default path when an approved `EXPERIMENT_SEARCH_SPEC.json` exists.
+- [x] Ensure candidate worktree creation, promotion, and discard remain workflow-owned and review-gated.
+- [x] Record every trial in `EXPERIMENT_LEDGER.json`, including:
+  - candidate lineage
+  - base commit
+  - promoted commit
+  - discard reason
+  - failure class
+  - search session id
+- [x] Make `SEARCH_STATE.json` / `experiment_search` carry enough information to resume mid-search without ambiguity.
+
+#### 11.12.5 Scientific decision layer
+
+- [x] Add a deterministic decision engine, e.g. `tools/workflow-experiment-decision.ts`.
+- [x] This engine must output one of:
+  - `repair_implementation`
+  - `continue_tuning`
+  - `narrow_search`
+  - `require_multi_seed`
+  - `require_ablation`
+  - `innovation_fragile`
+  - `innovation_supported`
+  - `innovation_invalidated` / explicit rollback normalization
+  - `rollback_to_plan`
+  - `rollback_to_idea`
+- [x] The engine must consume:
+  - `EXPERIMENT_SEARCH_SPEC.json`
+  - `experiment_search`
+  - `EXPERIMENT_LEDGER.json`
+  - experiment review state
+  - monitor state
+  - distilled experiment memory packet
+- [x] The engine must never emit `innovation_invalidated` unless all of the following are true:
+  - baseline fairness is clean
+  - implementation confidence is high
+  - multi-seed is ready
+  - ablation is ready
+  - repeated candidate failures are scientifically attributable
+
+Implementation note:
+
+- `tools/workflow-experiment-decision.ts` now exists and is exposed through `research_workflow.evaluate_experiment_search_decision`.
+- The current implementation now distinguishes `repair_implementation`, `continue_tuning`, `narrow_search`, `require_multi_seed`, `require_ablation`, `innovation_supported`, `innovation_fragile`, `rollback_to_plan`, `rollback_to_idea`, and `reconcile_runtime`.
+- `auto_iterator` now consumes this decision to:
+  - keep EXPERIMENT from falsely auto-advancing to ANALYZE
+  - hand bounded repair work to `Coder`
+  - hand reconciliation / multi-seed / ablation back to `Researcher`
+  - rollback explicitly to `plan` / `idea` and sync `orchestration_state`
+- `register-workflow-service.ts` now also tailors experiment auto-stage handoff bodies so monitor/reconcile vs repair vs decision-follow-up are not collapsed into the same generic dispatch text.
+- The decision engine now also consumes experiment review blockers plus the durable experiment-memory digest, so unresolved review blockers or unsynced experiment memory can keep the workflow in repair/reconcile mode instead of over-advancing.
+- `tools/workflow-gpu-monitor.ts` now implements the completion ladder explicitly: terminal artifact first, then stable `RESULT_SUMMARY.json`, then idle/missing-screen heuristic, then stale-heartbeat timeout.
+- `tools/workflow-runtime-maintenance.ts` now refreshes experiment monitor state plus persists the latest experiment decision during maintenance passes, so completion / routing can converge without a foreground agent still being alive.
+- Handoff check result:
+  - the previous bug where experiment decision changed `ownerAfter` but still stayed stuck in `background` because stage signals remained has now been fixed by letting experiment decision own the next dispatchable step
+  - the remaining broader caveat is that non-experiment stages still use the older "missing stage signals vs drive_stage dispatch" policy, so this next-priority work is stable for experiment routing first, not yet a universal stage-handoff rewrite
+- Dedicated clean tests now cover:
+  - bounded repair handoff to `Coder`
+  - rollback handoff to `Orchestrator`
+  - review-blocker-aware decision routing
+  - stable-result-summary and stale-heartbeat completion detection
+  - runtime-maintenance-driven monitor refresh + decision persistence without a foreground agent
+  - service-side automatic `Coder /search-experiment` dispatch for experiment auto loops
+
+Bounded search loop note:
+
+- The git-native search loop already routes through `research_workflow.request_experiment_git_op` / `apply_experiment_git_op`, and dedicated runtime tests cover:
+  - multi-agent review before candidate worktree creation / promotion
+  - reviewed discard that removes retained git state while preserving workflow-owned search memory
+  - promotion guard that refuses retention when the recorded basis only cites configured non-promotion signals
+  - ledger metadata for `searchSessionId`, candidate lineage, discard reason, and failure class
+- Stage guidance / prompt assembly / `resume-pipeline` already prefer `/search-experiment` when an approved `EXPERIMENT_SEARCH_SPEC.json` exists.
+
+#### 11.12.6 State model upgrades
+
+- [x] Extend `EXPERIMENT_SEARCH_SPEC.json` with explicit fields for:
+  - `primary_metric_contract`
+  - `baseline_fairness_contract`
+  - `required_validation_steps`
+  - `innovation_invalidity_criteria`
+  - `tuning_exhaustion_criteria`
+  - `search_ladder`
+- [x] Extend `experiment_search` / `SEARCH_STATE.json` with:
+  - `validation_stage`
+  - `baseline_fairness_status`
+  - `implementation_confidence`
+  - `search_exhaustion_status`
+  - `ablation_status`
+  - `innovation_status`
+  - `decision_confidence`
+  - `recommended_next_action`
+  - `failure_cluster_ids`
+  - `evidence_cleanliness_status`
+- [x] Preserve backward compatibility for legacy experiment projects that only know `status`, `multi_seed_status`, and `plot_pack_status`.
+
+Implementation note:
+
+- `workflow-status` / snapshot now surface these fields, so users can inspect the decision state without opening raw JSON files.
+
+#### 11.12.7 Rollback policy
+
+- [x] Rollback must become explicit and durable, not implied by chat guidance.
+- [x] The system must distinguish:
+  - rollback because implementation is untrusted
+  - rollback because baseline fairness is broken
+  - rollback because the search envelope is exhausted
+  - rollback because the innovation itself has been invalidated
+- [x] Every rollback should record:
+  - trigger
+  - source evidence
+  - target stage
+  - recommended next owner
+
+#### 11.12.8 Monitoring / throughput policy
+
+- [x] The workflow should support high-throughput candidate search without forcing long-lived foreground turns.
+- [x] Background monitor passes must stay bounded and resumable.
+- [x] Completion detection should be able to keep up with multiple active runs on one or more servers.
+- [x] `experiment_search` should expose whether the next best action is:
+  - launch another candidate
+  - wait for more evidence
+  - reconcile finished runs
+  - stop and reflect
+
+#### 11.12.9 Acceptance criteria for this next phase
+
+- [x] A reviewed search envelope can drive multiple candidate trials without human babysitting.
+- [x] Non-promoted candidates are discarded from retained git history but preserved in durable search/ledger memory.
+- [x] The workflow can explain why a candidate was discarded in one of three categories: runtime failure, implementation failure, or scientific failure.
+- [x] The workflow does not call an innovation invalid before baseline fairness, multi-seed, and ablation are complete.
+- [x] The workflow can continue tuning when evidence is inconclusive, narrow search when the neighborhood is poor, and rollback when the innovation is truly weak.
+- [x] Experiment completion is derived from durable watcher/runtime signals, not only from an agent noticing that a `screen` disappeared.

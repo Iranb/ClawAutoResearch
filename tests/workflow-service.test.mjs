@@ -1242,6 +1242,85 @@ test("maybeLaunchAutoStageForProject defaults experiment monitor cooldown to fiv
   assert.equal(runs.length, 0);
 });
 
+test("maybeLaunchAutoStageForProject can dispatch coder-owned search-experiment work for experiment auto loops", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
+        return { runId: `search-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 30,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "coder",
+          stage: "experiment",
+          summary: "Continue the approved bounded experiment search loop.",
+          command:
+            "Run /search-experiment and continue the approved bounded search loop from the current incumbent without widening the envelope.",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.owner, "coder");
+  assert.equal(launch.stage, "experiment");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message ?? "", /\/search-experiment/i);
+});
+
 test("maybeLaunchAutoZoteroSyncForProject starts a non-blocking researcher continuation after graph refresh", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");

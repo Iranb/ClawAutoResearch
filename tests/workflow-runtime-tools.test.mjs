@@ -115,6 +115,143 @@ async function writeExecutable(targetPath, value) {
   await fs.chmod(targetPath, 0o755);
 }
 
+async function writeFakeResearch30Script(targetPath) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(
+    targetPath,
+    `#!/usr/bin/env python3
+import json
+import os
+from types import SimpleNamespace
+
+RESPONSES = {}
+payload_path = os.environ.get("OPENCLAW_RESEARCH30_FAKE_RESPONSES")
+if payload_path:
+    with open(payload_path, "r", encoding="utf-8") as handle:
+        RESPONSES = json.load(handle)
+
+class OpenAlexItem(dict):
+    pass
+
+class Report:
+    def __init__(self, topic, from_date, to_date, mode):
+        self.topic = topic
+        self.range_from = from_date
+        self.range_to = to_date
+        self.generated_at = "2026-04-12T00:00:00Z"
+        self.mode = mode
+        self.openalex = []
+        self.semanticscholar = []
+        self.pubmed = []
+        self.biorxiv = []
+        self.medrxiv = []
+        self.arxiv = []
+        self.huggingface = []
+        self.openalex_error = None
+        self.semanticscholar_error = None
+        self.pubmed_error = None
+        self.biorxiv_error = None
+        self.medrxiv_error = None
+        self.arxiv_error = None
+        self.huggingface_error = None
+
+    def to_dict(self):
+        return {
+            "topic": self.topic,
+            "range": {"from": self.range_from, "to": self.range_to},
+            "generated_at": self.generated_at,
+            "mode": self.mode,
+            "openalex": [dict(item) for item in self.openalex],
+            "semanticscholar": [dict(item) for item in self.semanticscholar],
+            "pubmed": [dict(item) for item in self.pubmed],
+            "biorxiv": [dict(item) for item in self.biorxiv],
+            "medrxiv": [dict(item) for item in self.medrxiv],
+            "arxiv": [dict(item) for item in self.arxiv],
+            "huggingface": [dict(item) for item in self.huggingface],
+        }
+
+def create_report(topic, from_date, to_date, mode):
+    return Report(topic, from_date, to_date, mode)
+
+class Normalize:
+    @staticmethod
+    def normalize_openalex_items(items, *_args):
+        return [OpenAlexItem(item) for item in items]
+    @staticmethod
+    def normalize_semanticscholar_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_biorxiv_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_arxiv_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_pubmed_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_huggingface_items(items, *_args):
+        return []
+    @staticmethod
+    def filter_by_date_range(items, *_args):
+        return items
+
+class Score:
+    @staticmethod
+    def score_openalex_items(items):
+        return items
+    @staticmethod
+    def score_semanticscholar_items(items):
+        return items
+    @staticmethod
+    def score_biorxiv_items(items):
+        return items
+    @staticmethod
+    def score_arxiv_items(items):
+        return items
+    @staticmethod
+    def score_pubmed_items(items):
+        return items
+    @staticmethod
+    def score_huggingface_items(items):
+        return items
+    @staticmethod
+    def sort_items(items):
+        return sorted(items, key=lambda item: -int(item.get("score", 0)))
+
+class Dedupe:
+    @staticmethod
+    def dedupe_within_source(items):
+        return items
+    @staticmethod
+    def dedupe_cross_source(items):
+        return items
+
+dates = SimpleNamespace(get_date_range=lambda days: ("2016-01-01", "2026-04-12"))
+env = SimpleNamespace(get_config=lambda: {})
+normalize = Normalize()
+score = Score()
+dedupe = Dedupe()
+schema = SimpleNamespace(create_report=create_report)
+
+def determine_sources(requested):
+    return {requested}
+
+def run_research(topic, sources_set, config, from_date, to_date, depth="default", mock=False, progress=None):
+    return {
+        "openalex": (RESPONSES.get(topic, []), None),
+        "semanticscholar": ([], None),
+        "pubmed": ([], None),
+        "biorxiv": ([], None),
+        "medrxiv": ([], None),
+        "arxiv": ([], None),
+        "huggingface": ([], None),
+    }
+`,
+    "utf8"
+  );
+}
+
 async function seedSparseIdeationRepairScenario(projectRoot, tool) {
   await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
   await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
@@ -707,6 +844,98 @@ test("research_workflow queue_paper_ingestion code-validates staged markdown and
   assert.match(report.entries[0].issues[0].message ?? "", /HTML|stub|paper/i);
 });
 
+test("research_workflow stage_papernexus_remote_sources uploads staged papers and writes a remote manifest", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-stage-ssh-"));
+  const remoteRoot = path.join(projectRoot, "fake-remote");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousPath = process.env.PATH;
+  const previousSshTarget = process.env.OPENCLAW_PAPERNEXUS_STAGE_SSH_TARGET;
+  const previousStageBaseDir = process.env.OPENCLAW_PAPERNEXUS_STAGE_BASE_DIR;
+  const previousFakeRemoteRoot = process.env.OPENCLAW_FAKE_REMOTE_ROOT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousSshTarget === undefined) delete process.env.OPENCLAW_PAPERNEXUS_STAGE_SSH_TARGET;
+    else process.env.OPENCLAW_PAPERNEXUS_STAGE_SSH_TARGET = previousSshTarget;
+    if (previousStageBaseDir === undefined) delete process.env.OPENCLAW_PAPERNEXUS_STAGE_BASE_DIR;
+    else process.env.OPENCLAW_PAPERNEXUS_STAGE_BASE_DIR = previousStageBaseDir;
+    if (previousFakeRemoteRoot === undefined) delete process.env.OPENCLAW_FAKE_REMOTE_ROOT;
+    else process.env.OPENCLAW_FAKE_REMOTE_ROOT = previousFakeRemoteRoot;
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const sourcePath = path.join(projectRoot, "researcher", "paper-staging", "2603.12226.pdf");
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "batch-import.json");
+  await writeText(sourcePath, "%PDF-1.4\nfake lane c\n");
+  await writeJson(manifestPath, {
+    papers: [
+      {
+        paper_id: "arxiv:2603.12226",
+        source_path: sourcePath,
+      },
+    ],
+  });
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    `#!/bin/sh
+target="$1"
+shift
+cmd="$1"
+root="$OPENCLAW_FAKE_REMOTE_ROOT"
+clean="$(printf "%s" "$cmd" | tr -d "'\\"")"
+case "$clean" in
+  mkdir\\ -p\\ *)
+    dir="\${clean#mkdir -p }"
+    mkdir -p "$root$dir"
+    exit 0
+    ;;
+  cat\\ \\>\\ *)
+    file="\${clean#cat > }"
+    mkdir -p "$(dirname "$root$file")"
+    cat > "$root$file"
+    exit 0
+    ;;
+esac
+echo "unsupported ssh command: $cmd" >&2
+exit 1
+`
+  );
+
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_FAKE_REMOTE_ROOT = remoteRoot;
+  process.env.OPENCLAW_PAPERNEXUS_STAGE_SSH_TARGET = "fake@remote";
+  process.env.OPENCLAW_PAPERNEXUS_STAGE_BASE_DIR = "/srv/papernexus-stage";
+
+  const result = await executeWorkflowTool(tool, {
+    action: "stage_papernexus_remote_sources",
+    papernexusRemoteStage: {
+      manifest_path: "researcher/paper-staging/batch-import.json",
+    },
+  });
+
+  assert.equal(result.available, true);
+  assert.match(result.reportPath, /REMOTE_PAPERNEXUS_STAGE\.json$/);
+  assert.equal(result.report.uploads[0].status, "uploaded");
+  const rewrittenManifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "batch-import.remote.json"
+  );
+  const rewrittenManifest = JSON.parse(await fs.readFile(rewrittenManifestPath, "utf8"));
+  assert.equal(
+    rewrittenManifest.papers[0].server_file_path,
+    "/srv/papernexus-stage/demo-project/pdf/2603.12226.pdf"
+  );
+});
+
 test("research_workflow audit_literature_coverage writes a non-blocking coverage diagnostic", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
@@ -894,6 +1123,234 @@ test("research_workflow refresh_gpu_monitor persists idle-vs-busy GPU state for 
     snapshot.experimentGpuMonitorRecommendation,
     "reconcile_finished"
   );
+});
+
+test("research_workflow refresh_gpu_monitor trusts terminal watcher artifacts before screen heuristics", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousPath = process.env.PATH;
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fake-ssh-"));
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    [
+      "#!/bin/sh",
+      "printf '0, NVIDIA RTX 4090, 15000, 24576, 80\\n'",
+      "printf '\\n---SCREENS---\\n'",
+      "printf 'There is a screen on:\\n'",
+      "printf '\\t9876.ghost-run\\t(Detached)\\n'",
+      "printf '1 Socket in /run/screen.\\n'",
+      "",
+    ].join("\n")
+  );
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-2",
+    experiment_name: "candidate",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "ghost-run",
+    status: "running",
+  });
+  await writeJson(path.join(runDir, "RUN_TERMINAL.json"), {
+    status: "completed",
+    terminal_at: "2026-04-12T12:00:00.000Z",
+  });
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const refreshed = await executeWorkflowTool(tool, {
+    action: "refresh_gpu_monitor",
+  });
+
+  assert.equal(refreshed.state.recommendation, "reconcile_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].conclusion, "likely_finished");
+  assert.equal(
+    refreshed.state.servers[0].assignments[0].watcherSignal,
+    "terminal_artifact"
+  );
+});
+
+test("research_workflow refresh_gpu_monitor treats stable result summaries as terminal before screen heuristics", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousPath = process.env.PATH;
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fake-ssh-"));
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    [
+      "#!/bin/sh",
+      "printf '0, NVIDIA RTX 4090, 15000, 24576, 80\\n'",
+      "printf '\\n---SCREENS---\\n'",
+      "printf 'There is a screen on:\\n'",
+      "printf '\\t2222.stale-run\\t(Detached)\\n'",
+      "printf '1 Socket in /run/screen.\\n'",
+      "",
+    ].join("\n")
+  );
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-3",
+    experiment_name: "candidate",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "stale-run",
+    status: "running",
+  });
+  const resultSummaryPath = path.join(runDir, "RESULT_SUMMARY.json");
+  await writeJson(resultSummaryPath, {
+    status: "completed",
+    metrics: { h_score: 0.58 },
+  });
+  const staleAt = new Date(Date.now() - 5 * 60 * 1000);
+  await fs.utimes(resultSummaryPath, staleAt, staleAt);
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const refreshed = await executeWorkflowTool(tool, {
+    action: "refresh_gpu_monitor",
+  });
+
+  assert.equal(refreshed.state.recommendation, "reconcile_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].conclusion, "likely_finished");
+  assert.equal(
+    refreshed.state.servers[0].assignments[0].watcherSignal,
+    "result_summary"
+  );
+});
+
+test("research_workflow refresh_gpu_monitor escalates stale heartbeats to timeout-style completion", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousPath = process.env.PATH;
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fake-ssh-"));
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    [
+      "#!/bin/sh",
+      "printf '\\n---SCREENS---\\n'",
+      "printf 'No Sockets found in /run/screen.\\n'",
+      "",
+    ].join("\n")
+  );
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-4",
+    experiment_name: "candidate",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "timed-run",
+    status: "running",
+  });
+  const heartbeatPath = path.join(runDir, "RUN_HEARTBEAT.json");
+  await writeJson(heartbeatPath, {
+    status: "running",
+    heartbeat_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+  });
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const refreshed = await executeWorkflowTool(tool, {
+    action: "refresh_gpu_monitor",
+  });
+
+  assert.equal(refreshed.state.recommendation, "reconcile_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].conclusion, "likely_finished");
+  assert.equal(refreshed.state.servers[0].assignments[0].watcherSignal, "timeout");
+});
+
+test("research_workflow record_experiment_runtime_signal writes watcher artifacts that monitor and decision logic can consume", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    experiment_search: {
+      status: "running",
+      search_spec_path: "planner/EXPERIMENT_SEARCH_SPEC.json",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "pending",
+      ablation_status: "pending",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+    },
+  });
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_session_id: "search-demo",
+  });
+  await writeJson(path.join(projectRoot, "coder", "demo-exp", "REMOTE_RUN.json"), {
+    experiment_id: "exp-1",
+    experiment_name: "baseline",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "baseline-run",
+    status: "running",
+  });
+
+  const runtimeSignal = await executeWorkflowTool(tool, {
+    action: "record_experiment_runtime_signal",
+    projectRoot,
+    experimentRuntimeSignal: {
+      experiment_id: "exp-1",
+      remote_run_path: "coder/demo-exp/REMOTE_RUN.json",
+      status: "completed",
+      result_paths: ["researcher/artifacts/results/results.json"],
+      key_metric: { name: "h_score", value: 0.55 },
+      metrics: { h_score: 0.55 },
+    },
+  });
+
+  assert.equal(runtimeSignal.status, "completed");
+  await fs.access(path.join(runDir, "RUN_TERMINAL.json"));
+  await fs.access(path.join(runDir, "RESULT_SUMMARY.json"));
+
+  const decision = await executeWorkflowTool(tool, {
+    action: "evaluate_experiment_search_decision",
+    experimentSearchDecision: {
+      project_root: projectRoot,
+    },
+  });
+  assert.equal(typeof decision.summary.decision, "string");
 });
 
 test("research_workflow get_snapshot reconciles finished uploads and refreshes graph presence during graph_build", async (t) => {
@@ -3321,15 +3778,46 @@ test("research_workflow run_citation_calibration updates citation integrity from
     },
   });
   const binDir = path.join(projectRoot, "bin");
+  const fakeResearch30 = path.join(projectRoot, "research30", "scripts", "research30.py");
+  const fakeResponses = path.join(projectRoot, "research30-responses.json");
   const previousPath = process.env.PATH;
+  const previousResearch30Script = process.env.OPENCLAW_RESEARCH30_SCRIPT;
+  const previousResearch30Responses = process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
   t.after(() => {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
+    if (previousResearch30Script === undefined) delete process.env.OPENCLAW_RESEARCH30_SCRIPT;
+    else process.env.OPENCLAW_RESEARCH30_SCRIPT = previousResearch30Script;
+    if (previousResearch30Responses === undefined) delete process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
+    else process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = previousResearch30Responses;
   });
   await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
     `@inproceedings{demo2024,\n  title={Demo Paper},\n  author={Unknown},\n  booktitle={CVPR},\n  year={2024}\n}\n`
+  );
+  await writeFakeResearch30Script(fakeResearch30);
+  await writeText(
+    fakeResponses,
+    `${JSON.stringify(
+      {
+        "Demo Paper doe": [
+          {
+            title: "Demo Paper",
+            authors: "Doe, Jane and Smith, John",
+            abstract: "Demo abstract",
+            doi: "10.1000/demo2024",
+            url: "https://openalex.org/W123",
+            source_name: "CVPR",
+            date: "2024-06-18",
+            score: 97,
+            why_relevant: "Exact title match",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`
   );
   await writeExecutable(
     path.join(binDir, "reffix"),
@@ -3348,25 +3836,9 @@ done
 cat "$in" | sed 's/author={[Uu]nknown}/author={Doe, Jane and Smith, John}/' > "$out"
 `
   );
-  await writeExecutable(
-    path.join(binDir, "update_from_dblp"),
-    `#!/bin/sh
-in="$1"
-shift
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--out" ]; then
-    out="$2"
-    shift 2
-  else
-    shift
-  fi
-done
-cat "$in" > "$out"
-printf '\\n  biburl={https://dblp.org/rec/conf/cvpr/demo2024.bib},\\n' >> "$out"
-`
-  );
   process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  process.env.OPENCLAW_RESEARCH30_SCRIPT = fakeResearch30;
+  process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = fakeResponses;
 
   const result = await executeWorkflowTool(tool, {
     action: "run_citation_calibration",
@@ -3399,16 +3871,47 @@ test("research_workflow run_citation_calibration accepts top-level projectRoot o
     },
   });
   const binDir = path.join(projectRoot, "bin");
+  const fakeResearch30 = path.join(projectRoot, "research30", "scripts", "research30.py");
+  const fakeResponses = path.join(projectRoot, "research30-responses.json");
   const previousPath = process.env.PATH;
+  const previousResearch30Script = process.env.OPENCLAW_RESEARCH30_SCRIPT;
+  const previousResearch30Responses = process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
   t.after(async () => {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
+    if (previousResearch30Script === undefined) delete process.env.OPENCLAW_RESEARCH30_SCRIPT;
+    else process.env.OPENCLAW_RESEARCH30_SCRIPT = previousResearch30Script;
+    if (previousResearch30Responses === undefined) delete process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
+    else process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = previousResearch30Responses;
     await fs.rm(unrelatedRoot, { recursive: true, force: true });
   });
   await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
     `@inproceedings{demo2024,\n  title={Demo Paper},\n  author={Unknown},\n  booktitle={CVPR},\n  year={2024}\n}\n`
+  );
+  await writeFakeResearch30Script(fakeResearch30);
+  await writeText(
+    fakeResponses,
+    `${JSON.stringify(
+      {
+        "Demo Paper doe": [
+          {
+            title: "Demo Paper",
+            authors: "Doe, Jane and Smith, John",
+            abstract: "Demo abstract",
+            doi: "10.1000/demo2024",
+            url: "https://openalex.org/W123",
+            source_name: "CVPR",
+            date: "2024-06-18",
+            score: 97,
+            why_relevant: "Exact title match",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`
   );
   await writeExecutable(
     path.join(binDir, "reffix"),
@@ -3427,25 +3930,9 @@ done
 cat "$in" | sed 's/author={[Uu]nknown}/author={Doe, Jane and Smith, John}/' > "$out"
 `
   );
-  await writeExecutable(
-    path.join(binDir, "update_from_dblp"),
-    `#!/bin/sh
-in="$1"
-shift
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--out" ]; then
-    out="$2"
-    shift 2
-  else
-    shift
-  fi
-done
-cat "$in" > "$out"
-printf '\\n  biburl={https://dblp.org/rec/conf/cvpr/demo2024.bib},\\n' >> "$out"
-`
-  );
   process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  process.env.OPENCLAW_RESEARCH30_SCRIPT = fakeResearch30;
+  process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = fakeResponses;
 
   const result = await executeWorkflowTool(tool, {
     action: "run_citation_calibration",
@@ -3497,6 +3984,89 @@ test("research_workflow run_citation_calibration returns structured repair evide
   assert.equal(result.hallucinatedCount, 0);
   assert.equal(result.verification.state.verificationStatus, "needs_revision");
   assert.match(result.report.tool_runs[0].stderr, /not found/i);
+});
+
+test("research_workflow reconcile_authoring_closeout self-heals setup-stage conference drafts into a citation-backed submit-ready state", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "setup";
+  manifest.workflow_line = "experiment";
+  await writeJson(manifestPath, manifest);
+
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    `\\documentclass{article}
+\\title{Stable Conference Draft}
+\\begin{document}
+\\maketitle
+\\section{Introduction}
+We study generalized category discovery.
+\\section{Related Work}
+Prior work studies related benchmarks.
+\\section{Method}
+We introduce a verification gate.
+\\section{Experiments}
+We evaluate on a synthetic benchmark.
+\\section{Results}
+The method remains stable.
+\\section{Conclusion}
+The pipeline can close the loop.
+\\bibliographystyle{plain}
+\\bibliography{refs}
+\\end{document}
+`
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    `@inproceedings{vaze2022gcd,
+  title={Generalized Category Discovery},
+  author={Vaze, Sagar and Han, Kai and Vedaldi, Andrea and Zisserman, Andrew},
+  booktitle={CVPR},
+  year={2022}
+}
+@book{kahneman2011thinking,
+  title={Thinking, Fast and Slow},
+  author={Kahneman, Daniel},
+  year={2011},
+  publisher={Farrar, Straus and Giroux}
+}
+`
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"), "# story\n");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "CROSS_DOMAIN_STORY_BRIDGE.md"),
+    "# bridge\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    "{}\n"
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "reconcile_authoring_closeout",
+    projectRoot,
+    authoringCloseout: {
+      compile_pdf: true,
+    },
+  });
+
+  assert.equal(result.paperMode, "conference");
+  assert.equal(result.nextStage, "submit");
+
+  const healedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(healedManifest.current_stage, "submit");
+  assert.equal(healedManifest.writing_contract.paper_mode, "conference");
+
+  const updatedDraft = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "utf8"
+  );
+  assert.match(updatedDraft, /\\cite\{[^}]+\}/);
+  await fs.access(path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"));
+  await fs.access(path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"));
+  await fs.access(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"));
 });
 
 test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {
@@ -4701,6 +5271,69 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(experimentSearchSummary.state.bestNodeId, "node-3");
   assert.equal(experimentSearchSummary.stateFileExists, true);
+
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_session_id: "search-demo",
+    comparison_policy: {
+      promotion_rule: "beat_incumbent_or_equal_simpler",
+      non_promotion_signals: ["gap_reduction", "smoother_curve"],
+    },
+    baseline_fairness_contract: {
+      require_baseline_parity: true,
+      locked_dataset_protocol: true,
+      locked_metric_protocol: true,
+      locked_evaluation_harness: true,
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: "2026-04-12T00:00:00.000Z",
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "done",
+        decision: "advance",
+      },
+    ],
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-1",
+      lastFailedExperimentId: null,
+      bestKnownConfigRef: "configs/best.yaml",
+      lastDecisionSummary: "advance",
+      papernexusSyncRequired: false,
+      papernexusLastSyncAt: "2026-04-12T00:00:00.000Z",
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_search",
+    experimentSearch: {
+      status: "running",
+      search_spec_path: "planner/EXPERIMENT_SEARCH_SPEC.json",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "pending",
+      ablation_status: "pending",
+      evidence_cleanliness_status: "clean",
+      search_exhaustion_status: "active",
+      last_decision: "advance",
+    },
+  });
+  const experimentDecision = await executeWorkflowTool(tool, {
+    action: "evaluate_experiment_search_decision",
+    experimentSearchDecision: {},
+  });
+  assert.equal(experimentDecision.summary.decision, "require_multi_seed");
+  assert.equal(
+    experimentDecision.state.validation_stage ??
+      experimentDecision.state.validationStage,
+    "multi_seed_validation"
+  );
+  assert.match(
+    experimentDecision.summary.recommendedNextAction,
+    /multi-seed/i
+  );
 
   await executeWorkflowTool(tool, {
     action: "auto_iterator_tick",
