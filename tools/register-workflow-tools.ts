@@ -109,6 +109,7 @@ import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/work
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
+import { runCitationCalibration } from "./research-writing/citation-calibration";
 import {
   dispatchWorkflowTaskToAgent,
   deriveWorkflowDispatchSessionCandidates,
@@ -387,6 +388,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_graph_guided_writing: "getGraphGuidedWritingStateSummary",
   set_graph_guided_writing: "setGraphGuidedWritingState",
   get_citation_integrity: "getCitationIntegrityStateSummary",
+  run_citation_calibration: "runCitationCalibration",
   get_paper_qc: "getPaperQcStateSummary",
   set_paper_qc: "setPaperQcState",
   get_figure_qc: "getFigureQcStateSummary",
@@ -461,6 +463,16 @@ async function resolveWorkflowToolState(params: {
   autoBind?: boolean;
 }): Promise<WorkflowToolState> {
   const channelBinding = asObject(params.rawParams.channelBinding);
+  const citationCalibration = asObject(params.rawParams.citationCalibration);
+  const explicitProjectRootOverride =
+    readString(params.rawParams.projectRoot) ??
+    readString(params.rawParams.project_root) ??
+    (params.action === "run_citation_calibration"
+      ? readString(citationCalibration?.projectRoot) ??
+        readString(citationCalibration?.project_root) ??
+        readString(citationCalibration?.projectPath) ??
+        readString(citationCalibration?.project_path)
+      : null);
   const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotContext({
     plugin: params.plugin,
     agentCtx: params.agentCtx,
@@ -494,6 +506,7 @@ async function resolveWorkflowToolState(params: {
       !readString(params.agentCtx.channelKey));
 
   const projectRoot =
+    explicitProjectRootOverride ??
     snapshot.projectRoot ??
     (allowWorkspaceProjectFallback ? workspaceProjectRoot : null) ??
     getProjectRootForWorkflow({
@@ -550,6 +563,17 @@ function requireWorkflowProjectRoot(state: WorkflowToolState): string {
     throw new Error(state.projectRequiredMessage);
   }
   return state.projectRoot;
+}
+
+function resolveWorkflowProjectRootWithOverride(params: {
+  state: WorkflowToolState;
+  override?: string | null;
+}): string {
+  const explicit = readString(params.override);
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  return requireWorkflowProjectRoot(params.state);
 }
 
 function normalizeTrackStatus(value: unknown): string | null {
@@ -1253,6 +1277,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_graph_guided_writing",
               "set_graph_guided_writing",
               "get_citation_integrity",
+              "run_citation_calibration",
               "get_paper_qc",
               "set_paper_qc",
               "get_figure_qc",
@@ -1283,7 +1308,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_theory_appendix",
               "record_innovation_reflection",
               "set_writing_contract",
-              "record_citation_verification",
+  "record_citation_verification",
               "get_channel_project_binding",
               "bind_channel_project",
               "unbind_channel_project",
@@ -1509,9 +1534,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          citationCalibration: {
+            type: "object",
+            additionalProperties: true,
+          },
           channelBinding: {
             type: "object",
             additionalProperties: true,
+          },
+          projectRoot: {
+            type: "string",
+          },
+          projectId: {
+            type: "string",
           },
           toAgent: {
             type: "string",
@@ -3474,6 +3509,63 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "run_citation_calibration": {
+              const calibration = asObject(params.citationCalibration);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(calibration?.projectRoot) ??
+                  readString(calibration?.project_root) ??
+                  readString(calibration?.projectPath) ??
+                  readString(calibration?.project_path),
+              });
+              const result = await runCitationCalibration({
+                projectRoot: resolvedProjectRoot,
+                bibliographyPath:
+                  readString(calibration?.bibliographyPath) ??
+                  readString(calibration?.bibliography_path),
+                outputBibPath:
+                  readString(calibration?.outputBibPath) ??
+                  readString(calibration?.output_bib_path),
+                reportJsonPath:
+                  readString(calibration?.reportJsonPath) ??
+                  readString(calibration?.report_json_path),
+                reportMarkdownPath:
+                  readString(calibration?.reportMarkdownPath) ??
+                  readString(calibration?.report_markdown_path),
+                replaceArxiv:
+                  calibration?.replaceArxiv === true ||
+                  calibration?.replace_arxiv === true,
+                syncVerificationReport:
+                  calibration?.syncVerificationReport === false ||
+                  calibration?.sync_verification_report === false
+                    ? false
+                    : true,
+              });
+              const verificationStatus =
+                result.hallucinatedCount > 0 || result.suspiciousCount > 0
+                  ? "needs_revision"
+                  : "verified";
+              const verification = await recordCitationVerification({
+                projectRoot: resolvedProjectRoot,
+                citationVerification: {
+                  bibliography_path: result.outputBibPath,
+                  verification_report_path:
+                    result.verificationReportPath ?? "reviewer/CITATION_VERIFICATION.md",
+                  verification_status: verificationStatus,
+                  verified_citation_count: result.verifiedCount,
+                  suspicious_citation_count: result.suspiciousCount,
+                  hallucinated_citation_count: result.hallucinatedCount,
+                  pending_reason:
+                    verificationStatus === "verified"
+                      ? "Citation calibration completed cleanly."
+                      : "Citation calibration found suspicious or hallucinated entries.",
+                },
+              });
+              return textResponse(
+                JSON.stringify({ ...result, verification }, null, 2)
+              );
             }
             case "get_paper_ingestion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

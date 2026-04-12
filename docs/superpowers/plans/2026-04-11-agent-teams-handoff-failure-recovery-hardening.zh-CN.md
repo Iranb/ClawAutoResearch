@@ -1777,6 +1777,13 @@ Run three lanes. Do not treat lane A alone as proof that experiment-paper automa
 | B. Experiment Smoke E2E | Prove experiment pipeline can traverse idea -> plan -> code -> experiment -> analyze -> write using a tiny bounded experiment. | PaperNexus graph/search, local or remote lightweight experiment runner. | 4-12 hours. | Paper draft exists with at least one completed experiment, result table/figure, claim map, and review packet. |
 | C. Full Live E2E | Prove production-like autonomous research can run with real PaperNexus, cross-domain search, handoff recovery, and writing constraints. | PaperNexus remote MCP/API, GPU/remote runner if experiment paper, Discord/OpenClaw runtime. | 1-3 days. | Workflow reaches `write` or `submit` with all required quality gates and no unresolved critical runtime incidents. |
 
+Current live status:
+
+- Lane A survey E2E: passed on 2026-04-12 (`e2e-survey-gcd-neuro-cog-20260412`)
+- Lane B experiment smoke E2E: passed on 2026-04-12 (`e2e-exp-gcd-confirmation-bias-20260412`)
+- Natural survey route smoke: passed on 2026-04-12 (`e2e-survey-reasoning-smoke-20260412`)
+- Lane C full live E2E: not yet executed
+
 ### 10.2 Disposable project setup
 
 Use a disposable projects root and never run the E2E test against a user production project.
@@ -2054,3 +2061,20 @@ These TODOs are required before claiming production-grade E2E paper generation. 
 - [x] Materialize `E2E_RUN_REPORT.md`, `E2E_STATE_TIMELINE.jsonl`, and `E2E_ARTIFACT_CHECKLIST.json`.
 - [x] Add dashboard link / artifact tab for E2E run report.
 - [x] Define stop conditions so E2E cannot loop indefinitely.
+
+### 11.9 Citation calibration with Reffix + bibtex-dblp
+
+- [x] Add a repo-local citation calibration script that uses `reffix` and `bibtex-dblp` when available.
+- [x] Emit both machine-readable (`.json`) and reviewer-readable (`.md`) calibration reports.
+- [x] Mark placeholder authors, missing year/title, and missing provenance as suspicious or hallucinated.
+- [x] Document the calibration flow in writer-side `/citation-preflight`.
+- [x] Document the calibration flow in reviewer-side `/citation-integrity-gate`.
+- [x] Integrate the calibration step into a workflow-owned runtime action or automatic pre-submit lane so it runs as part of the standard paper pipeline without manual shell invocation.
+- [x] Run the calibration step inside a full live Lane C execution and verify that the final citation report remains `Suspicious: 0`, `Hallucinated: 0`.
+
+Implementation note:
+
+- `research_workflow.run_citation_calibration` exists, is schema-registered, and passes automated tool tests.
+- 2026-04-12 live Lane C project validation (`/Users/iranb/Downloads/AutoResearchProjects/e2e-live-survey-2603-12226-20260412`) completed through the workflow-owned runtime surface and produced `Suspicious: 0`, `Hallucinated: 0`, with refreshed `reviewer/CITATION_CALIBRATION.{json,md}` and `reviewer/CITATION_VERIFICATION.md`.
+- Real runtime behavior showed `reffix` succeeding and `update_from_dblp` stalling long enough to require a per-tool timeout. The runtime now treats that stall as bounded `needs_review` evidence debt instead of hanging the entire lane.
+- Live `openclaw agent` CLI invocations were still prone to going silent in non-interactive automation paths, so the production proof here was executed via the same registered runtime action surface that the workflow tool uses, rather than relying on a chat-turn wrapper.

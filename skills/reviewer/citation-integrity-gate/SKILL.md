@@ -58,7 +58,31 @@ This skill operationalizes the citation workflow principle that citations must b
 ## Outputs
 
 - `{PROJ}/reviewer/CITATION_VERIFICATION.md`
+- `{PROJ}/reviewer/CITATION_CALIBRATION.md` when machine-assisted calibration is used
 - updated `PROJECT_MANIFEST.json.citation_integrity` through `research_workflow.record_citation_verification`
+
+## Automation Helper
+
+Before issuing the final reviewer verdict, prefer running the calibration helper and auditing its report:
+
+```bash
+python3 scripts/citation_calibrate.py \
+  --bib "{PROJ}/academic_writer/paper/refs.bib" \
+  --out "{PROJ}/academic_writer/paper/refs.calibrated.bib" \
+  --report-json "{PROJ}/reviewer/CITATION_CALIBRATION.json" \
+  --report-md "{PROJ}/reviewer/CITATION_CALIBRATION.md"
+```
+
+This helper is designed to use:
+
+- `reffix` for BibTeX repair / replacement
+- `bibtex-dblp` CLI tools such as `update_from_dblp` for DBLP-backed normalization
+
+Reviewer rule:
+
+- if the calibration helper reports `suspicious > 0`, the gate is `needs_revision`
+- if it reports `hallucinated > 0`, the gate is a hard failure
+- if both are `0`, continue with the usual claim-fit audit
 
 ## Audit Procedure
 

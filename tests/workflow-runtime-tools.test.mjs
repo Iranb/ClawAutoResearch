@@ -3310,6 +3310,195 @@ test("research_workflow materializes paper story and review pressure contracts f
   assert.match(discoveryPacket.next_action_suggestion ?? "", /graph_build/i);
 });
 
+test("research_workflow run_citation_calibration updates citation integrity from calibrated refs", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:test",
+    pluginConfig: {
+      projectsRoot: path.dirname(projectRoot),
+    },
+  });
+  const binDir = path.join(projectRoot, "bin");
+  const previousPath = process.env.PATH;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    `@inproceedings{demo2024,\n  title={Demo Paper},\n  author={Unknown},\n  booktitle={CVPR},\n  year={2024}\n}\n`
+  );
+  await writeExecutable(
+    path.join(binDir, "reffix"),
+    `#!/bin/sh
+in="$1"
+shift
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat "$in" | sed 's/author={[Uu]nknown}/author={Doe, Jane and Smith, John}/' > "$out"
+`
+  );
+  await writeExecutable(
+    path.join(binDir, "update_from_dblp"),
+    `#!/bin/sh
+in="$1"
+shift
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--out" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat "$in" > "$out"
+printf '\\n  biburl={https://dblp.org/rec/conf/cvpr/demo2024.bib},\\n' >> "$out"
+`
+  );
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_citation_calibration",
+    citationCalibration: {
+      bibliography_path: "academic_writer/paper/refs.bib",
+    },
+  });
+
+  assert.equal(result.suspiciousCount, 0);
+  assert.equal(result.hallucinatedCount, 0);
+  assert.equal(result.verification.state.verificationStatus, "verified");
+  const report = await fs.readFile(
+    path.join(projectRoot, "reviewer", "CITATION_CALIBRATION.md"),
+    "utf8"
+  );
+  assert.match(report, /Citation Calibration Report/);
+});
+
+test("research_workflow run_citation_calibration accepts top-level projectRoot override", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const unrelatedRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-unrelated-workspace-")
+  );
+  const tool = createResearchWorkflowTool({
+    workspaceDir: unrelatedRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:test",
+    pluginConfig: {
+      projectsRoot: path.dirname(projectRoot),
+    },
+  });
+  const binDir = path.join(projectRoot, "bin");
+  const previousPath = process.env.PATH;
+  t.after(async () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(unrelatedRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    `@inproceedings{demo2024,\n  title={Demo Paper},\n  author={Unknown},\n  booktitle={CVPR},\n  year={2024}\n}\n`
+  );
+  await writeExecutable(
+    path.join(binDir, "reffix"),
+    `#!/bin/sh
+in="$1"
+shift
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat "$in" | sed 's/author={[Uu]nknown}/author={Doe, Jane and Smith, John}/' > "$out"
+`
+  );
+  await writeExecutable(
+    path.join(binDir, "update_from_dblp"),
+    `#!/bin/sh
+in="$1"
+shift
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--out" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat "$in" > "$out"
+printf '\\n  biburl={https://dblp.org/rec/conf/cvpr/demo2024.bib},\\n' >> "$out"
+`
+  );
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_citation_calibration",
+    projectRoot,
+    citationCalibration: {
+      bibliography_path: "academic_writer/paper/refs.bib",
+    },
+  });
+
+  assert.equal(result.suspiciousCount, 0);
+  assert.equal(result.hallucinatedCount, 0);
+});
+
+test("research_workflow run_citation_calibration returns structured repair evidence when citations remain suspicious", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:test",
+    pluginConfig: {
+      projectsRoot: path.dirname(projectRoot),
+    },
+  });
+  const previousPath = process.env.PATH;
+  const previousHome = process.env.HOME;
+  const isolatedHome = path.join(projectRoot, "isolated-home");
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    `@inproceedings{demo2024,\n  title={Demo Paper},\n  author={Unknown},\n  booktitle={CVPR},\n  year={2024}\n}\n`
+  );
+  process.env.PATH = "/usr/bin:/bin";
+  process.env.HOME = isolatedHome;
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_citation_calibration",
+    citationCalibration: {
+      bibliography_path: "academic_writer/paper/refs.bib",
+    },
+  });
+
+  assert.equal(result.suspiciousCount, 1);
+  assert.equal(result.hallucinatedCount, 0);
+  assert.equal(result.verification.state.verificationStatus, "needs_revision");
+  assert.match(result.report.tool_runs[0].stderr, /not found/i);
+});
+
 test("research_workflow set_paper_ingestion broadcasts each newly completed PaperNexus import once", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
