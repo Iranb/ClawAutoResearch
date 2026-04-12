@@ -13,13 +13,16 @@ allowed-tools:
 
 # Monitor Experiment
 
-Monitor experiment status on a remote server and durably reconcile completion so the workflow can advance to analysis without waiting for a human to notice.
+Reconcile experiment state from durable runtime signals so the workflow can advance to analysis without waiting for a human to notice.
 
 This is the default follow-up once remote runs exist. In auto mode, the workflow may repeatedly route the EXPERIMENT stage back here until the remote runs are terminal and `experiment_search` is ready for analysis.
 
 In reviewed-auto mode, monitor mode begins only after the pre-launch review loop has approved a packet and Coder has created real remote runs. Planner/analyzer/cross-reviewer work belongs to the earlier experiment micro-stages.
 
 ## Monitoring Principles
+
+- **Reconciliation first**: this skill should prefer durable runtime artifacts (`REMOTE_RUN.json`, `RUN_HEARTBEAT.json`, `RUN_TERMINAL.json`, `RESULT_SUMMARY.json`, `FAILURE_SIGNATURE.json`) over live shell inspection whenever those artifacts exist.
+- **Agent is not the primary watcher**: if watcher artifacts already say the run is terminal, do not keep treating this as a process babysitting task.
 
 - **Baseline-first interpretation**: compare running curves against the agreed baseline contract before reading too much into a proposed variant.
 - **Soft early intervention**: if a run spends a meaningful stretch clearly below baseline, do not just keep waiting out the whole budget by default.
@@ -40,6 +43,13 @@ Also read the active bundles' `REMOTE_RUN.json` files first so you know:
 - `log_path`
 - `results_path`
 - which experiment id / track id each remote run belongs to
+
+If watcher artifacts already exist beside `REMOTE_RUN.json`, read them before making any live-shell inference:
+
+- `RUN_HEARTBEAT.json`
+- `RUN_TERMINAL.json`
+- `RESULT_SUMMARY.json`
+- `FAILURE_SIGNATURE.json`
 
 If the workflow GPU monitor is available, refresh it before concluding that a run is still active:
 
@@ -72,6 +82,8 @@ Update `{PROJ}/researcher/EXPERIMENT_REGISTRY.md` in the same pass so humans and
 ### 4. Detect Completion
 
 Experiment completion signals:
+- `RUN_TERMINAL.json` exists
+- `RESULT_SUMMARY.json` exists and points at stable result outputs
 - the `screen` session no longer exists (`screen -ls` does not contain `<exp_name>`)
 - the log tail contains `EXIT_CODE=0`
 - result files have been generated
@@ -122,11 +134,12 @@ If that happens, treat it as a **strategy-review signal**:
 
 The point is not to hard-stop every underperforming run instantly. The point is to avoid silently burning long GPU time on a branch that is staying below baseline with no recovery story.
 
-### 6. Promote the workflow when runs are done
+### 6. Reconcile the workflow when runs are done
 
 When all active remote runs are terminal:
 
 1. ensure finished outputs are copied or recorded under `{PROJ}/researcher/artifacts/results/`
+2. call `research_workflow.record_experiment_runtime_signal` if the watcher artifacts are missing or stale, so the run leaves behind a normalized heartbeat/terminal/result summary
 2. update `research_workflow.upsert_experiment` for every finished / failed run
 3. refresh `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`
 4. call `research_workflow.set_experiment_search`
@@ -138,6 +151,14 @@ Use these rules for `experiment_search`:
 - move to `status: "ready_for_analysis"` only when evaluation summary and plot pack paths both exist and multi-seed / plot-pack work is complete
 
 Do not mark the project analysis-ready just because the training process exited. The workflow should advance only after the result bundle is durable enough for Analyzer.
+
+If `research_workflow.evaluate_experiment_search_decision` recommends:
+
+- `reconcile_runtime` — finish the runtime reconciliation first
+- `repair_implementation` — hand back to Coder / Researcher with the recorded failure evidence
+- `require_multi_seed` — schedule the multi-seed validation pass, do not over-interpret a single run
+- `require_ablation` — request the missing ablation rather than claiming the innovation is validated
+- `innovation_invalidated` — stop tuning this envelope and route back to Researcher/Planner for rollback or reflection
 
 ### 7. Report
 

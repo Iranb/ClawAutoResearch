@@ -17,6 +17,10 @@ import type {
 import type {
   startBackgroundWorkflowRun,
 } from "../workflow-fast-paths.js";
+import type { runIdeaCatalystResearch30 } from "../research30/bridge.ts";
+import type { runCitationCalibration } from "../research-writing/citation-calibration.ts";
+import type { stagePapernexusRemoteSources } from "../papernexus-remote-stage.ts";
+import type { reconcileAuthoringCloseout } from "../authoring-closeout-reconcile.ts";
 import type {
   readGateReviewStore,
 } from "../workflow-auto-gate.js";
@@ -41,7 +45,12 @@ export type WorkflowCommandKind =
   | "project_init"
   | "clear_project_binding"
   | "workflow_status"
-  | "show_commands";
+  | "show_commands"
+  | "survey_graph_build"
+  | "idea_catalyst_search"
+  | "citation_calibrate"
+  | "papernexus_stage_remote"
+  | "authoring_closeout";
 
 export type WorkflowCommandDependencies = {
   resolveConversationBindingRecord: (
@@ -51,6 +60,10 @@ export type WorkflowCommandDependencies = {
   runWorkflowAutoIterator: typeof runWorkflowAutoIterator;
   startBackgroundWorkflowRun: typeof startBackgroundWorkflowRun;
   unbindChannelProjectForWorkflow: typeof unbindChannelProjectForWorkflow;
+  runIdeaCatalystResearch30: typeof runIdeaCatalystResearch30;
+  runCitationCalibration: typeof runCitationCalibration;
+  stagePapernexusRemoteSources: typeof stagePapernexusRemoteSources;
+  reconcileAuthoringCloseout: typeof reconcileAuthoringCloseout;
 };
 
 export type WorkflowCommandApi = Pick<
@@ -94,4 +107,9 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   clear_project_binding: "/clear-project-binding",
   workflow_status: "/workflow-status",
   show_commands: "/show-commands",
+  survey_graph_build: "/survey-graph-build",
+  idea_catalyst_search: "/idea-catalyst-search",
+  citation_calibrate: "/citation-calibrate",
+  papernexus_stage_remote: "/papernexus-stage-remote",
+  authoring_closeout: "/authoring-closeout",
 };

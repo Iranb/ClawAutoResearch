@@ -99,10 +99,22 @@ import {
 } from "./idea-catalyst/state";
 import { materializeIdeaCatalystState } from "./idea-catalyst/materializers";
 import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
+import {
+  getCrossDomainInspirationStateSummary,
+  materializeCrossDomainBridgeArtifacts,
+  materializeCrossDomainInspirationRequisition,
+  setCrossDomainInspirationState,
+} from "./idea-catalyst/cross-domain-contract";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
+import { runCitationCalibration } from "./research-writing/citation-calibration";
+import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
+import { runIdeaCatalystResearch30 } from "./research30/bridge";
+import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
+import { evaluateExperimentSearchDecisionForProject } from "./workflow-experiment-decision";
+import { recordExperimentRuntimeSignal } from "./workflow-experiment-runtime-watch";
 import {
   dispatchWorkflowTaskToAgent,
   deriveWorkflowDispatchSessionCandidates,
@@ -115,7 +127,8 @@ import {
   maybeBroadcastAutoIteratorStageChange,
   maybeBroadcastWorkflowStatusUpdate,
 } from "./stage-broadcast";
-import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
+import { handoffWorkflowTaskToAgent } from "./workflow-execution/delivery-adapter";
+import { ensureWorkflowDispatchMailboxMessage } from "./workflow-handoff-runtime";
 import {
   buildPapernexusWrapperBackgroundRunRequest,
   enqueueQueuedBackgroundWorkflowRun,
@@ -127,13 +140,13 @@ import {
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
   retireBackgroundWorkflowRuns,
-} from "./workflow-background-pool";
-import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
+} from "./workflow-execution/background-pool";
+import { migrateWorkflowRuntimeState } from "./workflow-execution/runtime-store";
 import {
   getWorkflowRuntimeQueuePath,
   getWorkflowRuntimeSessionsPath,
   readWorkflowRuntimeEvents,
-} from "./workflow-runtime-state.js";
+} from "./workflow-execution/runtime-store";
 import {
   asObject,
   readNumber,
@@ -143,13 +156,25 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
-import { readJsonIfExists, pathExists } from "./workflow-guard-core/fs";
+import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { ensureSurveyWorkflowIdentity } from "./workflow-line-routing.js";
 import { loadTrackInnovationEvidence } from "./workflow-derived-state/track-evidence";
 import {
   buildWorkflowQueueContext,
   enqueueWorkflowTask,
 } from "./workflow-coordination";
+import {
+  claimWorkflowTask,
+  claimNextWorkflowTaskForOwner,
+  } from "./workflow-team/task-graph";
+import {
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+  recordWorkflowTeamRoundClaim,
+  recordWorkflowTeamRoundCompletion,
+  releaseWorkflowTeamRoundSession,
+} from "./workflow-team/team-round";
 import { getGateReviewStorePath, readGateReviewStore } from "./workflow-auto-gate";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { inspectPapernexusRemoteAccess } from "./papernexus-secret";
@@ -157,7 +182,54 @@ import {
   isTrackedPapernexusImportWrapper,
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
+import {
+  collectPaperIngestionFailures,
+  materializePaperIngestionRetry,
+  readProjectManifestForRetry,
+} from "./paper-ingestion-failures";
+import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+import {
+  getWorkflowTaskGraphPath,
+  releaseWorkflowTaskClaim,
+  renewWorkflowTaskLease,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "./workflow-team/task-graph";
+import { completeWorkflowTaskAndContinue } from "./workflow-team/task-hooks";
+import {
+  createWorkflowArtifactReceipt,
+  readWorkflowArtifactReceiptStore,
+} from "./workflow-handoff/artifact-receipts";
+import {
+  readWorkflowHandoffIntentStore,
+  transitionWorkflowHandoffIntent,
+} from "./workflow-handoff/handoff-store";
+import {
+  createStageOwnerHandoffIntent,
+  createTaskUnlockedHandoffIntent,
+} from "./workflow-handoff/handoff-router";
+import { deliverWorkflowHandoffIntent } from "./workflow-handoff/handoff-delivery";
+import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
+import {
+  closeWorkflowRepairItemsForTask,
+  readWorkflowRepairQueueStore,
+} from "./workflow-handoff/repair-queue";
+import {
+  readWorkflowAgentCapabilityStore,
+  upsertWorkflowAgentCapability,
+} from "./workflow-handoff/agent-capabilities";
+import {
+  claimWorkflowWriteScope,
+  readWorkflowWriteScopeStore,
+  releaseStaleWorkflowWriteScopes,
+} from "./workflow-handoff/write-scope";
+import {
+  createWorkflowInboundBudgetContext,
+  recordWorkflowInboundTurnCompleted,
+  recordWorkflowInboundTurnStarted,
+} from "./workflow-handoff/inbound-budget";
+import { WORKFLOW_INBOUND_AUTO_ITERATOR_INLINE_BUDGET_MS } from "./workflow-handoff/handoff-defaults";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -173,11 +245,25 @@ type WorkflowToolState = {
 
 type AutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 
+function resolveSnapshotWorkflowLine(
+  snapshot: WorkflowSnapshot
+): "experiment" | "survey" {
+  const record = snapshot as Record<string, unknown>;
+  const workflowLine =
+    readString(record.workflowLine) ?? readString(record.workflow_line);
+  const paperMode =
+    readString(record.paperMode) ??
+    readString(record.paper_mode) ??
+    readString((record.writingContract as Record<string, unknown> | undefined)?.paper_mode);
+  return workflowLine === "survey" || paperMode === "survey" ? "survey" : "experiment";
+}
+
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "auto_iterator_tick",
   "start_background_run",
   "run_papernexus_wrapper",
   "queue_paper_ingestion",
+  "stage_papernexus_remote_sources",
   "queue_idea_catalyst_requisition",
   "queue_literature_discovery_requisition",
   "migrate_runtime_state",
@@ -190,14 +276,20 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
+  "reconcile_authoring_closeout",
   "materialize_cycle_memory",
   "materialize_survey_review_state",
   "materialize_idea_catalyst_state",
+  "run_idea_catalyst_research30",
   "set_survey_review",
   "refresh_gpu_monitor",
   "set_ideation_contract",
   "set_experiment_review_state",
   "set_idea_catalyst_state",
+  "set_cross_domain_inspiration",
+  "materialize_cross_domain_requisition",
+  "queue_cross_domain_requisition",
+  "materialize_cross_domain_bridge_artifacts",
   "set_paper_story_state",
   "materialize_review_pressure_packet",
   "set_review_pressure_packet",
@@ -206,6 +298,27 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "bind_channel_project",
   "unbind_channel_project",
   "dispatch_task",
+  "get_task_graph",
+  "get_team_round",
+  "claim_task",
+  "renew_task_lease",
+  "release_task",
+  "complete_task",
+  "get_handoff_intents",
+  "ack_handoff_intent",
+  "claim_handoff_intent",
+  "fail_handoff_intent",
+  "get_artifact_receipts",
+  "get_repair_queue",
+  "get_agent_capabilities",
+  "claim_write_scope",
+  "release_stale_write_scopes",
+  "get_paper_ingestion_failures",
+  "classify_paper_ingestion_failures",
+  "materialize_paper_ingestion_retry",
+  "queue_paper_ingestion_retry",
+  "get_paper_ingestion_retry_status",
+  "cancel_paper_ingestion_retry",
   "read_mailbox",
   "send_mailbox",
   "ack_mailbox",
@@ -218,12 +331,15 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
   check_graph_presence: "checkGraphPresenceForWorkflow",
+  refresh_graph_presence: "checkGraphPresenceForWorkflow",
+  accept_remote_graph_ready: "checkGraphPresenceForWorkflow",
   audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
   queue_paper_ingestion: "queuePaperIngestionRequest",
+  stage_papernexus_remote_sources: "stagePapernexusRemoteSources",
   validate_paper_ingestion: "validatePaperIngestionRequest",
   queue_idea_catalyst_requisition: "queueIdeaCatalystRequisition",
   queue_literature_discovery_requisition: "queueLiteratureDiscoveryRequisition",
@@ -238,20 +354,28 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_survey_review: "getSurveyReviewStateSummary",
   set_brainstorm_cycle: "setBrainstormCycleState",
   refresh_gpu_monitor: "refreshExperimentGpuMonitor",
+  record_experiment_runtime_signal: "recordExperimentRuntimeSignal",
   run_brainstorm_cycle: "runBrainstormCycle",
   materialize_ideation_contract: "materializeIdeationContract",
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
   materialize_plan_state: "materializePlanState",
   materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
+  run_idea_catalyst_research30: "runIdeaCatalystResearch30",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
+  reconcile_authoring_closeout: "reconcileAuthoringCloseout",
   materialize_cycle_memory: "materializeCycleMemory",
   materialize_survey_review_state: "materializeSurveyReviewState",
   get_ideation_contract: "getIdeationContractStateSummary",
   get_idea_catalyst_state: "getIdeaCatalystStateSummary",
   set_ideation_contract: "setIdeationContractState",
   set_idea_catalyst_state: "setIdeaCatalystState",
+  get_cross_domain_inspiration: "getCrossDomainInspirationStateSummary",
+  set_cross_domain_inspiration: "setCrossDomainInspirationState",
+  materialize_cross_domain_requisition: "materializeCrossDomainInspirationRequisition",
+  queue_cross_domain_requisition: "queueLiteratureDiscoveryRequisition",
+  materialize_cross_domain_bridge_artifacts: "materializeCrossDomainBridgeArtifacts",
   get_research_program: "getResearchProgramStateSummary",
   set_survey_review: "setSurveyReviewState",
   set_research_program: "setResearchProgramState",
@@ -276,6 +400,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_graph_guided_writing: "getGraphGuidedWritingStateSummary",
   set_graph_guided_writing: "setGraphGuidedWritingState",
   get_citation_integrity: "getCitationIntegrityStateSummary",
+  run_citation_calibration: "runCitationCalibration",
   get_paper_qc: "getPaperQcStateSummary",
   set_paper_qc: "setPaperQcState",
   get_figure_qc: "getFigureQcStateSummary",
@@ -285,6 +410,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_review_issue_tracker: "getReviewIssueTrackerStateSummary",
   set_review_issue_tracker: "setReviewIssueTrackerState",
   get_experiment_search: "getExperimentSearchStateSummary",
+  evaluate_experiment_search_decision: "evaluateExperimentSearchDecisionForProject",
   get_experiment_git_review: "getExperimentGitReviewSummary",
   get_experiment_review_state: "getExperimentReviewStateSummary",
   set_experiment_search: "setExperimentSearchState",
@@ -314,6 +440,29 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   unbind_channel_project: "unbindChannelProjectForWorkflow",
   list_channel_project_bindings: "listChannelProjectBindingsForWorkflow",
   dispatch_task: "dispatchWorkflowTaskToAgent",
+  get_task_graph: "readWorkflowTaskGraphStore",
+  get_team_round: "readWorkflowTeamRoundStore",
+  claim_task: "claimWorkflowTask",
+  renew_task_lease: "renewWorkflowTaskLease",
+  release_task: "releaseWorkflowTaskClaim",
+  complete_task: "completeWorkflowTaskAndContinue",
+  get_handoff_intents: "readWorkflowHandoffIntentStore",
+  ack_handoff_intent: "transitionWorkflowHandoffIntent",
+  claim_handoff_intent: "transitionWorkflowHandoffIntent",
+  fail_handoff_intent: "routeWorkflowFailure",
+  get_artifact_receipts: "readWorkflowArtifactReceiptStore",
+  get_repair_queue: "readWorkflowRepairQueueStore",
+  get_agent_capabilities: "readWorkflowAgentCapabilityStore",
+  claim_write_scope: "claimWorkflowWriteScope",
+  release_stale_write_scopes: "releaseStaleWorkflowWriteScopes",
+  get_paper_ingestion_failures: "collectPaperIngestionFailures",
+  classify_paper_ingestion_failures: "collectPaperIngestionFailures",
+  materialize_paper_ingestion_retry: "materializePaperIngestionRetry",
+  queue_paper_ingestion_retry: "queuePaperIngestionRequest",
+  get_paper_ingestion_retry_status: "getPaperIngestionStateSummary",
+  cancel_paper_ingestion_retry: "setPaperIngestionState",
+  recover_survey_route: "ensureSurveyWorkflowIdentity",
+  skip_experiment_stages_for_survey: "ensureSurveyWorkflowIdentity",
   read_mailbox: "readWorkflowMailboxForAgent",
   send_mailbox: "queueWorkflowMailboxMessage",
   ack_mailbox: "acknowledgeWorkflowMailboxMessage",
@@ -327,6 +476,16 @@ async function resolveWorkflowToolState(params: {
   autoBind?: boolean;
 }): Promise<WorkflowToolState> {
   const channelBinding = asObject(params.rawParams.channelBinding);
+  const citationCalibration = asObject(params.rawParams.citationCalibration);
+  const explicitProjectRootOverride =
+    readString(params.rawParams.projectRoot) ??
+    readString(params.rawParams.project_root) ??
+    (params.action === "run_citation_calibration"
+      ? readString(citationCalibration?.projectRoot) ??
+        readString(citationCalibration?.project_root) ??
+        readString(citationCalibration?.projectPath) ??
+        readString(citationCalibration?.project_path)
+      : null);
   const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotContext({
     plugin: params.plugin,
     agentCtx: params.agentCtx,
@@ -360,6 +519,7 @@ async function resolveWorkflowToolState(params: {
       !readString(params.agentCtx.channelKey));
 
   const projectRoot =
+    explicitProjectRootOverride ??
     snapshot.projectRoot ??
     (allowWorkspaceProjectFallback ? workspaceProjectRoot : null) ??
     getProjectRootForWorkflow({
@@ -416,6 +576,17 @@ function requireWorkflowProjectRoot(state: WorkflowToolState): string {
     throw new Error(state.projectRequiredMessage);
   }
   return state.projectRoot;
+}
+
+function resolveWorkflowProjectRootWithOverride(params: {
+  state: WorkflowToolState;
+  override?: string | null;
+}): string {
+  const explicit = readString(params.override);
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  return requireWorkflowProjectRoot(params.state);
 }
 
 function normalizeTrackStatus(value: unknown): string | null {
@@ -681,6 +852,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
   waitTimeoutMs?: number;
   retryOnTimeout?: boolean;
   enableSpawnFallback?: boolean;
+  forceQueueOnly?: boolean;
 }) {
   const requesterRole = params.snapshot.role;
   const ownerAfter = params.result.ownerAfter as DispatchableWorkflowRole | null;
@@ -710,26 +882,201 @@ export async function maybeDispatchAutoIteratorTask(params: {
   if (!params.snapshot.projectRoot) {
     return null;
   }
-  const dispatch = await handoffWorkflowTaskToAgent({
-    runtimeSubagent: params.plugin.api.runtime?.subagent,
-    workflowPolicy: params.workflowPolicy,
-    requesterSessionKey: params.agentCtx.sessionKey,
-    requesterChannel: params.agentCtx.messageChannel,
-    fromRole: requesterRole,
-    toRole: ownerAfter,
+  const handoffIntent = await createStageOwnerHandoffIntent({
     projectRoot: params.snapshot.projectRoot,
     projectId: params.snapshot.projectId,
-    stage: primaryAction.stage ?? params.snapshot.currentStage,
-    summary: primaryAction.summary,
-    command: primaryAction.command,
-    mailboxMessageId: primaryAction.mailboxMessageId,
-    requireMailboxAcknowledgement: true,
-    waitTimeoutMs: params.waitTimeoutMs,
-    retryOnTimeout: params.retryOnTimeout,
-    enableSpawnFallback: params.enableSpawnFallback,
-    autoModeActive,
-    logger: params.plugin.api.logger,
+    workflowLine: resolveSnapshotWorkflowLine(params.snapshot),
+    stageBefore: params.result.stageBefore,
+    stageAfter: params.result.stageAfter,
+    ownerBefore: params.result.ownerBefore,
+    ownerAfter,
+    fromSessionKey: params.agentCtx.sessionKey,
+    nextAction: params.result.nextAction,
+    blockingReason: params.result.blockingReason,
+    missingStageSignals: params.result.missingStageSignals,
+    manifestRevision:
+      readString((params.snapshot as Record<string, unknown>).manifestUpdatedAt) ??
+      readString((params.snapshot as Record<string, unknown>).manifest_updated_at),
   });
+  let dispatchedViaDelivery: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
+    null;
+  const deliveryResult = params.forceQueueOnly
+    ? null
+    : await deliverWorkflowHandoffIntent({
+        intent: handoffIntent.intent,
+        lobsterMode: params.workflowPolicy.lobsterHandoff?.enabled
+          ? "enabled"
+          : "disabled",
+        runtime: {
+          nativeDispatch: async () => {
+            dispatchedViaDelivery = await handoffWorkflowTaskToAgent({
+              runtimeSubagent: params.plugin.api.runtime?.subagent,
+              workflowPolicy: params.workflowPolicy,
+              requesterSessionKey: params.agentCtx.sessionKey,
+              requesterChannel: params.agentCtx.messageChannel,
+              fromRole: requesterRole,
+              toRole: ownerAfter,
+              projectRoot: params.snapshot.projectRoot!,
+              projectId: params.snapshot.projectId,
+              stage: primaryAction.stage ?? params.snapshot.currentStage,
+              summary: primaryAction.summary,
+              command: primaryAction.command,
+              mailboxMessageId: primaryAction.mailboxMessageId,
+              requireMailboxAcknowledgement: true,
+              waitTimeoutMs: params.waitTimeoutMs,
+              retryOnTimeout: params.retryOnTimeout,
+              enableSpawnFallback: params.enableSpawnFallback,
+              autoModeActive,
+              logger: params.plugin.api.logger,
+            });
+            return {
+              ok: dispatchedViaDelivery.dispatched,
+              runId: dispatchedViaDelivery.runId,
+              sessionKey: dispatchedViaDelivery.sessionKey,
+              error: dispatchedViaDelivery.error,
+            };
+          },
+          channelBroadcast: async (intent) => {
+            const result = await maybeBroadcastWorkflowStatusUpdate({
+              runtimeSubagent: params.plugin.api.runtime?.subagent,
+              sessionKey: params.agentCtx.sessionKey,
+              projectId: params.snapshot.projectId,
+              projectRoot: params.snapshot.projectRoot,
+              status: "handoff_ready",
+              stage: primaryAction.stage ?? params.snapshot.currentStage,
+              summary: `Handoff ${intent.intentId} is ready for ${ownerAfter}: ${primaryAction.summary}`,
+              idempotencyKeySuffix: `handoff-channel:${intent.intentId}`,
+            });
+            return {
+              ok:
+                result.broadcasted ||
+                result.reasonSkipped === "duplicate_pending" ||
+                result.reasonSkipped === "duplicate_delivered",
+              runId: result.runId,
+              messageId: result.idempotencyKey,
+              error: result.reasonSkipped,
+            };
+          },
+          runtimeQueue: async (intent) => {
+            const requesterSessionKey =
+              readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
+            const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
+              requesterSessionKey,
+              targetRole: ownerAfter,
+            });
+            const queued = await enqueueQueuedBackgroundWorkflowRun({
+              source: "workflow_auto_stage",
+              ownerAgent: ownerAfter,
+              requesterSessionKey,
+              messageChannel: readString(params.agentCtx.messageChannel),
+              preferredSessionKey: preferredSessionKeys[0] ?? null,
+              family: "research",
+              kind: "workflow_stage_dispatch",
+              projectId: params.snapshot.projectId,
+              projectRoot: params.snapshot.projectRoot!,
+              projectsRoot: params.workflowPolicy.projectsRoot,
+              queueKey: `handoff:${intent.intentId}`,
+              summary: `Queued handoff ${intent.intentId} for ${ownerAfter} after direct delivery fallback.`,
+              dispatchPayload: {
+                requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
+                requesterAccountId: null,
+                preferredSessionKeys,
+                fromRole: requesterRole,
+                toRole: ownerAfter,
+                projectRoot: params.snapshot.projectRoot!,
+                projectId: params.snapshot.projectId,
+                stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+                summary: primaryAction.summary,
+                command: primaryAction.command,
+                mailboxMessageId: primaryAction.mailboxMessageId ?? null,
+                requireMailboxAcknowledgement: true,
+                extraBody:
+                  "Workflow handoff delivery fallback. Continue only the assigned stage and keep durable state current.",
+                waitTimeoutMs: params.waitTimeoutMs ?? 5000,
+                retryOnTimeout: params.retryOnTimeout ?? false,
+                enableSpawnFallback:
+                  params.enableSpawnFallback === false ? false : true,
+                useWorkflowHandoff: true,
+                autoModeActive: true,
+              },
+            });
+            return { ok: true, queueKey: queued.entry.queueKey };
+          },
+          mailboxCompat: async (intent) => {
+            const messageId = await ensureWorkflowDispatchMailboxMessage({
+              projectRoot: params.snapshot.projectRoot!,
+              fromAgent: requesterRole,
+              toAgent: ownerAfter,
+              projectId: params.snapshot.projectId,
+              stage: primaryAction.stage ?? params.snapshot.currentStage,
+              summary: `Compatibility handoff ${intent.intentId}: ${primaryAction.summary}`,
+              command: primaryAction.command,
+              queueKey: intent.intentId,
+              existingMessageId: primaryAction.mailboxMessageId,
+            });
+            return {
+              ok: Boolean(messageId),
+              messageId,
+              error: messageId ? null : "mailbox_compat_unavailable",
+            };
+          },
+        },
+      });
+  const queuedAttempt =
+    deliveryResult?.intent.deliveryAttempts.find(
+      (attempt) => attempt.channel === "runtime_queue" && attempt.status === "delivered"
+    ) ?? null;
+  const dispatch = params.forceQueueOnly
+    ? {
+        dispatched: false,
+        sessionKey: null,
+        runId: null,
+        waitStatus: null,
+        channel: null,
+        strategy: null,
+        attempts: [],
+        fallbackSpawned: false,
+        acknowledgedByMailbox: false,
+        error: "inbound_budget_exceeded",
+        backend: "native" as const,
+        lobsterStatus: null,
+        fallbackReason: "inbound_budget_exceeded",
+      }
+    : queuedAttempt
+      ? {
+          dispatched: false,
+          sessionKey: null,
+          runId: null,
+          waitStatus: null,
+          channel: null,
+          strategy: null,
+          attempts: [],
+          fallbackSpawned: false,
+          acknowledgedByMailbox: false,
+          error: null,
+          backend: "native" as const,
+          lobsterStatus: null,
+          fallbackReason: "runtime_queue",
+          queuedFallback: true,
+          queueKey: queuedAttempt.queueKey,
+          queuePosition: null,
+        }
+      : dispatchedViaDelivery ??
+      {
+        dispatched: false,
+        sessionKey: null,
+        runId: null,
+        waitStatus: null,
+        channel: null,
+        strategy: null,
+        attempts: [],
+        fallbackSpawned: false,
+        acknowledgedByMailbox: false,
+        error: "handoff delivery did not start",
+        backend: "native" as const,
+        lobsterStatus: null,
+        fallbackReason: "handoff_delivery_failed",
+      };
   if (dispatch.dispatched) {
     await recordWorkflowContactEvent({
       projectRoot: params.snapshot.projectRoot,
@@ -737,8 +1084,67 @@ export async function maybeDispatchAutoIteratorTask(params: {
       toAgent: ownerAfter,
       channel: dispatch.channel ?? "sessions_send",
     });
+    if (dispatch.sessionKey && params.workflowPolicy.teamRuntime?.enabled !== false) {
+      try {
+        const claimedTask = await claimNextWorkflowTaskForOwner({
+          projectRoot: params.snapshot.projectRoot,
+          owner: ownerAfter,
+          sessionKey: dispatch.sessionKey,
+        });
+        if (claimedTask.claimed && claimedTask.task) {
+          let teamRound = await recordWorkflowTeamRoundClaim({
+            projectRoot: params.snapshot.projectRoot,
+            sessionKey: dispatch.sessionKey,
+            taskId: claimedTask.task.taskId,
+          });
+          if (!teamRound) {
+            const taskGraphStore = await readWorkflowTaskGraphStore(
+              params.snapshot.projectRoot
+            );
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (taskGraphStore) {
+              await materializeWorkflowTeamRound({
+                projectRoot: params.snapshot.projectRoot,
+                projectId: params.snapshot.projectId ?? null,
+                stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+                leadRole: ownerAfter,
+                topTierVerdict: taskGraphStore.topTierVerdict,
+                evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+                taskGraphPath: getWorkflowTaskGraphPath(params.snapshot.projectRoot),
+                taskCount: taskGraphSummary.taskCount,
+                claimableCount: taskGraphSummary.claimableCount,
+                blockedCount: taskGraphSummary.blockedCount,
+                claimedCount: taskGraphSummary.claimedCount,
+                verifyingCount: taskGraphSummary.verifyingCount,
+                needsRepairCount: taskGraphSummary.needsRepairCount,
+                satisfiedCount: taskGraphSummary.satisfiedCount,
+                optionalCount: taskGraphSummary.optionalCount,
+              });
+              teamRound = await recordWorkflowTeamRoundClaim({
+                projectRoot: params.snapshot.projectRoot,
+                sessionKey: dispatch.sessionKey,
+                taskId: claimedTask.task.taskId,
+              });
+            }
+          }
+        }
+      } catch (error) {
+        params.plugin.api.logger?.warn?.("Failed to claim workflow task after tool-side auto dispatch.", {
+          projectRoot: params.snapshot.projectRoot,
+          owner: ownerAfter,
+          stage:
+            primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
-  if (!dispatch.dispatched && autoModeActive) {
+  if (
+    !dispatch.dispatched &&
+    autoModeActive &&
+    !("queuedFallback" in dispatch && dispatch.queuedFallback) &&
+    !(deliveryResult?.delivered || deliveryResult?.terminal)
+  ) {
     const requesterSessionKey =
       readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
     const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
@@ -824,12 +1230,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_papernexus_remote_access",
               "get_papernexus_progress",
               "check_graph_presence",
+              "refresh_graph_presence",
+              "accept_remote_graph_ready",
               "audit_literature_coverage",
               "plan_citation_expansion",
               "auto_iterator_tick",
               "start_background_run",
               "run_papernexus_wrapper",
               "queue_paper_ingestion",
+              "stage_papernexus_remote_sources",
               "validate_paper_ingestion",
               "queue_literature_discovery_requisition",
               "migrate_runtime_state",
@@ -843,6 +1252,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_survey_review",
   "set_brainstorm_cycle",
   "refresh_gpu_monitor",
+  "record_experiment_runtime_signal",
   "run_brainstorm_cycle",
               "materialize_ideation_contract",
               "materialize_experiment_review_state",
@@ -851,8 +1261,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
+              "reconcile_authoring_closeout",
               "materialize_cycle_memory",
               "materialize_survey_review_state",
+              "run_idea_catalyst_research30",
+              "get_cross_domain_inspiration",
+              "set_cross_domain_inspiration",
+              "materialize_cross_domain_requisition",
+              "queue_cross_domain_requisition",
+              "materialize_cross_domain_bridge_artifacts",
               "get_research_program",
               "set_survey_review",
               "set_research_program",
@@ -877,6 +1294,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_graph_guided_writing",
               "set_graph_guided_writing",
               "get_citation_integrity",
+              "run_citation_calibration",
               "get_paper_qc",
               "set_paper_qc",
               "get_figure_qc",
@@ -886,6 +1304,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "get_review_issue_tracker",
               "set_review_issue_tracker",
               "get_experiment_search",
+              "evaluate_experiment_search_decision",
               "get_experiment_git_review",
               "get_experiment_review_state",
               "set_experiment_search",
@@ -907,12 +1326,35 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_theory_appendix",
               "record_innovation_reflection",
               "set_writing_contract",
-              "record_citation_verification",
+  "record_citation_verification",
               "get_channel_project_binding",
               "bind_channel_project",
               "unbind_channel_project",
               "list_channel_project_bindings",
               "dispatch_task",
+              "get_task_graph",
+              "get_team_round",
+              "claim_task",
+              "renew_task_lease",
+              "release_task",
+              "complete_task",
+              "get_handoff_intents",
+              "ack_handoff_intent",
+              "claim_handoff_intent",
+              "fail_handoff_intent",
+              "get_artifact_receipts",
+              "get_repair_queue",
+              "get_agent_capabilities",
+              "claim_write_scope",
+              "release_stale_write_scopes",
+              "get_paper_ingestion_failures",
+              "classify_paper_ingestion_failures",
+              "materialize_paper_ingestion_retry",
+              "queue_paper_ingestion_retry",
+              "get_paper_ingestion_retry_status",
+              "cancel_paper_ingestion_retry",
+              "recover_survey_route",
+              "skip_experiment_stages_for_survey",
               "read_mailbox",
               "send_mailbox",
               "ack_mailbox",
@@ -979,6 +1421,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           ideationMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          crossDomainInspiration: {
+            type: "object",
+            additionalProperties: true,
+          },
+          crossDomainBridgeEvidence: {
             type: "object",
             additionalProperties: true,
           },
@@ -1074,6 +1524,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          experimentSearchDecision: {
+            type: "object",
+            additionalProperties: true,
+          },
           experimentGitRequest: {
             type: "object",
             additionalProperties: true,
@@ -1083,6 +1537,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           experimentMemoryMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          experimentRuntimeSignal: {
             type: "object",
             additionalProperties: true,
           },
@@ -1102,9 +1560,31 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          citationCalibration: {
+            type: "object",
+            additionalProperties: true,
+          },
+          ideaCatalystResearch30: {
+            type: "object",
+            additionalProperties: true,
+          },
+          papernexusRemoteStage: {
+            type: "object",
+            additionalProperties: true,
+          },
+          authoringCloseout: {
+            type: "object",
+            additionalProperties: true,
+          },
           channelBinding: {
             type: "object",
             additionalProperties: true,
+          },
+          projectRoot: {
+            type: "string",
+          },
+          projectId: {
+            type: "string",
           },
           toAgent: {
             type: "string",
@@ -1138,6 +1618,27 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           },
           messageId: {
             type: "string",
+          },
+          taskId: {
+            type: "string",
+          },
+          completionNote: {
+            type: "string",
+          },
+          handoffIntentId: {
+            type: "string",
+          },
+          artifactReceipt: {
+            type: "object",
+            additionalProperties: true,
+          },
+          failure: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writeScope: {
+            type: "object",
+            additionalProperties: true,
           },
           waitSeconds: {
             type: "number",
@@ -1194,6 +1695,87 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             });
           };
           await traceAction("started");
+          if (projectRoot && ctx.sessionKey) {
+            await upsertWorkflowAgentCapability({
+              projectRoot,
+              projectId: snapshot.projectId,
+              sessionKey: ctx.sessionKey,
+              sessionId: ctx.sessionId,
+              role: snapshot.role,
+              agentId: ctx.agentId,
+              messageChannel: ctx.messageChannel,
+              canUseResearchWorkflow: true,
+              canReceiveNativeDispatch: true,
+              canRunExecPacket: true,
+              confidence: "high",
+            });
+          }
+          const genericInboundBudget =
+            projectRoot && action !== "auto_iterator_tick"
+              ? createWorkflowInboundBudgetContext({
+                  projectRoot,
+                  projectId: snapshot.projectId,
+                  channelKey:
+                    readString(channelBinding?.channelKey) ??
+                    readString(ctx.channelKey) ??
+                    readString(ctx.messageChannel),
+                  sessionKey: ctx.sessionKey,
+                  agentId: ctx.agentId,
+                  action,
+                })
+              : null;
+          if (genericInboundBudget) {
+            await recordWorkflowInboundTurnStarted(genericInboundBudget);
+          }
+          let actionFailed = false;
+
+          const syncTeamRoundFromTaskGraph = async (params: {
+            projectRoot: string;
+            stage: string | null;
+            leadRole: string | null;
+            sessionKey?: string | null;
+            claimedTaskId?: string | null;
+            completedTaskId?: string | null;
+          }) => {
+            const taskGraphStore = await readWorkflowTaskGraphStore(params.projectRoot);
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (!taskGraphStore) {
+              return { taskGraphStore: null, taskGraphSummary, teamRound: null };
+            }
+            const existingRound = await readWorkflowTeamRoundStore(params.projectRoot);
+            const teamRound = await materializeWorkflowTeamRound({
+              projectRoot: params.projectRoot,
+              projectId: snapshot.projectId ?? taskGraphStore.projectId ?? null,
+              stage: params.stage ?? taskGraphStore.stage ?? null,
+              leadRole: params.leadRole ?? existingRound?.leadRole ?? null,
+              topTierVerdict: taskGraphStore.topTierVerdict,
+              evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+              taskGraphPath: getWorkflowTaskGraphPath(params.projectRoot),
+              taskCount: taskGraphSummary.taskCount,
+              claimableCount: taskGraphSummary.claimableCount,
+              blockedCount: taskGraphSummary.blockedCount,
+              claimedCount: taskGraphSummary.claimedCount,
+              verifyingCount: taskGraphSummary.verifyingCount,
+              needsRepairCount: taskGraphSummary.needsRepairCount,
+              satisfiedCount: taskGraphSummary.satisfiedCount,
+              optionalCount: taskGraphSummary.optionalCount,
+            });
+            if (params.sessionKey && params.claimedTaskId) {
+              await recordWorkflowTeamRoundClaim({
+                projectRoot: params.projectRoot,
+                sessionKey: params.sessionKey,
+                taskId: params.claimedTaskId,
+              });
+            }
+            if (params.sessionKey && params.completedTaskId) {
+              await recordWorkflowTeamRoundCompletion({
+                projectRoot: params.projectRoot,
+                sessionKey: params.sessionKey,
+                taskId: params.completedTaskId,
+              });
+            }
+            return { taskGraphStore, taskGraphSummary, teamRound };
+          };
 
           try {
             switch (action) {
@@ -1242,12 +1824,18 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(progress, null, 2));
             }
-            case "check_graph_presence": {
+            case "check_graph_presence":
+            case "refresh_graph_presence":
+            case "accept_remote_graph_ready": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const graphPresenceCheck = asObject(params.graphPresenceCheck);
               const result = await checkGraphPresenceForWorkflow({
                 projectRoot: resolvedProjectRoot,
                 updateManifest:
+                  action === "refresh_graph_presence" ||
+                  action === "accept_remote_graph_ready"
+                    ? true
+                    :
                   graphPresenceCheck?.updateManifest === false ||
                   graphPresenceCheck?.update_manifest === false
                     ? false
@@ -1266,6 +1854,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
                 },
               });
+              if (action === "accept_remote_graph_ready" && result.status !== "ready") {
+                throw new Error(
+                  `Remote graph is not ready; graph presence status=${result.status}, missing=${result.missingPaperCount}.`
+                );
+              }
               return textResponse(JSON.stringify(result, null, 2));
             }
             case "audit_literature_coverage": {
@@ -1371,6 +1964,22 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   )
                 );
               }
+              const inboundBudget = createWorkflowInboundBudgetContext({
+                projectRoot,
+                projectId: snapshot.projectId,
+                channelKey:
+                  readString(channelBinding?.channelKey) ??
+                  readString(ctx.channelKey) ??
+                  readString(ctx.messageChannel),
+                sessionKey: ctx.sessionKey,
+                agentId: ctx.agentId,
+                action: "auto_iterator_tick",
+                inboundBudgetMs:
+                  readNumber(iterator?.inboundBudgetMs) ??
+                  readNumber(iterator?.inbound_budget_ms) ??
+                  WORKFLOW_INBOUND_AUTO_ITERATOR_INLINE_BUDGET_MS,
+              });
+              await recordWorkflowInboundTurnStarted(inboundBudget);
               const result = await runWorkflowAutoIterator({
                 projectRoot,
                 policy: workflowPolicy,
@@ -1395,7 +2004,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       waitTimeoutMs:
                         (readNumber(iterator?.waitTimeoutMs) ??
                           readNumber(iterator?.wait_timeout_ms)) ??
-                        5000,
+                        Math.min(5000, Math.max(0, inboundBudget.remainingMs() - 1500)),
                       retryOnTimeout:
                         iterator?.retryOnTimeout === true ||
                         iterator?.retry_on_timeout === true,
@@ -1404,13 +2013,42 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                         iterator?.enable_spawn_fallback === false
                           ? false
                           : true,
+                      forceQueueOnly:
+                        (readString(iterator?.executionMode) ??
+                          readString(iterator?.execution_mode) ??
+                          "defer_after_budget") === "outbox_only" ||
+                        inboundBudget.isExhausted(2500),
                     });
+              const stageHandoff =
+                result.stageChanged && result.ownerAfter
+                  ? await createStageOwnerHandoffIntent({
+                  projectRoot,
+                  projectId: snapshot.projectId,
+                  workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                  stageBefore: result.stageBefore,
+                  stageAfter: result.stageAfter,
+                  ownerBefore: result.ownerBefore,
+                  ownerAfter: result.ownerAfter,
+                  fromSessionKey: ctx.sessionKey,
+                  nextAction: result.nextAction,
+                  blockingReason: result.blockingReason,
+                  missingStageSignals: result.missingStageSignals,
+                  manifestRevision:
+                    readString((snapshot as Record<string, unknown>).manifestUpdatedAt) ??
+                    readString((snapshot as Record<string, unknown>).manifest_updated_at),
+                    })
+                  : null;
               const stageBroadcast =
                 iterator?.broadcastStageChange === false ||
-                iterator?.broadcast_stage_change === false
+                iterator?.broadcast_stage_change === false ||
+                inboundBudget.isExhausted(1500)
                   ? {
                       broadcasted: false,
-                      reasonSkipped: "disabled_by_iterator",
+                      reasonSkipped:
+                        iterator?.broadcastStageChange === false ||
+                        iterator?.broadcast_stage_change === false
+                          ? "disabled_by_iterator"
+                          : "inbound_budget_exceeded",
                       runId: null,
                       sessionKey: ctx.sessionKey ?? null,
                       idempotencyKey: null,
@@ -1430,9 +2068,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       regressed: result.regressed,
                       recommendedActions: result.recommendedActions,
                       agentTaskDispatch: dispatchResult,
+                      handoffIntentId: stageHandoff?.intent.intentId ?? null,
                     });
               const statusBroadcast =
-                result.timedDefaultTriggered === true
+                result.timedDefaultTriggered === true && !inboundBudget.isExhausted(1500)
                   ? await maybeBroadcastWorkflowStatusUpdate({
                       runtimeSubagent: plugin.api.runtime?.subagent,
                       sessionKey: ctx.sessionKey,
@@ -1454,7 +2093,26 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       runId: null,
                       sessionKey: ctx.sessionKey ?? null,
                       idempotencyKey: null,
-                    };
+                  };
+              const dispatchQueuedFallback =
+                Boolean(
+                  dispatchResult &&
+                    "queuedFallback" in dispatchResult &&
+                    dispatchResult.queuedFallback === true
+                );
+              const dispatchQueueKey =
+                dispatchResult && "queueKey" in dispatchResult
+                  ? readString(dispatchResult.queueKey)
+                  : null;
+              await recordWorkflowInboundTurnCompleted({
+                context: inboundBudget,
+                status:
+                  dispatchQueuedFallback ||
+                  stageBroadcast.reasonSkipped === "inbound_budget_exceeded"
+                    ? "deferred"
+                    : "completed_inline",
+                deferredQueueKey: dispatchQueueKey,
+              });
               return textResponse(
                 JSON.stringify(
                   {
@@ -1462,6 +2120,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     agentTaskDispatch: dispatchResult,
                     stageBroadcast,
                     statusBroadcast,
+                    inboundBudget: {
+                      turnId: inboundBudget.turn.turnId,
+                      remainingMs: inboundBudget.remainingMs(),
+                      deferred:
+                        dispatchQueuedFallback ||
+                        stageBroadcast.reasonSkipped === "inbound_budget_exceeded",
+                    },
                   },
                   null,
                   2
@@ -1658,6 +2323,235 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 )
               );
             }
+            case "stage_papernexus_remote_sources": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const stageParams = asObject(params.papernexusRemoteStage);
+              const result = await stagePapernexusRemoteSources({
+                projectRoot: resolvedProjectRoot,
+                sshTarget:
+                  readString(stageParams?.sshTarget) ??
+                  readString(stageParams?.ssh_target),
+                remoteBaseDir:
+                  readString(stageParams?.remoteBaseDir) ??
+                  readString(stageParams?.remote_base_dir),
+                projectId:
+                  readString(stageParams?.projectId) ??
+                  readString(stageParams?.project_id),
+                sourcePaths: Array.isArray(stageParams?.sourcePaths)
+                  ? stageParams.sourcePaths
+                      .map((entry) => readString(entry))
+                      .filter((entry): entry is string => Boolean(entry))
+                  : Array.isArray(stageParams?.source_paths)
+                    ? stageParams.source_paths
+                        .map((entry) => readString(entry))
+                        .filter((entry): entry is string => Boolean(entry))
+                    : undefined,
+                manifestPath:
+                  readString(stageParams?.manifestPath) ??
+                  readString(stageParams?.manifest_path),
+                rewriteManifestOut:
+                  readString(stageParams?.rewriteManifestOut) ??
+                  readString(stageParams?.rewrite_manifest_out),
+                reportPath:
+                  readString(stageParams?.reportPath) ??
+                  readString(stageParams?.report_path),
+                timeoutSeconds:
+                  typeof stageParams?.timeoutSeconds === "number"
+                    ? stageParams.timeoutSeconds
+                    : typeof stageParams?.timeout_seconds === "number"
+                      ? stageParams.timeout_seconds
+                      : undefined,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_paper_ingestion_failures":
+            case "classify_paper_ingestion_failures": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifest = await readProjectManifestForRetry(resolvedProjectRoot);
+              const ingestionState = normalizePaperIngestionState(manifest.paper_ingestion);
+              const failures = collectPaperIngestionFailures({ state: ingestionState });
+              const retryableFailures = failures.filter(
+                (entry) => entry.retryable && !entry.alreadyInGraph
+              );
+              const nonRetryableFailures = failures.filter(
+                (entry) => !entry.retryable || entry.alreadyInGraph
+              );
+              await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  failed_papers: failures,
+                  retryable_failed_papers: retryableFailures,
+                  non_retryable_failed_papers: nonRetryableFailures,
+                  last_failure_scan_at: new Date().toISOString(),
+                },
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    failedCount: failures.length,
+                    retryableCount: retryableFailures.length,
+                    nonRetryableCount: nonRetryableFailures.length,
+                    failures,
+                    retryableFailures,
+                    nonRetryableFailures,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "materialize_paper_ingestion_retry":
+            case "queue_paper_ingestion_retry": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const requestPayload = asObject(params.paperIngestionRequest);
+              const materialized = await materializePaperIngestionRetry({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId ?? null,
+                manifest: await readProjectManifestForRetry(resolvedProjectRoot),
+                intervalSeconds:
+                  readNumber(
+                    requestPayload?.intervalSeconds ?? requestPayload?.interval_seconds
+                  ) ?? null,
+                maxAttempts:
+                  readNumber(requestPayload?.maxAttempts ?? requestPayload?.max_attempts) ??
+                  null,
+              });
+              if (action === "materialize_paper_ingestion_retry") {
+                await setPaperIngestionState({
+                  projectRoot: resolvedProjectRoot,
+                  paperIngestion: {
+                    failed_papers: materialized.failures,
+                    retryable_failed_papers: materialized.retryableFailures,
+                    non_retryable_failed_papers: materialized.nonRetryableFailures,
+                    last_failure_scan_at: new Date().toISOString(),
+                    last_retry_manifest_path: materialized.retryManifestPath,
+                    retry_policy: {
+                      mode: "sequential",
+                      interval_seconds: materialized.retryManifest.intervalSeconds,
+                      max_attempts: materialized.retryManifest.maxAttempts,
+                    },
+                    retry_status:
+                      materialized.retryableFailures.length > 0
+                        ? "manifest_ready"
+                        : "no_retryable_failures",
+                    sequential_retry_interval_seconds:
+                      materialized.retryManifest.intervalSeconds,
+                  },
+                });
+                return textResponse(JSON.stringify(materialized, null, 2));
+              }
+              if (materialized.retryableFailures.length === 0) {
+                await setPaperIngestionState({
+                  projectRoot: resolvedProjectRoot,
+                  paperIngestion: {
+                    failed_papers: materialized.failures,
+                    retryable_failed_papers: [],
+                    non_retryable_failed_papers: materialized.nonRetryableFailures,
+                    last_failure_scan_at: new Date().toISOString(),
+                    last_retry_manifest_path: materialized.retryManifestPath,
+                    retry_status: "no_retryable_failures",
+                  },
+                });
+                const repairHandoff =
+                  materialized.failures.length > 0
+                    ? await routeWorkflowFailure({
+                        projectRoot: resolvedProjectRoot,
+                        projectId: snapshot.projectId,
+                        workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                        stage: snapshot.currentStage,
+                        originalOwner: snapshot.role,
+                        failureKind: "paper_ingestion_failed",
+                        failureReason:
+                          "PaperNexus failures remain but no retryable failed papers were found.",
+                        verificationRule: "paper_ingestion_retry",
+                      })
+                    : null;
+                return textResponse(
+                  JSON.stringify({ ...materialized, repairHandoff }, null, 2)
+                );
+              }
+              const queued = await queuePaperIngestionRequest({
+                projectRoot: resolvedProjectRoot,
+                paperIngestionRequest: {
+                  wrapper: "pn_batch_import.py",
+                  args: [
+                    "--manifest",
+                    materialized.retryManifestPath,
+                    "submit",
+                    "--sequential",
+                    "--interval",
+                    String(materialized.retryManifest.intervalSeconds),
+                  ],
+                  command_text: materialized.commandText,
+                  manifest_path: materialized.retryManifestPath,
+                  paper_count: materialized.retryableFailures.length,
+                  summary: `Sequentially retry ${materialized.retryableFailures.length} failed PaperNexus paper import(s).`,
+                  trigger_kind: "failed_paper_retry",
+                  status: "queued",
+                },
+              });
+              await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  failed_papers: materialized.failures,
+                  retryable_failed_papers: materialized.retryableFailures,
+                  non_retryable_failed_papers: materialized.nonRetryableFailures,
+                  last_failure_scan_at: new Date().toISOString(),
+                  last_retry_manifest_path: materialized.retryManifestPath,
+                  retry_policy: {
+                    mode: "sequential",
+                    interval_seconds: materialized.retryManifest.intervalSeconds,
+                    max_attempts: materialized.retryManifest.maxAttempts,
+                  },
+                  retry_status: "queued",
+                  retry_attempt_count: 0,
+                  sequential_retry_interval_seconds:
+                    materialized.retryManifest.intervalSeconds,
+                },
+              });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...materialized,
+                    queuedRequest: queued.request,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "get_paper_ingestion_retry_status": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifest = await readProjectManifestForRetry(resolvedProjectRoot);
+              const ingestionState = normalizePaperIngestionState(manifest.paper_ingestion);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    retryStatus: ingestionState.retryStatus,
+                    retryRunId: ingestionState.retryRunId,
+                    retryAttemptCount: ingestionState.retryAttemptCount,
+                    lastRetryManifestPath: ingestionState.lastRetryManifestPath,
+                    retryableFailedCount: ingestionState.retryableFailedPapers.length,
+                    nonRetryableFailedCount: ingestionState.nonRetryableFailedPapers.length,
+                    sequentialRetryIntervalSeconds:
+                      ingestionState.sequentialRetryIntervalSeconds,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "cancel_paper_ingestion_retry": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setPaperIngestionState({
+                projectRoot: resolvedProjectRoot,
+                paperIngestion: {
+                  retry_status: "cancelled",
+                  last_updated_at: new Date().toISOString(),
+                },
+              });
+              return textResponse(JSON.stringify(result.state, null, 2));
+            }
             case "queue_idea_catalyst_requisition": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await queueIdeaCatalystRequisition({
@@ -1804,6 +2698,214 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "get_task_graph": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowTaskGraphStore(resolvedProjectRoot);
+              return textResponse(
+                JSON.stringify(
+                  {
+                    path: getWorkflowTaskGraphPath(resolvedProjectRoot),
+                    summary: summarizeWorkflowTaskGraphStore(store),
+                    store,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "get_team_round": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowTeamRoundStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "claim_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for claim_task.");
+              }
+              if (!snapshot.role) {
+                throw new Error("Cannot determine the current workflow role for claim_task.");
+              }
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for claim_task.");
+              }
+              const claimed = await claimWorkflowTask({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+                role: snapshot.role,
+              });
+              if (claimed.claimed && claimed.task) {
+                await syncTeamRoundFromTaskGraph({
+                  projectRoot: resolvedProjectRoot,
+                  stage: snapshot.currentStage,
+                  leadRole: snapshot.ownerAgent ?? snapshot.role,
+                  sessionKey: ctx.sessionKey,
+                  claimedTaskId: claimed.task.taskId,
+                });
+              }
+              return textResponse(JSON.stringify(claimed, null, 2));
+            }
+            case "renew_task_lease": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for renew_task_lease.");
+              }
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for renew_task_lease.");
+              }
+              const renewed = await renewWorkflowTaskLease({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+              });
+              return textResponse(JSON.stringify(renewed, null, 2));
+            }
+            case "release_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for release_task.");
+              }
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for release_task.");
+              }
+              const released = await releaseWorkflowTaskClaim({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+              });
+              if (released.released) {
+                await releaseWorkflowTeamRoundSession({
+                  projectRoot: resolvedProjectRoot,
+                  sessionKey: ctx.sessionKey,
+                });
+                await syncTeamRoundFromTaskGraph({
+                  projectRoot: resolvedProjectRoot,
+                  stage: snapshot.currentStage,
+                  leadRole: snapshot.ownerAgent ?? snapshot.role,
+                });
+              }
+              return textResponse(JSON.stringify(released, null, 2));
+            }
+            case "complete_task": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              if (workflowPolicy.teamRuntime?.enabled === false) {
+                throw new Error("Workflow Team Runtime is disabled by policy.");
+              }
+              const taskId = readString(params.taskId);
+              if (!taskId) {
+                throw new Error("taskId is required for complete_task.");
+              }
+              if (!snapshot.role) {
+                throw new Error("Cannot determine the current workflow role for complete_task.");
+              }
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for complete_task.");
+              }
+              const receiptPayload = asObject(params.artifactReceipt);
+              const receipt = await createWorkflowArtifactReceipt({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                taskId,
+                handoffIntentId: readString(params.handoffIntentId),
+                producedByRole: snapshot.role,
+                producedBySessionKey: ctx.sessionKey,
+                stage: snapshot.currentStage,
+                summary:
+                  readString(receiptPayload?.summary) ??
+                  readString(params.completionNote) ??
+                  "Workflow task completion.",
+                completionNote: readString(params.completionNote),
+                changedFiles: Array.isArray(receiptPayload?.changedFiles)
+                  ? receiptPayload.changedFiles.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                artifactPaths: Array.isArray(receiptPayload?.artifactPaths)
+                  ? receiptPayload.artifactPaths.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                evidencePointers: Array.isArray(receiptPayload?.evidencePointers)
+                  ? receiptPayload.evidencePointers.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                verificationCommands: Array.isArray(receiptPayload?.verificationCommands)
+                  ? receiptPayload.verificationCommands.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                verificationResult:
+                  receiptPayload?.verificationResult === "passed" ||
+                  receiptPayload?.verificationResult === "failed" ||
+                  receiptPayload?.verificationResult === "not_run"
+                    ? receiptPayload.verificationResult
+                    : "not_run",
+                blockers: Array.isArray(receiptPayload?.blockers)
+                  ? receiptPayload.blockers.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                assumptions: Array.isArray(receiptPayload?.assumptions)
+                  ? receiptPayload.assumptions.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                nextSuggestedTaskIds: Array.isArray(receiptPayload?.nextSuggestedTaskIds)
+                  ? receiptPayload.nextSuggestedTaskIds.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+              });
+              const completion = await completeWorkflowTaskAndContinue({
+                projectRoot: resolvedProjectRoot,
+                taskId,
+                sessionKey: ctx.sessionKey,
+                role: snapshot.role,
+                completionNote: readString(params.completionNote),
+              });
+              if (!completion.verification.verified) {
+                await routeWorkflowFailure({
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId,
+                  workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                  stage: snapshot.currentStage,
+                  sourceTaskId: taskId,
+                  originalOwner: snapshot.role,
+                  failureKind: "verification_failed",
+                  failureReason:
+                    completion.verification.reason ??
+                    "Workflow task verification failed.",
+                  verificationRule: completion.task?.verificationRule ?? null,
+                });
+              } else {
+                await closeWorkflowRepairItemsForTask({
+                  projectRoot: resolvedProjectRoot,
+                  sourceTaskId: taskId,
+                });
+              }
+              if (completion.verification.verified && completion.nextTask?.owner) {
+                await createTaskUnlockedHandoffIntent({
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId,
+                  workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                  stage: snapshot.currentStage,
+                  fromRole: snapshot.role,
+                  fromSessionKey: ctx.sessionKey,
+                  toRole: completion.nextTask.owner,
+                  sourceTaskId: taskId,
+                  targetTaskId: completion.nextTask.taskId,
+                  artifactReceiptId: receipt.receipt.receiptId,
+                  summary: `Task ${taskId} completed; ${completion.nextTask.taskId} is ready.`,
+                  command: completion.nextTask.title,
+                });
+              }
+              await syncTeamRoundFromTaskGraph({
+                projectRoot: resolvedProjectRoot,
+                stage: snapshot.currentStage,
+                leadRole: snapshot.ownerAgent ?? snapshot.role,
+              });
+              return textResponse(JSON.stringify({ ...completion, artifactReceipt: receipt }, null, 2));
+            }
             case "dispatch_task": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               if (!snapshot.role) {
@@ -1881,6 +2983,44 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   toAgent,
                   channel: dispatch.channel ?? "sessions_send",
                 });
+                if (dispatch.sessionKey) {
+                  try {
+                    const claimedTask = await claimNextWorkflowTaskForOwner({
+                      projectRoot: resolvedProjectRoot,
+                      owner: toAgent,
+                      sessionKey: dispatch.sessionKey,
+                    });
+                    if (claimedTask.claimed && claimedTask.task) {
+                      await syncTeamRoundFromTaskGraph({
+                        projectRoot: resolvedProjectRoot,
+                        stage: snapshot.currentStage,
+                        leadRole: toAgent,
+                        sessionKey: dispatch.sessionKey,
+                        claimedTaskId: claimedTask.task.taskId,
+                      });
+                    } else {
+                      plugin.api.logger?.warn?.(
+                        "No matching workflow task was claimed after explicit dispatch_task.",
+                        {
+                          projectRoot: resolvedProjectRoot,
+                          owner: toAgent,
+                          stage: snapshot.currentStage,
+                          reason: claimedTask.reason,
+                        }
+                      );
+                    }
+                  } catch (error) {
+                    plugin.api.logger?.warn?.(
+                      "Failed to claim workflow task after explicit dispatch_task.",
+                      {
+                        projectRoot: resolvedProjectRoot,
+                        owner: toAgent,
+                        stage: snapshot.currentStage,
+                        error: error instanceof Error ? error.message : String(error),
+                      }
+                    );
+                  }
+                }
               }
               return textResponse(JSON.stringify(dispatch, null, 2));
             }
@@ -1978,6 +3118,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "record_experiment_runtime_signal": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await recordExperimentRuntimeSignal({
+                projectRoot: resolvedProjectRoot,
+                runtimeSignal: requireObject(
+                  params.experimentRuntimeSignal,
+                  "experimentRuntimeSignal"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "run_brainstorm_cycle": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await runBrainstormCycle({
@@ -2002,6 +3153,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getIdeaCatalystStateSummary({
                 projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_cross_domain_inspiration": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getCrossDomainInspirationStateSummary({
+                projectRoot: resolvedProjectRoot,
+                workflowLine: resolveSnapshotWorkflowLine(snapshot),
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
@@ -2044,6 +3203,81 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "run_idea_catalyst_research30": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const searchParams = asObject(params.ideaCatalystResearch30);
+              const depthValue = readString(searchParams?.depth);
+              const result = await runIdeaCatalystResearch30({
+                projectRoot: resolvedProjectRoot,
+                scoutingReportPath:
+                  readString(searchParams?.scoutingReportPath) ??
+                  readString(searchParams?.scouting_report_path),
+                requisitionPath:
+                  readString(searchParams?.requisitionPath) ??
+                  readString(searchParams?.requisition_path),
+                reportJsonPath:
+                  readString(searchParams?.reportJsonPath) ??
+                  readString(searchParams?.report_json_path),
+                reportMarkdownPath:
+                  readString(searchParams?.reportMarkdownPath) ??
+                  readString(searchParams?.report_markdown_path),
+                days:
+                  typeof searchParams?.days === "number"
+                    ? searchParams.days
+                    : typeof searchParams?.day_horizon === "number"
+                      ? searchParams.day_horizon
+                      : undefined,
+                sources:
+                  readString(searchParams?.sources) ??
+                  readString(searchParams?.source_mode),
+                depth:
+                  depthValue === "quick" ||
+                  depthValue === "default" ||
+                  depthValue === "deep"
+                    ? depthValue
+                    : undefined,
+                topK:
+                  typeof searchParams?.topK === "number"
+                    ? searchParams.topK
+                    : typeof searchParams?.top_k === "number"
+                      ? searchParams.top_k
+                      : undefined,
+                mock:
+                  searchParams?.mock === true || searchParams?.use_mock === true,
+                updateScoutReport:
+                  searchParams?.updateScoutReport === false ||
+                  searchParams?.update_scout_report === false
+                    ? false
+                    : true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "reconcile_authoring_closeout": {
+              const closeoutParams = asObject(params.authoringCloseout);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(closeoutParams?.projectRoot) ??
+                  readString(closeoutParams?.project_root),
+              });
+              const result = await reconcileAuthoringCloseout({
+                projectRoot: resolvedProjectRoot,
+                compilePdf:
+                  closeoutParams?.compilePdf === false ||
+                  closeoutParams?.compile_pdf === false
+                    ? false
+                    : true,
+                autoInjectConferenceCitations:
+                  closeoutParams?.autoInjectConferenceCitations === false ||
+                  closeoutParams?.auto_inject_conference_citations === false
+                    ? false
+                    : true,
+                currentStageOverride:
+                  readString(closeoutParams?.currentStageOverride) ??
+                  readString(closeoutParams?.current_stage_override),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "materialize_survey_review_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await materializeSurveyReviewState({
@@ -2079,6 +3313,65 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "set_cross_domain_inspiration": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setCrossDomainInspirationState({
+                projectRoot: resolvedProjectRoot,
+                patch: requireObject(
+                  params.crossDomainInspiration,
+                  "crossDomainInspiration"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_cross_domain_requisition":
+            case "queue_cross_domain_requisition": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const materialized = await materializeCrossDomainInspirationRequisition({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                force:
+                  asObject(params.crossDomainInspiration)?.force === true ||
+                  asObject(params.crossDomainInspiration)?.force_requisition === true,
+              });
+              if (
+                action === "queue_cross_domain_requisition" &&
+                materialized.created &&
+                materialized.requisitionPath
+              ) {
+                const queued = await queueLiteratureDiscoveryRequisition({
+                  projectRoot: resolvedProjectRoot,
+                  packetPath: materialized.requisitionPath,
+                  triggerKind: "cross_domain_literature_discovery",
+                  originStage: snapshot.currentStage,
+                  summary:
+                    "Workflow-owned cross-domain source-domain evidence acquisition.",
+                  requestIdPrefix: "cross-domain",
+                });
+                return textResponse(
+                  JSON.stringify({ ...materialized, queued }, null, 2)
+                );
+              }
+              return textResponse(JSON.stringify(materialized, null, 2));
+            }
+            case "materialize_cross_domain_bridge_artifacts": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload = asObject(params.crossDomainBridgeEvidence);
+              const evidenceItems = Array.isArray(payload?.bridgeEvidence)
+                ? payload.bridgeEvidence
+                : Array.isArray(payload?.bridge_evidence)
+                  ? payload.bridge_evidence
+                  : [];
+              const result = await materializeCrossDomainBridgeArtifacts({
+                projectRoot: resolvedProjectRoot,
+                evidenceItems: evidenceItems.filter(
+                  (entry): entry is Record<string, unknown> =>
+                    Boolean(entry && typeof entry === "object" && !Array.isArray(entry))
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getResearchProgramStateSummary({
@@ -2093,6 +3386,45 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 surveyReview: requireObject(params.surveyReview, "surveyReview"),
               });
               return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "recover_survey_route":
+            case "skip_experiment_stages_for_survey": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const manifestPath = path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json");
+              const manifest =
+                (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+              const surveyIdentity = ensureSurveyWorkflowIdentity({
+                ...manifest,
+                workflow_line: "survey",
+                paper_type: "survey",
+              });
+              const surveyReview = asObject(surveyIdentity.manifest.survey_review);
+              const nextManifest = {
+                ...manifest,
+                ...surveyIdentity.manifest,
+                current_stage: "survey_review",
+                current_micro_stage:
+                  readString(surveyReview?.current_phase) ?? "survey_route_recovery",
+                owner_agent: "researcher",
+                next_action:
+                  "Materialize survey_review state, then produce survey taxonomy, coverage matrix, and outline before write.",
+                blocking_reason: null,
+                updated_at: new Date().toISOString(),
+              };
+              await writeJsonAtomicEnsured(manifestPath, nextManifest);
+              return textResponse(
+                JSON.stringify(
+                  {
+	                    recovered: true,
+	                    action,
+	                    stage: nextManifest.current_stage,
+	                    workflowLine: (nextManifest as Record<string, unknown>).workflow_line,
+	                    paperType: (nextManifest as Record<string, unknown>).paper_type,
+	                  },
+                  null,
+                  2
+                )
+              );
             }
             case "set_research_program": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -2343,6 +3675,63 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "run_citation_calibration": {
+              const calibration = asObject(params.citationCalibration);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(calibration?.projectRoot) ??
+                  readString(calibration?.project_root) ??
+                  readString(calibration?.projectPath) ??
+                  readString(calibration?.project_path),
+              });
+              const result = await runCitationCalibration({
+                projectRoot: resolvedProjectRoot,
+                bibliographyPath:
+                  readString(calibration?.bibliographyPath) ??
+                  readString(calibration?.bibliography_path),
+                outputBibPath:
+                  readString(calibration?.outputBibPath) ??
+                  readString(calibration?.output_bib_path),
+                reportJsonPath:
+                  readString(calibration?.reportJsonPath) ??
+                  readString(calibration?.report_json_path),
+                reportMarkdownPath:
+                  readString(calibration?.reportMarkdownPath) ??
+                  readString(calibration?.report_markdown_path),
+                replaceArxiv:
+                  calibration?.replaceArxiv === true ||
+                  calibration?.replace_arxiv === true,
+                syncVerificationReport:
+                  calibration?.syncVerificationReport === false ||
+                  calibration?.sync_verification_report === false
+                    ? false
+                    : true,
+              });
+              const verificationStatus =
+                result.hallucinatedCount > 0 || result.suspiciousCount > 0
+                  ? "needs_revision"
+                  : "verified";
+              const verification = await recordCitationVerification({
+                projectRoot: resolvedProjectRoot,
+                citationVerification: {
+                  bibliography_path: result.outputBibPath,
+                  verification_report_path:
+                    result.verificationReportPath ?? "reviewer/CITATION_VERIFICATION.md",
+                  verification_status: verificationStatus,
+                  verified_citation_count: result.verifiedCount,
+                  suspicious_citation_count: result.suspiciousCount,
+                  hallucinated_citation_count: result.hallucinatedCount,
+                  pending_reason:
+                    verificationStatus === "verified"
+                      ? "Citation calibration completed cleanly."
+                      : "Citation calibration found suspicious or hallucinated entries.",
+                },
+              });
+              return textResponse(
+                JSON.stringify({ ...result, verification }, null, 2)
+              );
+            }
             case "get_paper_ingestion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getPaperIngestionStateSummary({
@@ -2590,6 +3979,24 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "evaluate_experiment_search_decision": {
+              const decisionParams = asObject(params.experimentSearchDecision);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(decisionParams?.projectRoot) ??
+                  readString(decisionParams?.project_root),
+              });
+              const result = await evaluateExperimentSearchDecisionForProject({
+                projectRoot: resolvedProjectRoot,
+                persist:
+                  decisionParams?.persist === false ||
+                  decisionParams?.write_back === false
+                    ? false
+                    : true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_experiment_git_review": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getExperimentGitReviewSummary({
@@ -2778,6 +4185,221 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "get_handoff_intents": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowHandoffIntentStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "ack_handoff_intent": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const handoffIntentId = readString(params.handoffIntentId);
+              const idempotencyKey = readString(params.messageId);
+              if (!handoffIntentId && !idempotencyKey) {
+                throw new Error("handoffIntentId or messageId/idempotencyKey is required.");
+              }
+              const handoffStore = await readWorkflowHandoffIntentStore(resolvedProjectRoot);
+              const currentIntent =
+                handoffStore.intents.find(
+                  (entry) =>
+                    (handoffIntentId && entry.intentId === handoffIntentId) ||
+                    (idempotencyKey && entry.idempotencyKey === idempotencyKey)
+                ) ?? null;
+              if (!currentIntent) {
+                throw new Error("handoff intent not found.");
+              }
+              const actorRole = snapshot.role ?? ctx.agentId ?? null;
+              const canAck =
+                actorRole === currentIntent.toRole ||
+                actorRole === "researcher" ||
+                actorRole === "admin" ||
+                (ctx.sessionKey && ctx.sessionKey === currentIntent.toSessionKey);
+              if (!canAck) {
+                throw new Error(
+                  `${actorRole ?? "unknown"} cannot acknowledge handoff for ${currentIntent.toRole}.`
+                );
+              }
+              const intent = await transitionWorkflowHandoffIntent({
+                projectRoot: resolvedProjectRoot,
+                intentId: handoffIntentId,
+                idempotencyKey,
+                toStatus: "acknowledged",
+                summary: `Handoff acknowledged by ${snapshot.role ?? ctx.agentId ?? "unknown"}.`,
+              });
+              return textResponse(JSON.stringify(intent, null, 2));
+            }
+            case "claim_handoff_intent": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const handoffIntentId = readString(params.handoffIntentId);
+              const idempotencyKey = readString(params.messageId);
+              if (!handoffIntentId && !idempotencyKey) {
+                throw new Error("handoffIntentId or messageId/idempotencyKey is required.");
+              }
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for claim_handoff_intent.");
+              }
+              const handoffStore = await readWorkflowHandoffIntentStore(resolvedProjectRoot);
+              const currentIntent =
+                handoffStore.intents.find(
+                  (entry) =>
+                    (handoffIntentId && entry.intentId === handoffIntentId) ||
+                    (idempotencyKey && entry.idempotencyKey === idempotencyKey)
+                ) ?? null;
+              if (!currentIntent) {
+                throw new Error("handoff intent not found.");
+              }
+              const actorRole = snapshot.role ?? ctx.agentId ?? null;
+              const canClaim =
+                actorRole === currentIntent.toRole ||
+                actorRole === "researcher" ||
+                actorRole === "admin" ||
+                ctx.sessionKey === currentIntent.toSessionKey;
+              if (!canClaim) {
+                throw new Error(
+                  `${actorRole ?? "unknown"} cannot claim handoff for ${currentIntent.toRole}.`
+                );
+              }
+              let claimedTask = null;
+              if (currentIntent.targetTaskId) {
+                claimedTask = await claimWorkflowTask({
+                  projectRoot: resolvedProjectRoot,
+                  taskId: currentIntent.targetTaskId,
+                  sessionKey: ctx.sessionKey,
+                  role: actorRole,
+                });
+                if (!claimedTask.claimed) {
+                  throw new Error(
+                    `Could not claim target task ${currentIntent.targetTaskId}: ${claimedTask.reason}`
+                  );
+                }
+              }
+              const capabilitySnapshot =
+                (await readWorkflowAgentCapabilityStore(resolvedProjectRoot)).records.find(
+                  (entry) => entry.sessionKey === ctx.sessionKey
+                ) ?? null;
+              const now = new Date();
+              const leaseMs = Math.max(60_000, Math.floor((readNumber(params.waitSeconds) ?? 900) * 1000));
+              const claimableIntent =
+                currentIntent.status === "delivered"
+                  ? (await transitionWorkflowHandoffIntent({
+                      projectRoot: resolvedProjectRoot,
+                      intentId: currentIntent.intentId,
+                      toStatus: "acknowledged",
+                      summary: `Handoff acknowledged before claim by ${actorRole ?? "unknown"}.`,
+                    })) ?? currentIntent
+                  : currentIntent;
+              if (claimableIntent.status !== "acknowledged") {
+                throw new Error(
+                  `handoff intent must be acknowledged before claim (current: ${claimableIntent.status}).`
+                );
+              }
+              const intent = await transitionWorkflowHandoffIntent({
+                projectRoot: resolvedProjectRoot,
+                intentId: claimableIntent.intentId,
+                toStatus: "claimed",
+                summary: `Handoff claimed by ${snapshot.role ?? ctx.agentId ?? "unknown"}.`,
+                patch: {
+                  toSessionKey: ctx.sessionKey ?? null,
+                  claimedAt: now.toISOString(),
+                  claimLeaseExpiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+                  payload: {
+                    ...(claimableIntent.payload ?? {}),
+                    claimedCapability: capabilitySnapshot,
+                    claimedTask,
+                  },
+                },
+              });
+              return textResponse(JSON.stringify(intent, null, 2));
+            }
+            case "fail_handoff_intent": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const handoffIntentId = readString(params.handoffIntentId);
+              const failure = asObject(params.failure);
+              const failureReason =
+                readString(failure?.failureReason) ??
+                readString(failure?.reason) ??
+                readString(params.completionNote) ??
+                "Handoff execution failed.";
+              const failureKind =
+                readString(failure?.failureKind) === "tool_unavailable"
+                  ? "tool_unavailable"
+                  : readString(failure?.failureKind) === "runtime_unavailable"
+                    ? "runtime_unavailable"
+                    : readString(failure?.failureKind) === "stale_claim"
+                      ? "stale_claim"
+                      : "verification_failed";
+              const routed = await routeWorkflowFailure({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                workflowLine: resolveSnapshotWorkflowLine(snapshot),
+                stage: snapshot.currentStage,
+                sourceIntentId: handoffIntentId,
+                originalOwner: snapshot.role,
+                failureKind,
+                failureReason,
+                verificationRule: readString(failure?.verificationRule),
+              });
+              if (handoffIntentId) {
+                await transitionWorkflowHandoffIntent({
+                  projectRoot: resolvedProjectRoot,
+                  intentId: handoffIntentId,
+                  toStatus: "failed",
+                  summary: failureReason,
+                });
+              }
+              return textResponse(JSON.stringify(routed, null, 2));
+            }
+            case "get_artifact_receipts": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowArtifactReceiptStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "get_repair_queue": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowRepairQueueStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "get_agent_capabilities": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const store = await readWorkflowAgentCapabilityStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "claim_write_scope": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const writeScope = asObject(params.writeScope);
+              if (!ctx.sessionKey) {
+                throw new Error("sessionKey is required for claim_write_scope.");
+              }
+              const result = await claimWorkflowWriteScope({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                taskId: readString(params.taskId),
+                sessionKey: ctx.sessionKey,
+                role: snapshot.role,
+                ownedDirs: Array.isArray(writeScope?.ownedDirs)
+                  ? writeScope.ownedDirs.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                exclusiveFiles: Array.isArray(writeScope?.exclusiveFiles)
+                  ? writeScope.exclusiveFiles.filter((entry): entry is string => typeof entry === "string")
+                  : [],
+                mode:
+                  writeScope?.mode === "append_only" ||
+                  writeScope?.mode === "exclusive_write" ||
+                  writeScope?.mode === "read_only"
+                    ? writeScope.mode
+                    : "read_only",
+                leaseTtlMs: readNumber(writeScope?.leaseTtlMs) ?? undefined,
+                override: writeScope?.override === true,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "release_stale_write_scopes": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const released = await releaseStaleWorkflowWriteScopes({
+                projectRoot: resolvedProjectRoot,
+              });
+              const store = await readWorkflowWriteScopeStore(resolvedProjectRoot);
+              return textResponse(JSON.stringify({ released, store }, null, 2));
+            }
             case "read_mailbox": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               if (!workflowPolicy.enableWorkflowMailbox) {
@@ -2875,10 +4497,22 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               throw new Error(`Unsupported research_workflow action: ${action}`);
             }
           } catch (error) {
+            actionFailed = true;
             await traceAction("failed", {
               error: error instanceof Error ? error.message : String(error),
             });
             throw error;
+          } finally {
+            if (genericInboundBudget) {
+              await recordWorkflowInboundTurnCompleted({
+                context: genericInboundBudget,
+                status: actionFailed
+                  ? "failed"
+                  : genericInboundBudget.isExhausted()
+                    ? "deferred"
+                    : "completed_inline",
+              }).catch(() => null);
+            }
           }
         };
 

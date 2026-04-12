@@ -21,8 +21,11 @@ import {
   acquireBackgroundWorkflowSession,
   getBackgroundWorkflowRunByQueueKey,
   recordBackgroundWorkflowRun,
-} from "./workflow-background-pool";
-import { readWorkflowAnnounceOutboxStore } from "./workflow-runtime-state.js";
+} from "./workflow-execution/background-pool";
+import {
+  readWorkflowAnnounceOutboxStore,
+  readWorkflowRuntimeSessionsStore,
+} from "./workflow-execution/runtime-store";
 import {
   orchestrateWorkflowTransition,
   recordWorkflowAnnounceEvent,
@@ -43,7 +46,7 @@ import {
   deriveAgentSessionKeyForRole,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
-import { handoffWorkflowTaskToAgent } from "./lobster-handoff";
+import { handoffWorkflowTaskToAgent } from "./workflow-execution/delivery-adapter";
 import { ensureWorkflowDispatchMailboxMessage } from "./workflow-handoff-runtime";
 import { maybeBroadcastWorkflowStatusUpdate } from "./stage-broadcast";
 import {
@@ -90,6 +93,26 @@ import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
+import {
+  claimNextWorkflowTaskForOwner,
+  releaseWorkflowTasksForSession,
+} from "./workflow-team/task-graph";
+import {
+  recordWorkflowTeamRoundClaim,
+  materializeWorkflowTeamRound,
+  readWorkflowTeamRoundStore,
+  releaseWorkflowTeamRoundSession,
+} from "./workflow-team/team-round";
+import { appendWorkflowRuntimeEvent } from "./workflow-execution/runtime-store";
+import {
+  getWorkflowTaskGraphPath,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "./workflow-team/task-graph";
+import {
+  createWorkflowReviewRoundHandoff,
+  recordWorkflowReviewRoundResults,
+} from "./workflow-handoff/review-rounds";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -105,6 +128,19 @@ type WorkflowCoordinatorProject = {
   updatedAt: string | null;
   channelKey: string | null;
 };
+
+const POOLED_SERVICE_ROLES = new Set([
+  "researcher",
+  "orchestrator",
+  "coder",
+  "analyzer",
+  "academic_writer",
+  "reviewer",
+]);
+
+function shouldUsePooledServiceSession(role: string | null | undefined): boolean {
+  return typeof role === "string" && POOLED_SERVICE_ROLES.has(role);
+}
 
 type WorkflowCoordinatorDependencies = {
   runWorkflowAutoIterator: typeof runWorkflowAutoIterator;
@@ -129,6 +165,54 @@ function resolveWorkflowCoordinatorDependencies(
       listChannelProjectBindingsForWorkflow,
     runWorkflowRuntimeMaintenancePass:
       overrides?.runWorkflowRuntimeMaintenancePass ?? runWorkflowRuntimeMaintenancePass,
+  };
+}
+
+const TEAM_CLAIM_RELEASE_SESSION_STATUSES = new Set(["completed", "failed", "needs_repair"]);
+
+export async function reconcileClaimedWorkflowTasksForProject(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<{
+  releasedTaskIds: string[];
+  releasedSessionKeys: string[];
+}> {
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot);
+  const staleSessionKeys = sessionsStore.entries
+    .filter((entry) => TEAM_CLAIM_RELEASE_SESSION_STATUSES.has(entry.status))
+    .map((entry) => entry.sessionKey);
+
+  const releasedTaskIds: string[] = [];
+  const releasedSessionKeys: string[] = [];
+
+  for (const sessionKey of staleSessionKeys) {
+    const released = await releaseWorkflowTasksForSession({
+      projectRoot: params.projectRoot,
+      sessionKey,
+    });
+    if (released.releasedTaskIds.length > 0) {
+      releasedTaskIds.push(...released.releasedTaskIds);
+      releasedSessionKeys.push(sessionKey);
+      await releaseWorkflowTeamRoundSession({
+        projectRoot: params.projectRoot,
+        sessionKey,
+      });
+      await appendWorkflowRuntimeEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId ?? null,
+        kind: "team_task_released",
+        summary: `Released ${released.releasedTaskIds.length} task claim(s) from ${sessionKey}.`,
+        details: {
+          sessionKey,
+          taskIds: released.releasedTaskIds,
+        },
+      });
+    }
+  }
+
+  return {
+    releasedTaskIds,
+    releasedSessionKeys,
   };
 }
 
@@ -757,7 +841,12 @@ function buildWorkflowCoordinatorDispatchSessionKeys(params: {
   segments?: Array<string | null | undefined>;
 }): string[] | undefined {
   if (params.owner !== "researcher") {
-    return undefined;
+    return [
+      deriveAgentSessionKeyForRole({
+        requesterSessionKey: params.requesterSessionKey ?? undefined,
+        targetRole: params.owner,
+      }),
+    ];
   }
   return [
     buildResearcherWorkflowSubagentSessionKey({
@@ -1593,6 +1682,33 @@ function isExperimentMonitorCommand(command: string | null | undefined): boolean
   return /\/monitor-experiment\b/i.test(command ?? "");
 }
 
+function buildAutoStageDispatchExtraBody(params: {
+  stage: string | null;
+  owner: string | null;
+  command: string | null;
+}): string {
+  if (params.stage === "experiment" && isExperimentMonitorCommand(params.command)) {
+    return "Workflow auto-mode experiment reconciliation dispatch. Treat this as reconciliation-first work: read watcher artifacts before shell polling, persist missing watcher signals with research_workflow.record_experiment_runtime_signal, and do not relaunch or widen the search envelope until the ledger and experiment_search are coherent.";
+  }
+  if (
+    params.stage === "experiment" &&
+    params.owner === "coder" &&
+    /repair|baseline|implementation|runtime/i.test(params.command ?? "")
+  ) {
+    return "Workflow auto-mode experiment repair dispatch. Stay inside bounded runtime / implementation repair, keep baseline fairness intact, avoid inventing new experiments, and hand back once the repair evidence is durable.";
+  }
+  if (
+    params.stage === "experiment" &&
+    params.owner === "researcher" &&
+    /(multi-seed|ablation|search neighborhood|bounded search|rollback)/i.test(
+      params.command ?? ""
+    )
+  ) {
+    return "Workflow auto-mode experiment decision dispatch. Execute only the requested multi-seed / ablation / bounded-search / rollback follow-up, keep the incumbent-vs-candidate history clean, and do not mix scientific judgment with unrelated runtime babysitting.";
+  }
+  return "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.";
+}
+
 async function launchWorkflowDispatchTransition(params: {
   runtimeSubagent: RuntimeSubagentApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -2032,13 +2148,13 @@ export async function maybeLaunchAutoStageForProject(params: {
           action.command,
         ],
       });
-      let researcherSessionLease:
+      let pooledSessionLease:
         | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
         | null = null;
-      if (action.owner === "researcher") {
-        researcherSessionLease = await acquireBackgroundWorkflowSession({
+      if (shouldUsePooledServiceSession(action.owner)) {
+        pooledSessionLease = await acquireBackgroundWorkflowSession({
           runtimeSubagent: params.runtimeSubagent,
-          ownerAgent: "researcher",
+          ownerAgent: action.owner,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           channelKey: requesterBinding.channelKey ?? undefined,
           preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
@@ -2048,10 +2164,10 @@ export async function maybeLaunchAutoStageForProject(params: {
           projectRoot: params.projectRoot,
           projectsRoot: params.workflowPolicy.projectsRoot,
         });
-        if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+        if (!pooledSessionLease.acquired || !pooledSessionLease.sessionKey) {
           await enqueueQueuedBackgroundWorkflowRun({
             source: "workflow_auto_stage",
-            ownerAgent: "researcher",
+            ownerAgent: action.owner,
             requesterSessionKey: defaultResearcherRequesterSessionKey,
             channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
@@ -2062,7 +2178,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             projectsRoot: params.workflowPolicy.projectsRoot,
             queueKey: launchKey,
             summary:
-              `Queued the ${action.stage ?? params.autoIteratorResult.stageAfter ?? "current"} stage handoff until an idle Researcher service session becomes available.`,
+              `Queued the ${action.stage ?? params.autoIteratorResult.stageAfter ?? "current"} stage handoff until an idle ${action.owner} service session becomes available.`,
             dispatchPayload: {
               requesterChannel: requesterBinding.messageChannel,
               requesterAccountId: null,
@@ -2077,7 +2193,11 @@ export async function maybeLaunchAutoStageForProject(params: {
               mailboxMessageId: action.mailboxMessageId ?? null,
               requireMailboxAcknowledgement: true,
               extraBody:
-                "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+                buildAutoStageDispatchExtraBody({
+                  stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+                  owner: action.owner,
+                  command: action.command,
+                }),
               waitTimeoutMs: 5000,
               retryOnTimeout: true,
               enableSpawnFallback: true,
@@ -2098,10 +2218,10 @@ export async function maybeLaunchAutoStageForProject(params: {
             runId: null,
             dispatchStrategy: null,
             launchKey,
-            error: `Researcher service session pool is at capacity for this channel (${researcherSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
+            error: `${action.owner} service session pool is at capacity for this channel (${pooledSessionLease.activeOwnerSessionsInChannel ?? pooledSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
-              researcherSessionLease.activeResearcherSessionsInChannel,
+              pooledSessionLease.activeResearcherSessionsInChannel,
           };
         }
       }
@@ -2117,9 +2237,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         requesterChannel: requesterBinding.messageChannel ?? undefined,
         requesterChannelKey: requesterBinding.channelKey ?? undefined,
         preferredSessionKeys:
-          action.owner === "researcher"
+          shouldUsePooledServiceSession(action.owner)
             ? [
-                researcherSessionLease?.sessionKey ??
+                pooledSessionLease?.sessionKey ??
                   preferredResearcherSessionKeys?.[0] ??
                   defaultResearcherRequesterSessionKey,
               ]
@@ -2132,7 +2252,11 @@ export async function maybeLaunchAutoStageForProject(params: {
         command: action.command,
         mailboxMessageId: action.mailboxMessageId ?? null,
         extraBody:
-          "Workflow auto-mode service dispatch. Continue only the assigned stage, keep durable state current, and do not skip stage completion checks.",
+          buildAutoStageDispatchExtraBody({
+            stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+            owner: action.owner,
+            command: action.command,
+          }),
         autoModeActive:
           (params.autoIteratorResult.effectiveAutoMode ??
             params.workflowPolicy.autoMode) !== "off",
@@ -2153,19 +2277,19 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: dispatchLaunch.error,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
-            researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
+            pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
         };
       }
 
       if (
-        action.owner === "researcher" &&
-        researcherSessionLease?.channelKey &&
+        shouldUsePooledServiceSession(action.owner) &&
+        pooledSessionLease?.channelKey &&
         dispatchLaunch.runId &&
         dispatchLaunch.sessionKey
       ) {
         await recordBackgroundWorkflowRun({
-          ownerAgent: "researcher",
-          channelKey: researcherSessionLease.channelKey,
+          ownerAgent: action.owner,
+          channelKey: pooledSessionLease.channelKey,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           backgroundSessionKey: dispatchLaunch.sessionKey,
           runId: dispatchLaunch.runId,
@@ -2182,6 +2306,68 @@ export async function maybeLaunchAutoStageForProject(params: {
         key: launchKey,
         launchedAt: Date.now(),
       });
+      if (params.workflowPolicy.teamRuntime?.enabled !== false && dispatchLaunch.sessionKey) try {
+        const claimedTask = await claimNextWorkflowTaskForOwner({
+          projectRoot: params.projectRoot,
+          owner: String(action.owner),
+          sessionKey: dispatchLaunch.sessionKey,
+        });
+        if (claimedTask.claimed && claimedTask.task) {
+          let teamRound = await recordWorkflowTeamRoundClaim({
+            projectRoot: params.projectRoot,
+            sessionKey: dispatchLaunch.sessionKey,
+            taskId: claimedTask.task.taskId,
+          });
+          if (!teamRound) {
+            const taskGraphStore = await readWorkflowTaskGraphStore(params.projectRoot);
+            const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+            if (taskGraphStore) {
+              await materializeWorkflowTeamRound({
+                projectRoot: params.projectRoot,
+                projectId: params.projectId ?? null,
+                stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+                leadRole: String(action.owner),
+                topTierVerdict: taskGraphStore.topTierVerdict,
+                evidenceCloseoutStatus: taskGraphStore.evidenceCloseoutStatus,
+                taskGraphPath: getWorkflowTaskGraphPath(params.projectRoot),
+                taskCount: taskGraphSummary.taskCount,
+                claimableCount: taskGraphSummary.claimableCount,
+                blockedCount: taskGraphSummary.blockedCount,
+                claimedCount: taskGraphSummary.claimedCount,
+                verifyingCount: taskGraphSummary.verifyingCount,
+                needsRepairCount: taskGraphSummary.needsRepairCount,
+                satisfiedCount: taskGraphSummary.satisfiedCount,
+                optionalCount: taskGraphSummary.optionalCount,
+              });
+              teamRound = await recordWorkflowTeamRoundClaim({
+                projectRoot: params.projectRoot,
+                sessionKey: dispatchLaunch.sessionKey,
+                taskId: claimedTask.task.taskId,
+              });
+            }
+          }
+          await appendWorkflowRuntimeEvent({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId ?? null,
+            kind: "team_task_claimed",
+            summary: `Auto-stage dispatch claimed ${claimedTask.task.taskId} for ${action.owner}.`,
+            details: {
+              taskId: claimedTask.task.taskId,
+              owner: action.owner,
+              sessionKey: dispatchLaunch.sessionKey,
+              stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+              launchKey,
+            },
+          });
+        }
+      } catch (error) {
+        params.logger?.warn?.("Failed to claim workflow task after auto-stage dispatch.", {
+          projectRoot: params.projectRoot,
+          owner: action.owner,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await recordWorkflowContactEvent({
         projectRoot: params.projectRoot,
         fromAgent: "researcher",
@@ -2200,9 +2386,9 @@ export async function maybeLaunchAutoStageForProject(params: {
         dispatchStrategy: dispatchLaunch.strategy,
         launchKey,
         error: null,
-        reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
+        reusedServiceSession: pooledSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
-          researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
+          pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
       };
     },
   });
@@ -2845,6 +3031,34 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           currentRound: nextRound,
         };
         await saveCodeReviewStore(params.projectRoot, nextStore);
+        if (nextRound.status !== "reviewing") {
+          await recordWorkflowReviewRoundResults({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            workflowLine: "experiment",
+            stage: "code",
+            results: nextRound.attempts
+              .filter((attempt) => attempt.result)
+              .map((attempt) => ({
+                reviewerRole: attempt.reviewerRole,
+                verdict:
+                  attempt.result?.verdict === "pass"
+                    ? "pass"
+                    : attempt.result?.verdict === "revise"
+                      ? "revise"
+                      : "block",
+                summary:
+                  attempt.result?.summary ??
+                  `${attempt.reviewerRole} code review ${attempt.result?.verdict ?? attempt.status}.`,
+                artifactPaths: attempt.result?.reviewedArtifacts ?? [],
+                blockers: [
+                  ...(attempt.result?.criticalBlockers ?? []),
+                  ...(attempt.result?.majorIssues ?? []),
+                ],
+              })),
+            nextOwnerOnPass: nextRound.aggregate?.approved ? "researcher" : null,
+          });
+        }
         return {
           launched: false,
           reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
@@ -2965,6 +3179,20 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         currentRound: round,
       };
       await saveCodeReviewStore(params.projectRoot, nextStore);
+      await Promise.all(
+        attempts.map((attempt) =>
+          createWorkflowReviewRoundHandoff({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            workflowLine: "experiment",
+            stage: "code",
+            fromRole: "orchestrator",
+            reviewerRole: attempt.reviewerRole,
+            subject: `Code innovation review for ${attempt.reviewerRole}`,
+            command: `Review packet: ${packet.packetPath}`,
+          })
+        )
+      );
       return {
         launched: true,
         reason: "started",
@@ -3344,8 +3572,8 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
                 requesterSessionKey: requesterSessionKey ?? undefined,
                 targetRole: reviewerRole,
               });
-        const researcherDiscussionQueueKey =
-          reviewerRole === "researcher"
+        const pooledDiscussionQueueKey =
+          shouldUsePooledServiceSession(reviewerRole)
             ? [
                 "auto-discussion",
                 params.projectId ?? path.basename(params.projectRoot),
@@ -3354,13 +3582,13 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
                 reviewerRole,
               ].join(":")
             : null;
-        let researcherSessionLease:
+        let pooledSessionLease:
           | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
           | null = null;
-        if (reviewerRole === "researcher") {
-          researcherSessionLease = await acquireBackgroundWorkflowSession({
+        if (shouldUsePooledServiceSession(reviewerRole)) {
+          pooledSessionLease = await acquireBackgroundWorkflowSession({
             runtimeSubagent: params.runtimeSubagent,
-            ownerAgent: "researcher",
+            ownerAgent: reviewerRole,
             requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
             channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: sessionKey,
@@ -3370,10 +3598,10 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             projectRoot: params.projectRoot,
             projectsRoot: params.workflowPolicy.projectsRoot,
           });
-          if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+          if (!pooledSessionLease.acquired || !pooledSessionLease.sessionKey) {
             await enqueueQueuedBackgroundWorkflowRun({
               source: "workflow_auto_discussion",
-              ownerAgent: "researcher",
+              ownerAgent: reviewerRole,
               requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
               channelKey: requesterBinding.channelKey ?? undefined,
               preferredSessionKey: sessionKey,
@@ -3382,9 +3610,9 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               projectId: params.projectId ?? undefined,
               projectRoot: params.projectRoot,
               projectsRoot: params.workflowPolicy.projectsRoot,
-              queueKey: researcherDiscussionQueueKey,
+              queueKey: pooledDiscussionQueueKey,
               summary:
-                "Queued the researcher auto discussion reviewer until an idle Researcher service session becomes available.",
+                `Queued the ${reviewerRole} auto discussion reviewer until an idle ${reviewerRole} service session becomes available.`,
               runPayload: {
                 message: buildAutoModeDiscussionPrompt({
                   projectRoot: params.projectRoot,
@@ -3411,13 +3639,13 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               stage: params.autoIteratorResult.stageAfter ?? null,
               riskLevel,
               activeResearcherSessionsInChannel:
-                researcherSessionLease.activeResearcherSessionsInChannel,
+                pooledSessionLease.activeResearcherSessionsInChannel,
             });
             attempts.push({
               reviewerRole,
               sessionKey: sessionKey ?? "",
               runId: null,
-              queueKey: researcherDiscussionQueueKey,
+              queueKey: pooledDiscussionQueueKey,
               status: "pending",
               launchedAt: nowIso(),
               completedAt: null,
@@ -3426,7 +3654,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             });
             continue;
           }
-          sessionKey = researcherSessionLease.sessionKey;
+          sessionKey = pooledSessionLease.sessionKey;
         }
         try {
           const queueKey = slugifyForIdempotency(
@@ -3464,10 +3692,10 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
                 "Auto discussion reviewer failed to launch through the workflow runtime."
             );
           }
-          if (reviewerRole === "researcher" && researcherSessionLease?.channelKey) {
+          if (shouldUsePooledServiceSession(reviewerRole) && pooledSessionLease?.channelKey) {
             await recordBackgroundWorkflowRun({
-              ownerAgent: "researcher",
-              channelKey: researcherSessionLease.channelKey,
+              ownerAgent: reviewerRole,
+              channelKey: pooledSessionLease.channelKey,
               requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
               backgroundSessionKey: sessionKey,
               runId: started.runId,
@@ -3482,7 +3710,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             reviewerRole,
             sessionKey,
             runId: started.runId,
-            queueKey: researcherDiscussionQueueKey,
+            queueKey: pooledDiscussionQueueKey,
             status: "pending",
             launchedAt: nowIso(),
             completedAt: null,
@@ -3494,7 +3722,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             reviewerRole,
             sessionKey,
             runId: null,
-            queueKey: researcherDiscussionQueueKey,
+            queueKey: pooledDiscussionQueueKey,
             status: "error",
             launchedAt: nowIso(),
             completedAt: nowIso(),
@@ -3672,13 +3900,13 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           params.autoIteratorResult.nextAction,
         ],
       });
-      let researcherSessionLease:
+      let pooledSessionLease:
         | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
         | null = null;
-      if (owner === "researcher") {
-        researcherSessionLease = await acquireBackgroundWorkflowSession({
+      if (shouldUsePooledServiceSession(owner)) {
+        pooledSessionLease = await acquireBackgroundWorkflowSession({
           runtimeSubagent: params.runtimeSubagent,
-          ownerAgent: "researcher",
+          ownerAgent: owner,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           channelKey: requesterBinding.channelKey ?? undefined,
           preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
@@ -3688,10 +3916,10 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           projectRoot: params.projectRoot,
           projectsRoot: params.workflowPolicy.projectsRoot,
         });
-        if (!researcherSessionLease.acquired || !researcherSessionLease.sessionKey) {
+        if (!pooledSessionLease.acquired || !pooledSessionLease.sessionKey) {
           await enqueueQueuedBackgroundWorkflowRun({
             source: "workflow_auto_mitigation",
-            ownerAgent: "researcher",
+            ownerAgent: owner,
             requesterSessionKey: defaultResearcherRequesterSessionKey,
             channelKey: requesterBinding.channelKey ?? undefined,
             preferredSessionKey: preferredResearcherSessionKeys?.[0] ?? null,
@@ -3702,7 +3930,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             projectsRoot: params.workflowPolicy.projectsRoot,
             queueKey: launchKey,
             summary:
-              "Queued the mitigation pass until an idle Researcher service session becomes available.",
+              `Queued the mitigation pass until an idle ${owner} service session becomes available.`,
             dispatchPayload: {
               requesterChannel: requesterBinding.messageChannel,
               requesterAccountId: null,
@@ -3746,10 +3974,10 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             sessionKey: null,
             runId: null,
             dispatchStrategy: null,
-            error: `Researcher service session pool is at capacity for this channel (${researcherSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
+            error: `${owner} service session pool is at capacity for this channel (${pooledSessionLease.activeOwnerSessionsInChannel ?? pooledSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
-              researcherSessionLease.activeResearcherSessionsInChannel,
+              pooledSessionLease.activeResearcherSessionsInChannel,
           };
         }
       }
@@ -3765,9 +3993,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         requesterChannel: requesterBinding.messageChannel ?? undefined,
         requesterChannelKey: requesterBinding.channelKey ?? undefined,
         preferredSessionKeys:
-          owner === "researcher"
+          shouldUsePooledServiceSession(owner)
             ? [
-                researcherSessionLease?.sessionKey ??
+                pooledSessionLease?.sessionKey ??
                   preferredResearcherSessionKeys?.[0] ??
                   defaultResearcherRequesterSessionKey,
               ]
@@ -3808,19 +4036,19 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           error: dispatchLaunch.error,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
-            researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
+            pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
         };
       }
 
       if (
-        owner === "researcher" &&
-        researcherSessionLease?.channelKey &&
+        shouldUsePooledServiceSession(owner) &&
+        pooledSessionLease?.channelKey &&
         dispatchLaunch.runId &&
         dispatchLaunch.sessionKey
       ) {
         await recordBackgroundWorkflowRun({
-          ownerAgent: "researcher",
-          channelKey: researcherSessionLease.channelKey,
+          ownerAgent: owner,
+          channelKey: pooledSessionLease.channelKey,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           backgroundSessionKey: dispatchLaunch.sessionKey,
           runId: dispatchLaunch.runId,
@@ -3855,9 +4083,9 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         runId: dispatchLaunch.runId,
         dispatchStrategy: dispatchLaunch.strategy,
         error: null,
-        reusedServiceSession: researcherSessionLease?.reusedIdleSession ?? false,
+        reusedServiceSession: pooledSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
-          researcherSessionLease?.activeResearcherSessionsInChannel ?? null,
+          pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
       };
     },
   });
@@ -3953,6 +4181,14 @@ export function createWorkflowCoordinatorService(
                   sessionKey: result.sessionKey,
                 };
               },
+            })
+          )
+        );
+        await Promise.all(
+          results.map((entry) =>
+            reconcileClaimedWorkflowTasksForProject({
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
             })
           )
         );

@@ -14,6 +14,9 @@
 | `/resume-pipeline` | 从 durable state 恢复 | 会话重启、上下文丢失、换频道 |
 | `/workflow-status` | 查看阶段、blocking reason、auto discussion | 排障与人工诊断 |
 | `/show-commands` | 列出可用 slash commands 与简介 | 刚接触系统，或不确定该用哪个入口 |
+| `/citation-calibrate` | 对当前项目运行 citation calibration | submit 前刷新引用真实性校验 |
+| `/authoring-closeout` | 对当前项目执行 deterministic closeout | 稿件已生成，但 workflow 状态或 QC 还没收口 |
+| `/survey-graph-build` | 运行后台 survey 图谱候选构建 | 主题相关、强去重、graph-missing 优先 |
 
 ## 2. `research_memory`
 
@@ -68,6 +71,8 @@
 - `upsert_experiment`
 - `refresh_gpu_monitor`
 - `get_gpu_monitor`
+- `record_experiment_runtime_signal`
+- `evaluate_experiment_search_decision`
 - `get_paper_qc`
 - `get_figure_qc`
 - `get_citation_collection`
@@ -78,11 +83,33 @@
 - 读取项目里的活跃 `REMOTE_RUN.json`
 - 通过 SSH 采集服务器 GPU 使用率与 `screen -ls`
 - 生成 durable 的 GPU monitor snapshot
-- 帮 Coder / Researcher 判断“run 还在忙”还是“GPU 已空闲，应该转去 `/monitor-experiment` 做 reconciliation”
+- 按显式优先级判断 completion：
+  - terminal watcher artifact
+  - stable `RESULT_SUMMARY.json`
+  - idle GPU + missing screen
+  - stale heartbeat timeout
+- 帮 Coder / Researcher 判断“run 还在忙”还是“应该转去 `/monitor-experiment` 做 reconciliation”
+
+`record_experiment_runtime_signal` / `evaluate_experiment_search_decision` 这一组是 experiment control-plane 的新核心：
+
+- `record_experiment_runtime_signal`
+  - 给 bundle 写 `RUN_HEARTBEAT.json` / `RUN_TERMINAL.json` / `RESULT_SUMMARY.json` / `FAILURE_SIGNATURE.json`
+  - 让 completion 检测不依赖 agent 在线
+- `evaluate_experiment_search_decision`
+  - 综合 `EXPERIMENT_SEARCH_SPEC.json`、`experiment_search`、`EXPERIMENT_LEDGER.json`、experiment review、experiment memory、GPU monitor
+  - 输出 `repair_implementation / continue_tuning / require_multi_seed / require_ablation / rollback_to_plan / rollback_to_idea / reconcile_runtime`
+  - promotion 现在也有 runtime hard guard：如果 recorded basis 只引用 configured `non_promotion_signals`，candidate 不能被 promote
 
 ## 4. 为什么 `auto_iterator_tick` 是最重要的入口
 
 只看命令表，容易误以为所有动作是平铺的。实际上 `auto_iterator_tick` 是把它们串起来的关键：它决定当前阶段该持有哪种工具动作、该 materialize 哪些 contract、是否应该回退到 `graph_build`、是否该等待人工。
+
+在 experiment 阶段，它现在还负责：
+
+- 根据 decision engine 把 bounded repair handoff 给 `Coder`
+- 把 multi-seed / ablation / reconcile handoff 回 `Researcher`
+- 在 active search envelope 下优先派发 `Coder /search-experiment`
+- 在 rollback 条件满足时显式回退到 `plan` / `idea` 并同步 `orchestration_state`
 
 ## 5. command / tool / skill 的关系
 
@@ -91,3 +118,12 @@
 - skill：面向角色的执行协议。
 
 理解这三层的关系后，排查问题会容易很多。很多表面上的“skill 没做好”，其实是 tool state 没准备好，或者 command 进入点选错了。
+
+补充一个真实调试经验：
+
+- workflow command handler 本身已经可以通过 repo-local fallback `scripts/run_local_workflow_command.mjs` 直接验证
+- 如果 non-interactive `openclaw agent` slash transport 继续 silent hang，优先区分：
+  - handler / workflow runtime 是否正常
+  - transport 本体是否异常
+
+这样就不会把 transport 问题误判成 workflow 主链问题。

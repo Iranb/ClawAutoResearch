@@ -58,6 +58,9 @@ import {
 } from "./workflow-coordination";
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
+import { claimNextWorkflowTaskForOwner } from "./workflow-team/task-graph";
+import { recordWorkflowTeamRoundClaim } from "./workflow-team/team-round";
+import { upsertWorkflowAgentCapability } from "./workflow-handoff/agent-capabilities";
 
 const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "researcher",
@@ -134,6 +137,10 @@ function looksLikeLiteratureReviewCommand(text: string | null | undefined): bool
 
 function looksLikeSurveyPipelineCommand(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\/survey-pipeline\b/i.test(text));
+}
+
+function looksLikePaperPlanCommand(text: string | null | undefined): boolean {
+  return Boolean(text && /^\s*\/paper-plan\b/i.test(text));
 }
 
 export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
@@ -608,6 +615,21 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         });
       }
       if (snapshot.projectRoot && snapshot.role) {
+        if (agentCtx.sessionKey) {
+          await upsertWorkflowAgentCapability({
+            projectRoot: snapshot.projectRoot,
+            projectId: snapshot.projectId,
+            sessionKey: agentCtx.sessionKey,
+            sessionId: agentCtx.sessionId,
+            role: snapshot.role,
+            agentId: agentCtx.agentId,
+            messageChannel: agentCtx.messageChannel,
+            canUseResearchWorkflow: true,
+            canReceiveNativeDispatch: true,
+            canRunExecPacket: true,
+            confidence: "high",
+          }).catch(() => null);
+        }
         await autoAcknowledgeWorkflowMailboxForAgent({
           projectRoot: snapshot.projectRoot,
           agentId: snapshot.role,
@@ -615,6 +637,28 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         });
       }
       const trigger = readString(hookCtx.trigger);
+      let heartbeatClaimedTaskId: string | null = null;
+      if (
+        trigger === "heartbeat" &&
+        workflowPolicy.teamRuntime?.enabled !== false &&
+        snapshot.projectRoot &&
+        snapshot.role &&
+        agentCtx.sessionKey
+      ) {
+        const claimed = await claimNextWorkflowTaskForOwner({
+          projectRoot: snapshot.projectRoot,
+          owner: snapshot.role,
+          sessionKey: agentCtx.sessionKey,
+        }).catch(() => null);
+        if (claimed?.claimed && claimed.task) {
+          heartbeatClaimedTaskId = claimed.task.taskId;
+          await recordWorkflowTeamRoundClaim({
+            projectRoot: snapshot.projectRoot,
+            sessionKey: agentCtx.sessionKey,
+            taskId: claimed.task.taskId,
+          }).catch(() => null);
+        }
+      }
       if (!workflowPolicy.injectWorkflowContext) {
         return;
       }
@@ -630,6 +674,22 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
           : null;
       const extraContext: string[] = [];
+      if (snapshot.currentStage === "survey_review" || snapshot.writingPaperMode === "survey") {
+        extraContext.push(
+          "[Survey Route Guard]",
+          "This is a survey workflow. Do not hand-edit PROJECT_MANIFEST.json.current_stage to skip stages, and do not create coder/experiments stubs or fake experiment manifests.",
+          "Use research_workflow.recover_survey_route or research_workflow.materialize_survey_review_state when the workflow drifts toward idea/plan/code/experiment/analyze.",
+          "[/Survey Route Guard]"
+        );
+      }
+      if (heartbeatClaimedTaskId) {
+        extraContext.push(
+          "[TeammateIdle Continuation]",
+          `A claimable workflow team task was assigned during heartbeat: ${heartbeatClaimedTaskId}.`,
+          "Continue that task now. When the durable outputs are ready, call research_workflow.complete_task with this taskId so verification can either mark it satisfied or return repair feedback, then auto-claim the next task if one is available.",
+          "[/TeammateIdle Continuation]"
+        );
+      }
       if (
         snapshot.role === "researcher" &&
         looksLikeResearchPipelineCommand(latestPromptLikeText) &&
@@ -690,6 +750,19 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           )}`,
           "After the tool returns, reply briefly that the background survey pipeline has started and stop. The background continuation will materialize the real survey packet.",
           "[/Slash Fast Path]"
+        );
+      } else if (
+        snapshot.role === "researcher" &&
+        snapshot.currentStage === "survey_review" &&
+        looksLikePaperPlanCommand(latestPromptLikeText)
+      ) {
+        extraContext.push(
+          "[Survey Paper Plan]",
+          "This is a survey workflow. Do not route /paper-plan through the experiment-paper plan/code/experiment stages.",
+          "First call research_workflow.materialize_survey_review_state to reconcile SURVEY_QUERY_REGISTRY.json, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, COVERAGE_SUMMARY.md, and SURVEY_BRIEF.md.",
+          "Then draft or update the survey outline/taxonomy plan under researcher/SURVEY_OUTLINE.md or academic_writer/PAPER_PLAN.md using the survey_review packet as the source of truth.",
+          "Do not create coder/experiments stubs or fake experiment manifests for survey papers.",
+          "[/Survey Paper Plan]"
         );
       } else if (
         snapshot.role &&

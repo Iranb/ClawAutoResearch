@@ -18,6 +18,143 @@ async function writeText(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
 }
 
+async function writeFakeResearch30Script(targetPath) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(
+    targetPath,
+    `#!/usr/bin/env python3
+import json
+import os
+from types import SimpleNamespace
+
+RESPONSES = {}
+payload_path = os.environ.get("OPENCLAW_RESEARCH30_FAKE_RESPONSES")
+if payload_path:
+    with open(payload_path, "r", encoding="utf-8") as handle:
+        RESPONSES = json.load(handle)
+
+class OpenAlexItem(dict):
+    pass
+
+class Report:
+    def __init__(self, topic, from_date, to_date, mode):
+        self.topic = topic
+        self.range_from = from_date
+        self.range_to = to_date
+        self.generated_at = "2026-04-12T00:00:00Z"
+        self.mode = mode
+        self.openalex = []
+        self.semanticscholar = []
+        self.pubmed = []
+        self.biorxiv = []
+        self.medrxiv = []
+        self.arxiv = []
+        self.huggingface = []
+        self.openalex_error = None
+        self.semanticscholar_error = None
+        self.pubmed_error = None
+        self.biorxiv_error = None
+        self.medrxiv_error = None
+        self.arxiv_error = None
+        self.huggingface_error = None
+
+    def to_dict(self):
+        return {
+            "topic": self.topic,
+            "range": {"from": self.range_from, "to": self.range_to},
+            "generated_at": self.generated_at,
+            "mode": self.mode,
+            "openalex": [dict(item) for item in self.openalex],
+            "semanticscholar": [],
+            "pubmed": [],
+            "biorxiv": [],
+            "medrxiv": [],
+            "arxiv": [],
+            "huggingface": [],
+        }
+
+def create_report(topic, from_date, to_date, mode):
+    return Report(topic, from_date, to_date, mode)
+
+class Normalize:
+    @staticmethod
+    def normalize_openalex_items(items, *_args):
+        return [OpenAlexItem(item) for item in items]
+    @staticmethod
+    def normalize_semanticscholar_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_biorxiv_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_arxiv_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_pubmed_items(items, *_args):
+        return []
+    @staticmethod
+    def normalize_huggingface_items(items, *_args):
+        return []
+    @staticmethod
+    def filter_by_date_range(items, *_args):
+        return items
+
+class Score:
+    @staticmethod
+    def score_openalex_items(items):
+        return items
+    @staticmethod
+    def score_semanticscholar_items(items):
+        return items
+    @staticmethod
+    def score_biorxiv_items(items):
+        return items
+    @staticmethod
+    def score_arxiv_items(items):
+        return items
+    @staticmethod
+    def score_pubmed_items(items):
+        return items
+    @staticmethod
+    def score_huggingface_items(items):
+        return items
+    @staticmethod
+    def sort_items(items):
+        return sorted(items, key=lambda item: -int(item.get("score", 0)))
+
+class Dedupe:
+    @staticmethod
+    def dedupe_within_source(items):
+        return items
+    @staticmethod
+    def dedupe_cross_source(items):
+        return items
+
+dates = SimpleNamespace(get_date_range=lambda days: ("2016-01-01", "2026-04-12"))
+env = SimpleNamespace(get_config=lambda: {})
+normalize = Normalize()
+score = Score()
+dedupe = Dedupe()
+schema = SimpleNamespace(create_report=create_report)
+
+def determine_sources(requested):
+    return {requested}
+
+def run_research(topic, sources_set, config, from_date, to_date, depth="default", mock=False, progress=None):
+    return {
+        "openalex": (RESPONSES.get(topic, []), None),
+        "semanticscholar": ([], None),
+        "pubmed": ([], None),
+        "biorxiv": ([], None),
+        "medrxiv": ([], None),
+        "arxiv": ([], None),
+        "huggingface": ([], None),
+    }
+`,
+    "utf8"
+  );
+}
+
 function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
   const api = {
@@ -420,6 +557,106 @@ test("research_workflow materialize_idea_catalyst_state prunes unsupported scout
   assert.equal(scoreboard.candidate_pool_status, "below_floor");
   assert.match(scoreboard.candidate_scarcity_reason ?? "", /graph|evidence|scarcity/i);
   assert.match(top3Summary, /Contribution hints:/i);
+});
+
+test("research_workflow run_idea_catalyst_research30 persists cross-domain search evidence and syncs scout summaries", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousResearch30Script = process.env.OPENCLAW_RESEARCH30_SCRIPT;
+  const previousResearch30Responses = process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
+  const fakeResearch30 = path.join(projectRoot, "research30", "scripts", "research30.py");
+  const fakeResponses = path.join(projectRoot, "research30-responses.json");
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    if (previousResearch30Script === undefined) delete process.env.OPENCLAW_RESEARCH30_SCRIPT;
+    else process.env.OPENCLAW_RESEARCH30_SCRIPT = previousResearch30Script;
+    if (previousResearch30Responses === undefined) delete process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES;
+    else process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = previousResearch30Responses;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeFakeResearch30Script(fakeResearch30);
+  await writeText(
+    fakeResponses,
+    `${JSON.stringify(
+      {
+        "Psychology memory preservation transferable principle Computer Science": [
+          {
+            title: "Metacontrol for Adaptive Memory",
+            authors: "A. Researcher",
+            abstract: "Psychology view on memory preservation and flexible control.",
+            doi: "10.1000/metacontrol",
+            url: "https://openalex.org/Wmetacontrol",
+            source_name: "Psych Review",
+            date: "2024-04-18",
+            score: 93,
+            why_relevant: "Direct transfer evidence",
+          },
+        ],
+        "Control Theory memory preservation transferable principle Computer Science": [
+          {
+            title: "Adaptive Regulation for Stable Controllers",
+            authors: "B. Researcher",
+            abstract: "Control-theoretic stabilization under changing evidence.",
+            doi: "10.1000/controller",
+            url: "https://openalex.org/Wcontroller",
+            source_name: "Control Letters",
+            date: "2023-11-03",
+            score: 89,
+            why_relevant: "Mechanism overlap",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_RESEARCH30_SCRIPT = fakeResearch30;
+  process.env.OPENCLAW_RESEARCH30_FAKE_RESPONSES = fakeResponses;
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_idea_catalyst_research30",
+    ideaCatalystResearch30: {
+      days: 3650,
+      depth: "quick",
+    },
+  });
+
+  assert.equal(result.queryCount >= 2, true);
+  assert.equal(result.scoutReportUpdated, true);
+
+  const report = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "RESEARCH30_SCOUT_REPORT.json"),
+      "utf8"
+    )
+  );
+  assert.equal(report.backend, "research30");
+  assert.equal(report.available, true);
+  assert.equal(Array.isArray(report.queries), true);
+
+  const scoutReport = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "SCOUTING_REPORT.json"),
+      "utf8"
+    )
+  );
+  assert.equal(scoutReport.research30_validation.backend, "research30");
+  const psychology = scoutReport.candidate_domains.find((entry) => entry.domain === "Psychology");
+  assert.equal(psychology.research30_validation.total_hits >= 1, true);
+  assert.equal(psychology.research30_validation.top_results[0].doi, "10.1000/metacontrol");
 });
 
 test("stage preflight materializes idea_catalyst after ideation_contract becomes ready", async (t) => {

@@ -11,6 +11,7 @@ import {
   maybeBroadcastWorkflowStatusUpdate,
 } from "../tools/stage-broadcast.ts";
 import { readWorkflowBroadcastOutboxStore } from "../tools/workflow-runtime-state.ts";
+import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 
 test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dispatch context", () => {
   const message = buildAutoIteratorStageBroadcastMessage({
@@ -47,6 +48,7 @@ test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dis
       strategy: "direct_session",
       channel: "sessions_send",
     },
+    handoffIntentId: "intent-123",
   });
 
   assert.match(message, /Workflow advanced: setup -> graph build/);
@@ -64,6 +66,8 @@ test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dis
     /Agent participation: orchestrator: task dispatched, via direct_session \| researcher: Refresh graph inputs and verify missing papers., command \/graph-build/
   );
   assert.match(message, /Dispatch: dispatched=yes, owner=orchestrator/);
+  assert.match(message, /Handoff Intent: intent-123/);
+  assert.match(message, /ack_handoff_intent/);
 });
 
 test("isWorkflowStageBroadcastMessage recognizes rendered stage updates", () => {
@@ -95,45 +99,52 @@ test("maybeBroadcastAutoIteratorStageChange skips when the stage is unchanged", 
 });
 
 test("maybeBroadcastAutoIteratorStageChange posts a deliverable nested run when the stage changes", async () => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
+  );
   const calls = [];
-  const result = await maybeBroadcastAutoIteratorStageChange({
-    runtimeSubagent: {
-      async run(params) {
-        calls.push(params);
-        return { runId: "broadcast-run-1" };
+  try {
+    const result = await maybeBroadcastAutoIteratorStageChange({
+      runtimeSubagent: {
+        async run(params) {
+          calls.push(params);
+          return { runId: "broadcast-run-1" };
+        },
       },
-    },
-    sessionKey: "agent:researcher:discord:group:paper-lab",
-    projectId: "demo-project",
-    projectRoot: "/tmp/demo-project",
-    stageBefore: "frontier_mapping",
-    stageAfter: "idea",
-    stageChanged: true,
-    ownerBefore: "researcher",
-    ownerAfter: "researcher",
-    nextAction: "/idea-phase",
-    blockingReason: null,
-    regressed: false,
-    recommendedActions: [
-      {
-        kind: "drive_stage",
-        owner: "researcher",
-        stage: "idea",
-        summary: "Advance to ideation with the refreshed graph.",
-        command: "/idea-phase",
-        blocking: false,
-      },
-    ],
-  });
+      sessionKey: "agent:researcher:discord:group:paper-lab",
+      projectId: "demo-project",
+      projectRoot,
+      stageBefore: "frontier_mapping",
+      stageAfter: "idea",
+      stageChanged: true,
+      ownerBefore: "researcher",
+      ownerAfter: "researcher",
+      nextAction: "/idea-phase",
+      blockingReason: null,
+      regressed: false,
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "idea",
+          summary: "Advance to ideation with the refreshed graph.",
+          command: "/idea-phase",
+          blocking: false,
+        },
+      ],
+    });
 
-  assert.equal(result.broadcasted, true);
-  assert.equal(result.runId, "broadcast-run-1");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].sessionKey, "agent:researcher:discord:group:paper-lab");
-  assert.equal(calls[0].lane, "nested");
-  assert.equal(calls[0].deliver, true);
-  assert.match(calls[0].message, /WORKFLOW_STAGE_BROADCAST=1/);
-  assert.match(calls[0].extraSystemPrompt, /synthetic workflow stage-change broadcast/i);
+    assert.equal(result.broadcasted, true);
+    assert.equal(result.runId, "broadcast-run-1");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].sessionKey, "agent:researcher:discord:group:paper-lab");
+    assert.equal(calls[0].lane, "nested");
+    assert.equal(calls[0].deliver, true);
+    assert.match(calls[0].message, /WORKFLOW_STAGE_BROADCAST=1/);
+    assert.match(calls[0].extraSystemPrompt, /synthetic workflow stage-change broadcast/i);
+  } finally {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  }
 });
 
 test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local broadcast outbox", async (t) => {
@@ -176,4 +187,126 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
   assert.equal(outbox.entries.length, 1);
   assert.equal(outbox.entries[0].status, "recovered_after_restart");
   assert.equal(outbox.entries[0].deliveryStatus, "delivered");
+});
+
+test("maybeBroadcastAutoIteratorStageChange short-circuits duplicate broadcast idempotency", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const base = {
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: `broadcast-run-${calls.length}` };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    stageBefore: "plan",
+    stageAfter: "code",
+    stageChanged: true,
+    ownerBefore: "orchestrator",
+    ownerAfter: "coder",
+    nextAction: "/code-phase",
+    blockingReason: null,
+  };
+
+  const first = await maybeBroadcastAutoIteratorStageChange(base);
+  const second = await maybeBroadcastAutoIteratorStageChange(base);
+
+  assert.equal(first.broadcasted, true);
+  assert.equal(second.broadcasted, false);
+  assert.equal(second.reasonSkipped, "duplicate_delivered");
+  assert.equal(calls.length, 1);
+});
+
+test("maybeBroadcastAutoIteratorStageChange records Discord inbound timeout as incident", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await maybeBroadcastAutoIteratorStageChange({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("Discord inbound worker timed out.");
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    stageBefore: "plan",
+    stageAfter: "code",
+    stageChanged: true,
+    ownerBefore: "orchestrator",
+    ownerAfter: "coder",
+    nextAction: "/code-phase",
+    blockingReason: null,
+  });
+
+  assert.equal(result.broadcasted, false);
+  assert.equal(result.reasonSkipped, "runtime_error");
+  const incidents = await readWorkflowRuntimeIncidentsStore(projectRoot, "demo-project");
+  assert.equal(incidents.entries.length, 1);
+  assert.equal(incidents.entries[0].kind, "discord_inbound_timeout");
+});
+
+test("maybeBroadcastAutoIteratorStageChange supersedes stale pending/failed stage broadcasts", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
+  );
+  let shouldFail = true;
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await maybeBroadcastAutoIteratorStageChange({
+    runtimeSubagent: {
+      async run() {
+        if (shouldFail) throw new Error("temporary broadcast failure");
+        return { runId: "run-ok" };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    stageBefore: "code",
+    stageAfter: "plan",
+    stageChanged: true,
+    ownerBefore: "coder",
+    ownerAfter: "orchestrator",
+    nextAction: "/plan",
+    blockingReason: null,
+  });
+  shouldFail = false;
+  await maybeBroadcastAutoIteratorStageChange({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "run-ok" };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    stageBefore: "plan",
+    stageAfter: "code",
+    stageChanged: true,
+    ownerBefore: "orchestrator",
+    ownerAfter: "coder",
+    nextAction: "/code",
+    blockingReason: null,
+  });
+
+  const outbox = await readWorkflowBroadcastOutboxStore(projectRoot);
+  assert.equal(outbox.entries[0].deliveryStatus, "superseded");
+  assert.equal(outbox.entries[1].deliveryStatus, "delivered");
 });

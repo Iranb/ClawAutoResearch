@@ -4,6 +4,10 @@ import {
   getIdeaCatalystRequiredArtifactPaths,
   isIdeaCatalystReadyForPlan,
 } from "../idea-catalyst/workflow-bridge";
+import {
+  evaluateCrossDomainInspirationGate,
+  normalizeCrossDomainInspirationState,
+} from "../idea-catalyst/cross-domain-contract";
 import type {
   ManifestLike,
   StageSignalsContext,
@@ -143,6 +147,22 @@ export async function collectIdeaStageMissingSignals(
 
   const ideaCatalyst = deps.normalizeIdeaCatalystState(ctx.manifest?.idea_catalyst);
   missing.push(...deps.getIdeaCatalystValidationErrors(ideaCatalyst));
+  if (
+    ctx.manifest?.cross_domain_inspiration &&
+    typeof ctx.manifest.cross_domain_inspiration === "object"
+  ) {
+    const crossDomain = normalizeCrossDomainInspirationState(
+      ctx.manifest.cross_domain_inspiration
+    );
+    const crossDomainGate = evaluateCrossDomainInspirationGate({
+      state: crossDomain,
+      workflowLine: "experiment",
+      headlineClaim: true,
+    });
+    if (!crossDomainGate.ready) {
+      missing.push(...crossDomainGate.blockers);
+    }
+  }
   const requisitionBlockingSignal =
     getIdeaCatalystRequisitionBlockingSignal(ideaCatalyst);
   if (requisitionBlockingSignal) {

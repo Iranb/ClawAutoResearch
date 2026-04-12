@@ -15,6 +15,7 @@ type ExperimentSearchStateLike = {
   trackId: string | null;
   currentMainStage: string | null;
   currentSubstage: string | null;
+  validationStage: string | null;
   searchSessionId: string | null;
   searchSpecPath: string | null;
   searchStatePath: string | null;
@@ -45,6 +46,15 @@ type ExperimentSearchStateLike = {
   lastGitOpResult: string | null;
   lastDecision: string | null;
   multiSeedStatus: string;
+  baselineFairnessStatus: string;
+  implementationConfidence: string;
+  searchExhaustionStatus: string;
+  ablationStatus: string;
+  innovationStatus: string;
+  decisionConfidence: string;
+  recommendedNextAction: string | null;
+  failureClusterIds: string[];
+  evidenceCleanlinessStatus: string;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
@@ -67,6 +77,8 @@ type OrchestrationStateLike = {
   nextTransitionCandidate: string | null;
   blockingCategory: string | null;
   blockingReason: string | null;
+  rollbackReasonCategory: string | null;
+  rollbackEvidenceSummary: string | null;
   retryBudgetRemaining: number | null;
   lastContractEvalAt: string | null;
   lastContractEvalResult: string | null;
@@ -190,6 +202,8 @@ export function normalizeExperimentSearchState(
       normalizeStage(record.currentMainStage ?? record.current_main_stage) ?? null,
     currentSubstage:
       normalizeStage(record.currentSubstage ?? record.current_substage) ?? null,
+    validationStage:
+      normalizeStage(record.validationStage ?? record.validation_stage) ?? null,
     searchSessionId: pickString(record, ["searchSessionId", "search_session_id"]),
     searchSpecPath: pickString(record, ["searchSpecPath", "search_spec_path"]),
     searchStatePath: pickString(record, ["searchStatePath", "search_state_path"]),
@@ -278,6 +292,38 @@ export function normalizeExperimentSearchState(
     multiSeedStatus:
       normalizeStage(record.multiSeedStatus ?? record.multi_seed_status) ??
       "pending",
+    baselineFairnessStatus:
+      normalizeStage(
+        record.baselineFairnessStatus ?? record.baseline_fairness_status
+      ) ?? "unknown",
+    implementationConfidence:
+      normalizeStage(
+        record.implementationConfidence ?? record.implementation_confidence
+      ) ?? "unknown",
+    searchExhaustionStatus:
+      normalizeStage(
+        record.searchExhaustionStatus ?? record.search_exhaustion_status
+      ) ?? "unknown",
+    ablationStatus:
+      normalizeStage(record.ablationStatus ?? record.ablation_status) ??
+      "pending",
+    innovationStatus:
+      normalizeStage(record.innovationStatus ?? record.innovation_status) ??
+      "unknown",
+    decisionConfidence:
+      normalizeStage(record.decisionConfidence ?? record.decision_confidence) ??
+      "unknown",
+    recommendedNextAction: pickString(record, [
+      "recommendedNextAction",
+      "recommended_next_action",
+    ]),
+    failureClusterIds: asStringArray(
+      record.failureClusterIds ?? record.failure_cluster_ids
+    ),
+    evidenceCleanlinessStatus:
+      normalizeStage(
+        record.evidenceCleanlinessStatus ?? record.evidence_cleanliness_status
+      ) ?? "unknown",
     evaluationSummaryPath: pickString(record, [
       "evaluationSummaryPath",
       "evaluation_summary_path",
@@ -347,6 +393,16 @@ export function serializeExperimentSearchState(
     last_git_op_result: state.lastGitOpResult,
     last_decision: state.lastDecision,
     multi_seed_status: state.multiSeedStatus,
+    validation_stage: state.validationStage,
+    baseline_fairness_status: state.baselineFairnessStatus,
+    implementation_confidence: state.implementationConfidence,
+    search_exhaustion_status: state.searchExhaustionStatus,
+    ablation_status: state.ablationStatus,
+    innovation_status: state.innovationStatus,
+    decision_confidence: state.decisionConfidence,
+    recommended_next_action: state.recommendedNextAction,
+    failure_cluster_ids: state.failureClusterIds,
+    evidence_cleanliness_status: state.evidenceCleanlinessStatus,
     evaluation_summary_path: state.evaluationSummaryPath,
     plot_pack_status: state.plotPackStatus,
     plot_pack_path: state.plotPackPath,
@@ -380,6 +436,14 @@ export function normalizeOrchestrationState(
       "blocking_category",
     ]),
     blockingReason: pickString(record, ["blockingReason", "blocking_reason"]),
+    rollbackReasonCategory: pickString(record, [
+      "rollbackReasonCategory",
+      "rollback_reason_category",
+    ]),
+    rollbackEvidenceSummary: pickString(record, [
+      "rollbackEvidenceSummary",
+      "rollback_evidence_summary",
+    ]),
     retryBudgetRemaining: pickNumber(record, [
       "retryBudgetRemaining",
       "retry_budget_remaining",
@@ -413,6 +477,8 @@ export function serializeOrchestrationState(
     next_transition_candidate: value.nextTransitionCandidate,
     blocking_category: value.blockingCategory,
     blocking_reason: value.blockingReason,
+    rollback_reason_category: value.rollbackReasonCategory,
+    rollback_evidence_summary: value.rollbackEvidenceSummary,
     retry_budget_remaining: value.retryBudgetRemaining,
     last_contract_eval_at: value.lastContractEvalAt,
     last_contract_eval_result: value.lastContractEvalResult,

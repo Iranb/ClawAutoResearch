@@ -160,6 +160,9 @@ export async function setExperimentSearchState(params: {
     currentSubstage:
       normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
       current.currentSubstage,
+    validationStage:
+      normalizeStage(patch.validationStage ?? patch.validation_stage) ??
+      current.validationStage,
     searchSessionId:
       pickString(patch, ["searchSessionId", "search_session_id"]) ??
       current.searchSessionId,
@@ -232,7 +235,44 @@ export async function setExperimentSearchState(params: {
     lastGitOpResult:
       pickString(patch, ["lastGitOpResult", "last_git_op_result"]) ??
       current.lastGitOpResult,
+    lastDecision:
+      pickString(patch, ["lastDecision", "last_decision"]) ??
+      current.lastDecision,
     multiSeedStatus: inferredMultiSeedStatus,
+    baselineFairnessStatus:
+      normalizeStage(
+        patch.baselineFairnessStatus ?? patch.baseline_fairness_status
+      ) ?? current.baselineFairnessStatus,
+    implementationConfidence:
+      normalizeStage(
+        patch.implementationConfidence ?? patch.implementation_confidence
+      ) ?? current.implementationConfidence,
+    searchExhaustionStatus:
+      normalizeStage(
+        patch.searchExhaustionStatus ?? patch.search_exhaustion_status
+      ) ?? current.searchExhaustionStatus,
+    ablationStatus:
+      normalizeStage(patch.ablationStatus ?? patch.ablation_status) ??
+      current.ablationStatus,
+    innovationStatus:
+      normalizeStage(patch.innovationStatus ?? patch.innovation_status) ??
+      current.innovationStatus,
+    decisionConfidence:
+      normalizeStage(patch.decisionConfidence ?? patch.decision_confidence) ??
+      current.decisionConfidence,
+    recommendedNextAction:
+      pickString(patch, [
+        "recommendedNextAction",
+        "recommended_next_action",
+      ]) ?? current.recommendedNextAction,
+    failureClusterIds:
+      patch.failureClusterIds || patch.failure_cluster_ids
+        ? asStringArray(patch.failureClusterIds ?? patch.failure_cluster_ids)
+        : current.failureClusterIds,
+    evidenceCleanlinessStatus:
+      normalizeStage(
+        patch.evidenceCleanlinessStatus ?? patch.evidence_cleanliness_status
+      ) ?? current.evidenceCleanlinessStatus,
     evaluationSummaryPath,
     plotPackStatus,
     plotPackPath,
@@ -365,6 +405,16 @@ export async function setPaperIngestionState(params: {
   const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
   const batchItemsRaw = patch.batch_items ?? patch.batchItems;
   const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
+  const patchState = normalizePaperIngestionState(patch);
+  const hasFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "failedPapers");
+  const hasRetryableFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "retryable_failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "retryableFailedPapers");
+  const hasNonRetryableFailedPapersPatch =
+    Object.prototype.hasOwnProperty.call(patch, "non_retryable_failed_papers") ||
+    Object.prototype.hasOwnProperty.call(patch, "nonRetryableFailedPapers");
   const completedPaperUpdate = mergeCompletedPaperEntries({
     current: current.completedPapers,
     patch: completedPapersRaw,
@@ -408,6 +458,32 @@ export async function setPaperIngestionState(params: {
     activeBatches: batchRunUpdate.activeBatches,
     batchItems: batchItemUpdate.batchItems,
     queuedRequests: queuedRequestUpdate.queuedRequests,
+    failedPapers: hasFailedPapersPatch ? patchState.failedPapers : current.failedPapers,
+    retryableFailedPapers: hasRetryableFailedPapersPatch
+      ? patchState.retryableFailedPapers
+      : current.retryableFailedPapers,
+    nonRetryableFailedPapers: hasNonRetryableFailedPapersPatch
+      ? patchState.nonRetryableFailedPapers
+      : current.nonRetryableFailedPapers,
+    lastFailureScanAt:
+      pickString(patch, ["lastFailureScanAt", "last_failure_scan_at"]) ??
+      current.lastFailureScanAt,
+    lastRetryManifestPath:
+      pickString(patch, ["lastRetryManifestPath", "last_retry_manifest_path"]) ??
+      current.lastRetryManifestPath,
+    retryPolicy: patchState.retryPolicy ?? current.retryPolicy,
+    retryRunId:
+      pickString(patch, ["retryRunId", "retry_run_id"]) ?? current.retryRunId,
+    retryStatus:
+      pickString(patch, ["retryStatus", "retry_status"]) ?? current.retryStatus,
+    retryAttemptCount:
+      pickNumber(patch, ["retryAttemptCount", "retry_attempt_count"]) ??
+      current.retryAttemptCount,
+    sequentialRetryIntervalSeconds:
+      pickNumber(patch, [
+        "sequentialRetryIntervalSeconds",
+        "sequential_retry_interval_seconds",
+      ]) ?? current.sequentialRetryIntervalSeconds,
     lastBatchManifestPath:
       pickString(patch, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
       batchRunUpdate.activeBatches[batchRunUpdate.activeBatches.length - 1]?.manifestPath ??

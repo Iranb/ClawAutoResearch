@@ -193,6 +193,64 @@ test("before_prompt_build auto-acknowledges pending handoff mailbox items for th
   assert.equal(typeof mailbox.messages[0].acknowledgedAt, "string");
 });
 
+test("before_prompt_build maps /paper-plan to survey-native planning for survey workflows", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-hook-survey-paper-plan-")
+  );
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-survey-tpami-2026",
+    workflow_line: "survey",
+    paper_type: "survey",
+    current_stage: "survey_review",
+    owner_agent: "researcher",
+    writing_contract: { paper_mode: "survey" },
+    survey_review: {
+      topic: "GCD survey",
+      status: "searching",
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
+
+  const result = await beforePromptBuild(
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "/paper-plan" }],
+        },
+      ],
+    },
+    {
+      agentId: "researcher",
+      workspaceDir: projectRoot,
+      sessionKey: "agent:researcher:dashboard:main",
+      sessionId: "session-researcher",
+      messageChannel: "main",
+      trigger: "user",
+    }
+  );
+
+  assert.match(result?.prependContext ?? "", /\[Survey Paper Plan\]/);
+  assert.match(result?.prependContext ?? "", /materialize_survey_review_state/);
+  assert.match(result?.prependContext ?? "", /Do not create coder\/experiments stubs/i);
+});
+
 test("before_prompt_build follows the explicit dashboard channel binding instead of a generic main session", async (t) => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-dashboard-binding-"));
   const projectsRoot = path.join(workspaceRoot, "projects");

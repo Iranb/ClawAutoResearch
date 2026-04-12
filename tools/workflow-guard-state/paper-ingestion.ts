@@ -11,9 +11,11 @@ import type {
   PaperIngestionBatchItem,
   PaperIngestionBatchRun,
   PaperIngestionCompletedPaper,
+  PaperIngestionFailedPaper,
   PaperIngestionQueueProgress,
   PaperIngestionPaperOperation,
   PaperIngestionQueuedRequest,
+  PaperIngestionRetryPolicy,
   PaperIngestionRemoteTaskProgress,
   PaperIngestionState,
 } from "../workflow-guard.js";
@@ -219,6 +221,119 @@ function normalizePaperIngestionQueuedRequestStatus(
   }
 }
 
+function normalizePaperIngestionRetryPolicy(value: unknown): PaperIngestionRetryPolicy | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const intervalSeconds = pickNumber(record, ["intervalSeconds", "interval_seconds"]) ?? 45;
+  const maxAttempts = pickNumber(record, ["maxAttempts", "max_attempts"]) ?? 3;
+  return {
+    mode: normalizeStage(record.mode) === "batch" ? "batch" : "sequential",
+    intervalSeconds: Math.max(1, Math.floor(intervalSeconds)),
+    maxAttempts: Math.max(1, Math.floor(maxAttempts)),
+  };
+}
+
+function serializePaperIngestionRetryPolicy(
+  value: PaperIngestionRetryPolicy | null
+): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  return {
+    mode: value.mode,
+    interval_seconds: value.intervalSeconds,
+    max_attempts: value.maxAttempts,
+  };
+}
+
+function normalizePaperIngestionFailedPaper(value: unknown): PaperIngestionFailedPaper | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const paperId = pickString(record, ["paperId", "paper_id", "canonicalId", "canonical_id"]);
+  const title = pickString(record, ["title", "paperTitle", "paper_title"]);
+  const sourceKey = pickString(record, ["sourceKey", "source_key"]);
+  const inputPath = pickString(record, ["inputPath", "input_path", "path"]);
+  const failureMessage = pickString(record, [
+    "failureMessage",
+    "failure_message",
+    "error",
+    "message",
+    "detail",
+  ]);
+  if (!paperId && !title && !sourceKey && !inputPath && !failureMessage) {
+    return null;
+  }
+  return {
+    paperId,
+    title,
+    sourceKey,
+    inputPath,
+    failureSignature:
+      pickString(record, ["failureSignature", "failure_signature"]) ?? failureMessage,
+    failureMessage,
+    failedAt: pickString(record, ["failedAt", "failed_at", "updatedAt", "updated_at"]),
+    retryable: record.retryable === true,
+    retryReason: pickString(record, ["retryReason", "retry_reason"]),
+    alreadyInGraph: record.alreadyInGraph === true || record.already_in_graph === true,
+    lastRetryAt: pickString(record, ["lastRetryAt", "last_retry_at"]),
+    retryCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["retryCount", "retry_count"]) ?? 0)
+    ),
+  };
+}
+
+function normalizePaperIngestionFailedPapers(value: unknown): PaperIngestionFailedPaper[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: PaperIngestionFailedPaper[] = [];
+  for (const item of value) {
+    const normalized = normalizePaperIngestionFailedPaper(item);
+    if (!normalized) {
+      continue;
+    }
+    const key =
+      normalized.paperId ?? normalized.sourceKey ?? normalized.inputPath ?? normalized.title;
+    const existingIndex = entries.findIndex(
+      (entry) => key && key === (entry.paperId ?? entry.sourceKey ?? entry.inputPath ?? entry.title)
+    );
+    if (existingIndex >= 0) {
+      entries[existingIndex] = {
+        ...entries[existingIndex],
+        ...normalized,
+        retryCount: Math.max(entries[existingIndex].retryCount, normalized.retryCount),
+      };
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function serializePaperIngestionFailedPaper(
+  value: PaperIngestionFailedPaper
+): Record<string, unknown> {
+  return {
+    paper_id: value.paperId,
+    title: value.title,
+    source_key: value.sourceKey,
+    input_path: value.inputPath,
+    failure_signature: value.failureSignature,
+    failure_message: value.failureMessage,
+    failed_at: value.failedAt,
+    retryable: value.retryable,
+    retry_reason: value.retryReason,
+    already_in_graph: value.alreadyInGraph,
+    last_retry_at: value.lastRetryAt,
+    retry_count: value.retryCount,
+  };
+}
+
 function normalizePaperIngestionValidationStatus(
   value: unknown
 ): PaperIngestionValidationStatus {
@@ -242,6 +357,11 @@ export function normalizePaperIngestionState(value: unknown): PaperIngestionStat
   const activeBatchesRaw = record.active_batches ?? record.activeBatches;
   const batchItemsRaw = record.batch_items ?? record.batchItems;
   const queuedRequestsRaw = record.queued_requests ?? record.queuedRequests;
+  const failedPapersRaw = record.failed_papers ?? record.failedPapers;
+  const retryableFailedPapersRaw =
+    record.retryable_failed_papers ?? record.retryableFailedPapers;
+  const nonRetryableFailedPapersRaw =
+    record.non_retryable_failed_papers ?? record.nonRetryableFailedPapers;
   const activeBatches = normalizePaperIngestionBatchRuns(activeBatchesRaw);
   const batchItems = normalizePaperIngestionBatchItems(batchItemsRaw);
   return {
@@ -262,6 +382,28 @@ export function normalizePaperIngestionState(value: unknown): PaperIngestionStat
     activeBatches,
     batchItems,
     queuedRequests: normalizePaperIngestionQueuedRequests(queuedRequestsRaw),
+    failedPapers: normalizePaperIngestionFailedPapers(failedPapersRaw),
+    retryableFailedPapers: normalizePaperIngestionFailedPapers(retryableFailedPapersRaw),
+    nonRetryableFailedPapers: normalizePaperIngestionFailedPapers(nonRetryableFailedPapersRaw),
+    lastFailureScanAt: pickString(record, ["lastFailureScanAt", "last_failure_scan_at"]),
+    lastRetryManifestPath: pickString(record, [
+      "lastRetryManifestPath",
+      "last_retry_manifest_path",
+    ]),
+    retryPolicy: normalizePaperIngestionRetryPolicy(
+      record.retryPolicy ?? record.retry_policy
+    ),
+    retryRunId: pickString(record, ["retryRunId", "retry_run_id"]),
+    retryStatus: pickString(record, ["retryStatus", "retry_status"]),
+    retryAttemptCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["retryAttemptCount", "retry_attempt_count"]) ?? 0)
+    ),
+    sequentialRetryIntervalSeconds:
+      pickNumber(record, [
+        "sequentialRetryIntervalSeconds",
+        "sequential_retry_interval_seconds",
+      ]) ?? null,
     lastBatchManifestPath:
       pickString(record, ["lastBatchManifestPath", "last_batch_manifest_path"]) ??
       activeBatches[activeBatches.length - 1]?.manifestPath ??
@@ -295,6 +437,20 @@ export function serializePaperIngestionState(
     active_batches: value.activeBatches.map(serializePaperIngestionBatchRun),
     batch_items: value.batchItems.map(serializePaperIngestionBatchItem),
     queued_requests: value.queuedRequests.map(serializePaperIngestionQueuedRequest),
+    failed_papers: value.failedPapers.map(serializePaperIngestionFailedPaper),
+    retryable_failed_papers: value.retryableFailedPapers.map(
+      serializePaperIngestionFailedPaper
+    ),
+    non_retryable_failed_papers: value.nonRetryableFailedPapers.map(
+      serializePaperIngestionFailedPaper
+    ),
+    last_failure_scan_at: value.lastFailureScanAt,
+    last_retry_manifest_path: value.lastRetryManifestPath,
+    retry_policy: serializePaperIngestionRetryPolicy(value.retryPolicy),
+    retry_run_id: value.retryRunId,
+    retry_status: value.retryStatus,
+    retry_attempt_count: value.retryAttemptCount,
+    sequential_retry_interval_seconds: value.sequentialRetryIntervalSeconds,
     last_batch_manifest_path: value.lastBatchManifestPath,
     graph_version_seen: value.graphVersionSeen,
     reconcile_required: value.reconcileRequired,

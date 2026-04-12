@@ -8,6 +8,13 @@ import {
   ensureWorkflowDispatchMailboxMessage,
   waitForWorkflowMailboxAcknowledgement,
 } from "./workflow-handoff-runtime";
+import { isExecApprovalRequiredError } from "./workflow-execution/exec-budget";
+import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
+import {
+  downgradeWorkflowAgentCapability,
+  readWorkflowAgentCapabilityStore,
+  selectWorkflowCapableSession,
+} from "./workflow-handoff/agent-capabilities";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -372,6 +379,14 @@ async function runSingleDispatchAttempt(params: {
       },
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (/tool.+unavailable|unknown tool|not available|permission denied/i.test(errorMessage)) {
+      await downgradeWorkflowAgentCapability({
+        projectRoot: params.projectRoot,
+        sessionKey: params.sessionKey,
+        reason: errorMessage,
+      }).catch(() => null);
+    }
     return {
       accepted: false,
       attempt: {
@@ -382,7 +397,9 @@ async function runSingleDispatchAttempt(params: {
         dispatched: false,
         acceptedByMailbox: false,
         acceptedByTranscript: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: isExecApprovalRequiredError(error)
+          ? `exec_packet_required: ${errorMessage}`
+          : errorMessage,
       },
     };
   }
@@ -424,6 +441,15 @@ export async function dispatchWorkflowTaskToAgent(params: {
   }
   const requireMailboxAcknowledgement =
     params.requireMailboxAcknowledgement !== false;
+  const execPayload = await materializeExecPacketIfNeeded({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    stage: params.stage,
+    ownerRole: params.toRole,
+    commandText: params.command,
+    extraBody: params.extraBody,
+    budgetKind: "dispatch_command",
+  });
 
   const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
     projectRoot: params.projectRoot,
@@ -432,8 +458,8 @@ export async function dispatchWorkflowTaskToAgent(params: {
     projectId: params.projectId,
     stage: params.stage,
     summary: params.summary,
-    command: params.command,
-    extraBody: params.extraBody,
+    command: execPayload.commandForDispatch || params.command,
+    extraBody: execPayload.extraBodyForDispatch,
     existingMessageId: params.mailboxMessageId,
   });
 
@@ -444,15 +470,27 @@ export async function dispatchWorkflowTaskToAgent(params: {
     toRole: params.toRole,
     stage: params.stage,
     summary: params.summary,
-    command: params.command,
+    command: execPayload.commandForDispatch || params.command,
     mailboxMessageId,
-    extraBody: params.extraBody,
+    extraBody: execPayload.extraBodyForDispatch,
   });
   const attempts: WorkflowTaskDispatchAttempt[] = [];
   const dispatchBatchId = randomUUID();
   const preferredCandidates = Array.isArray(params.preferredSessionKeys)
     ? uniqueStrings(params.preferredSessionKeys)
     : [];
+  const capabilityStore = await readWorkflowAgentCapabilityStore(params.projectRoot).catch(
+    () => null
+  );
+  const roleCapabilityRecords =
+    capabilityStore?.records.filter(
+      (entry) => entry.role === params.toRole || entry.agentId === params.toRole
+    ) ?? [];
+  const capableSession = await selectWorkflowCapableSession({
+    projectRoot: params.projectRoot,
+    role: params.toRole,
+    requiresResearchWorkflow: true,
+  }).catch(() => null);
   const dedicatedPapernexusSessionKey =
     preferredCandidates.length === 0 &&
     looksLikePapernexusHeavyCommand(params.command ?? params.summary)
@@ -466,7 +504,11 @@ export async function dispatchWorkflowTaskToAgent(params: {
         })
       : null;
   const candidates =
-    preferredCandidates.length > 0
+    capableSession
+      ? uniqueStrings([capableSession.sessionKey, ...preferredCandidates])
+      : roleCapabilityRecords.length > 0
+        ? []
+    : preferredCandidates.length > 0
       ? preferredCandidates
       : dedicatedPapernexusSessionKey
         ? [dedicatedPapernexusSessionKey]

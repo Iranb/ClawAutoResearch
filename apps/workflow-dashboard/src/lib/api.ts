@@ -33,6 +33,56 @@ export type ProjectDetailSummary = {
   surveyProgressSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
+  topTierVerdict: string | null;
+  teamRoundLead: string | null;
+  teamRoundActiveSessions: number | null;
+  teamRoundLastClaimedTaskId: string | null;
+  teamRoundLastCompletedTaskId: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphBlockedCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphVerifyingCount: number | null;
+  teamTaskGraphNeedsRepairCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
+  pendingHandoffCount: number;
+  failedHandoffCount: number;
+  unackedHandoffCount: number;
+  repairQueueCount: number;
+  staleClaimCount: number;
+  capabilityWarnings: number;
+  activeWriteScopeCount: number;
+  taskBoard: Array<{
+    taskId: string;
+    title: string;
+    owner: string | null;
+    status: string;
+    claimant: string | null;
+    dependsOn: string[];
+    verificationStatus: string;
+    latestEvent: string | null;
+    latestEventAt: string | null;
+  }>;
+  evidenceBoard: {
+    benchmarkProtocolStatus: string | null;
+    benchmarkProtocolLocked: boolean;
+    statisticalEvidenceStatus: string | null;
+    statisticalEvidenceClaimStrength: string | null;
+    venueCompetitionStatus: string | null;
+    venueCompetitionGraphContextStatus: string | null;
+    ablationEvidenceStatus: string | null;
+    ablationEvidenceSufficiency: string | null;
+    mechanismEvidenceStatus: string | null;
+    mechanismEvidenceGraphContextStatus: string | null;
+    reproducibilityPackStatus: string | null;
+    reproducibilityEnvironmentStatus: string | null;
+    cameraReadyEvidenceStatus: string | null;
+    cameraReadyFiguresStatus: string | null;
+    cameraReadyTablesStatus: string | null;
+    cameraReadyCaptionsStatus: string | null;
+    topTierVerdict: string | null;
+    evidenceCloseoutStatus: string | null;
+  };
   source: Array<"manifest" | "papernexus_progress" | "fallback">;
 };
 
@@ -46,7 +96,17 @@ export type ArtifactDescriptor = {
     | "runtime_queue"
     | "runtime_sessions"
     | "runtime_events"
-    | "runtime_trace";
+    | "runtime_trace"
+    | "handoff_intents"
+    | "handoff_events"
+    | "handoff_receipts"
+    | "repair_queue"
+    | "agent_capabilities"
+    | "write_scopes"
+    | "inbound_turns"
+    | "e2e_report"
+    | "e2e_artifact_checklist"
+    | "e2e_state_timeline";
   label: string;
   path: string;
   kind: "json" | "jsonl" | "markdown" | "text";

@@ -22,11 +22,11 @@ import {
   DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
   getWorkflowLiteratureDiscoveryNeed,
 } from "../literature-discovery/materializer";
+import { inspectPapernexusBridgeArtifacts } from "../workflow-evidence/papernexus-bridge";
 import { hasActiveLiteratureDiscoveryRequest } from "../literature-discovery/workflow-bridge";
 import { isLiteratureDiscoveryTriggerKind } from "../literature-discovery/workflow-bridge";
 import { materializeCycleMemory } from "../research-memory-cycle";
 import {
-  DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH,
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
@@ -666,31 +666,10 @@ async function shouldMaterializePapernexusPacketContracts(params: {
   if (!params.stage || !PAPERNEXUS_PACKET_PREP_STAGES.has(params.stage)) {
     return false;
   }
-  const mechanismPacketPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json"
-  );
-  const challengePacketPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json"
-  );
-  const storylinePacketPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    "researcher/papernexus/GRAPH_STORYLINE_PACKET.json"
-  );
-  const ideaCatalystBundlePath = resolveProjectArtifactPath(
-    params.projectRoot,
-    DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH
-  );
-  if (
-    (mechanismPacketPath && (await pathExists(mechanismPacketPath))) ||
-    (challengePacketPath && (await pathExists(challengePacketPath))) ||
-    (storylinePacketPath && (await pathExists(storylinePacketPath))) ||
-    (ideaCatalystBundlePath && (await pathExists(ideaCatalystBundlePath)))
-  ) {
-    return true;
-  }
-  return false;
+  const artifacts = await inspectPapernexusBridgeArtifacts({
+    projectRoot: params.projectRoot,
+  });
+  return artifacts.anyArtifactsPresent;
 }
 
 async function shouldQueueLiteratureDiscoveryRequisition(params: {

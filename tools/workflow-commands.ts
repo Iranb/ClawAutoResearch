@@ -18,6 +18,10 @@ import {
   setResearchProgramState,
   unbindChannelProjectForWorkflow,
 } from "./workflow-guard.js";
+import { runIdeaCatalystResearch30 } from "./research30/bridge";
+import { runCitationCalibration } from "./research-writing/citation-calibration";
+import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
+import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
 import {
   buildGraphBuildBackgroundCommand,
   buildLiteratureReviewBackgroundCommand,
@@ -111,6 +115,10 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   runWorkflowAutoIterator,
   startBackgroundWorkflowRun,
   unbindChannelProjectForWorkflow,
+  runIdeaCatalystResearch30,
+  runCitationCalibration,
+  stagePapernexusRemoteSources,
+  reconcileAuthoringCloseout,
 };
 
 let cachedConversationRuntime:
@@ -309,8 +317,28 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "查看当前阶段、owner、blockers、auto mode 与 runtime health。",
   },
   {
+    label: COMMAND_LABELS.survey_graph_build,
+    intro: "后台执行 survey 图谱构建前置搜集：强调主题相关、强去重、优先找图里没有的论文。",
+  },
+  {
     label: COMMAND_LABELS.show_commands,
     intro: "列出当前可用的 slash commands 和用途说明。",
+  },
+  {
+    label: COMMAND_LABELS.idea_catalyst_search,
+    intro: "运行 IDEA-CATALYST 的跨域 research30 检索，并把结果回写到 scouting report。",
+  },
+  {
+    label: COMMAND_LABELS.citation_calibrate,
+    intro: "运行当前项目的 citation calibration，并更新 reviewer 侧验证报告。",
+  },
+  {
+    label: COMMAND_LABELS.papernexus_stage_remote,
+    intro: "把本地 staged PDF/Markdown 上传到远端 PaperNexus staging，并生成 remote manifest。",
+  },
+  {
+    label: COMMAND_LABELS.authoring_closeout,
+    intro: "对当前论文项目做写作 closeout：补 citation/review/QC 状态并尝试生成 PDF。",
   },
 ];
 
@@ -361,6 +389,88 @@ async function resolveExistingWorkflowProjectSelection(params: {
   return {
     projectId,
     projectRoot,
+  };
+}
+
+function hasCommandFlag(commandText: string | undefined, flag: string): boolean {
+  return Boolean(commandText && new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`, "i").test(commandText));
+}
+
+function readNumericFlag(commandText: string | undefined, flag: string): number | null {
+  if (!commandText) {
+    return null;
+  }
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = commandText.match(new RegExp(`${escaped}\\s+(\\d+)`, "i"));
+  return match?.[1] ? Number.parseInt(match[1], 10) : null;
+}
+
+function readFlagValue(commandText: string | undefined, flag: string): string | null {
+  if (!commandText) {
+    return null;
+  }
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = commandText.match(
+    new RegExp(`${escaped}\\s+(?:"([^"]+)"|'([^']+)'|(\\S+))`, "i")
+  );
+  return readString(match?.[1] ?? match?.[2] ?? match?.[3]) ?? null;
+}
+
+async function resolveProjectRootForProjectBoundCommand(params: {
+  api: WorkflowCommandApi;
+  ctx: PluginCommandContext;
+  deps: WorkflowCommandDependencies;
+  explicitArgument?: string | null;
+}) {
+  const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(params.api));
+  const target = resolveWorkflowCommandSessionTarget(
+    params.api,
+    params.ctx,
+    params.deps.resolveConversationBindingRecord
+  );
+  const targetSessionKey = target.sessionKey;
+  const explicitArgument = readString(params.explicitArgument);
+  if (explicitArgument) {
+    if (path.isAbsolute(explicitArgument)) {
+      return {
+        projectRoot: path.resolve(explicitArgument),
+        projectId: path.basename(path.resolve(explicitArgument)),
+        workflowPolicy,
+        target,
+      };
+    }
+    const explicitProject = await resolveExistingWorkflowProjectSelection({
+      workflowPolicy,
+      projectId: explicitArgument,
+    }).catch(() => null);
+    if (explicitProject) {
+      return {
+        projectRoot: explicitProject.projectRoot,
+        projectId: explicitProject.projectId,
+        workflowPolicy,
+        target,
+      };
+    }
+  }
+  if (!targetSessionKey) {
+    throw new Error("This slash command requires a workflow-bound conversation or an explicit project path/project id.");
+  }
+  const snapshot = await params.deps.buildWorkflowSnapshot({
+    policy: workflowPolicy,
+    agentId: target.agentId ?? undefined,
+    workspaceDir: target.workspaceDir ?? undefined,
+    sessionKey: targetSessionKey,
+    messageChannel: params.ctx.channel,
+    channelKey: target.bindingChannelKey ?? undefined,
+  });
+  if (!snapshot.projectRoot) {
+    throw new Error("The current conversation is not bound to a workflow project.");
+  }
+  return {
+    projectRoot: snapshot.projectRoot,
+    projectId: snapshot.projectId ?? path.basename(snapshot.projectRoot),
+    workflowPolicy,
+    target,
   };
 }
 
@@ -846,6 +956,257 @@ function createShowCommandsCommandHandler() {
   });
 }
 
+function createSurveyGraphBuildCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.survey_graph_build;
+    try {
+      const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      const target = resolveWorkflowCommandSessionTarget(
+        api,
+        ctx,
+        deps.resolveConversationBindingRecord
+      );
+      const targetSessionKey = target.sessionKey;
+      if (!targetSessionKey) {
+        return {
+          text:
+            `❌ ${commandLabel} requires a resolved workflow session for this conversation. ` +
+            "Run it from a Researcher-bound conversation.",
+        };
+      }
+      const targetRole = inferTargetRoleFromToolParams({
+        agentId: target.agentId ?? undefined,
+        sessionKey: targetSessionKey,
+      });
+      if (targetRole !== "researcher") {
+        return {
+          text:
+            `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
+            `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
+        };
+      }
+
+      const snapshot = await deps.buildWorkflowSnapshot({
+        policy: workflowPolicy,
+        agentId: target.agentId ?? undefined,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: targetSessionKey,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
+      });
+
+      const topic = extractQuotedSegment(ctx.args) ?? snapshot.projectId ?? "survey graph build";
+      const result = await deps.startBackgroundWorkflowRun({
+        runtimeSubagent: api.runtime?.subagent,
+        workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: target.workspaceDir ?? undefined,
+          sessionKey: targetSessionKey,
+          sessionId: undefined,
+          messageChannel: ctx.channel,
+          channelKey: target.bindingChannelKey ?? undefined,
+        },
+        snapshot,
+        backgroundRun: {
+          kind: "literature_review",
+          commandText: buildLiteratureReviewBackgroundCommand(
+            `/literature-review "${topic}"`
+          ),
+          topic,
+          title: topic,
+          projectId: snapshot.projectId ?? undefined,
+          projectRoot: snapshot.projectRoot ?? undefined,
+          summary:
+            `Background survey graph build started for ${snapshot.projectId ?? topic}.`,
+          extraSystemPrompt: [
+            "This continuation is running the dedicated /survey-graph-build flow.",
+            "Goal: build a topic-focused survey graph candidate set without blocking the main workflow.",
+            "Hard priorities:",
+            "1. Prefer papers that are strongly relevant to the requested topic or survey scope.",
+            "2. Deduplicate aggressively by canonical identity, DOI, arXiv id, and normalized title before recommending or staging anything.",
+            "3. Prefer papers that appear to be missing from the current shared graph or missing from the project's durable survey packet.",
+            "4. Do not churn the graph with near-duplicates, weakly related papers, or papers already well covered in the current graph unless they upgrade canonical quality.",
+            "5. Materialize a durable packet under {PROJ}/researcher/ describing included candidates, dedupe decisions, likely-missing-in-graph targets, and suggested next import actions.",
+            "Required outputs:",
+            "- {PROJ}/researcher/SURVEY_GRAPH_BUILD_PACKET.md",
+            "- {PROJ}/researcher/SURVEY_GRAPH_BUILD_CANDIDATES.json",
+            "- {PROJ}/researcher/SURVEY_GRAPH_BUILD_DEDUPE_LOG.json",
+            "- {PROJ}/researcher/SURVEY_GRAPH_BUILD_MISSING_IN_GRAPH.json",
+            "Execution guidance:",
+            "- Reuse the current literature-review and graph-grounding workflow rather than inventing a parallel state machine.",
+            "- If strong candidates are staged locally, queue imports through research_workflow.queue_paper_ingestion instead of running wrappers inline.",
+            "- If remote graph checks are available, prefer graph-aware checks before staging imports so the packet can prioritize graph-missing papers.",
+            "- Keep the pass bounded and report the strongest non-duplicate missing papers first.",
+          ].join("\n"),
+        },
+      });
+
+      return {
+        text: result.summary,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to start survey graph build background run.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to start /survey-graph-build: ${message}`,
+      };
+    }
+  };
+}
+
+function createIdeaCatalystSearchCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const depth = hasCommandFlag(ctx.commandBody, "--deep")
+        ? "deep"
+        : hasCommandFlag(ctx.commandBody, "--quick")
+          ? "quick"
+          : "default";
+      const days = readNumericFlag(ctx.commandBody, "--days") ?? 3650;
+      const result = await deps.runIdeaCatalystResearch30({
+        projectRoot: resolved.projectRoot,
+        days,
+        depth,
+      });
+      return {
+        text:
+          `IDEA-CATALYST search completed for ${resolved.projectId}.\n` +
+          `queries=${result.queryCount}, domains=${result.domainCount}, scout_report_updated=${result.scoutReportUpdated ? "yes" : "no"}\n` +
+          `json={PROJ}/${result.reportJsonPath}\nmarkdown={PROJ}/${result.reportMarkdownPath}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /idea-catalyst-search: ${message}`,
+      };
+    }
+  };
+}
+
+function createCitationCalibrateCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const result = await deps.runCitationCalibration({
+        projectRoot: resolved.projectRoot,
+        replaceArxiv: hasCommandFlag(ctx.commandBody, "--replace-arxiv"),
+      });
+      return {
+        text:
+          `Citation calibration completed for ${resolved.projectId}.\n` +
+          `verified=${result.verifiedCount}, needs_review=${result.needsReviewCount}, suspicious=${result.suspiciousCount}, hallucinated=${result.hallucinatedCount}\n` +
+          `json={PROJ}/${result.reportJsonPath}\nmarkdown={PROJ}/${result.reportMarkdownPath}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /citation-calibrate: ${message}`,
+      };
+    }
+  };
+}
+
+function createPapernexusStageRemoteCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const manifestPath =
+        readFlagValue(ctx.commandBody, "--manifest") ??
+        "researcher/paper-staging/batch-import.json";
+      const result = await deps.stagePapernexusRemoteSources({
+        projectRoot: resolved.projectRoot,
+        sshTarget: readFlagValue(ctx.commandBody, "--ssh-target"),
+        remoteBaseDir: readFlagValue(ctx.commandBody, "--remote-base-dir"),
+        manifestPath,
+      });
+      if (!result.available) {
+        return {
+          text: `❌ /papernexus-stage-remote unavailable: ${result.error ?? "missing configuration"}`,
+        };
+      }
+      return {
+        text:
+          `Remote PaperNexus staging completed for ${resolved.projectId}.\n` +
+          `report={PROJ}/${result.reportPath}\n` +
+          `remote_manifest=${result.rewriteManifestOut ?? "none"}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /papernexus-stage-remote: ${message}`,
+      };
+    }
+  };
+}
+
+function createAuthoringCloseoutCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const result = await deps.reconcileAuthoringCloseout({
+        projectRoot: resolved.projectRoot,
+        compilePdf: !hasCommandFlag(ctx.commandBody, "--no-compile"),
+        autoInjectConferenceCitations: !hasCommandFlag(
+          ctx.commandBody,
+          "--no-auto-cite"
+        ),
+      });
+      return {
+        text:
+          `Authoring closeout finished for ${resolved.projectId}.\n` +
+          `paper_mode=${result.paperMode}, stage=${result.nextStage}, cites=${result.citeCount}, sections=${result.sectionCount}, pdf=${result.mainPdfExists ? "yes" : "no"}\n` +
+          `citation_status=${result.citationIntegrity.verificationStatus}, review_status=${result.reviewSession.status}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /authoring-closeout: ${message}`,
+      };
+    }
+  };
+}
+
 async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   api: WorkflowCommandApi,
   workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>
@@ -969,11 +1330,46 @@ export function createResearchWorkflowCommands(
       ),
     },
     {
+      name: "survey-graph-build",
+      description:
+        "Run a non-blocking survey graph candidate build focused on topic relevance, aggressive dedupe, and graph-missing papers.",
+      acceptsArgs: true,
+      handler: createSurveyGraphBuildCommandHandler(api, resolvedDeps),
+    },
+    {
       name: "workflow-status",
       description:
         "Show the current workflow snapshot for this bound conversation or workflow session.",
       acceptsArgs: false,
       handler: createWorkflowStatusCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "idea-catalyst-search",
+      description:
+        "Run the workflow-owned research30 cross-domain search for the current project's IDEA-CATALYST scouting state.",
+      acceptsArgs: true,
+      handler: createIdeaCatalystSearchCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "citation-calibrate",
+      description:
+        "Run citation calibration for the current project and refresh reviewer-side verification artifacts.",
+      acceptsArgs: true,
+      handler: createCitationCalibrateCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "papernexus-stage-remote",
+      description:
+        "Upload the current project's staged PDF/Markdown sources to the configured remote PaperNexus staging host.",
+      acceptsArgs: true,
+      handler: createPapernexusStageRemoteCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "authoring-closeout",
+      description:
+        "Reconcile writing/review/QC state for the current project and attempt a deterministic paper closeout.",
+      acceptsArgs: true,
+      handler: createAuthoringCloseoutCommandHandler(api, resolvedDeps),
     },
     {
       name: "show-commands",

@@ -343,6 +343,22 @@ export function formatWorkflowStatusText(params: {
       `Experiment search: status=${snapshot.experimentSearchStatus}, session=${snapshot.experimentSearchSessionId ?? "unset"}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, incumbent_exp=${snapshot.experimentSearchIncumbentExperimentId ?? "unset"}, incumbent_branch=${snapshot.experimentSearchIncumbentBranch ?? "unset"}, incumbent_commit=${snapshot.experimentSearchIncumbentCommit ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
     );
     lines.push(
+      `Experiment search decision: decision=${snapshot.experimentSearchDecision ?? "unset"}, validation_stage=${snapshot.experimentSearchValidationStage ?? "unset"}, fairness=${snapshot.experimentSearchBaselineFairnessStatus ?? "unset"}, impl_confidence=${snapshot.experimentSearchImplementationConfidence ?? "unset"}, ablation=${snapshot.experimentSearchAblationStatus ?? "unset"}, innovation=${snapshot.experimentSearchInnovationStatus ?? "unset"}, exhaustion=${snapshot.experimentSearchSearchExhaustionStatus ?? "unset"}, evidence=${snapshot.experimentSearchEvidenceCleanlinessStatus ?? "unset"}, confidence=${snapshot.experimentSearchDecisionConfidence ?? "unset"}`
+    );
+    if (snapshot.experimentSearchRecommendedNextAction) {
+      lines.push(
+        `Experiment search next action: ${snapshot.experimentSearchRecommendedNextAction}`
+      );
+    }
+    if (
+      Array.isArray(snapshot.experimentSearchFailureClusterIds) &&
+      snapshot.experimentSearchFailureClusterIds.length > 0
+    ) {
+      lines.push(
+        `Experiment search failure clusters: ${snapshot.experimentSearchFailureClusterIds.join(", ")}`
+      );
+    }
+    lines.push(
       `Experiment search artifacts: spec=${snapshot.experimentSearchSpecPath ?? "unset"}, state=${snapshot.experimentSearchStatePath ?? "unset"}, graph_memory_packet=${snapshot.experimentSearchGraphMemoryPacketPath ?? snapshot.experimentMemoryGraphPacketPath ?? "unset"}, graph_sync=${snapshot.experimentSearchGraphMemorySyncStatus ?? "unset"}`
     );
     if (snapshot.experimentSearchRequestedGitOp || snapshot.experimentSearchGitOpStatus) {
@@ -399,6 +415,79 @@ export function formatWorkflowStatusText(params: {
         `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`
       );
     }
+  }
+  if (snapshot.benchmarkProtocolStatus && snapshot.benchmarkProtocolStatus !== "missing") {
+    lines.push(
+      `Benchmark protocol: status=${snapshot.benchmarkProtocolStatus}, family=${snapshot.benchmarkProtocolFamily ?? "unset"}, locked=${snapshot.benchmarkProtocolLocked ? "true" : "false"}, drift=${snapshot.benchmarkProtocolDriftStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.statisticalEvidenceStatus && snapshot.statisticalEvidenceStatus !== "missing") {
+    lines.push(
+      `Statistical evidence: status=${snapshot.statisticalEvidenceStatus}, claim_strength=${snapshot.statisticalEvidenceClaimStrengthStatus ?? "unset"}, significant=${snapshot.statisticalEvidenceSignificantResultCount ?? 0}, insufficient_seeds=${snapshot.statisticalEvidenceInsufficientSeedCount ?? 0}`
+    );
+  }
+  if (snapshot.venueCompetitionStatus && snapshot.venueCompetitionStatus !== "missing") {
+    lines.push(
+      `Venue competition: status=${snapshot.venueCompetitionStatus}, venues=${(snapshot.venueCompetitionTargetVenues ?? []).join(",") || "none"}, risk=${snapshot.venueCompetitionAcceptanceRiskStatus ?? "unset"}, graph_context=${snapshot.venueCompetitionGraphContextStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.ablationEvidenceStatus && snapshot.ablationEvidenceStatus !== "missing") {
+    lines.push(
+      `Ablation evidence: status=${snapshot.ablationEvidenceStatus}, sufficiency=${snapshot.ablationEvidenceSufficiencyStatus ?? "unset"}, publication_critical=${snapshot.ablationEvidencePublicationCriticalCount ?? 0}`
+    );
+  }
+  if (snapshot.mechanismEvidenceStatus && snapshot.mechanismEvidenceStatus !== "missing") {
+    lines.push(
+      `Mechanism evidence: status=${snapshot.mechanismEvidenceStatus}, tier=${snapshot.mechanismEvidenceTier ?? "unset"}, graph_context=${snapshot.mechanismEvidenceGraphContextStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.reproducibilityPackStatus && snapshot.reproducibilityPackStatus !== "missing") {
+    lines.push(
+      `Reproducibility pack: status=${snapshot.reproducibilityPackStatus}, environment=${snapshot.reproducibilityPackEnvironmentCaptureStatus ?? "unset"}, regenerate_tables=${snapshot.reproducibilityPackRegenerateTablesStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.cameraReadyEvidenceStatus && snapshot.cameraReadyEvidenceStatus !== "missing") {
+    lines.push(
+      `Camera-ready evidence: status=${snapshot.cameraReadyEvidenceStatus}, figures=${snapshot.cameraReadyEvidenceFiguresStatus ?? "unset"}, tables=${snapshot.cameraReadyEvidenceTablesStatus ?? "unset"}, captions=${snapshot.cameraReadyEvidenceCaptionsStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.opportunityScorecardStatus && snapshot.opportunityScorecardStatus !== "missing") {
+    lines.push(
+      `Top-tier opportunity: status=${snapshot.opportunityScorecardStatus}, verdict=${snapshot.opportunityScorecardVerdict ?? "unset"}, graph_context=${snapshot.opportunityScorecardGraphContextStatus ?? "unset"}`
+    );
+  }
+  if (snapshot.evidenceCloseoutStatus) {
+    lines.push(
+      `Evidence closeout: status=${snapshot.evidenceCloseoutStatus}, verdict=${snapshot.evidenceCloseoutTopTierVerdict ?? "unset"}, blockers=${snapshot.evidenceCloseoutBlockerCount ?? 0}, graph_blockers=${snapshot.evidenceCloseoutGraphDependentBlockerCount ?? 0}, local_blockers=${snapshot.evidenceCloseoutLocalEvidenceBlockerCount ?? 0}`
+    );
+    lines.push(
+      `Evidence closeout stages: experiment_to_analyze=${snapshot.evidenceCloseoutExperimentAnalyzeReady ? "ready" : "blocked"}, analyze_to_review=${snapshot.evidenceCloseoutAnalyzeReviewReady ? "ready" : "blocked"}, write=${snapshot.evidenceCloseoutWriteReady ? "ready" : "blocked"}, submit=${snapshot.evidenceCloseoutSubmitReady ? "ready" : "blocked"}`
+    );
+    if ((snapshot.evidenceCloseoutTopBlockers ?? []).length > 0) {
+      lines.push(
+        `Evidence closeout blockers: ${(snapshot.evidenceCloseoutTopBlockers ?? []).join("; ")}`
+      );
+    }
+  }
+  if ((snapshot.teamTaskPreview ?? []).length > 0) {
+    lines.push(
+      `Stage task preview: ${(snapshot.teamTaskPreview ?? [])
+        .map(
+          (task) =>
+            `${task.taskId}[${task.status}]${task.owner ? `@${task.owner}` : ""}`
+        )
+        .join(", ")}`
+    );
+  }
+  if ((snapshot.teamTaskGraphTaskCount ?? 0) > 0) {
+    lines.push(
+      `Stage task graph: tasks=${snapshot.teamTaskGraphTaskCount ?? 0}, claimable=${snapshot.teamTaskGraphClaimableCount ?? 0}, blocked=${snapshot.teamTaskGraphBlockedCount ?? 0}, claimed=${snapshot.teamTaskGraphClaimedCount ?? 0}, verifying=${snapshot.teamTaskGraphVerifyingCount ?? 0}, needs_repair=${snapshot.teamTaskGraphNeedsRepairCount ?? 0}, satisfied=${snapshot.teamTaskGraphSatisfiedCount ?? 0}, optional=${snapshot.teamTaskGraphOptionalCount ?? 0}`
+    );
+  }
+  if (snapshot.teamRoundPath) {
+    lines.push(
+      `Team round: status=${snapshot.teamRoundStatus ?? "not_applicable"}, lead=${snapshot.teamRoundLeadRole ?? "unset"}, active_sessions=${snapshot.teamRoundActiveSessionCount ?? 0}, last_claimed_task=${snapshot.teamRoundLastClaimedTaskId ?? "none"}, last_completed_task=${snapshot.teamRoundLastCompletedTaskId ?? "none"}`
+    );
   }
   if (snapshot.paperStoryStatus) {
     lines.push(

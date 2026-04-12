@@ -28,6 +28,10 @@ import {
   type ExperimentSearchReviewStateLike,
 } from "./workflow-guard-state/experiment-search-review.js";
 import {
+  normalizeExperimentSearchSpec,
+  resolveExperimentSearchSpecPath,
+} from "./workflow-guard-state/experiment-search-spec.js";
+import {
   serializeExperimentSearchState,
 } from "./workflow-guard-state/execution-state";
 import {
@@ -91,6 +95,45 @@ function removeString(values: string[], value: string | null): string[] {
     return values;
   }
   return values.filter((entry) => entry !== value);
+}
+
+function uniqueNormalizedSignals(values: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeStage(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
+function classifyDiscardFailure(params: {
+  reviewState: ExperimentSearchReviewStateLike;
+  searchState: Awaited<ReturnType<typeof loadExperimentSearchState>>;
+}): string {
+  const explicit = normalizeStage(params.reviewState.failureClass);
+  if (explicit) {
+    return explicit;
+  }
+  if (
+    ["repair_implementation"].includes(
+      normalizeStage(params.searchState.lastDecision) ?? ""
+    )
+  ) {
+    return "implementation";
+  }
+  const pendingReason = `${params.reviewState.pendingReason ?? ""} ${params.reviewState.discardReason ?? ""}`.toLowerCase();
+  if (/\boom\b|timeout|ssh|disk full|killed|connection/i.test(pendingReason)) {
+    return "runtime";
+  }
+  if (/baseline fairness|implementation|protocol drift|shape mismatch|nan|traceback/i.test(pendingReason)) {
+    return "implementation";
+  }
+  return "scientific";
 }
 
 export async function requestExperimentGitOpImpl(
@@ -318,6 +361,23 @@ export async function setExperimentGitReviewStateImpl(
     ),
     blockers:
       patch.blockers != null ? asStringArray(patch.blockers) : current.blockers,
+    promotionBasisSignals:
+      patch.promotionBasisSignals != null || patch.promotion_basis_signals != null
+        ? asStringArray(
+            patch.promotionBasisSignals ?? patch.promotion_basis_signals
+          )
+        : current.promotionBasisSignals,
+    promotionEvidenceSummary:
+      pickString(patch, [
+        "promotionEvidenceSummary",
+        "promotion_evidence_summary",
+      ]) ?? current.promotionEvidenceSummary,
+    discardReason:
+      pickString(patch, ["discardReason", "discard_reason"]) ??
+      current.discardReason,
+    failureClass:
+      pickString(patch, ["failureClass", "failure_class"]) ??
+      current.failureClass,
     appliedAt:
       pickString(patch, ["appliedAt", "applied_at"]) ?? current.appliedAt,
     pendingReason:
@@ -388,6 +448,14 @@ export async function applyExperimentGitOpImpl(
   }
   const actionType =
     (searchState.requestedGitOp ?? reviewState.actionType) as ExperimentGitActionType;
+  const specPath = resolveExperimentSearchSpecPath({
+    projectRoot: params.projectRoot,
+    manifest,
+    searchSpecPath: reviewState.searchSpecPath ?? searchState.searchSpecPath,
+  });
+  const spec = normalizeExperimentSearchSpec(
+    await readJsonIfExists<Record<string, unknown>>(specPath)
+  );
   if (reviewState.actionApproved !== true) {
     throw new Error(
       "Experiment git action is not approved; planner/analyzer/cross-reviewer review must pass before workflow may execute git side effects."
@@ -405,6 +473,29 @@ export async function applyExperimentGitOpImpl(
     throw new Error(
       "Experiment git action lacks full multi-agent approval; planner plus analyzer plus cross-reviewer must all be ready with no revise/block verdicts before execution."
     );
+  }
+  if (actionType === "promote_candidate") {
+    const basisSignals = uniqueNormalizedSignals(reviewState.promotionBasisSignals);
+    if (basisSignals.length === 0) {
+      throw new Error(
+        "Promotion is blocked until experiment_search_review_state.promotion_basis_signals explicitly records the retention basis."
+      );
+    }
+    const nonPromotionSignals = new Set(
+      uniqueNormalizedSignals(spec.comparisonPolicy.nonPromotionSignals)
+    );
+    const hasPrimaryBasis = basisSignals.some(
+      (signal) =>
+        !nonPromotionSignals.has(signal) ||
+        signal === "primary_metric_win" ||
+        signal === "beat_incumbent" ||
+        signal === "promotion_rule_satisfied"
+    );
+    if (!hasPrimaryBasis) {
+      throw new Error(
+        `Promotion is blocked because the recorded basis only cites non-promotion signals (${basisSignals.join(", ")}).`
+      );
+    }
   }
   const gitResult = await executeExperimentGitAction({
     projectRoot: params.projectRoot,

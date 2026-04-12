@@ -949,6 +949,12 @@ export async function setSurveyReviewState(params: {
       new Date().toISOString(),
   });
   manifest.survey_review = serializeSurveyReviewState(next);
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(asRecord(manifest.writing_contract) ?? {}),
+    paper_mode: "survey",
+  };
   manifest.current_stage = "survey_review";
   manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
   manifest.owner_agent = STAGE_REQUIREMENTS.survey_review?.owner ?? "researcher";
@@ -1092,6 +1098,21 @@ export async function setOrchestrationState(params: {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeOrchestrationState(manifest.orchestration_state);
   const patch = asRecord(params.orchestrationState) ?? {};
+  const surveyProject =
+    normalizeStage(manifest.current_stage) === "survey_review" ||
+    normalizeSurveyReviewState(manifest.survey_review).status !== "missing" ||
+    normalizeStage((asRecord(manifest.writing_contract) ?? {}).paper_mode) === "survey" ||
+    normalizeStage(manifest.workflow_line) === "survey" ||
+    normalizeStage(manifest.paper_type) === "survey";
+  const requestedTransition = pickString(patch, [
+    "nextTransitionCandidate",
+    "next_transition_candidate",
+  ]);
+  const surveyUnsafeTransition =
+    surveyProject &&
+    ["idea", "plan", "code", "experiment", "analyze"].includes(
+      normalizeStage(requestedTransition) ?? ""
+    );
   const next: OrchestrationState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
@@ -1105,16 +1126,25 @@ export async function setOrchestrationState(params: {
     nextOwner:
       pickString(patch, ["nextOwner", "next_owner"]) ?? current.nextOwner,
     nextTransitionCandidate:
-      pickString(patch, [
-        "nextTransitionCandidate",
-        "next_transition_candidate",
-      ]) ?? current.nextTransitionCandidate,
+      surveyUnsafeTransition
+        ? "survey_review"
+        : requestedTransition ?? current.nextTransitionCandidate,
     blockingCategory:
       pickString(patch, ["blockingCategory", "blocking_category"]) ??
       current.blockingCategory,
     blockingReason:
       pickString(patch, ["blockingReason", "blocking_reason"]) ??
       current.blockingReason,
+    rollbackReasonCategory:
+      pickString(patch, [
+        "rollbackReasonCategory",
+        "rollback_reason_category",
+      ]) ?? current.rollbackReasonCategory,
+    rollbackEvidenceSummary:
+      pickString(patch, [
+        "rollbackEvidenceSummary",
+        "rollback_evidence_summary",
+      ]) ?? current.rollbackEvidenceSummary,
     retryBudgetRemaining:
       pickNumber(patch, ["retryBudgetRemaining", "retry_budget_remaining"]) ??
       current.retryBudgetRemaining,
@@ -1278,6 +1308,9 @@ export async function setExperimentSearchState(params: {
     currentSubstage:
       normalizeStage(patch.currentSubstage ?? patch.current_substage) ??
       current.currentSubstage,
+    validationStage:
+      normalizeStage(patch.validationStage ?? patch.validation_stage) ??
+      current.validationStage,
     searchSessionId:
       pickString(patch, ["searchSessionId", "search_session_id"]) ??
       current.searchSessionId,
@@ -1351,9 +1384,46 @@ export async function setExperimentSearchState(params: {
     lastGitOpResult:
       pickString(patch, ["lastGitOpResult", "last_git_op_result"]) ??
       current.lastGitOpResult,
+    lastDecision:
+      pickString(patch, ["lastDecision", "last_decision"]) ??
+      current.lastDecision,
     multiSeedStatus:
       normalizeStage(patch.multiSeedStatus ?? patch.multi_seed_status) ??
       current.multiSeedStatus,
+    baselineFairnessStatus:
+      normalizeStage(
+        patch.baselineFairnessStatus ?? patch.baseline_fairness_status
+      ) ?? current.baselineFairnessStatus,
+    implementationConfidence:
+      normalizeStage(
+        patch.implementationConfidence ?? patch.implementation_confidence
+      ) ?? current.implementationConfidence,
+    searchExhaustionStatus:
+      normalizeStage(
+        patch.searchExhaustionStatus ?? patch.search_exhaustion_status
+      ) ?? current.searchExhaustionStatus,
+    ablationStatus:
+      normalizeStage(patch.ablationStatus ?? patch.ablation_status) ??
+      current.ablationStatus,
+    innovationStatus:
+      normalizeStage(patch.innovationStatus ?? patch.innovation_status) ??
+      current.innovationStatus,
+    decisionConfidence:
+      normalizeStage(patch.decisionConfidence ?? patch.decision_confidence) ??
+      current.decisionConfidence,
+    recommendedNextAction:
+      pickString(patch, [
+        "recommendedNextAction",
+        "recommended_next_action",
+      ]) ?? current.recommendedNextAction,
+    failureClusterIds:
+      patch.failureClusterIds || patch.failure_cluster_ids
+        ? asStringArray(patch.failureClusterIds ?? patch.failure_cluster_ids)
+        : current.failureClusterIds,
+    evidenceCleanlinessStatus:
+      normalizeStage(
+        patch.evidenceCleanlinessStatus ?? patch.evidence_cleanliness_status
+      ) ?? current.evidenceCleanlinessStatus,
     evaluationSummaryPath:
       pickString(patch, [
         "evaluationSummaryPath",

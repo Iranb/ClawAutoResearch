@@ -222,7 +222,7 @@ export async function replayWorkflowBroadcastOutbox(params: {
 
   for (let index = 0; index < nextEntries.length; index += 1) {
     const entry = nextEntries[index];
-    if (entry.deliveryStatus === "delivered") {
+    if (entry.deliveryStatus === "delivered" || entry.deliveryStatus === "superseded") {
       skipped.push(entry);
       seenIdempotencyKeys.add(entry.idempotencyKey);
       continue;

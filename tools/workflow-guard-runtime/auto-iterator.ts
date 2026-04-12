@@ -2,12 +2,11 @@ import * as path from "node:path";
 import {
   asRecord,
   asString,
-  normalizeGraphPresenceStatus,
   normalizeStage,
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
-import { readJsonIfExists } from "../workflow-guard-core/fs";
+import { readJsonIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
 import {
   deriveGraphBuildMicroStage,
   normalizePaperIngestionState,
@@ -22,6 +21,20 @@ import {
   shouldRouteIdeaCatalystToGraphBuild,
 } from "../idea-catalyst/workflow-bridge";
 import { shouldRouteLiteratureDiscoveryToGraphBuild } from "../literature-discovery/workflow-bridge";
+import {
+  deriveWorkflowGraphContext,
+  shouldRefreshWorkflowGraphPresence,
+} from "../workflow-kernel/graph-context";
+import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
+import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
+import {
+  getWorkflowTaskGraphPath,
+  materializeWorkflowTaskGraph,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "../workflow-team/task-graph";
+import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
+import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
@@ -87,6 +100,133 @@ type ProjectsStateLike = {
 };
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
+
+const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
+  "repair_implementation",
+  "continue_tuning",
+  "narrow_search",
+  "require_multi_seed",
+  "require_ablation",
+  "innovation_fragile",
+  "reconcile_runtime",
+]);
+
+function resolveExperimentRollbackStage(params: {
+  decision: string | null;
+  experimentSearchSpec: Record<string, unknown> | null;
+  manifest: ManifestLike;
+}): string | null {
+  const decision = normalizeStage(params.decision);
+  if (decision === "rollback_to_idea") {
+    return "idea";
+  }
+  if (decision === "rollback_to_plan") {
+    return "plan";
+  }
+  if (decision !== "innovation_invalidated") {
+    return null;
+  }
+  const criteria =
+    asRecord(
+    params.experimentSearchSpec?.innovationInvalidityCriteria ??
+      params.experimentSearchSpec?.innovation_invalidity_criteria
+    ) ?? {};
+  const orchestration = asRecord(params.manifest.orchestration_state) ?? {};
+  const rollbackCandidate =
+    pickString(criteria, ["rollbackTarget", "rollback_target"]) ??
+    pickString(orchestration, ["rollbackTargetStage", "rollback_target_stage"]) ??
+    "plan";
+  const normalized = normalizeStage(rollbackCandidate);
+  return normalized === "idea" ? "idea" : "plan";
+}
+
+function buildExperimentDecisionCommand(params: {
+  decision: string | null;
+  rationale: string | null;
+  monitorCommand: string;
+  searchLoopActive: boolean;
+  validationStage: string | null;
+}): {
+  ownerOverride: AutoIteratorAction["owner"] | null;
+  command: string | null;
+  summary: string | null;
+} {
+  const decision = normalizeStage(params.decision);
+  switch (decision) {
+    case "reconcile_runtime":
+      return {
+        ownerOverride: "researcher",
+        command: params.monitorCommand,
+        summary:
+          "Reconcile finished or likely-finished experiment runs from durable runtime signals before any new launch work.",
+      };
+    case "repair_implementation":
+      return {
+        ownerOverride:
+          normalizeStage(params.validationStage) === "review_blockers"
+            ? "researcher"
+            : "coder",
+        command:
+          normalizeStage(params.validationStage) === "review_blockers"
+            ? "Run /experiment-phase to resolve the outstanding experiment review blockers, reopen planner/analyzer/cross-reviewer if needed, and only hand back to Coder after the reviewed packet is coherent again."
+            : params.searchLoopActive
+              ? "Run /search-experiment to repair the bounded runtime / implementation issue inside the approved search envelope, keep the baseline protocol fair, and persist watcher artifacts with research_workflow.record_experiment_runtime_signal before handing back to Researcher."
+              : "Use /resume-pipeline or /search-experiment to repair the bounded runtime / implementation issue, keep the baseline protocol fair, and persist watcher artifacts with research_workflow.record_experiment_runtime_signal before handing back to Researcher.",
+        summary:
+          normalizeStage(params.validationStage) === "review_blockers"
+            ? "Experiment review blockers must be resolved before the search loop can continue."
+            : "Bounded implementation or runtime repair is required before experiment evidence is trustworthy.",
+      };
+    case "require_multi_seed":
+      return {
+        ownerOverride: "researcher",
+        command:
+          "Run /experiment-phase to schedule multi-seed validation on the current incumbent, then reconcile EXPERIMENT_LEDGER.json and experiment_search before analysis.",
+        summary:
+          "A promising incumbent exists, but multi-seed validation is still required before analysis.",
+      };
+    case "require_ablation":
+      return {
+        ownerOverride: "researcher",
+        command:
+          "Run /experiment-phase to execute the missing ablation bundle(s), record the results in EXPERIMENT_LEDGER.json, and keep experiment_search blocked until attribution is clean.",
+        summary:
+          "The innovation is not isolated yet; the missing ablation pass must complete before analysis.",
+      };
+    case "narrow_search":
+      return {
+        ownerOverride: params.searchLoopActive ? "coder" : "researcher",
+        command: params.searchLoopActive
+          ? "Run /search-experiment and narrow the bounded search neighborhood around the incumbent instead of widening the envelope or inventing a new branch."
+          : "Run /experiment-phase and narrow the bounded search neighborhood around the best incumbent instead of widening the envelope or inventing a new branch.",
+        summary:
+          "The current envelope looks exhausted; narrow the search neighborhood before declaring the innovation invalid.",
+      };
+    case "continue_tuning":
+      return {
+        ownerOverride: params.searchLoopActive ? "coder" : "researcher",
+        command: params.searchLoopActive
+          ? "Run /search-experiment and continue the approved bounded search loop from the current incumbent without widening the envelope."
+          : "Run /experiment-phase and continue the approved bounded search loop; prefer waking Coder /search-experiment for the next candidate rather than hand-editing the envelope.",
+        summary:
+          "Stay in the approved bounded tuning loop; the evidence is not strong enough for analysis yet.",
+      };
+    case "innovation_fragile":
+      return {
+        ownerOverride: "researcher",
+        command:
+          "Run /experiment-phase to add one more robustness slice or a tighter incumbent neighborhood before analysis, and do not over-claim the innovation yet.",
+        summary:
+          "The innovation looks promising but still fragile; collect one more robustness slice before analysis.",
+      };
+    default:
+      return {
+        ownerOverride: null,
+        command: null,
+        summary: params.rationale ? `Experiment decision: ${params.rationale}` : null,
+      };
+  }
+}
 
 export function selectDispatchableAutoStageAction(params: {
   autoIteratorResult: Pick<
@@ -187,6 +327,10 @@ type AutoIteratorDeps = {
     now: string;
   }) => Promise<GateEvaluationLike>;
   isSurveyWorkflow: (manifest: ManifestLike | null) => boolean;
+  ensureSurveyWorkflowIdentity?: (manifest: ManifestLike | null) => {
+    manifest: ManifestLike;
+    updated: boolean;
+  };
   resolveStageForWorkflowLine: (params: {
     stage: string | null;
     manifest: ManifestLike | null;
@@ -242,6 +386,24 @@ type AutoIteratorDeps = {
     ledger: ExperimentLedgerLike | null;
     experimentSearch: Record<string, unknown>;
   }) => boolean;
+  evaluateExperimentSearchDecision: (params: {
+    experimentSearch: unknown;
+    experimentSearchSpec?: unknown;
+    experimentLedger?: unknown;
+    gpuMonitor?: unknown;
+    experimentReviewState?: unknown;
+    experimentMemory?: unknown;
+  }) => {
+    decision: string;
+    rationale: string;
+    recommendedNextAction: string;
+    validationStage: string;
+    decisionConfidence: string;
+    baselineFairnessStatus: string;
+    implementationConfidence: string;
+    searchExhaustionStatus: string;
+    persistedPatch: Record<string, unknown>;
+  };
   buildExperimentMonitorCommand: () => string;
   buildGraphImportRepairGuidance: (
     sharedCorpus: string | null | undefined
@@ -354,45 +516,6 @@ type AutoIteratorDeps = {
 
 const MAX_REGRESSION_DEPTH = 3;
 
-function readIsoTimestamp(value: unknown): number | null {
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function shouldRefreshGraphPresenceDuringAutoIterator(params: {
-  manifest: ManifestLike;
-  stage: string;
-  nowIso: string;
-}): boolean {
-  if (!["graph_build", "frontier_mapping", "idea"].includes(params.stage)) {
-    return false;
-  }
-  const paperIngestion = asRecord(params.manifest.paper_ingestion);
-  const graphPresenceStatus = normalizeGraphPresenceStatus(
-    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
-  );
-  const refreshRequired =
-    paperIngestion?.refresh_required === true || paperIngestion?.refreshRequired === true;
-  const checkedAtMs = readIsoTimestamp(
-    pickString(paperIngestion ?? {}, [
-      "graph_presence_checked_at",
-      "graphPresenceCheckedAt",
-    ])
-  );
-  const nowMs = readIsoTimestamp(params.nowIso) ?? Date.now();
-  const recentlyChecked =
-    checkedAtMs !== null &&
-    nowMs - checkedAtMs < AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS;
-
-  if (graphPresenceStatus === "ready" && !refreshRequired) {
-    return false;
-  }
-  if (recentlyChecked && !refreshRequired) {
-    return false;
-  }
-  return graphPresenceStatus !== "ready" || refreshRequired || checkedAtMs === null;
-}
-
 export async function runWorkflowAutoIteratorImpl(
   params: {
     projectRoot: string;
@@ -434,6 +557,16 @@ export async function runWorkflowAutoIteratorImpl(
   const projectId = deps.inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
   let stageBefore = normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  if (deps.ensureSurveyWorkflowIdentity) {
+    const surveyIdentity = deps.ensureSurveyWorkflowIdentity(manifest);
+    if (surveyIdentity.updated) {
+      manifest = {
+        ...manifest,
+        ...surveyIdentity.manifest,
+      };
+      await deps.saveManifest(projectRoot, manifest);
+    }
+  }
   if (deps.isSurveyWorkflow(manifest)) {
     stageBefore =
       deps.resolveStageForWorkflowLine({
@@ -489,10 +622,11 @@ export async function runWorkflowAutoIteratorImpl(
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
   if (
-    shouldRefreshGraphPresenceDuringAutoIterator({
+    shouldRefreshWorkflowGraphPresence({
       manifest,
       stage: stageBefore,
       nowIso: now,
+      minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
     })
   ) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
@@ -517,9 +651,14 @@ export async function runWorkflowAutoIteratorImpl(
       manifest;
   }
 
-  const paperIngestionStateBeforeRouting = normalizePaperIngestionState(
-    manifest.paper_ingestion
-  );
+  const graphContextBeforeRouting = deriveWorkflowGraphContext({
+    manifest,
+    stage: stageBefore,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    graphPresenceCheck,
+  });
+  const paperIngestionStateBeforeRouting = graphContextBeforeRouting.paperIngestionState;
   const ideaCatalystStateBeforeRouting = normalizeIdeaCatalystState(manifest.idea_catalyst);
   const catalystRequestedGraphReentry = shouldRouteIdeaCatalystToGraphBuild({
     currentStage: stageBefore,
@@ -530,9 +669,7 @@ export async function runWorkflowAutoIteratorImpl(
     shouldRouteLiteratureDiscoveryToGraphBuild({
       currentStage: stageBefore,
       paperIngestion: paperIngestionStateBeforeRouting,
-      graphPresenceStatus:
-        asRecord(manifest.paper_ingestion)?.graph_presence_status ??
-        asRecord(manifest.paper_ingestion)?.graphPresenceStatus,
+      graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
     });
   const requestedGraphReentry =
     !surveyWorkflow &&
@@ -639,12 +776,60 @@ export async function runWorkflowAutoIteratorImpl(
     }) &&
     normalizeStage(experimentSearchStateBeforeAdvance?.status) !==
       "ready_for_analysis";
+  const experimentGpuMonitorStateBeforeAdvance =
+    stageEffective === "experiment"
+      ? await readJsonIfExists<Record<string, unknown>>(
+          path.join(projectRoot, "researcher", "EXPERIMENT_GPU_MONITOR.json")
+        )
+      : null;
+  const experimentSearchSpecBeforeAdvance =
+    stageEffective === "experiment"
+      ? await readJsonIfExists<Record<string, unknown>>(
+          path.join(
+            projectRoot,
+            asString(experimentSearchStateBeforeAdvance?.searchSpecPath) ??
+              "planner/EXPERIMENT_SEARCH_SPEC.json"
+          )
+        )
+      : null;
+  const experimentDecisionBeforeAdvance =
+    stageEffective === "experiment"
+      ? deps.evaluateExperimentSearchDecision({
+          experimentSearch: experimentSearchStateBeforeAdvance,
+          experimentSearchSpec: experimentSearchSpecBeforeAdvance,
+          experimentLedger,
+          gpuMonitor: experimentGpuMonitorStateBeforeAdvance,
+          experimentReviewState: experimentReviewStateBeforeAdvance,
+          experimentMemory: asRecord(manifest.experiment_memory) ?? {},
+        })
+      : null;
+  const experimentRollbackStage =
+    stageEffective === "experiment"
+      ? resolveExperimentRollbackStage({
+          decision: experimentDecisionBeforeAdvance?.decision ?? null,
+          experimentSearchSpec: experimentSearchSpecBeforeAdvance,
+          manifest,
+        })
+      : null;
+  const experimentDecisionBlocksAdvance =
+    stageEffective === "experiment" &&
+    (EXPERIMENT_DECISIONS_HOLDING_STAGE.has(
+      normalizeStage(experimentDecisionBeforeAdvance?.decision) ?? ""
+    ) ||
+      experimentRollbackStage != null);
   if (
+    experimentRollbackStage != null &&
+    !surveyWorkflow
+  ) {
+    stageAfter = experimentRollbackStage;
+    regressed = true;
+  } else if (
     !reviewedAutoPrelaunch &&
     !gateEvaluation.blocking &&
     stageEffective &&
     effectiveMissingSignals.length === 0 &&
-    stageEffective !== "done"
+    stageEffective !== "done" &&
+    !experimentDecisionBlocksAdvance
   ) {
     const nextStage = deps.resolveNextStageForWorkflow({
       stage: stageEffective,
@@ -667,9 +852,14 @@ export async function runWorkflowAutoIteratorImpl(
       : effectiveMissingSignals;
 
   const ownerBefore = asString(manifest.owner_agent);
-  const paperIngestionStateForActions = normalizePaperIngestionState(
-    manifest.paper_ingestion
-  );
+  const graphContextForActions = deriveWorkflowGraphContext({
+    manifest,
+    stage: stageAfter,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    graphPresenceCheck,
+  });
+  const paperIngestionStateForActions = graphContextForActions.paperIngestionState;
   const experimentSearchState = deps.normalizeExperimentSearchState(
     manifest.experiment_search
   );
@@ -693,6 +883,36 @@ export async function runWorkflowAutoIteratorImpl(
         ledger: experimentLedger,
         experimentSearch: experimentSearchState,
       }));
+  const experimentGpuMonitorState =
+    stageAfter === "experiment"
+      ? experimentGpuMonitorStateBeforeAdvance ??
+        (await readJsonIfExists<Record<string, unknown>>(
+          path.join(projectRoot, "researcher", "EXPERIMENT_GPU_MONITOR.json")
+        ))
+      : null;
+  const experimentSearchSpec =
+    stageAfter === "experiment"
+        ? experimentSearchSpecBeforeAdvance ??
+          (await readJsonIfExists<Record<string, unknown>>(
+            path.join(
+              projectRoot,
+              asString(experimentSearchState.searchSpecPath) ??
+                "planner/EXPERIMENT_SEARCH_SPEC.json"
+            )
+          ))
+      : null;
+  const experimentDecision =
+    stageAfter === "experiment"
+      ? experimentDecisionBeforeAdvance ??
+        deps.evaluateExperimentSearchDecision({
+          experimentSearch: experimentSearchState,
+          experimentSearchSpec,
+          experimentLedger,
+          gpuMonitor: experimentGpuMonitorState,
+          experimentReviewState: experimentReviewState,
+          experimentMemory: asRecord(manifest.experiment_memory) ?? {},
+        })
+      : null;
   const experimentReadyForAnalysis =
     stageAfter === "experiment" &&
     normalizeStage(experimentSearchState.status) === "ready_for_analysis";
@@ -716,10 +936,30 @@ export async function runWorkflowAutoIteratorImpl(
           state: experimentReviewState,
         })
       : null;
-  const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
   const experimentMonitorCommand = shouldMonitorExperiments
     ? deps.buildExperimentMonitorCommand()
     : null;
+  const experimentDecisionCommand =
+    stageAfter === "experiment"
+      ? buildExperimentDecisionCommand({
+          decision: experimentDecision?.decision ?? null,
+          rationale: experimentDecision?.rationale ?? null,
+          monitorCommand:
+            experimentMonitorCommand ?? deps.buildExperimentMonitorCommand(),
+          searchLoopActive: Boolean(
+            experimentSearchState.searchSessionId ?? experimentSearchSpec?.searchSessionId
+          ) && !shouldMonitorExperiments,
+          validationStage: experimentDecision?.validationStage ?? null,
+        })
+      : null;
+  const experimentDecisionOwnsNextStep =
+    stageAfter === "experiment" &&
+    experimentDecisionCommand?.command != null &&
+    !experimentReviewCommand;
+  const dispatchStageSignals =
+    shouldMonitorExperiments || experimentDecisionOwnsNextStep
+      ? []
+      : activeStageSignals;
   const setupOnboardingCommand =
     stageAfter === "setup" &&
     activeStageSignals.some((signal) =>
@@ -728,9 +968,9 @@ export async function runWorkflowAutoIteratorImpl(
       ? "Run /project-init to complete the onboarding contract and lock the baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path before graph grounding."
       : null;
   const graphImportRepairCommand =
-    stageAfter === "graph_build" && paperIngestionStateForActions.repairRequired
+    stageAfter === "graph_build" && graphContextForActions.repairRequired
       ? deps.buildGraphImportRepairGuidance(
-          paperIngestionStateForActions.repairTargetCorpus
+          graphContextForActions.repairTargetCorpus
         )
       : null;
   const ideaCatalystStateForActions = normalizeIdeaCatalystState(manifest.idea_catalyst);
@@ -741,7 +981,9 @@ export async function runWorkflowAutoIteratorImpl(
       ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA.`
       : null;
   const ownerAfter =
-    (experimentReviewCommand ? experimentReviewOwner : null) ?? deps.stageOwner(stageAfter);
+    (experimentReviewCommand ? experimentReviewOwner : null) ??
+    experimentDecisionCommand?.ownerOverride ??
+    deps.stageOwner(stageAfter);
   const stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
   const stageReadinessRepairSummary =
@@ -750,13 +992,15 @@ export async function runWorkflowAutoIteratorImpl(
       : stageRepairCommand;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : experimentMonitorCommand ??
+    : experimentDecisionCommand?.command ??
+      experimentMonitorCommand ??
       experimentReviewCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : experimentMonitorCommand ??
+    : experimentDecisionCommand?.command ??
+      experimentMonitorCommand ??
       experimentReviewCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
@@ -782,10 +1026,8 @@ export async function runWorkflowAutoIteratorImpl(
       ? deriveGraphBuildMicroStage({
           paperIngestionState: paperIngestionStateForActions,
           graphPresenceStatus:
-            normalizeGraphPresenceStatus(
-              asRecord(manifest.paper_ingestion)?.graph_presence_status ??
-                asRecord(manifest.paper_ingestion)?.graphPresenceStatus
-            ) ?? graphPresenceCheck?.status ?? null,
+            graphContextForActions.graphPresenceStatus ??
+            graphContextForActions.graphPresenceCheckStatus,
         })
       : stageAfter === "experiment" &&
           reviewedAutoExperimentLaunchEnabled &&
@@ -800,7 +1042,25 @@ export async function runWorkflowAutoIteratorImpl(
         ? deriveIdeaCatalystMicroStage(asRecord(manifest.idea_catalyst))
       : stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
         ? deps.STAGE_ENTRY_MICRO_STAGES[stageAfter] ?? previousMicroStage
-        : previousMicroStage;
+      : previousMicroStage;
+
+  if (stageEffective === "experiment" && experimentDecisionBeforeAdvance) {
+    const persistedSearchState = {
+      ...asRecord(manifest.experiment_search),
+      ...experimentDecisionBeforeAdvance.persistedPatch,
+      last_updated_at: now,
+    };
+    manifest.experiment_search = persistedSearchState;
+    await writeJsonEnsured(
+      path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"),
+      persistedSearchState
+    );
+    manifest.experiment_memory = {
+      ...(asRecord(manifest.experiment_memory) ?? {}),
+      last_decision_summary: experimentDecisionBeforeAdvance.rationale,
+      last_updated_at: now,
+    };
+  }
 
   manifest.project_id = projectId;
   manifest.current_stage = stageAfter;
@@ -810,6 +1070,78 @@ export async function runWorkflowAutoIteratorImpl(
   manifest.blocking_reason = blockingReason;
   manifest.last_heartbeat_at = now;
   manifest.current_micro_stage = nextMicroStage;
+  const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
+  const rollbackReasonCategory =
+    experimentRollbackStage != null
+      ? normalizeStage(experimentDecisionBeforeAdvance?.decision) === "rollback_to_idea"
+        ? "innovation_invalidated"
+        : normalizeStage(experimentDecisionBeforeAdvance?.baselineFairnessStatus) !== "ready"
+          ? "baseline_fairness_broken"
+          : normalizeStage(experimentDecisionBeforeAdvance?.implementationConfidence) ===
+              "untrusted"
+            ? "implementation_untrusted"
+            : normalizeStage(experimentDecisionBeforeAdvance?.searchExhaustionStatus) ===
+                "exhausted"
+              ? "search_exhausted"
+              : "innovation_invalidated"
+      : null;
+  const orchestrationNextStage =
+    stageAfter != null ? deps.STAGE_REQUIREMENTS[stageAfter]?.nextStage ?? null : null;
+  manifest.orchestration_state = {
+    ...existingOrchestrationState,
+    status: gateEvaluation.blocking
+      ? "blocked"
+      : stageReadyForOwnerWork
+        ? "running"
+        : "waiting",
+    blocking_category:
+      experimentRollbackStage != null
+        ? "rollback_required"
+        : stageAfter === "experiment" && experimentDecisionBeforeAdvance
+          ? normalizeStage(experimentDecisionBeforeAdvance.decision)
+          : pickString(existingOrchestrationState, [
+              "blockingCategory",
+              "blocking_category",
+            ]),
+    current_owner: ownerAfter,
+    next_owner:
+      orchestrationNextStage != null ? deps.stageOwner(orchestrationNextStage) : null,
+    next_transition_candidate: orchestrationNextStage,
+    blocking_reason: blockingReason,
+    rollback_reason_category:
+      rollbackReasonCategory ??
+      pickString(existingOrchestrationState, [
+        "rollbackReasonCategory",
+        "rollback_reason_category",
+      ]),
+    rollback_evidence_summary:
+      experimentRollbackStage != null
+        ? experimentDecisionBeforeAdvance?.rationale ?? blockingReason
+        : pickString(existingOrchestrationState, [
+            "rollbackEvidenceSummary",
+            "rollback_evidence_summary",
+          ]),
+    rollback_target_stage:
+      experimentRollbackStage ??
+      pickString(existingOrchestrationState, [
+        "rollbackTargetStage",
+        "rollback_target_stage",
+      ]),
+    last_contract_eval_result:
+      experimentRollbackStage != null
+        ? "rollback_required"
+        : gateEvaluation.blocking
+          ? "blocked"
+          : dispatchStageSignals.length > 0
+            ? "needs_stage_repair"
+            : "pass",
+    last_contract_eval_at: now,
+    resume_cursor:
+      stageAfter === "experiment" && experimentDecisionBeforeAdvance
+        ? experimentDecisionBeforeAdvance.validationStage
+        : nextMicroStage,
+    last_updated_at: now,
+  };
   if (stageAfter === "experiment" && experimentReviewState) {
     const experimentReviewStatus = experimentReadyForAnalysis
       ? "ready_for_analysis"
@@ -828,6 +1160,42 @@ export async function runWorkflowAutoIteratorImpl(
     manifest.last_handoff_at = now;
   }
   await deps.saveManifest(projectRoot, manifest);
+
+  if (workflowPolicy.teamRuntime?.enabled !== false) {
+    const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
+    const teamTaskPreview = buildWorkflowStageTaskPreview({
+      currentStage: stageAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseout,
+    });
+    await materializeWorkflowTaskGraph({
+      projectRoot,
+      projectId,
+      stage: stageAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseout,
+      previewTasks: teamTaskPreview,
+    });
+    const taskGraphStore = await readWorkflowTaskGraphStore(projectRoot);
+    const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+    await materializeWorkflowTeamRound({
+      projectRoot,
+      projectId,
+      stage: stageAfter,
+      leadRole: ownerAfter,
+      topTierVerdict: evidenceCloseout.topTierVerdict,
+      evidenceCloseoutStatus: evidenceCloseout.status,
+      taskGraphPath: getWorkflowTaskGraphPath(projectRoot),
+      taskCount: taskGraphSummary.taskCount,
+      claimableCount: taskGraphSummary.claimableCount,
+      blockedCount: taskGraphSummary.blockedCount,
+      claimedCount: taskGraphSummary.claimedCount,
+      verifyingCount: taskGraphSummary.verifyingCount,
+      needsRepairCount: taskGraphSummary.needsRepairCount,
+      satisfiedCount: taskGraphSummary.satisfiedCount,
+      optionalCount: taskGraphSummary.optionalCount,
+    });
+  }
 
   const nextGateState: GateStateLike = {
     ...gateState,
@@ -943,6 +1311,7 @@ export async function runWorkflowAutoIteratorImpl(
       stage: stageAfter,
       owner: ownerAfter,
       summary:
+        experimentDecisionCommand?.summary ??
         deps.formatStageSummary(stageAfter) ??
         "Drive the current workflow stage and refresh durable state.",
       command: nextAction,
@@ -1106,6 +1475,9 @@ export async function runWorkflowAutoIteratorImpl(
     nextAction,
     resumeAction,
     blockingReason,
+    experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
+    experimentDecisionRationale: experimentDecisionBeforeAdvance?.rationale ?? null,
+    experimentRollbackStage,
     graphPresenceCheck,
     projectsStateUpdated,
     auditPath: null,
@@ -1140,6 +1512,9 @@ export async function runWorkflowAutoIteratorImpl(
       ownerBefore,
       ownerAfter,
       nextAction,
+      experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
+      experimentDecisionRationale: experimentDecisionBeforeAdvance?.rationale ?? null,
+      experimentRollbackStage,
     },
   });
   return result;

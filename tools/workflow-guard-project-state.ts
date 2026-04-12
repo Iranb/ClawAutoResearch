@@ -74,6 +74,8 @@ function applySurveyWorkflowBootstrapToManifest(params: {
   });
   const nextManifest = {
     ...params.manifest,
+    workflow_line: "survey",
+    paper_type: "survey",
     survey_review: serializeSurveyReviewState(nextSurveyReview),
     writing_contract: serializeWritingContractState(
       normalizeWritingContractState({

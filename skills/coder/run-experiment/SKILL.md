@@ -194,6 +194,7 @@ Also update:
 - the bundle's `EXPERIMENT_MANIFEST.json` status and remote pointers
 - `{PROJ}/coder/EXPERIMENT_INDEX.md` so the local folder tree and remote run stay linked
 - bundle-local `SEARCH_STATE.json` when this launch belongs to a search session
+- `research_workflow.record_experiment_runtime_signal` with a normalized `running` heartbeat once launch verification succeeds, so watcher artifacts (`RUN_HEARTBEAT.json`) exist even if no agent keeps polling the process
 
 Return a short structured summary so Researcher can update `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`.
 If you can identify `experimentId`, `trackId`, `server`, `gpu_id`, `screen_name`, and `REMOTE_RUN.json`, also call `research_workflow.upsert_experiment` so the shared ledger records the atomic launch immediately.
@@ -215,6 +216,7 @@ When those signals appear:
 
 - stop treating the branch as a fresh launch problem
 - do not burn more GPU time on adjacent novelty branches just because the old screen exited
+- call `research_workflow.record_experiment_runtime_signal` with a terminal status if watcher artifacts are missing or stale, so `/monitor-experiment` can reconcile from durable state instead of guessing from shell output alone
 - hand control to monitoring / reconciliation so results, artifacts, and ledger state become durable
 
 ## Allowed Runtime Adjustments

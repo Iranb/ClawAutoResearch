@@ -2,6 +2,12 @@ import {
   markWorkflowBroadcastEvent,
   recordWorkflowBroadcastEvent,
 } from "./workflow-session-orchestrator.js";
+import {
+  readWorkflowBroadcastOutboxStore,
+  writeWorkflowBroadcastOutboxStore,
+} from "./workflow-runtime-state.js";
+import { applyWorkflowBroadcastBudget } from "./workflow-handoff/broadcast-budget";
+import { recordWorkflowRuntimeIncident } from "./workflow-runtime-incidents.js";
 
 export type StageBroadcastRuntime = {
   run: (params: {
@@ -224,6 +230,7 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
   regressed?: boolean;
   recommendedActions?: StageBroadcastAction[];
   agentTaskDispatch?: StageBroadcastDispatch | null;
+  handoffIntentId?: string | null;
 }): string {
   const recommendedAction = summarizeRecommendedAction(params.recommendedActions);
   const participantSummaries = collectParticipantSummaries({
@@ -247,6 +254,12 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
   ];
   if (mentionTargets.length > 0) {
     lines.push(`Notify: ${mentionTargets.join(" ")}`);
+  }
+  if (params.handoffIntentId) {
+    lines.push(`Handoff Intent: ${params.handoffIntentId}`);
+    lines.push(
+      `Ack Command: research_workflow ack_handoff_intent handoffIntentId=${params.handoffIntentId}`
+    );
   }
   lines.push(
     `[STATUS] ${transitionVerb}: ${formatStageLabel(params.stageBefore)} -> ${formatStageLabel(
@@ -336,6 +349,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
   regressed?: boolean;
   recommendedActions?: StageBroadcastAction[];
   agentTaskDispatch?: StageBroadcastDispatch | null;
+  handoffIntentId?: string | null;
 }): Promise<StageBroadcastResult> {
   if (!params.stageChanged) {
     return {
@@ -385,9 +399,37 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
     regressed: params.regressed,
     recommendedActions: params.recommendedActions,
     agentTaskDispatch: params.agentTaskDispatch,
+    handoffIntentId: params.handoffIntentId,
   });
   if (params.projectRoot) {
-    await recordWorkflowBroadcastEvent({
+    const existingStore = await readWorkflowBroadcastOutboxStore(params.projectRoot);
+    const supersededEntries = existingStore.entries.map((entry) =>
+      entry.idempotencyKey !== idempotencyKey &&
+      entry.idempotencyKey.startsWith(
+        [
+          "openclaw-research:stage-broadcast",
+          params.sessionKey,
+          params.projectId ?? "unknown-project",
+        ].join(":")
+      ) &&
+      (entry.deliveryStatus === "pending" || entry.deliveryStatus === "failed")
+        ? {
+            ...entry,
+            deliveryStatus: "superseded" as const,
+            lastError:
+              entry.lastError ??
+              `Superseded by newer stage broadcast ${params.stageBefore ?? "unknown"} -> ${params.stageAfter ?? "unknown"}.`,
+          }
+        : entry
+    );
+    if (supersededEntries.some((entry, index) => entry !== existingStore.entries[index])) {
+      await writeWorkflowBroadcastOutboxStore({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        entries: supersededEntries,
+      });
+    }
+    const recorded = await recordWorkflowBroadcastEvent({
       projectRoot: params.projectRoot,
       projectId: params.projectId,
       broadcastId: idempotencyKey,
@@ -401,12 +443,37 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
         `Workflow stage changed from ${params.stageBefore ?? "unknown"} to ${params.stageAfter ?? "unknown"}.`,
       deliveryStatus: "pending",
     });
+    if (
+      !recorded.created &&
+      (recorded.entry.deliveryStatus === "pending" ||
+        recorded.entry.deliveryStatus === "sending" ||
+        recorded.entry.deliveryStatus === "delivered")
+    ) {
+      return {
+        broadcasted: false,
+        reasonSkipped: `duplicate_${recorded.entry.deliveryStatus}`,
+        runId: null,
+        sessionKey: params.sessionKey,
+        idempotencyKey,
+      };
+    }
   }
+  const budgeted = await applyWorkflowBroadcastBudget({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    sessionKey: params.sessionKey,
+    broadcastId: idempotencyKey,
+    idempotencyKey,
+    message,
+    summary:
+      params.nextAction ??
+      `Workflow stage changed from ${params.stageBefore ?? "unknown"} to ${params.stageAfter ?? "unknown"}.`,
+  });
   try {
     const runId = (
       await params.runtimeSubagent.run({
         sessionKey: params.sessionKey,
-        message,
+        message: budgeted.message,
         lane: "nested",
         deliver: true,
         idempotencyKey,
@@ -435,15 +502,34 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       idempotencyKey,
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     if (params.projectRoot) {
       await markWorkflowBroadcastEvent({
         projectRoot: params.projectRoot,
         idempotencyKey,
         deliveryStatus: "failed",
-        runError: error instanceof Error ? error.message : String(error),
+        runError: errorMessage,
         lastAttemptedAt: new Date().toISOString(),
         attemptsIncrement: 1,
       });
+      if (/Discord inbound worker timed out/i.test(errorMessage)) {
+        await recordWorkflowRuntimeIncident({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          idempotencyKey: `discord-inbound-timeout:${idempotencyKey}`,
+          kind: "discord_inbound_timeout",
+          severity: "warning",
+          summary:
+            "Discord inbound worker timed out while delivering a workflow stage broadcast.",
+          sessionKey: params.sessionKey,
+          error: errorMessage,
+          details: {
+            broadcastId: idempotencyKey,
+            stageBefore: params.stageBefore,
+            stageAfter: params.stageAfter,
+          },
+        });
+      }
     }
     return {
       broadcasted: false,
@@ -502,7 +588,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
     params.idempotencyKeySuffix ?? params.summary.trim().slice(0, 80),
   ].join(":");
   if (params.projectRoot) {
-    await recordWorkflowBroadcastEvent({
+    const recorded = await recordWorkflowBroadcastEvent({
       projectRoot: params.projectRoot,
       projectId: params.projectId,
       broadcastId: idempotencyKey,
@@ -513,18 +599,41 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       summary: params.summary,
       deliveryStatus: "pending",
     });
+    if (
+      !recorded.created &&
+      (recorded.entry.deliveryStatus === "pending" ||
+        recorded.entry.deliveryStatus === "sending" ||
+        recorded.entry.deliveryStatus === "delivered")
+    ) {
+      return {
+        broadcasted: false,
+        reasonSkipped: `duplicate_${recorded.entry.deliveryStatus}`,
+        runId: null,
+        sessionKey: params.sessionKey,
+        idempotencyKey,
+      };
+    }
   }
+  const budgeted = await applyWorkflowBroadcastBudget({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    sessionKey: params.sessionKey,
+    broadcastId: idempotencyKey,
+    idempotencyKey,
+    message: buildWorkflowStatusBroadcastMessage({
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      status: params.status,
+      stage: params.stage,
+      summary: params.summary,
+    }),
+    summary: params.summary,
+  });
   try {
     const runId = (
       await params.runtimeSubagent.run({
         sessionKey: params.sessionKey,
-        message: buildWorkflowStatusBroadcastMessage({
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          status: params.status,
-          stage: params.stage,
-          summary: params.summary,
-        }),
+        message: budgeted.message,
         lane: "nested",
         deliver: true,
         idempotencyKey,
@@ -551,15 +660,34 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       idempotencyKey,
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     if (params.projectRoot) {
       await markWorkflowBroadcastEvent({
         projectRoot: params.projectRoot,
         idempotencyKey,
         deliveryStatus: "failed",
-        runError: error instanceof Error ? error.message : String(error),
+        runError: errorMessage,
         lastAttemptedAt: new Date().toISOString(),
         attemptsIncrement: 1,
       });
+      if (/Discord inbound worker timed out/i.test(errorMessage)) {
+        await recordWorkflowRuntimeIncident({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          idempotencyKey: `discord-inbound-timeout:${idempotencyKey}`,
+          kind: "discord_inbound_timeout",
+          severity: "warning",
+          summary:
+            "Discord inbound worker timed out while delivering a workflow status broadcast.",
+          sessionKey: params.sessionKey,
+          error: errorMessage,
+          details: {
+            broadcastId: idempotencyKey,
+            stage: params.stage,
+            status: params.status,
+          },
+        });
+      }
     }
     return {
       broadcasted: false,

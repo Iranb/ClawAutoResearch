@@ -16,6 +16,7 @@ import {
 } from "../tools/workflow-runtime-state.ts";
 import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 import { runWorkflowRuntimeMaintenancePass } from "../tools/workflow-runtime-maintenance.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-"));
@@ -36,6 +37,16 @@ async function makeProject(projectRoot, projectId) {
     )}\n`,
     "utf8"
   );
+}
+
+async function writeJson(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeExecutable(filePath, text) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, text, { mode: 0o755 });
 }
 
 test("runWorkflowRuntimeMaintenancePass replays repairable background transitions", async (t) => {
@@ -286,5 +297,106 @@ test("runWorkflowRuntimeMaintenancePass escalates exhausted transitions and orph
   assert.equal(
     incidents.entries.some((entry) => entry.kind === "repair_orphan_session"),
     true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failures to repair handoff", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await makeProject(projectRoot, "gamma");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    retry_status: "completed_with_failures",
+    retryable_failed_papers: [{ source_key: "paper-1", title: "Failed paper" }],
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "gamma",
+  });
+
+  const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(
+    handoffs.intents.some((intent) => intent.reason === "paper_ingestion_failed"),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass refreshes experiment monitor and persists decision without a foreground agent", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousPath = process.env.PATH;
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-ssh-"));
+
+  t.after(async () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(binDir, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeExecutable(
+    path.join(binDir, "ssh"),
+    [
+      "#!/bin/sh",
+      "printf '\\n---SCREENS---\\n'",
+      "printf 'No Sockets found in /run/screen.\\n'",
+      "",
+    ].join("\n")
+  );
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+
+  await makeProject(projectRoot, "delta");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.owner_agent = "researcher";
+  manifest.experiment_search = {
+    status: "running",
+    search_spec_path: "planner/EXPERIMENT_SEARCH_SPEC.json",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    multi_seed_status: "pending",
+    ablation_status: "pending",
+    search_exhaustion_status: "active",
+    evidence_cleanliness_status: "clean",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_session_id: "search-delta",
+  });
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-delta",
+    experiment_name: "candidate",
+    track_id: "track-main",
+    server: "gpu-server",
+    gpu_id: "0",
+    screen_name: "timed-run",
+    status: "running",
+  });
+  await writeJson(path.join(runDir, "RUN_HEARTBEAT.json"), {
+    status: "running",
+    heartbeat_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "delta",
+  });
+
+  assert.equal(result.experimentMaintenance.attempted, true);
+  assert.equal(result.experimentMaintenance.monitorRefreshed, true);
+  assert.equal(result.experimentMaintenance.decisionPersisted, true);
+  assert.equal(result.experimentMaintenance.recommendation, "reconcile_finished");
+  assert.equal(result.experimentMaintenance.decision, "reconcile_runtime");
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    refreshedManifest.experiment_search.last_decision,
+    "reconcile_runtime"
   );
 });

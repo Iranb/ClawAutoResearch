@@ -22,11 +22,48 @@
 - `/workflow-status`  
   当前 workflow 快照入口。除了 stage / owner / gate，也会显示 PaperNexus 的 graph refresh 与 paper ingestion 摘要；看到 `graph refresh required` 时，要结合 `PaperNexus ingestion` 一行判断是“真的缺论文”还是“wrapper 驱动的导入/重算仍在进行中”。
 
+- `/idea-catalyst-search`
+  对当前项目运行 workflow-owned IDEA-CATALYST 跨域检索。它会读取现有 `SCOUTING_REPORT.json` / `INVESTIGATION_REQUISITION.json` 中的 query，通过 research30 的多源检索补强 source-domain evidence，并把结果回写到 `RESEARCH30_SCOUT_REPORT.{json,md}` 与 `SCOUTING_REPORT.json.research30_validation`。可选参数：
+  - `--quick`
+  - `--deep`
+  - `--days <N>`
+
+- `/citation-calibrate`
+  对当前项目运行 citation calibration，刷新 `reviewer/CITATION_CALIBRATION.{json,md}` 和 `reviewer/CITATION_VERIFICATION.md`。适合在 `/paper-write` 之后、`/review-phase` 或 submit 前执行。可选参数：
+  - `--replace-arxiv`
+
+- `/papernexus-stage-remote`
+  把当前项目 `paper-staging` 下的 PDF/Markdown 上传到远端 PaperNexus staging 主机，并生成带 `server_file_path` 的 remote manifest。适合远端 PaperNexus 无法直接访问本地文件系统时使用。默认 manifest 是 `researcher/paper-staging/batch-import.json`。可选参数：
+  - `--manifest "<relative-path>"`
+  - `--ssh-target <user@host>`
+  - `--remote-base-dir <remote-dir>`
+
+- `/authoring-closeout`
+  对当前项目执行 deterministic authoring closeout：补齐 writing/review/QC 状态、必要时自动补 conference citation、尝试生成 `main.pdf`，并把 stage 收口到 `write` 或 `submit`。适合在“稿子已经出来，但 workflow 状态没收口”时使用。可选参数：
+  - `--no-compile`
+  - `--no-auto-cite`
+
 - `/clear-project-binding`
   在当前频道 / 群组会话里清空它的 workflow 项目绑定。适合频道被错误绑定到别的项目、需要重新开始绑定时使用。这个命令只清当前频道对应的 project binding，不会删除项目目录，也不会影响其他频道。
 
 - `/survey-pipeline`
   面向综述 / survey 写作的 projectless 入口。给一个主题后，系统会创建一个轻量 survey workspace，并停留在 `survey_review` 这一个顶层 stage 内部推进 `retrieval -> screening -> synthesis -> complete`，不会进入实验环节。它复用现有 PaperNexus、workflow manifest、状态快照和 durable review packet，但把权威状态集中在 `PROJECT_MANIFEST.json.survey_review`，避免“文件已经生成了但 workflow 仍卡住”的老问题。现在 `survey_review -> write` 的 handoff 不再只看文件是否存在，而是会检查 5 个 survey gate：coverage、taxonomy stability、representative methods、benchmark alignment、gap closure。
+
+- `/survey-graph-build`
+  单独的后台 survey 构图入口。适合在综述 / survey 项目里做“主题相关、去重复、优先找图里没有的论文”的前置搜集，而不是直接刷新全图。它会后台启动一个 bounded Researcher continuation，复用现有 literature-review 与 graph-grounding 能力，但增加三条硬约束：
+  - 主题相关性优先
+  - 强 canonical dedupe
+  - graph-missing papers 优先
+
+  预期 durable 输出：
+  - `{PROJ}/researcher/SURVEY_GRAPH_BUILD_PACKET.md`
+  - `{PROJ}/researcher/SURVEY_GRAPH_BUILD_CANDIDATES.json`
+  - `{PROJ}/researcher/SURVEY_GRAPH_BUILD_DEDUPE_LOG.json`
+  - `{PROJ}/researcher/SURVEY_GRAPH_BUILD_MISSING_IN_GRAPH.json`
+
+  这个命令不替代 `/graph-build`。更合适的理解是：
+  - `/survey-graph-build`：先把“值得进图的 survey 候选论文”整理好
+  - `/graph-build`：再去执行 graph readiness / import catch-up / brainstorm refresh
 
 ## 3. 文献与图谱
 
@@ -120,13 +157,25 @@
   Coder 在实现与 dry-run 阶段生成 sanity-check 图、baseline/proposed 对比图和 ablation 预览图。
 
 - `/run-experiment`  
-  启动和管理实验执行。
+  启动和管理实验执行。现在它不只是写 `REMOTE_RUN.json`；成功启动后还应通过 `research_workflow.record_experiment_runtime_signal` 留下标准化 watcher artifacts，这样后续 completion 检测不依赖某个 agent 一直在线盯进程。
 
 - `/parallel-experiments`  
   并行实验批次调度。
 
 - `/monitor-experiment`  
   监控远程实验、结果目录和 screen 状态，并把完成的 run 回写到实验账本与分析就绪状态；在自动模式里，这是远程训练开始后的默认跟进动作。
+  但当前它已经是 **reconciliation-first** 而不是 primary watcher：
+  - 优先读 `REMOTE_RUN.json`、`RUN_HEARTBEAT.json`、`RUN_TERMINAL.json`、`RESULT_SUMMARY.json`、`FAILURE_SIGNATURE.json`
+  - 只有这些 durable runtime artifacts 不够时，才退回到 shell / `screen -ls` / GPU 占用检查
+  - 如果 workflow decision 建议 `require_multi_seed`、`require_ablation`、`repair_implementation` 或 rollback，就不应该再把这一步当成单纯盯进程
+
+- `/search-experiment`
+  运行 git-native bounded experiment search inner loop。适用于已经存在 `planner/EXPERIMENT_SEARCH_SPEC.json` 的项目。
+  当前约束已经变成 runtime hard guard：
+  - candidate worktree 的创建 / promote / discard 只能走 workflow-owned git actions
+  - promote 必须有显式 `promotion_basis_signals`
+  - 如果 basis 只引用 `gap_reduction`、`smoother_curve` 这类 `non_promotion_signals`，workflow 会直接拒绝 promotion
+  - discard 会把 `searchSessionId`、candidate lineage、discard reason、failure class 写回 ledger / search memory，而不是只存在聊天里
 
 ## 6. 分析、评审、写作
 
@@ -173,6 +222,13 @@
 1. 大多数情况下先用 `/research-pipeline`
 2. 项目中断后优先用 `/resume-pipeline`
 3. 只有在你明确要干预某个阶段时，再单独调用阶段性命令
+
+如果你是在本地做真实调试，而且遇到 non-interactive OpenClaw slash transport 静默挂起，可以使用 repo-local fallback：
+
+- `node scripts/run_local_workflow_command.mjs --command show-commands`
+- `node scripts/run_local_workflow_command.mjs --command citation-calibrate --project-root "<path>"`
+
+这个脚本的作用是直接执行 command handler，验证 workflow command 本身是否正常；它不是对 OpenClaw transport 本体的替代，只是调试 / live 验证时的稳定降级路径。
 
 ## 8. 相关文档
 

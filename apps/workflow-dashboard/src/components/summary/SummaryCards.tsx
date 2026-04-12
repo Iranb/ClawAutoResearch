@@ -31,6 +31,23 @@ export function SummaryCards(props: SummaryCardsProps) {
       label: "Updated",
       value: formatTimestamp(props.summary.updatedAt),
     },
+    {
+      label: "Top-tier verdict",
+      value: props.summary.topTierVerdict ?? "none",
+    },
+    {
+      label: "Task graph",
+      value:
+        props.summary.teamTaskGraphTaskCount !== null
+          ? `${props.summary.teamTaskGraphTaskCount} tasks · ${props.summary.teamTaskGraphClaimableCount ?? 0} claimable · ${props.summary.teamTaskGraphBlockedCount ?? 0} blocked`
+          : "none",
+    },
+    {
+      label: "Team round",
+      value: props.summary.teamRoundLead
+        ? `${props.summary.teamRoundLead} · ${props.summary.teamRoundActiveSessions ?? 0} active`
+        : "none",
+    },
   ];
 
   return (

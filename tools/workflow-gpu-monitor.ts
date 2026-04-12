@@ -17,6 +17,8 @@ export const DEFAULT_EXPERIMENT_GPU_MONITOR_PATH =
   "researcher/EXPERIMENT_GPU_MONITOR.json";
 const DEFAULT_GPU_MONITOR_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_SSH_TIMEOUT_MS = 15_000;
+const RESULT_SUMMARY_STABLE_MS = 90 * 1000;
+const RUN_HEARTBEAT_STALE_MS = 15 * 60 * 1000;
 
 type RemoteRunRecord = {
   experimentId: string | null;
@@ -27,6 +29,12 @@ type RemoteRunRecord = {
   screenName: string | null;
   status: string | null;
   remoteRunPath: string;
+  terminalStatus: string | null;
+  terminalAt: string | null;
+  heartbeatAt: string | null;
+  resultSummaryPath: string | null;
+  resultSummaryUpdatedAt: string | null;
+  failureSignature: string | null;
 };
 
 export type ExperimentGpuAssignment = {
@@ -42,6 +50,12 @@ export type ExperimentGpuAssignment = {
   likelyFinished: boolean;
   conclusion: "running" | "likely_finished" | "unknown";
   reason: string;
+  watcherSignal:
+    | "terminal_artifact"
+    | "result_summary"
+    | "timeout"
+    | "heartbeat_only"
+    | "none";
 };
 
 export type ExperimentGpuServerSnapshot = {
@@ -143,9 +157,29 @@ async function loadRemoteRunRecords(projectRoot: string): Promise<RemoteRunRecor
     if (!record) {
       continue;
     }
+    const dir = path.dirname(filePath);
+    const terminal = await readJsonIfExists<Record<string, unknown>>(
+      path.join(dir, "RUN_TERMINAL.json")
+    );
+    const heartbeat = await readJsonIfExists<Record<string, unknown>>(
+      path.join(dir, "RUN_HEARTBEAT.json")
+    );
+    const resultSummaryAbsolutePath = path.join(dir, "RESULT_SUMMARY.json");
+    const resultSummaryExists = await pathExists(resultSummaryAbsolutePath);
+    const resultSummaryUpdatedAt = resultSummaryExists
+      ? (
+          await fs.stat(resultSummaryAbsolutePath).catch(() => null)
+        )?.mtime?.toISOString?.() ?? null
+      : null;
+    const failureSignature = await readJsonIfExists<Record<string, unknown>>(
+      path.join(dir, "FAILURE_SIGNATURE.json")
+    );
     const server = pickString(record, ["server"]);
     const gpuId = pickString(record, ["gpuId", "gpu_id"]);
     const screenName = pickString(record, ["screenName", "screen_name"]);
+    const terminalStatus = normalizeRemoteRunStatus(
+      terminal?.status ?? terminal?.terminal_status
+    );
     const status = normalizeRemoteRunStatus(record.status);
     const experimentId =
       pickString(record, ["experimentId", "experiment_id"]) ??
@@ -159,6 +193,22 @@ async function loadRemoteRunRecords(projectRoot: string): Promise<RemoteRunRecor
       screenName,
       status,
       remoteRunPath: path.relative(projectRoot, filePath),
+      terminalStatus,
+      terminalAt:
+        readString(terminal?.terminalAt ?? terminal?.terminal_at) ??
+        readString(terminal?.completedAt ?? terminal?.completed_at),
+      heartbeatAt:
+        readString(heartbeat?.heartbeatAt ?? heartbeat?.heartbeat_at) ??
+        readString(heartbeat?.updatedAt ?? heartbeat?.updated_at),
+      resultSummaryPath: resultSummaryExists
+        ? path.relative(projectRoot, resultSummaryAbsolutePath)
+        : null,
+      resultSummaryUpdatedAt,
+      failureSignature:
+        readString(
+          failureSignature?.failureSignature ?? failureSignature?.failure_signature
+        ) ??
+        readString(terminal?.failureSignature ?? terminal?.failure_signature),
     });
   }
   return records;
@@ -182,6 +232,12 @@ async function loadLedgerBackedRunRecords(projectRoot: string): Promise<RemoteRu
       screenName: entry.screenName,
       status: entry.status,
       remoteRunPath: null,
+      terminalStatus: null,
+      terminalAt: null,
+      heartbeatAt: null,
+      resultSummaryPath: null,
+      resultSummaryUpdatedAt: null,
+      failureSignature: entry.failureSignature,
     }))
     .map((entry) => ({
       ...entry,
@@ -298,6 +354,7 @@ async function queryServerGpuStatus(params: {
 
 function buildAssignment(params: {
   run: RemoteRunRecord;
+  serverStatus: "ok" | "error";
   gpuSnapshot:
     | {
         gpuId: string;
@@ -312,18 +369,47 @@ function buildAssignment(params: {
       ? "present"
       : "missing"
     : "unknown";
+  const explicitTerminalSignal = Boolean(
+    params.run.terminalStatus || params.run.failureSignature
+  );
+  const resultSummaryStable =
+    Boolean(params.run.resultSummaryPath) &&
+    Boolean(params.run.resultSummaryUpdatedAt) &&
+    Number.isFinite(Date.parse(params.run.resultSummaryUpdatedAt ?? "")) &&
+    Date.now() - Date.parse(params.run.resultSummaryUpdatedAt ?? "") >=
+      RESULT_SUMMARY_STABLE_MS;
+  const heartbeatTimedOut =
+    Boolean(params.run.heartbeatAt) &&
+    Number.isFinite(Date.parse(params.run.heartbeatAt ?? "")) &&
+    Date.now() - Date.parse(params.run.heartbeatAt ?? "") >=
+      RUN_HEARTBEAT_STALE_MS &&
+    params.serverStatus === "ok" &&
+    occupancy !== "busy" &&
+    screenState !== "present" &&
+    isActiveRemoteRunStatus(params.run.status);
   const likelyFinished =
+    explicitTerminalSignal ||
+    resultSummaryStable ||
+    heartbeatTimedOut ||
     occupancy === "idle" &&
     (screenState === "missing" || screenState === "unknown") &&
     isActiveRemoteRunStatus(params.run.status);
   const conclusion =
-    occupancy === "busy" || screenState === "present"
+    explicitTerminalSignal || resultSummaryStable || heartbeatTimedOut
+      ? "likely_finished"
+      : occupancy === "busy" || screenState === "present"
       ? "running"
       : likelyFinished
         ? "likely_finished"
         : "unknown";
   const reason =
-    conclusion === "running"
+    explicitTerminalSignal
+      ? "terminal watcher artifact is present"
+      : resultSummaryStable
+        ? "stable result summary has been present long enough to treat the run as terminal"
+      : heartbeatTimedOut
+        ? "run heartbeat is stale and no live runtime signal remains, so the run is treated as timed out"
+      : conclusion === "running"
       ? screenState === "present"
         ? "screen session still present"
         : "assigned GPU still looks busy"
@@ -343,6 +429,15 @@ function buildAssignment(params: {
     likelyFinished,
     conclusion,
     reason,
+    watcherSignal: explicitTerminalSignal
+      ? "terminal_artifact"
+      : resultSummaryStable
+        ? "result_summary"
+      : heartbeatTimedOut
+        ? "timeout"
+      : params.run.heartbeatAt
+        ? "heartbeat_only"
+        : "none",
   };
 }
 
@@ -404,7 +499,7 @@ export async function refreshExperimentGpuMonitor(params: {
   const ledgerRuns = await loadLedgerBackedRunRecords(projectRoot);
   const activeRunMap = new Map<string, RemoteRunRecord>();
   for (const run of [...remoteRunFiles, ...ledgerRuns]) {
-    if (!isActiveRemoteRunStatus(run.status)) {
+    if (!isActiveRemoteRunStatus(run.status) && !run.terminalStatus) {
       continue;
     }
     const key =
@@ -440,6 +535,7 @@ export async function refreshExperimentGpuMonitor(params: {
       .map((run) =>
         buildAssignment({
           run,
+          serverStatus: queried.status,
           gpuSnapshot: queried.gpus.find((gpu) => gpu.gpuId === (run.gpuId ?? "")),
           screenNames: queried.screenNames,
         })
@@ -576,6 +672,16 @@ export async function getExperimentGpuMonitorStateSummary(params: {
                 ? "likely_finished"
                 : "unknown",
           reason: pickString(assignment, ["reason"]) ?? "unknown",
+          watcherSignal:
+            pickString(assignment, ["watcherSignal", "watcher_signal"]) === "terminal_artifact"
+              ? "terminal_artifact"
+              : pickString(assignment, ["watcherSignal", "watcher_signal"]) === "result_summary"
+                ? "result_summary"
+                : pickString(assignment, ["watcherSignal", "watcher_signal"]) === "timeout"
+                  ? "timeout"
+              : pickString(assignment, ["watcherSignal", "watcher_signal"]) === "heartbeat_only"
+                ? "heartbeat_only"
+                : "none",
         };
       }),
       busyAssignedGpuCount:

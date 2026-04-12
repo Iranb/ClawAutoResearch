@@ -183,6 +183,27 @@ export function ProjectDetailPage() {
     selectedArtifactKey
       ? visibleArtifacts.find((artifact) => artifact.key === selectedArtifactKey) ?? null
       : null;
+  const summaryTaskBoard = summary?.taskBoard ?? [];
+  const summaryEvidenceBoard = summary?.evidenceBoard ?? {
+    benchmarkProtocolStatus: null,
+    benchmarkProtocolLocked: false,
+    statisticalEvidenceStatus: null,
+    statisticalEvidenceClaimStrength: null,
+    venueCompetitionStatus: null,
+    venueCompetitionGraphContextStatus: null,
+    ablationEvidenceStatus: null,
+    ablationEvidenceSufficiency: null,
+    mechanismEvidenceStatus: null,
+    mechanismEvidenceGraphContextStatus: null,
+    reproducibilityPackStatus: null,
+    reproducibilityEnvironmentStatus: null,
+    cameraReadyEvidenceStatus: null,
+    cameraReadyFiguresStatus: null,
+    cameraReadyTablesStatus: null,
+    cameraReadyCaptionsStatus: null,
+    topTierVerdict: null,
+    evidenceCloseoutStatus: null,
+  };
 
   return (
     <AppShell
@@ -253,6 +274,161 @@ export function ProjectDetailPage() {
                     </article>
                   </section>
                 ) : null}
+                <section className="detail-grid detail-grid--secondary">
+                  <article className="detail-card">
+                    <p className="detail-card__label">Team round</p>
+                    <p className="detail-card__value">
+                      {summary.teamRoundLead
+                        ? `${summary.teamRoundLead} · ${summary.teamRoundActiveSessions ?? 0} active`
+                        : "No active round"}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Task graph health</p>
+                    <p className="detail-card__value">
+                      {summary.teamTaskGraphTaskCount !== null
+                        ? `${summary.teamTaskGraphClaimableCount ?? 0} claimable · ${summary.teamTaskGraphBlockedCount ?? 0} blocked · ${summary.teamTaskGraphClaimedCount ?? 0} claimed`
+                        : "No task graph"}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Last claimed task</p>
+                    <p className="detail-card__value">
+                      {summary.teamRoundLastClaimedTaskId ?? "None"}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Last completed task</p>
+                    <p className="detail-card__value">
+                      {summary.teamRoundLastCompletedTaskId ?? "None"}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Handoff recovery</p>
+                    <p className="detail-card__value">
+                      {`${summary.pendingHandoffCount} pending · ${summary.unackedHandoffCount} unacked · ${summary.failedHandoffCount} failed`}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Repair queue</p>
+                    <p className="detail-card__value">
+                      {`${summary.repairQueueCount} repairs · ${summary.staleClaimCount} stale claims`}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Runtime safety</p>
+                    <p className="detail-card__value">
+                      {`${summary.capabilityWarnings} capability warnings · ${summary.activeWriteScopeCount} write locks`}
+                    </p>
+                  </article>
+                </section>
+                <section className="detail-grid detail-grid--secondary">
+                  <article className="detail-card">
+                    <p className="detail-card__label">Benchmark protocol</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.benchmarkProtocolStatus,
+                        summaryEvidenceBoard.benchmarkProtocolLocked ? "locked" : "unlocked",
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Statistical evidence</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.statisticalEvidenceStatus,
+                        summaryEvidenceBoard.statisticalEvidenceClaimStrength,
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Venue competition</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.venueCompetitionStatus,
+                        summaryEvidenceBoard.venueCompetitionGraphContextStatus,
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Ablation evidence</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.ablationEvidenceStatus,
+                        summaryEvidenceBoard.ablationEvidenceSufficiency,
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Mechanism evidence</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.mechanismEvidenceStatus,
+                        summaryEvidenceBoard.mechanismEvidenceGraphContextStatus,
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Reproducibility pack</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.reproducibilityPackStatus,
+                        summaryEvidenceBoard.reproducibilityEnvironmentStatus,
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Camera-ready evidence</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.cameraReadyEvidenceStatus,
+                        [
+                          summaryEvidenceBoard.cameraReadyFiguresStatus,
+                          summaryEvidenceBoard.cameraReadyTablesStatus,
+                          summaryEvidenceBoard.cameraReadyCaptionsStatus,
+                        ]
+                          .filter(Boolean)
+                          .join(" / "),
+                      )}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Evidence closeout</p>
+                    <p className="detail-card__value">
+                      {formatEvidenceLine(
+                        summaryEvidenceBoard.evidenceCloseoutStatus,
+                        summaryEvidenceBoard.topTierVerdict,
+                      )}
+                    </p>
+                  </article>
+                </section>
+                {summaryTaskBoard.length > 0 ? (
+                  <section className="detail-card">
+                    <p className="detail-card__label">Task board</p>
+                    <div className="artifact-panel">
+                      {summaryTaskBoard.map((task) => (
+                        <article className="detail-card" key={task.taskId}>
+                          <p className="detail-card__label">{task.taskId}</p>
+                          <p className="detail-card__value">{task.title}</p>
+                          <p className="detail-card__meta">
+                            {[
+                              task.owner ? `owner: ${task.owner}` : null,
+                              `status: ${task.status}`,
+                              task.claimant ? `claimant: ${task.claimant}` : null,
+                              task.dependsOn.length > 0
+                                ? `depends: ${task.dependsOn.join(", ")}`
+                                : null,
+                              `verify: ${task.verificationStatus}`,
+                              task.latestEvent ? `event: ${task.latestEvent}` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
               </>
             ) : (
               <section className="artifact-panel">
@@ -305,6 +481,13 @@ export function ProjectDetailPage() {
       ) : null}
     </AppShell>
   );
+}
+
+function formatEvidenceLine(primary: string | null, secondary: string | null): string {
+  if (primary && secondary) {
+    return `${primary} · ${secondary}`;
+  }
+  return primary ?? secondary ?? "Unknown";
 }
 
 function filterArtifactsForTab(

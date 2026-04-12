@@ -3,6 +3,7 @@ import path from "node:path";
 import { getWorkflowStageIndex } from "../constants/workflow-stages.js";
 import { readJsonFile } from "../file-access/fs.js";
 import { resolveExistingProjectRoot } from "../file-access/project-root.js";
+import { readWorkflowDashboardSummary } from "../../../../tools/workflow-projection/dashboard-summary.js";
 
 type ManifestFile = {
   project_id?: string | null;
@@ -24,6 +25,9 @@ type ManifestFile = {
   writing_contract?: {
     paper_mode?: string | null;
     paperMode?: string | null;
+  } | null;
+  opportunity_scorecard?: {
+    verdict?: string | null;
   } | null;
 };
 
@@ -54,6 +58,56 @@ export type ProjectDetailSummary = {
   surveyProgressSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
+  topTierVerdict: string | null;
+  teamRoundLead: string | null;
+  teamRoundActiveSessions: number | null;
+  teamRoundLastClaimedTaskId: string | null;
+  teamRoundLastCompletedTaskId: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphBlockedCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphVerifyingCount: number | null;
+  teamTaskGraphNeedsRepairCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
+  pendingHandoffCount: number;
+  failedHandoffCount: number;
+  unackedHandoffCount: number;
+  repairQueueCount: number;
+  staleClaimCount: number;
+  capabilityWarnings: number;
+  activeWriteScopeCount: number;
+  taskBoard: Array<{
+    taskId: string;
+    title: string;
+    owner: string | null;
+    status: string;
+    claimant: string | null;
+    dependsOn: string[];
+    verificationStatus: string;
+    latestEvent: string | null;
+    latestEventAt: string | null;
+  }>;
+  evidenceBoard: {
+    benchmarkProtocolStatus: string | null;
+    benchmarkProtocolLocked: boolean;
+    statisticalEvidenceStatus: string | null;
+    statisticalEvidenceClaimStrength: string | null;
+    venueCompetitionStatus: string | null;
+    venueCompetitionGraphContextStatus: string | null;
+    ablationEvidenceStatus: string | null;
+    ablationEvidenceSufficiency: string | null;
+    mechanismEvidenceStatus: string | null;
+    mechanismEvidenceGraphContextStatus: string | null;
+    reproducibilityPackStatus: string | null;
+    reproducibilityEnvironmentStatus: string | null;
+    cameraReadyEvidenceStatus: string | null;
+    cameraReadyFiguresStatus: string | null;
+    cameraReadyTablesStatus: string | null;
+    cameraReadyCaptionsStatus: string | null;
+    topTierVerdict: string | null;
+    evidenceCloseoutStatus: string | null;
+  };
   source: Array<"manifest" | "papernexus_progress" | "fallback">;
 };
 
@@ -76,6 +130,7 @@ export async function readProjectDetailSummary(params: {
   const progress = await readJsonFile<PapernexusProgressFile>(
     path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
   );
+  const dashboardSummary = await readWorkflowDashboardSummary(projectRoot);
   const source: ProjectDetailSummary["source"] = [];
 
   if (manifest) {
@@ -118,6 +173,53 @@ export async function readProjectDetailSummary(params: {
     surveyProgressSummary: formatSurveyProgressSummary(manifest?.survey_review),
     papernexusPhase: asString(progress?.phase),
     papernexusProgressSummary: formatPapernexusProgressSummary(progress?.progress),
+    topTierVerdict: asString(manifest?.opportunity_scorecard?.verdict),
+    teamRoundLead: dashboardSummary.teamRound.leadRole,
+    teamRoundActiveSessions: dashboardSummary.teamRound.activeSessionCount,
+    teamRoundLastClaimedTaskId: dashboardSummary.teamRound.lastClaimedTaskId,
+    teamRoundLastCompletedTaskId: dashboardSummary.teamRound.lastCompletedTaskId,
+    teamTaskGraphTaskCount: dashboardSummary.teamTaskGraph.taskCount,
+    teamTaskGraphClaimableCount: dashboardSummary.teamTaskGraph.claimableCount,
+    teamTaskGraphBlockedCount: dashboardSummary.teamTaskGraph.blockedCount,
+    teamTaskGraphClaimedCount: dashboardSummary.teamTaskGraph.claimedCount,
+    teamTaskGraphVerifyingCount: dashboardSummary.teamTaskGraph.verifyingCount,
+    teamTaskGraphNeedsRepairCount: dashboardSummary.teamTaskGraph.needsRepairCount,
+    teamTaskGraphSatisfiedCount: dashboardSummary.teamTaskGraph.satisfiedCount,
+    pendingHandoffCount: dashboardSummary.handoffRecovery.pendingHandoffCount,
+    failedHandoffCount: dashboardSummary.handoffRecovery.failedHandoffCount,
+    unackedHandoffCount: dashboardSummary.handoffRecovery.unackedHandoffCount,
+    repairQueueCount: dashboardSummary.handoffRecovery.repairQueueCount,
+    staleClaimCount: dashboardSummary.handoffRecovery.staleClaimCount,
+    capabilityWarnings: dashboardSummary.handoffRecovery.capabilityWarnings,
+    activeWriteScopeCount: dashboardSummary.handoffRecovery.activeWriteScopeCount,
+    taskBoard: dashboardSummary.taskBoard,
+    evidenceBoard: {
+      benchmarkProtocolStatus: dashboardSummary.evidenceBoard.benchmarkProtocol.status,
+      benchmarkProtocolLocked: dashboardSummary.evidenceBoard.benchmarkProtocol.locked,
+      statisticalEvidenceStatus: dashboardSummary.evidenceBoard.statisticalEvidence.status,
+      statisticalEvidenceClaimStrength:
+        dashboardSummary.evidenceBoard.statisticalEvidence.claimStrengthStatus,
+      venueCompetitionStatus: dashboardSummary.evidenceBoard.venueCompetition.status,
+      venueCompetitionGraphContextStatus:
+        dashboardSummary.evidenceBoard.venueCompetition.graphContextStatus,
+      ablationEvidenceStatus: dashboardSummary.evidenceBoard.ablationEvidence.status,
+      ablationEvidenceSufficiency:
+        dashboardSummary.evidenceBoard.ablationEvidence.sufficiencyStatus,
+      mechanismEvidenceStatus: dashboardSummary.evidenceBoard.mechanismEvidence.status,
+      mechanismEvidenceGraphContextStatus:
+        dashboardSummary.evidenceBoard.mechanismEvidence.graphContextStatus,
+      reproducibilityPackStatus: dashboardSummary.evidenceBoard.reproducibilityPack.status,
+      reproducibilityEnvironmentStatus:
+        dashboardSummary.evidenceBoard.reproducibilityPack.environmentCaptureStatus,
+      cameraReadyEvidenceStatus: dashboardSummary.evidenceBoard.cameraReadyEvidence.status,
+      cameraReadyFiguresStatus:
+        dashboardSummary.evidenceBoard.cameraReadyEvidence.figuresStatus,
+      cameraReadyTablesStatus: dashboardSummary.evidenceBoard.cameraReadyEvidence.tablesStatus,
+      cameraReadyCaptionsStatus:
+        dashboardSummary.evidenceBoard.cameraReadyEvidence.captionsStatus,
+      topTierVerdict: dashboardSummary.evidenceBoard.opportunityScorecard.verdict,
+      evidenceCloseoutStatus: dashboardSummary.evidenceCloseout.status,
+    },
     source,
   };
 }

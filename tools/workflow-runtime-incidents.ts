@@ -11,7 +11,8 @@ export type WorkflowRuntimeIncidentKind =
   | "lobster_fallback"
   | "repair_exhausted"
   | "repair_orphan_session"
-  | "broadcast_delivery_failed";
+  | "broadcast_delivery_failed"
+  | "discord_inbound_timeout";
 
 export type WorkflowRuntimeIncidentSeverity = "warning" | "error";
 

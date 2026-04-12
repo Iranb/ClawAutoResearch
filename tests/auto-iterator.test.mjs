@@ -4294,6 +4294,97 @@ test("auto iterator advances analyze without theory appendix artifacts when proo
   );
 });
 
+test("auto iterator keeps top-tier analyze stage blocked until mechanism and venue competition evidence are graph-grounded", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.benchmark_protocol = {
+    status: "ready",
+    benchmark_family: "OpenWorldGraphBench",
+    protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
+    locked: true,
+    drift_status: "pass",
+  };
+  manifest.statistical_evidence = {
+    status: "ready",
+    aggregate_path: "analyzer/STATISTICAL_EVIDENCE.json",
+    claim_strength_status: "strong",
+    significant_result_count: 3,
+    insufficient_seed_count: 0,
+  };
+  manifest.ablation_evidence = {
+    status: "ready",
+    summary_path: "researcher/ABLATION_EVIDENCE.json",
+    sufficiency_status: "sufficient",
+    publication_critical_count: 2,
+  };
+  manifest.mechanism_evidence = {
+    status: "partial",
+    packet_path: "researcher/MECHANISM_EVIDENCE.json",
+    evidence_tier: "moderate",
+    graph_context_status: "unverified_graph_context",
+  };
+  manifest.venue_competition = {
+    status: "partial",
+    target_venues: ["ICLR"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "unverified_graph_context",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "analyze");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /mechanism_evidence\.graph_context_status/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /venue_competition\.graph_context_status/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator regresses frontier_mapping back to graph_build when graph misses canonical papers", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -5620,6 +5711,101 @@ test("auto iterator advances code to experiment when aggressive code innovation 
   assert.equal(result.gateBlocking, false);
 });
 
+test("auto iterator keeps top-tier experiment stage blocked until benchmark, statistics, and ablation evidence are present", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "ready_for_analysis";
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    plot_pack_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: "2026-04-11T00:00:00.000Z",
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.benchmark_protocol = {
+    status: "missing",
+    locked: false,
+    drift_status: null,
+  };
+  manifest.statistical_evidence = {
+    status: "missing",
+    claim_strength_status: null,
+  };
+  manifest.ablation_evidence = {
+    status: "missing",
+    sufficiency_status: null,
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: "2026-04-11T00:00:00.000Z",
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-1",
+      lastFailedExperimentId: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId: "track-main",
+        status: "completed",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /benchmark_protocol\.status must not be missing/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /statistical_evidence\.status must not be missing/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /ablation_evidence\.status must not be missing/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator points experiment stage at monitor-experiment while remote runs are still active", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -5756,6 +5942,174 @@ test("auto iterator points experiment stage at monitor-experiment while remote r
       /\/monitor-experiment/i.test(action.command ?? "")
     )
   );
+});
+
+test("auto iterator hands experiment implementation repair back to coder when baseline fairness is not ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "baseline_parity";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: null,
+    last_failed_experiment_id: null,
+    best_known_config_ref: null,
+    last_decision_summary: null,
+    papernexus_sync_required: false,
+    papernexus_sync_status: "clean",
+  };
+  manifest.experiment_search = {
+    status: "running",
+    current_main_stage: "baseline_tuning",
+    current_substage: "baseline_parity",
+    validation_stage: "baseline_parity",
+    baseline_fairness_status: "pending",
+    implementation_confidence: "unknown",
+    search_exhaustion_status: "active",
+    ablation_status: "pending",
+    innovation_status: "unknown",
+    evidence_cleanliness_status: "partial",
+    multi_seed_status: "pending",
+    plot_pack_status: "pending",
+    pending_reason: "Baseline parity has not been re-established yet.",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.ownerAfter, "coder");
+  assert.equal(result.experimentDecision, "repair_implementation");
+  assert.match(result.nextAction ?? "", /repair the bounded runtime \/ implementation issue/i);
+  assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
+  assert.equal(result.recommendedActions[0]?.owner, "coder");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.orchestration_state.current_owner, "coder");
+  assert.equal(repairedManifest.orchestration_state.next_transition_candidate, "analyze");
+});
+
+test("auto iterator rolls experiment stage back to plan when the innovation is invalidated", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now, trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "artifacts", "results", "metrics.json"),
+    "{}\n"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "decision";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: "exp-2",
+    last_failed_experiment_id: "exp-2",
+    best_known_config_ref: "planner/EXPERIMENT_SEARCH_SPEC.json",
+    last_decision_summary: "clean scientific failures keep repeating",
+    papernexus_sync_required: false,
+    papernexus_sync_status: "clean",
+  };
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "decision",
+    validation_stage: "decision",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    search_exhaustion_status: "exhausted",
+    ablation_status: "ready",
+    innovation_status: "unknown",
+    evidence_cleanliness_status: "clean",
+    multi_seed_status: "ready",
+    plot_pack_status: "ready",
+    evaluation_summary_path: "researcher/artifacts/results/metrics.json",
+    plot_pack_path: "researcher/artifacts/results/metrics.json",
+  };
+  manifest.orchestration_state = {
+    status: "running",
+    current_owner: "researcher",
+    next_owner: "analyzer",
+    next_transition_candidate: "analyze",
+    retry_budget_remaining: 1,
+    rollback_target_stage: "plan",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: now,
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-2",
+      lastFailedExperimentId: "exp-2",
+      bestKnownConfigRef: null,
+      lastDecisionSummary: "innovation invalidated",
+      papernexusSyncRequired: false,
+      papernexusLastSyncAt: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId,
+        name: "candidate-a",
+        kind: "train",
+        status: "failed",
+        stage: "analysis",
+        summary: "Under baseline after fair comparison.",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+      {
+        experimentId: "exp-2",
+        trackId,
+        name: "candidate-b",
+        kind: "train",
+        status: "failed",
+        stage: "analysis",
+        summary: "Under baseline after fair comparison.",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "plan");
+  assert.equal(result.ownerAfter, "orchestrator");
+  assert.equal(result.experimentDecision, "rollback_to_plan");
+  assert.equal(result.experimentRollbackStage, "plan");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.current_stage, "plan");
+  assert.equal(repairedManifest.orchestration_state.rollback_target_stage, "plan");
+  assert.equal(repairedManifest.orchestration_state.current_owner, "orchestrator");
+  assert.equal(repairedManifest.orchestration_state.next_transition_candidate, "code");
 });
 
 test("auto iterator keeps write stage blocked when theory appendix draft is missing", async (t) => {
@@ -5921,6 +6275,162 @@ test("auto iterator keeps write stage blocked when figure QC reports caption ali
     result.missingStageSignals.some((signal) =>
       /figure_qc.*caption_alignment_status = pass/i.test(signal)
     )
+  );
+});
+
+test("auto iterator keeps top-tier write stage blocked when venue competition is not graph-grounded", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "top_tier_positioning";
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "unverified_graph_context",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.venue_competition = {
+    status: "partial",
+    target_venues: ["ICLR", "NeurIPS"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "unverified_graph_context",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /opportunity_scorecard\.graph_context_status/i.test(signal)
+    )
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /venue_competition\.graph_context_status/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps top-tier write stage blocked when reproducibility pack is missing", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "reproducibility_packaging";
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.venue_competition = {
+    status: "ready",
+    target_venues: ["ICLR"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "ready",
+  };
+  manifest.reproducibility_pack = {
+    status: "missing",
+    bundle_path: "academic_writer/REPRODUCIBILITY_PACK.json",
+    environment_capture_status: null,
+    regenerate_tables_status: null,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /reproducibility_pack\.status must not be missing/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator surfaces camera-ready evidence requirements for top-tier submit", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "submit";
+  manifest.current_micro_stage = "camera_ready_validation";
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.venue_competition = {
+    status: "ready",
+    target_venues: ["ICLR"],
+    competitor_slate_path: "researcher/VENUE_COMPETITION.json",
+    acceptance_risk_status: "moderate",
+    graph_context_status: "ready",
+  };
+  manifest.reproducibility_pack = {
+    status: "ready",
+    bundle_path: "academic_writer/REPRODUCIBILITY_PACK.json",
+    environment_capture_status: "ready",
+    regenerate_tables_status: "ready",
+  };
+  manifest.camera_ready_evidence = {
+    status: "draft",
+    package_path: "academic_writer/CAMERA_READY_EVIDENCE.json",
+    figures_status: "ready",
+    tables_status: "pending",
+    captions_status: "pending",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /camera_ready_evidence\.tables_status must be ready/i.test(signal)
+    ),
+    JSON.stringify(result.missingStageSignals)
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /camera_ready_evidence\.captions_status must be ready/i.test(signal)
+    ),
+    JSON.stringify(result.missingStageSignals)
   );
 });
 

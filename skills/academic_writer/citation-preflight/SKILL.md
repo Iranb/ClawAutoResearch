@@ -77,6 +77,29 @@ Preferred sources:
 - arXiv when the paper is a preprint
 - DataCite when relevant for datasets / software / reports
 
+## Automation Helper
+
+When local Python is available, run the repo calibration helper before manually editing `refs.bib`:
+
+```bash
+python3 scripts/citation_calibrate.py \
+  --bib "{PROJ}/academic_writer/paper/refs.bib" \
+  --out "{PROJ}/academic_writer/paper/refs.calibrated.bib" \
+  --report-json "{PROJ}/reviewer/CITATION_CALIBRATION.json" \
+  --report-md "{PROJ}/reviewer/CITATION_CALIBRATION.md"
+```
+
+This helper now prefers:
+
+- `reffix` for BibTeX repair / replacement
+- `research30`-backed multi-source validation for DOI / URL / venue grounding
+
+Optional fallback:
+
+- `update_from_dblp` can still be enabled as a secondary fallback, but it is no longer the primary verifier
+
+If the external verifier is unavailable, the helper still emits a report and marks suspicious / hallucinated entries conservatively.
+
 ## Procedure
 
 ### 1. Load Citation State
@@ -162,6 +185,7 @@ If a citation only loosely relates to the sentence, treat it as `suspicious`.
 Keep or add only verified entries in:
 
 - `{PROJ}/academic_writer/paper/refs.bib`
+- Prefer replacing it from `{PROJ}/academic_writer/paper/refs.calibrated.bib` after the calibration helper succeeds.
 
 Recommended key format:
 

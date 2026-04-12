@@ -15,6 +15,25 @@ const SURVEY_WORKFLOW_RECOVERY_STAGES = new Set([
   "review",
 ]);
 
+function inferSurveyTopic(manifest) {
+  const record = manifest ?? {};
+  const surveyReview =
+    record.survey_review && typeof record.survey_review === "object"
+      ? record.survey_review
+      : {};
+  const researchProgram =
+    record.research_program && typeof record.research_program === "object"
+      ? record.research_program
+      : {};
+  return (
+    asString(surveyReview.topic) ??
+    asString(record.topic) ??
+    asString(record.title) ??
+    asString(researchProgram.goal) ??
+    asString(record.project_id)
+  );
+}
+
 export function isSurveyWorkflow(manifest) {
   const record = manifest ?? {};
   const explicitWorkflowLine =
@@ -73,6 +92,52 @@ export function resolveStageForWorkflowLine(params) {
     return "survey_review";
   }
   return SURVEY_WORKFLOW_RECOVERY_STAGES.has(stage) ? "survey_review" : stage;
+}
+
+export function ensureSurveyWorkflowIdentity(manifest) {
+  if (!isSurveyWorkflow(manifest)) {
+    return {
+      manifest: manifest ?? {},
+      updated: false,
+    };
+  }
+  const record = { ...(manifest ?? {}) };
+  const now = new Date().toISOString();
+  const currentSurveyReview = normalizeSurveyReviewState(record.survey_review);
+  const currentWritingContract = normalizeWritingContractState(record.writing_contract);
+  const topic = currentSurveyReview.topic ?? inferSurveyTopic(record);
+  const nextSurveyReview = {
+    ...(record.survey_review && typeof record.survey_review === "object"
+      ? record.survey_review
+      : {}),
+    topic,
+    mode: currentSurveyReview.mode ?? "survey",
+    status: currentSurveyReview.status === "missing" ? "searching" : currentSurveyReview.status,
+    current_phase: currentSurveyReview.currentPhase ?? "retrieval",
+    last_updated_at: currentSurveyReview.lastUpdatedAt ?? now,
+  };
+  const nextWritingContract = {
+    ...(record.writing_contract && typeof record.writing_contract === "object"
+      ? record.writing_contract
+      : {}),
+    paper_mode: "survey",
+  };
+  const next = {
+    ...record,
+    workflow_line: "survey",
+    paper_type: "survey",
+    survey_review: nextSurveyReview,
+    writing_contract: nextWritingContract,
+  };
+  const updated =
+    record.workflow_line !== next.workflow_line ||
+    record.paper_type !== next.paper_type ||
+    record.survey_review !== next.survey_review ||
+    record.writing_contract !== next.writing_contract;
+  return {
+    manifest: next,
+    updated,
+  };
 }
 
 export function resolveNextStageForWorkflow(params) {

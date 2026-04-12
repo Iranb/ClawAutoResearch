@@ -10,6 +10,10 @@ import {
   deriveWorkflowDispatchSessionCandidates,
   dispatchWorkflowTaskToAgent,
 } from "../tools/agent-task-dispatch.ts";
+import {
+  downgradeWorkflowAgentCapability,
+  upsertWorkflowAgentCapability,
+} from "../tools/workflow-handoff/agent-capabilities.ts";
 
 test("deriveAgentSessionKeyForRole keeps the same channel peer and swaps the agent id", () => {
   const sessionKey = deriveAgentSessionKeyForRole({
@@ -84,6 +88,46 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
   assert.match(calls[0].message, /Implement the current experiment plan/);
 });
 
+test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packets", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-exec-packet-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const longCommand = `python3 scripts/do_work.py --payload ${"x".repeat(2200)}`;
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-long-command" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Run a long command safely.",
+    command: longCommand,
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.match(calls[0].message, /file-backed exec packet/i);
+  assert.doesNotMatch(calls[0].message, /x{500}/);
+
+  const packetDir = path.join(projectRoot, ".openclaw-research", "exec-packets");
+  const files = await fs.readdir(packetDir);
+  assert.ok(files.some((entry) => entry.endsWith(".json")));
+  assert.ok(files.some((entry) => entry.endsWith(".sh")));
+});
+
 test("dispatchWorkflowTaskToAgent retries alternate direct session candidates before giving up", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
@@ -148,6 +192,52 @@ test("dispatchWorkflowTaskToAgent falls back to a spawned session when direct de
   assert.match(result.sessionKey ?? "", /^agent:coder:subagent:/);
   assert.equal(result.attempts.at(-1)?.strategy, "spawn_fallback");
   assert.equal(calls.length, 3);
+});
+
+test("dispatchWorkflowTaskToAgent avoids stale same-role capability records", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-capability-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await upsertWorkflowAgentCapability({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    role: "coder",
+    canUseResearchWorkflow: true,
+    confidence: "high",
+  });
+  await downgradeWorkflowAgentCapability({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    reason: "research_workflow unavailable",
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params.sessionKey);
+        return { runId: "spawn-after-stale-capability" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    summary: "Dispatch with stale capability.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.channel, "sessions_spawn");
+  assert.match(result.sessionKey ?? "", /^agent:coder:subagent:/);
+  assert.deepEqual(calls, [result.sessionKey]);
 });
 
 test("dispatchWorkflowTaskToAgent retries timeout only when requested and transcript did not advance", async () => {

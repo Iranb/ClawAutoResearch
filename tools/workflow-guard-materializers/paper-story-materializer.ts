@@ -13,6 +13,10 @@ import {
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { buildIdeaToClaimMap } from "../idea-catalyst/claim-mapper";
+import {
+  evaluateCrossDomainInspirationGate,
+  normalizeCrossDomainInspirationState,
+} from "../idea-catalyst/cross-domain-contract";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
@@ -139,6 +143,18 @@ export async function materializePaperStoryStateImpl(
   const ideationSummary = await deps.getIdeationContractStateSummary({ projectRoot });
   const ideationState = ideationSummary.state;
   const ideaCatalystState = normalizeIdeaCatalystState(manifest.idea_catalyst);
+  const crossDomainState = normalizeCrossDomainInspirationState(
+    manifest.cross_domain_inspiration
+  );
+  const crossDomainGate = manifest.cross_domain_inspiration
+    ? evaluateCrossDomainInspirationGate({
+        state: crossDomainState,
+        workflowLine: surveyWritingBridgeReady ? "survey" : "experiment",
+        headlineClaim:
+          (manifest.writing_contract as Record<string, unknown> | undefined)
+            ?.cross_domain_headline_claim === true,
+      })
+    : null;
   const brainstormSummary = await deps.getBrainstormCycleStateSummary({ projectRoot });
   const brainstormState = brainstormSummary.state;
   const trackRegistry =
@@ -334,6 +350,22 @@ export async function materializePaperStoryStateImpl(
     .map((line) => `If unresolved evidence persists, downgrade around: ${line}`)
     .slice(0, 3);
 
+  const crossDomainStorySection = manifest.cross_domain_inspiration
+    ? `## Cross-Domain Story Bridge
+- status: ${crossDomainState.status}
+- preferred source domains: ${crossDomainState.preferredSourceDomains.join(", ")}
+- priority concepts: ${crossDomainState.priorityConcepts.slice(0, 6).join(", ")}
+- target problem: ${crossDomainState.targetProblem ?? "unset"}
+- evidence gate: ${crossDomainGate?.ready ? "ready" : "not ready"}
+- usage: ${
+        crossDomainState.status === "partial"
+          ? "motivation / limitation / taxonomy only; no headline claim"
+          : surveyWritingBridgeReady
+            ? "taxonomy lens and future directions"
+            : "story mechanism bridge"
+      }`
+    : "";
+
   const storySpine = `# Story Spine
 
 ## Task
@@ -376,6 +408,8 @@ ${deps.quoteMarkdownText(
   (storylineBrief ? pickString(storylineBrief, ["arc"]) : null) ??
     "Task -> challenge -> insight -> contribution -> advantage"
 )}
+
+${crossDomainStorySection}
 `;
 
   const pipelineFigureSketch = surveyWritingBridgeReady
@@ -660,6 +694,20 @@ ${deps.renderMarkdownBulletList(
     [nextState.fallbackNarrativePath, fallbackNarrative],
     [nextState.rejectionRiskTablePath, rejectionRiskTable],
   ];
+  if (manifest.cross_domain_inspiration) {
+    fileSpecs.push([
+      crossDomainState.storylineBridgePath,
+      `# Cross-Domain Story Bridge
+
+${crossDomainStorySection || "- No cross-domain bridge configured."}
+
+## Evidence Debt
+- path: ${crossDomainState.evidenceDebtPath}
+- missing domains: ${crossDomainState.missingDomains.join(", ") || "none"}
+- satisfied domains: ${crossDomainState.satisfiedDomains.join(", ") || "none"}
+`,
+    ]);
+  }
 
   for (const [targetPath, payload] of fileSpecs) {
     const resolved = resolveProjectArtifactPath(projectRoot, targetPath);
@@ -699,7 +747,11 @@ ${deps.renderMarkdownBulletList(
     }
   }
 
-  if (surveyWritingBridgeReady && !currentWritingContract.paperMode) {
+  if (
+    surveyWritingBridgeReady &&
+    (currentWritingContract.paperMode !== "survey" ||
+      !currentWritingContract.requiredSections.includes("scope_and_protocol"))
+  ) {
     manifest.writing_contract = serializeWritingContractState(
       normalizeWritingContractState({
         ...serializeWritingContractState(currentWritingContract),

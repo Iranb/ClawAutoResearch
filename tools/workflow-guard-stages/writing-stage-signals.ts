@@ -1,5 +1,9 @@
 import * as path from "node:path";
 import type { StageSignalsContext } from "./types";
+import {
+  evaluateCrossDomainInspirationGate,
+  normalizeCrossDomainInspirationState,
+} from "../idea-catalyst/cross-domain-contract";
 
 export interface WritingStageDeps {
   resolveProjectArtifactPath: (
@@ -28,6 +32,10 @@ export interface WritingStageDeps {
   getWritePackageValidationErrors: (state: any) => string[];
   normalizeGraphGuidedWritingState: (value: unknown) => any;
   isGraphGuidedWritingReadyForSubmit: (state: any) => boolean;
+  normalizeVenueCompetitionState: (value: unknown) => any;
+  normalizeOpportunityScorecardState: (value: unknown) => any;
+  normalizeReproducibilityPackState: (value: unknown) => any;
+  normalizeCameraReadyEvidenceState: (value: unknown) => any;
   hydrateReviewIssueTrackerState: (params: {
     projectRoot: string;
     value: unknown;
@@ -62,6 +70,101 @@ async function pushMissingNonEmptyArtifact(
   const resolvedPath = deps.resolveProjectArtifactPath(projectRoot, relativePath);
   if (!(await deps.fileHasNonWhitespaceContent(resolvedPath))) {
     missing.push(`{PROJ}/${relativePath}`);
+  }
+}
+
+function appendTopTierOpportunitySignals(params: {
+  missing: string[];
+  manifest: Record<string, unknown> | null;
+  deps: Pick<
+    WritingStageDeps,
+    "normalizeVenueCompetitionState" | "normalizeOpportunityScorecardState"
+  >;
+}) {
+  const opportunityScorecard = params.deps.normalizeOpportunityScorecardState(
+    params.manifest?.opportunity_scorecard
+  );
+  if (opportunityScorecard.verdict !== "worth_top_tier_bet") {
+    return;
+  }
+
+  const venueCompetition = params.deps.normalizeVenueCompetitionState(
+    params.manifest?.venue_competition
+  );
+  if (venueCompetition.status === "missing") {
+    params.missing.push(
+      "PROJECT_MANIFEST.json.venue_competition.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+    );
+  }
+  if (
+    venueCompetition.graphContextStatus === "unverified_graph_context" ||
+    venueCompetition.graphContextStatus === "graph_unavailable"
+  ) {
+    params.missing.push(
+      `PROJECT_MANIFEST.json.venue_competition.graph_context_status must be graph-grounded before top-tier WRITE/SUBMIT handoff (current: ${venueCompetition.graphContextStatus})`
+    );
+  }
+  if (
+    opportunityScorecard.graphContextStatus === "unverified_graph_context" ||
+    opportunityScorecard.graphContextStatus === "graph_unavailable"
+  ) {
+    params.missing.push(
+      `PROJECT_MANIFEST.json.opportunity_scorecard.graph_context_status must be graph-grounded before top-tier WRITE/SUBMIT handoff (current: ${opportunityScorecard.graphContextStatus})`
+    );
+  }
+}
+
+function appendTopTierDeliverySignals(params: {
+  missing: string[];
+  manifest: Record<string, unknown> | null;
+  phase: "write" | "submit";
+  deps: Pick<
+    WritingStageDeps,
+    "normalizeOpportunityScorecardState" | "normalizeReproducibilityPackState" | "normalizeCameraReadyEvidenceState"
+  >;
+}) {
+  const opportunityScorecard = params.deps.normalizeOpportunityScorecardState(
+    params.manifest?.opportunity_scorecard
+  );
+  if (opportunityScorecard.verdict !== "worth_top_tier_bet") {
+    return;
+  }
+
+  if (params.phase === "write") {
+    const reproducibilityPack = params.deps.normalizeReproducibilityPackState(
+      params.manifest?.reproducibility_pack
+    );
+    if (reproducibilityPack.status === "missing") {
+      params.missing.push(
+        "PROJECT_MANIFEST.json.reproducibility_pack.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+      );
+    }
+    if (!reproducibilityPack.environmentCaptureStatus) {
+      params.missing.push(
+        "PROJECT_MANIFEST.json.reproducibility_pack.environment_capture_status must be set before top-tier WRITE handoff"
+      );
+    }
+    return;
+  }
+
+  const cameraReadyEvidence = params.deps.normalizeCameraReadyEvidenceState(
+    params.manifest?.camera_ready_evidence
+  );
+  if (cameraReadyEvidence.status === "missing") {
+    params.missing.push(
+      "PROJECT_MANIFEST.json.camera_ready_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"
+    );
+  }
+  for (const [label, value] of [
+    ["figures_status", cameraReadyEvidence.figuresStatus],
+    ["tables_status", cameraReadyEvidence.tablesStatus],
+    ["captions_status", cameraReadyEvidence.captionsStatus],
+  ] as const) {
+    if (!["ready", "pass", "complete", "completed"].includes(String(value ?? "").trim().toLowerCase())) {
+      params.missing.push(
+        `PROJECT_MANIFEST.json.camera_ready_evidence.${label} must be ready before top-tier SUBMIT handoff (current: ${value ?? "unset"})`
+      );
+    }
   }
 }
 
@@ -111,6 +214,36 @@ export async function collectWriteStageMissingSignals(
 
   const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
   const writePackage = deps.normalizeWritePackageState(ctx.manifest?.write_package);
+  if (
+    ctx.manifest?.cross_domain_inspiration &&
+    typeof ctx.manifest.cross_domain_inspiration === "object"
+  ) {
+    const crossDomain = normalizeCrossDomainInspirationState(
+      ctx.manifest.cross_domain_inspiration
+    );
+    const headlineClaim =
+      (ctx.manifest.writing_contract as Record<string, unknown> | undefined)
+        ?.cross_domain_headline_claim === true;
+    const crossDomainGate = evaluateCrossDomainInspirationGate({
+      state: crossDomain,
+      workflowLine:
+        writingContract.paperMode === "survey" || writingContract.paper_mode === "survey"
+          ? "survey"
+          : "experiment",
+      headlineClaim,
+    });
+    if (!crossDomainGate.ready) {
+      missing.push(...crossDomainGate.blockers);
+    }
+    if (crossDomain.status === "partial") {
+      await pushMissingNonEmptyArtifact(
+        missing,
+        ctx.projectRoot,
+        crossDomain.evidenceDebtPath,
+        deps
+      );
+    }
+  }
   const writingContractEval = await deps.evaluateWritingContractState({
     projectRoot: ctx.projectRoot,
     state: writingContract,
@@ -312,6 +445,17 @@ export async function collectWriteStageMissingSignals(
   if (!(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "cross-reviewer")))) {
     missing.push("{PROJ}/cross-reviewer/");
   }
+  appendTopTierOpportunitySignals({
+    missing,
+    manifest: ctx.manifest,
+    deps,
+  });
+  appendTopTierDeliverySignals({
+    missing,
+    manifest: ctx.manifest,
+    phase: "write",
+    deps,
+  });
   return missing;
 }
 
@@ -407,6 +551,18 @@ export async function collectSubmitStageMissingSignals(
       "{PROJ}/reviewer/SIMULATED_EXTERNAL_REVIEW.md — run simulated external review before SUBMIT"
     );
   }
+
+  appendTopTierOpportunitySignals({
+    missing,
+    manifest: ctx.manifest,
+    deps,
+  });
+  appendTopTierDeliverySignals({
+    missing,
+    manifest: ctx.manifest,
+    phase: "submit",
+    deps,
+  });
 
   return missing;
 }

@@ -17,6 +17,7 @@ import {
   loadExperimentSearchState,
 } from "../workflow-guard-experiment-history";
 import { getExperimentGpuMonitorStateSummary } from "../workflow-gpu-monitor.js";
+import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
 import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
@@ -45,6 +46,28 @@ import {
   deriveAutoZoteroSyncCandidate,
   readZoteroSyncStateSummary,
 } from "../workflow-zotero-sync";
+import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
+import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
+import {
+  getWorkflowTaskGraphPath,
+  readWorkflowTaskGraphStore,
+  summarizeWorkflowTaskGraphStore,
+} from "../workflow-team/task-graph";
+import {
+  getWorkflowTeamRoundPath,
+  readWorkflowTeamRoundStore,
+  summarizeWorkflowTeamRoundStore,
+} from "../workflow-team/team-round";
+import {
+  normalizeAblationEvidenceState,
+  normalizeBenchmarkProtocolState,
+  normalizeCameraReadyEvidenceState,
+  normalizeMechanismEvidenceState,
+  normalizeOpportunityScorecardState,
+  normalizeReproducibilityPackState,
+  normalizeStatisticalEvidenceState,
+  normalizeVenueCompetitionState,
+} from "../workflow-evidence/contracts";
 import {
   buildWorkflowRuntimeSessionBinding,
 } from "../workflow-subagent-sessions";
@@ -109,6 +132,18 @@ import {
   normalizePapernexusMcpTransport,
   summarizePapernexusRemoteAccessConfig,
 } from "../papernexus-secret";
+import {
+  countFinishedExperimentEntriesAwaitingReconciliation,
+  countTerminalExperimentEntries,
+  formatWorkflowShellArgument,
+  getBrainstormCycleValidationErrors,
+  getResearchProgramOnboardingGaps,
+  getResearchProgramOnboardingStatus,
+  getResearchProgramPlanValidationErrors,
+  isBrainstormCycleReady,
+  isInnovationReflectionDue,
+} from "../workflow-kernel/readiness";
+import { resolveWorkflowStageLeadRole } from "../workflow-kernel/stage-registry";
 import type { WorkflowSnapshot, WorkflowGuardPolicy } from "../workflow-guard.js";
 import type { WorkflowRole } from "../workflow-guard-guidance/types";
 import type { WorkflowProjectState } from "./project-context";
@@ -131,10 +166,7 @@ type RolePolicy = {
 
 type ReviewIssueTrackerState = ReturnType<typeof normalizeReviewIssueTrackerState>;
 type ReviewIssueState = ReviewIssueTrackerState["issues"][number];
-type ResearchProgramState = ReturnType<typeof normalizeResearchProgramState>;
-type BrainstormCycleState = ReturnType<typeof normalizeBrainstormCycleState>;
 type IdleResearchState = ReturnType<typeof normalizeIdleResearchState>;
-type InnovationReflectionState = ReturnType<typeof normalizeInnovationReflectionState>;
 type WorkflowEvidenceStatus = "ready" | "repairable" | "missing";
 
 type WorkflowDerivedEvidenceSummary = {
@@ -152,12 +184,6 @@ export type WorkflowSnapshotBuilderDeps = {
     currentStage: string | null;
   }) => Promise<string[]>;
 };
-
-function formatWorkflowShellArgument(value: string): string {
-  return /^[A-Za-z0-9._:/=-]+$/u.test(value)
-    ? value
-    : `"${value.replace(/(["\\])/g, "\\$1")}"`;
-}
 
 export function buildGraphImportRepairGuidance(
   targetCorpus: string | null | undefined
@@ -200,251 +226,6 @@ export function summarizeGraphPresenceMissing(
   return `${preview}${entries.length > 3 ? "; ..." : ""}`;
 }
 
-export function getResearchProgramOnboardingGaps(params: {
-  state: ResearchProgramState;
-  projectId?: string | null;
-}): string[] {
-  const gaps: string[] = [];
-  if (!params.state.goal) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.goal");
-  }
-  if (!params.state.problemStatement) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.problem_statement");
-  }
-  if (!params.state.baselineReference) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.baseline_reference");
-  }
-  if (!params.state.primaryMetric) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.primary_metric");
-  }
-  if (params.state.datasets.length === 0) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.datasets");
-  }
-  if (params.state.successCriteria.length === 0) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.success_criteria");
-  }
-  if (!params.state.zoteroProjectPath) {
-    gaps.push(
-      `PROJECT_MANIFEST.json.research_program.zotero_project_path (recommended: ${
-        defaultResearchProgramZoteroProjectPath(params.projectId) ?? "bot/<project-id>"
-      })`
-    );
-  }
-  return gaps;
-}
-
-export function getResearchProgramOnboardingStatus(params: {
-  state: ResearchProgramState;
-  projectId?: string | null;
-}): string {
-  return getResearchProgramOnboardingGaps(params).length === 0 ? "ready" : "incomplete";
-}
-
-export function getResearchProgramPlanValidationErrors(params: {
-  state: ResearchProgramState;
-  ideationContract?: ReturnType<typeof normalizeIdeationContractState> | null;
-}): string[] {
-  const errors: string[] = [];
-  const comparedOptionIds = [...new Set(params.state.planSelection.comparedOptionIds)];
-  if (params.state.planAlternatives.length < 2) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_alternatives must compare at least two graph-grounded options"
-    );
-  }
-  if (!params.state.planSelection.selectedOptionId) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_option_id is required");
-  }
-  if (!params.state.planSelection.selectedTrackId) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_track_id is required");
-  }
-  if (comparedOptionIds.length < 2) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_selection.compared_option_ids must record at least two compared options"
-    );
-  }
-  if (
-    params.state.planSelection.selectedOptionId &&
-    comparedOptionIds.length > 0 &&
-    !comparedOptionIds.includes(params.state.planSelection.selectedOptionId)
-  ) {
-    errors.push(
-      "research_program.plan_selection.selected_option_id must also appear in compared_option_ids"
-    );
-  }
-  if (!params.state.planSelection.rationale) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.rationale is required");
-  }
-  if (params.state.planSelection.decisiveGraphEvidencePaths.length === 0) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_selection.decisive_graph_evidence_paths must cite graph-backed evidence"
-    );
-  }
-  if (
-    params.state.planSelection.selectedTrackId &&
-    params.ideationContract?.selectedTrackId &&
-    params.state.planSelection.selectedTrackId !== params.ideationContract.selectedTrackId
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_track_id should stay aligned with ideation_contract.selected_track_id (${params.ideationContract.selectedTrackId})`
-    );
-  }
-
-  const selectedOption = params.state.planSelection.selectedOptionId
-    ? params.state.planAlternatives.find(
-        (option) => option.optionId === params.state.planSelection.selectedOptionId
-      ) ?? null
-    : null;
-  if (selectedOption) {
-    if (selectedOption.status !== "selected") {
-      errors.push(
-        `research_program.plan_alternatives option ${selectedOption.optionId} must have status=selected`
-      );
-    }
-    if (
-      selectedOption.linkedTrackId &&
-      params.state.planSelection.selectedTrackId &&
-      selectedOption.linkedTrackId !== params.state.planSelection.selectedTrackId
-    ) {
-      errors.push(
-        `research_program.plan_alternatives option ${selectedOption.optionId} should point at selected_track_id=${params.state.planSelection.selectedTrackId}`
-      );
-    }
-  }
-
-  for (const optionId of comparedOptionIds) {
-    const option =
-      params.state.planAlternatives.find((entry) => entry.optionId === optionId) ?? null;
-    if (!option) {
-      errors.push(
-        `research_program.plan_selection.compared_option_ids references missing option ${optionId}`
-      );
-      continue;
-    }
-    if (!option.title) {
-      errors.push(`research_program.plan_alternatives option ${option.optionId} missing title`);
-    }
-    if (!option.summary) {
-      errors.push(`research_program.plan_alternatives option ${option.optionId} missing summary`);
-    }
-    if (option.graphEvidencePaths.length === 0) {
-      errors.push(
-        `research_program.plan_alternatives option ${option.optionId} must cite graph_evidence_paths`
-      );
-    }
-  }
-
-  return errors;
-}
-
-function getInnovationReflectionBasis(ledger: unknown): {
-  latestExperimentUpdateAt: string | null;
-  experimentIds: string[];
-} {
-  const ledgerRecord = asRecord(ledger);
-  const experiments = Array.isArray(ledgerRecord?.experiments)
-    ? ledgerRecord.experiments
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    : [];
-  const reflectable = experiments
-    .filter((entry) =>
-      Boolean(
-        normalizeStage(entry.status) ||
-          entry.completedAt ||
-          entry.decision ||
-          entry.keyMetric ||
-          entry.failureSignature ||
-          (Array.isArray(entry.resultPaths) && entry.resultPaths.length > 0) ||
-          (Array.isArray(entry.evidencePointers) && entry.evidencePointers.length > 0)
-      )
-    )
-    .sort((left, right) => {
-      const leftUpdated = pickString(left, ["updatedAt", "updated_at"]) ?? "";
-      const rightUpdated = pickString(right, ["updatedAt", "updated_at"]) ?? "";
-      return rightUpdated.localeCompare(leftUpdated);
-    });
-  return {
-    latestExperimentUpdateAt:
-      reflectable.length > 0
-        ? pickString(reflectable[0], ["updatedAt", "updated_at"])
-        : null,
-    experimentIds: reflectable
-      .map((entry) => pickString(entry, ["experimentId", "experiment_id"]) ?? null)
-      .filter((entry): entry is string => Boolean(entry)),
-  };
-}
-
-function getExperimentLedgerEntries(
-  ledger: unknown
-): Array<Record<string, unknown>> {
-  const ledgerRecord = asRecord(ledger);
-  return Array.isArray(ledgerRecord?.experiments)
-    ? ledgerRecord.experiments
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    : [];
-}
-
-function countTerminalExperimentEntries(ledger: unknown): number {
-  return getExperimentLedgerEntries(ledger).filter((entry) =>
-    isTerminalExperimentStatus(normalizeStage(pickString(entry, ["status"])) ?? null)
-  ).length;
-}
-
-function countFinishedExperimentEntriesAwaitingReconciliation(params: {
-  ledger: unknown;
-  experimentSearch: { status?: string | null } | null | undefined;
-}): number {
-  if (normalizeStage(params.experimentSearch?.status) === "ready_for_analysis") {
-    return 0;
-  }
-  return getExperimentLedgerEntries(params.ledger).filter((entry) => {
-    const status = normalizeStage(pickString(entry, ["status"])) ?? null;
-    if (!isTerminalExperimentStatus(status)) {
-      return false;
-    }
-    const resultPaths = entry.resultPaths ?? entry.result_paths;
-    const evidencePointers = entry.evidencePointers ?? entry.evidence_pointers;
-    return Boolean(
-      pickString(entry, ["completedAt", "completed_at", "finishedAt", "finished_at"]) ||
-        (Array.isArray(resultPaths) && resultPaths.length > 0) ||
-        (Array.isArray(evidencePointers) && evidencePointers.length > 0) ||
-        asRecord(entry.keyMetric ?? entry.key_metric ?? entry.metric) ||
-        asRecord(entry.metrics)
-    );
-  }).length;
-}
-
-export function isInnovationReflectionDue(params: {
-  state: InnovationReflectionState;
-  ledger: unknown;
-}): boolean {
-  const basis = getInnovationReflectionBasis(params.ledger);
-  if (!params.state.requiredAfterExperiments || basis.experimentIds.length === 0) {
-    return false;
-  }
-  if (params.state.status === "running") {
-    return false;
-  }
-  if (!params.state.lastReflectionAt || !params.state.lastReflectionPath) {
-    return true;
-  }
-  if (!params.state.reflectedThroughExperimentUpdateAt) {
-    return true;
-  }
-  if (
-    basis.latestExperimentUpdateAt &&
-    Date.parse(params.state.reflectedThroughExperimentUpdateAt) <
-      Date.parse(basis.latestExperimentUpdateAt)
-  ) {
-    return true;
-  }
-  if (params.state.status === "pending" || params.state.status === "stale") {
-    return true;
-  }
-  const reflectedIds = new Set(params.state.reflectedExperimentIds);
-  return basis.experimentIds.some((experimentId) => !reflectedIds.has(experimentId));
-}
 
 async function hydrateReviewIssueTrackerState(params: {
   projectRoot: string;
@@ -626,81 +407,6 @@ function getDefaultPapernexusIndexRoot(): string {
   return path.join(os.homedir(), ".papernexus", "index-store");
 }
 
-function getResearchProgramValidationErrors(state: ResearchProgramState): string[] {
-  const errors: string[] = [];
-  const activeTracks = state.tracks.filter((track) => normalizeStage(track.status) === "active");
-  if (!["approved", "ready", "running"].includes(normalizeStage(state.status) ?? "")) {
-    errors.push(
-      `PROJECT_MANIFEST.json.research_program.status must be approved/ready/running (current: ${state.status})`
-    );
-  }
-  if (!state.goal) {
-    errors.push("PROJECT_MANIFEST.json.research_program.goal is required");
-  }
-  if (activeTracks.length === 0) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program must define at least one active track"
-    );
-  }
-  if (state.globalConstraints.maxActiveTracks != null) {
-    if (activeTracks.length > state.globalConstraints.maxActiveTracks) {
-      errors.push(
-        `active track count ${activeTracks.length} exceeds research_program.global_constraints.max_active_tracks=${state.globalConstraints.maxActiveTracks}`
-      );
-    }
-  }
-  for (const track of activeTracks) {
-    if (!track.hypothesis) {
-      errors.push(`research_program track ${track.trackId} missing hypothesis`);
-    }
-    if (!track.noveltyBasis) {
-      errors.push(`research_program track ${track.trackId} missing novelty_basis`);
-    }
-    if (!track.mainMetric) {
-      errors.push(`research_program track ${track.trackId} missing main_metric`);
-    }
-    if (!track.successThreshold) {
-      errors.push(`research_program track ${track.trackId} missing success_threshold`);
-    }
-    if (track.budget.gpuHours == null && track.budget.maxRuns == null && track.budget.maxDebugIterations == null) {
-      errors.push(`research_program track ${track.trackId} must declare a budget`);
-    }
-  }
-  for (const track of activeTracks) {
-    const hasTask = state.taskGraph.some(
-      (task) =>
-        task.trackId === track.trackId &&
-        task.entryCriteria.length > 0 &&
-        task.expectedOutputs.length > 0 &&
-        task.exitCriteria.length > 0
-    );
-    if (!hasTask) {
-      errors.push(
-        `research_program track ${track.trackId} requires task_graph coverage with entry/output/exit criteria`
-      );
-    }
-  }
-  if (
-    state.planSelection.selectedTrackId &&
-    !state.tracks.some((track) => track.trackId === state.planSelection.selectedTrackId)
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_track_id (${state.planSelection.selectedTrackId}) must reference a declared track`
-    );
-  }
-  if (
-    state.planSelection.selectedOptionId &&
-    !state.planAlternatives.some(
-      (option) => option.optionId === state.planSelection.selectedOptionId
-    )
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_option_id (${state.planSelection.selectedOptionId}) must reference research_program.plan_alternatives`
-    );
-  }
-  return errors;
-}
-
 function areWritingSectionPacketsReady(
   state: ReturnType<typeof normalizeWritingSessionState>
 ): boolean {
@@ -721,69 +427,6 @@ function areWritingSectionPacketsReady(
       );
     })
   );
-}
-
-function isBrainstormCycleReady(state: BrainstormCycleState): boolean {
-  return ["ready", "reconciled"].includes(normalizeStage(state.status) ?? "");
-}
-
-export function getBrainstormCycleValidationErrors(
-  state: BrainstormCycleState
-): string[] {
-  const errors: string[] = [];
-  if (!state.topic) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.topic is required");
-  }
-  if (!state.basisStage) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.basis_stage is required");
-  }
-  if (!state.provider) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider is required");
-  }
-  if (!state.providerMode) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider_mode is required");
-  }
-  if (!Number.isFinite(state.contractVersion ?? NaN)) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.contract_version is required");
-  }
-  for (const [field, value] of [
-    ["topic_summary_path", state.topicSummaryPath],
-    ["research_brief_path", state.researchBriefPath],
-    ["brainstorm_brief_path", state.brainstormBriefPath],
-    ["logic_chain_path", state.logicChainPath],
-    ["evidence_chain_path", state.evidenceChainPath],
-    ["reasoning_trace_path", state.reasoningTracePath],
-    ["question_packet_path", state.questionPacketPath],
-    ["working_memory_path", state.workingMemoryPath],
-    ["synthesis_packet_path", state.synthesisPacketPath],
-  ] as Array<[string, string | null]>) {
-    if (!value) {
-      errors.push(`PROJECT_MANIFEST.json.brainstorm_cycle.${field} is required`);
-    }
-  }
-  if (isBrainstormCycleReady(state)) {
-    if (!["ready", "reconciled"].includes(normalizeStage(state.providerStatus) ?? "")) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.provider_status = ready|reconciled is required when the brainstorm cycle is ready"
-      );
-    }
-    if (state.rounds.length === 0) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.rounds must contain at least one completed brainstorm round"
-      );
-    }
-    if (!state.selectedRoundId) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_round_id is required when the brainstorm cycle is ready"
-      );
-    }
-    if (!state.selectedOptionId) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_option_id is required when the brainstorm cycle is ready"
-      );
-    }
-  }
-  return errors;
 }
 
 export async function buildWorkflowSnapshotFromProjectState(
@@ -913,6 +556,44 @@ export async function buildWorkflowSnapshotFromProjectState(
   const researchProgram = normalizeResearchProgramState(
     asRecord(projectState.manifest?.research_program)
   );
+  const benchmarkProtocol = normalizeBenchmarkProtocolState(
+    asRecord(projectState.manifest?.benchmark_protocol)
+  );
+  const statisticalEvidence = normalizeStatisticalEvidenceState(
+    asRecord(projectState.manifest?.statistical_evidence)
+  );
+  const venueCompetition = normalizeVenueCompetitionState(
+    asRecord(projectState.manifest?.venue_competition)
+  );
+  const ablationEvidence = normalizeAblationEvidenceState(
+    asRecord(projectState.manifest?.ablation_evidence)
+  );
+  const mechanismEvidence = normalizeMechanismEvidenceState(
+    asRecord(projectState.manifest?.mechanism_evidence)
+  );
+  const reproducibilityPack = normalizeReproducibilityPackState(
+    asRecord(projectState.manifest?.reproducibility_pack)
+  );
+  const cameraReadyEvidence = normalizeCameraReadyEvidenceState(
+    asRecord(projectState.manifest?.camera_ready_evidence)
+  );
+  const opportunityScorecard = normalizeOpportunityScorecardState(
+    asRecord(projectState.manifest?.opportunity_scorecard)
+  );
+  const evidenceCloseout = summarizeEvidenceCloseoutState(projectState.manifest);
+  const teamTaskPreview = buildWorkflowStageTaskPreview({
+    currentStage,
+    topTierVerdict: opportunityScorecard.verdict,
+    evidenceCloseout,
+  });
+  const taskGraphStore = projectState.projectRoot
+    ? await readWorkflowTaskGraphStore(projectState.projectRoot)
+    : null;
+  const taskGraphSummary = summarizeWorkflowTaskGraphStore(taskGraphStore);
+  const teamRoundStore = projectState.projectRoot
+    ? await readWorkflowTeamRoundStore(projectState.projectRoot)
+    : null;
+  const teamRoundSummary = summarizeWorkflowTeamRoundStore(teamRoundStore);
   const researchProgramOnboardingMissing = getResearchProgramOnboardingGaps({
     state: researchProgram,
     projectId: projectState.projectId,
@@ -1054,6 +735,20 @@ export async function buildWorkflowSnapshotFromProjectState(
       : experimentLedgerSummary?.papernexusLastSyncAt
         ? "synced"
         : null);
+  const experimentSearchSpec = projectState.projectRoot
+    ? await readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(
+          projectState.projectRoot,
+          experimentSearch.searchSpecPath
+        ) ?? ""
+      )
+    : null;
+  const experimentSearchDecision = evaluateExperimentSearchDecision({
+    experimentSearch,
+    experimentSearchSpec,
+    experimentLedger: projectState.experimentLedger,
+    gpuMonitor: experimentGpuMonitor.state,
+  });
   const innovationReflectionDue = isInnovationReflectionDue({
     state: innovationReflection,
     ledger: projectState.experimentLedger,
@@ -1384,6 +1079,102 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    benchmarkProtocolStatus: benchmarkProtocol.status,
+    benchmarkProtocolFamily: benchmarkProtocol.benchmarkFamily,
+    benchmarkProtocolLocked: benchmarkProtocol.locked,
+    benchmarkProtocolDriftStatus: benchmarkProtocol.driftStatus,
+    benchmarkProtocolPath: benchmarkProtocol.protocolLockPath,
+    benchmarkProtocolPendingReason: benchmarkProtocol.pendingReason,
+    statisticalEvidenceStatus: statisticalEvidence.status,
+    statisticalEvidenceAggregatePath: statisticalEvidence.aggregatePath,
+    statisticalEvidenceClaimStrengthStatus:
+      statisticalEvidence.claimStrengthStatus,
+    statisticalEvidenceSignificantResultCount:
+      statisticalEvidence.significantResultCount,
+    statisticalEvidenceInsufficientSeedCount:
+      statisticalEvidence.insufficientSeedCount,
+    statisticalEvidencePendingReason: statisticalEvidence.pendingReason,
+    venueCompetitionStatus: venueCompetition.status,
+    venueCompetitionTargetVenues: venueCompetition.targetVenues,
+    venueCompetitionCompetitorSlatePath:
+      venueCompetition.competitorSlatePath,
+    venueCompetitionAcceptanceRiskStatus:
+      venueCompetition.acceptanceRiskStatus,
+    venueCompetitionGraphContextStatus:
+      venueCompetition.graphContextStatus,
+    venueCompetitionPendingReason: venueCompetition.pendingReason,
+    ablationEvidenceStatus: ablationEvidence.status,
+    ablationEvidenceSummaryPath: ablationEvidence.summaryPath,
+    ablationEvidenceSufficiencyStatus:
+      ablationEvidence.sufficiencyStatus,
+    ablationEvidencePublicationCriticalCount:
+      ablationEvidence.publicationCriticalCount,
+    ablationEvidencePendingReason: ablationEvidence.pendingReason,
+    mechanismEvidenceStatus: mechanismEvidence.status,
+    mechanismEvidencePacketPath: mechanismEvidence.packetPath,
+    mechanismEvidenceTier: mechanismEvidence.evidenceTier,
+    mechanismEvidenceGraphContextStatus:
+      mechanismEvidence.graphContextStatus,
+    mechanismEvidencePendingReason: mechanismEvidence.pendingReason,
+    reproducibilityPackStatus: reproducibilityPack.status,
+    reproducibilityPackBundlePath: reproducibilityPack.bundlePath,
+    reproducibilityPackEnvironmentCaptureStatus:
+      reproducibilityPack.environmentCaptureStatus,
+    reproducibilityPackRegenerateTablesStatus:
+      reproducibilityPack.regenerateTablesStatus,
+    reproducibilityPackPendingReason: reproducibilityPack.pendingReason,
+    cameraReadyEvidenceStatus: cameraReadyEvidence.status,
+    cameraReadyEvidencePackagePath: cameraReadyEvidence.packagePath,
+    cameraReadyEvidenceFiguresStatus: cameraReadyEvidence.figuresStatus,
+    cameraReadyEvidenceTablesStatus: cameraReadyEvidence.tablesStatus,
+    cameraReadyEvidenceCaptionsStatus:
+      cameraReadyEvidence.captionsStatus,
+    cameraReadyEvidencePendingReason: cameraReadyEvidence.pendingReason,
+    opportunityScorecardStatus: opportunityScorecard.status,
+    opportunityScorecardVerdict: opportunityScorecard.verdict,
+    opportunityScorecardPath: opportunityScorecard.scorecardPath,
+    opportunityScorecardGraphContextStatus:
+      opportunityScorecard.graphContextStatus,
+    opportunityScorecardPendingReason: opportunityScorecard.pendingReason,
+    evidenceCloseoutStatus: evidenceCloseout.status,
+    evidenceCloseoutTopTierVerdict: evidenceCloseout.topTierVerdict,
+    evidenceCloseoutBlockerCount: evidenceCloseout.blockers.length,
+    evidenceCloseoutGraphDependentBlockerCount:
+      evidenceCloseout.graphDependentBlockerCount,
+    evidenceCloseoutLocalEvidenceBlockerCount:
+      evidenceCloseout.localEvidenceBlockerCount,
+    evidenceCloseoutExperimentAnalyzeReady:
+      evidenceCloseout.experimentAnalyzeReady,
+    evidenceCloseoutAnalyzeReviewReady:
+      evidenceCloseout.analyzeReviewReady,
+    evidenceCloseoutWriteReady: evidenceCloseout.writeReady,
+    evidenceCloseoutSubmitReady: evidenceCloseout.submitReady,
+    evidenceCloseoutTopBlockers: evidenceCloseout.blockers.slice(0, 5),
+    teamTaskPreview,
+    teamTaskGraphPath: projectState.projectRoot
+      ? getWorkflowTaskGraphPath(projectState.projectRoot)
+      : null,
+    teamTaskGraphTaskCount: taskGraphSummary.taskCount,
+    teamTaskGraphClaimableCount: taskGraphSummary.claimableCount,
+    teamTaskGraphBlockedCount: taskGraphSummary.blockedCount,
+    teamTaskGraphClaimedCount: taskGraphSummary.claimedCount,
+    teamTaskGraphVerifyingCount: taskGraphSummary.verifyingCount,
+    teamTaskGraphNeedsRepairCount: taskGraphSummary.needsRepairCount,
+    teamTaskGraphSatisfiedCount: taskGraphSummary.satisfiedCount,
+    teamTaskGraphOptionalCount: taskGraphSummary.optionalCount,
+    teamRoundPath: projectState.projectRoot
+      ? getWorkflowTeamRoundPath(projectState.projectRoot)
+      : null,
+    teamRoundStatus: teamRoundSummary.status,
+    teamRoundLeadRole:
+      teamRoundStore?.leadRole ??
+      resolveWorkflowStageLeadRole({
+        stage: currentStage,
+        ownerAgent: asString(projectState.manifest?.owner_agent),
+      }),
+    teamRoundActiveSessionCount: teamRoundSummary.activeSessionCount,
+    teamRoundLastClaimedTaskId: teamRoundStore?.lastClaimedTaskId ?? null,
+    teamRoundLastCompletedTaskId: teamRoundStore?.lastCompletedTaskId ?? null,
     zoteroSyncStatus: zoteroSyncState.status,
     zoteroSyncTrigger: zoteroSyncState.trigger,
     zoteroSyncTriggerReason: zoteroSyncState.triggerReason,
@@ -1420,6 +1211,8 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchStatus: experimentSearch.status,
     experimentSearchCurrentMainStage: experimentSearch.currentMainStage,
     experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
+    experimentSearchValidationStage:
+      experimentSearch.validationStage ?? experimentSearchDecision.validationStage,
     experimentSearchSessionId: experimentSearch.searchSessionId,
     experimentSearchSpecPath: experimentSearch.searchSpecPath,
     experimentSearchStatePath: experimentSearch.searchStatePath,
@@ -1439,6 +1232,26 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchCandidateHeadCommit: experimentSearch.candidateHeadCommit,
     experimentSearchLastGitOpResult: experimentSearch.lastGitOpResult,
     experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
+    experimentSearchBaselineFairnessStatus:
+      experimentSearch.baselineFairnessStatus,
+    experimentSearchImplementationConfidence:
+      experimentSearch.implementationConfidence,
+    experimentSearchSearchExhaustionStatus:
+      experimentSearch.searchExhaustionStatus,
+    experimentSearchAblationStatus: experimentSearch.ablationStatus,
+    experimentSearchInnovationStatus: experimentSearch.innovationStatus,
+    experimentSearchDecisionConfidence:
+      experimentSearch.decisionConfidence ?? experimentSearchDecision.decisionConfidence,
+    experimentSearchRecommendedNextAction:
+      experimentSearch.recommendedNextAction ??
+      experimentSearchDecision.recommendedNextAction,
+    experimentSearchFailureClusterIds:
+      experimentSearch.failureClusterIds.length > 0
+        ? experimentSearch.failureClusterIds
+        : experimentSearchDecision.failureClusters.map((cluster) => cluster.clusterId),
+    experimentSearchEvidenceCleanlinessStatus:
+      experimentSearch.evidenceCleanlinessStatus,
+    experimentSearchDecision: experimentSearchDecision.decision,
     experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
     experimentSearchGraphMemoryPacketPath: experimentSearch.graphMemoryPacketPath,
     experimentSearchGraphMemorySyncStatus: experimentSearch.graphMemorySyncStatus,

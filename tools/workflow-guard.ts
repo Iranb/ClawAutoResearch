@@ -64,11 +64,34 @@ import {
   summarizePapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
 import {
+  formatWorkflowShellArgument as formatWorkflowShellArgumentFromKernel,
+  getBrainstormCycleValidationErrors as getBrainstormCycleValidationErrorsFromKernel,
+  getResearchProgramOnboardingGaps as getResearchProgramOnboardingGapsFromKernel,
+  getResearchProgramOnboardingStatus as getResearchProgramOnboardingStatusFromKernel,
+  getResearchProgramPlanValidationErrors as getResearchProgramPlanValidationErrorsFromKernel,
+  getResearchProgramValidationErrors as getResearchProgramValidationErrorsFromKernel,
+  isBrainstormCycleReady as isBrainstormCycleReadyFromKernel,
+  isInnovationReflectionDue as isInnovationReflectionDueFromKernel,
+} from "./workflow-kernel/readiness";
+import {
+  resolveWorkflowStageLeadRole,
+} from "./workflow-kernel/stage-registry";
+import {
   loadPapernexusProgress,
   summarizePapernexusProgress,
   type PapernexusProgressSnapshot,
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
+import {
+  normalizeCameraReadyEvidenceState,
+  normalizeReproducibilityPackState,
+  normalizeMechanismEvidenceState,
+  normalizeOpportunityScorecardState,
+  normalizeAblationEvidenceState,
+  normalizeBenchmarkProtocolState,
+  normalizeStatisticalEvidenceState,
+  normalizeVenueCompetitionState,
+} from "./workflow-evidence/contracts";
 import {
   collectFrontierMappingStageMissingSignals,
   collectGraphBuildStageMissingSignals,
@@ -88,6 +111,9 @@ import {
   collectSubmitStageMissingSignals,
   collectWriteStageMissingSignals,
 } from "./workflow-guard-stages/writing-stage-signals";
+import {
+  collectSurveyReviewStageMissingSignals as collectSurveyReviewStageMissingSignalsFromModule,
+} from "./workflow-guard-stages/survey-stage-signals";
 import {
   asRecord,
   asString,
@@ -145,6 +171,7 @@ import {
   normalizeSurveyReviewState,
 } from "./workflow-guard-state/survey-review";
 import {
+  ensureSurveyWorkflowIdentity,
   isSurveyWorkflow,
   resolveNextStageForWorkflow,
   resolveStageForWorkflowLine,
@@ -487,6 +514,7 @@ import {
   upsertExperimentLedgerEntryImpl,
 } from "./workflow-guard-recorders/state-recorders";
 import { runWorkflowAutoIteratorImpl } from "./workflow-guard-runtime/auto-iterator";
+import { evaluateExperimentSearchDecision } from "./workflow-experiment-decision";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
 
@@ -517,7 +545,12 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
+  teamRuntime?: WorkflowTeamRuntimeConfig;
 }
+
+export type WorkflowTeamRuntimeConfig = {
+  enabled: boolean;
+};
 
 export interface WorkflowToolContext {
   agentId?: string;
@@ -961,6 +994,7 @@ type ExperimentSearchState = {
   trackId: string | null;
   currentMainStage: string | null;
   currentSubstage: string | null;
+  validationStage: string | null;
   searchSessionId: string | null;
   searchSpecPath: string | null;
   searchStatePath: string | null;
@@ -991,6 +1025,15 @@ type ExperimentSearchState = {
   lastGitOpResult: string | null;
   lastDecision: string | null;
   multiSeedStatus: string;
+  baselineFairnessStatus: string;
+  implementationConfidence: string;
+  searchExhaustionStatus: string;
+  ablationStatus: string;
+  innovationStatus: string;
+  decisionConfidence: string;
+  recommendedNextAction: string | null;
+  failureClusterIds: string[];
+  evidenceCleanlinessStatus: string;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
@@ -1284,6 +1327,16 @@ export type PaperIngestionState = {
   activeBatches: PaperIngestionBatchRun[];
   batchItems: PaperIngestionBatchItem[];
   queuedRequests: PaperIngestionQueuedRequest[];
+  failedPapers: PaperIngestionFailedPaper[];
+  retryableFailedPapers: PaperIngestionFailedPaper[];
+  nonRetryableFailedPapers: PaperIngestionFailedPaper[];
+  lastFailureScanAt: string | null;
+  lastRetryManifestPath: string | null;
+  retryPolicy: PaperIngestionRetryPolicy | null;
+  retryRunId: string | null;
+  retryStatus: string | null;
+  retryAttemptCount: number;
+  sequentialRetryIntervalSeconds: number | null;
   lastBatchManifestPath: string | null;
   graphVersionSeen: string | null;
   reconcileRequired: boolean;
@@ -1291,6 +1344,27 @@ export type PaperIngestionState = {
   repairReason: string | null;
   repairTargetCorpus: string | null;
   lastUpdatedAt: string | null;
+};
+
+export type PaperIngestionRetryPolicy = {
+  mode: "sequential" | "batch";
+  intervalSeconds: number;
+  maxAttempts: number;
+};
+
+export type PaperIngestionFailedPaper = {
+  paperId: string | null;
+  title: string | null;
+  sourceKey: string | null;
+  inputPath: string | null;
+  failureSignature: string | null;
+  failureMessage: string | null;
+  failedAt: string | null;
+  retryable: boolean;
+  retryReason: string | null;
+  alreadyInGraph: boolean;
+  lastRetryAt: string | null;
+  retryCount: number;
 };
 
 export type PaperIngestionCompletedPaper = {
@@ -1657,6 +1731,82 @@ export type WorkflowSnapshot = {
   researchProgramDatasetCount: number | null;
   researchProgramSuccessCriteriaCount: number | null;
   researchProgramZoteroProjectPath: string | null;
+  benchmarkProtocolStatus: string | null;
+  benchmarkProtocolFamily: string | null;
+  benchmarkProtocolLocked: boolean;
+  benchmarkProtocolDriftStatus: string | null;
+  benchmarkProtocolPath: string | null;
+  benchmarkProtocolPendingReason: string | null;
+  statisticalEvidenceStatus: string | null;
+  statisticalEvidenceAggregatePath: string | null;
+  statisticalEvidenceClaimStrengthStatus: string | null;
+  statisticalEvidenceSignificantResultCount: number | null;
+  statisticalEvidenceInsufficientSeedCount: number | null;
+  statisticalEvidencePendingReason: string | null;
+  venueCompetitionStatus: string | null;
+  venueCompetitionTargetVenues: string[];
+  venueCompetitionCompetitorSlatePath: string | null;
+  venueCompetitionAcceptanceRiskStatus: string | null;
+  venueCompetitionGraphContextStatus: string | null;
+  venueCompetitionPendingReason: string | null;
+  ablationEvidenceStatus: string | null;
+  ablationEvidenceSummaryPath: string | null;
+  ablationEvidenceSufficiencyStatus: string | null;
+  ablationEvidencePublicationCriticalCount: number | null;
+  ablationEvidencePendingReason: string | null;
+  mechanismEvidenceStatus: string | null;
+  mechanismEvidencePacketPath: string | null;
+  mechanismEvidenceTier: string | null;
+  mechanismEvidenceGraphContextStatus: string | null;
+  mechanismEvidencePendingReason: string | null;
+  reproducibilityPackStatus: string | null;
+  reproducibilityPackBundlePath: string | null;
+  reproducibilityPackEnvironmentCaptureStatus: string | null;
+  reproducibilityPackRegenerateTablesStatus: string | null;
+  reproducibilityPackPendingReason: string | null;
+  cameraReadyEvidenceStatus: string | null;
+  cameraReadyEvidencePackagePath: string | null;
+  cameraReadyEvidenceFiguresStatus: string | null;
+  cameraReadyEvidenceTablesStatus: string | null;
+  cameraReadyEvidenceCaptionsStatus: string | null;
+  cameraReadyEvidencePendingReason: string | null;
+  opportunityScorecardStatus: string | null;
+  opportunityScorecardVerdict: string | null;
+  opportunityScorecardPath: string | null;
+  opportunityScorecardGraphContextStatus: string | null;
+  opportunityScorecardPendingReason: string | null;
+  evidenceCloseoutStatus: "not_applicable" | "blocked" | "ready";
+  evidenceCloseoutTopTierVerdict: string | null;
+  evidenceCloseoutBlockerCount: number | null;
+  evidenceCloseoutGraphDependentBlockerCount: number | null;
+  evidenceCloseoutLocalEvidenceBlockerCount: number | null;
+  evidenceCloseoutExperimentAnalyzeReady: boolean;
+  evidenceCloseoutAnalyzeReviewReady: boolean;
+  evidenceCloseoutWriteReady: boolean;
+  evidenceCloseoutSubmitReady: boolean;
+  evidenceCloseoutTopBlockers: string[];
+  teamTaskPreview: Array<{
+    taskId: string;
+    title: string;
+    owner: string | null;
+    status: "ready" | "blocked" | "optional";
+    reason: string | null;
+  }>;
+  teamTaskGraphPath: string | null;
+  teamTaskGraphTaskCount: number | null;
+  teamTaskGraphClaimableCount: number | null;
+  teamTaskGraphBlockedCount: number | null;
+  teamTaskGraphClaimedCount: number | null;
+  teamTaskGraphVerifyingCount: number | null;
+  teamTaskGraphNeedsRepairCount: number | null;
+  teamTaskGraphSatisfiedCount: number | null;
+  teamTaskGraphOptionalCount: number | null;
+  teamRoundPath: string | null;
+  teamRoundStatus: "not_applicable" | "blocked" | "active" | "ready";
+  teamRoundLeadRole: string | null;
+  teamRoundActiveSessionCount: number | null;
+  teamRoundLastClaimedTaskId: string | null;
+  teamRoundLastCompletedTaskId: string | null;
   zoteroSyncStatus: string | null;
   zoteroSyncTrigger: string | null;
   zoteroSyncTriggerReason: string | null;
@@ -1688,6 +1838,7 @@ export type WorkflowSnapshot = {
   experimentSearchStatus: string | null;
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
+  experimentSearchValidationStage: string | null;
   experimentSearchSessionId: string | null;
   experimentSearchSpecPath: string | null;
   experimentSearchStatePath: string | null;
@@ -1707,6 +1858,16 @@ export type WorkflowSnapshot = {
   experimentSearchCandidateHeadCommit: string | null;
   experimentSearchLastGitOpResult: string | null;
   experimentSearchMultiSeedStatus: string | null;
+  experimentSearchBaselineFairnessStatus: string | null;
+  experimentSearchImplementationConfidence: string | null;
+  experimentSearchSearchExhaustionStatus: string | null;
+  experimentSearchAblationStatus: string | null;
+  experimentSearchInnovationStatus: string | null;
+  experimentSearchDecisionConfidence: string | null;
+  experimentSearchRecommendedNextAction: string | null;
+  experimentSearchFailureClusterIds: string[];
+  experimentSearchEvidenceCleanlinessStatus: string | null;
+  experimentSearchDecision: string | null;
   experimentSearchPlotPackStatus: string | null;
   experimentSearchGraphMemoryPacketPath: string | null;
   experimentSearchGraphMemorySyncStatus: string | null;
@@ -1904,6 +2065,9 @@ export type AutoIteratorResult = {
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;
+  experimentDecision: string | null;
+  experimentDecisionRationale: string | null;
+  experimentRollbackStage: string | null;
   graphPresenceCheck: GraphPresenceCheckResult | null;
   projectsStateUpdated: boolean;
   auditPath: string | null;
@@ -1952,6 +2116,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
   lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
+  teamRuntime: { enabled: true },
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -2477,6 +2642,18 @@ function normalizePolicy(
             (config as Record<string, unknown>).lobsterHandoff
           )
         : DEFAULT_POLICY.lobsterHandoff,
+    teamRuntime:
+      config && typeof config === "object" &&
+      (config as Record<string, unknown>).teamRuntime &&
+      typeof (config as Record<string, unknown>).teamRuntime === "object"
+        ? {
+            enabled:
+              ((config as Record<string, unknown>).teamRuntime as Record<string, unknown>)
+                .enabled === false
+                ? false
+                : true,
+          }
+        : DEFAULT_POLICY.teamRuntime,
   };
 }
 
@@ -2891,9 +3068,7 @@ function formatStageCommand(stage: string | null): string | null {
 }
 
 function formatWorkflowShellArgument(value: string): string {
-  return /^[A-Za-z0-9._:/=-]+$/u.test(value)
-    ? value
-    : `"${value.replace(/(["\\])/g, "\\$1")}"`;
+  return formatWorkflowShellArgumentFromKernel(value);
 }
 
 function buildGraphImportRepairSlashCommand(
@@ -2916,10 +3091,7 @@ function formatStageSummary(stage: string | null): string | null {
 }
 
 function stageOwner(stage: string | null): WorkflowRole | null {
-  if (!stage) {
-    return null;
-  }
-  return STAGE_REQUIREMENTS[stage]?.owner ?? null;
+  return resolveWorkflowStageLeadRole({ stage });
 }
 
 function getAutoIteratorAuditPath(projectRoot: string): string {
@@ -3360,7 +3532,7 @@ function hasFinishedExperimentWorkAwaitingReconciliation(params: {
 }
 
 function buildExperimentMonitorCommand(): string {
-  return "Run /monitor-experiment to reconcile active remote experiments and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis. If coder-side search is active, keep retained incumbent history and discarded candidate history distinct.";
+  return "Run /monitor-experiment to reconcile remote experiments from durable runtime artifacts first (REMOTE_RUN.json, RUN_HEARTBEAT.json, RUN_TERMINAL.json, RESULT_SUMMARY.json, FAILURE_SIGNATURE.json), persist missing watcher signals through research_workflow.record_experiment_runtime_signal when needed, and promote completed runs into artifacts/results/, EXPERIMENT_REGISTRY.md, EXPERIMENT_LEDGER.json, and experiment_search until ready_for_analysis. If coder-side search is active, keep retained incumbent history and discarded candidate history distinct.";
 }
 
 function isPaperQcHardFailure(state: PaperQcState): boolean {
@@ -3392,13 +3564,6 @@ function isCitationCollectionHardFailure(
   }
   return normalizeStage(state.status) === "blocked" || state.hallucinatedCount > 0;
 }
-
-const REQUIRED_RESEARCH_PROGRAM_EXPERIMENT_STAGES = [
-  "baseline_implementation",
-  "baseline_tuning",
-  "creative_research",
-  "ablation_studies",
-];
 
 function isResolvedReviewIssueStatus(status: string | null): boolean {
   return ["fixed", "verified", "waived", "closed", "resolved"].includes(
@@ -3529,212 +3694,14 @@ async function hydrateReviewIssueTrackerState(params: {
 function getResearchProgramValidationErrors(
   state: ResearchProgramState
 ): string[] {
-  const errors: string[] = [];
-  const activeTracks = state.tracks.filter(
-    (track) => normalizeStage(track.status) === "active"
-  );
-  if (!["approved", "ready", "running"].includes(normalizeStage(state.status) ?? "")) {
-    errors.push(
-      `PROJECT_MANIFEST.json.research_program.status must be approved/ready/running (current: ${state.status})`
-    );
-  }
-  if (!state.goal) {
-    errors.push("PROJECT_MANIFEST.json.research_program.goal is required");
-  }
-  if (activeTracks.length === 0) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program must define at least one active track"
-    );
-  }
-  if (state.globalConstraints.maxActiveTracks != null) {
-    if (activeTracks.length > state.globalConstraints.maxActiveTracks) {
-      errors.push(
-        `active track count ${activeTracks.length} exceeds research_program.global_constraints.max_active_tracks=${state.globalConstraints.maxActiveTracks}`
-      );
-    }
-  }
-  for (const track of activeTracks) {
-    if (!track.hypothesis) {
-      errors.push(`research_program track ${track.trackId} missing hypothesis`);
-    }
-    if (!track.noveltyBasis) {
-      errors.push(`research_program track ${track.trackId} missing novelty_basis`);
-    }
-    if (!track.mainMetric) {
-      errors.push(`research_program track ${track.trackId} missing main_metric`);
-    }
-    if (!track.successThreshold) {
-      errors.push(`research_program track ${track.trackId} missing success_threshold`);
-    }
-    if (track.requiredBaselines.length === 0) {
-      errors.push(`research_program track ${track.trackId} requires at least one baseline`);
-    }
-    if (track.requiredAblations.length === 0) {
-      errors.push(`research_program track ${track.trackId} requires at least one ablation`);
-    }
-    if (track.stopRules.length === 0) {
-      errors.push(`research_program track ${track.trackId} requires stop_rules`);
-    }
-    if (track.rollbackTriggers.length === 0) {
-      errors.push(
-        `research_program track ${track.trackId} requires rollback_triggers`
-      );
-    }
-    const stageMatrix = new Set(
-      track.experimentStageMatrix.map((entry) => normalizeStage(entry) ?? entry)
-    );
-    for (const requiredStage of REQUIRED_RESEARCH_PROGRAM_EXPERIMENT_STAGES) {
-      if (!stageMatrix.has(requiredStage)) {
-        errors.push(
-          `research_program track ${track.trackId} is missing experiment_stage_matrix entry ${requiredStage}`
-        );
-      }
-    }
-    if (
-      track.writeScope.allowedClaimIds.length === 0 &&
-      track.writeScope.allowedFigureIds.length === 0
-    ) {
-      errors.push(
-        `research_program track ${track.trackId} must declare write_scope allowed claims or figures`
-      );
-    }
-    if (
-      track.budget.gpuHours == null &&
-      track.budget.maxRuns == null &&
-      track.budget.maxDebugIterations == null
-    ) {
-      errors.push(`research_program track ${track.trackId} must declare a budget`);
-    }
-  }
-  for (const track of activeTracks) {
-    const hasTask = state.taskGraph.some(
-      (task) =>
-        task.trackId === track.trackId &&
-        task.entryCriteria.length > 0 &&
-        task.expectedOutputs.length > 0 &&
-        task.exitCriteria.length > 0
-    );
-    if (!hasTask) {
-      errors.push(
-        `research_program track ${track.trackId} requires task_graph coverage with entry/output/exit criteria`
-      );
-    }
-  }
-  if (
-    state.planSelection.selectedTrackId &&
-    !state.tracks.some((track) => track.trackId === state.planSelection.selectedTrackId)
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_track_id (${state.planSelection.selectedTrackId}) must reference a declared track`
-    );
-  }
-  if (
-    state.planSelection.selectedOptionId &&
-    !state.planAlternatives.some(
-      (option) => option.optionId === state.planSelection.selectedOptionId
-    )
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_option_id (${state.planSelection.selectedOptionId}) must reference research_program.plan_alternatives`
-    );
-  }
-  return errors;
+  return getResearchProgramValidationErrorsFromKernel(state);
 }
 
 function getResearchProgramPlanValidationErrors(params: {
   state: ResearchProgramState;
   ideationContract?: IdeationContractState | null;
 }): string[] {
-  const errors: string[] = [];
-  const comparedOptionIds = [...new Set(params.state.planSelection.comparedOptionIds)];
-  if (params.state.planAlternatives.length < 2) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_alternatives must compare at least two graph-grounded options"
-    );
-  }
-  if (!params.state.planSelection.selectedOptionId) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_option_id is required");
-  }
-  if (!params.state.planSelection.selectedTrackId) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.selected_track_id is required");
-  }
-  if (comparedOptionIds.length < 2) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_selection.compared_option_ids must record at least two compared options"
-    );
-  }
-  if (
-    params.state.planSelection.selectedOptionId &&
-    comparedOptionIds.length > 0 &&
-    !comparedOptionIds.includes(params.state.planSelection.selectedOptionId)
-  ) {
-    errors.push(
-      "research_program.plan_selection.selected_option_id must also appear in compared_option_ids"
-    );
-  }
-  if (!params.state.planSelection.rationale) {
-    errors.push("PROJECT_MANIFEST.json.research_program.plan_selection.rationale is required");
-  }
-  if (params.state.planSelection.decisiveGraphEvidencePaths.length === 0) {
-    errors.push(
-      "PROJECT_MANIFEST.json.research_program.plan_selection.decisive_graph_evidence_paths must cite graph-backed evidence"
-    );
-  }
-  if (
-    params.state.planSelection.selectedTrackId &&
-    params.ideationContract?.selectedTrackId &&
-    params.state.planSelection.selectedTrackId !== params.ideationContract.selectedTrackId
-  ) {
-    errors.push(
-      `research_program.plan_selection.selected_track_id should stay aligned with ideation_contract.selected_track_id (${params.ideationContract.selectedTrackId})`
-    );
-  }
-
-  const selectedOption = params.state.planSelection.selectedOptionId
-    ? params.state.planAlternatives.find(
-        (option) => option.optionId === params.state.planSelection.selectedOptionId
-      ) ?? null
-    : null;
-  if (selectedOption) {
-    if (selectedOption.status !== "selected") {
-      errors.push(
-        `research_program.plan_alternatives option ${selectedOption.optionId} must have status=selected`
-      );
-    }
-    if (
-      selectedOption.linkedTrackId &&
-      params.state.planSelection.selectedTrackId &&
-      selectedOption.linkedTrackId !== params.state.planSelection.selectedTrackId
-    ) {
-      errors.push(
-        `research_program.plan_alternatives option ${selectedOption.optionId} should point at selected_track_id=${params.state.planSelection.selectedTrackId}`
-      );
-    }
-  }
-
-  for (const optionId of comparedOptionIds) {
-    const option =
-      params.state.planAlternatives.find((entry) => entry.optionId === optionId) ?? null;
-    if (!option) {
-      errors.push(
-        `research_program.plan_selection.compared_option_ids references missing option ${optionId}`
-      );
-      continue;
-    }
-    if (!option.title) {
-      errors.push(`research_program.plan_alternatives option ${option.optionId} missing title`);
-    }
-    if (!option.summary) {
-      errors.push(`research_program.plan_alternatives option ${option.optionId} missing summary`);
-    }
-    if (option.graphEvidencePaths.length === 0) {
-      errors.push(
-        `research_program.plan_alternatives option ${option.optionId} must cite graph_evidence_paths`
-      );
-    }
-  }
-
-  return errors;
+  return getResearchProgramPlanValidationErrorsFromKernel(params);
 }
 
 function defaultResearchProgramZoteroProjectPath(
@@ -3747,44 +3714,14 @@ function getResearchProgramOnboardingGaps(params: {
   state: ResearchProgramState;
   projectId?: string | null;
 }): string[] {
-  const { state } = params;
-  const gaps: string[] = [];
-  if (!state.goal) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.goal");
-  }
-  if (!state.problemStatement) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.problem_statement");
-  }
-  if (!state.baselineReference) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.baseline_reference");
-  }
-  if (!state.primaryMetric) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.primary_metric");
-  }
-  if (state.datasets.length === 0) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.datasets");
-  }
-  if (state.successCriteria.length === 0) {
-    gaps.push("PROJECT_MANIFEST.json.research_program.success_criteria");
-  }
-  if (!state.zoteroProjectPath) {
-    gaps.push(
-      `PROJECT_MANIFEST.json.research_program.zotero_project_path (recommended: ${
-        defaultResearchProgramZoteroProjectPath(params.projectId) ??
-        "<zoteroProjectRoot>/<project-id>"
-      })`
-    );
-  }
-  return gaps;
+  return getResearchProgramOnboardingGapsFromKernel(params);
 }
 
 function getResearchProgramOnboardingStatus(params: {
   state: ResearchProgramState;
   projectId?: string | null;
 }): string {
-  return getResearchProgramOnboardingGaps(params).length === 0
-    ? "ready"
-    : "incomplete";
+  return getResearchProgramOnboardingStatusFromKernel(params);
 }
 
 function isIdeationContractReady(state: IdeationContractState): boolean {
@@ -4029,66 +3966,13 @@ function getBrainstormCycleDefaultPaths(trackId: string | null): {
 }
 
 function isBrainstormCycleReady(state: BrainstormCycleState): boolean {
-  return ["ready", "reconciled"].includes(normalizeStage(state.status) ?? "");
+  return isBrainstormCycleReadyFromKernel(state);
 }
 
 function getBrainstormCycleValidationErrors(
   state: BrainstormCycleState
 ): string[] {
-  const errors: string[] = [];
-  if (!state.topic) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.topic is required");
-  }
-  if (!state.basisStage) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.basis_stage is required");
-  }
-  if (!state.provider) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider is required");
-  }
-  if (!state.providerMode) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.provider_mode is required");
-  }
-  if (!Number.isFinite(state.contractVersion ?? NaN)) {
-    errors.push("PROJECT_MANIFEST.json.brainstorm_cycle.contract_version is required");
-  }
-  for (const [field, value] of [
-    ["topic_summary_path", state.topicSummaryPath],
-    ["research_brief_path", state.researchBriefPath],
-    ["brainstorm_brief_path", state.brainstormBriefPath],
-    ["logic_chain_path", state.logicChainPath],
-    ["evidence_chain_path", state.evidenceChainPath],
-    ["reasoning_trace_path", state.reasoningTracePath],
-    ["question_packet_path", state.questionPacketPath],
-    ["working_memory_path", state.workingMemoryPath],
-    ["synthesis_packet_path", state.synthesisPacketPath],
-  ] as Array<[string, string | null]>) {
-    if (!value) {
-      errors.push(`PROJECT_MANIFEST.json.brainstorm_cycle.${field} is required`);
-    }
-  }
-  if (isBrainstormCycleReady(state)) {
-    if (!["ready", "reconciled"].includes(normalizeStage(state.providerStatus) ?? "")) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.provider_status = ready|reconciled is required when the brainstorm cycle is ready"
-      );
-    }
-    if (state.rounds.length === 0) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.rounds must contain at least one completed brainstorm round"
-      );
-    }
-    if (!state.selectedRoundId) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_round_id is required when the brainstorm cycle is ready"
-      );
-    }
-    if (!state.selectedOptionId) {
-      errors.push(
-        "PROJECT_MANIFEST.json.brainstorm_cycle.selected_option_id is required when the brainstorm cycle is ready"
-      );
-    }
-  }
-  return errors;
+  return getBrainstormCycleValidationErrorsFromKernel(state);
 }
 
 async function fileHasMeaningfulJsonContent(targetPath: string | null): Promise<boolean> {
@@ -4982,31 +4866,10 @@ function isInnovationReflectionDue(params: {
   state: InnovationReflectionState;
   ledger: ExperimentLedger | null;
 }): boolean {
-  const basis = getInnovationReflectionBasis(params.ledger);
-  if (!params.state.requiredAfterExperiments || basis.experimentIds.length === 0) {
-    return false;
-  }
-  if (params.state.status === "running") {
-    return false;
-  }
-  if (!params.state.lastReflectionAt || !params.state.lastReflectionPath) {
-    return true;
-  }
-  if (!params.state.reflectedThroughExperimentUpdateAt) {
-    return true;
-  }
-  if (
-    basis.latestExperimentUpdateAt &&
-    Date.parse(params.state.reflectedThroughExperimentUpdateAt) <
-      Date.parse(basis.latestExperimentUpdateAt)
-  ) {
-    return true;
-  }
-  if (params.state.status === "pending" || params.state.status === "stale") {
-    return true;
-  }
-  const reflectedIds = new Set(params.state.reflectedExperimentIds);
-  return basis.experimentIds.some((experimentId) => !reflectedIds.has(experimentId));
+  return isInnovationReflectionDueFromKernel({
+    state: params.state,
+    ledger: params.ledger,
+  });
 }
 
 function buildExperimentMemoryDigest(
@@ -5697,138 +5560,15 @@ async function collectSurveyReviewStageMissingSignals(params: {
   projectRoot: string;
   manifest: ManifestLike | null;
 }): Promise<string[]> {
-  const state = normalizeSurveyReviewState(params.manifest?.survey_review);
-  const missing: string[] = [];
-  if (!state.topic) {
-    missing.push("PROJECT_MANIFEST.json.survey_review.topic is required");
-  }
-  if (state.status !== "completed") {
-    missing.push(
-      state.pendingReason
-        ? `survey_review must reach completed before WRITE handoff: ${state.pendingReason}`
-        : `survey_review must reach completed before WRITE handoff (current: ${state.status})`
-    );
-  }
-  if (!state.gateReady) {
-    missing.push(
-      `survey_review quality gates must be ready before WRITE handoff: coverage=${state.coverageStatus ?? "missing"}, taxonomy=${state.taxonomyStabilityStatus ?? "missing"}, representative_methods=${state.representativeMethodsStatus ?? "missing"}, benchmark_alignment=${state.benchmarkAlignmentStatus ?? "missing"}, gap_closure=${state.gapClosureStatus ?? "missing"}`
-    );
-  }
-  if (state.coverageStatus !== "ready") {
-    missing.push(
-      state.coverageSummary
-        ? `survey coverage gate is not ready: ${state.coverageSummary}`
-        : "survey coverage gate is not ready"
-    );
-  }
-  if (state.taxonomyStabilityStatus !== "stable") {
-    missing.push(
-      state.taxonomyStabilitySummary
-        ? `survey taxonomy gate is not stable: ${state.taxonomyStabilitySummary}`
-        : "survey taxonomy gate is not stable"
-    );
-  }
-  if (state.representativeMethodsStatus !== "ready") {
-    missing.push(
-      state.representativeMethodsSummary
-        ? `survey representative-methods gate is not ready: ${state.representativeMethodsSummary}`
-        : "survey representative-methods gate is not ready"
-    );
-  }
-  if (state.benchmarkAlignmentStatus !== "aligned") {
-    missing.push(
-      state.benchmarkAlignmentSummary
-        ? `survey benchmark-alignment gate is not aligned: ${state.benchmarkAlignmentSummary}`
-        : "survey benchmark-alignment gate is not aligned"
-    );
-  }
-  if (state.gapClosureStatus !== "closed") {
-    missing.push(
-      state.gapClosureSummary
-        ? `survey gap-closure gate is not closed: ${state.gapClosureSummary}`
-        : "survey gap-closure gate is not closed"
-    );
-  }
-  if (state.gateBlockingIssues.length > 0) {
-    missing.push(
-      `survey_review blocking issues: ${state.gateBlockingIssues.join(" | ")}`
-    );
-  }
-  const queryRegistryResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.queryRegistryPath
-  );
-  const includedResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.includedPapersPath
-  );
-  const excludedResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.excludedPapersPath
-  );
-  const literatureReviewResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.literatureReviewPath
-  );
-  const gapResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.gapSynthesisPath
-  );
-  const surveyBriefResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.surveyBriefPath
-  );
-  const diagnosticsResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    state.diagnosticsPath
-  );
-
-  const requiresQueryRegistry = ["searching", "screening", "synthesizing", "completed"].includes(
-    state.status
-  );
-  const requiresScreeningPacket = ["screening", "synthesizing", "completed"].includes(
-    state.status
-  );
-  const requiresSynthesisPacket = ["synthesizing", "completed"].includes(state.status);
-  const requiresSurveyBrief = state.status === "completed";
-
-  if (
-    requiresQueryRegistry &&
-    !(await fileHasMeaningfulJsonContent(queryRegistryResolvedPath))
-  ) {
-    missing.push(`${state.queryRegistryPath ?? "researcher/SURVEY_QUERY_REGISTRY.json"} should record one or more retrieval rounds`);
-  }
-  if (
-    requiresScreeningPacket &&
-    !(await fileHasMeaningfulJsonContent(includedResolvedPath))
-  ) {
-    missing.push(`${state.includedPapersPath ?? "researcher/INCLUDED_PAPERS.json"} should list the included survey papers`);
-  }
-  if (
-    requiresScreeningPacket &&
-    !(await fileHasMeaningfulJsonContent(excludedResolvedPath))
-  ) {
-    missing.push(`${state.excludedPapersPath ?? "researcher/EXCLUDED_PAPERS.json"} should list excluded/background-only survey candidates`);
-  }
-  if (
-    requiresSynthesisPacket &&
-    !(await fileHasNonWhitespaceContent(literatureReviewResolvedPath))
-  ) {
-    missing.push(`${state.literatureReviewPath ?? "researcher/LITERATURE_REVIEW.md"} is required before the survey brief can be finalized`);
-  }
-  if (requiresSynthesisPacket && !(await fileHasNonWhitespaceContent(gapResolvedPath))) {
-    missing.push(`${state.gapSynthesisPath ?? "researcher/GAP_SYNTHESIS.md"} is required before the survey brief can be finalized`);
-  }
-  if (requiresSurveyBrief && !(await fileHasNonWhitespaceContent(surveyBriefResolvedPath))) {
-    missing.push(`${state.surveyBriefPath ?? "researcher/SURVEY_BRIEF.md"} is required when survey_review.status=completed`);
-  }
-  if (
-    requiresSynthesisPacket &&
-    !(await fileHasMeaningfulJsonContent(diagnosticsResolvedPath))
-  ) {
-    missing.push(`${state.diagnosticsPath ?? "researcher/SURVEY_GATE_DIAGNOSTICS.json"} should record the survey-quality gate diagnostics`);
-  }
-  return missing;
+  return collectSurveyReviewStageMissingSignalsFromModule({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    deps: {
+      resolveProjectArtifactPath,
+      fileHasMeaningfulJsonContent,
+      fileHasNonWhitespaceContent,
+    },
+  });
 }
 
 async function getMissingStageSignals(params: {
@@ -6017,6 +5757,12 @@ async function getMissingStageSignals(params: {
           hasActiveExperimentRuns: (ledger) =>
             hasActiveExperimentRuns(ledger as ExperimentLedger | null),
           normalizeAutonomousExecutionState,
+          normalizeBenchmarkProtocolState,
+          normalizeStatisticalEvidenceState,
+          normalizeAblationEvidenceState,
+          normalizeMechanismEvidenceState,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
@@ -6044,6 +5790,12 @@ async function getMissingStageSignals(params: {
           hasActiveExperimentRuns: (ledger) =>
             hasActiveExperimentRuns(ledger as ExperimentLedger | null),
           normalizeAutonomousExecutionState,
+          normalizeBenchmarkProtocolState,
+          normalizeStatisticalEvidenceState,
+          normalizeAblationEvidenceState,
+          normalizeMechanismEvidenceState,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
           readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
@@ -6068,10 +5820,16 @@ async function getMissingStageSignals(params: {
           loadExperimentSearchState,
           loadExperimentReviewState,
           isExperimentSearchReadyForAnalysis,
-          hasActiveExperimentRuns: (ledger) =>
-            hasActiveExperimentRuns(ledger as ExperimentLedger | null),
-          normalizeAutonomousExecutionState,
-          readJsonIfExists,
+	          hasActiveExperimentRuns: (ledger) =>
+	            hasActiveExperimentRuns(ledger as ExperimentLedger | null),
+	          normalizeAutonomousExecutionState,
+	          normalizeBenchmarkProtocolState,
+	          normalizeStatisticalEvidenceState,
+	          normalizeAblationEvidenceState,
+	          normalizeMechanismEvidenceState,
+	          normalizeVenueCompetitionState,
+	          normalizeOpportunityScorecardState,
+	          readJsonIfExists,
           normalizeStage,
           normalizeFigureQcState,
           resolveProjectArtifactPath,
@@ -6106,6 +5864,10 @@ async function getMissingStageSignals(params: {
           getWritePackageValidationErrors,
           normalizeGraphGuidedWritingState,
           isGraphGuidedWritingReadyForSubmit,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
+          normalizeReproducibilityPackState,
+          normalizeCameraReadyEvidenceState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
@@ -6146,6 +5908,10 @@ async function getMissingStageSignals(params: {
           getWritePackageValidationErrors,
           normalizeGraphGuidedWritingState,
           isGraphGuidedWritingReadyForSubmit,
+          normalizeVenueCompetitionState,
+          normalizeOpportunityScorecardState,
+          normalizeReproducibilityPackState,
+          normalizeCameraReadyEvidenceState,
           hydrateReviewIssueTrackerState,
           hasBlockingReviewIssues,
           hasUnwaivedMediumOrHigherReviewIssues,
@@ -7547,6 +7313,20 @@ export async function applyExperimentGitOp(params: {
     (result.gitResult.actionType === "promote_candidate" ||
       result.gitResult.actionType === "discard_candidate")
   ) {
+    const searchFailureClass =
+      result.gitResult.actionType === "discard_candidate"
+        ? normalizeStage(result.reviewState.failureClass) ??
+          (() => {
+            const reviewText = `${result.reviewState.pendingReason ?? ""} ${result.reviewState.discardReason ?? ""}`.toLowerCase();
+            if (/\boom\b|timeout|ssh|disk full|killed|connection/i.test(reviewText)) {
+              return "runtime";
+            }
+            if (/baseline fairness|implementation|protocol drift|shape mismatch|nan|traceback/i.test(reviewText)) {
+              return "implementation";
+            }
+            return "scientific";
+          })()
+        : null;
     const ledgerResult = await upsertExperimentLedgerEntry({
       projectRoot: params.projectRoot,
       agentId: params.agentId ?? undefined,
@@ -7563,8 +7343,21 @@ export async function applyExperimentGitOp(params: {
             ? "advance"
             : "discard",
         summary: result.gitResult.summary,
+        note:
+          result.reviewState.promotionEvidenceSummary ??
+          result.reviewState.discardReason ??
+          result.reviewState.pendingReason,
         metadata: {
           searchGit: {
+            actionType: result.gitResult.actionType,
+            searchSessionId:
+              result.reviewState.searchSessionId ??
+              result.searchState.searchSessionId,
+            promotionBasisSignals: result.reviewState.promotionBasisSignals,
+            promotionEvidenceSummary:
+              result.reviewState.promotionEvidenceSummary,
+            discardReason: result.reviewState.discardReason,
+            failureClass: searchFailureClass,
             incumbentBranch: result.gitResult.incumbentBranch,
             incumbentCommit: result.gitResult.incumbentCommit,
             candidateBranch: result.gitResult.candidateBranch,
@@ -9138,6 +8931,7 @@ export async function runWorkflowAutoIterator(params: {
       resolveEffectiveWorkflowAutoMode,
       evaluateGateBlocking,
       isSurveyWorkflow,
+      ensureSurveyWorkflowIdentity,
       resolveStageForWorkflowLine,
       resolveNextStageForWorkflow,
       STAGE_REQUIREMENTS,
@@ -9151,6 +8945,7 @@ export async function runWorkflowAutoIterator(params: {
       buildExperimentReviewCommand,
       hasActiveExperimentRuns,
       hasFinishedExperimentWorkAwaitingReconciliation,
+      evaluateExperimentSearchDecision,
       buildExperimentMonitorCommand,
       buildGraphImportRepairGuidance,
       formatStageCommand,
