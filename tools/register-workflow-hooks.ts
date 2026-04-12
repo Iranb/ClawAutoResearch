@@ -60,6 +60,7 @@ import { appendWorkflowTraceEvent } from "./workflow-trace";
 import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
 import { claimNextWorkflowTaskForOwner } from "./workflow-team/task-graph";
 import { recordWorkflowTeamRoundClaim } from "./workflow-team/team-round";
+import { upsertWorkflowAgentCapability } from "./workflow-handoff/agent-capabilities";
 
 const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "researcher",
@@ -614,6 +615,21 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         });
       }
       if (snapshot.projectRoot && snapshot.role) {
+        if (agentCtx.sessionKey) {
+          await upsertWorkflowAgentCapability({
+            projectRoot: snapshot.projectRoot,
+            projectId: snapshot.projectId,
+            sessionKey: agentCtx.sessionKey,
+            sessionId: agentCtx.sessionId,
+            role: snapshot.role,
+            agentId: agentCtx.agentId,
+            messageChannel: agentCtx.messageChannel,
+            canUseResearchWorkflow: true,
+            canReceiveNativeDispatch: true,
+            canRunExecPacket: true,
+            confidence: "high",
+          }).catch(() => null);
+        }
         await autoAcknowledgeWorkflowMailboxForAgent({
           projectRoot: snapshot.projectRoot,
           agentId: snapshot.role,

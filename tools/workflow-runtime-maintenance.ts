@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
 import {
   dispatchWorkflowTaskToAgent,
   type DispatchableWorkflowRole,
@@ -27,6 +28,11 @@ import {
   writeWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
 import { resumeWorkflowTransition } from "./workflow-session-orchestrator.js";
+import {
+  runWorkflowHandoffMaintenancePass,
+  type WorkflowHandoffMaintenanceResult,
+} from "./workflow-handoff/maintenance";
+import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -71,6 +77,7 @@ export type WorkflowRuntimeMaintenanceResult = {
   repairedSessionKeys: string[];
   exhaustedSessionKeys: string[];
   incidents: WorkflowRuntimeIncidentEntry[];
+  handoffMaintenance: WorkflowHandoffMaintenanceResult;
   watchdogSummary: {
     queueRepairPending: number;
     sessionRepairPending: number;
@@ -427,6 +434,43 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     staleSessionAgeMs: params.staleSessionAgeMs,
     sendBroadcast: params.sendBroadcast,
   });
+  const handoffMaintenance = await runWorkflowHandoffMaintenancePass({
+    projectRoot,
+  });
+  const manifest = await readJsonIfExists<Record<string, unknown>>(
+    path.join(projectRoot, "PROJECT_MANIFEST.json")
+  );
+  const paperIngestion =
+    manifest?.paper_ingestion &&
+    typeof manifest.paper_ingestion === "object" &&
+    !Array.isArray(manifest.paper_ingestion)
+      ? (manifest.paper_ingestion as Record<string, unknown>)
+      : null;
+  const retryStatus = readString(
+    paperIngestion?.retry_status ?? paperIngestion?.retryStatus
+  );
+  const retryableFailuresRaw =
+    paperIngestion?.retryable_failed_papers ?? paperIngestion?.retryableFailedPapers;
+  const retryableFailures: unknown[] = Array.isArray(retryableFailuresRaw)
+    ? retryableFailuresRaw
+    : [];
+  if (
+    retryableFailures.length > 0 &&
+    ["failed", "terminal", "completed_with_failures", "exhausted"].includes(
+      retryStatus ?? ""
+    )
+  ) {
+    await routeWorkflowFailure({
+      projectRoot,
+      projectId,
+      workflowLine: manifest?.workflow_line === "survey" ? "survey" : "experiment",
+      stage: readString(manifest?.current_stage),
+      originalOwner: readString(manifest?.owner_agent),
+      failureKind: "paper_ingestion_failed",
+      failureReason: `PaperNexus retry terminal state still has ${retryableFailures.length} retryable failure(s).`,
+      verificationRule: "paper_ingestion_retry_terminal",
+    });
+  }
 
   const incidents = await recordBroadcastFailures({
     projectRoot,
@@ -656,6 +700,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       replayedQueueKeys,
       exhaustedQueueKeys,
       exhaustedSessionKeys,
+      handoffMaintenance,
       queueRepairPending: watchdogSummary.queueRepairPending,
       sessionRepairPending: watchdogSummary.sessionRepairPending,
       incidentCount: watchdogSummary.incidentCount,
@@ -671,6 +716,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     repairedSessionKeys,
     exhaustedSessionKeys,
     incidents,
+    handoffMaintenance,
     watchdogSummary,
   };
 }

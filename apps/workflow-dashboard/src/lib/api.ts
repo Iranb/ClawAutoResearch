@@ -45,6 +45,13 @@ export type ProjectDetailSummary = {
   teamTaskGraphVerifyingCount: number | null;
   teamTaskGraphNeedsRepairCount: number | null;
   teamTaskGraphSatisfiedCount: number | null;
+  pendingHandoffCount: number;
+  failedHandoffCount: number;
+  unackedHandoffCount: number;
+  repairQueueCount: number;
+  staleClaimCount: number;
+  capabilityWarnings: number;
+  activeWriteScopeCount: number;
   taskBoard: Array<{
     taskId: string;
     title: string;
@@ -89,7 +96,17 @@ export type ArtifactDescriptor = {
     | "runtime_queue"
     | "runtime_sessions"
     | "runtime_events"
-    | "runtime_trace";
+    | "runtime_trace"
+    | "handoff_intents"
+    | "handoff_events"
+    | "handoff_receipts"
+    | "repair_queue"
+    | "agent_capabilities"
+    | "write_scopes"
+    | "inbound_turns"
+    | "e2e_report"
+    | "e2e_artifact_checklist"
+    | "e2e_state_timeline";
   label: string;
   path: string;
   kind: "json" | "jsonl" | "markdown" | "text";

@@ -4,6 +4,7 @@ import {
   type WorkflowTaskDispatchResult,
 } from "../agent-task-dispatch";
 import {
+  DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
   handoffWorkflowTaskToAgent,
   shouldUseLobsterForWorkflowHandoff,
   type WorkflowHandoffDispatchResult,
@@ -26,9 +27,10 @@ export function resolveWorkflowDeliveryAdapter(params: {
   requesterSessionKey?: string | null;
 }): WorkflowDeliveryAdapterDecision {
   const shouldUseLobster = shouldUseLobsterForWorkflowHandoff({
-    config: params.workflowPolicy?.lobsterHandoff ?? null,
+    config:
+      params.workflowPolicy?.lobsterHandoff ??
+      DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
     autoModeActive: params.autoModeActive !== false,
-    requesterSessionKey: params.requesterSessionKey ?? null,
   });
   return {
     adapter: shouldUseLobster ? "lobster" : "native",

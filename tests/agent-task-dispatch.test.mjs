@@ -10,6 +10,10 @@ import {
   deriveWorkflowDispatchSessionCandidates,
   dispatchWorkflowTaskToAgent,
 } from "../tools/agent-task-dispatch.ts";
+import {
+  downgradeWorkflowAgentCapability,
+  upsertWorkflowAgentCapability,
+} from "../tools/workflow-handoff/agent-capabilities.ts";
 
 test("deriveAgentSessionKeyForRole keeps the same channel peer and swaps the agent id", () => {
   const sessionKey = deriveAgentSessionKeyForRole({
@@ -188,6 +192,52 @@ test("dispatchWorkflowTaskToAgent falls back to a spawned session when direct de
   assert.match(result.sessionKey ?? "", /^agent:coder:subagent:/);
   assert.equal(result.attempts.at(-1)?.strategy, "spawn_fallback");
   assert.equal(calls.length, 3);
+});
+
+test("dispatchWorkflowTaskToAgent avoids stale same-role capability records", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-capability-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await upsertWorkflowAgentCapability({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    role: "coder",
+    canUseResearchWorkflow: true,
+    confidence: "high",
+  });
+  await downgradeWorkflowAgentCapability({
+    projectRoot,
+    sessionKey: "agent:coder:discord:group:paper-lab",
+    reason: "research_workflow unavailable",
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params.sessionKey);
+        return { runId: "spawn-after-stale-capability" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    summary: "Dispatch with stale capability.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.channel, "sessions_spawn");
+  assert.match(result.sessionKey ?? "", /^agent:coder:subagent:/);
+  assert.deepEqual(calls, [result.sessionKey]);
 });
 
 test("dispatchWorkflowTaskToAgent retries timeout only when requested and transcript did not advance", async () => {

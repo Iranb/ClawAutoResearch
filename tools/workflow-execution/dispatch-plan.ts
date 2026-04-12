@@ -1,6 +1,22 @@
 import type { DispatchableWorkflowRole } from "../agent-task-dispatch";
 import type { WorkflowRuntimeQueueDispatchPayload } from "./runtime-store";
 
+function toDispatchableWorkflowRole(value: string): DispatchableWorkflowRole {
+  switch (value) {
+    case "planner":
+    case "orchestrator":
+    case "coder":
+    case "analyzer":
+    case "academic_writer":
+    case "reviewer":
+    case "cross-reviewer":
+    case "researcher":
+      return value;
+    default:
+      return "researcher";
+  }
+}
+
 export function buildWorkflowDispatchPlan(
   payload: WorkflowRuntimeQueueDispatchPayload
 ): {
@@ -12,7 +28,7 @@ export function buildWorkflowDispatchPlan(
   autoModeActive: boolean;
 } {
   return {
-    toRole: payload.toRole,
+    toRole: toDispatchableWorkflowRole(payload.toRole),
     summary: payload.summary,
     command: payload.command,
     stage: payload.stage,

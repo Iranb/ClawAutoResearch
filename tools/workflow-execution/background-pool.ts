@@ -18,4 +18,4 @@ export type {
   PapernexusWrapperRunRequest,
   PapernexusWrapperScript,
   QueuedBackgroundWorkflowDrainResult,
-} from "../workflow-background-pool";
+} from "../workflow-fast-paths";

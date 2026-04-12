@@ -55,6 +55,8 @@ import { readGateReviewStore } from "../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import { readCodeReviewStore } from "../tools/workflow-code-review.ts";
 import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
+import { readWorkflowArtifactReceiptStore } from "../tools/workflow-handoff/artifact-receipts.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
@@ -3325,6 +3327,13 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   assert.equal(start.launched, true);
   assert.equal(start.reason, "started");
   assert.equal(runtimeCalls.length, 3);
+  const handoffStoreAfterStart = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(
+    handoffStoreAfterStart.intents.filter(
+      (intent) => intent.reason === "code_review_required"
+    ).length,
+    3
+  );
 
   const startedStore = await readCodeReviewStore(projectRoot);
   for (const attempt of startedStore.currentRound?.attempts ?? []) {
@@ -3394,4 +3403,10 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   const approvedStore = await readCodeReviewStore(projectRoot);
   assert.equal(approvedStore.currentRound?.status, "approved");
   assert.equal(approvedStore.currentRound?.aggregate?.reviewCount, 3);
+  const receiptStore = await readWorkflowArtifactReceiptStore(projectRoot);
+  assert.equal(receiptStore.receipts.length, 3);
+  assert.equal(
+    receiptStore.receipts.every((receipt) => receipt.verificationResult === "passed"),
+    true
+  );
 });

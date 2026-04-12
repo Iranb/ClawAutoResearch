@@ -16,6 +16,7 @@ import {
 } from "../tools/workflow-runtime-state.ts";
 import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 import { runWorkflowRuntimeMaintenancePass } from "../tools/workflow-runtime-maintenance.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-"));
@@ -285,6 +286,32 @@ test("runWorkflowRuntimeMaintenancePass escalates exhausted transitions and orph
   );
   assert.equal(
     incidents.entries.some((entry) => entry.kind === "repair_orphan_session"),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failures to repair handoff", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await makeProject(projectRoot, "gamma");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    retry_status: "completed_with_failures",
+    retryable_failed_papers: [{ source_key: "paper-1", title: "Failed paper" }],
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "gamma",
+  });
+
+  const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(
+    handoffs.intents.some((intent) => intent.reason === "paper_ingestion_failed"),
     true
   );
 });

@@ -303,6 +303,24 @@ export function ProjectDetailPage() {
                       {summary.teamRoundLastCompletedTaskId ?? "None"}
                     </p>
                   </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Handoff recovery</p>
+                    <p className="detail-card__value">
+                      {`${summary.pendingHandoffCount} pending · ${summary.unackedHandoffCount} unacked · ${summary.failedHandoffCount} failed`}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Repair queue</p>
+                    <p className="detail-card__value">
+                      {`${summary.repairQueueCount} repairs · ${summary.staleClaimCount} stale claims`}
+                    </p>
+                  </article>
+                  <article className="detail-card">
+                    <p className="detail-card__label">Runtime safety</p>
+                    <p className="detail-card__value">
+                      {`${summary.capabilityWarnings} capability warnings · ${summary.activeWriteScopeCount} write locks`}
+                    </p>
+                  </article>
                 </section>
                 <section className="detail-grid detail-grid--secondary">
                   <article className="detail-card">

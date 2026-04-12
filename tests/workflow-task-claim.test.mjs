@@ -85,3 +85,80 @@ test("workflow task claim runtime skips dependency-blocked tasks and auto-contin
     "claimed"
   );
 });
+
+test("workflow task claim blocks active write-scope conflicts", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-task-write-scope-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    topTierVerdict: null,
+    evidenceCloseout: {
+      status: "not_applicable",
+      topTierVerdict: null,
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: true,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "code.shared_a",
+        title: "Edit shared file A",
+        owner: "coder",
+        status: "blocked",
+        reason: "Needs implementation.",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+      {
+        taskId: "code.shared_b",
+        title: "Edit shared file B",
+        owner: "coder",
+        status: "blocked",
+        reason: "Needs implementation.",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+    ],
+  });
+
+  const graph = await readWorkflowTaskGraphStore(projectRoot);
+  graph.tasks = graph.tasks.map((task) => ({
+    ...task,
+    writeScope: {
+      ownedDirs: [],
+      exclusiveFiles: ["coder/shared-plan.md"],
+      mode: "exclusive_write",
+    },
+  }));
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-task-graph.json"),
+    `${JSON.stringify(graph, null, 2)}\n`,
+    "utf8"
+  );
+
+  const first = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "coder",
+    sessionKey: "agent:coder:one",
+  });
+  const second = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "coder",
+    sessionKey: "agent:coder:two",
+  });
+
+  assert.equal(first.claimed, true);
+  assert.equal(second.claimed, false);
+  assert.match(second.reason ?? "", /^write_scope_conflict:/);
+});

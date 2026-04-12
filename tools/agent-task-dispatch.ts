@@ -10,6 +10,11 @@ import {
 } from "./workflow-handoff-runtime";
 import { isExecApprovalRequiredError } from "./workflow-execution/exec-budget";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
+import {
+  downgradeWorkflowAgentCapability,
+  readWorkflowAgentCapabilityStore,
+  selectWorkflowCapableSession,
+} from "./workflow-handoff/agent-capabilities";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -375,6 +380,13 @@ async function runSingleDispatchAttempt(params: {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    if (/tool.+unavailable|unknown tool|not available|permission denied/i.test(errorMessage)) {
+      await downgradeWorkflowAgentCapability({
+        projectRoot: params.projectRoot,
+        sessionKey: params.sessionKey,
+        reason: errorMessage,
+      }).catch(() => null);
+    }
     return {
       accepted: false,
       attempt: {
@@ -467,6 +479,18 @@ export async function dispatchWorkflowTaskToAgent(params: {
   const preferredCandidates = Array.isArray(params.preferredSessionKeys)
     ? uniqueStrings(params.preferredSessionKeys)
     : [];
+  const capabilityStore = await readWorkflowAgentCapabilityStore(params.projectRoot).catch(
+    () => null
+  );
+  const roleCapabilityRecords =
+    capabilityStore?.records.filter(
+      (entry) => entry.role === params.toRole || entry.agentId === params.toRole
+    ) ?? [];
+  const capableSession = await selectWorkflowCapableSession({
+    projectRoot: params.projectRoot,
+    role: params.toRole,
+    requiresResearchWorkflow: true,
+  }).catch(() => null);
   const dedicatedPapernexusSessionKey =
     preferredCandidates.length === 0 &&
     looksLikePapernexusHeavyCommand(params.command ?? params.summary)
@@ -480,7 +504,11 @@ export async function dispatchWorkflowTaskToAgent(params: {
         })
       : null;
   const candidates =
-    preferredCandidates.length > 0
+    capableSession
+      ? uniqueStrings([capableSession.sessionKey, ...preferredCandidates])
+      : roleCapabilityRecords.length > 0
+        ? []
+    : preferredCandidates.length > 0
       ? preferredCandidates
       : dedicatedPapernexusSessionKey
         ? [dedicatedPapernexusSessionKey]

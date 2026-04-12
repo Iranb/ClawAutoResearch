@@ -4,6 +4,8 @@
 
 > **Non-negotiable:** 本计划不改变现有 workflow stage truth，不让 Team Lead 自由拆任务，不把 mailbox 重新变成核心 handoff 机制。`auto_iterator_tick`、stage registry、role policy、manifest/gate/runtime state 仍是控制面真相源。新增代码只能围绕 **durable handoff intent + delivery + ack + recovery** 增强现有 pipeline。
 
+> **Loop-hardening update:** 本计划必须把 handoff / repair / cross-domain inspiration 的所有等待路径写成可终止状态机。任何等待都必须有 deadline、retry budget、terminal state、fallback owner、observable event；任何自动恢复都不得通过重复 tick、重复 mention、重复 repair task 或重复 stub artifact 绕过 workflow gate。
+
 ---
 
 ## 0. 当前代码边界
@@ -82,6 +84,8 @@ tools/workflow-handoff/artifact-receipts.ts
 tools/workflow-handoff/agent-capabilities.ts
 tools/workflow-handoff/review-rounds.ts
 tools/workflow-handoff/write-scope.ts
+tools/workflow-handoff/inbound-budget.ts
+tools/workflow-handoff/broadcast-budget.ts
 ```
 
 Also create extensionless shim files for repo import compatibility:
@@ -98,6 +102,8 @@ tools/workflow-handoff/artifact-receipts
 tools/workflow-handoff/agent-capabilities
 tools/workflow-handoff/review-rounds
 tools/workflow-handoff/write-scope
+tools/workflow-handoff/inbound-budget
+tools/workflow-handoff/broadcast-budget
 ```
 
 Each shim:
@@ -115,6 +121,8 @@ export * from "./<file>.ts";
 {PROJ}/.openclaw-research/workflow-repair-queue.json
 {PROJ}/.openclaw-research/workflow-agent-capabilities.json
 {PROJ}/.openclaw-research/workflow-write-scopes.json
+{PROJ}/.openclaw-research/workflow-inbound-turns.jsonl
+{PROJ}/.openclaw-research/workflow-broadcast-payloads/
 ```
 
 ### 1.3 Existing files to modify
@@ -135,6 +143,7 @@ tools/workflow-runtime-recovery.ts
 tools/workflow-runtime-maintenance.ts
 tools/workflow-execution/exec-packet.ts
 tools/paper-ingestion-failures.ts
+tools/workflow-guard-prompt-assembly.ts
 apps/workflow-dashboard/server/read-models/project-detail.ts
 apps/workflow-dashboard/src/lib/api.ts
 apps/workflow-dashboard/src/pages/ProjectDetailPage.tsx
@@ -166,18 +175,30 @@ export type WorkflowHandoffReason =
   | "survey_review_required"
   | "survey_route_drift"
   | "paper_review_required"
+  | "cross_domain_evidence_missing"
+  | "capability_stale"
+  | "handoff_ack_timeout"
+  | "discord_inbound_timeout"
+  | "inbound_budget_exceeded"
+  | "broadcast_delivery_timeout"
+  | "stale_claim"
+  | "write_scope_conflict"
   | "manual_recovery";
 
 export type WorkflowHandoffStatus =
   | "pending"
+  | "queued"
   | "dispatching"
   | "delivered"
   | "acknowledged"
   | "claimed"
   | "completed"
   | "failed"
+  | "stale_claim"
   | "expired"
-  | "superseded";
+  | "superseded"
+  | "escalated"
+  | "cancelled";
 
 export type WorkflowHandoffDeliveryChannel =
   | "native_runtime"
@@ -204,6 +225,9 @@ export type WorkflowHandoffDeliveryPlan = {
   requireAck: boolean;
   ackDeadlineAt: string | null;
   fallbackAfterMs: number | null;
+  maxAttemptsTotal: number;
+  maxAttemptsByChannel: Partial<Record<WorkflowHandoffDeliveryChannel, number>>;
+  staleClaimAfterMs: number | null;
 };
 
 export type WorkflowHandoffIntent = {
@@ -224,9 +248,12 @@ export type WorkflowHandoffIntent = {
   targetTaskId: string | null;
   artifactReceiptId: string | null;
   failureId: string | null;
+  failureFingerprint: string | null;
+  repairLineageId: string | null;
   status: WorkflowHandoffStatus;
   deliveryPlan: WorkflowHandoffDeliveryPlan;
   deliveryAttempts: WorkflowHandoffDeliveryAttempt[];
+  terminalReason: string | null;
   createdAt: string;
   updatedAt: string;
   expiresAt: string | null;
@@ -275,10 +302,17 @@ export type WorkflowRepairQueueItem = {
   failureKind: WorkflowHandoffReason;
   failureReason: string;
   verificationRule: string | null;
+  failureFingerprint: string;
+  repairLineageId: string;
+  parentRepairId: string | null;
+  repairDepth: number;
+  maxRepairDepth: number;
   originalOwner: string | null;
   repairOwner: string;
   fallbackOwners: string[];
   retryBudgetRemaining: number;
+  staleClaimAfterMs: number;
+  nextEligibleAt: string | null;
   status: "queued" | "claimed" | "completed" | "failed" | "escalated";
   createdAt: string;
   updatedAt: string;
@@ -303,7 +337,67 @@ export type WorkflowAgentCapabilityRecord = {
   canReceiveNativeDispatch: boolean;
   canRunExecPacket: boolean;
   canUseLobster: boolean;
+  capabilityTtlMs: number;
+  confidence: "unknown" | "low" | "medium" | "high";
+  degradedReason: string | null;
   lastSeenAt: string;
+  expiresAt: string;
+};
+```
+
+### 2.5 Inbound turn budget record
+
+File: `tools/workflow-handoff/inbound-budget.ts`
+
+```ts
+export type WorkflowInboundTurnRecord = {
+  schemaVersion: 1;
+  turnId: string;
+  projectId: string | null;
+  projectRoot: string;
+  channelKey: string | null;
+  sessionKey: string | null;
+  agentId: string | null;
+  action: string;
+  status:
+    | "started"
+    | "completed_inline"
+    | "deferred"
+    | "timed_out"
+    | "failed";
+  inboundBudgetMs: number;
+  startedAt: string;
+  completedAt: string | null;
+  elapsedMs: number | null;
+  deferredRunId: string | null;
+  deferredQueueKey: string | null;
+  idempotencyKey: string;
+  summaryPath: string | null;
+  error: string | null;
+};
+```
+
+### 2.6 Broadcast payload budget record
+
+File: `tools/workflow-handoff/broadcast-budget.ts`
+
+```ts
+export type WorkflowBroadcastPayloadBudget = {
+  schemaVersion: 1;
+  broadcastId: string;
+  idempotencyKey: string;
+  projectId: string | null;
+  projectRoot: string;
+  channelKey: string | null;
+  sessionKey: string | null;
+  payloadPath: string | null;
+  summary: string;
+  fullMessageCharCount: number;
+  postedMessageCharCount: number;
+  truncated: boolean;
+  maxInlineChars: number;
+  deliveryMode: "inline" | "payload_pointer" | "outbox_only";
+  createdAt: string;
 };
 ```
 
@@ -331,10 +425,17 @@ Implementation:
 - Add `appendWorkflowHandoffEvent(...)` JSONL.
 - Add dedupe by `idempotencyKey`.
 - Add status transition guard:
-  - pending -> dispatching -> delivered -> acknowledged -> claimed -> completed
-  - pending/dispatching/delivered -> failed
-  - pending/delivered -> expired
-  - any non-terminal -> superseded
+  - `pending -> queued -> dispatching -> delivered -> acknowledged -> claimed -> completed`
+  - `pending -> dispatching` is allowed when the first delivery attempt starts immediately.
+  - `delivered -> acknowledged` is required when `deliveryPlan.requireAck=true`.
+  - `acknowledged -> claimed` is required for task-bearing intents; stage-owner notice intents may complete after ack.
+  - `claimed -> failed` is allowed only with failure evidence and optional repair queue creation.
+  - `claimed -> stale_claim` must happen when no progress event is recorded before `staleClaimAfterMs`.
+  - `pending/queued/dispatching/delivered/acknowledged -> expired` when `expiresAt` passes.
+  - `failed/expired/stale_claim -> escalated` when retry budget or fallback owners are exhausted.
+  - `any non-terminal -> superseded` only when a newer intent with same idempotency key carries a higher manifest version or stage decision revision.
+  - `any non-terminal -> cancelled` only through explicit workflow maintenance / user cancellation event.
+  - Terminal statuses are `completed`, `expired`, `superseded`, `escalated`, and `cancelled`.
 - Do not modify auto_iterator yet.
 
 Tests:
@@ -462,12 +563,21 @@ Implementation:
 - Add `deliverWorkflowHandoffIntent(...)`.
 - Delivery order:
   1. native runtime dispatch if target session known/capable
-  2. Lobster if enabled
+  2. Lobster if explicitly enabled and not in dry-run-only mode
   3. channel broadcast mention
   4. runtime queue
   5. mailbox compatibility note
   6. human escalation event
 - Each attempt appends to intent deliveryAttempts.
+- Delivery must read `deliveryPlan.maxAttemptsTotal` and `deliveryPlan.maxAttemptsByChannel` before every attempt.
+- If total attempts are exhausted, set status `escalated` and append a human escalation event instead of attempting another channel.
+- If a channel has a deterministic failure, mark that channel exhausted for this intent and do not retry it.
+- If channel broadcast succeeds but no ack arrives before `ackDeadlineAt`, set reason `handoff_ack_timeout` and perform runtime queue fallback once.
+- If runtime queue fallback also fails or remains unclaimed until `expiresAt`, set status `escalated`.
+- Lobster default policy:
+  - `disabled` for all projects until `tests/workflow-lobster-delivery-e2e.test.mjs` passes in the local repo.
+  - `dry_run` can record intended Lobster payloads but must not count as successful delivery.
+  - `enabled` requires project-level feature flag plus successful capability check.
 - Stop deterministic failures:
   - target role invalid
   - project missing
@@ -483,7 +593,10 @@ Tests:
 - Native success stops ladder.
 - Native failure falls back to channel broadcast.
 - Lobster disabled skips Lobster.
+- Lobster dry-run records attempt but does not mark intent delivered.
 - Mailbox note is written only as compatibility attempt.
+- Unacked channel mention falls back to runtime queue once and then escalates if still unclaimed.
+- Exhausted total attempts transitions to `escalated` without creating a duplicate intent.
 - Intent records all attempts.
 
 ### Step 7：ack / claim protocol
@@ -508,6 +621,13 @@ Implementation:
   - mark intent `claimed`
   - claim target task if targetTaskId present
   - record session key
+  - write `claimedAt`, `claimLeaseExpiresAt`, and the claiming capability snapshot
+- Claimed intents must produce one of the following before `staleClaimAfterMs`:
+  - artifact receipt
+  - task progress event
+  - explicit blocker event
+  - fail intent event
+- If no progress signal appears before `claimLeaseExpiresAt`, runtime maintenance marks the intent `stale_claim` and routes repair/fallback according to failure policy.
 - Stage owner handoff may be acked without task claim.
 
 Tests:
@@ -515,6 +635,7 @@ Tests:
 - Target owner can ack intent.
 - Wrong owner cannot claim unless researcher/admin role.
 - Claiming task intent claims task graph entry.
+- Claimed intent without progress becomes stale and routes to fallback owner once.
 
 ### Step 8：failure router and repair queue
 
@@ -530,16 +651,32 @@ tests/workflow-failure-recovery.test.mjs
 Implementation:
 
 - Define failure routing table.
+- Every failure record must include:
+  - `failureFingerprint = hash(projectRoot, workflowLine, stage, failureKind, verificationRule, normalizedFailureReason, sourceTaskId)`
+  - `repairLineageId = source task id or parent repair lineage id`
+  - `repairDepth`
+  - `maxRepairDepth`
 - In `completeWorkflowTaskAndContinue`, when verification fails:
   - create failure record
   - create repair queue item
   - create handoff intent to repair owner
   - optionally keep original task claimed until repair owner claims repair task
+- Do not create a second active repair queue item with the same `failureFingerprint`.
+- Do not create a child repair item when `repairDepth >= maxRepairDepth`; escalate to human instead.
+- Repair task completion must either:
+  - close the matching repair item
+  - decrement retry budget and requeue with the same `repairLineageId`
+  - escalate when the budget is exhausted
 - Retry budget defaults:
   - verification_failed: 2
   - code_review_failed: 2
   - plan_inconsistent: 2
   - paper_ingestion_failed: 3
+  - cross_domain_evidence_missing: 2 search/requisition rounds, then waiver or escalation
+  - capability_stale: 1 reassignment attempt, then human escalation
+  - handoff_ack_timeout: 1 runtime queue fallback, then human escalation
+  - stale_claim: 1 fallback owner reassignment, then human escalation
+  - write_scope_conflict: no retry until conflicting lease expires or explicit override event exists
   - exec_approval_required: 1 then human escalation
 - Exhausted retry budget -> urgent human escalation intent.
 
@@ -549,6 +686,8 @@ Tests:
 - Repair owner deterministic by failure kind.
 - Retry budget decrements.
 - Exhausted repair escalates.
+- Same `failureFingerprint` does not create duplicate active repairs.
+- Repair-of-repair is capped by `maxRepairDepth`.
 
 ### Step 9：agent capability registry
 
@@ -570,15 +709,29 @@ Implementation:
   - sessionKey
   - canUseResearchWorkflow true for workflow tool surface
   - message channel
+- Capability records expire after `capabilityTtlMs`.
+- Default `capabilityTtlMs`:
+  - foreground workflow tool session: 10 minutes
+  - native runtime dispatch session: 5 minutes
+  - channel-only agent identity: 2 minutes
+  - Lobster capability: 2 minutes unless Lobster e2e heartbeat exists
 - On tool execution, refresh `canUseResearchWorkflow=true`.
+- On tool-unavailable error, immediately downgrade the matching capability:
+  - set `confidence="low"`
+  - set `degradedReason`
+  - set `expiresAt=now`
+  - append capability degradation event
 - Handoff delivery should select capable session for workflow actions.
 - If target foreground lacks tool, route to capable same-role session or researcher fallback.
+- If no non-expired capable session exists, create `tool_unavailable` or `capability_stale` repair intent instead of asking the wrong agent to run an impossible workflow action.
 
 Tests:
 
 - Capability heartbeat persists.
 - Tool action updates capability.
 - Handoff for `queue_paper_ingestion_retry` avoids session without research_workflow.
+- Stale capability is ignored during delivery selection.
+- Tool-unavailable error downgrades capability and triggers reassignment/escalation.
 
 ### Step 10：channel mention delivery with ack timeout
 
@@ -653,6 +806,9 @@ Implementation:
   - `writeScope.ownedDirs`
   - `writeScope.exclusiveFiles`
   - `writeScope.mode = read_only | append_only | exclusive_write`
+  - `writeScope.leaseTtlMs`
+  - `writeScope.claimedAt`
+  - `writeScope.leaseExpiresAt`
 - Before claim, detect active conflicting claims.
 - Always exclusive:
   - `PROJECT_MANIFEST.json`
@@ -660,12 +816,19 @@ Implementation:
   - `.openclaw-research/workflow-task-graph.json`
   - `.openclaw-research/workflow-handoff-intents.json`
 - Allow read-only parallel claims.
+- Default write-scope lease:
+  - manifest / registry / task graph / handoff store: 5 minutes
+  - project artifacts under one agent-owned directory: 30 minutes
+  - long-running analyzer/coder output directories: 2 hours with heartbeat extension
+- A stale exclusive lease may be released only by runtime maintenance after appending `write_scope_stale_released` event.
+- If conflicting lease is active and non-stale, create `write_scope_conflict` blocker event instead of busy retry.
 
 Tests:
 
 - Conflicting exclusive task claim is blocked.
 - Read-only task claim is allowed.
 - Lead/researcher override requires explicit flag and event.
+- Stale write-scope lease can be released by maintenance and reassigned once.
 
 ### Step 13：PaperNexus retry completion integration
 
@@ -758,6 +921,75 @@ Tests:
 - Dashboard renders repair queue.
 - Dashboard remains read-only.
 
+### Step 16：Discord inbound worker budget and deferred execution
+
+Problem evidence:
+
+- `Discord inbound worker timed out` is a transport/inbound-worker timeout, not proof that workflow state work failed.
+- Current `auto_iterator_tick` path can synchronously run stage reconciliation, task dispatch, stage broadcast, and status broadcast in one inbound tool call.
+- Current stage broadcast path records an outbox event, but a duplicate outbox entry does not automatically short-circuit `runtimeSubagent.run`.
+- Repeated user pings or repeated agent recovery turns can therefore trigger duplicate nested broadcasts and long synchronous work inside the Discord inbound worker.
+
+Files:
+
+```text
+tools/workflow-handoff/inbound-budget.ts
+tools/workflow-handoff/broadcast-budget.ts
+tools/register-workflow-tools.ts
+tools/stage-broadcast.ts
+tools/workflow-runtime-maintenance.ts
+tools/workflow-session-orchestrator.ts
+tools/workflow-guard-prompt-assembly.ts
+tests/workflow-inbound-budget.test.mjs
+tests/workflow-broadcast-budget.test.mjs
+```
+
+Implementation:
+
+- Add `withWorkflowInboundBudget(...)`.
+- Default inbound budgets:
+  - Discord/chat inbound tool call: 8 seconds total synchronous work.
+  - `auto_iterator_tick` inside Discord/chat: 5 seconds inline, then defer remaining dispatch/broadcast.
+  - stage/status broadcast launch: 1.5 seconds inline, then outbox-only.
+  - mailbox ack wait during Discord/chat dispatch: 500 ms inline max.
+- `auto_iterator_tick` must support:
+  - `iterator.executionMode = "inline" | "defer_after_budget" | "outbox_only"`
+  - default `defer_after_budget` for Discord/chat sessions.
+- If budget is exceeded:
+  - persist `WorkflowInboundTurnRecord(status="deferred")`
+  - enqueue remaining dispatch/broadcast into runtime queue/outbox
+  - return a compact response with `deferred=true`, `queueKey`, and current live snapshot summary
+  - do not run another `auto_iterator_tick` from the same inbound turn
+- Stage/status broadcast must become outbox-first:
+  - call `recordWorkflowBroadcastEvent(...)`
+  - if it returns `created=false` and existing entry is `pending` or `delivered`, skip `runtimeSubagent.run`
+  - if inline budget is exhausted, leave deliveryStatus `pending` and let runtime maintenance deliver it
+  - never call `runtimeSubagent.run` twice for the same idempotency key in the same inbound turn
+- Broadcast message budget:
+  - max inline broadcast text: 1500 chars
+  - max `[ARTIFACTS]` or `Recommended action` inline fragment: 400 chars
+  - if full message exceeds budget, write full details to `workflow-broadcast-payloads/<broadcastId>.md`
+  - posted message must include only summary plus payload path
+- Prompt guard update:
+  - Agents must treat `Discord inbound worker timed out` as transport timeout.
+  - Do not retry the whole stage from chat.
+  - First inspect live workflow snapshot / latest inbound turn record.
+  - If a deferred queue/outbox entry exists, report it and wait for runtime maintenance or run a bounded maintenance pass.
+- If Discord inbound timeout is observed:
+  - create `discord_inbound_timeout` runtime incident
+  - mark related inbound turn `timed_out` if known
+  - do not mutate stage truth
+  - do not create duplicate stage handoff intent unless idempotency key changes
+
+Tests:
+
+- `auto_iterator_tick` in Discord/chat defers dispatch/broadcast after budget instead of timing out.
+- Duplicate stage broadcast idempotency key records one outbox entry and calls `runtimeSubagent.run` at most once.
+- Oversized broadcast payload is materialized and compacted before posting.
+- Repeated user pings coalesce to one active inbound turn per project/channel/action.
+- `Discord inbound worker timed out` incident does not regress or advance workflow stage by itself.
+- Deferred queue/outbox delivery can be replayed by runtime maintenance.
+
 ---
 
 ## 4. Termination and anti-loop rules
@@ -813,6 +1045,194 @@ Rules:
 - Mention delivery without ack after deadline becomes runtime queue fallback once.
 - Runtime queue failure after max attempts becomes human escalation.
 - Mailbox compatibility note never triggers another mailbox handoff by itself.
+
+### 4.5 Handoff intent state machine
+
+Every implementation path must use the same state machine. No module may invent a parallel lifecycle.
+
+| State | Meaning | Allowed next states |
+| --- | --- | --- |
+| `pending` | Intent exists, no delivery attempt started. | `queued`, `dispatching`, `expired`, `superseded`, `cancelled` |
+| `queued` | Intent is waiting for runtime maintenance / delivery worker. | `dispatching`, `expired`, `superseded`, `cancelled` |
+| `dispatching` | A delivery attempt is currently being made. | `delivered`, `failed`, `queued`, `expired`, `escalated` |
+| `delivered` | At least one delivery channel reached the target surface. | `acknowledged`, `failed`, `expired`, `escalated` |
+| `acknowledged` | Target role/session acknowledged the intent. | `claimed`, `completed`, `failed`, `expired`, `escalated` |
+| `claimed` | Target role/session accepted responsibility. | `completed`, `failed`, `stale_claim`, `expired`, `escalated` |
+| `failed` | Execution failed with evidence and can still be repaired. | `queued`, `escalated`, `superseded` |
+| `stale_claim` | Claim lease expired without progress evidence. | `queued`, `escalated`, `superseded` |
+| `completed` | Target completed or intentionally accepted the handoff. | terminal |
+| `expired` | Intent exceeded `expiresAt`. | terminal |
+| `superseded` | A newer workflow decision replaces this intent. | terminal |
+| `escalated` | Automatic recovery budget is exhausted. | terminal |
+| `cancelled` | User/workflow maintenance explicitly cancelled it. | terminal |
+
+State machine invariants:
+
+- `completed`, `expired`, `superseded`, `escalated`, and `cancelled` are terminal.
+- Terminal intents must never be delivered, claimed, repaired, or retried.
+- A repeated `auto_iterator_tick` may update read-model fields but must not create a second active intent with the same idempotency key.
+- Stage progression must never be inferred from `completed` handoff status; only workflow stage truth can advance the stage.
+
+### 4.6 Default budgets and terminal policies
+
+All budget defaults must live in one module, for example `tools/workflow-handoff/handoff-defaults.ts`. Tests must assert these defaults directly.
+
+| Intent / failure kind | `ackDeadlineMs` | `expiresInMs` | `maxAttemptsTotal` | Repair budget | Terminal path |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `stage_owner_change` | 10 min | 60 min | 4 | 1 fallback owner | runtime queue once, then human escalation |
+| `task_completed` | 10 min | 60 min | 4 | 1 fallback owner | runtime queue once, then human escalation |
+| `dependency_unblocked` | 10 min | 60 min | 4 | 1 fallback owner | runtime queue once, then human escalation |
+| `verification_failed` | 15 min | 6 h | 4 | 2 | repair owner, then human escalation |
+| `code_review_failed` | 30 min | 12 h | 4 | 2 | coder repair, then human escalation |
+| `plan_inconsistent` | 30 min | 12 h | 4 | 2 | orchestrator repair, then human escalation |
+| `paper_ingestion_failed` | 30 min | 24 h | 4 | 3 | researcher retry, then graph-ready waiver or escalation |
+| `cross_domain_evidence_missing` | 30 min | 24 h | 4 | 2 requisition rounds | researcher requisition, waiver, or escalation |
+| `tool_unavailable` | 10 min | 2 h | 3 | 1 reassignment | capable same-role session, researcher fallback, then escalation |
+| `capability_stale` | 10 min | 2 h | 3 | 1 reassignment | capability refresh, reassignment, then escalation |
+| `handoff_ack_timeout` | none | inherited | 1 fallback | 0 | runtime queue once, then escalation |
+| `discord_inbound_timeout` | none | inherited | 0 inline | 0 | record incident, defer remaining work, no stage mutation |
+| `inbound_budget_exceeded` | none | inherited | 0 inline | 0 | queue/outbox remaining work and return compact response |
+| `broadcast_delivery_timeout` | none | inherited | 1 outbox delivery | 0 | leave pending for maintenance, then warning incident |
+| `stale_claim` | none | inherited | 1 fallback | 1 fallback owner | release lease, reassign once, then escalation |
+| `write_scope_conflict` | none | 2 h | 0 | 0 until lease expires | wait for lease expiry or explicit override |
+| `exec_approval_required` | none | 24 h | 1 | 1 | materialize exec packet, then human approval escalation |
+
+Default channel attempt caps:
+
+- `native_runtime`: 1 per intent unless capability refresh changes the selected session.
+- `lobster`: 1 dry-run or 1 enabled attempt, never both for the same intent.
+- `channel_broadcast`: 1 mention per intent.
+- `runtime_queue`: 1 fallback enqueue per intent.
+- `mailbox_compat`: 1 compatibility note per intent.
+- `human_escalation`: 1 terminal event per intent.
+
+### 4.7 Idempotency and duplicate prevention
+
+Every generated intent must use a deterministic idempotency key. The key must be stable across repeated ticks but change when the underlying workflow decision changes.
+
+Recommended key shapes:
+
+```text
+stage_owner_change:{projectId}:{workflowLine}:{stageAfter}:{ownerAfter}:{manifestRevision}:{routeRevision}
+task_completed:{projectId}:{sourceTaskId}:{targetTaskId}:{artifactReceiptId}
+dependency_unblocked:{projectId}:{sourceTaskId}:{targetTaskId}:{dependencyRevision}
+verification_failed:{projectId}:{sourceTaskId}:{failureFingerprint}
+paper_ingestion_failed:{projectId}:{paperFailureBatchId}:{failureFingerprint}
+cross_domain_evidence_missing:{projectId}:{targetProblemHash}:{missingDomainsHash}:{requisitionRound}
+tool_unavailable:{projectId}:{toRole}:{requiredTool}:{capabilityRevision}
+stale_claim:{projectId}:{intentId}:{claimLeaseRevision}
+write_scope_conflict:{projectId}:{conflictingTaskId}:{requestedScopeHash}:{activeLeaseId}
+discord_inbound_timeout:{projectId}:{channelKey}:{action}:{turnId}
+inbound_budget_exceeded:{projectId}:{channelKey}:{action}:{budgetWindow}
+broadcast_delivery_timeout:{projectId}:{broadcastId}:{idempotencyKey}
+```
+
+Duplicate prevention rules:
+
+- `upsertWorkflowHandoffIntent` must return the existing active intent when the same idempotency key exists.
+- If the existing intent is terminal, a new intent may be created only when the key changes or an explicit `manual_recovery` event references the terminal intent.
+- A repair queue item with the same active `failureFingerprint` blocks creation of another repair item.
+- A mailbox compatibility note must not be used as a source event for creating another handoff intent.
+- Duplicate inbound turns for the same `{projectId, channelKey, action}` inside the active budget window must coalesce to the existing turn record.
+- Duplicate broadcast outbox records must short-circuit inline delivery instead of launching another nested runtime run.
+
+### 4.8 Repair lineage and repair-of-repair prevention
+
+Repair tasks must not recursively generate unbounded repair tasks.
+
+Rules:
+
+- `repairLineageId` is inherited by every child repair item created from the same original failure.
+- `failureFingerprint` dedupes active repair items inside the same lineage.
+- `repairDepth` starts at `0` for the first repair.
+- `maxRepairDepth` defaults to `2`.
+- If a repair task fails because the same verification rule still fails, decrement retry budget and reuse the same repair item instead of creating a child repair.
+- If a repair task fails for a different failure kind, create a child repair only when `repairDepth < maxRepairDepth`.
+- If `repairDepth >= maxRepairDepth`, create `human_escalation` and block stage closeout with an observable escalated repair item.
+
+### 4.9 Capability staleness and downgrade rules
+
+Capability records are advisory, not permanent truth.
+
+Rules:
+
+- Delivery selection must ignore capability records with `expiresAt < now`.
+- Tool execution failure saying a tool is unavailable immediately downgrades the current session capability.
+- A downgraded capability cannot be used for delivery until a later successful tool heartbeat refreshes it.
+- If all target-role capabilities are stale, route to same-role fallback only once.
+- If fallback also lacks capability, create `tool_unavailable` repair intent to researcher/orchestrator rather than asking the same incapable agent again.
+
+### 4.10 Write-scope deadlock prevention
+
+Write-scope safety must protect shared files without creating permanent locks.
+
+Rules:
+
+- Every exclusive write claim must have `leaseExpiresAt`.
+- Runtime maintenance may release a stale lease only after writing `write_scope_stale_released`.
+- Active non-stale conflicts produce `write_scope_conflict` and no busy retry.
+- Manual override requires an explicit event with requester role, reason, previous owner, and affected paths.
+- Stage truth files are never force-overridden by ordinary agent handoff.
+
+### 4.11 Cross-domain non-blocking policy
+
+Cross-domain inspiration should improve idea/story quality without creating infinite research loops.
+
+Rules:
+
+- `cross_domain_inspiration.max_requisition_rounds` defaults to `2`.
+- Each requisition round must increment `requisition_round`.
+- Missing preferred-domain evidence after the final round must choose one of:
+  - `waived` with explicit rationale and `waived_by`
+  - `blocked` with human escalation
+  - `partial` story usage that forbids strong headline claims
+- PaperNexus unavailable creates a repair intent once; repeated unavailability after budget exhaustion creates evidence debt and escalation.
+- Survey projects may continue with evidence debt if cross-domain content is only used for taxonomy/future-directions enrichment.
+- Experiment projects cannot use cross-domain framing as a headline contribution unless `status in [recontextualized, story_ready]`.
+
+### 4.12 Lobster safety policy
+
+Lobster must remain optional until proven in this workflow.
+
+Rules:
+
+- Default Lobster mode is `disabled`.
+- `dry_run` records payload shape and route decision but cannot mark an intent delivered.
+- `enabled` requires:
+  - project feature flag
+  - non-expired `canUseLobster=true` capability
+  - passing Lobster e2e test
+  - rollback path to channel broadcast/runtime queue
+- Lobster failure must be treated as a delivery failure, not an agent execution failure.
+- Lobster failure must not create a repair task unless all other delivery paths also fail.
+
+### 4.13 Discord inbound timeout prevention
+
+Discord/chat inbound workers are latency-sensitive. Workflow correctness must not depend on completing long workflow work before the inbound worker deadline.
+
+Rules:
+
+- Inbound tool calls must be treated as request/ack surfaces, not long-running workflow workers.
+- A single inbound turn may run at most one `auto_iterator_tick`.
+- `auto_iterator_tick` may reconcile stage truth inline, but dispatch and broadcast must be deferred when budget is close to exhaustion.
+- Nested `runtimeSubagent.run` calls from an inbound turn must be best-effort and budgeted.
+- Duplicate broadcast idempotency keys must skip nested delivery immediately.
+- Long recommended actions, blocker lists, participant summaries, or command text must be materialized to payload files instead of posted inline.
+- When `Discord inbound worker timed out` appears, agents must not infer workflow failure or retry the whole stage. They must inspect live state and pending outbox/queue records.
+- A timeout incident must never advance or regress `current_stage`.
+- If a timeout happens after state mutation but before broadcast, runtime maintenance must replay only the missing broadcast/outbox delivery, not rerun the stage transition.
+
+### 4.14 Broadcast storm prevention
+
+Repeated stage updates are harmful even when each individual update is correct.
+
+Rules:
+
+- One stage transition revision may create one stage broadcast idempotency key.
+- Replaying an existing broadcast may update delivery metadata, but must not create another nested agent turn.
+- If live state has already moved past a broadcast's `stageAfter`, mark the old broadcast `superseded` instead of posting it.
+- If a regression and an advancement are both detected inside one budget window, post only the latest live snapshot summary and write both transitions to diagnostics.
+- Broadcast content must prefer stable artifact paths over full blocker/action dumps.
 
 ---
 
@@ -883,6 +1303,10 @@ Required new tests:
 - `tests/workflow-channel-mention-delivery.test.mjs`
 - `tests/workflow-lobster-delivery-e2e.test.mjs`
 - `tests/workflow-write-scope.test.mjs`
+- `tests/workflow-handoff-loop-guards.test.mjs`
+- `tests/workflow-cross-domain-inspiration.test.mjs`
+- `tests/workflow-inbound-budget.test.mjs`
+- `tests/workflow-broadcast-budget.test.mjs`
 
 Regression tests:
 
@@ -895,6 +1319,23 @@ Regression tests:
 - `tests/workflow-writing-lines-e2e.test.mjs`
 - `tests/survey-review-materializer.test.mjs`
 - `npm run dashboard:test`
+
+Loop / blocker guard cases:
+
+- Repeated `auto_iterator_tick` with unchanged stage/owner creates one active `stage_owner_change` intent, not many.
+- Terminal intents are ignored by delivery and maintenance workers.
+- Unacked channel mention falls back to runtime queue once and then escalates.
+- Same `failureFingerprint` cannot create duplicate active repair queue items.
+- Repair task failure cannot create children beyond `maxRepairDepth`.
+- Stale capability is ignored and downgraded after tool-unavailable error.
+- Stale write-scope lease can be released once with event; active lease conflict does not busy retry.
+- Lobster dry-run cannot mark delivery successful.
+- Cross-domain missing evidence stops after `max_requisition_rounds` and produces `partial`, `waived`, or `blocked`.
+- Survey route recovery never creates code/experiment/analyze handoff during blocker recovery.
+- Discord/chat `auto_iterator_tick` returns compact deferred response when dispatch/broadcast would exceed inbound budget.
+- Duplicate broadcast idempotency keys do not call `runtimeSubagent.run` twice.
+- Oversized stage broadcast writes `workflow-broadcast-payloads/<broadcastId>.md` and posts only a compact pointer.
+- `Discord inbound worker timed out` incident does not create a second stage transition or duplicate handoff.
 
 ---
 
@@ -970,13 +1411,21 @@ Add to `PROJECT_MANIFEST.json`:
     "minimum_sources_per_domain": 2,
     "minimum_bridge_nodes": 3,
     "minimum_recontextualized_fragments": 2,
+    "max_requisition_rounds": 2,
+    "requisition_round": 0,
+    "paper_nexus_retry_budget": 2,
+    "allow_partial_story_usage": false,
+    "allow_survey_taxonomy_enrichment_with_evidence_debt": true,
     "bridge_evidence_path": "researcher/ideation/CROSS_DOMAIN_BRIDGE_EVIDENCE.json",
     "concept_map_path": "researcher/ideation/NEURO_COGNITIVE_CONCEPT_MAP.md",
     "recontextualization_path": "researcher/ideation/CROSS_DOMAIN_RECONTEXTUALIZATION.md",
     "idea_fragment_path": "researcher/idea-catalyst/IDEA_FRAGMENTS.json",
     "storyline_bridge_path": "academic_writer/story/CROSS_DOMAIN_STORY_BRIDGE.md",
+    "evidence_debt_path": "researcher/ideation/CROSS_DOMAIN_EVIDENCE_DEBT.md",
     "missing_domains": [],
     "satisfied_domains": [],
+    "waived_by": null,
+    "waiver_reason": null,
     "blocked_reason": null,
     "last_updated_at": null
   }
@@ -992,6 +1441,7 @@ searching
 evidence_ready
 recontextualized
 story_ready
+partial
 waived
 blocked
 ```
@@ -1004,6 +1454,7 @@ Meaning:
 - `evidence_ready`: enough external-domain evidence exists.
 - `recontextualized`: evidence has been mapped back into target-domain mechanisms.
 - `story_ready`: story bridge has been written and can be consumed by paper story.
+- `partial`: evidence exists but is not strong enough for headline contribution claims; writing may use it only as motivation, limitation, taxonomy lens, or future-direction lens.
 - `waived`: explicitly skipped with rationale.
 - `blocked`: required cross-domain evidence is missing and cannot proceed without repair.
 
@@ -1095,11 +1546,17 @@ Required behavior:
   - include priority concepts
   - include concrete search queries
   - enqueue bounded literature discovery / PaperNexus ingestion.
+- Requisition loop control:
+  - increment `cross_domain_inspiration.requisition_round` before each new requisition
+  - stop requisitions when `requisition_round >= max_requisition_rounds`
+  - after the final round, choose `partial`, `waived`, or `blocked`; never enqueue another automatic requisition for the same `target_problem`
+  - write `CROSS_DOMAIN_EVIDENCE_DEBT.md` when continuing with partial/waived evidence
 
 Acceptance:
 
 - If neuroscience evidence is missing and contract requires it, IDEA cannot claim `story_ready`.
 - If user waives neuroscience with rationale, workflow can continue but records waiver.
+- If evidence is partial, writer/reviewer must reject strong headline claims that imply source-domain proof.
 - Literature discovery receives explicit target domains and priority concepts.
 
 ### 8.7 Integration with graph / PaperNexus
@@ -1136,7 +1593,7 @@ type CrossDomainBridgeEvidence = {
   domainAgnosticQuestion: string;
   transferableMechanism: string;
   recontextualizedMechanism: string;
-  evidenceStrength: \"weak\" | \"partial\" | \"strong\";
+  evidenceStrength: "weak" | "partial" | "strong";
   limitations: string[];
 };
 ```
@@ -1201,9 +1658,11 @@ Experiment paper line:
 
 - Before `idea -> plan`, if cross-domain inspiration is enabled:
   - require `cross_domain_inspiration.status in [recontextualized, story_ready, waived]`.
+  - allow `partial` only if `writing_contract.cross_domain_headline_claim=false`.
   - if `blocked`, route repair to researcher.
 - Before `write`, require:
   - `paper_story_state` includes source-domain bridge if headline story uses cross-domain framing.
+  - if `partial`, require `CROSS_DOMAIN_EVIDENCE_DEBT.md` and reviewer-visible limitation note.
 
 Survey line:
 
@@ -1223,11 +1682,15 @@ If cross-domain evidence is missing:
   - toRole: `researcher`
   - target action: queue literature discovery / PaperNexus acquisition
 - If PaperNexus unavailable:
-  - create repair intent
+  - create repair intent once per requisition round
+  - decrement `paper_nexus_retry_budget`
+  - after budget exhaustion, set status `partial` or `blocked` and write evidence debt
   - allow waiver only with explicit rationale
 - If source-domain evidence is weak:
   - keep idea/story status partial
   - prevent strong cross-domain claim in abstract/introduction
+- Repeated missing-evidence handoff must use idempotency key `cross_domain_evidence_missing:{projectId}:{targetProblemHash}:{missingDomainsHash}:{requisitionRound}`.
+- The same missing domain set cannot create a second active handoff in the same requisition round.
 
 ### 8.11 Tests
 
@@ -1252,19 +1715,342 @@ Required cases:
 - Survey mode can use cross-domain inspiration as taxonomy/future-direction lens without entering experiment stages.
 
 ---
-\n## 9. Final acceptance criteria
 
-- [ ] Stage owner change creates durable handoff intent.
-- [ ] Task completion that unlocks downstream work creates durable handoff intent.
-- [ ] Verification failure creates repair intent with deterministic owner.
-- [ ] Tool capability mismatch is detected before asking an agent to run impossible workflow actions.
-- [ ] Channel mention includes intent id and requires ack/claim.
-- [ ] Mailbox is compatibility-only, not source of truth.
-- [ ] Plan/review/code-review rounds are represented as handoff intents and artifact receipts.
-- [ ] Dashboard shows handoff and repair state.
-- [ ] Handoff/recovery cannot bypass experiment quality gates.
-- [ ] Handoff/recovery cannot push survey workflows into code/experiment/analyze.
-- [ ] Delivery and repair retries terminate deterministically.
-- [ ] Cross-domain inspiration contract can require Neuroscience / Cognitive Science / Psychology priority search.
-- [ ] Missing required source-domain bridge evidence creates recovery handoff instead of relying on agent prompt memory.
-- [ ] Cross-domain concepts are consumed by paper story before writer uses them as headline narrative.
+## 9. Final acceptance criteria
+
+- [x] Stage owner change creates durable handoff intent.
+- [x] Task completion that unlocks downstream work creates durable handoff intent.
+- [x] Verification failure creates repair intent with deterministic owner.
+- [x] Tool capability mismatch is detected before asking an agent to run impossible workflow actions.
+- [x] Channel mention includes intent id and requires ack/claim.
+- [x] Mailbox is compatibility-only, not source of truth.
+- [x] Plan/review/code-review rounds are represented as handoff intents and artifact receipts.
+- [x] Dashboard shows handoff and repair state.
+- [x] Handoff/recovery cannot bypass experiment quality gates.
+- [x] Handoff/recovery cannot push survey workflows into code/experiment/analyze.
+- [x] Delivery and repair retries terminate deterministically.
+- [x] Handoff status machine has explicit terminal states and rejects invalid transitions.
+- [x] Default retry/ack/expiry/lease budgets live in one tested module.
+- [x] Repeated auto iterator ticks do not create duplicate active handoff intents.
+- [x] Repair lineage and failure fingerprints prevent repair-of-repair loops.
+- [x] Stale capability records are ignored, downgraded on tool failure, and do not cause repeated impossible handoffs.
+- [x] Stale write-scope leases are released by maintenance with event evidence; active conflicts do not busy retry.
+- [x] Lobster remains disabled or dry-run until e2e delivery is verified.
+- [x] Discord/chat inbound turns have a strict synchronous budget and defer remaining dispatch/broadcast work.
+- [x] Duplicate stage/status broadcast idempotency keys do not create duplicate nested runtime runs.
+- [x] Oversized workflow broadcasts are compacted with payload files instead of large inline Discord messages.
+- [x] `Discord inbound worker timed out` is recorded as transport incident and never causes stage mutation by itself.
+- [x] Cross-domain inspiration contract can require Neuroscience / Cognitive Science / Psychology priority search.
+- [x] Missing required source-domain bridge evidence creates recovery handoff instead of relying on agent prompt memory.
+- [x] Cross-domain requisition stops after bounded rounds and resolves to `story_ready`, `partial`, `waived`, or `blocked`.
+- [x] Cross-domain concepts are consumed by paper story before writer uses them as headline narrative.
+
+Implementation evidence:
+
+- `npm run build` passes (`tsc`, dist preparation, runtime import verification).
+- `npm run dashboard:test` passes.
+- `node --test tests/workflow-cross-domain-inspiration.test.mjs tests/workflow-handoff-intent.test.mjs tests/workflow-handoff-delivery.test.mjs tests/workflow-handoff-loop-guards.test.mjs tests/workflow-handoff-ack.test.mjs tests/workflow-failure-recovery.test.mjs tests/workflow-artifact-receipts.test.mjs tests/workflow-review-round-handoff.test.mjs tests/workflow-broadcast-budget.test.mjs tests/workflow-inbound-budget.test.mjs tests/workflow-runtime-maintenance.test.mjs tests/stage-broadcast.test.mjs tests/agent-task-dispatch.test.mjs tests/workflow-task-claim.test.mjs tests/e2e-paper-generation-harness.test.mjs tests/workflow-runtime-tools.test.mjs` passes.
+- `PATH=/opt/homebrew/bin:$PATH node --test --test-concurrency=1 tests/auto-iterator.test.mjs` passes.
+- `PATH=/opt/homebrew/bin:$PATH node --test --test-concurrency=1 tests/workflow-service.test.mjs tests/workflow-hook-prompt-isolation.test.mjs` passes.
+- `npx tsc --noEmit --pretty false --project tsconfig.json` reports 0 diagnostics.
+- Full coverage notes: delivery ladder is now used by auto-stage dispatch; capability-aware dispatch skips stale sessions; task claims enforce write-scope; code review creates handoff intents and artifact receipts; cross-domain contract participates in idea/write/story gates; Discord inbound timeout is recorded as a runtime incident.
+
+---
+
+## 10. Real End-to-End AutoResearch Paper Generation Test Protocol
+
+This section is the real-world validation plan for the question:
+
+```text
+Can the current AutoResearch workflow start from a research topic and produce a reviewable paper draft end-to-end?
+```
+
+Unit tests and integration tests are not enough. The workflow must be validated through a live disposable project that exercises project binding, agent handoff, PaperNexus graph readiness, cross-domain inspiration, writing constraints, citation constraints, figure constraints, and failure recovery.
+
+### 10.1 Test lanes
+
+Run three lanes. Do not treat lane A alone as proof that experiment-paper automation works.
+
+| Lane | Goal | External dependencies | Expected runtime | Pass definition |
+| --- | --- | --- | --- | --- |
+| A. Survey E2E | Prove survey pipeline can produce a reviewable survey draft without entering code/experiment. | PaperNexus graph/search, writer/reviewer agents. | 2-6 hours. | Survey draft exists with taxonomy, SOTA matrix, references, citation report, and no code/experiment stage drift. |
+| B. Experiment Smoke E2E | Prove experiment pipeline can traverse idea -> plan -> code -> experiment -> analyze -> write using a tiny bounded experiment. | PaperNexus graph/search, local or remote lightweight experiment runner. | 4-12 hours. | Paper draft exists with at least one completed experiment, result table/figure, claim map, and review packet. |
+| C. Full Live E2E | Prove production-like autonomous research can run with real PaperNexus, cross-domain search, handoff recovery, and writing constraints. | PaperNexus remote MCP/API, GPU/remote runner if experiment paper, Discord/OpenClaw runtime. | 1-3 days. | Workflow reaches `write` or `submit` with all required quality gates and no unresolved critical runtime incidents. |
+
+### 10.2 Disposable project setup
+
+Use a disposable projects root and never run the E2E test against a user production project.
+
+```text
+OPENCLAW_PROJECTS_ROOT=/tmp/openclaw-e2e-projects
+E2E_CHANNEL=discord:channel:<test-channel-id>
+E2E_PROJECT_SURVEY=e2e-survey-gcd-neuro-cog-YYYYMMDD
+E2E_PROJECT_EXPERIMENT=e2e-exp-gcd-confirmation-bias-YYYYMMDD
+```
+
+Preflight checks:
+
+- `npm run build` passes.
+- `npm run dashboard:test` passes.
+- `npx tsc --noEmit --pretty false --project tsconfig.json` reports 0 diagnostics.
+- Workflow plugin can resolve the test projects root.
+- Runtime subagent API is available.
+- Test channel binding can be created and refreshed without session restart.
+- PaperNexus access mode is known:
+  - `remote_mcp` preferred.
+  - `remote_api` acceptable.
+  - local graph fallback is not acceptable for lane C.
+- If Discord is used, inbound worker timeout incidents must be visible under `.openclaw-research/workflow-runtime-incidents.json`.
+
+### 10.3 Lane A: Survey E2E script
+
+Topic:
+
+```text
+Survey topic: Generalized Category Discovery with graph evidence, confirmation bias, and neuro-cognitive inspiration.
+Paper mode: survey
+Venue target: TPAMI-style survey draft
+Cross-domain inspiration: enabled
+Preferred source domains: Neuroscience, Cognitive Science, Psychology
+```
+
+Required execution flow:
+
+1. Create project and bind test channel.
+2. Set durable identity:
+   - `workflow_line=survey`
+   - `paper_type=survey`
+   - `writing_contract.paper_mode=survey`
+   - `cross_domain_inspiration.enabled=true`
+3. Run graph/literature acquisition:
+   - queue a bounded literature discovery request
+   - ingest 30-60 target-domain papers
+   - ingest at least 6 source-domain papers, with at least 2 neuroscience papers
+4. Run survey review:
+   - `SURVEY_QUERY_REGISTRY.json`
+   - `INCLUDED_PAPERS.json`
+   - `EXCLUDED_PAPERS.json`
+   - `LITERATURE_REVIEW.md`
+   - `SOTA_MATRIX.md`
+   - `GAP_SYNTHESIS.md`
+   - `COVERAGE_SUMMARY.md`
+   - `SURVEY_BRIEF.md`
+5. Run cross-domain materialization:
+   - `CROSS_DOMAIN_BRIDGE_EVIDENCE.json`
+   - `NEURO_COGNITIVE_CONCEPT_MAP.md`
+   - `CROSS_DOMAIN_RECONTEXTUALIZATION.md`
+   - `CROSS_DOMAIN_EVIDENCE_DEBT.md` only if evidence is partial/waived
+6. Run paper story materialization:
+   - `STORY_SPINE.md`
+   - `MODULE_MOTIVATION_MAP.md`
+   - `CROSS_DOMAIN_STORY_BRIDGE.md`
+7. Run writing:
+   - `academic_writer/PAPER_PLAN.md`
+   - `academic_writer/paper/main.tex`
+   - section files under `academic_writer/paper/sections/`
+   - `academic_writer/paper/refs.bib`
+8. Run review:
+   - citation verification
+   - figure QC if figures exist
+   - reviewer issue tracker
+
+Survey lane pass criteria:
+
+- Workflow never enters `code`, `experiment`, or `analyze` unless explicit hybrid mode is set.
+- No coder handoff intent is created.
+- `PROJECT_MANIFEST.json.current_stage` reaches `write`, `review`, `submit`, or `done`.
+- `academic_writer/paper/main.tex` exists and references real included papers.
+- `SOTA_MATRIX.md` has representative method rows.
+- `CROSS_DOMAIN_STORY_BRIDGE.md` is consumed in `STORY_SPINE.md` if cross-domain inspiration is enabled.
+- No `discord_inbound_timeout` incident remains open after maintenance replay.
+- `workflow-handoff-intents.json` has no active stale `delivered`, `claimed`, `failed`, or `stale_claim` item older than its budget.
+
+### 10.4 Lane B: Experiment Smoke E2E script
+
+Topic:
+
+```text
+Experiment topic: Mitigating pseudo-label confirmation bias in generalized category discovery with a confidence-aware slow/fast verification gate.
+Paper mode: conference
+Experiment budget: tiny smoke run only
+```
+
+Required execution flow:
+
+1. Create project and bind test channel.
+2. Run target-domain graph/literature acquisition with 20-40 papers.
+3. Enable cross-domain inspiration and require at least neuroscience + cognitive science evidence.
+4. Run idea/frontier/plan:
+   - `IDEA_REPORT.md`
+   - `IDEA_AUDIT.md`
+   - `TRACK_REGISTRY.json` with 1 active track
+   - `orchestrator/PLAN.md`
+   - `orchestrator/TODOS.md`
+   - `orchestrator/PLAN_AUDIT.md`
+5. Run code:
+   - one structured experiment bundle under `coder/experiments/<track-id>/<experiment-id>__<slug>/`
+   - `train.py`
+   - `README.md`
+   - `EXPERIMENT_MANIFEST.json`
+   - `coder/EXPERIMENT_INDEX.md`
+6. Run code review:
+   - code review handoff intents created for all panel reviewers
+   - artifact receipts created for reviewer outcomes
+   - repair handoff created if review fails
+7. Run experiment:
+   - bounded toy/local/remote run completes
+   - result artifact exists under `researcher/artifacts/results/`
+   - `EXPERIMENT_LEDGER.json` records completed run
+   - one plot/table artifact exists
+8. Run analyze:
+   - claim-evidence matrix
+   - ablation/mechanism notes if required
+   - result summary packet
+9. Run write/review:
+   - `STORY_SPINE.md`
+   - `academic_writer/paper/main.tex`
+   - citations and figure QC pass or record explicit debt
+
+Experiment smoke pass criteria:
+
+- At least one experiment result is real, not a stub artifact created only to satisfy a gate.
+- The paper draft contains at least one result table or figure tied to `EXPERIMENT_LEDGER.json`.
+- Code review handoff and receipts are visible in `.openclaw-research`.
+- No quality gate is bypassed by manually editing `current_stage`.
+- If cross-domain evidence is partial, the abstract/introduction cannot make it a strong headline claim.
+
+### 10.5 Lane C: Full Live E2E script
+
+Lane C should run only after lanes A and B pass.
+
+Required additions over lane B:
+
+- Use real remote PaperNexus service, not local fallback.
+- Use real source-domain PaperNexus retrieval for neuroscience/cognitive/psychology bridge papers.
+- Use real experiment runner if the project is experiment-mode.
+- Run workflow through Discord/OpenClaw rather than only direct Node tests.
+- Run with heartbeat/service maintenance enabled for at least 2 maintenance cycles after final writing.
+- Keep dashboard open/readable during execution.
+
+Full live pass criteria:
+
+- No channel binding loss after channel/project bind.
+- No unresolved `discord_inbound_timeout` incident after maintenance pass.
+- No duplicate stage broadcast for the same idempotency key.
+- No active handoff intent older than its budget.
+- No active write-scope lock after all sessions complete.
+- No repair queue item remains `queued`, `claimed`, or `failed` without escalation/owner.
+- Paper draft exists with references, figures/tables if applicable, and reviewer report.
+- If `submit` is blocked, it is blocked only by an explicit human final gate or reviewer issue, not by missing workflow artifacts.
+
+### 10.6 E2E evidence bundle
+
+Every E2E run must create:
+
+```text
+{PROJ}/.openclaw-research/E2E_RUN_REPORT.md
+{PROJ}/.openclaw-research/E2E_STATE_TIMELINE.jsonl
+{PROJ}/.openclaw-research/E2E_ARTIFACT_CHECKLIST.json
+```
+
+`E2E_RUN_REPORT.md` must include:
+
+- start/end timestamps
+- project id/root
+- lane type
+- PaperNexus mode and endpoint class
+- stage timeline
+- handoff counts by status
+- repair queue summary
+- capability warning summary
+- write-scope summary
+- generated paper files
+- citation/figure QC status
+- final verdict: `pass`, `partial`, or `fail`
+
+### 10.7 Automation guardrails for the E2E run
+
+- Do not use production project roots.
+- Do not manually edit `current_stage`.
+- Do not create stub experiment results to pass experiment gates.
+- Do not accept local PaperNexus fallback for lane C.
+- Do not ignore open high/critical review issues.
+- If the run times out, capture state and stop; do not loop indefinitely.
+- If a handoff fails, recovery must go through durable handoff/repair state, not ad hoc chat @mentions.
+
+---
+
+## 11. Remaining TODOs From Coverage Audit
+
+These TODOs are required before claiming production-grade E2E paper generation. Implementation tasks below are now covered by code and automated tests; live Lane A/B/C runs remain the final production proof before using the workflow on a real project.
+
+### 11.1 Complete delivery ladder main-path coverage
+
+- [x] Use full delivery ladder by default for handoff intents: `native_runtime -> lobster/dry-run-or-enabled -> channel_broadcast -> runtime_queue -> mailbox_compat -> human_escalation`.
+- [x] Stop using `channels: ["native_runtime"]` for auto-stage handoff except in explicit smoke mode.
+- [x] Add real `channelBroadcast`, `runtimeQueue`, and `mailboxCompat` callbacks to `deliverWorkflowHandoffIntent`.
+- [x] Ensure every fallback appends a delivery attempt to `workflow-handoff-intents.json`.
+- [x] Add E2E test where native dispatch fails and runtime queue fallback succeeds.
+- [x] Add E2E test where every automatic channel fails and `human_escalation` becomes terminal.
+
+### 11.2 Harden handoff ack/claim authority
+
+- [x] `ack_handoff_intent` must verify target role/session or researcher/admin override.
+- [x] `claim_handoff_intent` must reject wrong owner unless researcher/admin override is explicit.
+- [x] `claim_handoff_intent` must claim `targetTaskId` in `workflow-task-graph.json` when present.
+- [x] Claim must record capability snapshot, not only session key.
+- [x] Add `tests/workflow-handoff-ack.test.mjs`.
+- [x] Add regression for stale claim -> fallback owner -> escalation.
+
+### 11.3 Finish repair lifecycle closeout
+
+- [x] Repair task completion must close matching `workflow-repair-queue.json` item.
+- [x] Repair task failure must decrement retry budget.
+- [x] Same verification failure must reuse the same repair item, not spawn a child.
+- [x] Different failure kind may create child repair only if `repairDepth < maxRepairDepth`.
+- [x] Exhausted repair must create visible `human_escalation` handoff intent.
+- [x] Add `tests/workflow-failure-recovery.test.mjs`.
+- [x] Add E2E assertion: no non-terminal repair item remains after successful paper draft generation.
+
+### 11.4 Deepen cross-domain PaperNexus / IDEA-CATALYST integration
+
+- [x] IDEA-CATALYST candidate domains must seed from `cross_domain_inspiration.preferred_source_domains`.
+- [x] Graph packet candidate domains may add to preferred domains but must not silently replace Neuroscience/Cognitive Science/Psychology priority.
+- [x] Gatekeeper must enforce `minimum_sources_per_domain`, `minimum_bridge_nodes`, and `minimum_recontextualized_fragments`.
+- [x] Missing evidence must materialize `INVESTIGATION_REQUISITION.json` with missing domains, priority concepts, and concrete PaperNexus queries.
+- [x] Literature discovery bridge must receive preferred source domains and priority concepts.
+- [x] PaperNexus result processing must materialize `CROSS_DOMAIN_BRIDGE_EVIDENCE.json`, `NEURO_COGNITIVE_CONCEPT_MAP.md`, and `CROSS_DOMAIN_RECONTEXTUALIZATION.md`.
+- [x] After `max_requisition_rounds`, workflow must choose `partial`, `waived`, or `blocked`, and write `CROSS_DOMAIN_EVIDENCE_DEBT.md`.
+- [x] Add tests that missing neuroscience evidence creates a PaperNexus requisition, not just a gate blocker.
+
+### 11.5 Make inbound budget global and coalesced
+
+- [x] Wrap all Discord/chat workflow actions in `withWorkflowInboundBudget`, not only `auto_iterator_tick`.
+- [x] Coalesce duplicate inbound turns for the same `{projectId, channelKey, action}` inside an active budget window.
+- [x] On budget exhaustion, always enqueue remaining work and return compact response.
+- [x] Maintenance must replay pending outbox/queue work without rerunning stage mutation.
+- [x] If `Discord inbound worker timed out` is observed outside nested broadcast catch blocks, record `discord_inbound_timeout` incident from the outer adapter path.
+- [x] Add test for duplicate user pings coalescing to one inbound turn.
+
+### 11.6 Complete broadcast supersede strategy
+
+- [x] If live state already moved past a broadcast's `stageAfter`, mark old broadcast `superseded` instead of posting it.
+- [x] If a regression and advancement happen inside one budget window, post only latest live snapshot summary.
+- [x] Long blocker/action/participant details must always become payload files.
+- [x] Add test where repeated `code -> plan -> code -> experiment` within one window posts only the latest stable summary.
+
+### 11.7 PaperNexus retry terminal recovery
+
+- [x] When retry background run reaches terminal state, refresh graph presence automatically.
+- [x] Remaining retry failures must create `paper_ingestion_failed` repair handoff.
+- [x] Already-in-graph failures must be marked completed/waived, not requeued.
+- [x] Retry terminal state must not require a user to ask for status before repair routing happens.
+- [x] Add E2E test for 33 failed imports style recovery: sequential retry -> remaining failures -> repair handoff.
+
+### 11.8 E2E paper generation harness
+
+- [x] Add script or documented command sequence to run Lane A survey E2E.
+- [x] Add script or documented command sequence to run Lane B experiment smoke E2E.
+- [x] Materialize `E2E_RUN_REPORT.md`, `E2E_STATE_TIMELINE.jsonl`, and `E2E_ARTIFACT_CHECKLIST.json`.
+- [x] Add dashboard link / artifact tab for E2E run report.
+- [x] Define stop conditions so E2E cannot loop indefinitely.

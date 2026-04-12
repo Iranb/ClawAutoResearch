@@ -109,6 +109,10 @@ import {
   readWorkflowTaskGraphStore,
   summarizeWorkflowTaskGraphStore,
 } from "./workflow-team/task-graph";
+import {
+  createWorkflowReviewRoundHandoff,
+  recordWorkflowReviewRoundResults,
+} from "./workflow-handoff/review-rounds";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -2267,7 +2271,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         key: launchKey,
         launchedAt: Date.now(),
       });
-      if (params.workflowPolicy.teamRuntime?.enabled !== false) try {
+      if (params.workflowPolicy.teamRuntime?.enabled !== false && dispatchLaunch.sessionKey) try {
         const claimedTask = await claimNextWorkflowTaskForOwner({
           projectRoot: params.projectRoot,
           owner: String(action.owner),
@@ -2992,6 +2996,34 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           currentRound: nextRound,
         };
         await saveCodeReviewStore(params.projectRoot, nextStore);
+        if (nextRound.status !== "reviewing") {
+          await recordWorkflowReviewRoundResults({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            workflowLine: "experiment",
+            stage: "code",
+            results: nextRound.attempts
+              .filter((attempt) => attempt.result)
+              .map((attempt) => ({
+                reviewerRole: attempt.reviewerRole,
+                verdict:
+                  attempt.result?.verdict === "pass"
+                    ? "pass"
+                    : attempt.result?.verdict === "revise"
+                      ? "revise"
+                      : "block",
+                summary:
+                  attempt.result?.summary ??
+                  `${attempt.reviewerRole} code review ${attempt.result?.verdict ?? attempt.status}.`,
+                artifactPaths: attempt.result?.reviewedArtifacts ?? [],
+                blockers: [
+                  ...(attempt.result?.criticalBlockers ?? []),
+                  ...(attempt.result?.majorIssues ?? []),
+                ],
+              })),
+            nextOwnerOnPass: nextRound.aggregate?.approved ? "researcher" : null,
+          });
+        }
         return {
           launched: false,
           reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
@@ -3112,6 +3144,20 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         currentRound: round,
       };
       await saveCodeReviewStore(params.projectRoot, nextStore);
+      await Promise.all(
+        attempts.map((attempt) =>
+          createWorkflowReviewRoundHandoff({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            workflowLine: "experiment",
+            stage: "code",
+            fromRole: "orchestrator",
+            reviewerRole: attempt.reviewerRole,
+            subject: `Code innovation review for ${attempt.reviewerRole}`,
+            command: `Review packet: ${packet.packetPath}`,
+          })
+        )
+      );
       return {
         launched: true,
         reason: "started",

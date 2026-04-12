@@ -70,6 +70,13 @@ export type ProjectDetailSummary = {
   teamTaskGraphVerifyingCount: number | null;
   teamTaskGraphNeedsRepairCount: number | null;
   teamTaskGraphSatisfiedCount: number | null;
+  pendingHandoffCount: number;
+  failedHandoffCount: number;
+  unackedHandoffCount: number;
+  repairQueueCount: number;
+  staleClaimCount: number;
+  capabilityWarnings: number;
+  activeWriteScopeCount: number;
   taskBoard: Array<{
     taskId: string;
     title: string;
@@ -178,6 +185,13 @@ export async function readProjectDetailSummary(params: {
     teamTaskGraphVerifyingCount: dashboardSummary.teamTaskGraph.verifyingCount,
     teamTaskGraphNeedsRepairCount: dashboardSummary.teamTaskGraph.needsRepairCount,
     teamTaskGraphSatisfiedCount: dashboardSummary.teamTaskGraph.satisfiedCount,
+    pendingHandoffCount: dashboardSummary.handoffRecovery.pendingHandoffCount,
+    failedHandoffCount: dashboardSummary.handoffRecovery.failedHandoffCount,
+    unackedHandoffCount: dashboardSummary.handoffRecovery.unackedHandoffCount,
+    repairQueueCount: dashboardSummary.handoffRecovery.repairQueueCount,
+    staleClaimCount: dashboardSummary.handoffRecovery.staleClaimCount,
+    capabilityWarnings: dashboardSummary.handoffRecovery.capabilityWarnings,
+    activeWriteScopeCount: dashboardSummary.handoffRecovery.activeWriteScopeCount,
     taskBoard: dashboardSummary.taskBoard,
     evidenceBoard: {
       benchmarkProtocolStatus: dashboardSummary.evidenceBoard.benchmarkProtocol.status,

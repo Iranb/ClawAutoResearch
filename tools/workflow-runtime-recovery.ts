@@ -139,7 +139,7 @@ export async function buildWorkflowRuntimeRecoveryPlan(params: {
     ],
     announcePending: announceStore.pending.map((entry) => entry.announceId),
     broadcastPending: broadcastStore.entries
-      .filter((entry) => entry.deliveryStatus !== "delivered")
+      .filter((entry) => entry.deliveryStatus !== "delivered" && entry.deliveryStatus !== "superseded")
       .map((entry) => entry.idempotencyKey),
     staleQueueKeys: queueStore.entries
       .filter((entry) => isStaleQueueEntry(entry, staleSessionAgeMs))
@@ -223,7 +223,7 @@ export async function recoverWorkflowRuntimeState(params: {
   });
   const broadcastStore = await readWorkflowBroadcastOutboxStore(projectRoot);
   const broadcast =
-    params.sendBroadcast && broadcastStore.entries.some((entry) => entry.deliveryStatus !== "delivered")
+    params.sendBroadcast && broadcastStore.entries.some((entry) => entry.deliveryStatus !== "delivered" && entry.deliveryStatus !== "superseded")
       ? await replayWorkflowBroadcastOutbox({
           projectRoot,
           projectId,
@@ -321,7 +321,12 @@ export async function recoverWorkflowRuntimeState(params: {
       repairedSessions.length > 0,
   });
 
-  if (recoveryBroadcast && recoveryBroadcast.deliveryStatus !== "delivered" && params.sendBroadcast) {
+  if (
+    recoveryBroadcast &&
+    recoveryBroadcast.deliveryStatus !== "delivered" &&
+    recoveryBroadcast.deliveryStatus !== "superseded" &&
+    params.sendBroadcast
+  ) {
     await replayWorkflowBroadcastOutbox({
       projectRoot,
       projectId,

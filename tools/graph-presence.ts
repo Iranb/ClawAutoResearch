@@ -375,7 +375,9 @@ function extractDois(value: string | null | undefined): string[] {
 }
 
 function normalizeCorpusRootCandidate(value: string): string {
-  const absolute = path.resolve(value);
+  // Expand ~ to home directory (Node.js path.resolve does NOT do this)
+  const expanded = value.startsWith('~') ? value.replace('~', os.homedir()) : value;
+  const absolute = path.resolve(expanded);
   const basename = path.basename(absolute);
   if (basename === ".papernexus") {
     return path.dirname(absolute);

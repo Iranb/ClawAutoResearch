@@ -1,5 +1,9 @@
 import * as path from "node:path";
 import type { StageSignalsContext } from "./types";
+import {
+  evaluateCrossDomainInspirationGate,
+  normalizeCrossDomainInspirationState,
+} from "../idea-catalyst/cross-domain-contract";
 
 export interface WritingStageDeps {
   resolveProjectArtifactPath: (
@@ -210,6 +214,36 @@ export async function collectWriteStageMissingSignals(
 
   const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
   const writePackage = deps.normalizeWritePackageState(ctx.manifest?.write_package);
+  if (
+    ctx.manifest?.cross_domain_inspiration &&
+    typeof ctx.manifest.cross_domain_inspiration === "object"
+  ) {
+    const crossDomain = normalizeCrossDomainInspirationState(
+      ctx.manifest.cross_domain_inspiration
+    );
+    const headlineClaim =
+      (ctx.manifest.writing_contract as Record<string, unknown> | undefined)
+        ?.cross_domain_headline_claim === true;
+    const crossDomainGate = evaluateCrossDomainInspirationGate({
+      state: crossDomain,
+      workflowLine:
+        writingContract.paperMode === "survey" || writingContract.paper_mode === "survey"
+          ? "survey"
+          : "experiment",
+      headlineClaim,
+    });
+    if (!crossDomainGate.ready) {
+      missing.push(...crossDomainGate.blockers);
+    }
+    if (crossDomain.status === "partial") {
+      await pushMissingNonEmptyArtifact(
+        missing,
+        ctx.projectRoot,
+        crossDomain.evidenceDebtPath,
+        deps
+      );
+    }
+  }
   const writingContractEval = await deps.evaluateWritingContractState({
     projectRoot: ctx.projectRoot,
     state: writingContract,

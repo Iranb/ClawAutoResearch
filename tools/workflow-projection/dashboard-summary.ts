@@ -20,6 +20,10 @@ import {
   readWorkflowTeamRoundStore,
   summarizeWorkflowTeamRoundStore,
 } from "../workflow-team/team-round";
+import { readWorkflowHandoffIntentStore } from "../workflow-handoff/handoff-store";
+import { readWorkflowRepairQueueStore } from "../workflow-handoff/repair-queue";
+import { readWorkflowAgentCapabilityStore } from "../workflow-handoff/agent-capabilities";
+import { readWorkflowWriteScopeStore } from "../workflow-handoff/write-scope";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -52,6 +56,15 @@ export async function readWorkflowDashboardSummary(projectRoot: string): Promise
     lastClaimedTaskId: string | null;
     lastCompletedTaskId: string | null;
   };
+  handoffRecovery: {
+    pendingHandoffCount: number;
+    failedHandoffCount: number;
+    unackedHandoffCount: number;
+    repairQueueCount: number;
+    staleClaimCount: number;
+    capabilityWarnings: number;
+    activeWriteScopeCount: number;
+  };
 }> {
   const manifest = await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"));
   const evidenceBoard = {
@@ -83,6 +96,11 @@ export async function readWorkflowDashboardSummary(projectRoot: string): Promise
   const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
   const taskGraphStore = await readWorkflowTaskGraphStore(projectRoot);
   const teamRoundStore = await readWorkflowTeamRoundStore(projectRoot);
+  const handoffStore = await readWorkflowHandoffIntentStore(projectRoot);
+  const repairQueue = await readWorkflowRepairQueueStore(projectRoot);
+  const capabilities = await readWorkflowAgentCapabilityStore(projectRoot);
+  const writeScopes = await readWorkflowWriteScopeStore(projectRoot);
+  const now = Date.now();
   return {
     evidenceCloseout,
     evidenceBoard,
@@ -103,6 +121,33 @@ export async function readWorkflowDashboardSummary(projectRoot: string): Promise
       leadRole: teamRoundStore?.leadRole ?? null,
       lastClaimedTaskId: teamRoundStore?.lastClaimedTaskId ?? null,
       lastCompletedTaskId: teamRoundStore?.lastCompletedTaskId ?? null,
+    },
+    handoffRecovery: {
+      pendingHandoffCount: handoffStore.intents.filter((entry) =>
+        ["pending", "queued", "dispatching", "delivered", "acknowledged"].includes(
+          entry.status
+        )
+      ).length,
+      failedHandoffCount: handoffStore.intents.filter((entry) =>
+        ["failed", "expired", "escalated"].includes(entry.status)
+      ).length,
+      unackedHandoffCount: handoffStore.intents.filter(
+        (entry) => entry.status === "delivered"
+      ).length,
+      repairQueueCount: repairQueue.items.filter((entry) =>
+        ["queued", "claimed", "failed", "escalated"].includes(entry.status)
+      ).length,
+      staleClaimCount: handoffStore.intents.filter(
+        (entry) => entry.status === "stale_claim"
+      ).length,
+      capabilityWarnings: capabilities.records.filter(
+        (entry) =>
+          entry.confidence === "low" ||
+          (entry.expiresAt && Date.parse(entry.expiresAt) <= now)
+      ).length,
+      activeWriteScopeCount: writeScopes.claims.filter(
+        (entry) => !entry.releasedAt && Date.parse(entry.leaseExpiresAt) > now
+      ).length,
     },
   };
 }

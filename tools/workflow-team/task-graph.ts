@@ -9,6 +9,10 @@ import type {
   WorkflowStageTaskPreview,
   WorkflowTaskVerificationRule,
 } from "./stage-profiles";
+import {
+  claimWorkflowWriteScope,
+  type WorkflowWriteScopeMode,
+} from "../workflow-handoff/write-scope";
 
 export type WorkflowTaskGraphTaskStatus =
   | "claimable"
@@ -48,6 +52,11 @@ export type WorkflowTaskGraphTask = {
   latestEventKind: string | null;
   latestEventSummary: string | null;
   latestEventAt: string | null;
+  writeScope?: {
+    ownedDirs: string[];
+    exclusiveFiles: string[];
+    mode: WorkflowWriteScopeMode;
+  };
 };
 
 export type WorkflowTaskGraphStore = {
@@ -176,6 +185,42 @@ function normalizeTask(
     : verificationRule === "none"
       ? "not_required"
       : "pending";
+  const dependsOnRaw = record.dependsOn ?? record.depends_on;
+  const dependsOn = Array.isArray(dependsOnRaw)
+    ? dependsOnRaw.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+      )
+    : [];
+  const writeScopeRecord =
+    record.writeScope && typeof record.writeScope === "object" && !Array.isArray(record.writeScope)
+      ? (record.writeScope as Record<string, unknown>)
+      : record.write_scope && typeof record.write_scope === "object" && !Array.isArray(record.write_scope)
+        ? (record.write_scope as Record<string, unknown>)
+        : null;
+  const writeScopeModeRaw =
+    typeof writeScopeRecord?.mode === "string" ? writeScopeRecord.mode : "read_only";
+  const writeScopeMode: WorkflowWriteScopeMode =
+    writeScopeModeRaw === "append_only" || writeScopeModeRaw === "exclusive_write"
+      ? writeScopeModeRaw
+      : "read_only";
+  const writeScopeOwnedDirsRaw = writeScopeRecord?.ownedDirs ?? writeScopeRecord?.owned_dirs;
+  const writeScopeExclusiveFilesRaw =
+    writeScopeRecord?.exclusiveFiles ?? writeScopeRecord?.exclusive_files;
+  const writeScope = writeScopeRecord
+    ? {
+        ownedDirs: Array.isArray(writeScopeOwnedDirsRaw)
+          ? writeScopeOwnedDirsRaw.filter(
+              (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+            )
+          : [],
+        exclusiveFiles: Array.isArray(writeScopeExclusiveFilesRaw)
+          ? writeScopeExclusiveFilesRaw.filter(
+              (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+            )
+          : [],
+        mode: writeScopeMode,
+      }
+    : undefined;
   return {
     taskId,
     title,
@@ -188,11 +233,7 @@ function normalizeTask(
       typeof record.reason === "string" && record.reason.trim()
         ? record.reason.trim()
         : null,
-    dependsOn: Array.isArray(record.dependsOn ?? record.depends_on)
-      ? (record.dependsOn ?? record.depends_on).filter(
-          (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
-        )
-      : [],
+    dependsOn,
     verificationRule,
     verificationStatus,
     lease:
@@ -243,6 +284,7 @@ function normalizeTask(
       typeof record.latestEventAt === "string" && record.latestEventAt.trim()
         ? record.latestEventAt
         : null,
+    ...(writeScope ? { writeScope } : {}),
   };
 }
 
@@ -299,6 +341,41 @@ function applyTaskEvent(
     latestEventSummary: summary,
     latestEventAt: nowIso(),
   };
+}
+
+async function claimWriteScopeForTask(params: {
+  projectRoot: string;
+  task: WorkflowTaskGraphTask;
+  sessionKey: string;
+  role?: string | null;
+}): Promise<{ ok: boolean; reason: string | null }> {
+  const ownedDirs =
+    params.task.writeScope?.ownedDirs ??
+    (params.task.owner ? [params.task.owner] : []);
+  const exclusiveFiles = params.task.writeScope?.exclusiveFiles ?? [];
+  const mode =
+    params.task.writeScope?.mode ??
+    (ownedDirs.length > 0 || exclusiveFiles.length > 0
+      ? "append_only"
+      : "read_only");
+  const scope = await claimWorkflowWriteScope({
+    projectRoot: params.projectRoot,
+    taskId: params.task.taskId,
+    sessionKey: params.sessionKey,
+    role: params.role ?? params.task.owner,
+    ownedDirs,
+    exclusiveFiles,
+    mode,
+  });
+  if (!scope.claimed) {
+    return {
+      ok: false,
+      reason: `write_scope_conflict:${scope.conflicts
+        .map((entry) => entry.claimId)
+        .join(",")}`,
+    };
+  }
+  return { ok: true, reason: null };
 }
 
 function areTaskDependenciesSatisfied(
@@ -533,6 +610,15 @@ export async function claimWorkflowTask(params: {
               role: params.role ?? null,
               ttlMs: params.ttlMs,
             });
+      const writeScope = await claimWriteScopeForTask({
+        projectRoot: params.projectRoot,
+        task: current,
+        sessionKey: params.sessionKey,
+        role: params.role,
+      });
+      if (!writeScope.ok) {
+        return { claimed: false, reason: writeScope.reason, task: current };
+      }
       const claimedTask: WorkflowTaskGraphTask = {
         ...current,
         status: "claimed",
@@ -785,6 +871,15 @@ export async function claimNextWorkflowTaskForOwner(params: {
       if (!nextTask) {
         return { claimed: false, reason: "no_matching_claimable_task", task: null };
       }
+      const writeScope = await claimWriteScopeForTask({
+        projectRoot: params.projectRoot,
+        task: nextTask,
+        sessionKey: params.sessionKey,
+        role: params.owner,
+      });
+      if (!writeScope.ok) {
+        return { claimed: false, reason: writeScope.reason, task: nextTask };
+      }
       const claimedTasks = nextTasks.map((task) =>
         task.taskId === nextTask.taskId
           ? {
@@ -799,7 +894,7 @@ export async function claimNextWorkflowTaskForOwner(params: {
               satisfiedBy: null,
               completionNote: null,
               verificationStatus:
-                task.verificationRule === "none" ? "not_required" : "pending",
+                task.verificationRule === "none" ? "not_required" as const : "pending" as const,
               latestEventKind: "claimed",
               latestEventSummary: `Claimed by ${params.owner}.`,
               latestEventAt: nowIso(),

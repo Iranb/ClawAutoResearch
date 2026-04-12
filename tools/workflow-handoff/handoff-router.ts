@@ -1,0 +1,126 @@
+import { createHash } from "node:crypto";
+import { upsertWorkflowHandoffIntent } from "./handoff-store";
+import type {
+  WorkflowHandoffIntent,
+  WorkflowHandoffReason,
+} from "./handoff-types";
+
+function hashFragment(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value ?? null))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function buildStageOwnerHandoffIdempotencyKey(params: {
+  projectId?: string | null;
+  workflowLine?: string | null;
+  stageAfter?: string | null;
+  ownerAfter?: string | null;
+  manifestRevision?: string | number | null;
+  routeRevision?: string | number | null;
+  nextAction?: string | null;
+}): string {
+  return [
+    "stage_owner_change",
+    params.projectId ?? "unknown-project",
+    params.workflowLine ?? "experiment",
+    params.stageAfter ?? "unknown-stage",
+    params.ownerAfter ?? "unknown-owner",
+    params.manifestRevision ?? "no-manifest-revision",
+    params.routeRevision ?? hashFragment(params.nextAction),
+  ].join(":");
+}
+
+export async function createStageOwnerHandoffIntent(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  workflowLine?: "experiment" | "survey";
+  stageBefore?: string | null;
+  stageAfter?: string | null;
+  ownerBefore?: string | null;
+  ownerAfter: string;
+  fromSessionKey?: string | null;
+  nextAction?: string | null;
+  blockingReason?: string | null;
+  missingStageSignals?: string[];
+  manifestRevision?: string | number | null;
+  routeRevision?: string | number | null;
+  deliveryPlan?: Parameters<typeof upsertWorkflowHandoffIntent>[0]["deliveryPlan"];
+}): Promise<{ intent: WorkflowHandoffIntent; created: boolean }> {
+  return upsertWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    workflowLine: params.workflowLine ?? "experiment",
+    idempotencyKey: buildStageOwnerHandoffIdempotencyKey(params),
+    stage: readString(params.stageAfter),
+    fromRole: readString(params.ownerBefore),
+    fromSessionKey: params.fromSessionKey,
+    toRole: params.ownerAfter,
+    reason: "stage_owner_change",
+    summary: `Workflow owner handoff ${params.ownerBefore ?? "unknown"} -> ${params.ownerAfter}.`,
+    command: params.nextAction,
+    blockerSummary: params.blockingReason,
+    payload: {
+      stageBefore: params.stageBefore ?? null,
+      stageAfter: params.stageAfter ?? null,
+      nextAction: params.nextAction ?? null,
+      missingStageSignals: params.missingStageSignals ?? [],
+    },
+    deliveryPlan: params.deliveryPlan,
+  });
+}
+
+export function buildTaskHandoffIdempotencyKey(params: {
+  projectId?: string | null;
+  sourceTaskId?: string | null;
+  targetTaskId?: string | null;
+  artifactReceiptId?: string | null;
+  reason?: WorkflowHandoffReason;
+}): string {
+  return [
+    params.reason ?? "task_completed",
+    params.projectId ?? "unknown-project",
+    params.sourceTaskId ?? "no-source-task",
+    params.targetTaskId ?? "no-target-task",
+    params.artifactReceiptId ?? "no-receipt",
+  ].join(":");
+}
+
+export async function createTaskUnlockedHandoffIntent(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  workflowLine?: "experiment" | "survey";
+  stage?: string | null;
+  fromRole?: string | null;
+  fromSessionKey?: string | null;
+  toRole: string;
+  sourceTaskId?: string | null;
+  targetTaskId?: string | null;
+  artifactReceiptId?: string | null;
+  summary?: string | null;
+  command?: string | null;
+  reason?: WorkflowHandoffReason;
+}): Promise<{ intent: WorkflowHandoffIntent; created: boolean }> {
+  const reason = params.reason ?? "dependency_unblocked";
+  return upsertWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    workflowLine: params.workflowLine ?? "experiment",
+    idempotencyKey: buildTaskHandoffIdempotencyKey({ ...params, reason }),
+    stage: params.stage,
+    fromRole: params.fromRole,
+    fromSessionKey: params.fromSessionKey,
+    toRole: params.toRole,
+    reason,
+    sourceTaskId: params.sourceTaskId,
+    targetTaskId: params.targetTaskId,
+    artifactReceiptId: params.artifactReceiptId,
+    summary: params.summary,
+    command: params.command,
+  });
+}

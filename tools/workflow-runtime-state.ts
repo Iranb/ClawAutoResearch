@@ -53,7 +53,8 @@ export type WorkflowRuntimeBroadcastDeliveryStatus =
   | "pending"
   | "sending"
   | "delivered"
-  | "failed";
+  | "failed"
+  | "superseded";
 
 export type WorkflowRuntimeMigrationInfo = {
   version: 1;
