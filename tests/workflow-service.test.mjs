@@ -221,6 +221,14 @@ test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STAT
       channelKey: null,
     },
   ]);
+
+  const prunedState = JSON.parse(
+    await fs.readFile(path.join(projectsRoot, "PROJECTS_STATE.json"), "utf8")
+  );
+  assert.deepEqual(
+    prunedState.projects.map((entry) => entry.id).sort(),
+    ["alpha", "beta"]
+  );
 });
 
 test("runWorkflowCoordinatorPass invokes auto iterator in service mode", async (t) => {

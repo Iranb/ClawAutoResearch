@@ -173,20 +173,16 @@ export async function listActiveProjectsFromRegistry(params: {
           Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
       )
     : [];
+  const retainedProjects: Record<string, unknown>[] = [];
   const results: Array<{
     projectId: string | null;
     projectRoot: string;
     stage: string | null;
     updatedAt: string | null;
   }> = [];
+  let prunedMissingProjectDir = false;
 
   for (const entry of projects) {
-    if (readString(entry.status)?.toLowerCase() === "completed") {
-      continue;
-    }
-    if (readString(entry.stage)?.toLowerCase() === "done") {
-      continue;
-    }
     const dir = readString(entry.dir);
     const projectRoot = dir
       ? path.isAbsolute(dir)
@@ -196,6 +192,17 @@ export async function listActiveProjectsFromRegistry(params: {
         ? path.resolve(params.projectsRoot, String(readString(entry.id)))
         : null;
     if (!projectRoot) {
+      continue;
+    }
+    if (!(await params.pathExists(projectRoot))) {
+      prunedMissingProjectDir = true;
+      continue;
+    }
+    retainedProjects.push(entry);
+    if (readString(entry.status)?.toLowerCase() === "completed") {
+      continue;
+    }
+    if (readString(entry.stage)?.toLowerCase() === "done") {
       continue;
     }
     if (!(await params.pathExists(path.join(projectRoot, "PROJECT_MANIFEST.json")))) {
@@ -210,6 +217,14 @@ export async function listActiveProjectsFromRegistry(params: {
     if (results.length >= params.maxProjects) {
       break;
     }
+  }
+
+  if (state && prunedMissingProjectDir) {
+    await writeJsonAtomicEnsured(path.join(path.resolve(params.projectsRoot), "PROJECTS_STATE.json"), {
+      ...state,
+      projects: retainedProjects,
+      updated_at: new Date().toISOString(),
+    });
   }
 
   return results;
