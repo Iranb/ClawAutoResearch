@@ -62,6 +62,18 @@
   - `--no-compile`
   - `--no-auto-cite`
 
+- `/capture-diagnostics`
+  对当前项目抓取一份 bounded 诊断包，适合 Discord 流水线卡住、handoff 异常、graph/papernexus 状态对不上、review/compile/citation 出现问题时留存现场。它会在 `{PROJ}/.openclaw-research/diagnostics/<timestamp>-<reason>/` 下生成：
+  - `SUMMARY.md`
+  - `INDEX.json`
+  - `snapshot.json`
+  - `runtime-health.json`
+  - handoff / queue / mailbox / graph / papernexus / review 相关的关键状态与日志 tail
+
+  可选参数：
+  - `--reason <text>`
+  - `--tail <N>`
+
 - `/clear-project-binding`
   在当前频道 / 群组会话里清空它的 workflow 项目绑定。适合频道被错误绑定到别的项目、需要重新开始绑定时使用。这个命令只清当前频道对应的 project binding，不会删除项目目录，也不会影响其他频道。
 

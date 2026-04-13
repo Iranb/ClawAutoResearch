@@ -13,6 +13,7 @@ import {
   consumeWorkflowAnnounceOutbox,
   replayWorkflowBroadcastOutbox,
 } from "./workflow-announce-runtime.js";
+import type { ChannelProjectBindingPolicy } from "./channel-project-bindings";
 import type {
   WorkflowRuntimeBroadcastEntry,
   WorkflowRuntimeQueueEntry,
@@ -197,6 +198,7 @@ export async function recoverWorkflowRuntimeState(params: {
   projectRoot: string;
   projectId?: string | null;
   staleSessionAgeMs?: number;
+  workflowPolicy?: ChannelProjectBindingPolicy;
   sendBroadcast?: (entry: WorkflowRuntimeBroadcastEntry) => Promise<{
     runId: string;
     sessionKey?: string | null;
@@ -227,6 +229,7 @@ export async function recoverWorkflowRuntimeState(params: {
       ? await replayWorkflowBroadcastOutbox({
           projectRoot,
           projectId,
+          workflowPolicy: params.workflowPolicy,
           sendBroadcast: params.sendBroadcast,
         })
       : {
@@ -330,6 +333,7 @@ export async function recoverWorkflowRuntimeState(params: {
     await replayWorkflowBroadcastOutbox({
       projectRoot,
       projectId,
+      workflowPolicy: params.workflowPolicy,
       sendBroadcast: params.sendBroadcast,
     });
   }

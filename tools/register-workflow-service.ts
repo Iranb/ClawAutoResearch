@@ -4162,6 +4162,7 @@ export function createWorkflowCoordinatorService(
               sendBroadcast: async (broadcastEntry) => {
                 const result = await maybeBroadcastWorkflowStatusUpdate({
                   runtimeSubagent: plugin.api.runtime?.subagent,
+                  bindingPolicy: workflowPolicy,
                   sessionKey: broadcastEntry.sessionKey,
                   projectId: broadcastEntry.projectId,
                   projectRoot: broadcastEntry.projectRoot,
@@ -4422,6 +4423,7 @@ export function createWorkflowCoordinatorService(
             });
             return maybeBroadcastWorkflowStatusUpdate({
               runtimeSubagent: plugin.api.runtime?.subagent,
+              bindingPolicy: workflowPolicy,
               sessionKey: requesterSessionKey,
               projectId: entry.projectId,
               projectRoot: entry.projectRoot,

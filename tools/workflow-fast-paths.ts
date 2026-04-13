@@ -54,7 +54,10 @@ import {
 } from "./workflow-session-orchestrator.js";
 import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
-import { readJsonIfExists } from "./workflow-guard-core/fs";
+import {
+  readJsonIfExists,
+  writeJsonAtomicEnsured,
+} from "./workflow-guard-core/fs";
 import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
@@ -717,6 +720,9 @@ async function readBackgroundRunRegistry(
   }
   try {
     const raw = await fs.readFile(getBackgroundRunRegistryPath(), "utf8");
+    if (!raw.trim()) {
+      return [];
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       return [];
@@ -779,6 +785,9 @@ async function readBackgroundRunRegistry(
       error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : null;
+    if (error instanceof SyntaxError) {
+      return [];
+    }
     if (code === "ENOENT") {
       return [];
     }
@@ -801,6 +810,9 @@ async function readBackgroundWorkflowQueue(
   }
   try {
     const raw = await fs.readFile(getBackgroundQueuePath(), "utf8");
+    if (!raw.trim()) {
+      return [];
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       return [];
@@ -987,6 +999,9 @@ async function readBackgroundWorkflowQueue(
       error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : null;
+    if (error instanceof SyntaxError) {
+      return [];
+    }
     if (code === "ENOENT") {
       return [];
     }
@@ -1021,7 +1036,7 @@ async function writeBackgroundRunRegistry(
   }
   const registryPath = getBackgroundRunRegistryPath();
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
-  await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+  await writeJsonAtomicEnsured(registryPath, entries);
 }
 
 async function writeBackgroundWorkflowQueue(
@@ -1051,7 +1066,7 @@ async function writeBackgroundWorkflowQueue(
   }
   const queuePath = getBackgroundQueuePath();
   await fs.mkdir(path.dirname(queuePath), { recursive: true });
-  await fs.writeFile(queuePath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+  await writeJsonAtomicEnsured(queuePath, entries);
 }
 
 async function pruneBackgroundWorkflowQueue(

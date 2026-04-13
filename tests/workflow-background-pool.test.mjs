@@ -82,6 +82,21 @@ test("workflow background pool refuses ephemeral registry fallback without proje
   }
 });
 
+test("workflow background pool tolerates an empty legacy registry file left by an interrupted write", async () => {
+  const registryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  if (!registryPath) {
+    throw new Error("Expected OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH to be configured.");
+  }
+  await fs.writeFile(registryPath, "", "utf8");
+
+  const listed = await listBackgroundWorkflowRuns({
+    ownerAgent: "researcher",
+    channelKey: "discord:channel:test-room",
+  });
+
+  assert.deepEqual(listed.entries, []);
+});
+
 test("workflow background pool reconciles stale active PaperNexus import sessions from durable state", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "workflow-background-pool-project-")

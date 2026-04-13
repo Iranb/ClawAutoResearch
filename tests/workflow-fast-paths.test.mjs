@@ -1180,6 +1180,56 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
 });
 
+test("startBackgroundWorkflowRun tolerates empty legacy background registry and queue files", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const registryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  const queuePath = process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  if (!registryPath || !queuePath) {
+    throw new Error("Expected test background registry paths to be configured.");
+  }
+  await fs.writeFile(registryPath, "", "utf8");
+  await fs.writeFile(queuePath, "", "utf8");
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "bg-run-empty-registry" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:gcd-room",
+      sessionId: "session-bg-empty-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "generalized category discovery with short cut learning",
+      summary: "Start despite empty legacy registry files",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.runId, "bg-run-empty-registry");
+});
+
 test("startBackgroundWorkflowRun queues the continuation when runtime subagent access is unavailable", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

@@ -20,6 +20,8 @@ import {
 } from "../tools/workflow-subagent-sessions.ts";
 import {
   ensureProjectsBindingIndex,
+  getProjectBindingAuditPath,
+  getProjectsBindingAuditPath,
   getProjectsBindingIndexPath,
 } from "../tools/channel-project-bindings.ts";
 
@@ -302,6 +304,52 @@ test("binding updates maintain a projects-root binding index", async (t) => {
     agentId: "researcher",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
+});
+
+test("binding updates append a queryable audit trail under the project and projects root", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "audited-track");
+  const sessionKey = "agent:researcher:discord:group:audit-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+  await unbindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+
+  const projectAudit = (await fs.readFile(getProjectBindingAuditPath(projectRoot), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const rootAudit = (await fs.readFile(getProjectsBindingAuditPath(projectsRoot), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(projectAudit.map((entry) => entry.action), ["bind", "unbind"]);
+  assert.deepEqual(rootAudit.map((entry) => entry.action), ["bind", "unbind"]);
+  assert.equal(projectAudit[0].projectRoot, projectRoot);
+  assert.equal(projectAudit[1].previousProjectRoot, projectRoot);
 });
 
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {

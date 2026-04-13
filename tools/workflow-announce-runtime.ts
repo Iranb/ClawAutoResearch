@@ -9,6 +9,10 @@ import {
   writeWorkflowBroadcastOutboxStore,
 } from "./workflow-runtime-state.js";
 import { reconcileWorkflowAnnounceRuntimeState } from "./workflow-session-orchestrator.js";
+import {
+  evaluateChannelProjectBindingGate,
+  type ChannelProjectBindingPolicy,
+} from "./channel-project-bindings";
 import type {
   WorkflowRuntimeAnnounceEntry,
   WorkflowRuntimeAnnounceOutboxStore,
@@ -198,6 +202,7 @@ export type WorkflowBroadcastReplayResult = {
 export async function replayWorkflowBroadcastOutbox(params: {
   projectRoot: string;
   projectId?: string | null;
+  workflowPolicy?: ChannelProjectBindingPolicy;
   sendBroadcast: (entry: WorkflowRuntimeBroadcastEntry) => Promise<{
     runId: string;
     sessionKey?: string | null;
@@ -239,6 +244,43 @@ export async function replayWorkflowBroadcastOutbox(params: {
       continue;
     }
     seenIdempotencyKeys.add(entry.idempotencyKey);
+    const gate = await evaluateChannelProjectBindingGate({
+      policy: params.workflowPolicy,
+      context: {
+        sessionKey: entry.sessionKey ?? undefined,
+      },
+      projectRoot: entry.projectRoot,
+      projectId: entry.projectId,
+      sessionKey: entry.sessionKey,
+      allowSessionProjectFallback: false,
+    });
+    if (!gate.allowed) {
+      nextEntries[index] = {
+        ...entry,
+        deliveryStatus: "superseded",
+        lastAttemptedAt: nowIso(),
+        lastError: [
+          "Broadcast replay suppressed because the current channel binding no longer matches this project.",
+          `gate_reason=${gate.reason}`,
+          gate.currentBinding?.projectId
+            ? `bound_project=${gate.currentBinding.projectId}`
+            : null,
+          gate.currentBinding?.projectRoot
+            ? `bound_root=${gate.currentBinding.projectRoot}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      };
+      skipped.push(nextEntries[index]);
+      changed = true;
+      await writeWorkflowBroadcastOutboxStore({
+        projectRoot,
+        projectId,
+        entries: nextEntries,
+      });
+      continue;
+    }
     nextEntries[index] = {
       ...entry,
       deliveryStatus: "sending",

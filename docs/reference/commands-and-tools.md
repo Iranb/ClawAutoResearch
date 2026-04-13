@@ -18,6 +18,7 @@
 | `/show-commands` | 列出可用 slash commands 与简介 | 刚接触系统，或不确定该用哪个入口 |
 | `/citation-calibrate` | 对当前项目运行 citation calibration | submit 前刷新引用真实性校验 |
 | `/authoring-closeout` | 对当前项目执行 deterministic closeout | 稿件已生成，但 workflow 状态或 QC 还没收口 |
+| `/capture-diagnostics` | 抓取当前项目的诊断包 | Discord 流水线卡住、handoff 丢失、graph/review 状态异常时一键留存现场 |
 | `/survey-graph-build` | 运行后台 survey 图谱候选构建 | 主题相关、强去重、graph-missing 优先 |
 
 ## 2. `research_memory`

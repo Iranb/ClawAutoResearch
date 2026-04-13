@@ -24,6 +24,7 @@ import type { runIdeaCatalystResearch30 } from "../research30/bridge.ts";
 import type { runCitationCalibration } from "../research-writing/citation-calibration.ts";
 import type { stagePapernexusRemoteSources } from "../papernexus-remote-stage.ts";
 import type { reconcileAuthoringCloseout } from "../authoring-closeout-reconcile.ts";
+import type { captureWorkflowDiagnosticBundle } from "../workflow-diagnostic-bundle.ts";
 import type {
   readGateReviewStore,
 } from "../workflow-auto-gate.js";
@@ -55,7 +56,8 @@ export type WorkflowCommandKind =
   | "idea_catalyst_search"
   | "citation_calibrate"
   | "papernexus_stage_remote"
-  | "authoring_closeout";
+  | "authoring_closeout"
+  | "capture_diagnostics";
 
 export type WorkflowCommandDependencies = {
   resolveConversationBindingRecord: (
@@ -71,6 +73,7 @@ export type WorkflowCommandDependencies = {
   runCitationCalibration: typeof runCitationCalibration;
   stagePapernexusRemoteSources: typeof stagePapernexusRemoteSources;
   reconcileAuthoringCloseout: typeof reconcileAuthoringCloseout;
+  captureWorkflowDiagnosticBundle: typeof captureWorkflowDiagnosticBundle;
 };
 
 export type WorkflowCommandApi = Pick<
@@ -136,4 +139,5 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   citation_calibrate: "/citation-calibrate",
   papernexus_stage_remote: "/papernexus-stage-remote",
   authoring_closeout: "/authoring-closeout",
+  capture_diagnostics: "/capture-diagnostics",
 };

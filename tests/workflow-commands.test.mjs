@@ -342,6 +342,7 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/citation-calibrate/);
   assert.match(result.text, /\/papernexus-stage-remote/);
   assert.match(result.text, /\/authoring-closeout/);
+  assert.match(result.text, /\/capture-diagnostics/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
 });
@@ -556,6 +557,60 @@ test("authoring-closeout command runs deterministic closeout for the bound proje
   assert.equal(captured.autoInjectConferenceCitations, true);
   assert.match(result.text ?? "", /stage=submit/);
   assert.match(result.text ?? "", /citation_status=verified/);
+});
+
+test("capture-diagnostics command materializes a diagnostic bundle for the bound project", async () => {
+  let captured = null;
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async captureWorkflowDiagnosticBundle(params) {
+        captured = params;
+        return {
+          bundleRelativeDir: ".openclaw-research/diagnostics/2026-04-13T11-00-00Z-manual-capture",
+          summaryRelativePath:
+            ".openclaw-research/diagnostics/2026-04-13T11-00-00Z-manual-capture/SUMMARY.md",
+          indexRelativePath:
+            ".openclaw-research/diagnostics/2026-04-13T11-00-00Z-manual-capture/INDEX.json",
+        };
+      },
+    }),
+    "capture-diagnostics"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/capture-diagnostics --reason discord_timeout --tail 120",
+    args: "--reason discord_timeout --tail 120",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(captured.projectRoot, "/tmp/projects/paper-lab");
+  assert.equal(captured.reason, "discord_timeout");
+  assert.equal(captured.tailLines, 120);
+  assert.match(result.text ?? "", /Diagnostic bundle captured/);
+  assert.match(result.text ?? "", /SUMMARY\.md/);
+  assert.match(result.text ?? "", /INDEX\.json/);
 });
 
 test("clear-project-binding command removes the workflow project binding for the current channel", async () => {

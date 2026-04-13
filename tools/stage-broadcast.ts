@@ -8,6 +8,10 @@ import {
 } from "./workflow-runtime-state.js";
 import { applyWorkflowBroadcastBudget } from "./workflow-handoff/broadcast-budget";
 import { recordWorkflowRuntimeIncident } from "./workflow-runtime-incidents.js";
+import {
+  evaluateChannelProjectBindingGate,
+  type ChannelProjectBindingPolicy,
+} from "./channel-project-bindings";
 
 export type StageBroadcastRuntime = {
   run: (params: {
@@ -69,6 +73,72 @@ export type WorkflowStatusBroadcastResult = {
   sessionKey: string | null;
   idempotencyKey: string | null;
 };
+
+async function maybeSuppressBindingMismatchedBroadcast(params: {
+  bindingPolicy?: ChannelProjectBindingPolicy;
+  sessionKey?: string | null;
+  projectId: string | null;
+  projectRoot: string | null;
+  idempotencyKey: string;
+  broadcastId: string;
+  status: WorkflowStatusBroadcastStatus;
+  stage: string | null;
+  summary: string;
+}): Promise<{
+  suppressed: boolean;
+  reason: string | null;
+}> {
+  if (!params.projectRoot || !params.bindingPolicy || !params.sessionKey) {
+    return { suppressed: false, reason: null };
+  }
+  const gate = await evaluateChannelProjectBindingGate({
+    policy: params.bindingPolicy,
+    context: {
+      sessionKey: params.sessionKey,
+    },
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    sessionKey: params.sessionKey,
+    allowSessionProjectFallback: false,
+  });
+  if (gate.allowed) {
+    return { suppressed: false, reason: null };
+  }
+  const mismatchMessage = [
+    `Suppressed stale workflow broadcast because the current channel binding no longer matches ${params.projectId ?? "the project"}.`,
+    `gate_reason=${gate.reason}`,
+    gate.currentBinding?.projectId
+      ? `bound_project=${gate.currentBinding.projectId}`
+      : null,
+    gate.currentBinding?.projectRoot
+      ? `bound_root=${gate.currentBinding.projectRoot}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const recorded = await recordWorkflowBroadcastEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    broadcastId: params.broadcastId,
+    idempotencyKey: params.idempotencyKey,
+    sessionKey: params.sessionKey,
+    status: params.status,
+    stage: params.stage,
+    summary: params.summary,
+    deliveryStatus: "superseded",
+    lastError: mismatchMessage,
+  });
+  if (!recorded.created) {
+    await markWorkflowBroadcastEvent({
+      projectRoot: params.projectRoot,
+      idempotencyKey: params.idempotencyKey,
+      deliveryStatus: "superseded",
+      runError: mismatchMessage,
+      lastAttemptedAt: new Date().toISOString(),
+    });
+  }
+  return { suppressed: true, reason: gate.reason };
+}
 
 function roleToMention(role: string | null | undefined): string | null {
   if (!role) {
@@ -336,6 +406,7 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
 
 export async function maybeBroadcastAutoIteratorStageChange(params: {
   runtimeSubagent?: StageBroadcastRuntime;
+  bindingPolicy?: ChannelProjectBindingPolicy;
   sessionKey?: string;
   projectId: string | null;
   projectRoot: string | null;
@@ -401,6 +472,29 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
     agentTaskDispatch: params.agentTaskDispatch,
     handoffIntentId: params.handoffIntentId,
   });
+  const bindingSuppressed = await maybeSuppressBindingMismatchedBroadcast({
+    bindingPolicy: params.bindingPolicy,
+    sessionKey: params.sessionKey,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    idempotencyKey,
+    broadcastId: idempotencyKey,
+    status:
+      params.agentTaskDispatch?.dispatched === true ? "handed_off" : "continued",
+    stage: params.stageAfter,
+    summary:
+      params.nextAction ??
+      `Workflow stage changed from ${params.stageBefore ?? "unknown"} to ${params.stageAfter ?? "unknown"}.`,
+  });
+  if (bindingSuppressed.suppressed) {
+    return {
+      broadcasted: false,
+      reasonSkipped: "binding_mismatch",
+      runId: null,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  }
   if (params.projectRoot) {
     const existingStore = await readWorkflowBroadcastOutboxStore(params.projectRoot);
     const supersededEntries = existingStore.entries.map((entry) =>
@@ -543,6 +637,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
 
 export async function maybeBroadcastWorkflowStatusUpdate(params: {
   runtimeSubagent?: StageBroadcastRuntime;
+  bindingPolicy?: ChannelProjectBindingPolicy;
   sessionKey?: string | null;
   projectId: string | null;
   projectRoot: string | null;
@@ -587,6 +682,26 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
     params.stage ?? "unknown-stage",
     params.idempotencyKeySuffix ?? params.summary.trim().slice(0, 80),
   ].join(":");
+  const bindingSuppressed = await maybeSuppressBindingMismatchedBroadcast({
+    bindingPolicy: params.bindingPolicy,
+    sessionKey: params.sessionKey,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    idempotencyKey,
+    broadcastId: idempotencyKey,
+    status: params.status,
+    stage: params.stage ?? null,
+    summary: params.summary,
+  });
+  if (bindingSuppressed.suppressed) {
+    return {
+      broadcasted: false,
+      reasonSkipped: "binding_mismatch",
+      runId: null,
+      sessionKey: params.sessionKey,
+      idempotencyKey,
+    };
+  }
   if (params.projectRoot) {
     const recorded = await recordWorkflowBroadcastEvent({
       projectRoot: params.projectRoot,

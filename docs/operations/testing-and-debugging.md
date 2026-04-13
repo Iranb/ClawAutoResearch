@@ -28,6 +28,14 @@ node --test tests/writer-reviewer-runtime-state.test.mjs tests/workflow-writing-
 
 ## 3. 常见问题应该先查哪里
 
+如果你在 Discord 里发现流水线卡住，优先直接运行：
+
+```text
+/capture-diagnostics --reason discord_pipeline_failure
+```
+
+它会在当前项目下生成一份 bounded 诊断包，包含 snapshot、runtime health、handoff、queue、mailbox、graph/papernexus 状态和关键日志 tail。
+
 ### graph 一直不 ready
 
 先查：

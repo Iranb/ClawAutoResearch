@@ -113,6 +113,7 @@ import { runCitationCalibration } from "./research-writing/citation-calibration"
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
+import { captureWorkflowDiagnosticBundle } from "./workflow-diagnostic-bundle";
 import { evaluateExperimentSearchDecisionForProject } from "./workflow-experiment-decision";
 import { recordExperimentRuntimeSignal } from "./workflow-experiment-runtime-watch";
 import {
@@ -281,6 +282,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_survey_review_state",
   "materialize_idea_catalyst_state",
   "run_idea_catalyst_research30",
+  "capture_diagnostic_bundle",
   "set_survey_review",
   "refresh_gpu_monitor",
   "set_ideation_contract",
@@ -362,6 +364,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   run_idea_catalyst_research30: "runIdeaCatalystResearch30",
+  capture_diagnostic_bundle: "captureWorkflowDiagnosticBundle",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
@@ -904,6 +907,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
     ? null
     : await deliverWorkflowHandoffIntent({
         intent: handoffIntent.intent,
+        bindingPolicy: params.workflowPolicy,
         lobsterMode: params.workflowPolicy.lobsterHandoff?.enabled
           ? "enabled"
           : "disabled",
@@ -939,6 +943,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
           channelBroadcast: async (intent) => {
             const result = await maybeBroadcastWorkflowStatusUpdate({
               runtimeSubagent: params.plugin.api.runtime?.subagent,
+              bindingPolicy: params.workflowPolicy,
               sessionKey: params.agentCtx.sessionKey,
               projectId: params.snapshot.projectId,
               projectRoot: params.snapshot.projectRoot,
@@ -1295,6 +1300,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_graph_guided_writing",
               "get_citation_integrity",
               "run_citation_calibration",
+              "capture_diagnostic_bundle",
               "get_paper_qc",
               "set_paper_qc",
               "get_figure_qc",
@@ -2055,6 +2061,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     }
                   : await maybeBroadcastAutoIteratorStageChange({
                       runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
                       projectRoot,
@@ -2074,6 +2081,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 result.timedDefaultTriggered === true && !inboundBudget.isExhausted(1500)
                   ? await maybeBroadcastWorkflowStatusUpdate({
                       runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
                       projectRoot,
@@ -2151,6 +2159,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
                       runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
                       projectRoot: resolvedProjectRoot,
@@ -2241,6 +2250,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
                       runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
                       projectRoot: resolvedProjectRoot,
@@ -3732,6 +3742,38 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 JSON.stringify({ ...result, verification }, null, 2)
               );
             }
+            case "capture_diagnostic_bundle": {
+              const bundle = asObject(params.diagnosticBundle);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(bundle?.projectRoot) ??
+                  readString(bundle?.project_root) ??
+                  readString(bundle?.projectPath) ??
+                  readString(bundle?.project_path),
+              });
+              const result = await captureWorkflowDiagnosticBundle({
+                projectRoot: resolvedProjectRoot,
+                workflowPolicy,
+                agentCtx: {
+                  agentId: ctx.agentId,
+                  workspaceDir: ctx.workspaceDir,
+                  sessionKey: ctx.sessionKey,
+                  sessionId: ctx.sessionId,
+                  messageChannel: ctx.messageChannel,
+                  channelKey: ctx.channelKey,
+                },
+                reason:
+                  readString(bundle?.reason) ??
+                  readString(bundle?.captureReason) ??
+                  "workflow_runtime_capture",
+                tailLines:
+                  readNumber(bundle?.tailLines) ??
+                  readNumber(bundle?.tail_lines) ??
+                  200,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_paper_ingestion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getPaperIngestionStateSummary({
@@ -3785,6 +3827,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
                   runtimeSubagent: plugin.api.runtime?.subagent,
+                  bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
                   projectRoot: resolvedProjectRoot,
@@ -3836,6 +3879,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
                   runtimeSubagent: plugin.api.runtime?.subagent,
+                  bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
                   projectRoot: resolvedProjectRoot,
@@ -3873,6 +3917,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
                   runtimeSubagent: plugin.api.runtime?.subagent,
+                  bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
                   projectRoot: resolvedProjectRoot,

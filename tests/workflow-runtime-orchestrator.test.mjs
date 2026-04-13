@@ -32,6 +32,7 @@ import {
   replayWorkflowBroadcastOutbox,
 } from "../tools/workflow-announce-runtime.ts";
 import { recoverWorkflowRuntimeState } from "../tools/workflow-runtime-recovery.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-orchestrator-"));
@@ -961,6 +962,73 @@ test("replayWorkflowBroadcastOutbox delivers pending and failed entries once", a
     broadcastStore.entries.filter((entry) => entry.deliveryStatus === "delivered").length,
     3
   );
+});
+
+test("replayWorkflowBroadcastOutbox supersedes stale entries when the channel binding points at another project", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-runtime-broadcast-binding-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
+  const reboundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const sessionKey = "agent:researcher:discord:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(staleProjectRoot, "generalized-category-discovery");
+  await makeProject(reboundProjectRoot, "gcd-survey-tpami-2026");
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: reboundProjectRoot,
+    boundByAgent: "researcher",
+  });
+  await writeWorkflowBroadcastOutboxStore({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    entries: [
+      {
+        broadcastId: "broadcast-stale",
+        idempotencyKey: "broadcast-stale",
+        projectId: "generalized-category-discovery",
+        projectRoot: staleProjectRoot,
+        sessionKey,
+        status: "continued",
+        stage: "plan",
+        summary: "stale replay",
+        deliveryStatus: "pending",
+        attempts: 0,
+        createdAt: "2026-03-31T00:00:00.000Z",
+        lastAttemptedAt: null,
+        deliveredAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const result = await replayWorkflowBroadcastOutbox({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    sendBroadcast: async () => {
+      throw new Error("should not deliver");
+    },
+  });
+
+  assert.equal(result.delivered.length, 0);
+  assert.equal(result.skipped.length, 1);
+  const broadcastStore = await readWorkflowBroadcastOutboxStore(staleProjectRoot);
+  assert.equal(broadcastStore.entries[0].deliveryStatus, "superseded");
 });
 
 test("recoverWorkflowRuntimeState repairs stale queue and sessions after replaying announce and broadcast outboxes", async (t) => {

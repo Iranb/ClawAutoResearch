@@ -9,6 +9,7 @@ import {
   readWorkflowHandoffIntentStore,
   upsertWorkflowHandoffIntent,
 } from "../tools/workflow-handoff/handoff-store.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 test("deliverWorkflowHandoffIntent records native delivery and waits for ack", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-"));
@@ -157,4 +158,72 @@ test("deliverWorkflowHandoffIntent escalates when all automatic delivery channel
   assert.equal(result.intent.terminalReason, "human_escalation");
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].deliveryAttempts.at(-1).channel, "human_escalation");
+});
+
+test("deliverWorkflowHandoffIntent supersedes stale intents when the channel binding moved to another project", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-binding-"));
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
+  const reboundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const sessionKey = "agent:researcher:discord:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(staleProjectRoot, { recursive: true });
+  await fs.mkdir(reboundProjectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(staleProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "generalized-category-discovery" }, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(reboundProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "gcd-survey-tpami-2026" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: reboundProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot: staleProjectRoot,
+    idempotencyKey: "deliver-stale-binding",
+    toRole: "coder",
+    fromSessionKey: sessionKey,
+    reason: "stage_owner_change",
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 2,
+    },
+  });
+
+  const result = await deliverWorkflowHandoffIntent({
+    intent: created.intent,
+    bindingPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      async nativeDispatch() {
+        throw new Error("should not dispatch");
+      },
+    },
+  });
+
+  assert.equal(result.delivered, false);
+  assert.equal(result.terminal, true);
+  assert.equal(result.intent.status, "superseded");
+  const store = await readWorkflowHandoffIntentStore(staleProjectRoot);
+  assert.equal(store.intents[0].status, "superseded");
 });

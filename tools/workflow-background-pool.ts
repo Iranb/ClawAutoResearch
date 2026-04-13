@@ -13,6 +13,7 @@ import {
   readWorkflowRuntimeSessionsStore,
   writeWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
+import { writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import type {
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state";
@@ -300,6 +301,9 @@ async function readBackgroundRunRegistry(
   }
   try {
     const raw = await fs.readFile(getBackgroundRunRegistryPath(), "utf8");
+    if (!raw.trim()) {
+      return [];
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       return [];
@@ -362,6 +366,9 @@ async function readBackgroundRunRegistry(
       error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : null;
+    if (error instanceof SyntaxError) {
+      return [];
+    }
     if (code === "ENOENT") {
       return [];
     }
@@ -396,7 +403,7 @@ async function writeBackgroundRunRegistry(
   }
   const registryPath = getBackgroundRunRegistryPath();
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
-  await fs.writeFile(registryPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+  await writeJsonAtomicEnsured(registryPath, entries);
 }
 
 async function pruneBackgroundRunRegistry(params: {

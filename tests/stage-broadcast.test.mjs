@@ -12,6 +12,7 @@ import {
 } from "../tools/stage-broadcast.ts";
 import { readWorkflowBroadcastOutboxStore } from "../tools/workflow-runtime-state.ts";
 import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dispatch context", () => {
   const message = buildAutoIteratorStageBroadcastMessage({
@@ -309,4 +310,67 @@ test("maybeBroadcastAutoIteratorStageChange supersedes stale pending/failed stag
   const outbox = await readWorkflowBroadcastOutboxStore(projectRoot);
   assert.equal(outbox.entries[0].deliveryStatus, "superseded");
   assert.equal(outbox.entries[1].deliveryStatus, "delivered");
+});
+
+test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcasts when the channel binding moved", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-binding-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
+  const boundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const sessionKey = "agent:researcher:discord:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(staleProjectRoot, { recursive: true });
+  await fs.mkdir(boundProjectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(staleProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "generalized-category-discovery" }, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(boundProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "gcd-survey-tpami-2026" }, null, 2)}\n`,
+    "utf8"
+  );
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: boundProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const result = await maybeBroadcastWorkflowStatusUpdate({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not send");
+      },
+    },
+    bindingPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    sessionKey,
+    projectId: "generalized-category-discovery",
+    projectRoot: staleProjectRoot,
+    status: "waiting",
+    stage: "plan",
+    summary: "A stale test broadcast should not leak into the rebound channel.",
+    idempotencyKeySuffix: "binding-mismatch",
+  });
+
+  assert.equal(result.broadcasted, false);
+  assert.equal(result.reasonSkipped, "binding_mismatch");
+  const outbox = await readWorkflowBroadcastOutboxStore(staleProjectRoot);
+  assert.equal(outbox.entries.length, 1);
+  assert.equal(outbox.entries[0].deliveryStatus, "superseded");
 });

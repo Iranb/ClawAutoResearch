@@ -3063,6 +3063,60 @@ test("research_workflow get_runtime_health treats stale started audits as timed 
   assert.match(health.autoIteratorAudit.summary ?? "", /timed out/i);
 });
 
+test("research_workflow capture_diagnostic_bundle materializes a bounded diagnostic bundle", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  await seedMinimalProject(projectRoot, {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    blocking_reason: "Waiting for graph presence",
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "missing_sources",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-runtime-queue.json"), {
+    schemaVersion: 1,
+    entries: [],
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "capture_diagnostic_bundle",
+    diagnosticBundle: {
+      reason: "discord_native_failure",
+      tailLines: 50,
+    },
+  });
+
+  assert.equal(result.projectId, "demo-project");
+  assert.match(result.bundleRelativeDir ?? "", /\.openclaw-research\/diagnostics\//);
+  await fs.access(path.join(projectRoot, result.summaryRelativePath));
+  await fs.access(path.join(projectRoot, result.indexRelativePath));
+  const index = JSON.parse(
+    await fs.readFile(path.join(projectRoot, result.indexRelativePath), "utf8")
+  );
+  assert.equal(index.projectId, "demo-project");
+  assert.equal(index.reason, "discord_native_failure");
+  const summaryText = await fs.readFile(
+    path.join(projectRoot, result.summaryRelativePath),
+    "utf8"
+  );
+  assert.match(summaryText, /Workflow Diagnostic Bundle/);
+  assert.match(summaryText, /blocking_reason: Waiting for graph presence/);
+});
+
 test("research_workflow auto_iterator_tick follows the bound channel project even when workspaceDir points at another project", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-runtime-binding-priority-")

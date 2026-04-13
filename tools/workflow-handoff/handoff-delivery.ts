@@ -5,6 +5,10 @@ import {
   countWorkflowHandoffAttemptsTotal,
   transitionWorkflowHandoffIntent,
 } from "./handoff-store";
+import {
+  evaluateChannelProjectBindingGate,
+  type ChannelProjectBindingPolicy,
+} from "../channel-project-bindings";
 import type {
   WorkflowHandoffDeliveryChannel,
   WorkflowHandoffIntent,
@@ -63,6 +67,7 @@ export async function deliverWorkflowHandoffIntent(params: {
   intent: WorkflowHandoffIntent;
   runtime?: WorkflowHandoffDeliveryRuntime;
   lobsterMode?: "disabled" | "dry_run" | "enabled";
+  bindingPolicy?: ChannelProjectBindingPolicy;
 }): Promise<{
   delivered: boolean;
   intent: WorkflowHandoffIntent;
@@ -86,6 +91,39 @@ export async function deliverWorkflowHandoffIntent(params: {
       intent: escalated,
       terminal: true,
       reason: "delivery_attempt_budget_exhausted",
+    };
+  }
+
+  const deliveryGate = await evaluateChannelProjectBindingGate({
+    policy: params.bindingPolicy,
+    context: {
+      sessionKey: intent.fromSessionKey ?? intent.toSessionKey ?? undefined,
+    },
+    projectRoot: intent.projectRoot,
+    projectId: intent.projectId,
+    sessionKey: intent.fromSessionKey ?? intent.toSessionKey,
+    allowSessionProjectFallback: !intent.fromSessionKey && Boolean(intent.toSessionKey),
+    allowSessionFallbackOnBindingMismatch: false,
+  });
+  if (!deliveryGate.allowed) {
+    const superseded =
+      (await transitionWorkflowHandoffIntent({
+        projectRoot: intent.projectRoot,
+        intentId: intent.intentId,
+        toStatus: "superseded",
+        terminalReason: [
+          "binding_gate_mismatch",
+          deliveryGate.reason,
+          deliveryGate.currentBinding?.projectId ?? "unbound",
+        ].join(":"),
+        summary:
+          "Suppressed stale handoff because the current channel binding no longer points at this project.",
+      })) ?? intent;
+    return {
+      delivered: false,
+      intent: superseded,
+      terminal: true,
+      reason: "binding_mismatch",
     };
   }
 

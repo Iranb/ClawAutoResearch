@@ -17,6 +17,7 @@ import {
 import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 import { runWorkflowRuntimeMaintenancePass } from "../tools/workflow-runtime-maintenance.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-"));
@@ -296,6 +297,116 @@ test("runWorkflowRuntimeMaintenancePass escalates exhausted transitions and orph
   );
   assert.equal(
     incidents.entries.some((entry) => entry.kind === "repair_orphan_session"),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass suppresses stale queue replays when the channel binding moved to another project", async (t) => {
+  const workspaceRoot = await makeProjectRoot();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
+  const reboundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const queueKey = "repair:dispatch:binding-mismatch";
+  const sessionKey = "agent:researcher:discord:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(staleProjectRoot, "generalized-category-discovery");
+  await makeProject(reboundProjectRoot, "gcd-survey-tpami-2026");
+  await migrateWorkflowRuntimeState({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: reboundProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "discord:channel:1491811255814586530",
+    requesterSessionKey: sessionKey,
+    preferredSessionKey: `${sessionKey}:subagent:workflow-stage`,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay the stale stage dispatch.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: "default",
+      preferredSessionKeys: [`${sessionKey}:subagent:workflow-stage`],
+      fromRole: "researcher",
+      toRole: "coder",
+      projectRoot: staleProjectRoot,
+      projectId: "generalized-category-discovery",
+      stage: "plan",
+      summary: "Replay the stale stage dispatch.",
+      command: "/plan-research",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(staleProjectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "needs_repair",
+            attemptCount: 0,
+            lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+            lastCheckedAt: "2026-04-10T09:00:00.000Z",
+          }
+        : entry
+    ),
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot: staleProjectRoot,
+    projectId: "generalized-category-discovery",
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    staleSessionAgeMs: 0,
+  });
+
+  assert.equal(result.exhaustedQueueKeys.includes(queueKey), true);
+  assert.equal(result.replayedQueueKeys.includes(queueKey), false);
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(staleProjectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "failed"
+  );
+  const incidents = await readWorkflowRuntimeIncidentsStore(
+    staleProjectRoot,
+    "generalized-category-discovery"
+  );
+  assert.equal(
+    incidents.entries.some((entry) => entry.kind === "binding_gate_mismatch"),
     true
   );
 });

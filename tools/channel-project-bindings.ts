@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -30,6 +31,7 @@ import {
   withAdvisoryLock,
   writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
+import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 
 export interface ChannelProjectBindingPolicy {
   enableChannelProjectBindings?: boolean;
@@ -105,6 +107,47 @@ export type ResolvedProjectContext = {
   source: "channel_binding" | "env" | "none";
   storePath: string;
   binding: ChannelProjectBindingRecord | null;
+};
+
+export type ChannelProjectBindingAuditAction = "bind" | "rebind" | "unbind";
+
+export type ChannelProjectBindingAuditEvent = {
+  schemaVersion: 1;
+  eventId: string;
+  action: ChannelProjectBindingAuditAction;
+  recordedAt: string;
+  channelKey: string;
+  projectRoot: string | null;
+  projectId: string | null;
+  previousProjectRoot: string | null;
+  previousProjectId: string | null;
+  messageChannel: string | null;
+  sessionKey: string | null;
+  sessionId: string | null;
+  workflowSessionKey: string | null;
+  workflowRole: string | null;
+  actor: string | null;
+  notes: string | null;
+  storePath: string;
+};
+
+export type ChannelProjectBindingGateReason =
+  | "binding_gate_disabled"
+  | "binding_match"
+  | "binding_project_mismatch"
+  | "binding_missing"
+  | "session_project_match"
+  | "session_project_missing";
+
+export type ChannelProjectBindingGateResult = {
+  allowed: boolean;
+  reason: ChannelProjectBindingGateReason;
+  matchedBy: "binding" | "session" | "none";
+  channelKey: string | null;
+  expectedProjectRoot: string;
+  expectedProjectId: string | null;
+  currentBinding: ChannelProjectBindingRecord | null;
+  matchedSessionKey: string | null;
 };
 
 const DEFAULT_POLICY: Required<ChannelProjectBindingPolicy> = {
@@ -318,6 +361,14 @@ function getProjectScopedStorePath(projectRoot: string): string {
   );
 }
 
+export function getProjectBindingAuditPath(projectRoot: string): string {
+  return path.join(
+    path.resolve(expandHome(projectRoot)),
+    ".openclaw-research",
+    "channel-project-binding-audit.jsonl"
+  );
+}
+
 function getProjectsRoot(policy: Required<ChannelProjectBindingPolicy>): string | null {
   const explicit = asString(policy.projectsRoot);
   return explicit ? path.resolve(expandHome(explicit)) : null;
@@ -344,6 +395,14 @@ export function getProjectsBindingIndexPath(projectsRoot: string): string {
     path.resolve(expandHome(projectsRoot)),
     ".openclaw-research",
     "channel-project-bindings.index.json"
+  );
+}
+
+export function getProjectsBindingAuditPath(projectsRoot: string): string {
+  return path.join(
+    path.resolve(expandHome(projectsRoot)),
+    ".openclaw-research",
+    "channel-project-binding-audit.jsonl"
   );
 }
 
@@ -698,6 +757,172 @@ async function saveStore(
 ): Promise<void> {
   store.updatedAt = new Date().toISOString();
   await writeJsonAtomicEnsured(storePath, store);
+}
+
+async function appendBindingAuditEvents(params: {
+  projectsRoot?: string | null;
+  projectRoot?: string | null;
+  events: ChannelProjectBindingAuditEvent[];
+}): Promise<void> {
+  const auditTargets = new Set<string>();
+  const projectRoot = asString(params.projectRoot);
+  const projectsRoot = asString(params.projectsRoot);
+  if (projectRoot) {
+    auditTargets.add(getProjectBindingAuditPath(projectRoot));
+  }
+  if (projectsRoot) {
+    auditTargets.add(getProjectsBindingAuditPath(projectsRoot));
+  }
+  if (auditTargets.size === 0 || params.events.length === 0) {
+    return;
+  }
+  const payload =
+    params.events
+      .map((event) => JSON.stringify(event))
+      .join("\n")
+      .concat("\n");
+  for (const auditPath of auditTargets) {
+    await fsp.mkdir(path.dirname(auditPath), { recursive: true });
+    await fsp.appendFile(auditPath, payload, "utf8");
+  }
+}
+
+function bindingRootsMatch(expectedProjectRoot: string, binding: ChannelProjectBindingRecord): boolean {
+  return path.resolve(binding.projectRoot) === path.resolve(expectedProjectRoot);
+}
+
+function collectSessionProjectKeys(sessionKey: string | null): string[] {
+  if (!sessionKey) {
+    return [];
+  }
+  return uniqueBindingKeys([
+    sessionKey,
+    normalizeWorkflowSubagentParentSessionKey(sessionKey) ?? null,
+  ]);
+}
+
+async function findProjectOwnedSessionMatch(params: {
+  projectRoot: string;
+  sessionKey: string | null;
+}): Promise<string | null> {
+  const sessionKeys = collectSessionProjectKeys(params.sessionKey);
+  if (sessionKeys.length === 0) {
+    return null;
+  }
+  const store = await readWorkflowRuntimeSessionsStore(params.projectRoot).catch(() => null);
+  if (!store) {
+    return null;
+  }
+  for (const entry of store.entries) {
+    if (
+      path.resolve(entry.projectRoot ?? params.projectRoot) !==
+      path.resolve(params.projectRoot)
+    ) {
+      continue;
+    }
+    if (!["active", "idle", "needs_repair"].includes(entry.status)) {
+      continue;
+    }
+    const candidateKeys = collectSessionProjectKeys(entry.sessionKey).concat(
+      collectSessionProjectKeys(entry.requesterSessionKey ?? null),
+      collectSessionProjectKeys(entry.parentSessionKey ?? null)
+    );
+    const matchedKey = candidateKeys.find((candidate) => sessionKeys.includes(candidate)) ?? null;
+    if (matchedKey) {
+      return matchedKey;
+    }
+  }
+  return null;
+}
+
+export async function evaluateChannelProjectBindingGate(params: {
+  policy?: ChannelProjectBindingPolicy;
+  context?: ChannelProjectBindingContext;
+  projectRoot: string;
+  projectId?: string | null;
+  sessionKey?: string | null;
+  allowSessionProjectFallback?: boolean;
+  allowSessionFallbackOnBindingMismatch?: boolean;
+}): Promise<ChannelProjectBindingGateResult> {
+  const policy = normalizePolicy(params.policy);
+  if (!policy.enableChannelProjectBindings) {
+    return {
+      allowed: true,
+      reason: "binding_gate_disabled",
+      matchedBy: "none",
+      channelKey: resolveChannelProjectKey({
+        ...(params.context ?? {}),
+        sessionKey: params.sessionKey ?? params.context?.sessionKey,
+      }),
+      expectedProjectRoot: path.resolve(expandHome(params.projectRoot)),
+      expectedProjectId: asString(params.projectId) ?? path.basename(params.projectRoot),
+      currentBinding: null,
+      matchedSessionKey: null,
+    };
+  }
+
+  const expectedProjectRoot = path.resolve(expandHome(params.projectRoot));
+  const expectedProjectId =
+    asString(params.projectId) ?? path.basename(expectedProjectRoot);
+  const context: ChannelProjectBindingContext = {
+    ...(params.context ?? {}),
+    sessionKey: params.sessionKey ?? params.context?.sessionKey,
+  };
+  const lookup = getChannelProjectBinding({
+    policy,
+    context,
+  });
+
+  if (lookup.binding && bindingRootsMatch(expectedProjectRoot, lookup.binding)) {
+    return {
+      allowed: true,
+      reason: "binding_match",
+      matchedBy: "binding",
+      channelKey: lookup.channelKey,
+      expectedProjectRoot,
+      expectedProjectId,
+      currentBinding: lookup.binding,
+      matchedSessionKey: null,
+    };
+  }
+
+  const sessionMatch =
+    params.allowSessionProjectFallback === true
+      ? await findProjectOwnedSessionMatch({
+          projectRoot: expectedProjectRoot,
+          sessionKey: asString(context.sessionKey) ?? null,
+        })
+      : null;
+  if (
+    sessionMatch &&
+    (!lookup.binding || params.allowSessionFallbackOnBindingMismatch === true)
+  ) {
+    return {
+      allowed: true,
+      reason: "session_project_match",
+      matchedBy: "session",
+      channelKey: lookup.channelKey,
+      expectedProjectRoot,
+      expectedProjectId,
+      currentBinding: lookup.binding,
+      matchedSessionKey: sessionMatch,
+    };
+  }
+
+  return {
+    allowed: false,
+    reason: lookup.binding
+      ? "binding_project_mismatch"
+      : params.allowSessionProjectFallback
+        ? "session_project_missing"
+        : "binding_missing",
+    matchedBy: "none",
+    channelKey: lookup.channelKey,
+    expectedProjectRoot,
+    expectedProjectId,
+    currentBinding: lookup.binding,
+    matchedSessionKey: sessionMatch,
+  };
 }
 
 export function resolveChannelProjectBindingsPath(params: {
@@ -1113,6 +1338,31 @@ export async function setChannelProjectBinding(params: {
       store,
     });
   }
+  await appendBindingAuditEvents({
+    projectsRoot,
+    projectRoot,
+    events: [
+      {
+        schemaVersion: 1,
+        eventId: randomUUID(),
+        action: existing ? "rebind" : "bind",
+        recordedAt: now,
+        channelKey,
+        projectRoot,
+        projectId: binding.projectId,
+        previousProjectRoot: existing?.projectRoot ?? null,
+        previousProjectId: existing?.projectId ?? null,
+        messageChannel: binding.messageChannel,
+        sessionKey: binding.sessionKeySample,
+        sessionId: binding.sessionId,
+        workflowSessionKey: binding.workflowSessionKey,
+        workflowRole: binding.workflowRole,
+        actor: binding.boundByAgent,
+        notes: binding.notes,
+        storePath,
+      },
+    ],
+  });
   return {
     enabled: true,
     storePath,
@@ -1174,6 +1424,9 @@ export async function clearChannelProjectBinding(params: {
     }
   }
   const removableKeys = new Set(lookup.lookupKeys);
+  const removedBindings = store.bindings.filter((entry) =>
+    removableKeys.has(entry.channelKey)
+  );
   const nextBindings = store.bindings.filter((entry) => !removableKeys.has(entry.channelKey));
   const removed = nextBindings.length !== store.bindings.length;
   if (removed) {
@@ -1186,6 +1439,29 @@ export async function clearChannelProjectBinding(params: {
         store,
       });
     }
+    await appendBindingAuditEvents({
+      projectsRoot,
+      projectRoot: removedBindings[0]?.projectRoot ?? null,
+      events: removedBindings.map((binding) => ({
+        schemaVersion: 1,
+        eventId: randomUUID(),
+        action: "unbind" as const,
+        recordedAt: new Date().toISOString(),
+        channelKey: binding.channelKey,
+        projectRoot: binding.projectRoot,
+        projectId: binding.projectId,
+        previousProjectRoot: binding.projectRoot,
+        previousProjectId: binding.projectId,
+        messageChannel: binding.messageChannel,
+        sessionKey: binding.sessionKeySample,
+        sessionId: binding.sessionId,
+        workflowSessionKey: binding.workflowSessionKey,
+        workflowRole: binding.workflowRole,
+        actor: normalizeChannelKey(asString(context.role) ?? null),
+        notes: binding.notes,
+        storePath: effectiveStorePath,
+      })),
+    });
   }
   return {
     enabled: true,

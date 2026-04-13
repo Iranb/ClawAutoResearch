@@ -23,6 +23,7 @@ import { runIdeaCatalystResearch30 } from "./research30/bridge";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
+import { captureWorkflowDiagnosticBundle } from "./workflow-diagnostic-bundle";
 import {
   buildGraphBuildBackgroundCommand,
   buildLiteratureReviewBackgroundCommand,
@@ -124,6 +125,7 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   runCitationCalibration,
   stagePapernexusRemoteSources,
   reconcileAuthoringCloseout,
+  captureWorkflowDiagnosticBundle,
 };
 
 let cachedConversationRuntime:
@@ -352,6 +354,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
   {
     label: COMMAND_LABELS.authoring_closeout,
     intro: "对当前论文项目做写作 closeout：补 citation/review/QC 状态并尝试生成 PDF。",
+  },
+  {
+    label: COMMAND_LABELS.capture_diagnostics,
+    intro: "抓取当前项目的诊断包：snapshot、runtime health、handoff、queue、mailbox、graph/papernexus 状态和关键日志 tail。",
   },
 ];
 
@@ -1497,6 +1503,47 @@ function createAuthoringCloseoutCommandHandler(
   };
 }
 
+function createCaptureDiagnosticsCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const result = await deps.captureWorkflowDiagnosticBundle({
+        projectRoot: resolved.projectRoot,
+        workflowPolicy: resolved.workflowPolicy,
+        agentCtx: {
+          agentId: resolved.target.agentId ?? undefined,
+          workspaceDir: resolved.target.workspaceDir ?? undefined,
+          sessionKey: resolved.target.sessionKey ?? undefined,
+          messageChannel: ctx.channel,
+          channelKey: resolved.target.bindingChannelKey ?? undefined,
+        },
+        reason: readFlagValue(ctx.commandBody, "--reason") ?? "manual_capture",
+        tailLines: readNumericFlag(ctx.commandBody, "--tail") ?? 200,
+      });
+      return {
+        text:
+          `Diagnostic bundle captured for ${resolved.projectId}.\n` +
+          `bundle={PROJ}/${result.bundleRelativeDir}\n` +
+          `summary={PROJ}/${result.summaryRelativePath}\n` +
+          `index={PROJ}/${result.indexRelativePath}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /capture-diagnostics: ${message}`,
+      };
+    }
+  };
+}
+
 async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   api: WorkflowCommandApi,
   workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>
@@ -1674,6 +1721,13 @@ export function createResearchWorkflowCommands(
         "Reconcile writing/review/QC state for the current project and attempt a deterministic paper closeout.",
       acceptsArgs: true,
       handler: createAuthoringCloseoutCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "capture-diagnostics",
+      description:
+        "Capture a bounded workflow diagnostic bundle for the current project, including snapshot, runtime health, handoff, queue, mailbox, graph, and key log tails.",
+      acceptsArgs: true,
+      handler: createCaptureDiagnosticsCommandHandler(api, resolvedDeps),
     },
     {
       name: "show-commands",

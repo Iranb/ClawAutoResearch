@@ -35,6 +35,7 @@ import {
   type WorkflowHandoffMaintenanceResult,
 } from "./workflow-handoff/maintenance";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
+import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -68,6 +69,8 @@ type LoggerLike = {
 
 type WorkflowPolicyLike = {
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
+  enableChannelProjectBindings?: boolean;
+  projectsRoot?: string;
 } | null;
 
 export type WorkflowRuntimeMaintenanceResult = {
@@ -441,6 +444,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     projectRoot,
     projectId,
     staleSessionAgeMs: params.staleSessionAgeMs,
+    workflowPolicy: params.workflowPolicy ?? undefined,
     sendBroadcast: params.sendBroadcast,
   });
   const handoffMaintenance = await runWorkflowHandoffMaintenancePass({
@@ -496,6 +500,72 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
   const exhaustedQueueKeys: string[] = [];
 
   for (const entry of replayCandidates) {
+    const bindingGate = await evaluateChannelProjectBindingGate({
+      policy: params.workflowPolicy ?? undefined,
+      context: {
+        sessionKey:
+          readString(entry.requesterSessionKey) ??
+          readString(entry.preferredSessionKey) ??
+          undefined,
+        channelKey: readString(entry.channelKey) ?? undefined,
+        messageChannel: readString(entry.messageChannel) ?? undefined,
+      },
+      projectRoot,
+      projectId,
+      sessionKey:
+        readString(entry.requesterSessionKey) ??
+        readString(entry.preferredSessionKey),
+      allowSessionProjectFallback: true,
+      allowSessionFallbackOnBindingMismatch: true,
+    });
+    if (!bindingGate.allowed) {
+      const error = [
+        `Workflow transition ${entry.queueKey} was superseded by the current channel binding gate.`,
+        `gate_reason=${bindingGate.reason}`,
+        bindingGate.currentBinding?.projectId
+          ? `bound_project=${bindingGate.currentBinding.projectId}`
+          : null,
+        bindingGate.currentBinding?.projectRoot
+          ? `bound_root=${bindingGate.currentBinding.projectRoot}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: entry.queueKey,
+        error,
+      });
+      exhaustedQueueKeys.push(entry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `binding-gate:${entry.queueKey}`,
+          kind: "binding_gate_mismatch",
+          severity: "warning",
+          summary:
+            "Workflow repair replay was suppressed because the current channel binding points elsewhere.",
+          queueKey: entry.queueKey,
+          sessionKey: entry.requesterSessionKey,
+          error,
+          details: {
+            gateReason: bindingGate.reason,
+            expectedProjectRoot: projectRoot,
+            boundProjectRoot: bindingGate.currentBinding?.projectRoot ?? null,
+            boundProjectId: bindingGate.currentBinding?.projectId ?? null,
+          },
+        })
+      );
+      continue;
+    }
+
     if (entry.attemptCount >= maxRepairAttempts) {
       const error =
         entry.lastError ??
