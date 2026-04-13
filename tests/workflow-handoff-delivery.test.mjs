@@ -11,7 +11,7 @@ import {
 } from "../tools/workflow-handoff/handoff-store.ts";
 import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
-test("deliverWorkflowHandoffIntent records native delivery and waits for ack", async (t) => {
+test("deliverWorkflowHandoffIntent records native delivery as dispatched instead of prematurely completing the handoff", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-"));
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -41,7 +41,7 @@ test("deliverWorkflowHandoffIntent records native delivery and waits for ack", a
   });
 
   assert.equal(result.delivered, true);
-  assert.equal(result.intent.status, "delivered");
+  assert.equal(result.intent.status, "dispatched");
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].deliveryAttempts[0].channel, "native_runtime");
   assert.equal(store.intents[0].deliveryAttempts[0].status, "delivered");

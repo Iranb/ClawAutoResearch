@@ -25,6 +25,7 @@ import type { runCitationCalibration } from "../research-writing/citation-calibr
 import type { stagePapernexusRemoteSources } from "../papernexus-remote-stage.ts";
 import type { reconcileAuthoringCloseout } from "../authoring-closeout-reconcile.ts";
 import type { captureWorkflowDiagnosticBundle } from "../workflow-diagnostic-bundle.ts";
+import type { buildHandoffDashboard } from "../workflow-handoff/dashboard.ts";
 import type {
   readGateReviewStore,
 } from "../workflow-auto-gate.js";
@@ -51,6 +52,7 @@ export type WorkflowCommandKind =
   | "auto_review"
   | "clear_project_binding"
   | "workflow_status"
+  | "handoff_status"
   | "show_commands"
   | "survey_graph_build"
   | "idea_catalyst_search"
@@ -74,6 +76,7 @@ export type WorkflowCommandDependencies = {
   stagePapernexusRemoteSources: typeof stagePapernexusRemoteSources;
   reconcileAuthoringCloseout: typeof reconcileAuthoringCloseout;
   captureWorkflowDiagnosticBundle: typeof captureWorkflowDiagnosticBundle;
+  buildHandoffDashboard: typeof buildHandoffDashboard;
 };
 
 export type WorkflowCommandApi = Pick<
@@ -133,6 +136,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   auto_review: "/auto-review",
   clear_project_binding: "/clear-project-binding",
   workflow_status: "/workflow-status",
+  handoff_status: "/handoff-status",
   show_commands: "/show-commands",
   survey_graph_build: "/survey-graph-build",
   idea_catalyst_search: "/idea-catalyst-search",

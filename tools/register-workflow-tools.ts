@@ -211,6 +211,9 @@ import {
   createTaskUnlockedHandoffIntent,
 } from "./workflow-handoff/handoff-router";
 import { deliverWorkflowHandoffIntent } from "./workflow-handoff/handoff-delivery";
+import { sweepPendingHandoffIntents } from "./workflow-handoff/handoff-sweep.js";
+import { syncPreparedWorkflowHandoffToManifest } from "./workflow-handoff/handoff-activation.js";
+import { buildHandoffDashboard } from "./workflow-handoff/dashboard.js";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import {
   closeWorkflowRepairItemsForTask,
@@ -329,6 +332,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_snapshot: "buildWorkflowSnapshot",
   get_runtime_health: "buildWorkflowSnapshot",
+  get_handoff_status: "buildHandoffDashboard",
   diagnose_track_evidence: "loadTrackInnovationEvidence",
   get_papernexus_remote_access: "inspectPapernexusRemoteAccess",
   get_papernexus_progress: "getPapernexusProgressSummary",
@@ -804,6 +808,10 @@ function buildUnboundProjectAutoIteratorPayload(params: {
     missingStageSignals: ["No active project is bound to this channel/session."],
     ownerBefore: params.snapshot.ownerAgent ?? null,
     ownerAfter: params.snapshot.role === "researcher" ? "researcher" : null,
+    ownerActivated: true,
+    pendingHandoff: false,
+    pendingHandoffPhase: null,
+    pendingHandoffExecutionId: null,
     nextAction:
       'Start a project with /research-pipeline or call research_workflow.bind_channel_project with a projectId/topic so the plugin can scaffold it under projectsRoot.',
     resumeAction:
@@ -846,6 +854,80 @@ function buildAutoStageDispatchQueueKey(params: {
   ].join("::");
 }
 
+function buildStageHandoffAcceptanceChecks(params: {
+  workflowLine: "experiment" | "survey";
+  stageAfter: string | null | undefined;
+}): string[] {
+  const stageAfter = readString(params.stageAfter);
+  if (params.workflowLine === "survey") {
+    if (stageAfter === "write") {
+      return [
+        "researcher/SURVEY_QUERY_REGISTRY.json exists",
+        "researcher/INCLUDED_PAPERS.json exists",
+        "researcher/EXCLUDED_PAPERS.json exists",
+        "researcher/SOTA_MATRIX.md exists",
+        "researcher/GAP_SYNTHESIS.md exists",
+        "researcher/SURVEY_BRIEF.md exists",
+      ];
+    }
+    if (stageAfter === "review") {
+      return [
+        "academic_writer/PAPER_PLAN.md exists",
+        "academic_writer/STORYLINE_SKETCH.md exists",
+        "academic_writer/paper/main.tex exists",
+      ];
+    }
+    if (stageAfter === "submit") {
+      return [
+        "reviewer/REVIEW_PACKET.json exists",
+        "reviewer/CITATION_VERIFICATION.md exists",
+      ];
+    }
+    return [];
+  }
+  switch (stageAfter) {
+    case "plan":
+      return [
+        "researcher/IDEA_REPORT.md exists",
+        "TRACK_REGISTRY.json exists",
+      ];
+    case "code":
+      return [
+        "orchestrator/PLAN.md exists",
+        "orchestrator/TODOS.md exists",
+        "orchestrator/PLAN_AUDIT.md exists",
+        "PROJECT_MANIFEST.json.research_program.plan_selection.selected_track_id != null",
+      ];
+    case "experiment":
+      return [
+        "coder/EXPERIMENT_INDEX.md exists",
+        "coder/experiments/<track-id>/ bundle exists",
+      ];
+    case "analyze":
+      return [
+        "researcher/EXPERIMENT_LEDGER.json or EXPERIMENT_SEARCH.json is updated",
+        "researcher/EXPERIMENT_GPU_MONITOR.json is reconciled",
+      ];
+    case "write":
+      return [
+        "analyzer/analysis packet exists",
+        "write package inputs are assembled",
+      ];
+    case "review":
+      return [
+        "academic_writer/paper/main.tex exists",
+        "academic_writer/story/ or section packets are present",
+      ];
+    case "submit":
+      return [
+        "reviewer/REVIEW_PACKET.json exists",
+        "reviewer/CITATION_VERIFICATION.md exists",
+      ];
+    default:
+      return [];
+  }
+}
+
 export async function maybeDispatchAutoIteratorTask(params: {
   plugin: PluginRegistrationContext;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -867,6 +949,173 @@ export async function maybeDispatchAutoIteratorTask(params: {
   if (!requesterRole || !ownerAfter || requesterRole === ownerAfter) {
     return null;
   }
+
+  const buildDeliveryRuntime = (intent: {
+    intentId: string;
+    projectRoot: string;
+    projectId: string | null;
+    toRole: string;
+    stageAfter?: string | null;
+    stage?: string | null;
+    summary?: string | null;
+    command?: string | null;
+    toSessionKey?: string | null;
+    preferredSessionKeys?: string[];
+  }) => {
+    let capturedDispatch: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
+      null;
+    const targetRole = intent.toRole as DispatchableWorkflowRole;
+    const requesterSessionKey =
+      readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
+    const preferredSessionKeys =
+      intent.preferredSessionKeys && intent.preferredSessionKeys.length > 0
+        ? intent.preferredSessionKeys
+        : deriveWorkflowDispatchSessionCandidates({
+            requesterSessionKey,
+            targetRole,
+          });
+    return {
+      runtime: {
+        nativeDispatch: async () => {
+          capturedDispatch = await handoffWorkflowTaskToAgent({
+            runtimeSubagent: params.plugin.api.runtime?.subagent,
+            workflowPolicy: params.workflowPolicy,
+            requesterSessionKey: params.agentCtx.sessionKey,
+            requesterChannel: params.agentCtx.messageChannel,
+            fromRole: requesterRole,
+            toRole: targetRole,
+            projectRoot: intent.projectRoot,
+            projectId: intent.projectId,
+            stage: intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+            summary:
+              readString(intent.summary) ??
+              `Workflow handoff to ${targetRole}.`,
+            command: readString(intent.command),
+            mailboxMessageId: null,
+            requireMailboxAcknowledgement: true,
+            waitTimeoutMs: params.waitTimeoutMs,
+            retryOnTimeout: params.retryOnTimeout,
+            enableSpawnFallback: params.enableSpawnFallback,
+            autoModeActive,
+            logger: params.plugin.api.logger,
+          });
+          return {
+            ok: capturedDispatch.dispatched,
+            runId: capturedDispatch.runId,
+            sessionKey: capturedDispatch.sessionKey,
+            error: capturedDispatch.error,
+          };
+        },
+        channelBroadcast: async (handoffIntent: { intentId: string }) => {
+          const result = await maybeBroadcastWorkflowStatusUpdate({
+            runtimeSubagent: params.plugin.api.runtime?.subagent,
+            bindingPolicy: params.workflowPolicy,
+            sessionKey: params.agentCtx.sessionKey,
+            projectId: intent.projectId,
+            projectRoot: intent.projectRoot,
+            status: "handoff_ready",
+            stage:
+              intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+            summary: `Handoff ${handoffIntent.intentId} is ready for ${targetRole}: ${readString(intent.summary) ?? "Continue the assigned stage."}`,
+            idempotencyKeySuffix: `handoff-channel:${handoffIntent.intentId}`,
+          });
+          return {
+            ok:
+              result.broadcasted ||
+              result.reasonSkipped === "duplicate_pending" ||
+              result.reasonSkipped === "duplicate_delivered",
+            runId: result.runId,
+            messageId: result.idempotencyKey,
+            error: result.reasonSkipped,
+          };
+        },
+        runtimeQueue: async (handoffIntent: { intentId: string }) => {
+          const queued = await enqueueQueuedBackgroundWorkflowRun({
+            source: "workflow_auto_stage",
+            ownerAgent: targetRole,
+            requesterSessionKey,
+            messageChannel: readString(params.agentCtx.messageChannel),
+            preferredSessionKey: preferredSessionKeys[0] ?? intent.toSessionKey ?? null,
+            family: "research",
+            kind: "workflow_stage_dispatch",
+            projectId: intent.projectId,
+            projectRoot: intent.projectRoot,
+            projectsRoot: params.workflowPolicy.projectsRoot,
+            queueKey: `handoff:${handoffIntent.intentId}`,
+            summary: `Queued handoff ${handoffIntent.intentId} for ${targetRole} after direct delivery fallback.`,
+            dispatchPayload: {
+              requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
+              requesterAccountId: null,
+              preferredSessionKeys,
+              fromRole: requesterRole,
+              toRole: targetRole,
+              projectRoot: intent.projectRoot,
+              projectId: intent.projectId,
+              stage:
+                intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+              summary:
+                readString(intent.summary) ??
+                `Workflow handoff to ${targetRole}.`,
+              command: readString(intent.command) ?? null,
+              mailboxMessageId: null,
+              requireMailboxAcknowledgement: true,
+              extraBody:
+                "Workflow handoff delivery fallback. Continue only the assigned stage and keep durable state current.",
+              waitTimeoutMs: params.waitTimeoutMs ?? 5000,
+              retryOnTimeout: params.retryOnTimeout ?? false,
+              enableSpawnFallback:
+                params.enableSpawnFallback === false ? false : true,
+              useWorkflowHandoff: true,
+              autoModeActive: true,
+            },
+          });
+          return { ok: true, queueKey: queued.entry.queueKey };
+        },
+        mailboxCompat: async (handoffIntent: { intentId: string }) => {
+          const messageId = await ensureWorkflowDispatchMailboxMessage({
+            projectRoot: intent.projectRoot,
+            fromAgent: requesterRole,
+            toAgent: targetRole,
+            projectId: intent.projectId,
+            stage:
+              intent.stageAfter ?? intent.stage ?? params.snapshot.currentStage,
+            summary:
+              `Compatibility handoff ${handoffIntent.intentId}: ${readString(intent.summary) ?? "Continue the assigned stage."}`,
+            command: readString(intent.command),
+            queueKey: handoffIntent.intentId,
+            existingMessageId: null,
+          });
+          return {
+            ok: Boolean(messageId),
+            messageId,
+            error: messageId ? null : "mailbox_compat_unavailable",
+          };
+        },
+      },
+      getDispatch: () => capturedDispatch,
+    };
+  };
+
+  if (params.snapshot.projectRoot) {
+    const sweepRuntime = buildDeliveryRuntime({
+      intentId: "sweep",
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      toRole: ownerAfter,
+      stageAfter: params.result.stageAfter ?? params.snapshot.currentStage,
+      summary: params.result.nextAction ?? "Retry the pending workflow handoff.",
+      command: params.result.nextAction,
+    });
+    await sweepPendingHandoffIntents({
+      projectRoot: params.snapshot.projectRoot,
+      runtime: sweepRuntime.runtime,
+      lobsterMode: params.workflowPolicy.lobsterHandoff?.enabled
+        ? "enabled"
+        : "disabled",
+      bindingPolicy: params.workflowPolicy,
+    });
+  }
+
   const primaryAction = selectDispatchableAutoStageAction({
     autoIteratorResult: params.result,
     owner: ownerAfter,
@@ -874,7 +1123,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
   if (!primaryAction) {
     return null;
   }
-  if ((primaryAction.cooldownRemainingSeconds ?? 0) > 0) {
+  if ((primaryAction.cooldownRemainingSeconds ?? 0) > 0 && !params.result.pendingHandoff) {
     return {
       dispatched: false,
       blockedByCooldown: true,
@@ -894,15 +1143,54 @@ export async function maybeDispatchAutoIteratorTask(params: {
     ownerBefore: params.result.ownerBefore,
     ownerAfter,
     fromSessionKey: params.agentCtx.sessionKey,
-    nextAction: params.result.nextAction,
+    sessionBindingKey: params.snapshot.channelProjectBindingKey,
+    preferredSessionKeys: deriveWorkflowDispatchSessionCandidates({
+      requesterSessionKey: readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`,
+      targetRole: ownerAfter,
+    }),
+    executionId: params.result.pendingHandoffExecutionId,
+    summary: primaryAction.summary,
+    acceptanceChecks: buildStageHandoffAcceptanceChecks({
+      workflowLine: resolveSnapshotWorkflowLine(params.snapshot),
+      stageAfter: params.result.stageAfter,
+    }),
+    nextAction: primaryAction.command ?? params.result.nextAction,
+    resumeAction: primaryAction.command ?? params.result.resumeAction,
     blockingReason: params.result.blockingReason,
     missingStageSignals: params.result.missingStageSignals,
-    manifestRevision:
+    deliveryPlan: autoModeActive
+      ? undefined
+      : {
+          channels: ["native_runtime", "channel_broadcast", "mailbox_compat"],
+          maxAttemptsTotal: 3,
+          maxAttemptsByChannel: {
+            native_runtime: 1,
+            channel_broadcast: 1,
+            mailbox_compat: 1,
+          },
+        },
+    manifestRevision: params.result.pendingHandoffExecutionId ??
       readString((params.snapshot as Record<string, unknown>).manifestUpdatedAt) ??
       readString((params.snapshot as Record<string, unknown>).manifest_updated_at),
   });
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot: params.snapshot.projectRoot,
+    intent: handoffIntent.intent,
+  });
   let dispatchedViaDelivery: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
     null;
+  const deliveryRuntime = buildDeliveryRuntime({
+    intentId: handoffIntent.intent.intentId,
+    projectRoot: handoffIntent.intent.projectRoot,
+    projectId: handoffIntent.intent.projectId,
+    toRole: handoffIntent.intent.toRole,
+    stageAfter: handoffIntent.intent.stageAfter,
+    stage: handoffIntent.intent.stage,
+    summary: handoffIntent.intent.summary,
+    command: handoffIntent.intent.command,
+    toSessionKey: handoffIntent.intent.toSessionKey,
+    preferredSessionKeys: handoffIntent.intent.preferredSessionKeys,
+  });
   const deliveryResult = params.forceQueueOnly
     ? null
     : await deliverWorkflowHandoffIntent({
@@ -911,122 +1199,15 @@ export async function maybeDispatchAutoIteratorTask(params: {
         lobsterMode: params.workflowPolicy.lobsterHandoff?.enabled
           ? "enabled"
           : "disabled",
-        runtime: {
-          nativeDispatch: async () => {
-            dispatchedViaDelivery = await handoffWorkflowTaskToAgent({
-              runtimeSubagent: params.plugin.api.runtime?.subagent,
-              workflowPolicy: params.workflowPolicy,
-              requesterSessionKey: params.agentCtx.sessionKey,
-              requesterChannel: params.agentCtx.messageChannel,
-              fromRole: requesterRole,
-              toRole: ownerAfter,
-              projectRoot: params.snapshot.projectRoot!,
-              projectId: params.snapshot.projectId,
-              stage: primaryAction.stage ?? params.snapshot.currentStage,
-              summary: primaryAction.summary,
-              command: primaryAction.command,
-              mailboxMessageId: primaryAction.mailboxMessageId,
-              requireMailboxAcknowledgement: true,
-              waitTimeoutMs: params.waitTimeoutMs,
-              retryOnTimeout: params.retryOnTimeout,
-              enableSpawnFallback: params.enableSpawnFallback,
-              autoModeActive,
-              logger: params.plugin.api.logger,
-            });
-            return {
-              ok: dispatchedViaDelivery.dispatched,
-              runId: dispatchedViaDelivery.runId,
-              sessionKey: dispatchedViaDelivery.sessionKey,
-              error: dispatchedViaDelivery.error,
-            };
-          },
-          channelBroadcast: async (intent) => {
-            const result = await maybeBroadcastWorkflowStatusUpdate({
-              runtimeSubagent: params.plugin.api.runtime?.subagent,
-              bindingPolicy: params.workflowPolicy,
-              sessionKey: params.agentCtx.sessionKey,
-              projectId: params.snapshot.projectId,
-              projectRoot: params.snapshot.projectRoot,
-              status: "handoff_ready",
-              stage: primaryAction.stage ?? params.snapshot.currentStage,
-              summary: `Handoff ${intent.intentId} is ready for ${ownerAfter}: ${primaryAction.summary}`,
-              idempotencyKeySuffix: `handoff-channel:${intent.intentId}`,
-            });
-            return {
-              ok:
-                result.broadcasted ||
-                result.reasonSkipped === "duplicate_pending" ||
-                result.reasonSkipped === "duplicate_delivered",
-              runId: result.runId,
-              messageId: result.idempotencyKey,
-              error: result.reasonSkipped,
-            };
-          },
-          runtimeQueue: async (intent) => {
-            const requesterSessionKey =
-              readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
-            const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
-              requesterSessionKey,
-              targetRole: ownerAfter,
-            });
-            const queued = await enqueueQueuedBackgroundWorkflowRun({
-              source: "workflow_auto_stage",
-              ownerAgent: ownerAfter,
-              requesterSessionKey,
-              messageChannel: readString(params.agentCtx.messageChannel),
-              preferredSessionKey: preferredSessionKeys[0] ?? null,
-              family: "research",
-              kind: "workflow_stage_dispatch",
-              projectId: params.snapshot.projectId,
-              projectRoot: params.snapshot.projectRoot!,
-              projectsRoot: params.workflowPolicy.projectsRoot,
-              queueKey: `handoff:${intent.intentId}`,
-              summary: `Queued handoff ${intent.intentId} for ${ownerAfter} after direct delivery fallback.`,
-              dispatchPayload: {
-                requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
-                requesterAccountId: null,
-                preferredSessionKeys,
-                fromRole: requesterRole,
-                toRole: ownerAfter,
-                projectRoot: params.snapshot.projectRoot!,
-                projectId: params.snapshot.projectId,
-                stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
-                summary: primaryAction.summary,
-                command: primaryAction.command,
-                mailboxMessageId: primaryAction.mailboxMessageId ?? null,
-                requireMailboxAcknowledgement: true,
-                extraBody:
-                  "Workflow handoff delivery fallback. Continue only the assigned stage and keep durable state current.",
-                waitTimeoutMs: params.waitTimeoutMs ?? 5000,
-                retryOnTimeout: params.retryOnTimeout ?? false,
-                enableSpawnFallback:
-                  params.enableSpawnFallback === false ? false : true,
-                useWorkflowHandoff: true,
-                autoModeActive: true,
-              },
-            });
-            return { ok: true, queueKey: queued.entry.queueKey };
-          },
-          mailboxCompat: async (intent) => {
-            const messageId = await ensureWorkflowDispatchMailboxMessage({
-              projectRoot: params.snapshot.projectRoot!,
-              fromAgent: requesterRole,
-              toAgent: ownerAfter,
-              projectId: params.snapshot.projectId,
-              stage: primaryAction.stage ?? params.snapshot.currentStage,
-              summary: `Compatibility handoff ${intent.intentId}: ${primaryAction.summary}`,
-              command: primaryAction.command,
-              queueKey: intent.intentId,
-              existingMessageId: primaryAction.mailboxMessageId,
-            });
-            return {
-              ok: Boolean(messageId),
-              messageId,
-              error: messageId ? null : "mailbox_compat_unavailable",
-            };
-          },
-        },
+        runtime: deliveryRuntime.runtime,
       });
+  dispatchedViaDelivery = deliveryRuntime.getDispatch();
+  if (deliveryResult?.intent) {
+    await syncPreparedWorkflowHandoffToManifest({
+      projectRoot: params.snapshot.projectRoot,
+      intent: deliveryResult.intent,
+    });
+  }
   const queuedAttempt =
     deliveryResult?.intent.deliveryAttempts.find(
       (attempt) => attempt.channel === "runtime_queue" && attempt.status === "delivered"
@@ -1058,7 +1239,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
           attempts: [],
           fallbackSpawned: false,
           acknowledgedByMailbox: false,
-          error: null,
+          error: dispatchedViaDelivery?.error ?? "queued_via_runtime_queue",
           backend: "native" as const,
           lobsterStatus: null,
           fallbackReason: "runtime_queue",
@@ -1203,6 +1384,8 @@ export async function maybeDispatchAutoIteratorTask(params: {
       blockedByCooldown: false,
       cooldownRemainingSeconds: null,
       owner: ownerAfter,
+      handoffIntentId: handoffIntent.intent.intentId,
+      handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
       queuedFallback: true,
       queueKey: queued.entry.queueKey,
       queuePosition: queued.queuePosition,
@@ -1213,6 +1396,8 @@ export async function maybeDispatchAutoIteratorTask(params: {
     blockedByCooldown: false,
     cooldownRemainingSeconds: null,
     owner: ownerAfter,
+    handoffIntentId: handoffIntent.intent.intentId,
+    handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
   };
 }
 
@@ -1231,6 +1416,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             enum: [
               "get_snapshot",
               "get_runtime_health",
+              "get_handoff_status",
               "diagnose_track_evidence",
               "get_papernexus_remote_access",
               "get_papernexus_progress",
@@ -1794,6 +1980,16 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(report, null, 2));
             }
+            case "get_handoff_status": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const report = await buildHandoffDashboard({
+                projectRoot: resolvedProjectRoot,
+                projectId: state.snapshot.projectId,
+                policy: workflowPolicy,
+                sessionKey: ctx.sessionKey,
+              });
+              return textResponse(JSON.stringify(report, null, 2));
+            }
             case "diagnose_track_evidence": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const diagnosis = await diagnoseTrackEvidence(resolvedProjectRoot);
@@ -2025,35 +2221,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                           "defer_after_budget") === "outbox_only" ||
                         inboundBudget.isExhausted(2500),
                     });
-              const stageHandoff =
-                result.stageChanged && result.ownerAfter
-                  ? await createStageOwnerHandoffIntent({
-                  projectRoot,
-                  projectId: snapshot.projectId,
-                  workflowLine: resolveSnapshotWorkflowLine(snapshot),
-                  stageBefore: result.stageBefore,
-                  stageAfter: result.stageAfter,
-                  ownerBefore: result.ownerBefore,
-                  ownerAfter: result.ownerAfter,
-                  fromSessionKey: ctx.sessionKey,
-                  nextAction: result.nextAction,
-                  blockingReason: result.blockingReason,
-                  missingStageSignals: result.missingStageSignals,
-                  manifestRevision:
-                    readString((snapshot as Record<string, unknown>).manifestUpdatedAt) ??
-                    readString((snapshot as Record<string, unknown>).manifest_updated_at),
-                    })
-                  : null;
               const stageBroadcast =
                 iterator?.broadcastStageChange === false ||
                 iterator?.broadcast_stage_change === false ||
-                inboundBudget.isExhausted(1500)
+                inboundBudget.isExhausted(1500) ||
+                result.pendingHandoff
                   ? {
                       broadcasted: false,
                       reasonSkipped:
                         iterator?.broadcastStageChange === false ||
                         iterator?.broadcast_stage_change === false
                           ? "disabled_by_iterator"
+                          : result.pendingHandoff
+                            ? "handoff_pending"
                           : "inbound_budget_exceeded",
                       runId: null,
                       sessionKey: ctx.sessionKey ?? null,
@@ -2075,7 +2255,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       regressed: result.regressed,
                       recommendedActions: result.recommendedActions,
                       agentTaskDispatch: dispatchResult,
-                      handoffIntentId: stageHandoff?.intent.intentId ?? null,
+                      handoffIntentId:
+                        (dispatchResult as Record<string, unknown> | null)?.handoffIntentId as string | null ??
+                        null,
                     });
               const statusBroadcast =
                 result.timedDefaultTriggered === true && !inboundBudget.isExhausted(1500)

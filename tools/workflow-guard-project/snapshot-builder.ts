@@ -686,7 +686,9 @@ export async function buildWorkflowSnapshotFromProjectState(
     asRecord(projectState.manifest?.external_review_state)
   );
   const reviewIssueLaneCounts = countReviewIssueLanes(reviewIssueTracker.issues);
-  const recommendedOwner = currentStage ? STAGE_REQUIREMENTS[currentStage]?.owner ?? null : null;
+  const recommendedOwner =
+    normalizeWorkflowRole(orchestrationState.pendingOwnerCandidate) ??
+    (currentStage ? STAGE_REQUIREMENTS[currentStage]?.owner ?? null : null);
   const recentExperiments = buildExperimentMemoryDigest(
     projectState.experimentLedger as Parameters<typeof buildExperimentMemoryDigest>[0],
     5
@@ -856,7 +858,8 @@ export async function buildWorkflowSnapshotFromProjectState(
     role,
     currentStage,
     currentMicroStage: normalizeStage(projectState.manifest?.current_micro_stage),
-    ownerAgent: asString(projectState.manifest?.owner_agent),
+    ownerAgent:
+      orchestrationState.currentOwner ?? asString(projectState.manifest?.owner_agent),
     recommendedOwner,
     nextAction: asString(projectState.manifest?.next_action),
     resumeAction: asString(projectState.manifest?.resume_action),

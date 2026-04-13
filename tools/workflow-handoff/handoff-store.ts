@@ -49,11 +49,14 @@ function normalizePriority(value: unknown): WorkflowHandoffIntent["priority"] {
 }
 
 function normalizeStatus(value: unknown): WorkflowHandoffStatus {
-  return value === "queued" ||
+  return value === "prepared" ||
+    value === "queued" ||
     value === "dispatching" ||
+    value === "dispatched" ||
     value === "delivered" ||
     value === "acknowledged" ||
     value === "claimed" ||
+    value === "activated" ||
     value === "completed" ||
     value === "failed" ||
     value === "stale_claim" ||
@@ -195,6 +198,23 @@ function normalizeIntent(value: unknown, projectRoot: string): WorkflowHandoffIn
     failureFingerprint: readString(record.failureFingerprint),
     repairLineageId: readString(record.repairLineageId),
     status: normalizeStatus(record.status),
+    stageBefore: readString(record.stageBefore) ?? readString(record.stage_before),
+    stageAfter:
+      readString(record.stageAfter) ??
+      readString(record.stage_after) ??
+      readString(record.stage),
+    executionId: readString(record.executionId) ?? readString(record.execution_id),
+    sessionBindingKey:
+      readString(record.sessionBindingKey) ?? readString(record.session_binding_key),
+    preferredSessionKeys: (() => {
+      const rawPreferred = record.preferredSessionKeys ?? record.preferred_session_keys;
+      if (!Array.isArray(rawPreferred)) {
+        return [];
+      }
+      return rawPreferred
+        .map(readString)
+        .filter((entry): entry is string => Boolean(entry));
+    })(),
     deliveryPlan: {
       channels: Array.isArray(deliveryPlanRecord?.channels)
         ? deliveryPlanRecord.channels
@@ -216,7 +236,11 @@ function normalizeIntent(value: unknown, projectRoot: string): WorkflowHandoffIn
         readNumber(deliveryPlanRecord?.staleClaimAfterMs) ?? defaultPlan.staleClaimAfterMs,
     },
     deliveryAttempts: normalizeDeliveryAttempts(record.deliveryAttempts),
+    dispatchedAt: readString(record.dispatchedAt) ?? readString(record.dispatched_at),
+    acknowledgedAt:
+      readString(record.acknowledgedAt) ?? readString(record.acknowledged_at),
     claimedAt: readString(record.claimedAt),
+    activatedAt: readString(record.activatedAt) ?? readString(record.activated_at),
     claimLeaseExpiresAt: readString(record.claimLeaseExpiresAt),
     terminalReason: readString(record.terminalReason),
     createdAt: readString(record.createdAt) ?? nowIso(),
@@ -295,6 +319,11 @@ export async function upsertWorkflowHandoffIntent(params: {
   failureFingerprint?: string | null;
   repairLineageId?: string | null;
   status?: WorkflowHandoffStatus;
+  stageBefore?: string | null;
+  stageAfter?: string | null;
+  executionId?: string | null;
+  sessionBindingKey?: string | null;
+  preferredSessionKeys?: string[] | null;
   summary?: string | null;
   command?: string | null;
   blockerSummary?: string | null;
@@ -339,7 +368,16 @@ export async function upsertWorkflowHandoffIntent(params: {
         failureId: readString(params.failureId),
         failureFingerprint: readString(params.failureFingerprint),
         repairLineageId: readString(params.repairLineageId),
-        status: params.status ?? "pending",
+        status: params.status ?? "prepared",
+        stageBefore: readString(params.stageBefore),
+        stageAfter: readString(params.stageAfter) ?? readString(params.stage),
+        executionId: readString(params.executionId),
+        sessionBindingKey: readString(params.sessionBindingKey),
+        preferredSessionKeys: Array.isArray(params.preferredSessionKeys)
+          ? params.preferredSessionKeys
+              .map(readString)
+              .filter((entry): entry is string => Boolean(entry))
+          : [],
         deliveryPlan: {
           ...defaultPlan,
           ...params.deliveryPlan,
@@ -350,7 +388,10 @@ export async function upsertWorkflowHandoffIntent(params: {
           channels: params.deliveryPlan?.channels ?? defaultPlan.channels,
         },
         deliveryAttempts: [],
+        dispatchedAt: null,
+        acknowledgedAt: null,
         claimedAt: null,
+        activatedAt: null,
         claimLeaseExpiresAt: null,
         terminalReason: null,
         createdAt: now.toISOString(),
@@ -426,6 +467,31 @@ export async function transitionWorkflowHandoffIntent(params: {
         ...current,
         ...(params.patch ?? {}),
         status: params.toStatus,
+        acknowledgedAt:
+          params.toStatus === "acknowledged"
+            ? nowIso()
+            : params.toStatus === "claimed" ||
+                params.toStatus === "activated" ||
+                params.toStatus === "completed" ||
+                params.toStatus === "failed" ||
+                params.toStatus === "superseded" ||
+                params.toStatus === "expired" ||
+                params.toStatus === "escalated" ||
+                params.toStatus === "cancelled"
+              ? current.acknowledgedAt
+              : current.acknowledgedAt,
+        dispatchedAt:
+          params.toStatus === "dispatching" || params.toStatus === "dispatched"
+            ? current.dispatchedAt ?? nowIso()
+            : current.dispatchedAt,
+        claimedAt:
+          params.toStatus === "claimed"
+            ? current.claimedAt ?? nowIso()
+            : current.claimedAt,
+        activatedAt:
+          params.toStatus === "activated"
+            ? current.activatedAt ?? nowIso()
+            : current.activatedAt,
         terminalReason:
           isWorkflowHandoffTerminalStatus(params.toStatus)
             ? readString(params.terminalReason) ?? current.terminalReason
@@ -521,4 +587,127 @@ export function countWorkflowHandoffAttemptsByChannel(
 
 export function countWorkflowHandoffAttemptsTotal(intent: WorkflowHandoffIntent): number {
   return intent.deliveryAttempts.length;
+}
+
+export async function findWorkflowHandoffIntent(params: {
+  projectRoot: string;
+  intentId?: string | null;
+  idempotencyKey?: string | null;
+}): Promise<WorkflowHandoffIntent | null> {
+  const store = await readWorkflowHandoffIntentStore(params.projectRoot);
+  return (
+    store.intents.find(
+      (entry) =>
+        (readString(params.intentId) && entry.intentId === params.intentId) ||
+        (readString(params.idempotencyKey) &&
+          entry.idempotencyKey === params.idempotencyKey)
+    ) ?? null
+  );
+}
+
+export async function claimWorkflowHandoffIntent(params: {
+  projectRoot: string;
+  intentId?: string | null;
+  idempotencyKey?: string | null;
+  sessionKey?: string | null;
+  claimLeaseExpiresAt?: string | null;
+}): Promise<WorkflowHandoffIntent | null> {
+  const existing = await findWorkflowHandoffIntent(params);
+  if (!existing) {
+    return null;
+  }
+  const targetStatus =
+    existing.status === "claimed" || existing.status === "activated"
+      ? existing.status
+      : "claimed";
+  return transitionWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId: params.intentId,
+    idempotencyKey: params.idempotencyKey,
+    toStatus: targetStatus,
+    summary:
+      targetStatus === "claimed"
+        ? "Target agent claimed the handoff."
+        : "Handoff was already claimed.",
+    patch: {
+      toSessionKey: readString(params.sessionKey) ?? existing.toSessionKey,
+      claimLeaseExpiresAt:
+        readString(params.claimLeaseExpiresAt) ?? existing.claimLeaseExpiresAt,
+    },
+  });
+}
+
+export async function activateWorkflowHandoffIntent(params: {
+  projectRoot: string;
+  intentId?: string | null;
+  idempotencyKey?: string | null;
+}): Promise<WorkflowHandoffIntent | null> {
+  const existing = await findWorkflowHandoffIntent(params);
+  if (!existing) {
+    return null;
+  }
+  const targetStatus =
+    existing.status === "activated" || existing.status === "completed"
+      ? existing.status
+      : "activated";
+  return transitionWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId: params.intentId,
+    idempotencyKey: params.idempotencyKey,
+    toStatus: targetStatus,
+    summary:
+      targetStatus === "activated"
+        ? "Workflow activated the claimed handoff."
+        : "Handoff was already activated.",
+  });
+}
+
+export async function findRetriableWorkflowHandoffIntents(params: {
+  projectRoot: string;
+  now?: Date;
+}): Promise<WorkflowHandoffIntent[]> {
+  const now = params.now ?? new Date();
+  const nowMs = now.getTime();
+  const store = await readWorkflowHandoffIntentStore(params.projectRoot);
+  return store.intents.filter((intent) => {
+    if (isWorkflowHandoffTerminalStatus(intent.status)) {
+      return false;
+    }
+    if (!["prepared", "queued", "dispatching", "dispatched", "delivered", "acknowledged", "failed", "stale_claim", "pending"].includes(intent.status)) {
+      return false;
+    }
+    if (intent.expiresAt && Number.isFinite(Date.parse(intent.expiresAt)) && Date.parse(intent.expiresAt) <= nowMs) {
+      return false;
+    }
+    if (countWorkflowHandoffAttemptsTotal(intent) >= intent.deliveryPlan.maxAttemptsTotal) {
+      return false;
+    }
+    const lastAttemptAt = intent.deliveryAttempts.at(-1)?.attemptedAt ?? null;
+    const defaultFallbackAfterMs =
+      typeof intent.deliveryPlan.fallbackAfterMs === "number" &&
+      Number.isFinite(intent.deliveryPlan.fallbackAfterMs)
+        ? Math.max(0, Math.floor(intent.deliveryPlan.fallbackAfterMs))
+        : 0;
+    const effectiveBackoffMs =
+      intent.status === "failed" || intent.status === "stale_claim"
+        ? defaultFallbackAfterMs > 0
+          ? Math.min(defaultFallbackAfterMs, 30_000)
+          : 30_000
+        : intent.status === "dispatched" ||
+            intent.status === "delivered" ||
+            intent.status === "acknowledged"
+          ? defaultFallbackAfterMs > 0
+            ? Math.min(defaultFallbackAfterMs, 60_000)
+            : 60_000
+          : defaultFallbackAfterMs;
+    if (
+      lastAttemptAt &&
+      effectiveBackoffMs > 0 &&
+      Number.isFinite(Date.parse(lastAttemptAt)) &&
+      Date.parse(lastAttemptAt) + effectiveBackoffMs > nowMs
+    ) {
+      return false;
+    }
+    return true;
+  });
 }

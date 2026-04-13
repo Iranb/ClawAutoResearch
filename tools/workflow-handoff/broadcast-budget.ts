@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   WORKFLOW_BROADCAST_MAX_INLINE_CHARS,
   WORKFLOW_BROADCAST_MAX_INLINE_FRAGMENT_CHARS,
@@ -29,6 +30,10 @@ function nowIso(): string {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 export function getWorkflowBroadcastPayloadDir(projectRoot: string): string {
@@ -79,9 +84,17 @@ export async function applyWorkflowBroadcastBudget(params: {
   if (shouldMaterialize && projectRoot) {
     const payloadDir = getWorkflowBroadcastPayloadDir(projectRoot);
     await fs.mkdir(payloadDir, { recursive: true });
+    const hash = shortHash(
+      [
+        params.broadcastId,
+        params.idempotencyKey,
+        params.projectId ?? "unknown-project",
+        params.summary,
+      ].join("\n")
+    );
     payloadPath = path.join(
       payloadDir,
-      `${params.broadcastId.replace(/[^a-zA-Z0-9_.-]+/g, "_")}.md`
+      `broadcast-${hash}.md`
     );
     await fs.writeFile(payloadPath, params.message, "utf8");
     postedMessage = [

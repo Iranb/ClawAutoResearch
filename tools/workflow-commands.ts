@@ -28,6 +28,7 @@ import { runCitationCalibration } from "./research-writing/citation-calibration"
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
 import { captureWorkflowDiagnosticBundle } from "./workflow-diagnostic-bundle";
+import { buildHandoffDashboard } from "./workflow-handoff/dashboard.js";
 import {
   buildGraphBuildBackgroundCommand,
   buildLiteratureReviewBackgroundCommand,
@@ -142,6 +143,7 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   stagePapernexusRemoteSources,
   reconcileAuthoringCloseout,
   captureWorkflowDiagnosticBundle,
+  buildHandoffDashboard,
 };
 
 let cachedConversationRuntime:
@@ -346,6 +348,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
   {
     label: COMMAND_LABELS.workflow_status,
     intro: "查看当前阶段、owner、blockers、auto mode 与 runtime health。",
+  },
+  {
+    label: COMMAND_LABELS.handoff_status,
+    intro: "查看 handoff 当前停在哪一步：prepared、dispatched、claimed、activated、queue、mailbox、binding gate。",
   },
   {
     label: COMMAND_LABELS.survey_graph_build,
@@ -1270,6 +1276,42 @@ function createWorkflowStatusCommandHandler(
   };
 }
 
+function createHandoffStatusCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const status = await deps.buildHandoffDashboard({
+        projectRoot: resolved.projectRoot,
+        projectId: resolved.projectId,
+        policy: resolved.workflowPolicy,
+        sessionKey: resolved.target.sessionKey ?? undefined,
+      });
+      const latest = status.intents[0] ?? null;
+      return {
+        text:
+          `Handoff status for ${resolved.projectId}.\n` +
+          `current_owner=${status.currentOwner ?? "none"}, pending_handoff=${status.pendingHandoffId ?? "none"}, pending_owner=${status.pendingOwnerCandidate ?? "none"}, phase=${status.handoffPhase ?? "idle"}\n` +
+          `queue_depth=${status.queueDepth}, active_sessions=${status.activeSessionCount}, pending_mailbox=${status.pendingMailboxCount}\n` +
+          `binding_gate=${status.bindingGate?.allowed === true ? "allowed" : status.bindingGate?.reason ?? "unknown"}\n` +
+          `latest_intent=${latest ? `${latest.intentId} (${latest.status} -> ${latest.toRole})` : "none"}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /handoff-status: ${message}`,
+      };
+    }
+  };
+}
+
 function createShowCommandsCommandHandler() {
   return async () => ({
     text: formatShowCommandsText(),
@@ -1717,6 +1759,13 @@ export function createResearchWorkflowCommands(
         "Show the current workflow snapshot for this bound conversation or workflow session.",
       acceptsArgs: false,
       handler: createWorkflowStatusCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "handoff-status",
+      description:
+        "Show the current handoff control-plane status for this project, including pending intent, queue depth, mailbox backlog, and binding gate state.",
+      acceptsArgs: true,
+      handler: createHandoffStatusCommandHandler(api, resolvedDeps),
     },
     {
       name: "idea-catalyst-search",

@@ -72,8 +72,17 @@ type OrchestrationStateLike = {
   status: string;
   activeTicketId: string | null;
   stageRunId: string | null;
+  currentExecutionId: string | null;
   currentOwner: string | null;
   nextOwner: string | null;
+  pendingHandoffId: string | null;
+  pendingOwnerCandidate: string | null;
+  pendingStageCandidate: string | null;
+  handoffPhase: string | null;
+  ownerClaimedAt: string | null;
+  ownerActivationDeadline: string | null;
+  rollbackTargetOwner: string | null;
+  lastHandoffError: string | null;
   nextTransitionCandidate: string | null;
   blockingCategory: string | null;
   blockingReason: string | null;
@@ -425,8 +434,38 @@ export function normalizeOrchestrationState(
     status: normalizeStage(record.status) ?? "missing",
     activeTicketId: pickString(record, ["activeTicketId", "active_ticket_id"]),
     stageRunId: pickString(record, ["stageRunId", "stage_run_id"]),
+    currentExecutionId: pickString(record, [
+      "currentExecutionId",
+      "current_execution_id",
+    ]),
     currentOwner: pickString(record, ["currentOwner", "current_owner"]),
     nextOwner: pickString(record, ["nextOwner", "next_owner"]),
+    pendingHandoffId: pickString(record, [
+      "pendingHandoffId",
+      "pending_handoff_id",
+    ]),
+    pendingOwnerCandidate: pickString(record, [
+      "pendingOwnerCandidate",
+      "pending_owner_candidate",
+    ]),
+    pendingStageCandidate: pickString(record, [
+      "pendingStageCandidate",
+      "pending_stage_candidate",
+    ]),
+    handoffPhase: pickString(record, ["handoffPhase", "handoff_phase"]),
+    ownerClaimedAt: pickString(record, ["ownerClaimedAt", "owner_claimed_at"]),
+    ownerActivationDeadline: pickString(record, [
+      "ownerActivationDeadline",
+      "owner_activation_deadline",
+    ]),
+    rollbackTargetOwner: pickString(record, [
+      "rollbackTargetOwner",
+      "rollback_target_owner",
+    ]),
+    lastHandoffError: pickString(record, [
+      "lastHandoffError",
+      "last_handoff_error",
+    ]),
     nextTransitionCandidate: pickString(record, [
       "nextTransitionCandidate",
       "next_transition_candidate",
@@ -472,8 +511,17 @@ export function serializeOrchestrationState(
     status: value.status,
     active_ticket_id: value.activeTicketId,
     stage_run_id: value.stageRunId,
+    current_execution_id: value.currentExecutionId,
     current_owner: value.currentOwner,
     next_owner: value.nextOwner,
+    pending_handoff_id: value.pendingHandoffId,
+    pending_owner_candidate: value.pendingOwnerCandidate,
+    pending_stage_candidate: value.pendingStageCandidate,
+    handoff_phase: value.handoffPhase,
+    owner_claimed_at: value.ownerClaimedAt,
+    owner_activation_deadline: value.ownerActivationDeadline,
+    rollback_target_owner: value.rollbackTargetOwner,
+    last_handoff_error: value.lastHandoffError,
     next_transition_candidate: value.nextTransitionCandidate,
     blocking_category: value.blockingCategory,
     blocking_reason: value.blockingReason,

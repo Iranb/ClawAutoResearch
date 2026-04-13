@@ -26,12 +26,15 @@ export type WorkflowHandoffReason =
   | "manual_recovery";
 
 export type WorkflowHandoffStatus =
+  | "prepared"
   | "pending"
   | "queued"
   | "dispatching"
+  | "dispatched"
   | "delivered"
   | "acknowledged"
   | "claimed"
+  | "activated"
   | "completed"
   | "failed"
   | "stale_claim"
@@ -97,9 +100,17 @@ export type WorkflowHandoffIntent = {
   failureFingerprint: string | null;
   repairLineageId: string | null;
   status: WorkflowHandoffStatus;
+  stageBefore: string | null;
+  stageAfter: string | null;
+  executionId: string | null;
+  sessionBindingKey: string | null;
+  preferredSessionKeys: string[];
   deliveryPlan: WorkflowHandoffDeliveryPlan;
   deliveryAttempts: WorkflowHandoffDeliveryAttempt[];
+  dispatchedAt: string | null;
+  acknowledgedAt: string | null;
   claimedAt: string | null;
+  activatedAt: string | null;
   claimLeaseExpiresAt: string | null;
   terminalReason: string | null;
   createdAt: string;
@@ -143,12 +154,15 @@ export const WORKFLOW_HANDOFF_TERMINAL_STATUSES = new Set<WorkflowHandoffStatus>
 ]);
 
 export const WORKFLOW_HANDOFF_ACTIVE_STATUSES = new Set<WorkflowHandoffStatus>([
+  "prepared",
   "pending",
   "queued",
   "dispatching",
+  "dispatched",
   "delivered",
   "acknowledged",
   "claimed",
+  "activated",
   "failed",
   "stale_claim",
 ]);
@@ -157,13 +171,16 @@ export const WORKFLOW_HANDOFF_ALLOWED_TRANSITIONS: Record<
   WorkflowHandoffStatus,
   ReadonlySet<WorkflowHandoffStatus>
 > = {
-  pending: new Set(["queued", "dispatching", "expired", "superseded", "cancelled"]),
-  queued: new Set(["dispatching", "expired", "superseded", "cancelled"]),
-  dispatching: new Set(["delivered", "failed", "queued", "expired", "escalated"]),
-  delivered: new Set(["acknowledged", "failed", "expired", "escalated"]),
-  acknowledged: new Set(["claimed", "completed", "failed", "expired", "escalated"]),
-  claimed: new Set(["completed", "failed", "stale_claim", "expired", "escalated"]),
-  failed: new Set(["queued", "escalated", "superseded"]),
+  prepared: new Set(["pending", "queued", "dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
+  pending: new Set(["prepared", "queued", "dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
+  queued: new Set(["dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
+  dispatching: new Set(["dispatched", "delivered", "claimed", "failed", "queued", "expired", "escalated", "superseded"]),
+  dispatched: new Set(["delivered", "acknowledged", "claimed", "failed", "queued", "expired", "escalated", "superseded"]),
+  delivered: new Set(["acknowledged", "claimed", "failed", "expired", "escalated", "superseded"]),
+  acknowledged: new Set(["claimed", "failed", "expired", "escalated", "superseded"]),
+  claimed: new Set(["activated", "failed", "stale_claim", "expired", "escalated", "superseded"]),
+  activated: new Set(["completed", "failed", "stale_claim", "expired", "escalated", "superseded"]),
+  failed: new Set(["prepared", "queued", "dispatching", "dispatched", "escalated", "superseded"]),
   stale_claim: new Set(["queued", "escalated", "superseded"]),
   completed: new Set(),
   expired: new Set(),

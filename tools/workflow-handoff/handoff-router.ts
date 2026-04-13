@@ -45,6 +45,15 @@ export async function createStageOwnerHandoffIntent(params: {
   ownerBefore?: string | null;
   ownerAfter: string;
   fromSessionKey?: string | null;
+  sessionBindingKey?: string | null;
+  preferredSessionKeys?: string[] | null;
+  executionId?: string | null;
+  summary?: string | null;
+  acceptanceChecks?: string[] | null;
+  resumeAction?: string | null;
+  nextOwner?: string | null;
+  nextTransitionCandidate?: string | null;
+  nextMicroStage?: string | null;
   nextAction?: string | null;
   blockingReason?: string | null;
   missingStageSignals?: string[];
@@ -58,17 +67,33 @@ export async function createStageOwnerHandoffIntent(params: {
     workflowLine: params.workflowLine ?? "experiment",
     idempotencyKey: buildStageOwnerHandoffIdempotencyKey(params),
     stage: readString(params.stageAfter),
+    stageBefore: readString(params.stageBefore),
+    stageAfter: readString(params.stageAfter),
+    executionId: readString(params.executionId),
     fromRole: readString(params.ownerBefore),
     fromSessionKey: params.fromSessionKey,
+    sessionBindingKey: readString(params.sessionBindingKey),
+    preferredSessionKeys: params.preferredSessionKeys ?? null,
     toRole: params.ownerAfter,
     reason: "stage_owner_change",
-    summary: `Workflow owner handoff ${params.ownerBefore ?? "unknown"} -> ${params.ownerAfter}.`,
+    status: "prepared",
+    summary:
+      readString(params.summary) ??
+      `Workflow owner handoff ${params.ownerBefore ?? "unknown"} -> ${params.ownerAfter}.`,
     command: params.nextAction,
     blockerSummary: params.blockingReason,
     payload: {
       stageBefore: params.stageBefore ?? null,
       stageAfter: params.stageAfter ?? null,
+      ownerBefore: params.ownerBefore ?? null,
+      ownerAfter: params.ownerAfter,
       nextAction: params.nextAction ?? null,
+      resumeAction: params.resumeAction ?? null,
+      acceptanceChecks: params.acceptanceChecks ?? [],
+      nextOwner: params.nextOwner ?? null,
+      nextTransitionCandidate: params.nextTransitionCandidate ?? null,
+      nextMicroStage: params.nextMicroStage ?? null,
+      executionId: params.executionId ?? null,
       missingStageSignals: params.missingStageSignals ?? [],
     },
     deliveryPlan: params.deliveryPlan,

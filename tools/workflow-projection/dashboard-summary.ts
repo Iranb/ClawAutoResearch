@@ -124,7 +124,7 @@ export async function readWorkflowDashboardSummary(projectRoot: string): Promise
     },
     handoffRecovery: {
       pendingHandoffCount: handoffStore.intents.filter((entry) =>
-        ["pending", "queued", "dispatching", "delivered", "acknowledged"].includes(
+        ["prepared", "pending", "queued", "dispatching", "dispatched", "delivered", "acknowledged", "claimed", "activated"].includes(
           entry.status
         )
       ).length,
@@ -132,7 +132,7 @@ export async function readWorkflowDashboardSummary(projectRoot: string): Promise
         ["failed", "expired", "escalated"].includes(entry.status)
       ).length,
       unackedHandoffCount: handoffStore.intents.filter(
-        (entry) => entry.status === "delivered"
+        (entry) => ["dispatched", "delivered", "acknowledged"].includes(entry.status)
       ).length,
       repairQueueCount: repairQueue.items.filter((entry) =>
         ["queued", "claimed", "failed", "escalated"].includes(entry.status)

@@ -338,6 +338,7 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
   assert.match(result.text, /\/clear-project-binding/);
+  assert.match(result.text, /\/handoff-status/);
   assert.match(result.text, /\/idea-catalyst-search/);
   assert.match(result.text, /\/citation-calibrate/);
   assert.match(result.text, /\/papernexus-stage-remote/);
@@ -345,6 +346,76 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/capture-diagnostics/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("handoff-status command summarizes the current handoff control-plane state", async () => {
+  const api = makeApi();
+  const command = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async buildWorkflowSnapshot() {
+        return {
+          role: "researcher",
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async buildHandoffDashboard() {
+        return {
+          projectRoot: "/tmp/projects/paper-lab",
+          projectId: "paper-lab",
+          currentOwner: "researcher",
+          pendingHandoffId: "intent-123",
+          pendingOwnerCandidate: "academic_writer",
+          pendingStageCandidate: "write",
+          handoffPhase: "dispatched",
+          bindingGate: { allowed: true, reason: "binding_match" },
+          queueDepth: 1,
+          activeSessionCount: 1,
+          pendingMailboxCount: 0,
+          intents: [
+            {
+              intentId: "intent-123",
+              status: "dispatched",
+              toRole: "academic_writer",
+              stageAfter: "write",
+              executionId: "exec-1",
+              attempts: 1,
+              lastAttemptAt: "2026-04-13T11:00:00.000Z",
+              ackDeadlineAt: "2026-04-13T11:05:00.000Z",
+              claimLeaseExpiresAt: null,
+              terminalReason: null,
+            },
+          ],
+        };
+      },
+    }),
+    "handoff-status"
+  );
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/handoff-status",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text ?? "", /Handoff status for paper-lab/);
+  assert.match(result.text ?? "", /pending_handoff=intent-123/);
+  assert.match(result.text ?? "", /phase=dispatched/);
+  assert.match(result.text ?? "", /latest_intent=intent-123 \(dispatched -> academic_writer\)/);
 });
 
 test("idea-catalyst-search command runs project-bound research30 scouting", async () => {

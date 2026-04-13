@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   asRecord,
   asString,
@@ -851,7 +852,10 @@ export async function runWorkflowAutoIteratorImpl(
         })
       : effectiveMissingSignals;
 
-  const ownerBefore = asString(manifest.owner_agent);
+  const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
+  const ownerBefore =
+    pickString(existingOrchestrationState, ["currentOwner", "current_owner"]) ??
+    asString(manifest.owner_agent);
   const graphContextForActions = deriveWorkflowGraphContext({
     manifest,
     stage: stageAfter,
@@ -1062,15 +1066,49 @@ export async function runWorkflowAutoIteratorImpl(
     };
   }
 
+  const pendingOwnerCandidate =
+    pickString(existingOrchestrationState, [
+      "pendingOwnerCandidate",
+      "pending_owner_candidate",
+    ]) ?? null;
+  const pendingStageCandidate =
+    pickString(existingOrchestrationState, [
+      "pendingStageCandidate",
+      "pending_stage_candidate",
+    ]) ?? null;
+  const existingExecutionId =
+    pickString(existingOrchestrationState, [
+      "currentExecutionId",
+      "current_execution_id",
+    ]) ??
+    pickString(existingOrchestrationState, ["stageRunId", "stage_run_id"]) ??
+    null;
+  const ownerTransitionRequiresClaim =
+    stageReadyForOwnerWork &&
+    Boolean(ownerAfter) &&
+    Boolean(ownerBefore) &&
+    ownerAfter !== ownerBefore;
+  const reusePendingExecutionId =
+    ownerTransitionRequiresClaim &&
+    pendingOwnerCandidate === ownerAfter &&
+    pendingStageCandidate === stageAfter
+      ? existingExecutionId
+      : null;
+  const nextExecutionId =
+    reusePendingExecutionId ??
+    (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
+      ? randomUUID()
+      : existingExecutionId);
   manifest.project_id = projectId;
-  manifest.current_stage = stageAfter;
-  manifest.owner_agent = ownerAfter;
+  manifest.current_stage = ownerTransitionRequiresClaim ? stageBefore : stageAfter;
+  manifest.owner_agent = ownerTransitionRequiresClaim ? ownerBefore : ownerAfter;
   manifest.next_action = nextAction;
   manifest.resume_action = resumeAction;
   manifest.blocking_reason = blockingReason;
   manifest.last_heartbeat_at = now;
-  manifest.current_micro_stage = nextMicroStage;
-  const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
+  manifest.current_micro_stage = ownerTransitionRequiresClaim
+    ? previousMicroStage
+    : nextMicroStage;
   const rollbackReasonCategory =
     experimentRollbackStage != null
       ? normalizeStage(experimentDecisionBeforeAdvance?.decision) === "rollback_to_idea"
@@ -1091,6 +1129,8 @@ export async function runWorkflowAutoIteratorImpl(
     ...existingOrchestrationState,
     status: gateEvaluation.blocking
       ? "blocked"
+      : ownerTransitionRequiresClaim
+        ? "waiting"
       : stageReadyForOwnerWork
         ? "running"
         : "waiting",
@@ -1103,10 +1143,53 @@ export async function runWorkflowAutoIteratorImpl(
               "blockingCategory",
               "blocking_category",
             ]),
-    current_owner: ownerAfter,
-    next_owner:
-      orchestrationNextStage != null ? deps.stageOwner(orchestrationNextStage) : null,
-    next_transition_candidate: orchestrationNextStage,
+    current_owner: ownerTransitionRequiresClaim ? ownerBefore : ownerAfter,
+    next_owner: ownerTransitionRequiresClaim
+      ? ownerAfter
+      : orchestrationNextStage != null
+        ? deps.stageOwner(orchestrationNextStage)
+        : null,
+    pending_handoff_id:
+      ownerTransitionRequiresClaim &&
+      pendingOwnerCandidate === ownerAfter &&
+      pendingStageCandidate === stageAfter
+        ? pickString(existingOrchestrationState, [
+            "pendingHandoffId",
+            "pending_handoff_id",
+          ])
+        : null,
+    pending_owner_candidate: ownerTransitionRequiresClaim ? ownerAfter : null,
+    pending_stage_candidate: ownerTransitionRequiresClaim ? stageAfter : null,
+    handoff_phase: ownerTransitionRequiresClaim ? "prepared" : "idle",
+    current_execution_id: nextExecutionId,
+    owner_claimed_at:
+      ownerTransitionRequiresClaim &&
+      pendingOwnerCandidate === ownerAfter &&
+      pendingStageCandidate === stageAfter
+        ? pickString(existingOrchestrationState, [
+            "ownerClaimedAt",
+            "owner_claimed_at",
+          ])
+        : null,
+    owner_activation_deadline:
+      ownerTransitionRequiresClaim &&
+      pendingOwnerCandidate === ownerAfter &&
+      pendingStageCandidate === stageAfter
+        ? pickString(existingOrchestrationState, [
+            "ownerActivationDeadline",
+            "owner_activation_deadline",
+          ])
+        : null,
+    rollback_target_owner: ownerTransitionRequiresClaim ? ownerBefore : null,
+    last_handoff_error: ownerTransitionRequiresClaim
+      ? null
+      : pickString(existingOrchestrationState, [
+          "lastHandoffError",
+          "last_handoff_error",
+        ]),
+    next_transition_candidate: ownerTransitionRequiresClaim
+      ? stageAfter
+      : orchestrationNextStage,
     blocking_reason: blockingReason,
     rollback_reason_category:
       rollbackReasonCategory ??
@@ -1156,7 +1239,10 @@ export async function runWorkflowAutoIteratorImpl(
       lastUpdatedAt: now,
     });
   }
-  if (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed) {
+  if (
+    !ownerTransitionRequiresClaim &&
+    (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed)
+  ) {
     manifest.last_handoff_at = now;
   }
   await deps.saveManifest(projectRoot, manifest);
@@ -1472,6 +1558,10 @@ export async function runWorkflowAutoIteratorImpl(
     missingStageSignals: dispatchStageSignals,
     ownerBefore,
     ownerAfter,
+    ownerActivated: !ownerTransitionRequiresClaim,
+    pendingHandoff: ownerTransitionRequiresClaim,
+    pendingHandoffPhase: ownerTransitionRequiresClaim ? "prepared" : null,
+    pendingHandoffExecutionId: ownerTransitionRequiresClaim ? nextExecutionId : null,
     nextAction,
     resumeAction,
     blockingReason,

@@ -1121,10 +1121,39 @@ export async function setOrchestrationState(params: {
       current.activeTicketId,
     stageRunId:
       pickString(patch, ["stageRunId", "stage_run_id"]) ?? current.stageRunId,
+    currentExecutionId:
+      pickString(patch, ["currentExecutionId", "current_execution_id"]) ??
+      current.currentExecutionId,
     currentOwner:
       pickString(patch, ["currentOwner", "current_owner"]) ?? current.currentOwner,
     nextOwner:
       pickString(patch, ["nextOwner", "next_owner"]) ?? current.nextOwner,
+    pendingHandoffId:
+      pickString(patch, ["pendingHandoffId", "pending_handoff_id"]) ??
+      current.pendingHandoffId,
+    pendingOwnerCandidate:
+      pickString(patch, ["pendingOwnerCandidate", "pending_owner_candidate"]) ??
+      current.pendingOwnerCandidate,
+    pendingStageCandidate:
+      pickString(patch, ["pendingStageCandidate", "pending_stage_candidate"]) ??
+      current.pendingStageCandidate,
+    handoffPhase:
+      pickString(patch, ["handoffPhase", "handoff_phase"]) ??
+      current.handoffPhase,
+    ownerClaimedAt:
+      pickString(patch, ["ownerClaimedAt", "owner_claimed_at"]) ??
+      current.ownerClaimedAt,
+    ownerActivationDeadline:
+      pickString(patch, [
+        "ownerActivationDeadline",
+        "owner_activation_deadline",
+      ]) ?? current.ownerActivationDeadline,
+    rollbackTargetOwner:
+      pickString(patch, ["rollbackTargetOwner", "rollback_target_owner"]) ??
+      current.rollbackTargetOwner,
+    lastHandoffError:
+      pickString(patch, ["lastHandoffError", "last_handoff_error"]) ??
+      current.lastHandoffError,
     nextTransitionCandidate:
       surveyUnsafeTransition
         ? "survey_review"

@@ -8,6 +8,7 @@ export type WorkflowHandoffMaintenanceResult = {
   expiredIntentIds: string[];
   staleClaimIntentIds: string[];
   ackTimeoutIntentIds: string[];
+  stalledIntentIds: string[];
 };
 
 export async function runWorkflowHandoffMaintenancePass(params: {
@@ -20,6 +21,7 @@ export async function runWorkflowHandoffMaintenancePass(params: {
     expiredIntentIds: [],
     staleClaimIntentIds: [],
     ackTimeoutIntentIds: [],
+    stalledIntentIds: [],
   };
 
   for (const intent of store.intents) {
@@ -41,7 +43,7 @@ export async function runWorkflowHandoffMaintenancePass(params: {
     }
 
     if (
-      intent.status === "delivered" &&
+      ["dispatched", "delivered", "acknowledged"].includes(intent.status) &&
       intent.deliveryPlan.ackDeadlineAt &&
       Date.parse(intent.deliveryPlan.ackDeadlineAt) <= now.getTime()
     ) {
@@ -57,7 +59,7 @@ export async function runWorkflowHandoffMaintenancePass(params: {
         intentId: intent.intentId,
         idempotencyKey: intent.idempotencyKey,
         kind: "handoff_ack_timeout",
-        fromStatus: "delivered",
+        fromStatus: intent.status,
         toStatus: "failed",
         summary: "Handoff delivery was not acknowledged before ack deadline.",
       });
@@ -77,6 +79,37 @@ export async function runWorkflowHandoffMaintenancePass(params: {
         summary: "Handoff claim lease expired without progress evidence.",
       });
       result.staleClaimIntentIds.push(intent.intentId);
+      continue;
+    }
+
+    if (
+      ["prepared", "pending", "queued", "dispatching", "dispatched", "delivered", "acknowledged"].includes(intent.status)
+    ) {
+      const freshness =
+        intent.deliveryAttempts.at(-1)?.attemptedAt ??
+        intent.dispatchedAt ??
+        intent.updatedAt ??
+        intent.createdAt;
+      const freshnessMs = Date.parse(freshness ?? "");
+      if (Number.isFinite(freshnessMs) && now.getTime() - freshnessMs > 15 * 60 * 1000) {
+        await transitionWorkflowHandoffIntent({
+          projectRoot: params.projectRoot,
+          intentId: intent.intentId,
+          toStatus: "failed",
+          summary: "Handoff stall watchdog marked the handoff failed after prolonged inactivity.",
+        });
+        await appendWorkflowHandoffEvent({
+          projectRoot: params.projectRoot,
+          projectId: intent.projectId,
+          intentId: intent.intentId,
+          idempotencyKey: intent.idempotencyKey,
+          kind: "handoff_stall_detected",
+          fromStatus: intent.status,
+          toStatus: "failed",
+          summary: "Handoff stall watchdog detected prolonged inactivity without claim or completion.",
+        });
+        result.stalledIntentIds.push(intent.intentId);
+      }
     }
   }
   return result;

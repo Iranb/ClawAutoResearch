@@ -516,7 +516,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
         readString(entry.requesterSessionKey) ??
         readString(entry.preferredSessionKey),
       allowSessionProjectFallback: true,
-      allowSessionFallbackOnBindingMismatch: true,
+      allowSessionFallbackOnBindingMismatch: false,
     });
     if (!bindingGate.allowed) {
       const error = [

@@ -31,10 +31,22 @@ node --test tests/writer-reviewer-runtime-state.test.mjs tests/workflow-writing-
 如果你在 Discord 里发现流水线卡住，优先直接运行：
 
 ```text
+/handoff-status
+```
+
+如果它显示 handoff 已经停在 `prepared / dispatched / acknowledged` 一类状态，再继续运行：
+
+```text
 /capture-diagnostics --reason discord_pipeline_failure
 ```
 
-它会在当前项目下生成一份 bounded 诊断包，包含 snapshot、runtime health、handoff、queue、mailbox、graph/papernexus 状态和关键日志 tail。
+`/handoff-status` 适合先快速确认：
+
+- 当前真正 owner 是谁
+- `pending_handoff_id` 是不是还挂着
+- queue / mailbox / binding gate 谁在卡
+
+`/capture-diagnostics` 则会在当前项目下生成一份 bounded 诊断包，包含 snapshot、runtime health、handoff、queue、mailbox、graph/papernexus 状态和关键日志 tail。
 
 ### graph 一直不 ready
 

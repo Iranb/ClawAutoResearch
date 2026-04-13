@@ -15,6 +15,7 @@ import {
   readWorkflowAgentCapabilityStore,
   selectWorkflowCapableSession,
 } from "./workflow-handoff/agent-capabilities";
+import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -146,6 +147,13 @@ export function deriveWorkflowDispatchSessionCandidates(params: {
 
 export function buildSpawnFallbackSessionKey(targetRole: DispatchableWorkflowRole): string {
   return `agent:${toAgentId(targetRole)}:subagent:${randomUUID()}`;
+}
+
+function resolveRuntimeSessionStatus(params: {
+  runtimeSessionStatuses: Map<string, string>;
+  sessionKey: string;
+}): string | null {
+  return params.runtimeSessionStatuses.get(params.sessionKey) ?? null;
 }
 
 export function buildWorkflowDispatchMessage(params: {
@@ -516,8 +524,56 @@ export async function dispatchWorkflowTaskToAgent(params: {
           requesterSessionKey: params.requesterSessionKey,
           targetRole: params.toRole,
         });
+  const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot).catch(
+    () => null
+  );
+  const runtimeSessionStatuses = new Map<string, string>(
+    (runtimeSessionsStore?.entries ?? []).map((entry) => [entry.sessionKey, entry.status])
+  );
+  const canonicalMainSessionKey = deriveAgentSessionKeyForRole({
+    requesterSessionKey: params.requesterSessionKey,
+    targetRole: params.toRole,
+  });
 
   for (const [index, sessionKey] of candidates.entries()) {
+    const runtimeStatus = resolveRuntimeSessionStatus({
+      runtimeSessionStatuses,
+      sessionKey,
+    });
+    if (runtimeStatus === "failed" || runtimeStatus === "completed") {
+      attempts.push({
+        strategy: index === 0 ? "direct_session" : "alternate_session",
+        sessionKey,
+        runId: null,
+        waitStatus: null,
+        dispatched: false,
+        acceptedByMailbox: false,
+        acceptedByTranscript: false,
+        error: `session_liveness_probe:${runtimeStatus}`,
+      });
+      continue;
+    }
+    if (
+      index > 0 &&
+      sessionKey !== canonicalMainSessionKey &&
+      runtimeStatus == null &&
+      runtimeSubagent.getSessionMessages
+    ) {
+      const candidateMessageCount = await getMessageCount(runtimeSubagent, sessionKey);
+      if (candidateMessageCount === 0) {
+        attempts.push({
+          strategy: "alternate_session",
+          sessionKey,
+          runId: null,
+          waitStatus: null,
+          dispatched: false,
+          acceptedByMailbox: false,
+          acceptedByTranscript: false,
+          error: "session_liveness_probe:no_messages",
+        });
+        continue;
+      }
+    }
     const attemptResult = await runSingleDispatchAttempt({
       runtimeSubagent,
       sessionKey,

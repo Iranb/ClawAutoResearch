@@ -37,6 +37,7 @@ import { resolveBindingChannelKeyFromContext } from "./workflow-commands/parsers
 import { ensureProjectsBindingIndex } from "./channel-project-bindings";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { autoAcknowledgeWorkflowMailboxForAgent } from "./workflow-handoff-runtime";
+import { claimAndActivateWorkflowHandoffForAgent } from "./workflow-handoff/handoff-activation";
 import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
 import { isLiteratureDiscoveryTriggerKind } from "./literature-discovery/workflow-bridge";
 import {
@@ -630,11 +631,12 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         hookName: "before_prompt_build",
         agentCtx,
         task: async () => {
-          const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
+          const { workflowPolicy, snapshot: initialSnapshot } = await resolveWorkflowSnapshotForAgentContext({
             plugin,
             agentCtx,
             autoBind: false,
           });
+          let snapshot = initialSnapshot;
           if (
             workflowPolicy.enableChannelProjectBindings &&
             workflowPolicy.projectsRoot
@@ -664,6 +666,22 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               agentId: snapshot.role,
               handoffOnly: true,
             });
+            const claimedHandoff = await claimAndActivateWorkflowHandoffForAgent({
+              projectRoot: snapshot.projectRoot,
+              role: snapshot.role,
+              sessionKey: agentCtx.sessionKey,
+              claimLeaseMs: 15 * 60 * 1000,
+            }).catch(() => null);
+            if (claimedHandoff?.claimed) {
+              const refreshed = await resolveWorkflowSnapshotForAgentContext({
+                plugin,
+                agentCtx,
+                autoBind: false,
+              }).catch(() => null);
+              if (refreshed?.snapshot) {
+                snapshot = refreshed.snapshot;
+              }
+            }
           }
           const trigger = readString(hookCtx.trigger);
           let heartbeatClaimedTaskId: string | null = null;

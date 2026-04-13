@@ -15,6 +15,7 @@
 | `/research-queue` | 多项目排队推进 | 同时管理多个研究项目 |
 | `/resume-pipeline` | 从 durable state 恢复 | 会话重启、上下文丢失、换频道 |
 | `/workflow-status` | 查看阶段、blocking reason、auto discussion | 排障与人工诊断 |
+| `/handoff-status` | 查看 handoff control plane 状态 | owner 似乎切了但没人接手、queue/mailbox/binding gate 诊断 |
 | `/show-commands` | 列出可用 slash commands 与简介 | 刚接触系统，或不确定该用哪个入口 |
 | `/citation-calibrate` | 对当前项目运行 citation calibration | submit 前刷新引用真实性校验 |
 | `/authoring-closeout` | 对当前项目执行 deterministic closeout | 稿件已生成，但 workflow 状态或 QC 还没收口 |

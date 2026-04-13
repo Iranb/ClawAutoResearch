@@ -41,6 +41,16 @@
 - `/workflow-status`  
   当前 workflow 快照入口。除了 stage / owner / gate，也会显示 PaperNexus 的 graph refresh 与 paper ingestion 摘要；看到 `graph refresh required` 时，要结合 `PaperNexus ingestion` 一行判断是“真的缺论文”还是“wrapper 驱动的导入/重算仍在进行中”。
 
+- `/handoff-status`
+  当前项目的 handoff control plane 诊断入口。适合在“manifest 看起来已经切 owner 了，但下一个 agent 没真正跑起来”时使用。它会汇总：
+  - 当前真正 owner
+  - `pending_handoff_id`
+  - `pending_owner_candidate`
+  - 当前 handoff phase
+  - queue 深度 / active session 数 / mailbox backlog
+  - binding gate 当前判定
+  - 最新 handoff intent 的状态摘要
+
 - `/idea-catalyst-search`
   对当前项目运行 workflow-owned IDEA-CATALYST 跨域检索。它会读取现有 `SCOUTING_REPORT.json` / `INVESTIGATION_REQUISITION.json` 中的 query，通过 research30 的多源检索补强 source-domain evidence，并把结果回写到 `RESEARCH30_SCOUT_REPORT.{json,md}` 与 `SCOUTING_REPORT.json.research30_validation`。可选参数：
   - `--quick`

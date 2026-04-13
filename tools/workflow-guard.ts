@@ -2062,6 +2062,10 @@ export type AutoIteratorResult = {
   missingStageSignals: string[];
   ownerBefore: string | null;
   ownerAfter: WorkflowRole | null;
+  ownerActivated: boolean;
+  pendingHandoff: boolean;
+  pendingHandoffPhase: string | null;
+  pendingHandoffExecutionId: string | null;
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;

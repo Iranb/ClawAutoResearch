@@ -51,6 +51,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function computeAckDeadlineAt(intent: WorkflowHandoffIntent): string | null {
+  if (
+    typeof intent.deliveryPlan.fallbackAfterMs === "number" &&
+    Number.isFinite(intent.deliveryPlan.fallbackAfterMs) &&
+    intent.deliveryPlan.fallbackAfterMs > 0
+  ) {
+    return new Date(Date.now() + Math.floor(intent.deliveryPlan.fallbackAfterMs)).toISOString();
+  }
+  return intent.deliveryPlan.ackDeadlineAt ?? null;
+}
+
 function hasChannelBudget(
   intent: WorkflowHandoffIntent,
   channel: WorkflowHandoffDeliveryChannel
@@ -131,7 +142,14 @@ export async function deliverWorkflowHandoffIntent(params: {
     (await transitionWorkflowHandoffIntent({
       projectRoot: intent.projectRoot,
       intentId: intent.intentId,
-      toStatus: intent.status === "pending" || intent.status === "queued" ? "dispatching" : intent.status,
+      toStatus:
+        intent.status === "prepared" ||
+        intent.status === "pending" ||
+        intent.status === "queued" ||
+        intent.status === "failed" ||
+        intent.status === "stale_claim"
+          ? "dispatching"
+          : intent.status,
       summary: "Starting handoff delivery.",
     })) ?? intent;
   intent = dispatching;
@@ -187,8 +205,14 @@ export async function deliverWorkflowHandoffIntent(params: {
             (await transitionWorkflowHandoffIntent({
               projectRoot: intent.projectRoot,
               intentId: intent.intentId,
-              toStatus: intent.deliveryPlan.requireAck ? "delivered" : "completed",
-              patch: { toSessionKey: result.sessionKey ?? intent.toSessionKey },
+              toStatus: intent.deliveryPlan.requireAck ? "dispatched" : "dispatched",
+              patch: {
+                toSessionKey: result.sessionKey ?? intent.toSessionKey,
+                deliveryPlan: {
+                  ...intent.deliveryPlan,
+                  ackDeadlineAt: computeAckDeadlineAt(intent),
+                },
+              },
             })) ?? intent;
           return { delivered: true, intent: delivered, terminal: false, reason: null };
         }
@@ -216,8 +240,14 @@ export async function deliverWorkflowHandoffIntent(params: {
             (await transitionWorkflowHandoffIntent({
               projectRoot: intent.projectRoot,
               intentId: intent.intentId,
-              toStatus: intent.deliveryPlan.requireAck ? "delivered" : "completed",
-              patch: { toSessionKey: result.sessionKey ?? intent.toSessionKey },
+              toStatus: "dispatched",
+              patch: {
+                toSessionKey: result.sessionKey ?? intent.toSessionKey,
+                deliveryPlan: {
+                  ...intent.deliveryPlan,
+                  ackDeadlineAt: computeAckDeadlineAt(intent),
+                },
+              },
             })) ?? intent;
           return { delivered: true, intent: delivered, terminal: false, reason: null };
         }
@@ -244,7 +274,13 @@ export async function deliverWorkflowHandoffIntent(params: {
             (await transitionWorkflowHandoffIntent({
               projectRoot: intent.projectRoot,
               intentId: intent.intentId,
-              toStatus: "delivered",
+              toStatus: "dispatched",
+              patch: {
+                deliveryPlan: {
+                  ...intent.deliveryPlan,
+                  ackDeadlineAt: computeAckDeadlineAt(intent),
+                },
+              },
             })) ?? intent;
           return { delivered: true, intent: delivered, terminal: false, reason: null };
         }
@@ -272,6 +308,12 @@ export async function deliverWorkflowHandoffIntent(params: {
               projectRoot: intent.projectRoot,
               intentId: intent.intentId,
               toStatus: "queued",
+              patch: {
+                deliveryPlan: {
+                  ...intent.deliveryPlan,
+                  ackDeadlineAt: computeAckDeadlineAt(intent),
+                },
+              },
             })) ?? intent;
           return { delivered: true, intent: delivered, terminal: false, reason: null };
         }
@@ -298,7 +340,13 @@ export async function deliverWorkflowHandoffIntent(params: {
             (await transitionWorkflowHandoffIntent({
               projectRoot: intent.projectRoot,
               intentId: intent.intentId,
-              toStatus: "delivered",
+              toStatus: "dispatched",
+              patch: {
+                deliveryPlan: {
+                  ...intent.deliveryPlan,
+                  ackDeadlineAt: computeAckDeadlineAt(intent),
+                },
+              },
             })) ?? intent;
           return { delivered: true, intent: delivered, terminal: false, reason: null };
         }
