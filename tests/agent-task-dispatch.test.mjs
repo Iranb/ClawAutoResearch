@@ -35,6 +35,15 @@ test("deriveWorkflowDispatchSessionCandidates falls back from thread to parent s
   ]);
 });
 
+test("deriveAgentSessionKeyForRole strips workflow subagent lineage before swapping roles", () => {
+  const sessionKey = deriveAgentSessionKeyForRole({
+    requesterSessionKey:
+      "agent:researcher:discord:channel:1493115797856452619:subagent:workflow-survey-review:survey-generalized-category-discovery:generalized-category-discovery",
+    targetRole: "academic_writer",
+  });
+  assert.equal(sessionKey, "agent:academic_writer:discord:channel:1493115797856452619");
+});
+
 test("buildWorkflowDispatchMessage includes project and mailbox context", () => {
   const message = buildWorkflowDispatchMessage({
     projectRoot: "/tmp/demo-project",

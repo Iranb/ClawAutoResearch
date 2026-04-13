@@ -3,6 +3,7 @@ import {
   buildWorkflowSubagentSessionKey,
   derivePapernexusTaskLabel,
   looksLikePapernexusHeavyCommand,
+  normalizeWorkflowSubagentParentSessionKey,
 } from "./workflow-subagent-sessions";
 import {
   ensureWorkflowDispatchMailboxMessage,
@@ -82,7 +83,9 @@ export function deriveAgentSessionKeyForRole(params: {
   requesterSessionKey?: string;
   targetRole: DispatchableWorkflowRole;
 }): string {
-  const requesterSessionKey = params.requesterSessionKey?.trim();
+  const requesterSessionKey =
+    normalizeWorkflowSubagentParentSessionKey(params.requesterSessionKey) ??
+    params.requesterSessionKey?.trim();
   const targetAgentId = toAgentId(params.targetRole);
   if (requesterSessionKey?.startsWith("agent:")) {
     const parts = requesterSessionKey.split(":");
@@ -134,7 +137,10 @@ export function deriveWorkflowDispatchSessionCandidates(params: {
   targetRole: DispatchableWorkflowRole;
 }): string[] {
   const primary = deriveAgentSessionKeyForRole(params);
-  const parentSessionKey = stripThreadSuffix(params.requesterSessionKey);
+  const requesterBase =
+    normalizeWorkflowSubagentParentSessionKey(params.requesterSessionKey) ??
+    params.requesterSessionKey;
+  const parentSessionKey = stripThreadSuffix(requesterBase);
   const parentCandidate = parentSessionKey
     ? deriveAgentSessionKeyForRole({
         requesterSessionKey: parentSessionKey,

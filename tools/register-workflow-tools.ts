@@ -264,8 +264,43 @@ function resolveSnapshotWorkflowLine(
   const paperMode =
     readString(record.paperMode) ??
     readString(record.paper_mode) ??
-    readString((record.writingContract as Record<string, unknown> | undefined)?.paper_mode);
-  return workflowLine === "survey" || paperMode === "survey" ? "survey" : "experiment";
+    readString((record.writingContract as Record<string, unknown> | undefined)?.paper_mode) ??
+    readString(record.writingPaperMode) ??
+    readString(record.writing_paper_mode) ??
+    readString(record.surveyReviewMode) ??
+    readString(record.survey_review_mode);
+  const currentStage =
+    readString(record.currentStage) ?? readString(record.current_stage);
+  return workflowLine === "survey" ||
+    paperMode === "survey" ||
+    currentStage === "survey_review"
+    ? "survey"
+    : "experiment";
+}
+
+function resolveWorkflowLineFromManifestRecord(
+  manifest: Record<string, unknown> | null | undefined
+): "experiment" | "survey" {
+  const workflowLine =
+    readString(manifest?.workflow_line) ?? readString(manifest?.workflowLine);
+  const paperType =
+    readString(manifest?.paper_type) ?? readString(manifest?.paperType);
+  const writingContract =
+    asObject(manifest?.writing_contract) ?? asObject(manifest?.writingContract);
+  const paperMode =
+    readString(writingContract?.paper_mode) ?? readString(writingContract?.paperMode);
+  const currentStage =
+    readString(manifest?.current_stage) ?? readString(manifest?.currentStage);
+  if (
+    workflowLine === "survey" ||
+    paperType === "survey" ||
+    paperMode === "survey" ||
+    currentStage === "survey_review" ||
+    asObject(manifest?.survey_review) != null
+  ) {
+    return "survey";
+  }
+  return "experiment";
 }
 
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
@@ -4446,6 +4481,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               if (!actorRole) {
                 throw new Error("Current workflow role is required to prepare a stage handoff.");
               }
+              const currentManifest =
+                (await readJsonIfExists<Record<string, unknown>>(
+                  path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json")
+                )) ?? null;
               const handoffPatch = asObject(params.handoff) ?? {};
               const explicitToRole = inferTargetRoleFromToolParams({
                 agentId:
@@ -4489,7 +4528,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   ? "survey"
                   : readString(handoffPatch.workflowLine) === "experiment"
                     ? "experiment"
-                    : resolveSnapshotWorkflowLine(snapshot);
+                    : resolveWorkflowLineFromManifestRecord(currentManifest) ??
+                      resolveSnapshotWorkflowLine(snapshot);
               const summary =
                 readString(handoffPatch.summary) ??
                 autoIteratorResult?.recommendedActions.find(

@@ -185,4 +185,5 @@ test("prepare_stage_handoff creates a real prepared handoff intent without switc
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents.length, 1);
   assert.equal(store.intents[0].status, "prepared");
+  assert.equal(store.intents[0].workflowLine, "survey");
 });
