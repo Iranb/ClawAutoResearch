@@ -352,6 +352,55 @@ test("binding updates append a queryable audit trail under the project and proje
   assert.equal(projectAudit[1].previousProjectRoot, projectRoot);
 });
 
+test("explicit discord binding also persists a direct session-key alias for background continuations", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "alias-track");
+  const explicitChannelKey = "binding:discord:researcher:channel:1493115773701329030";
+  const sessionKey = "agent:researcher:discord:channel:1493115773701329030";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    channelKey: explicitChannelKey,
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const store = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "channel-project-bindings.json"),
+      "utf8"
+    )
+  );
+  const keys = store.bindings.map((entry) => entry.channelKey).sort();
+  assert.deepEqual(keys, [
+    "binding:discord:researcher:channel:1493115773701329030",
+    "discord:channel:1493115773701329030",
+  ]);
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey:
+      "agent:researcher:discord:channel:1493115773701329030:subagent:workflow-research-pipeline:alias-track",
+    messageChannel: "discord",
+  });
+  assert.equal(lookup.binding?.projectRoot, projectRoot);
+});
+
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");

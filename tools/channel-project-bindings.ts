@@ -1244,7 +1244,14 @@ export async function setChannelProjectBinding(params: {
   const storePath = resolveChannelProjectBindingsPath({ policy, context });
   const store = readStore(storePath);
   const now = new Date().toISOString();
-  const existing = store.bindings.find((entry) => entry.channelKey === channelKey) ?? null;
+  const aliasKeys = uniqueBindingKeys([
+    channelKey,
+    sessionKeyToChannelKey(asString(context.sessionKey)),
+  ]).filter(
+    (key) => key === channelKey || !isWeakWorkflowBindingChannelKey(key)
+  );
+  const existing =
+    store.bindings.find((entry) => aliasKeys.includes(entry.channelKey)) ?? null;
   const workflowIsolationMode =
     existing?.workflowIsolationMode ?? normalizeWorkflowIsolationMode(null);
   const workflowAllowedRoles =
@@ -1295,7 +1302,7 @@ export async function setChannelProjectBinding(params: {
   const workflowBindingMode = actorMayOwnWorkflowBinding
     ? runtimeSession.bindingMode
     : existing?.workflowBindingMode ?? "channel_only";
-  const binding: ChannelProjectBindingRecord = {
+  const baseBinding: ChannelProjectBindingRecord = {
     channelKey,
     projectRoot,
     projectId: asString(params.projectId) ?? path.basename(projectRoot),
@@ -1326,9 +1333,13 @@ export async function setChannelProjectBinding(params: {
       ? runtimeSession.sessionKey
       : resolveWorkflowBroadcastSessionKey(existing),
   };
+  const nextBindings = aliasKeys.map<ChannelProjectBindingRecord>((key) => ({
+    ...baseBinding,
+    channelKey: key,
+  }));
   store.bindings = [
-    ...store.bindings.filter((entry) => entry.channelKey !== channelKey),
-    binding,
+    ...store.bindings.filter((entry) => !aliasKeys.includes(entry.channelKey)),
+    ...nextBindings,
   ].sort((left, right) => left.channelKey.localeCompare(right.channelKey));
   await saveStore(storePath, store);
   if (projectsRoot) {
@@ -1349,16 +1360,16 @@ export async function setChannelProjectBinding(params: {
         recordedAt: now,
         channelKey,
         projectRoot,
-        projectId: binding.projectId,
+        projectId: baseBinding.projectId,
         previousProjectRoot: existing?.projectRoot ?? null,
         previousProjectId: existing?.projectId ?? null,
-        messageChannel: binding.messageChannel,
-        sessionKey: binding.sessionKeySample,
-        sessionId: binding.sessionId,
-        workflowSessionKey: binding.workflowSessionKey,
-        workflowRole: binding.workflowRole,
-        actor: binding.boundByAgent,
-        notes: binding.notes,
+        messageChannel: baseBinding.messageChannel,
+        sessionKey: baseBinding.sessionKeySample,
+        sessionId: baseBinding.sessionId,
+        workflowSessionKey: baseBinding.workflowSessionKey,
+        workflowRole: baseBinding.workflowRole,
+        actor: baseBinding.boundByAgent,
+        notes: baseBinding.notes,
         storePath,
       },
     ],
@@ -1366,7 +1377,7 @@ export async function setChannelProjectBinding(params: {
   return {
     enabled: true,
     storePath,
-    binding,
+    binding: baseBinding,
   };
 }
 
