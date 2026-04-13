@@ -339,6 +339,87 @@ test("materializeSurveyReviewState understands modern survey packet field names 
   assert.equal(result.state.coverageStatus, "ready");
 });
 
+test("materializeSurveyReviewState uses the representative-method and benchmark tables instead of the first protocol table", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    queryRounds: [{ round: 1 }, { round: 2 }, { round: 3 }],
+    totalCount: 14,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH),
+    "# Review Protocol\n\nDataset / benchmark / metric alignment is explicit.\n"
+  );
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    includedPapers: Array.from({ length: 14 }, (_, index) => ({ id: `p${index + 1}` })),
+    totalCount: 14,
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    excludedPapers: [],
+    backgroundPapers: [{ id: "b1" }, { id: "b2" }],
+    totalCount: 2,
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Contrastive + clustering\n- Alignment\n- Robustness\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "## Evaluation Protocol",
+      "| Dimension | Details |",
+      "|-----------|---------|",
+      "| Backbones | ResNet / DINO / CLIP |",
+      "| Datasets | CIFAR / CUB / Cars |",
+      "| Metrics | Accuracy / H-score |",
+      "| Setting | Known + novel |",
+      "",
+      "## Quantitative Comparison by Method Family",
+      "| Method | Backbone | Improvement | Notes |",
+      "|--------|----------|-------------|-------|",
+      "| SimGCD | ResNet-50 | baseline | baseline |",
+      "| TAN | ResNet-50 | — | alignment |",
+      "| FREE | ResNet-50 | robust | domain shift |",
+      "| MOS | — | +9% | attention |",
+      "| TextGCD | CLIP | +9.9% | multi-modal |",
+      "| SDC | ResNet-50 | +2.64% | calibration |",
+      "",
+      "## Benchmark & Dataset Alignment Table",
+      "| Benchmark | Dataset | Classes | Type | Key Methods Evaluated | Primary Metric |",
+      "|-----------|---------|---------|------|----------------------|----------------|",
+      "| SSB Part 1 | CUB | 200 | Fine-grained | SimGCD, MOS, SDC | All/Old/New/H-score |",
+      "| SSB Part 2 | Cars | 196 | Fine-grained | SimGCD, AF, GET | All/Old/New/H-score |",
+      "| Standard | CIFAR-100 | 100 | Coarse | SimGCD, TextGCD | All/Old/New/H-score |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- Better benchmark alignment\n- Shortcut learning robustness\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Search coverage spans core venues.\n- Scope boundaries are explicit.\n- Blind spots are recorded.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Contrastive + clustering\n- Alignment\n- Robustness\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-table-selection",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.representativeMethodsStatus, "ready");
+  assert.equal(result.state.benchmarkAlignmentStatus, "aligned");
+});
+
 test("completed survey review can advance into write stage", async (t) => {
   const projectRoot = await makeSurveyProjectRoot();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

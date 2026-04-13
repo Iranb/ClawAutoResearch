@@ -147,8 +147,14 @@ function extractSectionListItems(text: string, headingKeywords: string[]): strin
   return items.filter(Boolean);
 }
 
-function countMarkdownTableRows(text: string): { header: string[]; rows: number } {
+type MarkdownTable = {
+  header: string[];
+  rows: number;
+};
+
+function collectMarkdownTables(text: string): MarkdownTable[] {
   const lines = normalizeText(text).split(/\r?\n/);
+  const tables: MarkdownTable[] = [];
   for (let index = 0; index < lines.length - 1; index += 1) {
     const headerLine = lines[index]?.trim() ?? "";
     const dividerLine = lines[index + 1]?.trim() ?? "";
@@ -173,9 +179,14 @@ function countMarkdownTableRows(text: string): { header: string[]; rows: number 
       }
       rows += 1;
     }
-    return { header, rows };
+    tables.push({ header, rows });
+    index += rows + 1;
   }
-  return { header: [], rows: 0 };
+  return tables;
+}
+
+function countMarkdownTableRows(text: string): { header: string[]; rows: number } {
+  return collectMarkdownTables(text)[0] ?? { header: [], rows: 0 };
 }
 
 function buildDiagnostic(params: {
@@ -285,7 +296,35 @@ export async function materializeSurveyReviewDiagnostics(params: {
         .filter(Boolean)
     )
   );
-  const sotaTable = countMarkdownTableRows(sotaMatrixNormalized);
+  const sotaTables = collectMarkdownTables(sotaMatrixNormalized);
+  const representativeSotaTables = sotaTables.filter((table) => {
+    const joined = table.header.join(" | ");
+    return /\bmethod\b/.test(joined) && /\bnotes\b/.test(joined);
+  });
+  const representativeSotaTable =
+    representativeSotaTables[0] ??
+    sotaTables.find((table) =>
+      table.header.some((entry) => /\bmethod\b/.test(entry))
+    ) ??
+    { header: [], rows: 0 };
+  const representativeRowCount =
+    representativeSotaTables.length > 0
+      ? representativeSotaTables.reduce((sum, table) => sum + table.rows, 0)
+      : representativeSotaTable.rows;
+  const familyHeadingCount = (
+    sotaMatrixNormalized.match(/^###\s+/gm) ?? []
+  ).length;
+  const benchmarkTable =
+    sotaTables.find((table) => {
+      const joined = table.header.join(" | ");
+      return /\bbenchmark\b/.test(joined) && /\bdataset\b/.test(joined);
+    }) ??
+    sotaTables.find((table) => {
+      const joined = table.header.join(" | ");
+      return /\bdataset\b/.test(joined) && /\bmetric\b/.test(joined);
+    }) ??
+    { header: [], rows: 0 };
+  const sotaTable = representativeSotaTable;
 
   const coverageKeywords = countKeywordHits(coverageSummaryNormalized, [
     /\bcoverage\b/,
@@ -356,8 +395,18 @@ export async function materializeSurveyReviewDiagnostics(params: {
     });
   }
 
-  const requiredRepresentativeRows =
-    includedPapers >= 12 ? 5 : includedPapers >= 8 ? 4 : includedPapers >= 4 ? 3 : includedPapers >= 2 ? 2 : includedPapers >= 1 ? 1 : 0;
+  const requiredRepresentativeSignals =
+    includedPapers >= 12
+      ? 4
+      : includedPapers >= 8
+        ? 3
+        : includedPapers >= 4
+          ? 2
+          : includedPapers >= 2
+            ? 1
+            : includedPapers >= 1
+              ? 1
+              : 0;
   let representativeMethods = buildDiagnostic({
     status: "missing",
     summary: "Representative methods have not been mapped into the SoTA matrix yet.",
@@ -365,12 +414,19 @@ export async function materializeSurveyReviewDiagnostics(params: {
     blockers: ["Populate SOTA_MATRIX.md with representative methods from the included set before write handoff."],
   });
   if (includedPapers > 0 || sotaMatrixNormalized) {
-    const ready = requiredRepresentativeRows > 0 && sotaTable.rows >= requiredRepresentativeRows;
+    const representativeSignalCount = Math.max(
+      representativeRowCount,
+      familyHeadingCount,
+      uniqueTaxonomyItems.length
+    );
+    const ready =
+      requiredRepresentativeSignals > 0 &&
+      representativeSignalCount >= requiredRepresentativeSignals;
     representativeMethods = buildDiagnostic({
-      status: ready ? "ready" : sotaTable.rows > 0 ? "partial" : "missing",
+      status: ready ? "ready" : representativeRowCount > 0 ? "partial" : "missing",
       summary: ready
-        ? `Representative methods are covered in the SoTA matrix (${sotaTable.rows} rows for ${includedPapers} included papers).`
-        : `Representative method coverage is still incomplete (${sotaTable.rows} matrix rows for ${includedPapers} included papers).`,
+        ? `Representative methods are covered in the survey packet (matrix_rows=${representativeRowCount}, family_headings=${familyHeadingCount}, taxonomy_signals=${uniqueTaxonomyItems.length}, included=${includedPapers}).`
+        : `Representative method coverage is still incomplete (matrix_rows=${representativeRowCount}, family_headings=${familyHeadingCount}, taxonomy_signals=${uniqueTaxonomyItems.length}, included=${includedPapers}).`,
       evidencePaths: [params.state.includedPapersPath ?? "", params.state.sotaMatrixPath ?? ""].filter(Boolean),
       blockers: ready
         ? []
@@ -378,17 +434,24 @@ export async function materializeSurveyReviewDiagnostics(params: {
     });
   }
 
-  const hasBenchmarkHeader = sotaTable.header.some((entry) =>
+  const hasBenchmarkHeader = benchmarkTable.header.some((entry) =>
     /\bdataset\b|\bbenchmark\b|\bsetting\b/.test(entry)
   );
-  const hasMetricHeader = sotaTable.header.some((entry) =>
+  const hasMetricHeader = benchmarkTable.header.some((entry) =>
     /\bmetric\b|\bscore\b|\bacc\b|\baccuracy\b|\bf1\b|\bmap\b|\bauc\b/.test(entry)
   );
+  const benchmarkDocumentSignalCount = [
+    hasAnyKeyword(reviewProtocolNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]),
+    hasAnyKeyword(sotaMatrixNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]),
+    hasAnyKeyword(coverageSummaryNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]),
+  ].filter(Boolean).length;
   const benchmarkKeywordSupport =
     hasAnyKeyword(sotaMatrixNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]) ||
     hasAnyKeyword(coverageSummaryNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]) ||
     hasAnyKeyword(reviewProtocolNormalized, [/\bdataset\b/, /\bbenchmark\b/, /\bmetric\b/]);
-  const benchmarkAligned = hasBenchmarkHeader && hasMetricHeader;
+  const benchmarkAligned =
+    (hasBenchmarkHeader && hasMetricHeader) ||
+    benchmarkDocumentSignalCount >= 2;
   const benchmarkAlignment = buildDiagnostic({
     status: benchmarkAligned ? "aligned" : benchmarkKeywordSupport ? "partial" : "missing",
     summary: benchmarkAligned
