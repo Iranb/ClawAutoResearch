@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts) 从超大单文件演进成可按 stage、state、materializer、guidance 理解和维护的模块体系。
+**Goal:** 把 `tools/workflow-guard.ts` 从超大单文件演进成可按 stage、state、materializer、guidance 理解和维护的模块体系。
 
 **Architecture:** 保留 `workflow-guard.ts` 作为 facade，不做一次性重写；优先固化 `workflow-guard-stages/`，随后按 `core -> state -> materializer -> guidance` 顺序迁移实现。所有现有对外调用和测试语义保持兼容。
 
@@ -12,7 +12,7 @@
 
 ## 备注
 
-- [`tools/workflow-commands/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands/) 与旧的 `workflow-guard-modules/` 都是 Claude Ops 协助拆分时留下的目录。
+- `tools/workflow-commands/` 与旧的 `workflow-guard-modules/` 都是 Claude Ops 协助拆分时留下的目录。
 - `workflow-commands/` 已可作为正式拆分参考。
 - `workflow-guard-modules/` 已在当前轮次清理，不再作为正式目录保留。
 - 2026-04-02 进度快照：
@@ -32,11 +32,11 @@
 ## Task 1: 固化 stage 拆分边界
 
 **Files:**
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
-- Modify/Create: [`tools/workflow-guard-stages/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/)
-- Test: [`tests/auto-iterator.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/auto-iterator.test.mjs)
-- Test: [`tests/workflow-commands.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-commands.test.mjs)
-- Test: [`tests/workflow-runtime-tools.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-runtime-tools.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Modify/Create: `tools/workflow-guard-stages/`
+- Test: `tests/auto-iterator.test.mjs`
+- Test: `tests/workflow-commands.test.mjs`
+- Test: `tests/workflow-runtime-tools.test.mjs`
 
 - [x] 确认 `getMissingStageSignals(...)` 所有 stage case 已完全外迁到 `workflow-guard-stages/`
 - [x] 如果还有残余 stage-specific 逻辑，继续迁出
@@ -56,7 +56,7 @@ Expected:
 - Create: `tools/workflow-guard-core/coercion.ts`
 - Create: `tools/workflow-guard-core/fs.ts`
 - Create: `tools/workflow-guard-core/paths.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+- Modify: `tools/workflow-guard.ts`
 
 - [x] 迁移 `pickString` / `pickNumber` / `pickBoolean`
 - [x] 迁移 `asRecord` / `asString` / `asStringArray`
@@ -81,8 +81,8 @@ Expected:
 - Create: `tools/workflow-guard-state/review-pressure.ts`
 - Create: `tools/workflow-guard-state/paper-ingestion.ts`
 - Create: `tools/workflow-guard-state/writing-contract.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
-- Test: [`tests/workflow-runtime-tools.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-runtime-tools.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Test: `tests/workflow-runtime-tools.test.mjs`
 
 - [x] 把 normalize / serialize / validation helper 按合同迁移
 - [x] 先迁最常用的六类 contract
@@ -101,8 +101,8 @@ Expected:
 - Create: `tools/workflow-guard-materializers/ideation-contract-materializer.ts`
 - Create: `tools/workflow-guard-materializers/paper-story-materializer.ts`
 - Create: `tools/workflow-guard-materializers/review-pressure-materializer.ts`
-- Modify: [`tools/register-workflow-tools.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/register-workflow-tools.ts)
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+- Modify: `tools/register-workflow-tools.ts`
+- Modify: `tools/workflow-guard.ts`
 
 - [x] 抽出 `materializeIdeationContract`
 - [x] 抽出 `materializePaperStoryState`
@@ -122,8 +122,8 @@ Expected:
 - Create: `tools/workflow-guard-summaries/paper-story-summary.ts`
 - Create: `tools/workflow-guard-summaries/review-pressure-summary.ts`
 - Create: `tools/workflow-guard-summaries/paper-ingestion-summary.ts`
-- Modify: [`tools/workflow-commands.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands.ts)
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+- Modify: `tools/workflow-commands.ts`
+- Modify: `tools/workflow-guard.ts`
 
 - [x] 把 contract 相关 status / summary 函数迁出
 - [x] 保证 `/workflow-status` 文案不回归
@@ -140,7 +140,7 @@ Expected:
 - Create: `tools/workflow-guard-guidance/dynamic-tasks.ts`
 - Create: `tools/workflow-guard-guidance/papernexus-guidance.ts`
 - Create: `tools/workflow-guard-guidance/writing-guidance.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+- Modify: `tools/workflow-guard.ts`
 
 - [x] 抽出 `buildDynamicTasks(...)`
 - [x] 按 concern 再细分 guidance
@@ -155,8 +155,8 @@ Expected:
 ## Task 7: 整理实验性目录
 
 **Files:**
-- Review: [`tools/workflow-guard-modules/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-modules/)
-- Review: [`tools/workflow-commands/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands/)
+- Review: `tools/workflow-guard-modules/`
+- Review: `tools/workflow-commands/`
 
 - [x] 审核 `workflow-guard-modules/` 是否仍有保留价值
 - [x] 若无，迁移有效内容后删除
@@ -169,9 +169,9 @@ Expected:
 ## Task 8: 最终收口
 
 **Files:**
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
-- Modify: [`WORKFLOW.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/WORKFLOW.md)
-- Modify: [`DOC/reference/agents.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/DOC/reference/agents.md)
+- Modify: `tools/workflow-guard.ts`
+- Modify: `WORKFLOW.md`
+- Modify: `DOC/reference/agents.md`
 
 - [x] 继续迁出 state-heavy recorders 与 auto-iterator runtime glue
 - [x] 更新文档，说明 guard 新目录结构

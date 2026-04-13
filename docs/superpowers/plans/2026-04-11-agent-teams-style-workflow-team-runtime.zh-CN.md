@@ -434,7 +434,7 @@ Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram
 项目：
 
 - `gcd-survey-tpami-2026`
-- 项目路径：`/Users/iranb/Downloads/AutoResearchProjects/gcd-survey-tpami-2026`
+- 项目路径：`/workspace/AutoResearchProjects/gcd-survey-tpami-2026`
 - 用户明确说明：“综述不需要 idea phase”
 - 用户要求启动 `/paper-plan` 并开启全自动模式
 
@@ -770,13 +770,13 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 
 ### 2.1 当前 workflow 的真实形态
 
-从 [docs/architecture/workflow-control-plane.md](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/architecture/workflow-control-plane.md:7>) 可以确认：
+从 docs/architecture/workflow-control-plane.md 可以确认：
 
 - 系统当前明确是“durable state + workflow code 决定下一步”
 - `auto_iterator_tick` 是最核心的执行入口
 - 当前 handoff 是 `drive_stage` 级别，不是 task graph 级别
 
-从 [tools/workflow-guard-runtime/auto-iterator.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-runtime/auto-iterator.ts:91>) 可以确认：
+从 tools/workflow-guard-runtime/auto-iterator.ts 可以确认：
 
 - dispatchable action 的选择仍然是从 `recommendedActions` 中选一个 `drive_stage`
 - 当前系统能表达的主线动作还是：
@@ -814,20 +814,20 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 
 可见：
 
-- [workflow-guard.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts:2893>)
-- [snapshot-builder.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-project/snapshot-builder.ts:156>)
+- workflow-guard.ts
+- snapshot-builder.ts
 
 这意味着当前“workflow fact / validation / projection”并没有共享同一个真正的 domain kernel。
 
 #### B. execution/runtime 数据结构在多个文件重复建模
 
-`WorkflowRuntimeQueueDispatchPayload` 与 `WorkflowRuntimeQueueEntry` 已经在 [workflow-runtime-state.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-runtime-state.ts:76>) 定义，但 `workflow-fast-paths.ts` 里又有一套 `BackgroundWorkflowQueueDispatchPayload` / `BackgroundWorkflowQueueEntry`。
+`WorkflowRuntimeQueueDispatchPayload` 与 `WorkflowRuntimeQueueEntry` 已经在 workflow-runtime-state.ts 定义，但 `workflow-fast-paths.ts` 里又有一套 `BackgroundWorkflowQueueDispatchPayload` / `BackgroundWorkflowQueueEntry`。
 
 而 `acquireBackgroundWorkflowSession`、`recordBackgroundWorkflowRun` 等能力又在：
 
-- [workflow-background-pool.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-background-pool.ts:809>)
-- [workflow-fast-paths.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-fast-paths.ts:1566>)
-- [register-workflow-service.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/register-workflow-service.ts:2039>)
+- workflow-background-pool.ts
+- workflow-fast-paths.ts
+- register-workflow-service.ts
 
 之间反复穿透。
 
@@ -878,17 +878,17 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
 
 ### 2.5 从 `top-tier-paper-gap-analysis.md` 反推出来的结构性缺口
 
-[docs/reference/top-tier-paper-gap-analysis.md](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/reference/top-tier-paper-gap-analysis.md>) 提醒了一点：即使我们把 kernel 收束了、把 Team Runtime 做出来了，系统仍然未必能稳定产出 top-tier 论文。因为现在缺的不只是“更好的 handoff”，而是若干 **workflow-owned evidence contracts**。
+docs/reference/top-tier-paper-gap-analysis.md 提醒了一点：即使我们把 kernel 收束了、把 Team Runtime 做出来了，系统仍然未必能稳定产出 top-tier 论文。因为现在缺的不只是“更好的 handoff”，而是若干 **workflow-owned evidence contracts**。
 
 结合当前代码面，可以看到这些缺口已经有一些零散前置能力，但还不是一等公民：
 
 - **Benchmark registry / protocol lock**
-  - 现在 `research_program` 已经有 baseline / dataset / metric 字段，[templates/PROJECT_MANIFEST.json](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/templates/PROJECT_MANIFEST.json:135>)。
-  - survey 线也已经有 benchmark alignment 字段，[survey-review.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/survey-review.ts:183>)。
+  - 现在 `research_program` 已经有 baseline / dataset / metric 字段，templates/PROJECT_MANIFEST.json。
+  - survey 线也已经有 benchmark alignment 字段，survey-review.ts。
   - 但没有 benchmark object model、protocol lock file、protocol drift detection。
 
 - **Statistical evidence**
-  - 现在 analyze/review 技能会谈 significance，review rubric 也有 `significance` 字段，[authoring-review-state.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/authoring-review-state.ts:452>)。
+  - 现在 analyze/review 技能会谈 significance，review rubric 也有 `significance` 字段，authoring-review-state.ts。
   - 但没有 workflow-owned statistical aggregation materializer，也没有把多 seed 结果稳定升级成 claim-strength gate。
 
 - **Venue-competitive novelty / competitor slate**
@@ -896,8 +896,8 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
   - 但没有 target-venue competitor slate、acceptance-risk scorecard、venue-specific novelty kill-switch。
 
 - **Ablation sufficiency / mechanism evidence**
-  - `research_program` 已有 `required_ablations`，[research-program.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/research-program.ts:307>)。
-  - execution state 也已有 `ablationSummaryPath`，[execution-state.ts](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/execution-state.ts:461>)。
+  - `research_program` 已有 `required_ablations`，research-program.ts。
+  - execution state 也已有 `ablationSummaryPath`，execution-state.ts。
   - 但没有“ablation sufficiency evaluator”，也没有从 ablation -> causal mechanism 的 workflow contract。
 
 - **Release-grade reproducibility**
@@ -905,7 +905,7 @@ setup -> graph_build -> frontier_mapping -> survey_review -> write -> review/sur
   - 但没有 reproducibility pack / supplementary bundle contract / reproduce-on-commit 验证。
 
 - **Camera-ready evidence presentation**
-  - 现在已有 `write_package`、`paper_qc`、`figure_qc`，[templates/PROJECT_MANIFEST.json](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/templates/PROJECT_MANIFEST.json:373>) [templates/PROJECT_MANIFEST.json](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/templates/PROJECT_MANIFEST.json:455>) [templates/PROJECT_MANIFEST.json](</Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/templates/PROJECT_MANIFEST.json:470>)。
+  - 现在已有 `write_package`、`paper_qc`、`figure_qc`，templates/PROJECT_MANIFEST.json templates/PROJECT_MANIFEST.json templates/PROJECT_MANIFEST.json。
   - 但没有从 results -> stats tables -> figures -> captions -> camera-ready section packets 的一体化 materializer。
 
 - **Top-tier bet / opportunity model**

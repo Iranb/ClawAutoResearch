@@ -5,13 +5,16 @@
 import type {
   OpenClawPluginApi,
 } from "../../runtime-api.js";
+import type { PluginCommandContext } from "../../runtime-api.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import type {
   buildWorkflowSnapshot,
+  bindChannelProjectForWorkflow,
   runWorkflowAutoIterator,
+  setResearchProgramState,
   unbindChannelProjectForWorkflow,
 } from "../workflow-guard.js";
 import type {
@@ -43,6 +46,8 @@ export type WorkflowBackgroundCommandKind =
 export type WorkflowCommandKind =
   | WorkflowBackgroundCommandKind
   | "project_init"
+  | "auto_research"
+  | "auto_review"
   | "clear_project_binding"
   | "workflow_status"
   | "show_commands"
@@ -59,6 +64,8 @@ export type WorkflowCommandDependencies = {
   buildWorkflowSnapshot: typeof buildWorkflowSnapshot;
   runWorkflowAutoIterator: typeof runWorkflowAutoIterator;
   startBackgroundWorkflowRun: typeof startBackgroundWorkflowRun;
+  bindChannelProjectForWorkflow: typeof bindChannelProjectForWorkflow;
+  setResearchProgramState: typeof setResearchProgramState;
   unbindChannelProjectForWorkflow: typeof unbindChannelProjectForWorkflow;
   runIdeaCatalystResearch30: typeof runIdeaCatalystResearch30;
   runCitationCalibration: typeof runCitationCalibration;
@@ -70,6 +77,21 @@ export type WorkflowCommandApi = Pick<
   OpenClawPluginApi,
   "config" | "pluginConfig" | "runtime" | "logger" | "registerCommand"
 >;
+
+export type WorkflowCommandContext = Pick<
+  PluginCommandContext,
+  "channel" | "from" | "to" | "accountId" | "messageThreadId" | "config"
+> & {
+  sessionKey?: string | null;
+  commandTargetSessionKey?: string | null;
+  commandAuthorized?: boolean | null;
+  commandSource?: string | null;
+  originatingChannel?: string | null;
+  originatingTo?: string | null;
+  conversationId?: string | null;
+  channelKey?: string | null;
+  threadId?: string | number | null;
+};
 
 export type RoutePeer = {
   kind: "direct" | "group" | "channel";
@@ -104,6 +126,8 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   literature_review: "/literature-review",
   survey_review: "/survey-pipeline",
   project_init: "/project-init",
+  auto_research: "/auto-research",
+  auto_review: "/auto-review",
   clear_project_binding: "/clear-project-binding",
   workflow_status: "/workflow-status",
   show_commands: "/show-commands",

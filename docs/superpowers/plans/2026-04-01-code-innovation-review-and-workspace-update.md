@@ -61,7 +61,7 @@
 - Modify: `agents/researcher/TOOLS.md`
 - Modify: `install.sh`
 
-- [x] Add a Researcher skill for updating `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch`.
+- [x] Add a Researcher skill for updating `/workspace/ClawAutoResearch`.
 - [x] Add installer `--yes` / non-interactive confirmation support.
 - [x] Document the auto-yes install path and role-file overwrite behavior.
 

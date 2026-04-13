@@ -333,6 +333,8 @@ test("show-commands command lists the available slash commands and when to use t
 
   assert.match(result.text, /Available slash commands:/);
   assert.match(result.text, /\/project-init/);
+  assert.match(result.text, /\/auto-research/);
+  assert.match(result.text, /\/auto-review/);
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
   assert.match(result.text, /\/clear-project-binding/);
@@ -740,6 +742,175 @@ test("project-init command scaffolds a project and seeds the onboarding contract
     "bot/gcd-confirmation-bias-mitigation"
   );
   assert.equal(manifest.research_program.status, "draft");
+});
+
+test("auto-research command bootstraps topic-only onboarding and starts the background pipeline", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  let captured = null;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoResearchCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async bindChannelProjectForWorkflow(params) {
+        captured = {
+          ...(captured ?? {}),
+          boundProject: params,
+        };
+        return {
+          binding: {
+            channelKey: params.channelKey ?? "discord:group:gcd-lab",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          },
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-auto-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Full-auto research pipeline started.",
+        };
+      },
+    }),
+    "auto-research"
+  );
+
+  const result = await autoResearchCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/auto-research "gcd confirmation bias mitigation"',
+    args: '"gcd confirmation bias mitigation"',
+    config: {},
+    from: "discord:channel:gcd-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.match(result.text ?? "", /Full-auto research pipeline started/i);
+  assert.equal(
+    manifest.research_program.baseline_reference,
+    "gcd confirmation bias mitigation literature baseline (auto-bootstrap)"
+  );
+  assert.equal(
+    manifest.research_program.primary_metric,
+    "literature-grounded primary metric (auto-bootstrap)"
+  );
+  assert.deepEqual(manifest.research_program.datasets, [
+    "gcd confirmation bias mitigation target dataset (auto-bootstrap)",
+  ]);
+  assert.ok(
+    manifest.research_program.success_criteria[0]?.includes(
+      "literature-grounded baseline"
+    )
+  );
+  assert.equal(captured.boundProject.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(captured.backgroundParams.backgroundRun.kind, "research_pipeline");
+  assert.match(
+    captured.backgroundParams.backgroundRun.commandText,
+    /AUTO_PROCEED:\s*true/i
+  );
+});
+
+test("auto-review command bootstraps a survey project and starts the background survey pipeline", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  let captured = null;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoReviewCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async bindChannelProjectForWorkflow(params) {
+        captured = {
+          ...(captured ?? {}),
+          boundProject: params,
+        };
+        return {
+          binding: {
+            channelKey: params.channelKey ?? "discord:group:survey-lab",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          },
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-auto-review-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Full-auto survey pipeline started.",
+        };
+      },
+    }),
+    "auto-review"
+  );
+
+  const result = await autoReviewCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/auto-review "graph reasoning survey"',
+    args: '"graph reasoning survey"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = path.join(projectsRoot, "survey-graph-reasoning-survey");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.match(result.text ?? "", /Full-auto survey pipeline started/i);
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.workflow_line, "survey");
+  assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.equal(captured.boundProject.projectId, "survey-graph-reasoning-survey");
+  assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
+  assert.match(
+    captured.backgroundParams.backgroundRun.commandText,
+    /^\/survey-pipeline\b/
+  );
 });
 
 test("project-init command uses the configured plugin-global Zotero root for new projects", async (t) => {

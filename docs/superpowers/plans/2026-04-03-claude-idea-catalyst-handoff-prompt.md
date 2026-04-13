@@ -7,21 +7,21 @@ Continue the IDEA-CATALYST implementation in openclaw-research.
 
 Before deciding what to change, read these files carefully:
 
-1. /Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved
-2. /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md
-3. /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-kg-subpipeline.md
-4. /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/specs/2026-04-03-idea-catalyst-kg-subpipeline-design.zh-CN.md
-5. /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-handoff-summary.md
+1. /workspace/internal/artifacts/functional_audit_v2.md.resolved
+2. /workspace/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md
+3. /workspace/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-kg-subpipeline.md
+4. /workspace/openclaw-research/docs/superpowers/specs/2026-04-03-idea-catalyst-kg-subpipeline-design.zh-CN.md
+5. /workspace/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-handoff-summary.md
 
 Then inspect the current implementation state in:
 
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-runtime/stage-preflight.ts
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/ideation-stage-signals.ts
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/register-workflow-tools.ts
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands/formatters.ts
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/
-- /Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/reviewer/
+- /workspace/openclaw-research/tools/idea-catalyst/
+- /workspace/openclaw-research/tools/workflow-guard-runtime/stage-preflight.ts
+- /workspace/openclaw-research/tools/workflow-guard-stages/ideation-stage-signals.ts
+- /workspace/openclaw-research/tools/register-workflow-tools.ts
+- /workspace/openclaw-research/tools/workflow-commands/formatters.ts
+- /workspace/openclaw-research/skills/researcher/
+- /workspace/openclaw-research/skills/reviewer/
 
 Important constraints:
 

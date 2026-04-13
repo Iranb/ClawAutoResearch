@@ -26,6 +26,18 @@
 
 正确恢复入口是 `/resume-pipeline` 与 `research_workflow.get_snapshot`。系统强调的是“从状态恢复”，而不是“从对话记忆恢复”。
 
+如果你现在只有一个主题，想让系统自动建项目并直接开跑，最快入口是：
+
+- `/auto-research "topic"`
+  适合实验论文主线。
+
+- `/auto-review "topic"`
+  适合综述 / review 主线，会直接创建 survey 项目并启动 `survey_review` 背景流程。
+
+它们会自动创建/绑定项目；其中 `/auto-research` 会写入 topic-only onboarding placeholders 并以 `AUTO_PROCEED: true` 后台启动主科研流水线，`/auto-review` 则直接启动 survey 背景主线。
+
+注意：如果你是从内部调试脚本或 Gateway `chat.send` 手动发这些命令，而不是从真实 workflow-enabled channel surface 进入，仍可能被 workflow session gate 拒绝。那种情况下，优先参考运维文档里的真实 `chat.send` 测试记录，而不要把它误判成命令逻辑本身失效。
+
 ### 4. 想做科研综述，却沿用实验项目的默认启动路径
 
 如果目标是综述，不需要先走 `idea -> plan -> code -> experiment`。最短入口是直接运行 `/survey-pipeline "topic"`，让系统创建轻量 survey workspace，并围绕 `survey_review` durable state 推进到 survey-mode writing。

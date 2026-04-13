@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Continue the gradual decomposition of [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) while preserving the facade, keeping runtime semantics stable, and making the remaining work parallelizable across multiple agents with low merge conflict risk.
+**Goal:** Continue the gradual decomposition of `tools/workflow-guard.ts` while preserving the facade, keeping runtime semantics stable, and making the remaining work parallelizable across multiple agents with low merge conflict risk.
 
 **Architecture:** Do not rewrite the workflow control plane. Keep `workflow-guard.ts` as the public compatibility facade, and move remaining heavy logic into focused submodules under `tools/workflow-guard-*`. The core rule is: business logic moves out, the facade stays thin, exports stay stable, and every phase must preserve current workflow behavior and tests.
 
@@ -23,16 +23,16 @@ Completed on 2026-04-08.
 
 As of this plan:
 
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) is still about **11,246 lines**
+- `tools/workflow-guard.ts` is still about **11,246 lines**
 - the repo already has these decomposition families:
-  - [`tools/workflow-guard-core/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-core/)
-  - [`tools/workflow-guard-state/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-state/)
-  - [`tools/workflow-guard-stages/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-stages/)
-  - [`tools/workflow-guard-materializers/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-materializers/)
-  - [`tools/workflow-guard-guidance/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-guidance/)
-  - [`tools/workflow-guard-summaries/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-summaries/)
-  - [`tools/workflow-guard-runtime/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-runtime/)
-  - [`tools/workflow-guard-recorders/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard-recorders/)
+  - `tools/workflow-guard-core/`
+  - `tools/workflow-guard-state/`
+  - `tools/workflow-guard-stages/`
+  - `tools/workflow-guard-materializers/`
+  - `tools/workflow-guard-guidance/`
+  - `tools/workflow-guard-summaries/`
+  - `tools/workflow-guard-runtime/`
+  - `tools/workflow-guard-recorders/`
 - the current problem is not “missing decomposition ideas”, but that too much remaining glue still lives in the facade
 
 The largest remaining responsibility clusters in `workflow-guard.ts` are:
@@ -50,7 +50,7 @@ This plan focuses on those remaining clusters.
 
 ## 1. Constraints
 
-- Keep [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) as the public facade
+- Keep `tools/workflow-guard.ts` as the public facade
 - Do not change the existing public API names unless absolutely necessary
 - Do not change workflow stage semantics in this plan
 - Do not move `auto-iterator` back into the facade
@@ -71,7 +71,7 @@ This plan is intentionally split into **independent workstreams** so multiple ag
 
 **Owned write scope:**
 - `tools/workflow-guard-project/`
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) facade wrappers related to project/snapshot only
+- `tools/workflow-guard.ts` facade wrappers related to project/snapshot only
 - tests that directly assert project resolution and snapshot shape
 
 ### Workstream B: Policies + Tool Guards
@@ -81,7 +81,7 @@ This plan is intentionally split into **independent workstreams** so multiple ag
 
 **Owned write scope:**
 - `tools/workflow-guard-policies/`
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) facade wrappers related to policy exports only
+- `tools/workflow-guard.ts` facade wrappers related to policy exports only
 - tests around guard boundaries and prompt ownership
 
 ### Workstream C: Writing/Review Evaluation
@@ -91,7 +91,7 @@ This plan is intentionally split into **independent workstreams** so multiple ag
 
 **Owned write scope:**
 - `tools/workflow-guard-writing/`
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) facade wrappers related to evaluation helpers only
+- `tools/workflow-guard.ts` facade wrappers related to evaluation helpers only
 - writer/reviewer/auto-iterator quality tests
 
 ### Workstream D: State Setters
@@ -101,7 +101,7 @@ This plan is intentionally split into **independent workstreams** so multiple ag
 
 **Owned write scope:**
 - `tools/workflow-guard-setters/`
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) facade wrappers related to setters only
+- `tools/workflow-guard.ts` facade wrappers related to setters only
 - runtime tools / service tests
 
 ### Workstream E: Final Facade Cleanup
@@ -110,7 +110,7 @@ This plan is intentionally split into **independent workstreams** so multiple ag
 - after A-D merge, reduce `workflow-guard.ts` to mostly exports, dependency wiring, and compatibility glue
 
 **Owned write scope:**
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
+- `tools/workflow-guard.ts`
 - module map / docs
 
 ### Merge Order
@@ -178,10 +178,10 @@ Recommended file layout:
 - Create: `tools/workflow-guard-project/snapshot-builder.ts`
 - Create: `tools/workflow-guard-project/gate-state.ts`
 - Create: `tools/workflow-guard-project/projects-state.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
-- Test: [`tests/channel-project-bindings.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/channel-project-bindings.test.mjs)
-- Test: [`tests/workflow-runtime-tools.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-runtime-tools.test.mjs)
-- Test: [`tests/workflow-commands.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-commands.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Test: `tests/channel-project-bindings.test.mjs`
+- Test: `tests/workflow-runtime-tools.test.mjs`
+- Test: `tests/workflow-commands.test.mjs`
 
 **Scope:**
 - move project-root resolution and project-state loading out of the facade
@@ -219,7 +219,7 @@ Move these responsibilities:
 
 - [x] **Step 5: Replace facade bodies with thin wrappers**
 
-In [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts):
+In `tools/workflow-guard.ts`:
 - keep exported names unchanged
 - replace moved implementations with imports + wrappers
 
@@ -240,10 +240,10 @@ Expected:
 - Create: `tools/workflow-guard-policies/role-policy.ts`
 - Create: `tools/workflow-guard-policies/tool-guards.ts`
 - Create: `tools/workflow-guard-policies/handoff-rules.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
-- Test: [`tests/workflow-guard-boundaries.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-guard-boundaries.test.mjs)
-- Test: [`tests/workflow-prompt-ownership.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-prompt-ownership.test.mjs)
-- Test: [`tests/workflow-commands.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-commands.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Test: `tests/workflow-guard-boundaries.test.mjs`
+- Test: `tests/workflow-prompt-ownership.test.mjs`
+- Test: `tests/workflow-commands.test.mjs`
 
 **Scope:**
 - move policy tables and decision helpers out of the facade
@@ -274,7 +274,7 @@ Move:
 
 - [x] **Step 4: Keep facade exports stable**
 
-Re-export through [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) so callers do not change.
+Re-export through `tools/workflow-guard.ts` so callers do not change.
 
 - [x] **Step 5: Run focused tests**
 
@@ -293,10 +293,10 @@ Expected:
 - Create: `tools/workflow-guard-writing/write-package-eval.ts`
 - Create: `tools/workflow-guard-writing/paper-quality-eval.ts`
 - Create: `tools/workflow-guard-writing/citation-theory-eval.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
-- Test: [`tests/auto-iterator.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/auto-iterator.test.mjs)
-- Test: [`tests/workflow-runtime-tools.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-runtime-tools.test.mjs)
-- Test: [`tests/writer-reviewer-runtime-state.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/writer-reviewer-runtime-state.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Test: `tests/auto-iterator.test.mjs`
+- Test: `tests/workflow-runtime-tools.test.mjs`
+- Test: `tests/writer-reviewer-runtime-state.test.mjs`
 
 **Scope:**
 - move readiness evaluation logic used by write/review/submit/analyze stages
@@ -343,10 +343,10 @@ Expected:
 - Create: `tools/workflow-guard-setters/writing-state-setters.ts`
 - Create: `tools/workflow-guard-setters/review-state-setters.ts`
 - Create: `tools/workflow-guard-setters/ingestion-state-setters.ts`
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
-- Test: [`tests/workflow-runtime-tools.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-runtime-tools.test.mjs)
-- Test: [`tests/workflow-service.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/workflow-service.test.mjs)
-- Test: [`tests/auto-iterator.test.mjs`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tests/auto-iterator.test.mjs)
+- Modify: `tools/workflow-guard.ts`
+- Test: `tests/workflow-runtime-tools.test.mjs`
+- Test: `tests/workflow-service.test.mjs`
+- Test: `tests/auto-iterator.test.mjs`
 
 **Scope:**
 - move remaining `set*State(...)` implementations into file families that match ownership
@@ -401,10 +401,10 @@ Expected:
 ## 8. Task E: Final Facade Cleanup
 
 **Files:**
-- Modify: [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts)
-- Modify: [`docs/reference/module-map.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/docs/reference/module-map.md)
-- Modify: [`DOC/reference/agents.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/DOC/reference/agents.md)
-- Modify: [`WORKFLOW.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/WORKFLOW.md)
+- Modify: `tools/workflow-guard.ts`
+- Modify: `docs/reference/module-map.md`
+- Modify: `DOC/reference/agents.md`
+- Modify: `WORKFLOW.md`
 
 **Scope:**
 - shrink the facade into a stable public entrypoint
@@ -454,7 +454,7 @@ Do not let two agents edit the same new directory.
 
 ### Rule 2: The facade is the shared choke point
 
-Because all workstreams touch [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts), keep facade edits minimal:
+Because all workstreams touch `tools/workflow-guard.ts`, keep facade edits minimal:
 - import new module
 - replace body with wrapper
 - export/re-export if needed
@@ -506,7 +506,7 @@ If only two agents are available:
 
 This plan is complete when all of the following are true:
 
-- [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/ClawAutoResearch/tools/workflow-guard.ts) is no longer the primary place where business logic lives
+- `tools/workflow-guard.ts` is no longer the primary place where business logic lives
 - the facade mainly contains exports, wrappers, and compatibility glue
 - snapshot/project-state logic lives under `workflow-guard-project/`
 - policy/guard logic lives under `workflow-guard-policies/`

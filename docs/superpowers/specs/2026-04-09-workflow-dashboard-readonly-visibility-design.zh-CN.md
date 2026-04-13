@@ -8,10 +8,10 @@
 
 当前仓库已经具备完整的 workflow 控制平面和 durable state 体系：
 
-- 主阶段机定义在 [`WORKFLOW.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/WORKFLOW.md)
-- 控制平面说明见 [`docs/architecture/workflow-control-plane.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/architecture/workflow-control-plane.md)
-- 状态合同见 [`docs/reference/state-contracts.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/reference/state-contracts.md)
-- 模块地图见 [`docs/reference/module-map.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/reference/module-map.md)
+- 主阶段机定义在 `WORKFLOW.md`
+- 控制平面说明见 `docs/architecture/workflow-control-plane.md`
+- 状态合同见 `docs/reference/state-contracts.md`
+- 模块地图见 `docs/reference/module-map.md`
 
 系统已经能生成和维护大量中间产物，例如：
 
@@ -185,7 +185,7 @@
 2. **阶段矩阵**
    - 行：项目
    - 列：workflow 主阶段
-   - 建议列顺序与 [`WORKFLOW.md`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/WORKFLOW.md) 保持一致：
+   - 建议列顺序与 `WORKFLOW.md` 保持一致：
      - `setup`
      - `graph_build`
      - `frontier_mapping`

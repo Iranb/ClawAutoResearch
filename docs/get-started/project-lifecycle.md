@@ -9,6 +9,11 @@
 
 起点不是 brainstorming，而是 `/project-init`。
 
+如果你不想手动补 onboarding，只想输入主题就让系统自己开跑，最新入口是：
+
+- `/auto-research "topic"`
+- `/auto-review "topic"`
+
 它的作用是生成最小项目骨架，例如：
 
 - `PROJECT_MANIFEST.json`
@@ -25,6 +30,7 @@
 
 适用于“要做新方法、跑实验、分析结果、写论文”的项目。它通常从：
 
+- `/auto-research "topic"` 或
 - `/project-init`
 - `/graph-build`
 - `/research-pipeline`
@@ -35,6 +41,7 @@
 
 适用于“要围绕一个主题做系统综述、做 screening、coverage、gap synthesis、最后写 survey”的项目。它通常直接从：
 
+- `/auto-review "topic"` 或
 - `/survey-pipeline "topic"`
 
 开始。这个命令会创建一个轻量 survey workspace，把 durable state 写到 `PROJECT_MANIFEST.json.survey_review`，然后围绕综述 artifacts 推进，最终 handoff 到 `write`，并把 `writing_contract.paper_mode` 设为 `survey`。
@@ -112,7 +119,24 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 3. 在 `PROJECT_MANIFEST.json.survey_review` 下维护 topic、phase、included/excluded counts、coverage、brief readiness 等 durable state。
 4. 当 `SURVEY_BRIEF.md` 和关键综述工件 ready 后，允许 handoff 到 `write`，并以 `paper_mode=survey` 进入写作。
 
-## 8. 中断以后如何恢复
+## 8.5 现有项目如何迁移到最新 workflow/runtime
+
+如果你手上已经有一批旧项目，需要补齐最新 runtime state、survey identity 和 experiment decision 字段，可以直接运行：
+
+```bash
+node scripts/migrate_latest_workflow_projects.mjs --projects-root "/workspace/AutoResearchProjects"
+```
+
+这个迁移是 backfill-first：
+
+1. 补齐最新 workflow 骨架文件
+2. 初始化最新 runtime state 文件
+3. 校正 survey 项目的 workflow identity
+4. 对 experiment 项目持久化最新 decision 字段
+
+它不会删除现有项目内容，也不会重置已有论文/实验产物。
+
+## 9. 中断以后如何恢复
 
 恢复时不要继续滚聊天历史，统一走这条链：
 
@@ -123,7 +147,7 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 
 这能把 `current_stage`、owner、blocking reason、missing signals 和建议动作重新拉回到代码驱动的现场。
 
-## 9. 阶段完成后如何 handoff
+## 10. 阶段完成后如何 handoff
 
 当前项目里，stage closeout 不是“谁做完谁顺手喊下一位”，而是：
 
@@ -137,7 +161,7 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 
 - [Lobster Handoffs](../architecture/lobster-handoffs.md)
 
-## 10. 两个高频故障信号
+## 11. 两个高频故障信号
 
 ### 一直回到 `graph_build`
 

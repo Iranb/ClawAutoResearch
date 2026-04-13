@@ -42,7 +42,7 @@
 
 ### 2.2 功能审查
 
-- `/Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved.0`
+- `/workspace/internal/artifacts/functional_audit_v2.md.resolved`
 
 ### 2.3 关键代码与合同
 
@@ -60,11 +60,11 @@
 
 ### 2.4 PaperNexus 侧现状与计划
 
-- `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/docs/superpowers/plans/2026-04-03-papernexus-next-implementation-plan.zh-CN.md`
+- `/workspace/PaperNexus/docs/superpowers/plans/2026-04-03-papernexus-next-implementation-plan.zh-CN.md`
 
 ### 2.5 外部论文方法学
 
-- `/Users/iranb/Downloads/2603.12226v1.pdf`
+- `/workspace/input/2603.12226v1.pdf`
 
 这篇论文的核心思想可以概括为：
 

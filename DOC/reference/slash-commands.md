@@ -10,6 +10,25 @@
 - `/project-init`  
   引导式项目开启入口。用于在 setup 阶段锁定 research program onboarding contract：研究目标、问题陈述、baseline、primary metric、数据集、success criteria，以及 Zotero 项目路径。默认路径来自插件全局配置 `zoteroProjectRoot`（默认 `bot`），所以通常是 `<zoteroProjectRoot>/<project-id>`；如果项目显式设置了 `research_program.zotero_project_path`，则以项目值为准。`/workflow-status` 如果显示 setup checklist 缺项，应优先运行它。
 
+- `/auto-research`
+  主题即入口的全自动科研主线。只输入主题后，它会：
+  - 自动创建/绑定项目
+  - 用 topic-only bootstrap 补齐最小 onboarding contract
+  - 把 `baseline_reference`、`primary_metric`、`datasets`、`success_criteria` 先写成 workflow-owned provisional placeholders
+  - 立即以 `AUTO_PROCEED: true` 启动后台 `/research-pipeline`
+
+  它的定位不是替代完整 research program，而是把“只有主题、先让系统自己往前跑”做成稳定入口。后续随着 literature/graph/plan 收敛，这些 provisional onboarding 字段会被更具体的证据刷新。
+
+- `/auto-review`
+  主题即入口的全自动综述主线。只输入主题后，它会：
+  - 自动创建/绑定 survey 项目
+  - 把项目校正到 `survey_review` workflow line
+  - 后台启动 `/survey-pipeline "topic"`
+
+  它和 `/auto-research` 的区别是：
+  - `/auto-research`：面向实验论文主线
+  - `/auto-review`：面向 survey / review 主线
+
 - `/research-pipeline`  
   完整科研主入口。适合从主题出发，让 Researcher 按 workflow 自动推进，并通过 PaperNexus HTTP MCP 优先控制 live graph；导入/排队仍通过 wrappers。现在它会先检查 guided setup/onboarding contract；如果 contract 还不完整，先补 `/project-init`，再继续图谱与文献流。
 
@@ -221,7 +240,9 @@
 
 1. 大多数情况下先用 `/research-pipeline`
 2. 项目中断后优先用 `/resume-pipeline`
-3. 只有在你明确要干预某个阶段时，再单独调用阶段性命令
+3. 如果你只有主题、想直接让系统自己建实验项目并开跑，优先用 `/auto-research "topic"`
+4. 如果你只有主题、想直接让系统自己建 survey 项目并开跑，优先用 `/auto-review "topic"`
+5. 只有在你明确要干预某个阶段时，再单独调用阶段性命令
 
 如果你是在本地做真实调试，而且遇到 non-interactive OpenClaw slash transport 静默挂起，可以使用 repo-local fallback：
 
@@ -229,6 +250,18 @@
 - `node scripts/run_local_workflow_command.mjs --command citation-calibrate --project-root "<path>"`
 
 这个脚本的作用是直接执行 command handler，验证 workflow command 本身是否正常；它不是对 OpenClaw transport 本体的替代，只是调试 / live 验证时的稳定降级路径。
+
+现有项目如果需要补到最新 workflow/runtime 结构，可运行：
+
+```bash
+node scripts/migrate_latest_workflow_projects.mjs --projects-root "/Users/iranb/Downloads/AutoResearchProjects"
+```
+
+它会批量：
+- backfill 缺失的项目骨架文件
+- 初始化最新 runtime state 文件
+- 校正 survey 项目的 workflow identity
+- 对 experiment 项目持久化最新 experiment decision 字段
 
 ## 8. 相关文档
 

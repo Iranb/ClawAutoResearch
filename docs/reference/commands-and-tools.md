@@ -7,6 +7,8 @@
 | Command | 作用 | 常见场景 |
 | --- | --- | --- |
 | `/project-init` | 初始化项目骨架 | 新建项目 |
+| `/auto-research` | 只给主题就启动全自动科研主线 | 想从 topic 直接创建项目并后台开跑 |
+| `/auto-review` | 只给主题就启动全自动综述主线 | 想从 topic 直接创建 survey 项目并后台开跑 |
 | `/graph-build` | 构建或修复 graph presence | 共享图缺论文、graph 不 ready |
 | `/research-pipeline` | 启动或继续主研究流程 | 想从当前项目状态持续推进 |
 | `/survey-pipeline` | 启动综述主线 | 想围绕一个主题做综述、screening、coverage 与 survey 写作 |
@@ -127,3 +129,11 @@
   - transport 本体是否异常
 
 这样就不会把 transport 问题误判成 workflow 主链问题。
+
+现有项目批量迁移到最新 workflow/runtime 结构时，推荐直接运行：
+
+```bash
+node scripts/migrate_latest_workflow_projects.mjs --projects-root "/workspace/AutoResearchProjects"
+```
+
+它会批量 backfill 项目骨架、runtime state、survey identity，以及 experiment decision 持久化字段。

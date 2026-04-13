@@ -2,9 +2,9 @@
  * Peer and target parsers for Discord and Telegram channels.
  */
 
-import type { PluginCommandContext } from "../../runtime-api.js";
 import type { ConversationRef } from "openclaw/plugin-sdk/conversation-runtime";
 import type { RoutePeer } from "./types.js";
+import type { WorkflowCommandContext } from "./types.js";
 
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -124,10 +124,30 @@ export function parseDiscordPeer(raw: string): RoutePeer | null {
   if (normalized.startsWith("channel:")) {
     return { kind: "channel", id: normalized.slice("channel:".length).trim() };
   }
+  if (raw.startsWith("discord:") && !normalized.includes(":")) {
+    return { kind: "direct", id: normalized };
+  }
   if (/^\d+$/.test(normalized)) {
     return { kind: "channel", id: normalized };
   }
   return { kind: "channel", id: normalized };
+}
+
+function resolveDiscordConversationCandidate(
+  ctx: Pick<WorkflowCommandContext, "from" | "to" | "originatingTo">
+): string | null {
+  const candidates = [
+    readString(ctx.originatingTo),
+    readString(ctx.from),
+    readString(ctx.to),
+  ].filter((value): value is string => Boolean(value));
+  for (const candidate of candidates) {
+    const parsed = parseDiscordPeer(candidate);
+    if (parsed) {
+      return `${parsed.kind === "direct" ? "user" : "channel"}:${parsed.id}`;
+    }
+  }
+  return null;
 }
 
 export function stripTelegramInternalPrefixes(raw: string): string {
@@ -184,8 +204,8 @@ export function parseTelegramTarget(raw: string): {
 
 export function resolveBindingConversationFromCommandContext(
   ctx: Pick<
-    PluginCommandContext,
-    "channel" | "from" | "to" | "accountId" | "messageThreadId"
+    WorkflowCommandContext,
+    "channel" | "from" | "to" | "accountId" | "messageThreadId" | "originatingTo"
   >
 ): ConversationRef | null {
   const accountId = readString(ctx.accountId) ?? "default";
@@ -212,18 +232,12 @@ export function resolveBindingConversationFromCommandContext(
   }
 
   if (ctx.channel === "discord") {
-    const candidates = [readString(ctx.from), readString(ctx.to)].filter(
-      (value): value is string => Boolean(value)
-    );
-    for (const candidate of candidates) {
-      const parsed = parseDiscordPeer(candidate);
-      if (!parsed) {
-        continue;
-      }
+    const conversationId = resolveDiscordConversationCandidate(ctx);
+    if (conversationId) {
       return {
         channel: "discord",
         accountId,
-        conversationId: `${parsed.kind === "direct" ? "user" : "channel"}:${parsed.id}`,
+        conversationId,
       };
     }
   }
@@ -234,8 +248,8 @@ export function resolveBindingConversationFromCommandContext(
 export function resolveBindingChannelKeyFromContext(
   ctx: Partial<
     Pick<
-      PluginCommandContext,
-      "channel" | "from" | "to" | "accountId" | "messageThreadId"
+      WorkflowCommandContext,
+      "channel" | "from" | "to" | "accountId" | "messageThreadId" | "originatingTo"
     >
   > & {
     messageChannel?: string | null;
@@ -269,6 +283,7 @@ export function resolveBindingChannelKeyFromContext(
     channel: readString(ctx.channel) ?? readString(ctx.messageChannel) ?? "",
     from: readString(ctx.from),
     to: readString(ctx.to),
+    originatingTo: readString(ctx.originatingTo),
     accountId: readString(ctx.accountId),
     messageThreadId:
       typeof ctx.messageThreadId === "number"
@@ -281,7 +296,7 @@ export function resolveBindingChannelKeyFromContext(
 }
 
 export function resolveRoutePeerFromCommandContext(
-  ctx: Pick<PluginCommandContext, "channel" | "from" | "to">
+  ctx: Pick<WorkflowCommandContext, "channel" | "from" | "to" | "originatingTo">
 ): RoutePeer | null {
   if (ctx.channel === "telegram") {
     const rawTarget = readString(ctx.to) ?? readString(ctx.from);
@@ -296,7 +311,7 @@ export function resolveRoutePeerFromCommandContext(
   }
 
   if (ctx.channel === "discord") {
-    const candidates = [readString(ctx.from), readString(ctx.to)].filter(
+    const candidates = [readString(ctx.originatingTo), readString(ctx.from), readString(ctx.to)].filter(
       (value): value is string => Boolean(value)
     );
     for (const candidate of candidates) {

@@ -35,7 +35,7 @@
 本计划主要基于以下内容：
 
 1. 论文：
-   - `/Users/iranb/Downloads/2603.12226v1.pdf`
+   - `/workspace/input/2603.12226v1.pdf`
    - 元数据确认标题为：
      `Sparking Scientific Creativity via LLM-Driven Interdisciplinary Inspiration`
 2. 现有蓝图：
@@ -47,7 +47,7 @@
 5. Evo 风格设计稿：
    - `docs/superpowers/specs/2026-04-02-evo-inspired-ideation-story-workflow-design.zh-CN.md`
 6. 功能审查：
-   - `/Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved.0`
+   - `/workspace/internal/artifacts/functional_audit_v2.md.resolved`
 7. 当前 writer / reviewer skill：
    - `skills/academic_writer/paper-plan/SKILL.md`
    - `skills/academic_writer/paper-write/SKILL.md`

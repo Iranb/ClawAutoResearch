@@ -12,7 +12,7 @@
 本综述主要基于以下材料：
 
 1. 功能审查：
-   - `/Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved.0`
+   - `/workspace/internal/artifacts/functional_audit_v2.md.resolved`
 2. 当前核心计划：
    - `docs/superpowers/plans/2026-03-26-workflow-runtime-state.md`
    - `docs/superpowers/plans/2026-03-26-workflow-runtime-state-phase-2.md`

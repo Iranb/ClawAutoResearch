@@ -15,7 +15,7 @@
 ## 2. 推荐命令
 
 ```bash
-cd "/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research"
+cd "/workspace/openclaw-research"
 bash install.sh --dry-run
 bash install.sh
 ```

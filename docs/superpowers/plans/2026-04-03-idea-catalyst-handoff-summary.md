@@ -5,13 +5,13 @@
 This document is a handoff summary for continuing the IDEA-CATALYST implementation across:
 
 - the functional audit findings in:
-  `/Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved`
+  `/workspace/internal/artifacts/functional_audit_v2.md.resolved`
 - the blueprint in:
-  `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md`
+  `/workspace/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md`
 - the implementation plan in:
-  `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-kg-subpipeline.md`
+  `/workspace/openclaw-research/docs/superpowers/plans/2026-04-03-idea-catalyst-kg-subpipeline.md`
 - the companion design spec in:
-  `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/specs/2026-04-03-idea-catalyst-kg-subpipeline-design.zh-CN.md`
+  `/workspace/openclaw-research/docs/superpowers/specs/2026-04-03-idea-catalyst-kg-subpipeline-design.zh-CN.md`
 
 The current direction is:
 

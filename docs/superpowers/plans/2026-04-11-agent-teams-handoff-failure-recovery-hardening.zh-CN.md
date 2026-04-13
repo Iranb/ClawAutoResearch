@@ -2075,7 +2075,7 @@ These TODOs are required before claiming production-grade E2E paper generation. 
 Implementation note:
 
 - `research_workflow.run_citation_calibration` exists, is schema-registered, and passes automated tool tests.
-- 2026-04-12 live Lane C project validation (`/Users/iranb/Downloads/AutoResearchProjects/e2e-live-survey-2603-12226-20260412`) completed through the workflow-owned runtime surface and produced `Suspicious: 0`, `Hallucinated: 0`, with refreshed `reviewer/CITATION_CALIBRATION.{json,md}` and `reviewer/CITATION_VERIFICATION.md`.
+- 2026-04-12 live Lane C project validation (`/workspace/AutoResearchProjects/e2e-live-survey-2603-12226-20260412`) completed through the workflow-owned runtime surface and produced `Suspicious: 0`, `Hallucinated: 0`, with refreshed `reviewer/CITATION_CALIBRATION.{json,md}` and `reviewer/CITATION_VERIFICATION.md`.
 - Real runtime behavior showed `reffix` succeeding and `update_from_dblp` stalling long enough to require a per-tool timeout. The runtime now treats that stall as bounded `needs_review` evidence debt instead of hanging the entire lane.
 - Live `openclaw agent` CLI invocations were still prone to going silent in non-interactive automation paths, so the production proof here was executed via the same registered runtime action surface that the workflow tool uses, rather than relying on a chat-turn wrapper.
 

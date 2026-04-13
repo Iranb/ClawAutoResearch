@@ -111,7 +111,7 @@ Use these as normative references while implementing:
 - Public schema contract:
   `https://raw.githubusercontent.com/pkargupta/idea_catalyst/main/classes.py`
 - Paper:
-  `/Users/iranb/Downloads/2603.12226v1.pdf`
+  `/workspace/input/2603.12226v1.pdf`
 - Existing local upgrade notes:
   `openclaw-research/docs/superpowers/plans/2026-04-04-openclaw-research-idea-catalyst-upgrade-guide.md`
   `openclaw-research/docs/superpowers/plans/2026-04-05-papernexus-openclaw-idea-catalyst-integration.md`

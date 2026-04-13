@@ -1,11 +1,11 @@
 # workflow-guard 模块化拆分设计
 
 > 记录日期：2026-04-02  
-> 目标文件：[`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+> 目标文件：`tools/workflow-guard.ts`
 
 ## 背景
 
-当前 [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts) 已增长到约 18k 行，承担了过多职责：
+当前 `tools/workflow-guard.ts` 已增长到约 18k 行，承担了过多职责：
 
 - workflow 共享类型
 - manifest / state 的 normalize / serialize
@@ -27,9 +27,9 @@
 
 当前仓库里已经出现了 3 组与拆分相关的目录：
 
-- [`tools/workflow-commands/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-commands/)
-- [`tools/workflow-guard-stages/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/)
-- [`tools/workflow-guard-modules/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-modules/)
+- `tools/workflow-commands/`
+- `tools/workflow-guard-stages/`
+- `tools/workflow-guard-modules/`
 
 其中：
 
@@ -47,8 +47,8 @@
 
 在当前实施轮次里，又新增了两组正式目录：
 
-- [`tools/workflow-guard-recorders/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-recorders/)
-- [`tools/workflow-guard-runtime/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-runtime/)
+- `tools/workflow-guard-recorders/`
+- `tools/workflow-guard-runtime/`
 
 它们分别承接：
 
@@ -84,7 +84,7 @@
 
 ### 1. facade 层
 
-保留 [`tools/workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts) 作为唯一公共入口，职责只有：
+保留 `tools/workflow-guard.ts` 作为唯一公共入口，职责只有：
 
 - 统一 export
 - 组装依赖
@@ -97,7 +97,7 @@
 
 建议新建目录：
 
-- [`tools/workflow-guard-core/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-core/)
+- `tools/workflow-guard-core/`
 
 建议文件：
 
@@ -125,7 +125,7 @@
 
 建议新建目录：
 
-- [`tools/workflow-guard-state/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/)
+- `tools/workflow-guard-state/`
 
 按合同拆文件，而不是继续全部堆在一个文件里：
 
@@ -162,7 +162,7 @@
 
 当前已有：
 
-- [`tools/workflow-guard-stages/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/)
+- `tools/workflow-guard-stages/`
 
 建议把它正式化，作为 stage gate 主目录保留。
 
@@ -199,8 +199,8 @@
 
 建议新建目录：
 
-- [`tools/workflow-guard-materializers/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-materializers/)
-- [`tools/workflow-guard-summaries/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-summaries/)
+- `tools/workflow-guard-materializers/`
+- `tools/workflow-guard-summaries/`
 
 `materializers/` 推荐文件：
 
@@ -229,8 +229,8 @@
 
 建议新建目录：
 
-- [`tools/workflow-guard-recorders/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-recorders/)
-- [`tools/workflow-guard-runtime/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-runtime/)
+- `tools/workflow-guard-recorders/`
+- `tools/workflow-guard-runtime/`
 
 推荐文件：
 
@@ -254,7 +254,7 @@
 
 建议新建目录：
 
-- [`tools/workflow-guard-guidance/`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-guidance/)
+- `tools/workflow-guard-guidance/`
 
 推荐文件：
 
@@ -486,7 +486,7 @@ tools/
 
 拆完后，推荐的阅读顺序应该是：
 
-1. [`workflow-guard.ts`](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts)
+1. `workflow-guard.ts`
 2. `workflow-guard-stages/*`
 3. `workflow-guard-state/` 中和当前问题最相关的 contract
 4. `workflow-guard-materializers/*`

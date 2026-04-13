@@ -13,8 +13,8 @@
 ### Task 1: 写红测，钉住 PaperNexus KG/schema primitive
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/test/semantic-extraction.test.js`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/test/idea-catalyst-schema.test.js`
+- Modify: `/workspace/PaperNexus/test/semantic-extraction.test.js`
+- Create: `/workspace/PaperNexus/test/idea-catalyst-schema.test.js`
 
 - [ ] **Step 1: 新增/扩展测试，要求 semantic extraction 能保留 field/domain/mechanism 元数据**
 - [ ] **Step 2: 运行 PaperNexus 定向测试，确认先失败**
@@ -23,10 +23,10 @@
 ### Task 2: 实现 PaperNexus schema primitive
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/graph/schema.js`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/graph/domain-taxonomy.js`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/graph/abstract-mechanisms.js`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/graph/domain-bridges.js`
+- Modify: `/workspace/PaperNexus/src/core/graph/schema.js`
+- Create: `/workspace/PaperNexus/src/core/graph/domain-taxonomy.js`
+- Create: `/workspace/PaperNexus/src/core/graph/abstract-mechanisms.js`
+- Create: `/workspace/PaperNexus/src/core/graph/domain-bridges.js`
 
 - [ ] **Step 1: 新增 node/edge 类型与 helper，不破坏现有 graph API**
 - [ ] **Step 2: 实现最小 domain normalization / distance matrix helper**
@@ -36,8 +36,8 @@
 ### Task 3: 接线 PaperNexus ingestion / LLM extraction
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/llm/ollama.js`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/PaperNexus/src/core/ingestion/pipeline.js`
+- Modify: `/workspace/PaperNexus/src/core/llm/ollama.js`
+- Modify: `/workspace/PaperNexus/src/core/ingestion/pipeline.js`
 
 - [ ] **Step 1: 扩 semantic extraction prompt，让 paper/problem/method 支持 field/domain/mechanism 元数据**
 - [ ] **Step 2: 在 pipeline merge 路径中持久化这些元数据**
@@ -46,9 +46,9 @@
 ### Task 4: 在 openclaw-research 写红测，钉住 IDEA-CATALYST 子流水线 contract
 
 **Files:**
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/idea-catalyst-runtime-tools.test.mjs`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/auto-iterator.test.mjs`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-runtime-tools.test.mjs`
+- Create: `/workspace/openclaw-research/tests/idea-catalyst-runtime-tools.test.mjs`
+- Modify: `/workspace/openclaw-research/tests/auto-iterator.test.mjs`
+- Modify: `/workspace/openclaw-research/tests/workflow-runtime-tools.test.mjs`
 
 - [ ] **Step 1: 先写 IDEA 微阶段与 catalyst packet 缺失时的 failing tests**
 - [ ] **Step 2: 写 workflow tool 对 decomposition/scouting/judging packet 的 failing tests**
@@ -57,11 +57,11 @@
 ### Task 5: 新建 idea-catalyst 模块，不把逻辑塞进 workflow-guard
 
 **Files:**
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/packets.ts`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/materializers.ts`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/scout-adapter.ts`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/ranking.ts`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/idea-catalyst/workflow-bridge.ts`
+- Create: `/workspace/openclaw-research/tools/idea-catalyst/packets.ts`
+- Create: `/workspace/openclaw-research/tools/idea-catalyst/materializers.ts`
+- Create: `/workspace/openclaw-research/tools/idea-catalyst/scout-adapter.ts`
+- Create: `/workspace/openclaw-research/tools/idea-catalyst/ranking.ts`
+- Create: `/workspace/openclaw-research/tools/idea-catalyst/workflow-bridge.ts`
 
 - [ ] **Step 1: 定义 catalyst packet normalize/serialize helper**
 - [ ] **Step 2: 定义 workflow-owned materializer**
@@ -71,10 +71,10 @@
 ### Task 6: 接入 runtime tools 与 IDEA 微阶段
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/register-workflow-tools.ts`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-runtime/stage-preflight.ts`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/ideation-stage-signals.ts`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/templates/PROJECT_MANIFEST.json`
+- Modify: `/workspace/openclaw-research/tools/register-workflow-tools.ts`
+- Modify: `/workspace/openclaw-research/tools/workflow-guard-runtime/stage-preflight.ts`
+- Modify: `/workspace/openclaw-research/tools/workflow-guard-stages/ideation-stage-signals.ts`
+- Modify: `/workspace/openclaw-research/templates/PROJECT_MANIFEST.json`
 
 - [ ] **Step 1: 注册 catalyst workflow tools**
 - [ ] **Step 2: 让 IDEA 阶段 preflight 能自动 materialize catalyst packet**
@@ -84,15 +84,15 @@
 ### Task 7: 更新 skill / agent / workflow 文档
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/WORKFLOW.md`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/research-ideation/SKILL.md`
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-tournament/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-catalyst-decompose/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-catalyst-translate/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-catalyst-scout/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-catalyst-gatekeeper/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/researcher/idea-catalyst-integrator/SKILL.md`
-- Create: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/skills/reviewer/idea-catalyst-judge/SKILL.md`
+- Modify: `/workspace/openclaw-research/WORKFLOW.md`
+- Modify: `/workspace/openclaw-research/skills/researcher/research-ideation/SKILL.md`
+- Modify: `/workspace/openclaw-research/skills/researcher/idea-tournament/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/researcher/idea-catalyst-decompose/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/researcher/idea-catalyst-translate/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/researcher/idea-catalyst-scout/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/researcher/idea-catalyst-gatekeeper/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/researcher/idea-catalyst-integrator/SKILL.md`
+- Create: `/workspace/openclaw-research/skills/reviewer/idea-catalyst-judge/SKILL.md`
 
 - [ ] **Step 1: 写清楚 IDEA-CATALYST 是 IDEA 子流水线**
 - [ ] **Step 2: 写清楚 graph-first + bridge-first scouting 规则**
@@ -101,7 +101,7 @@
 ### Task 8: 验证与收尾
 
 **Files:**
-- Modify: `/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md`
+- Modify: `/workspace/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md`
 
 - [ ] **Step 1: 跑 PaperNexus 定向测试**
 - [ ] **Step 2: 跑 openclaw-research 定向测试**

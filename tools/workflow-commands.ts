@@ -11,6 +11,7 @@ import type {
 import {
   buildWorkflowSnapshot,
   ensureWorkflowProjectRoot,
+  bindChannelProjectForWorkflow,
   getResearchProgramStateSummary,
   getWorkflowGuardPolicy,
   inferTargetRoleFromToolParams,
@@ -51,6 +52,7 @@ import {
   type WorkflowCommandKind,
   type WorkflowCommandDependencies,
   type WorkflowCommandApi,
+  type WorkflowCommandContext,
   type ResolvedWorkflowCommandTarget,
   type WorkflowSnapshot,
   type ExistingWorkflowProjectSelection,
@@ -90,6 +92,7 @@ export type {
   WorkflowCommandKind,
   WorkflowCommandDependencies,
   WorkflowCommandApi,
+  WorkflowCommandContext,
   ResolvedWorkflowCommandTarget,
   WorkflowSnapshot,
   ExistingWorkflowProjectSelection,
@@ -114,6 +117,8 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   buildWorkflowSnapshot,
   runWorkflowAutoIterator,
   startBackgroundWorkflowRun,
+  bindChannelProjectForWorkflow,
+  setResearchProgramState,
   unbindChannelProjectForWorkflow,
   runIdeaCatalystResearch30,
   runCitationCalibration,
@@ -279,6 +284,14 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
   {
     label: COMMAND_LABELS.project_init,
     intro: "初始化或刷新当前项目的 research program onboarding。",
+  },
+  {
+    label: COMMAND_LABELS.auto_research,
+    intro: "只输入主题就启动全自动科研主线：自动建项目、补最小 onboarding、绑定频道并后台启动主 pipeline。",
+  },
+  {
+    label: COMMAND_LABELS.auto_review,
+    intro: "只输入主题就启动全自动综述主线：自动建 survey 项目、绑定频道并后台启动 survey pipeline。",
   },
   {
     label: COMMAND_LABELS.clear_project_binding,
@@ -477,8 +490,16 @@ async function resolveProjectRootForProjectBoundCommand(params: {
 export function resolveWorkflowCommandSessionTarget(
   api: Pick<WorkflowCommandApi, "runtime">,
   ctx: Pick<
-    PluginCommandContext,
-    "channel" | "from" | "to" | "accountId" | "messageThreadId" | "config"
+    WorkflowCommandContext,
+    | "channel"
+    | "from"
+    | "to"
+    | "accountId"
+    | "messageThreadId"
+    | "config"
+    | "commandTargetSessionKey"
+    | "commandSource"
+    | "originatingTo"
   >,
   resolveBindingRecord: WorkflowCommandDependencies["resolveConversationBindingRecord"] = DEFAULT_DEPS.resolveConversationBindingRecord
 ): ResolvedWorkflowCommandTarget {
@@ -495,7 +516,15 @@ export function resolveWorkflowCommandSessionTarget(
         peer: routePeer,
       })
     : null;
-  const sessionKey = readString(bindingRecord?.targetSessionKey) ?? readString(route?.sessionKey) ?? null;
+  const explicitTargetSessionKey = readString(ctx.commandTargetSessionKey) ?? null;
+  const fallbackSessionKey =
+    readString(ctx.commandSource) === "native" ? null : readString((ctx as { sessionKey?: string | null }).sessionKey);
+  const sessionKey =
+    explicitTargetSessionKey ??
+    readString(bindingRecord?.targetSessionKey) ??
+    readString(route?.sessionKey) ??
+    fallbackSessionKey ??
+    null;
   const agentId =
     extractAgentIdFromSessionKey(sessionKey) ?? readString(route?.agentId) ?? null;
   const workspaceDir =
@@ -785,6 +814,267 @@ function createProjectInitCommandHandler(
       });
       return {
         text: `❌ Failed to initialize the workflow project: ${message}`,
+      };
+    }
+  };
+}
+
+function buildAutoResearchBootstrapPatch(params: {
+  topic: string;
+  projectId: string;
+  zoteroProjectRoot?: string | null;
+  current: Awaited<ReturnType<typeof getResearchProgramStateSummary>>["state"];
+}) {
+  return {
+    status:
+      params.current.status === "missing" ? "draft" : params.current.status,
+    goal: params.current.goal ?? params.topic,
+    problem_statement: params.current.problemStatement ?? params.topic,
+    baseline_reference:
+      params.current.baselineReference ??
+      `${params.topic} literature baseline (auto-bootstrap)`,
+    primary_metric:
+      params.current.primaryMetric ??
+      "literature-grounded primary metric (auto-bootstrap)",
+    datasets:
+      params.current.datasets.length > 0
+        ? params.current.datasets
+        : [`${params.topic} target dataset (auto-bootstrap)`],
+    success_criteria:
+      params.current.successCriteria.length > 0
+        ? params.current.successCriteria
+        : [
+            "Infer a literature-grounded baseline, primary metric, and dataset envelope from the graph and literature, then advance the strongest experiment track automatically.",
+          ],
+    zotero_project_path:
+      params.current.zoteroProjectPath ??
+      defaultResearchProgramZoteroProjectPath(
+        params.projectId,
+        params.zoteroProjectRoot
+      ),
+    pending_reason:
+      params.current.pendingReason ??
+      "Auto-research bootstrap seeded provisional onboarding values from the topic; refine them with literature/graph evidence as the workflow advances.",
+  };
+}
+
+function createAutoResearchCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.auto_research;
+    try {
+      const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      const topic = extractQuotedSegment(ctx.args) ?? readString(ctx.args);
+      if (!topic) {
+        return {
+          text: `❌ ${commandLabel} requires a topic, for example: /auto-research "gcd confirmation bias mitigation"`,
+        };
+      }
+      const target = resolveWorkflowCommandSessionTarget(
+        api,
+        ctx,
+        deps.resolveConversationBindingRecord
+      );
+      const targetSessionKey = target.sessionKey;
+      if (!targetSessionKey) {
+        return {
+          text:
+            `❌ ${commandLabel} requires a resolved workflow session for this conversation. ` +
+            "Run it from a workflow-enabled channel or restore gateway routing first.",
+        };
+      }
+
+      const ensuredProject = await ensureWorkflowProjectRoot({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: targetSessionKey,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
+        title: topic,
+        topic,
+      });
+
+      await deps.bindChannelProjectForWorkflow({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: targetSessionKey,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
+        projectRoot: ensuredProject.projectRoot,
+        projectId: ensuredProject.projectId,
+        title: ensuredProject.title,
+        topic,
+        boundByAgent: "researcher",
+        notes: "Auto-bound during /auto-research bootstrap.",
+      });
+
+      const currentSummary = await getResearchProgramStateSummary({
+        projectRoot: ensuredProject.projectRoot,
+      });
+      const update = await deps.setResearchProgramState({
+        projectRoot: ensuredProject.projectRoot,
+        researchProgram: buildAutoResearchBootstrapPatch({
+          topic,
+          projectId: ensuredProject.projectId,
+          zoteroProjectRoot: workflowPolicy.zoteroProjectRoot,
+          current: currentSummary.state,
+        }),
+      });
+
+      const started = await deps.startBackgroundWorkflowRun({
+        runtimeSubagent: api.runtime?.subagent,
+        workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: target.workspaceDir ?? undefined,
+          sessionKey: targetSessionKey,
+          sessionId: undefined,
+          messageChannel: ctx.channel,
+          channelKey: target.bindingChannelKey ?? undefined,
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          channelProjectBindingsEnabled: true,
+        },
+        backgroundRun: {
+          kind: "research_pipeline",
+          projectId: ensuredProject.projectId,
+          projectRoot: ensuredProject.projectRoot,
+          topic,
+          title: topic,
+          triggerKind: "auto_research_command",
+          summary: `Full-auto research pipeline started for ${ensuredProject.projectId}.`,
+          commandText: buildResearchPipelineBackgroundCommand(
+            `/research-pipeline ${JSON.stringify(topic)} -- AUTO_PROCEED: true`
+          ),
+        },
+      });
+
+      return {
+        text:
+          `Full-auto research pipeline started for ${ensuredProject.projectId}.\n` +
+          `project_root=${ensuredProject.projectRoot}\n` +
+          `onboarding=${update.onboardingStatus}\n` +
+          `summary=${started.summary}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to start full-auto research pipeline.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to start /auto-research: ${message}`,
+      };
+    }
+  };
+}
+
+function createAutoReviewCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.auto_review;
+    try {
+      const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      const topic = extractQuotedSegment(ctx.args) ?? readString(ctx.args);
+      if (!topic) {
+        return {
+          text: `❌ ${commandLabel} requires a topic, for example: /auto-review "graph reasoning survey"`,
+        };
+      }
+      const target = resolveWorkflowCommandSessionTarget(
+        api,
+        ctx,
+        deps.resolveConversationBindingRecord
+      );
+      const targetSessionKey = target.sessionKey;
+      if (!targetSessionKey) {
+        return {
+          text:
+            `❌ ${commandLabel} requires a resolved workflow session for this conversation. ` +
+            "Run it from a workflow-enabled channel or restore gateway routing first.",
+        };
+      }
+
+      const ensuredProject = await ensureWorkflowProjectRoot({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: targetSessionKey,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
+        projectId: `survey-${sanitizeProjectIdFragment(topic)}`,
+        title: topic,
+        topic,
+        workflowLine: "survey",
+      });
+
+      await deps.bindChannelProjectForWorkflow({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: targetSessionKey,
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey ?? undefined,
+        projectRoot: ensuredProject.projectRoot,
+        projectId: ensuredProject.projectId,
+        title: ensuredProject.title,
+        topic,
+        boundByAgent: "researcher",
+        notes: "Auto-bound during /auto-review bootstrap.",
+      });
+
+      const started = await deps.startBackgroundWorkflowRun({
+        runtimeSubagent: api.runtime?.subagent,
+        workflowPolicy,
+        agentCtx: {
+          agentId: "researcher",
+          workspaceDir: target.workspaceDir ?? undefined,
+          sessionKey: targetSessionKey,
+          sessionId: undefined,
+          messageChannel: ctx.channel,
+          channelKey: target.bindingChannelKey ?? undefined,
+        },
+        snapshot: {
+          role: "researcher",
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          channelProjectBindingsEnabled: true,
+        },
+        backgroundRun: {
+          kind: "survey_review",
+          projectId: ensuredProject.projectId,
+          projectRoot: ensuredProject.projectRoot,
+          topic,
+          title: topic,
+          triggerKind: "auto_review_command",
+          summary: `Full-auto survey pipeline started for ${ensuredProject.projectId}.`,
+          commandText: buildSurveyReviewBackgroundCommand(
+            `/survey-pipeline ${JSON.stringify(topic)}`
+          ),
+        },
+      });
+
+      return {
+        text:
+          `Full-auto survey pipeline started for ${ensuredProject.projectId}.\n` +
+          `project_root=${ensuredProject.projectRoot}\n` +
+          `summary=${started.summary}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to start full-auto survey pipeline.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to start /auto-review: ${message}`,
       };
     }
   };
@@ -1244,6 +1534,20 @@ export function createResearchWorkflowCommands(
         "Initialize or refresh the guided workflow onboarding contract for the current project.",
       acceptsArgs: true,
       handler: createProjectInitCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "auto-research",
+      description:
+        "Start the full automated research pipeline from only a topic by bootstrapping a project and running the main pipeline in the background.",
+      acceptsArgs: true,
+      handler: createAutoResearchCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "auto-review",
+      description:
+        "Start the full automated survey pipeline from only a topic by bootstrapping a survey project and running the survey line in the background.",
+      acceptsArgs: true,
+      handler: createAutoReviewCommandHandler(api, resolvedDeps),
     },
     {
       name: "clear-project-binding",

@@ -8,7 +8,7 @@
 - `docs/superpowers/plans/2026-04-03-openclaw-research-system-status-summary.zh-CN.md`
 - `docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md`
 - `docs/superpowers/plans/2026-04-03-idea-catalyst-kg-subpipeline.md`
-- `/Users/iranb/.gemini/antigravity/brain/ba90158e-9154-484f-b2c3-5e52335f4f98/artifacts/functional_audit_v2.md.resolved.0`
+- `/workspace/internal/artifacts/functional_audit_v2.md.resolved`
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## 目标
 
-把 [IDEA_CATALYST_MultiAgent_Blueprint.md](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/superpowers/plans/IDEA_CATALYST_MultiAgent_Blueprint.md) 里的两条主线落地：
+把 IDEA_CATALYST_MultiAgent_Blueprint.md 里的两条主线落地：
 
 1. `PaperNexus` 先具备最小可用的跨领域 KG/schema primitive  
 2. `openclaw-research` 的 `IDEA` 阶段拥有正式的 IDEA-CATALYST 子流水线，而不是只靠单个脚本或 prompt
