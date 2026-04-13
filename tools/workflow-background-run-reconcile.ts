@@ -217,6 +217,35 @@ function isImportWrapperQueueKey(value: string | null): boolean {
   return Boolean(value && PAPERNEXUS_IMPORT_WRAPPER_PATTERN.test(value));
 }
 
+async function readManifestRecordIfPresent(
+  manifestPath: string
+): Promise<Record<string, unknown> | null> {
+  let manifestRaw: string;
+  try {
+    manifestRaw = await fs.readFile(manifestPath, "utf8");
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (!manifestRaw.trim()) {
+    return null;
+  }
+  try {
+    return asRecord(JSON.parse(manifestRaw)) ?? {};
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function inferBackgroundRunTerminalStateFromDurableState(params: {
   entry: BackgroundRunTerminalEntry;
 }): Promise<BackgroundRunDurableTerminalState | null> {
@@ -251,20 +280,10 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
   }
 
   const manifestPath = path.join(entry.projectRoot, "PROJECT_MANIFEST.json");
-  let manifestRaw: string;
-  try {
-    manifestRaw = await fs.readFile(manifestPath, "utf8");
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : null;
-    if (code === "ENOENT") {
-      return null;
-    }
-    throw error;
+  const manifest = await readManifestRecordIfPresent(manifestPath);
+  if (!manifest) {
+    return null;
   }
-  const manifest = asRecord(JSON.parse(manifestRaw)) ?? {};
   const paperIngestionRecord = asRecord(manifest.paper_ingestion) ?? {};
   const paperIngestion = normalizePaperIngestionState(paperIngestionRecord);
   const matchedRequest = paperIngestion.queuedRequests.find(
@@ -347,20 +366,10 @@ async function reconcilePaperIngestionTerminalState(params: {
     return false;
   }
   const manifestPath = path.join(params.entry.projectRoot, "PROJECT_MANIFEST.json");
-  let manifestRaw: string;
-  try {
-    manifestRaw = await fs.readFile(manifestPath, "utf8");
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : null;
-    if (code === "ENOENT") {
-      return false;
-    }
-    throw error;
+  const manifest = await readManifestRecordIfPresent(manifestPath);
+  if (!manifest) {
+    return false;
   }
-  const manifest = asRecord(JSON.parse(manifestRaw)) ?? {};
   const paperIngestionRecord = asRecord(manifest.paper_ingestion) ?? {};
   const paperIngestion = normalizePaperIngestionState(paperIngestionRecord);
   const graphPresenceStatus = normalizeGraphPresenceStatus(

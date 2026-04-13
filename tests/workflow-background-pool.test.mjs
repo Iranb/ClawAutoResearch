@@ -97,6 +97,55 @@ test("workflow background pool tolerates an empty legacy registry file left by a
   assert.deepEqual(listed.entries, []);
 });
 
+test("workflow background pool tolerates malformed project manifests while reconciling stale papernexus sessions", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "workflow-background-pool-bad-manifest-")
+  );
+  const projectRoot = path.join(workspaceRoot, "demo-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    '{"project_id":"demo-project",',
+    "utf8"
+  );
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:channel:test-room",
+    requesterSessionKey: "agent:researcher:discord:channel:test-room",
+    backgroundSessionKey:
+      "agent:researcher:discord:channel:test-room:subagent:papernexus-skill:corpus:demo-project",
+    runId: "run:papernexus-import",
+    queueKey:
+      "background-run:agent:researcher:discord:channel:test-room:papernexus:papernexus_wrapper:demo-project:python3 scripts/pn_batch_import.py --shared-corpus GCD --refresh",
+    family: "papernexus",
+    kind: "papernexus_wrapper",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const sessionsPath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "workflow-runtime-sessions.json"
+  );
+  const sessionsStore = JSON.parse(await fs.readFile(sessionsPath, "utf8"));
+  sessionsStore.entries[0].startedAt = new Date(Date.now() - 20_000).toISOString();
+  await fs.writeFile(sessionsPath, `${JSON.stringify(sessionsStore, null, 2)}\n`, "utf8");
+
+  const listed = await listBackgroundWorkflowRuns({
+    ownerAgent: "researcher",
+    projectId: "demo-project",
+    projectRoot,
+  });
+  assert.equal(listed.entries.length, 1);
+  assert.ok(["active", "idle", "needs_repair"].includes(listed.entries[0].status));
+});
+
 test("workflow background pool reconciles stale active PaperNexus import sessions from durable state", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "workflow-background-pool-project-")

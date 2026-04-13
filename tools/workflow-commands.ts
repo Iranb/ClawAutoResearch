@@ -19,6 +19,10 @@ import {
   setResearchProgramState,
   unbindChannelProjectForWorkflow,
 } from "./workflow-guard.js";
+import {
+  deriveAgentSessionKeyForRole,
+  type DispatchableWorkflowRole,
+} from "./agent-task-dispatch";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
@@ -112,6 +116,18 @@ type WorkflowAutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoItera
 type WorkflowGateReviewStore = Awaited<ReturnType<typeof readGateReviewStore>>;
 type WorkflowCodeReviewStore = Awaited<ReturnType<typeof readCodeReviewStore>>;
 type WorkflowAutoDiscussionStore = Awaited<ReturnType<typeof readAutoModeDiscussionStore>>;
+
+function deriveWorkflowRoleSessionKey(params: {
+  sessionKey: string | null;
+  role: DispatchableWorkflowRole;
+}): string | null {
+  return params.sessionKey
+    ? deriveAgentSessionKeyForRole({
+        requesterSessionKey: params.sessionKey,
+        targetRole: params.role,
+      })
+    : null;
+}
 
 const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   resolveConversationBindingRecord: defaultResolveConversationBindingRecord,
@@ -892,11 +908,15 @@ function createAutoResearchCommandHandler(
             "Run it from a workflow-enabled channel or restore gateway routing first.",
         };
       }
+      const researcherSessionKey = deriveWorkflowRoleSessionKey({
+        sessionKey: targetSessionKey,
+        role: "researcher",
+      });
 
       const ensuredProject = await ensureWorkflowProjectRoot({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: researcherSessionKey ?? targetSessionKey,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
         title: topic,
@@ -906,7 +926,7 @@ function createAutoResearchCommandHandler(
       await deps.bindChannelProjectForWorkflow({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: researcherSessionKey ?? targetSessionKey,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
         projectRoot: ensuredProject.projectRoot,
@@ -936,7 +956,7 @@ function createAutoResearchCommandHandler(
         agentCtx: {
           agentId: "researcher",
           workspaceDir: target.workspaceDir ?? undefined,
-          sessionKey: targetSessionKey,
+          sessionKey: researcherSessionKey ?? targetSessionKey,
           sessionId: undefined,
           messageChannel: ctx.channel,
           channelKey: target.bindingChannelKey ?? undefined,
@@ -1009,11 +1029,15 @@ function createAutoReviewCommandHandler(
             "Run it from a workflow-enabled channel or restore gateway routing first.",
         };
       }
+      const researcherSessionKey = deriveWorkflowRoleSessionKey({
+        sessionKey: targetSessionKey,
+        role: "researcher",
+      });
 
       const ensuredProject = await ensureWorkflowProjectRoot({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: researcherSessionKey ?? targetSessionKey,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
         projectId: `survey-${sanitizeProjectIdFragment(topic)}`,
@@ -1025,7 +1049,7 @@ function createAutoReviewCommandHandler(
       await deps.bindChannelProjectForWorkflow({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: researcherSessionKey ?? targetSessionKey,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
         projectRoot: ensuredProject.projectRoot,
@@ -1042,7 +1066,7 @@ function createAutoReviewCommandHandler(
         agentCtx: {
           agentId: "researcher",
           workspaceDir: target.workspaceDir ?? undefined,
-          sessionKey: targetSessionKey,
+          sessionKey: researcherSessionKey ?? targetSessionKey,
           sessionId: undefined,
           messageChannel: ctx.channel,
           channelKey: target.bindingChannelKey ?? undefined,

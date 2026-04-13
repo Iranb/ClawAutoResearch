@@ -269,12 +269,18 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
+    if (!raw.trim()) {
+      return null;
+    }
     return JSON.parse(raw) as T;
   } catch (error) {
     const code =
       error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : null;
+    if (error instanceof SyntaxError) {
+      return null;
+    }
     if (code === "ENOENT") {
       return null;
     }

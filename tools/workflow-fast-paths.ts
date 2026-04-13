@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   dispatchWorkflowTaskToAgent,
+  deriveAgentSessionKeyForRole,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
@@ -72,6 +73,50 @@ function readString(value: unknown): string | undefined {
 
 function normalizeAgentId(value: unknown): string | null {
   return readString(value)?.toLowerCase() ?? null;
+}
+
+function asDispatchableWorkflowRole(
+  value: string | null | undefined
+): DispatchableWorkflowRole | null {
+  const normalized = normalizeAgentId(value);
+  return normalized === "researcher" ||
+    normalized === "planner" ||
+    normalized === "orchestrator" ||
+    normalized === "coder" ||
+    normalized === "analyzer" ||
+    normalized === "academic_writer" ||
+    normalized === "reviewer" ||
+    normalized === "cross-reviewer"
+    ? (normalized as DispatchableWorkflowRole)
+    : null;
+}
+
+function readAgentIdFromSessionKey(sessionKey: string | null | undefined): string | null {
+  const normalized = readString(sessionKey);
+  if (!normalized?.startsWith("agent:")) {
+    return null;
+  }
+  const parts = normalized.split(":");
+  return parts.length >= 2 ? normalizeAgentId(parts[1]) : null;
+}
+
+function resolveRequesterSessionKeyForOwner(params: {
+  requesterSessionKey?: string | null;
+  ownerAgent?: string | null;
+}): string | null {
+  const requesterSessionKey = readString(params.requesterSessionKey) ?? null;
+  const ownerRole = asDispatchableWorkflowRole(params.ownerAgent ?? null);
+  if (!requesterSessionKey || !ownerRole) {
+    return requesterSessionKey;
+  }
+  const sessionRole = readAgentIdFromSessionKey(requesterSessionKey);
+  if (sessionRole === ownerRole) {
+    return requesterSessionKey;
+  }
+  return deriveAgentSessionKeyForRole({
+    requesterSessionKey,
+    targetRole: ownerRole,
+  });
 }
 
 function isGatewaySubagentUnavailableError(error: unknown): boolean {
@@ -2830,6 +2875,13 @@ export async function startBackgroundWorkflowRun(params: {
     readString(params.backgroundRun.title) ?? topic;
   const shouldEnsureProjectBinding =
     params.backgroundRun.ensureProjectBinding === false ? false : true;
+  const ownerAgent =
+    normalizeAgentId(params.agentCtx.agentId) ?? normalizeAgentId(params.snapshot.role);
+  const requesterSessionKeyForOwner =
+    resolveRequesterSessionKeyForOwner({
+      requesterSessionKey: params.agentCtx.sessionKey,
+      ownerAgent,
+    }) ?? params.agentCtx.sessionKey;
 
   let ensuredProject:
     | Awaited<ReturnType<typeof ensureWorkflowProjectRoot>>
@@ -2838,7 +2890,7 @@ export async function startBackgroundWorkflowRun(params: {
     ensuredProject = await ensureWorkflowProjectRoot({
       policy: params.workflowPolicy,
       workspaceDir: params.agentCtx.workspaceDir,
-      sessionKey: params.agentCtx.sessionKey,
+      sessionKey: requesterSessionKeyForOwner,
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
       channelKey: params.agentCtx.channelKey,
@@ -2855,7 +2907,7 @@ export async function startBackgroundWorkflowRun(params: {
       await bindChannelProjectForWorkflow({
         policy: params.workflowPolicy,
         workspaceDir: params.agentCtx.workspaceDir,
-        sessionKey: params.agentCtx.sessionKey,
+        sessionKey: requesterSessionKeyForOwner,
         sessionId: params.agentCtx.sessionId,
         messageChannel: params.agentCtx.messageChannel,
         channelKey: params.agentCtx.channelKey,
@@ -2914,11 +2966,9 @@ export async function startBackgroundWorkflowRun(params: {
     );
   }
 
-  const ownerAgent =
-    normalizeAgentId(params.agentCtx.agentId) ?? normalizeAgentId(params.snapshot.role);
   const channelKey = deriveBackgroundRunChannelKey({
     channelKey: params.agentCtx.channelKey,
-    sessionKey: params.agentCtx.sessionKey,
+    sessionKey: requesterSessionKeyForOwner,
     messageChannel: params.agentCtx.messageChannel,
   });
   const resolvedProjectId =
@@ -2979,7 +3029,7 @@ export async function startBackgroundWorkflowRun(params: {
     backgroundRunExtraSystemPrompt = execPayload.extraBodyForDispatch;
   }
   const queueKey = buildBackgroundRunQueueKey({
-    requesterSessionKey: params.agentCtx.sessionKey,
+    requesterSessionKey: requesterSessionKeyForOwner,
     family: normalizedFamily,
     kind: normalizedKind,
     projectId: resolvedProjectId,
@@ -3034,7 +3084,7 @@ export async function startBackgroundWorkflowRun(params: {
 
   const preferredBackgroundSessionKey =
     buildWorkflowSubagentSessionKey({
-      parentSessionKey: params.agentCtx.sessionKey,
+      parentSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
       purpose:
         isPapernexusBackgroundKind(normalizedKind) &&
         looksLikePapernexusHeavyCommand(commandText)
@@ -3057,7 +3107,10 @@ export async function startBackgroundWorkflowRun(params: {
   const queueIfRuntimeUnavailable = async (reason?: string | null) =>
     queueBackgroundWorkflowUntilRuntimeRecovers({
       workflowPolicy: params.workflowPolicy,
-      agentCtx: params.agentCtx,
+      agentCtx: {
+        ...params.agentCtx,
+        sessionKey: requesterSessionKeyForOwner ?? undefined,
+      },
       ownerAgent,
       queueKey,
       preferredSessionKey: preferredBackgroundSessionKey,
@@ -3101,7 +3154,7 @@ export async function startBackgroundWorkflowRun(params: {
   const sessionLease = await acquireBackgroundWorkflowSession({
     runtimeSubagent: params.runtimeSubagent,
     ownerAgent,
-    requesterSessionKey: params.agentCtx.sessionKey,
+    requesterSessionKey: requesterSessionKeyForOwner ?? undefined,
     messageChannel: params.agentCtx.messageChannel,
     channelKey: params.agentCtx.channelKey,
     preferredSessionKey: preferredBackgroundSessionKey,
@@ -3120,7 +3173,7 @@ export async function startBackgroundWorkflowRun(params: {
     const queued = await enqueueQueuedBackgroundWorkflowRun({
       source: "start_background_run",
       ownerAgent,
-      requesterSessionKey: params.agentCtx.sessionKey,
+      requesterSessionKey: requesterSessionKeyForOwner ?? undefined,
       messageChannel: params.agentCtx.messageChannel,
       channelKey: params.agentCtx.channelKey,
       preferredSessionKey: preferredBackgroundSessionKey,
@@ -3170,7 +3223,7 @@ export async function startBackgroundWorkflowRun(params: {
           entryType: "background_run",
           ownerAgent: ownerAgent ?? "researcher",
           channelKey: channelKey ?? backgroundSessionKey,
-          requesterSessionKey: params.agentCtx.sessionKey,
+          requesterSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
           messageChannel: params.agentCtx.messageChannel ?? null,
           preferredSessionKey: preferredBackgroundSessionKey,
           family: normalizedFamily,
@@ -3178,7 +3231,7 @@ export async function startBackgroundWorkflowRun(params: {
           summary:
             readString(params.backgroundRun.summary) ??
             `Start background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
-          parentSessionKey: params.agentCtx.sessionKey,
+          parentSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
           depth: 1,
           runPayload: {
             message: commandText,
@@ -3204,7 +3257,7 @@ export async function startBackgroundWorkflowRun(params: {
             role: ownerAgent,
             agentId: ownerAgent,
             ownerAgent,
-            parentSessionKey: params.agentCtx.sessionKey,
+            parentSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
             depth: 1,
           };
         },
@@ -3293,19 +3346,19 @@ export async function startBackgroundWorkflowRun(params: {
   }
 
   if (ownerAgent === "researcher" && channelKey) {
-      await recordBackgroundWorkflowRun({
+    await recordBackgroundWorkflowRun({
       ownerAgent,
       channelKey,
-      requesterSessionKey: params.agentCtx.sessionKey,
+      requesterSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
       backgroundSessionKey: directLaunch?.sessionKey ?? backgroundSessionKey,
       runId,
       queueKey,
       kind: normalizedKind,
-        family: normalizedFamily,
-        projectId: resolvedProjectId,
-        projectRoot: resolvedProjectRoot,
-        projectsRoot: params.workflowPolicy.projectsRoot,
-      });
+      family: normalizedFamily,
+      projectId: resolvedProjectId,
+      projectRoot: resolvedProjectRoot,
+      projectsRoot: params.workflowPolicy.projectsRoot,
+    });
   }
 
   return {
