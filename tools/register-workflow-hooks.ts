@@ -589,6 +589,30 @@ async function runSubagentSpawningHook(params: {
   return;
 }
 
+async function runWorkflowHookSafely<T>(params: {
+  plugin: PluginRegistrationContext;
+  hookName: string;
+  agentCtx?: ToolContext | null;
+  task: () => Promise<T>;
+}): Promise<T | undefined> {
+  try {
+    return await params.task();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    params.plugin.api.logger?.warn?.(
+      `Workflow hook ${params.hookName} failed; continuing without hook output.`,
+      {
+        hook: params.hookName,
+        agentId: params.agentCtx?.agentId ?? null,
+        sessionKey: params.agentCtx?.sessionKey ?? null,
+        workspaceDir: params.agentCtx?.workspaceDir ?? null,
+        error: message,
+      }
+    );
+    return undefined;
+  }
+}
+
 export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
   if (!plugin.api.on) {
     return;
@@ -601,255 +625,262 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       if (!isExplicitWorkflowHookAgent(agentCtx)) {
         return;
       }
-      const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
+      return runWorkflowHookSafely({
         plugin,
+        hookName: "before_prompt_build",
         agentCtx,
-        autoBind: false,
+        task: async () => {
+          const { workflowPolicy, snapshot } = await resolveWorkflowSnapshotForAgentContext({
+            plugin,
+            agentCtx,
+            autoBind: false,
+          });
+          if (
+            workflowPolicy.enableChannelProjectBindings &&
+            workflowPolicy.projectsRoot
+          ) {
+            await ensureProjectsBindingIndex({
+              projectsRoot: workflowPolicy.projectsRoot,
+            });
+          }
+          if (snapshot.projectRoot && snapshot.role) {
+            if (agentCtx.sessionKey) {
+              await upsertWorkflowAgentCapability({
+                projectRoot: snapshot.projectRoot,
+                projectId: snapshot.projectId,
+                sessionKey: agentCtx.sessionKey,
+                sessionId: agentCtx.sessionId,
+                role: snapshot.role,
+                agentId: agentCtx.agentId,
+                messageChannel: agentCtx.messageChannel,
+                canUseResearchWorkflow: true,
+                canReceiveNativeDispatch: true,
+                canRunExecPacket: true,
+                confidence: "high",
+              }).catch(() => null);
+            }
+            await autoAcknowledgeWorkflowMailboxForAgent({
+              projectRoot: snapshot.projectRoot,
+              agentId: snapshot.role,
+              handoffOnly: true,
+            });
+          }
+          const trigger = readString(hookCtx.trigger);
+          let heartbeatClaimedTaskId: string | null = null;
+          if (
+            trigger === "heartbeat" &&
+            workflowPolicy.teamRuntime?.enabled !== false &&
+            snapshot.projectRoot &&
+            snapshot.role &&
+            agentCtx.sessionKey
+          ) {
+            const claimed = await claimNextWorkflowTaskForOwner({
+              projectRoot: snapshot.projectRoot,
+              owner: snapshot.role,
+              sessionKey: agentCtx.sessionKey,
+            }).catch(() => null);
+            if (claimed?.claimed && claimed.task) {
+              heartbeatClaimedTaskId = claimed.task.taskId;
+              await recordWorkflowTeamRoundClaim({
+                projectRoot: snapshot.projectRoot,
+                sessionKey: agentCtx.sessionKey,
+                taskId: claimed.task.taskId,
+              }).catch(() => null);
+            }
+          }
+          if (!workflowPolicy.injectWorkflowContext) {
+            return;
+          }
+          if (trigger === "heartbeat" && !workflowPolicy.heartbeatBackgroundChecks) {
+            return;
+          }
+          const latestPromptLikeText = getLatestPromptLikeText(
+            Array.isArray(event.messages) ? event.messages : []
+          );
+          const queuedLiteratureDiscoveryFastPath =
+            snapshot.role === "researcher" &&
+            !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
+              ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
+              : null;
+          const extraContext: string[] = [];
+          if (snapshot.currentStage === "survey_review" || snapshot.writingPaperMode === "survey") {
+            extraContext.push(
+              "[Survey Route Guard]",
+              "This is a survey workflow. Do not hand-edit PROJECT_MANIFEST.json.current_stage to skip stages, and do not create coder/experiments stubs or fake experiment manifests.",
+              "Use research_workflow.recover_survey_route or research_workflow.materialize_survey_review_state when the workflow drifts toward idea/plan/code/experiment/analyze.",
+              "[/Survey Route Guard]"
+            );
+          }
+          if (heartbeatClaimedTaskId) {
+            extraContext.push(
+              "[TeammateIdle Continuation]",
+              `A claimable workflow team task was assigned during heartbeat: ${heartbeatClaimedTaskId}.`,
+              "Continue that task now. When the durable outputs are ready, call research_workflow.complete_task with this taskId so verification can either mark it satisfied or return repair feedback, then auto-claim the next task if one is available.",
+              "[/TeammateIdle Continuation]"
+            );
+          }
+          if (
+            snapshot.role === "researcher" &&
+            looksLikeResearchPipelineCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to come from /research-pipeline.",
+              "Before doing heavy work, call research_workflow with action start_background_run and backgroundRun.kind=research_pipeline.",
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildResearchPipelineBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "After the tool returns, reply briefly that the research pipeline has started and stop. The background continuation will perform the real workflow.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role === "researcher" &&
+            looksLikeResearchQueueCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to come from /research-queue.",
+              "Before doing heavy work, call research_workflow with action start_background_run and backgroundRun.kind=research_queue.",
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildResearchQueueBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "After the tool returns, reply briefly that the research queue task has started and stop. The background continuation will perform the real queue workflow.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role === "researcher" &&
+            snapshot.projectRoot &&
+            looksLikeLiteratureReviewCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to come from /literature-review.",
+              'Before doing heavy review work, call research_workflow with action start_background_run and backgroundRun.kind="literature_review".',
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildLiteratureReviewBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "Keep the pass project-scoped, durable, and bounded. After the tool returns, reply briefly that the background literature review has started and stop. The background continuation will materialize the real review packet.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role === "researcher" &&
+            looksLikeSurveyPipelineCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to come from /survey-pipeline.",
+              'Before doing heavy survey work, call research_workflow with action start_background_run and backgroundRun.kind="survey_review".',
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildSurveyReviewBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "After the tool returns, reply briefly that the background survey pipeline has started and stop. The background continuation will materialize the real survey packet.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role === "researcher" &&
+            snapshot.currentStage === "survey_review" &&
+            looksLikePaperPlanCommand(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Survey Paper Plan]",
+              "This is a survey workflow. Do not route /paper-plan through the experiment-paper plan/code/experiment stages.",
+              "First call research_workflow.materialize_survey_review_state to reconcile SURVEY_QUERY_REGISTRY.json, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, COVERAGE_SUMMARY.md, and SURVEY_BRIEF.md.",
+              "Then draft or update the survey outline/taxonomy plan under researcher/SURVEY_OUTLINE.md or academic_writer/PAPER_PLAN.md using the survey_review packet as the source of truth.",
+              "Do not create coder/experiments stubs or fake experiment manifests for survey papers.",
+              "[/Survey Paper Plan]"
+            );
+          } else if (
+            snapshot.role &&
+            looksLikePapernexusHeavyCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText) &&
+            !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to invoke authenticated PaperNexus live-graph work.",
+              "Before calling remote typed PaperNexus APIs or other heavy graph work, prefer research_workflow with action run_papernexus_wrapper when you know the wrapper and args. Legacy compatibility fallback: call start_background_run with backgroundRun.kind=papernexus_wrapper and an explicit wrapper commandText.",
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildPapernexusSkillBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "After the tool returns, reply briefly that the PaperNexus wrapper task has started in a dedicated subagent and stop. The background continuation will perform the real typed brief / brainstorm / evidence / graph work.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role &&
+            looksLikeResumePipelineCommand(latestPromptLikeText) &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Slash Fast Path]",
+              "This turn appears to come from /resume-pipeline.",
+              "Before doing heavy reconciliation work, call research_workflow with action start_background_run and backgroundRun.kind=resume_pipeline.",
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                buildResumePipelineBackgroundCommand(latestPromptLikeText ?? "")
+              )}`,
+              "After the tool returns, reply briefly that the resume pipeline task has started and stop. The background continuation will perform the actual reconciliation.",
+              "[/Slash Fast Path]"
+            );
+          } else if (
+            snapshot.role === "researcher" &&
+            queuedLiteratureDiscoveryFastPath &&
+            !hasBackgroundContinuationMarker(latestPromptLikeText)
+          ) {
+            extraContext.push(
+              "[Workflow-Owned Literature Fast Path]",
+              `A workflow-owned literature discovery request (${queuedLiteratureDiscoveryFastPath.requestId}) is ${queuedLiteratureDiscoveryFastPath.status} for this project.`,
+              "If the current turn needs you to continue that queued literature-discovery pass, do not execute the full pass inline in this foreground Researcher session.",
+              'Instead call research_workflow with action start_background_run and backgroundRun.kind="research_queue".',
+              `Pass backgroundRun.commandText as: ${JSON.stringify(
+                queuedLiteratureDiscoveryFastPath.commandText
+              )}`,
+              "After the tool returns, reply briefly that the background literature-discovery pass has started. If the user asked a direct question or status check, answer it normally in the foreground while the background session continues.",
+              "Do not start a duplicate run if the queue entry is no longer queued by the time you act.",
+              "[/Workflow-Owned Literature Fast Path]"
+            );
+          }
+          const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
+          const focusedAssembly =
+            detailLevel === "focused"
+              ? buildFocusedPromptAssembly({ snapshot, trigger })
+              : null;
+          const workflowPrompt =
+            focusedAssembly?.text ??
+            formatWorkflowSnapshotForPrompt({
+              snapshot,
+              trigger,
+              detailLevel,
+            });
+          if (detailLevel === "focused" && snapshot.projectRoot) {
+            await appendWorkflowTraceEvent({
+              projectRoot: snapshot.projectRoot,
+              projectId: snapshot.projectId,
+              kind: "prompt_assembly",
+              action: "focused_prompt_build",
+              functionName: "buildFocusedPromptAssembly",
+              stage: snapshot.currentStage,
+              owner: snapshot.ownerAgent,
+              agentId: snapshot.role,
+              sessionKey: agentCtx.sessionKey,
+              summary: `Focused prompt assembled for ${snapshot.role ?? "agent"}`,
+              details: {
+                trigger,
+                promptLayerProfile: focusedAssembly?.metadata.promptLayerProfile,
+                promptPayloadSizes: focusedAssembly?.metadata.promptPayloadSizes,
+                sectionContextId: focusedAssembly?.metadata.sectionContextId,
+                reviewLane: focusedAssembly?.metadata.reviewLane,
+                roundId: focusedAssembly?.metadata.roundId,
+              },
+            });
+          }
+          return {
+            prependContext: [...extraContext, workflowPrompt].filter(Boolean).join("\n"),
+          };
+        },
       });
-      if (
-        workflowPolicy.enableChannelProjectBindings &&
-        workflowPolicy.projectsRoot
-      ) {
-        await ensureProjectsBindingIndex({
-          projectsRoot: workflowPolicy.projectsRoot,
-        });
-      }
-      if (snapshot.projectRoot && snapshot.role) {
-        if (agentCtx.sessionKey) {
-          await upsertWorkflowAgentCapability({
-            projectRoot: snapshot.projectRoot,
-            projectId: snapshot.projectId,
-            sessionKey: agentCtx.sessionKey,
-            sessionId: agentCtx.sessionId,
-            role: snapshot.role,
-            agentId: agentCtx.agentId,
-            messageChannel: agentCtx.messageChannel,
-            canUseResearchWorkflow: true,
-            canReceiveNativeDispatch: true,
-            canRunExecPacket: true,
-            confidence: "high",
-          }).catch(() => null);
-        }
-        await autoAcknowledgeWorkflowMailboxForAgent({
-          projectRoot: snapshot.projectRoot,
-          agentId: snapshot.role,
-          handoffOnly: true,
-        });
-      }
-      const trigger = readString(hookCtx.trigger);
-      let heartbeatClaimedTaskId: string | null = null;
-      if (
-        trigger === "heartbeat" &&
-        workflowPolicy.teamRuntime?.enabled !== false &&
-        snapshot.projectRoot &&
-        snapshot.role &&
-        agentCtx.sessionKey
-      ) {
-        const claimed = await claimNextWorkflowTaskForOwner({
-          projectRoot: snapshot.projectRoot,
-          owner: snapshot.role,
-          sessionKey: agentCtx.sessionKey,
-        }).catch(() => null);
-        if (claimed?.claimed && claimed.task) {
-          heartbeatClaimedTaskId = claimed.task.taskId;
-          await recordWorkflowTeamRoundClaim({
-            projectRoot: snapshot.projectRoot,
-            sessionKey: agentCtx.sessionKey,
-            taskId: claimed.task.taskId,
-          }).catch(() => null);
-        }
-      }
-      if (!workflowPolicy.injectWorkflowContext) {
-        return;
-      }
-      if (trigger === "heartbeat" && !workflowPolicy.heartbeatBackgroundChecks) {
-        return;
-      }
-      const latestPromptLikeText = getLatestPromptLikeText(
-        Array.isArray(event.messages) ? event.messages : []
-      );
-      const queuedLiteratureDiscoveryFastPath =
-        snapshot.role === "researcher" &&
-        !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
-          ? await loadQueuedLiteratureDiscoveryForegroundFastPath(snapshot.projectRoot)
-          : null;
-      const extraContext: string[] = [];
-      if (snapshot.currentStage === "survey_review" || snapshot.writingPaperMode === "survey") {
-        extraContext.push(
-          "[Survey Route Guard]",
-          "This is a survey workflow. Do not hand-edit PROJECT_MANIFEST.json.current_stage to skip stages, and do not create coder/experiments stubs or fake experiment manifests.",
-          "Use research_workflow.recover_survey_route or research_workflow.materialize_survey_review_state when the workflow drifts toward idea/plan/code/experiment/analyze.",
-          "[/Survey Route Guard]"
-        );
-      }
-      if (heartbeatClaimedTaskId) {
-        extraContext.push(
-          "[TeammateIdle Continuation]",
-          `A claimable workflow team task was assigned during heartbeat: ${heartbeatClaimedTaskId}.`,
-          "Continue that task now. When the durable outputs are ready, call research_workflow.complete_task with this taskId so verification can either mark it satisfied or return repair feedback, then auto-claim the next task if one is available.",
-          "[/TeammateIdle Continuation]"
-        );
-      }
-      if (
-        snapshot.role === "researcher" &&
-        looksLikeResearchPipelineCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to come from /research-pipeline.",
-          "Before doing heavy work, call research_workflow with action start_background_run and backgroundRun.kind=research_pipeline.",
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildResearchPipelineBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "After the tool returns, reply briefly that the research pipeline has started and stop. The background continuation will perform the real workflow.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role === "researcher" &&
-        looksLikeResearchQueueCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to come from /research-queue.",
-          "Before doing heavy work, call research_workflow with action start_background_run and backgroundRun.kind=research_queue.",
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildResearchQueueBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "After the tool returns, reply briefly that the research queue task has started and stop. The background continuation will perform the real queue workflow.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role === "researcher" &&
-        snapshot.projectRoot &&
-        looksLikeLiteratureReviewCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to come from /literature-review.",
-          'Before doing heavy review work, call research_workflow with action start_background_run and backgroundRun.kind="literature_review".',
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildLiteratureReviewBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "Keep the pass project-scoped, durable, and bounded. After the tool returns, reply briefly that the background literature review has started and stop. The background continuation will materialize the real review packet.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role === "researcher" &&
-        looksLikeSurveyPipelineCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to come from /survey-pipeline.",
-          'Before doing heavy survey work, call research_workflow with action start_background_run and backgroundRun.kind="survey_review".',
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildSurveyReviewBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "After the tool returns, reply briefly that the background survey pipeline has started and stop. The background continuation will materialize the real survey packet.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role === "researcher" &&
-        snapshot.currentStage === "survey_review" &&
-        looksLikePaperPlanCommand(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Survey Paper Plan]",
-          "This is a survey workflow. Do not route /paper-plan through the experiment-paper plan/code/experiment stages.",
-          "First call research_workflow.materialize_survey_review_state to reconcile SURVEY_QUERY_REGISTRY.json, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, COVERAGE_SUMMARY.md, and SURVEY_BRIEF.md.",
-          "Then draft or update the survey outline/taxonomy plan under researcher/SURVEY_OUTLINE.md or academic_writer/PAPER_PLAN.md using the survey_review packet as the source of truth.",
-          "Do not create coder/experiments stubs or fake experiment manifests for survey papers.",
-          "[/Survey Paper Plan]"
-        );
-      } else if (
-        snapshot.role &&
-        looksLikePapernexusHeavyCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText) &&
-        !isWorkflowSubagentSessionKey(agentCtx.sessionKey)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to invoke authenticated PaperNexus live-graph work.",
-          "Before calling remote typed PaperNexus APIs or other heavy graph work, prefer research_workflow with action run_papernexus_wrapper when you know the wrapper and args. Legacy compatibility fallback: call start_background_run with backgroundRun.kind=papernexus_wrapper and an explicit wrapper commandText.",
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildPapernexusSkillBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "After the tool returns, reply briefly that the PaperNexus wrapper task has started in a dedicated subagent and stop. The background continuation will perform the real typed brief / brainstorm / evidence / graph work.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role &&
-        looksLikeResumePipelineCommand(latestPromptLikeText) &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Slash Fast Path]",
-          "This turn appears to come from /resume-pipeline.",
-          "Before doing heavy reconciliation work, call research_workflow with action start_background_run and backgroundRun.kind=resume_pipeline.",
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            buildResumePipelineBackgroundCommand(latestPromptLikeText ?? "")
-          )}`,
-          "After the tool returns, reply briefly that the resume pipeline task has started and stop. The background continuation will perform the actual reconciliation.",
-          "[/Slash Fast Path]"
-        );
-      } else if (
-        snapshot.role === "researcher" &&
-        queuedLiteratureDiscoveryFastPath &&
-        !hasBackgroundContinuationMarker(latestPromptLikeText)
-      ) {
-        extraContext.push(
-          "[Workflow-Owned Literature Fast Path]",
-          `A workflow-owned literature discovery request (${queuedLiteratureDiscoveryFastPath.requestId}) is ${queuedLiteratureDiscoveryFastPath.status} for this project.`,
-          "If the current turn needs you to continue that queued literature-discovery pass, do not execute the full pass inline in this foreground Researcher session.",
-          'Instead call research_workflow with action start_background_run and backgroundRun.kind="research_queue".',
-          `Pass backgroundRun.commandText as: ${JSON.stringify(
-            queuedLiteratureDiscoveryFastPath.commandText
-          )}`,
-          "After the tool returns, reply briefly that the background literature-discovery pass has started. If the user asked a direct question or status check, answer it normally in the foreground while the background session continues.",
-          "Do not start a duplicate run if the queue entry is no longer queued by the time you act.",
-          "[/Workflow-Owned Literature Fast Path]"
-        );
-      }
-      const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
-      const focusedAssembly =
-        detailLevel === "focused"
-          ? buildFocusedPromptAssembly({ snapshot, trigger })
-          : null;
-      const workflowPrompt =
-        focusedAssembly?.text ??
-        formatWorkflowSnapshotForPrompt({
-          snapshot,
-          trigger,
-          detailLevel,
-        });
-      if (detailLevel === "focused" && snapshot.projectRoot) {
-        await appendWorkflowTraceEvent({
-          projectRoot: snapshot.projectRoot,
-          projectId: snapshot.projectId,
-          kind: "prompt_assembly",
-          action: "focused_prompt_build",
-          functionName: "buildFocusedPromptAssembly",
-          stage: snapshot.currentStage,
-          owner: snapshot.ownerAgent,
-          agentId: snapshot.role,
-          sessionKey: agentCtx.sessionKey,
-          summary: `Focused prompt assembled for ${snapshot.role ?? "agent"}`,
-          details: {
-            trigger,
-            promptLayerProfile: focusedAssembly?.metadata.promptLayerProfile,
-            promptPayloadSizes: focusedAssembly?.metadata.promptPayloadSizes,
-            sectionContextId: focusedAssembly?.metadata.sectionContextId,
-            reviewLane: focusedAssembly?.metadata.reviewLane,
-            roundId: focusedAssembly?.metadata.roundId,
-          },
-        });
-      }
-      return {
-        prependContext: [...extraContext, workflowPrompt].filter(Boolean).join("\n"),
-      };
     },
     { priority: 40 }
   );
@@ -861,30 +892,37 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
       if (!isExplicitWorkflowHookAgent(agentCtx)) {
         return;
       }
-      const toolName = String(event.toolName ?? "");
-      if (!shouldQueueBeforeToolCall(toolName)) {
-        return runBeforeToolCallHook({
-          plugin,
-          agentCtx,
-          event,
-        });
-      }
-
-      const { snapshot } = await resolveWorkflowSnapshotForAgentContext({
+      return runWorkflowHookSafely({
         plugin,
+        hookName: "before_tool_call",
         agentCtx,
-        autoBind: false,
-      });
-      return enqueueWorkflowTask({
-        queueContext: resolveWorkflowHookQueueContext(agentCtx, snapshot),
-        label: `hook:before_tool_call:${toolName}`,
-        logger: plugin.api.logger,
-        task: () =>
-          runBeforeToolCallHook({
+        task: async () => {
+          const toolName = String(event.toolName ?? "");
+          if (!shouldQueueBeforeToolCall(toolName)) {
+            return runBeforeToolCallHook({
+              plugin,
+              agentCtx,
+              event,
+            });
+          }
+
+          const { snapshot } = await resolveWorkflowSnapshotForAgentContext({
             plugin,
             agentCtx,
-            event,
-          }),
+            autoBind: false,
+          });
+          return enqueueWorkflowTask({
+            queueContext: resolveWorkflowHookQueueContext(agentCtx, snapshot),
+            label: `hook:before_tool_call:${toolName}`,
+            logger: plugin.api.logger,
+            task: () =>
+              runBeforeToolCallHook({
+                plugin,
+                agentCtx,
+                event,
+              }),
+          });
+        },
       });
     },
     { priority: 50 }
@@ -934,35 +972,42 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
         return;
       }
       const requesterCtx = buildRequesterToolContext(hookCtx, requesterRole);
-      const { snapshot } = await resolveWorkflowSnapshotForAgentContext({
+      return runWorkflowHookSafely({
         plugin,
+        hookName: "subagent_spawning",
         agentCtx: requesterCtx,
-        autoBind: false,
-      });
-      if (
-        !canRoleSpawnInWorkflow({
-          fromRole: requesterRole,
-          toRole: childRole,
-          currentStage: snapshot.currentStage,
-        })
-      ) {
-        return {
-          status: "error",
-          error: `${requesterRole} cannot spawn ${childRole} in this workflow.`,
-        };
-      }
-      return enqueueWorkflowTask({
-        queueContext: resolveWorkflowHookQueueContext(requesterCtx, snapshot),
-        label: `hook:subagent_spawning:${requesterRole}->${childRole}`,
-        logger: plugin.api.logger,
-        task: () =>
-          runSubagentSpawningHook({
+        task: async () => {
+          const { snapshot } = await resolveWorkflowSnapshotForAgentContext({
             plugin,
-            event,
-            hookCtx,
-            requesterRole,
-            childRole,
-          }),
+            agentCtx: requesterCtx,
+            autoBind: false,
+          });
+          if (
+            !canRoleSpawnInWorkflow({
+              fromRole: requesterRole,
+              toRole: childRole,
+              currentStage: snapshot.currentStage,
+            })
+          ) {
+            return {
+              status: "error",
+              error: `${requesterRole} cannot spawn ${childRole} in this workflow.`,
+            };
+          }
+          return enqueueWorkflowTask({
+            queueContext: resolveWorkflowHookQueueContext(requesterCtx, snapshot),
+            label: `hook:subagent_spawning:${requesterRole}->${childRole}`,
+            logger: plugin.api.logger,
+            task: () =>
+              runSubagentSpawningHook({
+                plugin,
+                event,
+                hookCtx,
+                requesterRole,
+                childRole,
+              }),
+          });
+        },
       });
     },
     { priority: 45 }
