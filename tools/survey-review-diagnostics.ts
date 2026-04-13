@@ -46,14 +46,27 @@ function countPaperEntries(value: unknown): number {
   if (!record) {
     return 0;
   }
+  if (typeof record.totalCount === "number" && Number.isFinite(record.totalCount)) {
+    return Math.max(0, Math.floor(record.totalCount));
+  }
+  if (typeof record.total_count === "number" && Number.isFinite(record.total_count)) {
+    return Math.max(0, Math.floor(record.total_count));
+  }
   if (Array.isArray(record.papers)) {
     return record.papers.length;
   }
   if (Array.isArray(record.included)) {
     return record.included.length;
   }
+  if (Array.isArray(record.includedPapers)) {
+    return record.includedPapers.length;
+  }
   if (Array.isArray(record.excluded)) {
     return record.excluded.length;
+  }
+  if (Array.isArray(record.excludedPapers) || Array.isArray(record.backgroundPapers)) {
+    return (Array.isArray(record.excludedPapers) ? record.excludedPapers.length : 0) +
+      (Array.isArray(record.backgroundPapers) ? record.backgroundPapers.length : 0);
   }
   return 0;
 }
@@ -69,6 +82,9 @@ function countQueryRounds(value: unknown): number {
   if (Array.isArray(record.rounds)) {
     return record.rounds.length;
   }
+  if (Array.isArray(record.queryRounds)) {
+    return record.queryRounds.length;
+  }
   if (Array.isArray(record.queries)) {
     return record.queries.length;
   }
@@ -81,7 +97,15 @@ function getCandidatePaperCount(
 ): number {
   const candidateRaw = queryRegistry?.candidate_paper_count;
   if (typeof candidateRaw === "number" && Number.isFinite(candidateRaw)) {
-    return Math.max(fallbackCount, Math.floor(candidateRaw));
+    return Math.max(0, Math.floor(candidateRaw));
+  }
+  const camelRaw = queryRegistry?.candidatePaperCount;
+  if (typeof camelRaw === "number" && Number.isFinite(camelRaw)) {
+    return Math.max(0, Math.floor(camelRaw));
+  }
+  const totalRaw = queryRegistry?.totalCount ?? queryRegistry?.total_count;
+  if (typeof totalRaw === "number" && Number.isFinite(totalRaw)) {
+    return Math.max(0, Math.floor(totalRaw));
   }
   return fallbackCount;
 }

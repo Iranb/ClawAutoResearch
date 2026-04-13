@@ -252,6 +252,93 @@ test("survey review stays blocked when survey-quality gates are not ready", asyn
   );
 });
 
+test("materializeSurveyReviewState understands modern survey packet field names from live auto-review runs", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    topic: "Generalized Category Discovery",
+    mode: "survey",
+    queryRounds: [
+      { round: 1, queries: ["gcd survey"] },
+      { round: 2, queries: ["gcd taxonomy"] },
+      { round: 3, queries: ["gcd benchmark"] },
+    ],
+    totalCount: 14,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    version: 1,
+    includedPapers: [
+      { id: "p1" },
+      { id: "p2" },
+      { id: "p3" },
+      { id: "p4" },
+      { id: "p5" },
+      { id: "p6" },
+      { id: "p7" },
+      { id: "p8" },
+      { id: "p9" },
+      { id: "p10" },
+      { id: "p11" },
+      { id: "p12" },
+      { id: "p13" },
+      { id: "p14" },
+    ],
+    totalCount: 14,
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    version: 1,
+    excludedPapers: [],
+    backgroundPapers: [{ id: "b1" }, { id: "b2" }],
+    totalCount: 2,
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Contrastive + clustering\n- Alignment\n- Domain robustness\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Paper | Family | Dataset | Metric |",
+      "| --- | --- | --- | --- |",
+      "| A | Contrastive | CUB | All |",
+      "| B | Alignment | Cars | All |",
+      "| C | Domain Shift | SSB | H-score |",
+      "| D | Attention | CUB | All |",
+      "| E | Calibration | Cars | H-score |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- Better benchmark alignment\n- Shortcut learning robustness\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Search coverage spans core venues.\n- Scope boundaries are explicit.\n- Blind spots are recorded.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Contrastive + clustering\n- Alignment\n- Domain robustness\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-modern-fields",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.queryRoundCount, 3);
+  assert.equal(result.state.candidatePaperCount, 14);
+  assert.equal(result.state.includedPaperCount, 14);
+  assert.equal(result.state.excludedPaperCount, 2);
+  assert.equal(result.state.coverageStatus, "ready");
+});
+
 test("completed survey review can advance into write stage", async (t) => {
   const projectRoot = await makeSurveyProjectRoot();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

@@ -25,14 +25,27 @@ function countPaperEntries(value: unknown): number {
   if (!record) {
     return 0;
   }
+  if (typeof record.totalCount === "number" && Number.isFinite(record.totalCount)) {
+    return Math.max(0, Math.floor(record.totalCount));
+  }
+  if (typeof record.total_count === "number" && Number.isFinite(record.total_count)) {
+    return Math.max(0, Math.floor(record.total_count));
+  }
   if (Array.isArray(record.papers)) {
     return record.papers.length;
   }
   if (Array.isArray(record.included)) {
     return record.included.length;
   }
+  if (Array.isArray(record.includedPapers)) {
+    return record.includedPapers.length;
+  }
   if (Array.isArray(record.excluded)) {
     return record.excluded.length;
+  }
+  if (Array.isArray(record.excludedPapers) || Array.isArray(record.backgroundPapers)) {
+    return (Array.isArray(record.excludedPapers) ? record.excludedPapers.length : 0) +
+      (Array.isArray(record.backgroundPapers) ? record.backgroundPapers.length : 0);
   }
   return 0;
 }
@@ -47,6 +60,9 @@ function countQueryRounds(value: unknown): number {
   }
   if (Array.isArray(record.rounds)) {
     return record.rounds.length;
+  }
+  if (Array.isArray(record.queryRounds)) {
+    return record.queryRounds.length;
   }
   if (Array.isArray(record.queries)) {
     return record.queries.length;
@@ -128,15 +144,31 @@ export async function materializeSurveyReviewStateImpl(params: {
   const excludedPaperCount = countPaperEntries(excludedJson);
   const candidatePaperCount =
     typeof (queryRegistry as Record<string, unknown> | null)?.candidate_paper_count ===
-    "number"
+      "number"
       ? Math.max(
-          includedPaperCount + excludedPaperCount,
+          0,
           Number((queryRegistry as Record<string, unknown>).candidate_paper_count)
         )
-      : Math.max(
-          includedPaperCount + excludedPaperCount,
-          merged.candidatePaperCount ?? 0
-        );
+      : typeof (queryRegistry as Record<string, unknown> | null)?.candidatePaperCount ===
+            "number"
+        ? Math.max(
+            0,
+            Number((queryRegistry as Record<string, unknown>).candidatePaperCount)
+          )
+        : typeof (queryRegistry as Record<string, unknown> | null)?.totalCount === "number"
+          ? Math.max(
+              0,
+              Number((queryRegistry as Record<string, unknown>).totalCount)
+            )
+          : typeof (queryRegistry as Record<string, unknown> | null)?.total_count === "number"
+            ? Math.max(
+                0,
+                Number((queryRegistry as Record<string, unknown>).total_count)
+              )
+            : Math.max(
+                includedPaperCount + excludedPaperCount,
+                merged.candidatePaperCount ?? 0
+              );
   const diagnostics = await materializeSurveyReviewDiagnostics({
     projectRoot,
     state: {
