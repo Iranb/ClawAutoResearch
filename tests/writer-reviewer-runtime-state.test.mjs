@@ -631,6 +631,8 @@ test("writer/reviewer runtime summaries persist durable state and reserve schola
     graphSummary.state.scholarQuerySkillSlot,
     "future/literature-dehallucination"
   );
+  assert.equal(writingSummary.processStatus, "drafting");
+  assert.equal(writingSummary.nextSuggestedSection, "abstract");
 });
 
 test("writing session readiness blocks stale packets and unresolved citation placeholders", async (t) => {
@@ -861,14 +863,10 @@ test("ordinary paper line write-stage auto iterator blocks forward progression u
   });
 
   assert.equal(blocked.stageAfter, "write");
+  assert.deepEqual(blocked.missingStageSignals, []);
   assert.ok(
-    blocked.missingStageSignals.some((signal) =>
-      signal.includes("PROJECT_MANIFEST.json.writing_session")
-    )
-  );
-  assert.ok(
-    blocked.missingStageSignals.some((signal) =>
-      signal.includes("PROJECT_MANIFEST.json.graph_guided_writing")
+    blocked.recommendedActions.some((action) =>
+      action.command?.includes("/paper-phase")
     )
   );
 
@@ -1087,8 +1085,8 @@ test("ordinary paper line write-stage gate blocks only on hard review/QC failure
 
   assert.equal(blocked.stageAfter, "write");
   assert.ok(
-    blocked.missingStageSignals.some((signal) =>
-      signal.includes("review_issue_tracker")
+    blocked.recommendedActions.some((action) =>
+      action.command?.includes("/paper-phase")
     )
   );
 

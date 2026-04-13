@@ -16,6 +16,7 @@ type WritingSessionStateLike = {
   compileSafeSections: string[];
   sectionPackets: Record<string, WritingSectionPacketStateLike>;
   graphEvidenceCoverageStatus: string;
+  pendingReason?: string | null;
 };
 
 type GraphGuidedWritingStateLike = {
@@ -33,6 +34,29 @@ type ExternalReviewStateLike = {
 type WritingContractStateLike = {
   requiredSections: string[];
   sectionOrder: string[];
+};
+
+export type WritingProcessReadiness = {
+  processStatus:
+    | "missing"
+    | "bootstrapping"
+    | "outline_ready"
+    | "drafting"
+    | "section_review"
+    | "manuscript_complete"
+    | "compile_ready"
+    | "ready_for_submit";
+  requiredSections: string[];
+  draftedSections: string[];
+  reviewedSections: string[];
+  finalizedSections: string[];
+  compileSafeSections: string[];
+  missingSections: string[];
+  staleSections: string[];
+  nextSuggestedSection: string | null;
+  rebuildNeeded: boolean;
+  rebuildReason: string | null;
+  summary: string;
 };
 
 type WritePackageStateLike = {
@@ -143,6 +167,162 @@ export function isExternalReviewConclusionReady(
     ]) &&
     Boolean(state.overallRecommendation)
   );
+}
+
+function orderedUniqueSections(params: {
+  writingSession: WritingSessionStateLike;
+  writingContract: WritingContractStateLike;
+}): string[] {
+  const ordered = [
+    ...params.writingContract.sectionOrder,
+    ...params.writingContract.requiredSections,
+    ...params.writingSession.draftOrder,
+    ...Object.keys(params.writingSession.sectionPackets),
+  ]
+    .map((entry) => normalizeStage(entry) ?? entry)
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const section of ordered) {
+    if (seen.has(section)) {
+      continue;
+    }
+    seen.add(section);
+    result.push(section);
+  }
+  return result;
+}
+
+export function evaluateWritingProcessReadiness(params: {
+  writingSession: WritingSessionStateLike;
+  writingContract: WritingContractStateLike;
+}): WritingProcessReadiness {
+  const orderedSections = orderedUniqueSections(params);
+  const requiredSections = params.writingContract.requiredSections
+    .map((entry) => normalizeStage(entry) ?? entry)
+    .filter(Boolean);
+  const draftedSections = Object.entries(params.writingSession.sectionPackets)
+    .filter(([, packet]) => {
+      const status = normalizeStage(packet.status);
+      return status !== "missing" && status !== "pending";
+    })
+    .map(([section]) => section);
+  const reviewedSections = Object.entries(params.writingSession.sectionPackets)
+    .filter(([, packet]) => {
+      const verdict = normalizeStage(packet.reviewVerdict);
+      return verdict === "publication_ready" || verdict === "ready";
+    })
+    .map(([section]) => section);
+  const finalizedSections = params.writingSession.finalizedSections
+    .map((entry) => normalizeStage(entry) ?? entry)
+    .filter(Boolean);
+  const compileSafeSections = params.writingSession.compileSafeSections
+    .map((entry) => normalizeStage(entry) ?? entry)
+    .filter(Boolean);
+  const missingSections = requiredSections.filter(
+    (section) => !draftedSections.includes(section)
+  );
+  const staleSections = Object.entries(params.writingSession.sectionPackets)
+    .filter(([, packet]) => packet.stale || normalizeStage(packet.status) === "stale")
+    .map(([section]) => section);
+  const anyDrafts = draftedSections.length > 0;
+  const anyReviews = reviewedSections.length > 0;
+  const allRequiredDrafted =
+    requiredSections.length > 0 &&
+    requiredSections.every((section) => draftedSections.includes(section));
+  const allRequiredReviewed =
+    requiredSections.length > 0 &&
+    requiredSections.every((section) => reviewedSections.includes(section));
+  const allRequiredFinalized =
+    requiredSections.length > 0 &&
+    requiredSections.every((section) => finalizedSections.includes(section));
+  const allRequiredCompileSafe =
+    requiredSections.length > 0 &&
+    requiredSections.every((section) => compileSafeSections.includes(section));
+
+  const normalizedStatus = normalizeStage(params.writingSession.status);
+  const noPackets = Object.keys(params.writingSession.sectionPackets).length === 0;
+  const rebuildNeeded =
+    noPackets &&
+    !params.writingSession.currentSection &&
+    draftedSections.length === 0 &&
+    normalizedStatus !== "ready_for_submit" &&
+    normalizedStatus !== "draft_complete";
+
+  let processStatus: WritingProcessReadiness["processStatus"];
+  if (
+    normalizedStatus === "ready_for_submit" ||
+    (allRequiredCompileSafe &&
+      isRuntimeReadyStatus(params.writingSession.graphEvidenceCoverageStatus, [
+        "covered",
+        "ready",
+        "complete",
+        "completed",
+      ]))
+  ) {
+    processStatus = "ready_for_submit";
+  } else if (allRequiredCompileSafe) {
+    processStatus = "compile_ready";
+  } else if (allRequiredFinalized) {
+    processStatus = "manuscript_complete";
+  } else if (
+    allRequiredDrafted &&
+    (allRequiredReviewed || anyReviews || staleSections.length > 0)
+  ) {
+    processStatus = "section_review";
+  } else if (
+    rebuildNeeded ||
+    normalizedStatus === "bootstrapping" ||
+    normalizedStatus === "missing" ||
+    normalizedStatus === "pending"
+  ) {
+    processStatus = "bootstrapping";
+  } else if (allRequiredDrafted || anyDrafts || normalizedStatus === "draft_complete") {
+    processStatus = "drafting";
+  } else if (orderedSections.length > 0 || params.writingSession.currentSection) {
+    processStatus = "outline_ready";
+  } else {
+    processStatus = "missing";
+  }
+
+  const nextSuggestedSection =
+    missingSections[0] ??
+    staleSections[0] ??
+    orderedSections.find(
+      (section) =>
+        !finalizedSections.includes(section) && !compileSafeSections.includes(section)
+    ) ??
+    params.writingSession.currentSection ??
+    null;
+
+  const summary = [
+    `process=${processStatus}`,
+    `drafted=${draftedSections.length}/${requiredSections.length || orderedSections.length || 0}`,
+    `reviewed=${reviewedSections.length}`,
+    `finalized=${finalizedSections.length}`,
+    `compile_safe=${compileSafeSections.length}`,
+    nextSuggestedSection ? `next=${nextSuggestedSection}` : null,
+    rebuildNeeded ? `rebuild=${params.writingSession.pendingReason ?? "full bootstrap needed"}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return {
+    processStatus,
+    requiredSections,
+    draftedSections,
+    reviewedSections,
+    finalizedSections,
+    compileSafeSections,
+    missingSections,
+    staleSections,
+    nextSuggestedSection,
+    rebuildNeeded,
+    rebuildReason: rebuildNeeded
+      ? params.writingSession.pendingReason ?? "No reusable section packets or drafts were detected."
+      : null,
+    summary,
+  };
 }
 
 export function getWritingSectionContractViolations(params: {

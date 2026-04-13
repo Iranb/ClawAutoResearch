@@ -307,7 +307,9 @@ export function buildFocusedPromptAssemblyImpl(
     writingContextActive ||
     (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing")
   ) {
-    layer3Lines.push(`writing_status=${snapshot.writingSessionStatus ?? "unknown"}`);
+    layer3Lines.push(
+      `writing_status=${snapshot.writingSessionStatus ?? "unknown"} process=${snapshot.writingProcessStatus ?? "unknown"}`
+    );
   }
   if (
     brainstormContextActive &&
@@ -854,6 +856,17 @@ export function formatWorkflowSnapshotForPromptImpl(
   if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {
     lines.push(
       `Writing session: status=${snapshot.writingSessionStatus}, current_section=${snapshot.writingCurrentSection ?? "unset"}, section_review=${snapshot.writingCurrentSectionReviewVerdict ?? "unknown"}`
+    );
+    lines.push(
+      `Writing progress: process=${snapshot.writingProcessStatus ?? "unknown"}, next_section=${snapshot.writingNextSuggestedSection ?? "unset"}, missing_sections=${(snapshot.writingMissingSections ?? []).join(", ") || "none"}, stale_sections=${(snapshot.writingStaleSections ?? []).join(", ") || "none"}`
+    );
+    lines.push(
+      `Writing rebuild: needed=${snapshot.writingRebuildNeeded ? "true" : "false"}, reason=${snapshot.writingRebuildReason ?? "none"}`
+    );
+    lines.push(
+      snapshot.writingRebuildNeeded
+        ? "Writing recovery rule: rebuild only the missing durable writing scaffold, then resume from the first required section."
+        : "Writing recovery rule: do not describe the paper as wiped; resume from the current section packets and only draft or refresh the missing/stale sections."
     );
     lines.push(
       `Writing evidence coverage: status=${snapshot.writingGraphEvidenceCoverageStatus ?? "unknown"}, packets_ready=${snapshot.writingSectionPacketsReady ? "true" : "false"}`

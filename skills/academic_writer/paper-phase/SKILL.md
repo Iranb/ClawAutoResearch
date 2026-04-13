@@ -56,7 +56,9 @@ Only hard blockers (missing experiments flagged by Cross-Reviewer, or unresolved
 `theory`, `storyline`, or `paragraph_logic` marked `RED` are advisory only and must not block Phase 2.
 If multiple tracks survived review, narrow to the winning narrative before drafting prose.
 
-**Output**: `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`, `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when applicable, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
+**Output**: a durable writing scaffold, not a brittle file checklist. Typical outputs include `{PROJ}/academic_writer/PAPER_PLAN.md`, `{PROJ}/academic_writer/STORYLINE_SKETCH.md`, `{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md`, `{PROJ}/academic_writer/paper/sections/appendix_theory.tex`, `{PROJ}/academic_writer/KG_STORYLINE_PACKET.md`, `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` when applicable, and initial `{PROJ}/academic_writer/WRITING_SIGNALS.md`, with Cross-Reviewer assessment appended. Save outline review to `{PROJ}/cross-reviewer/outline/{date}.md`.
+
+If one helper file is missing but `writing_session`, `paper_story_state`, and the section packets remain recoverable, do **not** treat that as a full draft wipe. Rebuild only the missing scaffold pieces and continue the process.
 
 ## Phase 2: Paper Write
 
@@ -77,7 +79,7 @@ If theory / storyline / paragraph logic are `RED`, continue drafting but preserv
 Template adherence is not optional when configured: section structure and paragraph patterns should be adapted from the project-local template copy before style polishing.
 When proof-aware writing is enabled, the main text should keep concise theorem / lemma statements and final implications, while full derivations are maintained in the appendix path.
 
-**Output**: `{PROJ}/academic_writer/paper/sections/*.tex` + `refs.bib` + `main.tex` + updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
+**Output**: process-first draft progress. In practice this usually means `{PROJ}/academic_writer/paper/sections/*.tex`, `main.tex`, progressively improved section packets / review notes, and updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. `refs.bib`, `main.pdf`, and full submit-ready cleanup can arrive later; they are not required just to keep drafting forward. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
 
 ## Phase 3: Citation Preflight
 

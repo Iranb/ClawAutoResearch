@@ -43,6 +43,7 @@ import {
 } from "../workflow-guard-state/authoring-review-state";
 import {
   areWritingSectionPacketsReady,
+  evaluateWritingProcessReadiness,
   isExternalReviewConclusionReady,
   isGraphGuidedWritingReadyForSubmit,
   isWritingSessionReadyForSubmit,
@@ -703,6 +704,8 @@ export async function setWritingSessionState(params: {
   const next: WritingSessionState = {
     ...current,
     status: explicitStatus ?? current.status,
+    processStatus: current.processStatus,
+    outlineReady: current.outlineReady,
     currentSection:
       normalizeStage(patch.currentSection ?? patch.current_section) ??
       current.currentSection,
@@ -712,18 +715,35 @@ export async function setWritingSessionState(params: {
             .map((entry) => normalizeStage(entry) ?? entry)
             .filter(Boolean)
         : current.draftOrder,
+    draftedSections:
+      patch.draftedSections || patch.drafted_sections
+        ? asStringArray(patch.draftedSections ?? patch.drafted_sections)
+            .map((entry) => normalizeStage(entry) ?? entry)
+            .filter(Boolean)
+        : current.draftedSections,
+    reviewedSections:
+      patch.reviewedSections || patch.reviewed_sections
+        ? asStringArray(patch.reviewedSections ?? patch.reviewed_sections)
+            .map((entry) => normalizeStage(entry) ?? entry)
+            .filter(Boolean)
+        : current.reviewedSections,
     finalizedSections:
       patch.finalizedSections || patch.finalized_sections
         ? asStringArray(patch.finalizedSections ?? patch.finalized_sections)
             .map((entry) => normalizeStage(entry) ?? entry)
             .filter(Boolean)
         : current.finalizedSections,
+    manuscriptComplete:
+      pickBoolean(patch, ["manuscriptComplete", "manuscript_complete"]) ??
+      current.manuscriptComplete,
     compileSafeSections:
       patch.compileSafeSections || patch.compile_safe_sections
         ? asStringArray(patch.compileSafeSections ?? patch.compile_safe_sections)
             .map((entry) => normalizeStage(entry) ?? entry)
             .filter(Boolean)
         : current.compileSafeSections,
+    compileReady:
+      pickBoolean(patch, ["compileReady", "compile_ready"]) ?? current.compileReady,
     sectionPackets: sectionPacketsPatch
       ? Object.fromEntries(
           Object.entries(sectionPacketsPatch).map(([key, value]) => [
@@ -732,6 +752,14 @@ export async function setWritingSessionState(params: {
           ])
         )
       : current.sectionPackets,
+    nextSuggestedSection:
+      normalizeStage(
+        patch.nextSuggestedSection ?? patch.next_suggested_section
+      ) ?? current.nextSuggestedSection,
+    rebuildNeeded:
+      pickBoolean(patch, ["rebuildNeeded", "rebuild_needed"]) ?? current.rebuildNeeded,
+    rebuildReason:
+      pickString(patch, ["rebuildReason", "rebuild_reason"]) ?? current.rebuildReason,
     headlineClaimEvidenceStatus:
       explicitHeadlineClaimEvidenceStatus ?? current.headlineClaimEvidenceStatus,
     graphEvidenceCoverageStatus:
@@ -767,6 +795,27 @@ export async function setWritingSessionState(params: {
   if (!explicitGraphEvidenceCoverageStatus && sectionPacketsReady) {
     next.graphEvidenceCoverageStatus = "covered";
   }
+
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  const writingProcess = evaluateWritingProcessReadiness({
+    writingSession: next,
+    writingContract,
+  });
+  next.processStatus = writingProcess.processStatus;
+  next.outlineReady = !["missing", "bootstrapping"].includes(
+    writingProcess.processStatus
+  );
+  next.draftedSections = writingProcess.draftedSections;
+  next.reviewedSections = writingProcess.reviewedSections;
+  next.manuscriptComplete = ["manuscript_complete", "compile_ready", "ready_for_submit"].includes(
+    writingProcess.processStatus
+  );
+  next.compileReady = ["compile_ready", "ready_for_submit"].includes(
+    writingProcess.processStatus
+  );
+  next.nextSuggestedSection = writingProcess.nextSuggestedSection;
+  next.rebuildNeeded = writingProcess.rebuildNeeded;
+  next.rebuildReason = writingProcess.rebuildReason;
   if (
     !explicitStatus &&
     sectionPacketsReady &&
@@ -775,6 +824,9 @@ export async function setWritingSessionState(params: {
     )
   ) {
     next.status = "ready_for_submit";
+    next.processStatus = "ready_for_submit";
+    next.compileReady = true;
+    next.manuscriptComplete = true;
   }
 
   manifest.writing_session = serializeWritingSessionState(next);

@@ -70,6 +70,16 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `research_workflow.get_writing_contract` — template path and paragraph-logic contract
 - `research_workflow.get_citation_integrity` — bibliography path, verification expectations, and placeholder budget
 
+## Resume First
+
+Before drafting any section, inspect the workflow snapshot and current writing session.
+
+- If `writing_rebuild_needed = true`, rebuild only the missing durable scaffold first.
+- If `writing_rebuild_needed = false`, do **not** say the paper or paper directory was wiped.
+- Treat partial drafts as the normal steady state: resume from `current_section`, `next_suggested_section`, `missing_sections`, and `stale_sections`.
+- Missing helper files such as `PAPER_PLAN.md`, `STORYLINE_SKETCH.md`, or `refs.bib` do not by themselves justify a full-paper rewrite when section packets and prose files are still recoverable.
+- Prefer repairing or extending the smallest missing section set over re-authoring the whole manuscript.
+
 ## Writing Order
 
 Default drafting order when no user template overrides the section flow:
@@ -111,6 +121,14 @@ If the writing template is required but missing, stop and restore it first.
 If a template path is configured, read the project-local copied template and `{PROJ}/academic_writer/TEMPLATE_MAPPING.md` before writing. Never edit the external source template in place.
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
+
+Update the workflow-visible writing progress as you go. The controlling truth is the process state, not whether every convenience artifact already exists:
+
+- outline / ordering ready
+- section drafted
+- section prose-reviewed
+- section finalized
+- compile-safe when appropriate
 
 Before writing full prose, treat the durable story contract as authoritative:
 - `STORY_SPINE.md` defines the main arc `task -> challenge -> insight -> contribution -> advantage`

@@ -24,6 +24,18 @@ export interface WritingStageDeps {
     state: any;
   }) => Promise<any>;
   normalizeWritingSessionState: (value: unknown) => any;
+  evaluateWritingProcessReadiness: (params: {
+    writingSession: any;
+    writingContract: any;
+  }) => {
+    processStatus: string;
+    missingSections: string[];
+    staleSections: string[];
+    nextSuggestedSection: string | null;
+    rebuildNeeded: boolean;
+    rebuildReason: string | null;
+    summary: string;
+  };
   getWritingSectionContractViolations: (params: {
     writingSession: any;
     writingContract: any;
@@ -191,22 +203,6 @@ export async function collectWriteStageMissingSignals(
     }
   }
 
-  for (const relativePath of [
-    paperStoryState.taskSummaryPath,
-    paperStoryState.challengeStatementPath,
-    paperStoryState.insightSummaryPath,
-    paperStoryState.contributionMapPath,
-    paperStoryState.advantageMapPath,
-    paperStoryState.storySpinePath,
-    paperStoryState.pipelineFigureSketchPath,
-    paperStoryState.moduleMotivationMapPath,
-    paperStoryState.claimToExperimentMapPath,
-    paperStoryState.fallbackNarrativePath,
-    paperStoryState.rejectionRiskTablePath,
-  ]) {
-    await pushMissingNonEmptyArtifact(missing, ctx.projectRoot, relativePath, deps);
-  }
-
   const reviewPressurePacket = deps.normalizeReviewPressurePacketState(
     ctx.manifest?.review_pressure_packet
   );
@@ -273,54 +269,70 @@ export async function collectWriteStageMissingSignals(
       );
     }
   }
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "PAPER_PLAN.md")))) {
-    missing.push("{PROJ}/academic_writer/PAPER_PLAN.md");
-  }
-  if (
-    !(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "STORYLINE_SKETCH.md")))
-  ) {
-    missing.push("{PROJ}/academic_writer/STORYLINE_SKETCH.md");
-  }
-
   const writingSession = deps.normalizeWritingSessionState(ctx.manifest?.writing_session);
-  missing.push(
-    ...deps.getWritingSectionContractViolations({
-      writingSession,
-      writingContract,
-    })
-  );
-  if (!deps.isWritingSessionReadyForSubmit(writingSession)) {
+  const writingProcess = deps.evaluateWritingProcessReadiness({
+    writingSession,
+    writingContract,
+  });
+  if (writingProcess.rebuildNeeded) {
     missing.push(
-      `PROJECT_MANIFEST.json.writing_session must be ready_for_submit with publication-ready section packets and covered graph evidence (current: status=${writingSession.status}, coverage=${writingSession.graphEvidenceCoverageStatus})`
+      `writing process is not bootstrapped yet: ${writingProcess.rebuildReason ?? writingProcess.summary}`
     );
+  } else {
+    if (writingProcess.staleSections.length > 0) {
+      missing.push(
+        `writing process has stale section packets: ${writingProcess.staleSections.join(", ")}`
+      );
+    }
+    if (writingProcess.processStatus !== "ready_for_submit") {
+      const fragment = [
+        `writing process is ${writingProcess.processStatus}`,
+        writingProcess.missingSections.length > 0
+          ? `missing sections: ${writingProcess.missingSections.join(", ")}`
+          : null,
+        writingProcess.nextSuggestedSection
+          ? `next suggested section: ${writingProcess.nextSuggestedSection}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("; ");
+      missing.push(fragment);
+    }
+    if (
+      deps.normalizeStage(writingSession.graphEvidenceCoverageStatus) === "missing" ||
+      deps.normalizeStage(writingSession.headlineClaimEvidenceStatus) === "unsupported"
+    ) {
+      missing.push(
+        `writing claim/evidence coverage is not ready yet (headline=${writingSession.headlineClaimEvidenceStatus}, graph=${writingSession.graphEvidenceCoverageStatus})`
+      );
+    }
   }
-
-  missing.push(...deps.getWritePackageValidationErrors(writePackage));
 
   const graphGuidedWriting = deps.normalizeGraphGuidedWritingState(
     ctx.manifest?.graph_guided_writing
   );
-  if (!deps.isGraphGuidedWritingReadyForSubmit(graphGuidedWriting)) {
+  if (
+    graphGuidedWriting.enabled &&
+    deps.normalizeStage(graphGuidedWriting.status) === "missing"
+  ) {
     missing.push(
-      `PROJECT_MANIFEST.json.graph_guided_writing must report ready/covered evidence with no missing claims (current: status=${graphGuidedWriting.status}, evidence_coverage=${graphGuidedWriting.evidenceCoverageStatus}, missing_claims=${graphGuidedWriting.missingEvidenceClaims.join(",") || "none"})`
+      `graph_guided_writing has not been initialized yet (current: status=${graphGuidedWriting.status})`
     );
   }
-
   const reviewIssueTracker = await deps.hydrateReviewIssueTrackerState({
     projectRoot: ctx.projectRoot,
     value: ctx.manifest?.review_issue_tracker,
   });
   if (deps.hasBlockingReviewIssues(reviewIssueTracker)) {
     missing.push(
-      `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before submit handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
+      `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before write handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
     );
   }
   if (deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
     missing.push(
-      "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before submit handoff"
+      "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before write handoff"
     );
   }
-
   const paperQc = deps.normalizePaperQcState(ctx.manifest?.paper_qc);
   if (deps.normalizeStage(paperQc.compileStatus) === "fail") {
     missing.push(
@@ -337,7 +349,6 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.paper_qc.invalid_figure_ref_status = pass (current: ${paperQc.invalidFigureRefStatus})`
     );
   }
-
   const figureQc = deps.normalizeFigureQcState(ctx.manifest?.figure_qc);
   if (deps.normalizeStage(figureQc.duplicateFigureStatus) === "fail") {
     missing.push(
@@ -359,7 +370,6 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
     );
   }
-
   const citationCollection = deps.normalizeCitationCollectionState(
     ctx.manifest?.citation_collection
   );
@@ -373,7 +383,116 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.citation_collection.hallucinated_count = 0 (current: ${citationCollection.hallucinatedCount})`
     );
   }
+  appendTopTierOpportunitySignals({
+    missing,
+    manifest: ctx.manifest,
+    deps,
+  });
+  appendTopTierDeliverySignals({
+    missing,
+    manifest: ctx.manifest,
+    phase: "write",
+    deps,
+  });
+  return missing;
+}
 
+export async function collectSubmitStageMissingSignals(
+  ctx: StageSignalsContext,
+  deps: WritingStageDeps
+): Promise<string[]> {
+  const missing: string[] = [];
+  const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
+  const writingSession = deps.normalizeWritingSessionState(ctx.manifest?.writing_session);
+  const writingProcess = deps.evaluateWritingProcessReadiness({
+    writingSession,
+    writingContract,
+  });
+  if (!deps.isWritingSessionReadyForSubmit(writingSession)) {
+    missing.push(
+      `PROJECT_MANIFEST.json.writing_session must be ready_for_submit before SUBMIT (current: ${writingProcess.summary})`
+    );
+  }
+  missing.push(
+    ...deps.getWritingSectionContractViolations({
+      writingSession,
+      writingContract,
+    })
+  );
+  const writePackage = deps.normalizeWritePackageState(ctx.manifest?.write_package);
+  missing.push(...deps.getWritePackageValidationErrors(writePackage));
+  const graphGuidedWriting = deps.normalizeGraphGuidedWritingState(
+    ctx.manifest?.graph_guided_writing
+  );
+  if (!deps.isGraphGuidedWritingReadyForSubmit(graphGuidedWriting)) {
+    missing.push(
+      `PROJECT_MANIFEST.json.graph_guided_writing must report ready/covered evidence with no missing claims (current: status=${graphGuidedWriting.status}, evidence_coverage=${graphGuidedWriting.evidenceCoverageStatus}, missing_claims=${graphGuidedWriting.missingEvidenceClaims.join(",") || "none"})`
+    );
+  }
+  const reviewIssueTracker = await deps.hydrateReviewIssueTrackerState({
+    projectRoot: ctx.projectRoot,
+    value: ctx.manifest?.review_issue_tracker,
+  });
+  if (deps.hasBlockingReviewIssues(reviewIssueTracker)) {
+    missing.push(
+      `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before submit handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
+    );
+  }
+  if (deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
+    missing.push(
+      "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before submit handoff"
+    );
+  }
+  const paperQc = deps.normalizePaperQcState(ctx.manifest?.paper_qc);
+  if (deps.normalizeStage(paperQc.compileStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.paper_qc.compile_status = pass (current: ${paperQc.compileStatus})`
+    );
+  }
+  if (deps.normalizeStage(paperQc.pageBudgetStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.paper_qc.page_budget_status = pass (current: ${paperQc.pageBudgetStatus})`
+    );
+  }
+  if (deps.normalizeStage(paperQc.invalidFigureRefStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.paper_qc.invalid_figure_ref_status = pass (current: ${paperQc.invalidFigureRefStatus})`
+    );
+  }
+  const figureQc = deps.normalizeFigureQcState(ctx.manifest?.figure_qc);
+  if (deps.normalizeStage(figureQc.duplicateFigureStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.figure_qc.duplicate_figure_status = pass (current: ${figureQc.duplicateFigureStatus})`
+    );
+  }
+  if (deps.normalizeStage(figureQc.captionAlignmentStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.figure_qc.caption_alignment_status = pass (current: ${figureQc.captionAlignmentStatus})`
+    );
+  }
+  if (deps.normalizeStage(figureQc.textAlignmentStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.figure_qc.text_alignment_status = pass (current: ${figureQc.textAlignmentStatus})`
+    );
+  }
+  if (deps.normalizeStage(figureQc.selectionStatus) === "fail") {
+    missing.push(
+      `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
+    );
+  }
+  const citationCollection = deps.normalizeCitationCollectionState(
+    ctx.manifest?.citation_collection
+  );
+  if (deps.normalizeStage(citationCollection.status) === "blocked") {
+    missing.push(
+      `PROJECT_MANIFEST.json.citation_collection.status must not be blocked (current: ${citationCollection.status})`
+    );
+  }
+  if (citationCollection.hallucinatedCount > 0) {
+    missing.push(
+      `PROJECT_MANIFEST.json.citation_collection.hallucinated_count = 0 (current: ${citationCollection.hallucinatedCount})`
+    );
+  }
   const theorySupport = deps.normalizeTheorySupportState(ctx.manifest?.theory_state);
   if (writingContract.proofAppendixRequired) {
     const theoryStatePath = deps.resolveProjectArtifactPath(
@@ -409,61 +528,6 @@ export async function collectWriteStageMissingSignals(
       );
     }
   }
-
-  const citationIntegrity = deps.normalizeCitationIntegrityState(
-    ctx.manifest?.citation_integrity
-  );
-  const bibliographyPath = deps.resolveProjectArtifactPath(
-    ctx.projectRoot,
-    citationIntegrity.bibliographyPath
-  );
-  if (
-    citationIntegrity.enabled &&
-    citationIntegrity.verificationRequired &&
-    citationIntegrity.verificationStatus !== "verified"
-  ) {
-    missing.push(
-      `PROJECT_MANIFEST.json.citation_integrity.verification_status = verified (current: ${citationIntegrity.verificationStatus})`
-    );
-  }
-  if (
-    citationIntegrity.enabled &&
-    bibliographyPath &&
-    !(await deps.pathExists(bibliographyPath))
-  ) {
-    missing.push(
-      `citation bibliography at ${citationIntegrity.bibliographyPath ?? deps.DEFAULT_CITATION_BIB_PATH}`
-    );
-  }
-
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "paper", "main.pdf")))) {
-    missing.push("{PROJ}/academic_writer/paper/main.pdf");
-  }
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "WRITING_SIGNALS.md")))) {
-    missing.push("{PROJ}/academic_writer/WRITING_SIGNALS.md");
-  }
-  if (!(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "cross-reviewer")))) {
-    missing.push("{PROJ}/cross-reviewer/");
-  }
-  appendTopTierOpportunitySignals({
-    missing,
-    manifest: ctx.manifest,
-    deps,
-  });
-  appendTopTierDeliverySignals({
-    missing,
-    manifest: ctx.manifest,
-    phase: "write",
-    deps,
-  });
-  return missing;
-}
-
-export async function collectSubmitStageMissingSignals(
-  ctx: StageSignalsContext,
-  deps: WritingStageDeps
-): Promise<string[]> {
-  const missing: string[] = [];
   const citationIntegrity = deps.normalizeCitationIntegrityState(
     ctx.manifest?.citation_integrity
   );
@@ -516,6 +580,16 @@ export async function collectSubmitStageMissingSignals(
         `{PROJ}/${citationIntegrity.bibliographyPath ?? deps.DEFAULT_CITATION_BIB_PATH}`
       );
     }
+  }
+
+  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "paper", "main.pdf")))) {
+    missing.push("{PROJ}/academic_writer/paper/main.pdf");
+  }
+  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "WRITING_SIGNALS.md")))) {
+    missing.push("{PROJ}/academic_writer/WRITING_SIGNALS.md");
+  }
+  if (!(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "cross-reviewer")))) {
+    missing.push("{PROJ}/cross-reviewer/");
   }
 
   if (!deps.isExternalReviewConclusionReady(externalReview)) {

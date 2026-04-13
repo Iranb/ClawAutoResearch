@@ -915,9 +915,9 @@ function buildStageHandoffAcceptanceChecks(params: {
     }
     if (stageAfter === "review") {
       return [
-        "academic_writer/PAPER_PLAN.md exists",
-        "academic_writer/STORYLINE_SKETCH.md exists",
-        "academic_writer/paper/main.tex exists",
+        "PROJECT_MANIFEST.json.writing_session reflects active draft progress",
+        "academic_writer/paper/main.tex exists or writing section packets cover the required sections",
+        "writing process is manuscript_complete|compile_ready|ready_for_submit",
       ];
     }
     if (stageAfter === "submit") {

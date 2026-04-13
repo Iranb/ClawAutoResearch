@@ -196,7 +196,7 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   assert.equal(writeGate.stageAfter, "write");
   assert.ok(
     writeGate.missingStageSignals.some((signal) =>
-      /writing_session must be ready_for_submit/i.test(signal),
+      /writing process is not bootstrapped yet|writing process is /i.test(signal),
     ),
   );
   assert.ok(

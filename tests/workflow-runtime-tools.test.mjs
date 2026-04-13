@@ -2209,6 +2209,10 @@ test("research_workflow materialize_writing_support_artifacts scaffolds durable 
   assert.equal(result.referenceBundle.status, "ready");
   assert.equal(result.fallbackActivation.activeNarrativeMode, "fallback");
   assert.equal(result.revisionCycle.stage, "write");
+  assert.ok(Array.isArray(result.writingSession.draftOrder));
+  assert.ok(result.writingSession.draftOrder.length > 0);
+  assert.equal(result.writingSession.currentSection, result.writingSession.draftOrder[0]);
+  assert.match(result.writingSession.processStatus, /outline_ready|bootstrapping/);
   assert.ok(Array.isArray(result.generatedFiles));
   assert.ok(result.generatedFiles.some((entry) => /WRITING_REFERENCE_BUNDLE\.json$/.test(entry)));
 });

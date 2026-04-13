@@ -126,6 +126,7 @@ import {
   normalizeWorkflowRole,
 } from "../workflow-guard-policies/role-policy";
 import { countReviewIssueLanes } from "../workflow-guard-writing/paper-quality-eval";
+import { evaluateWritingProcessReadiness } from "../workflow-guard-writing/write-package-eval";
 import {
   normalizePapernexusAccessMode,
   normalizePapernexusApiTokenSource,
@@ -657,6 +658,10 @@ export async function buildWorkflowSnapshotFromProjectState(
   const writingSession = normalizeWritingSessionState(
     asRecord(projectState.manifest?.writing_session)
   );
+  const writingProcess = evaluateWritingProcessReadiness({
+    writingSession,
+    writingContract,
+  });
   const reviewSession = normalizeReviewSessionState(
     asRecord(projectState.manifest?.review_session)
   );
@@ -1331,6 +1336,12 @@ export async function buildWorkflowSnapshotFromProjectState(
     writingFinalizedSections: writingSession.finalizedSections,
     writingCompileSafeSections: writingSession.compileSafeSections,
     writingSectionPacketsReady: areWritingSectionPacketsReady(writingSession),
+    writingProcessStatus: writingProcess.processStatus,
+    writingMissingSections: writingProcess.missingSections,
+    writingStaleSections: writingProcess.staleSections,
+    writingNextSuggestedSection: writingProcess.nextSuggestedSection,
+    writingRebuildNeeded: writingProcess.rebuildNeeded,
+    writingRebuildReason: writingProcess.rebuildReason,
     writingCurrentSectionReviewVerdict: writingSession.currentSection
       ? writingSession.sectionPackets[writingSession.currentSection]?.reviewVerdict ?? null
       : null,

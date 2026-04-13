@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  evaluateWritingProcessReadiness,
   isExternalReviewConclusionReady,
   isGraphGuidedWritingReadyForSubmit,
   isWritingSessionReadyForSubmit,
@@ -75,6 +76,63 @@ test("isWritingSessionReadyForSubmit blocks stale section packets", () => {
   };
 
   assert.equal(isWritingSessionReadyForSubmit(state), false);
+});
+
+test("evaluateWritingProcessReadiness prefers incremental drafting over full rebuilds", () => {
+  const readiness = evaluateWritingProcessReadiness({
+    writingContract: {
+      requiredSections: ["abstract", "introduction", "results"],
+      sectionOrder: ["abstract", "introduction", "results"],
+    },
+    writingSession: {
+      status: "drafting",
+      currentSection: "results",
+      draftOrder: ["abstract", "introduction", "results"],
+      finalizedSections: [],
+      compileSafeSections: [],
+      sectionPackets: {
+        abstract: makeSectionPacket({
+          status: "finalized",
+          reviewVerdict: "publication_ready",
+        }),
+        introduction: makeSectionPacket({
+          packetPath: "academic_writer/paper/sections/introduction.json",
+          status: "drafted",
+          reviewVerdict: null,
+        }),
+      },
+      graphEvidenceCoverageStatus: "partial",
+      pendingReason: null,
+    },
+  });
+
+  assert.equal(readiness.processStatus, "drafting");
+  assert.equal(readiness.rebuildNeeded, false);
+  assert.deepEqual(readiness.missingSections, ["results"]);
+  assert.equal(readiness.nextSuggestedSection, "results");
+});
+
+test("evaluateWritingProcessReadiness only flags rebuilds when no reusable draft state exists", () => {
+  const readiness = evaluateWritingProcessReadiness({
+    writingContract: {
+      requiredSections: ["abstract", "introduction"],
+      sectionOrder: ["abstract", "introduction"],
+    },
+    writingSession: {
+      status: "missing",
+      currentSection: null,
+      draftOrder: [],
+      finalizedSections: [],
+      compileSafeSections: [],
+      sectionPackets: {},
+      graphEvidenceCoverageStatus: "missing",
+      pendingReason: "No sections have been materialized yet.",
+    },
+  });
+
+  assert.equal(readiness.processStatus, "bootstrapping");
+  assert.equal(readiness.rebuildNeeded, true);
+  assert.match(readiness.summary, /rebuild=No sections have been materialized yet/i);
 });
 
 test("isGraphGuidedWritingReadyForSubmit ignores disabled graph guidance", () => {

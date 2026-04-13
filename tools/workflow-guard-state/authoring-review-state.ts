@@ -58,11 +58,20 @@ type WritingSectionPacketStateLike = {
 
 type WritingSessionStateLike = {
   status: string;
+  processStatus: string;
+  outlineReady: boolean;
   currentSection: string | null;
   draftOrder: string[];
+  draftedSections: string[];
+  reviewedSections: string[];
   finalizedSections: string[];
+  manuscriptComplete: boolean;
   compileSafeSections: string[];
+  compileReady: boolean;
   sectionPackets: Record<string, WritingSectionPacketStateLike>;
+  nextSuggestedSection: string | null;
+  rebuildNeeded: boolean;
+  rebuildReason: string | null;
   headlineClaimEvidenceStatus: string;
   graphEvidenceCoverageStatus: string;
   graphEvidenceCoverageSummary: string | null;
@@ -371,20 +380,44 @@ export function normalizeWritingSessionState(
   );
   return {
     status: normalizeStage(record.status) ?? "missing",
+    processStatus:
+      normalizeStage(record.processStatus ?? record.process_status) ?? "missing",
+    outlineReady:
+      pickBoolean(record, ["outlineReady", "outline_ready"]) ?? false,
     currentSection: normalizeStage(record.currentSection ?? record.current_section),
     draftOrder:
       asStringArray(record.draftOrder ?? record.draft_order)
+        .map((entry) => normalizeStage(entry) ?? entry)
+        .filter(Boolean),
+    draftedSections:
+      asStringArray(record.draftedSections ?? record.drafted_sections)
+        .map((entry) => normalizeStage(entry) ?? entry)
+        .filter(Boolean),
+    reviewedSections:
+      asStringArray(record.reviewedSections ?? record.reviewed_sections)
         .map((entry) => normalizeStage(entry) ?? entry)
         .filter(Boolean),
     finalizedSections:
       asStringArray(record.finalizedSections ?? record.finalized_sections)
         .map((entry) => normalizeStage(entry) ?? entry)
         .filter(Boolean),
+    manuscriptComplete:
+      pickBoolean(record, ["manuscriptComplete", "manuscript_complete"]) ?? false,
     compileSafeSections:
       asStringArray(record.compileSafeSections ?? record.compile_safe_sections)
         .map((entry) => normalizeStage(entry) ?? entry)
         .filter(Boolean),
+    compileReady:
+      pickBoolean(record, ["compileReady", "compile_ready"]) ?? false,
     sectionPackets,
+    nextSuggestedSection:
+      normalizeStage(
+        record.nextSuggestedSection ?? record.next_suggested_section
+      ) ?? null,
+    rebuildNeeded:
+      pickBoolean(record, ["rebuildNeeded", "rebuild_needed"]) ?? false,
+    rebuildReason:
+      pickString(record, ["rebuildReason", "rebuild_reason"]) ?? null,
     headlineClaimEvidenceStatus:
       normalizeStage(
         record.headlineClaimEvidenceStatus ?? record.headline_claim_evidence_status
@@ -420,16 +453,25 @@ export function serializeWritingSessionState(
 ): Record<string, unknown> {
   return {
     status: state.status,
+    process_status: state.processStatus,
+    outline_ready: state.outlineReady,
     current_section: state.currentSection,
     draft_order: state.draftOrder,
+    drafted_sections: state.draftedSections,
+    reviewed_sections: state.reviewedSections,
     finalized_sections: state.finalizedSections,
+    manuscript_complete: state.manuscriptComplete,
     compile_safe_sections: state.compileSafeSections,
+    compile_ready: state.compileReady,
     section_packets: Object.fromEntries(
       Object.entries(state.sectionPackets).map(([key, packet]) => [
         key,
         serializeWritingSectionPacketState(packet),
       ])
     ),
+    next_suggested_section: state.nextSuggestedSection,
+    rebuild_needed: state.rebuildNeeded,
+    rebuild_reason: state.rebuildReason,
     headline_claim_evidence_status: state.headlineClaimEvidenceStatus,
     graph_evidence_coverage_status: state.graphEvidenceCoverageStatus,
     graph_evidence_coverage_summary: state.graphEvidenceCoverageSummary,

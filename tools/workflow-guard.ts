@@ -219,6 +219,9 @@ import {
   loadExperimentSearchReviewState,
 } from "./workflow-auto-experiment-search-review.js";
 import {
+  evaluateWritingProcessReadiness as evaluateWritingProcessReadinessFromModule,
+} from "./workflow-guard-writing/write-package-eval";
+import {
   normalizeAutonomousExecutionState,
   normalizeExperimentReviewState,
   serializeAutonomousExecutionState,
@@ -912,11 +915,20 @@ type WritingSectionPacketState = {
 
 type WritingSessionState = {
   status: string;
+  processStatus: string;
+  outlineReady: boolean;
   currentSection: string | null;
   draftOrder: string[];
+  draftedSections: string[];
+  reviewedSections: string[];
   finalizedSections: string[];
+  manuscriptComplete: boolean;
   compileSafeSections: string[];
+  compileReady: boolean;
   sectionPackets: Record<string, WritingSectionPacketState>;
+  nextSuggestedSection: string | null;
+  rebuildNeeded: boolean;
+  rebuildReason: string | null;
   headlineClaimEvidenceStatus: string;
   graphEvidenceCoverageStatus: string;
   graphEvidenceCoverageSummary: string | null;
@@ -1939,6 +1951,12 @@ export type WorkflowSnapshot = {
   writingFinalizedSections: string[];
   writingCompileSafeSections: string[];
   writingSectionPacketsReady: boolean;
+  writingProcessStatus: string | null;
+  writingMissingSections: string[];
+  writingStaleSections: string[];
+  writingNextSuggestedSection: string | null;
+  writingRebuildNeeded: boolean;
+  writingRebuildReason: string | null;
   writingCurrentSectionReviewVerdict: string | null;
   writingGraphEvidenceCoverageStatus: string | null;
   writingGraphEvidenceCoverageSummary: string | null;
@@ -5863,6 +5881,7 @@ async function getMissingStageSignals(params: {
           normalizeWritePackageState,
           evaluateWritingContractState,
           normalizeWritingSessionState,
+          evaluateWritingProcessReadiness: evaluateWritingProcessReadinessFromModule,
           getWritingSectionContractViolations,
           isWritingSessionReadyForSubmit,
           getWritePackageValidationErrors,
@@ -5907,6 +5926,7 @@ async function getMissingStageSignals(params: {
           normalizeWritePackageState,
           evaluateWritingContractState,
           normalizeWritingSessionState,
+          evaluateWritingProcessReadiness: evaluateWritingProcessReadinessFromModule,
           getWritingSectionContractViolations,
           isWritingSessionReadyForSubmit,
           getWritePackageValidationErrors,
@@ -7034,9 +7054,21 @@ export async function getWritingSessionStateSummary(params: {
   currentSectionPacketResolvedPath: string | null;
   currentSectionPacketExists: boolean;
   readyForSubmit: boolean;
+  processStatus: string;
+  missingSections: string[];
+  staleSections: string[];
+  nextSuggestedSection: string | null;
+  rebuildNeeded: boolean;
+  rebuildReason: string | null;
+  progressSummary: string;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const state = normalizeWritingSessionState(manifest.writing_session);
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  const process = evaluateWritingProcessReadinessFromModule({
+    writingSession: state,
+    writingContract,
+  });
   const sectionPacketDirResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     DEFAULT_WRITING_SECTION_PACKET_DIR
@@ -7056,6 +7088,13 @@ export async function getWritingSessionStateSummary(params: {
       ? await pathExists(currentSectionPacketResolvedPath)
       : false,
     readyForSubmit: isWritingSessionReadyForSubmit(state),
+    processStatus: process.processStatus,
+    missingSections: process.missingSections,
+    staleSections: process.staleSections,
+    nextSuggestedSection: process.nextSuggestedSection,
+    rebuildNeeded: process.rebuildNeeded,
+    rebuildReason: process.rebuildReason,
+    progressSummary: process.summary,
   };
 }
 
