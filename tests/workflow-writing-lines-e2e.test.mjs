@@ -146,8 +146,20 @@ test("end-to-end survey paper line advances survey review into survey-mode write
 
   assert.equal(transition.stageBefore, "survey_review");
   assert.equal(transition.stageAfter, "write");
-  assert.equal(manifestAfterTransition.current_stage, "write");
-  assert.equal(manifestAfterTransition.owner_agent, "academic_writer");
+  assert.equal(manifestAfterTransition.current_stage, "survey_review");
+  assert.equal(manifestAfterTransition.owner_agent, "researcher");
+  assert.equal(
+    manifestAfterTransition.orchestration_state.pending_owner_candidate,
+    "academic_writer",
+  );
+  assert.equal(
+    manifestAfterTransition.orchestration_state.pending_stage_candidate,
+    "write",
+  );
+  assert.equal(
+    manifestAfterTransition.orchestration_state.handoff_phase,
+    "prepared",
+  );
   assert.equal(manifestAfterTransition.writing_contract.paper_mode, "survey");
   assert.deepEqual(manifestAfterTransition.writing_contract.required_sections, [
     "abstract",
@@ -160,6 +172,19 @@ test("end-to-end survey paper line advances survey review into survey-mode write
     "conclusion",
   ]);
   assert.equal(manifestAfterTransition.writing_contract.proof_appendix_required, false);
+
+  manifestAfterTransition.current_stage = "write";
+  manifestAfterTransition.current_micro_stage = "writing_requested";
+  manifestAfterTransition.owner_agent = "academic_writer";
+  manifestAfterTransition.orchestration_state = {
+    ...(manifestAfterTransition.orchestration_state ?? {}),
+    current_owner: "academic_writer",
+    pending_handoff_id: null,
+    pending_owner_candidate: null,
+    pending_stage_candidate: null,
+    handoff_phase: "activated",
+  };
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifestAfterTransition);
 
   const writeGate = await runWorkflowAutoIterator({
     projectRoot,
@@ -208,8 +233,16 @@ test("misrouted survey projects self-heal back onto survey_review instead of loo
 
   assert.equal(result.stageBefore, "survey_review");
   assert.equal(result.stageAfter, "write");
-  assert.equal(healedManifest.current_stage, "write");
-  assert.equal(healedManifest.owner_agent, "academic_writer");
+  assert.equal(healedManifest.current_stage, "survey_review");
+  assert.equal(healedManifest.owner_agent, "researcher");
+  assert.equal(
+    healedManifest.orchestration_state.pending_owner_candidate,
+    "academic_writer",
+  );
+  assert.equal(
+    healedManifest.orchestration_state.pending_stage_candidate,
+    "write",
+  );
   assert.equal(healedManifest.writing_contract.paper_mode, "survey");
   assert.ok(
     !result.missingStageSignals.some((signal) =>

@@ -212,6 +212,6 @@ Researcher Agent 自我反思当前工作：
 
 才允许 handoff 到 WRITE。
 
-如果当前结论是进入 WRITE，则在 durable review state 更新完成后再调用 Lobster handoff。
+如果当前结论是进入 WRITE，则在 durable review state 更新完成后使用共享 `workflow-handoff-signal` 技能，并调用 `research_workflow.prepare_stage_handoff` for `review -> write`。
 
 如果结论是补实验、缩 scope、继续 review 轮次，或回退到 IDEA / EXPERIMENT / ANALYZE，则不要向前 handoff。

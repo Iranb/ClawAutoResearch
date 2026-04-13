@@ -37,14 +37,17 @@
     "./researcher/workspace-update",
     "./researcher/crawl4ai-search",
     "./researcher/theory-phase",
-    "./researcher/research-queue"
+    "./researcher/research-queue",
+    "./shared/workflow-handoff-signal"
   ],
   "planner": [
-    "./planner/experiment-plan"
+    "./planner/experiment-plan",
+    "./shared/workflow-handoff-signal"
   ],
   "orchestrator": [
     "./orchestrator/plan-research",
-    "./orchestrator/resume-pipeline"
+    "./orchestrator/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ],
   "coder": [
     "./coder/implement-experiment",
@@ -52,7 +55,8 @@
     "./coder/scientific-visualization",
     "./coder/run-experiment",
     "./coder/github-download",
-    "./coder/resume-pipeline"
+    "./coder/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ],
   "analyzer": [
     "./analyzer/experiment-design-review",
@@ -60,7 +64,8 @@
     "./analyzer/analyze-results",
     "./analyzer/scientific-figures",
     "./analyzer/papernexus-reflection",
-    "./analyzer/resume-pipeline"
+    "./analyzer/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ],
   "academic_writer": [
     "./academic_writer/citation-preflight",
@@ -72,7 +77,8 @@
     "./academic_writer/ai-research-prompt",
     "./academic_writer/research-paper-writing",
     "./academic_writer/venue-templates",
-    "./academic_writer/resume-pipeline"
+    "./academic_writer/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ],
   "reviewer": [
     "./reviewer/citation-integrity-gate",
@@ -85,10 +91,12 @@
     "./reviewer/evidence-grading",
     "./reviewer/paperreview-submit",
     "./reviewer/review-response",
-    "./reviewer/resume-pipeline"
+    "./reviewer/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ],
   "cross-reviewer": [
     "./cross-reviewer/experiment-attack",
-    "./cross-reviewer/resume-pipeline"
+    "./cross-reviewer/resume-pipeline",
+    "./shared/workflow-handoff-signal"
   ]
 }

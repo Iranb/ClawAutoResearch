@@ -347,6 +347,6 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 
 ## Stage Closeout
 
-When the required experiment bundle is complete, the dry-run has passed, and the stage is genuinely ready to move into EXPERIMENT, invoke the Lobster handoff workflow from the quickstart.
+When the required experiment bundle is complete, the dry-run has passed, and the stage is genuinely ready to move into EXPERIMENT, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `code -> experiment`.
 
 Do not hand off if dry-run, reproducibility, or implementation review still requires fixes.

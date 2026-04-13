@@ -358,6 +358,6 @@ Graph-backed `EXPERIMENT_MEMORY_PACKET.json` is the distilled bridge into later 
 
 ## Stage Closeout
 
-When experiment execution is durably reconciled and the track decision is to proceed into ANALYZE, Researcher should trigger the Lobster handoff workflow.
+When experiment execution is durably reconciled and the track decision is to proceed into ANALYZE, Researcher should use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `experiment -> analyze`.
 
 Do not hand off if more experiments or a bounded relaunch are still required, the right action is `restart-idea`, or artifacts / ledger state are still out of sync.

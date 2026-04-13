@@ -210,9 +210,15 @@ import {
   createStageOwnerHandoffIntent,
   createTaskUnlockedHandoffIntent,
 } from "./workflow-handoff/handoff-router";
-import { deliverWorkflowHandoffIntent } from "./workflow-handoff/handoff-delivery";
+import {
+  deliverWorkflowHandoffIntent,
+  type WorkflowHandoffDeliveryRuntime,
+} from "./workflow-handoff/handoff-delivery";
 import { sweepPendingHandoffIntents } from "./workflow-handoff/handoff-sweep.js";
-import { syncPreparedWorkflowHandoffToManifest } from "./workflow-handoff/handoff-activation.js";
+import {
+  claimAndActivateWorkflowHandoffForAgent,
+  syncPreparedWorkflowHandoffToManifest,
+} from "./workflow-handoff/handoff-activation.js";
 import { buildHandoffDashboard } from "./workflow-handoff/dashboard.js";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import {
@@ -309,6 +315,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "renew_task_lease",
   "release_task",
   "complete_task",
+  "prepare_stage_handoff",
   "get_handoff_intents",
   "ack_handoff_intent",
   "claim_handoff_intent",
@@ -453,6 +460,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   renew_task_lease: "renewWorkflowTaskLease",
   release_task: "releaseWorkflowTaskClaim",
   complete_task: "completeWorkflowTaskAndContinue",
+  prepare_stage_handoff: "createStageOwnerHandoffIntent",
   get_handoff_intents: "readWorkflowHandoffIntentStore",
   ack_handoff_intent: "transitionWorkflowHandoffIntent",
   claim_handoff_intent: "transitionWorkflowHandoffIntent",
@@ -928,6 +936,152 @@ function buildStageHandoffAcceptanceChecks(params: {
   }
 }
 
+function buildWorkflowHandoffDeliveryRuntime(params: {
+  plugin: PluginRegistrationContext;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  agentCtx: ToolContext;
+  requesterRole: DispatchableWorkflowRole;
+  targetRole: DispatchableWorkflowRole;
+  projectRoot: string;
+  projectId: string | null;
+  stage: string | null;
+  summary: string;
+  command: string | null;
+  preferredSessionKeys?: string[] | null;
+  toSessionKey?: string | null;
+  waitTimeoutMs?: number;
+  retryOnTimeout?: boolean;
+  enableSpawnFallback?: boolean;
+  autoModeActive: boolean;
+}): {
+  runtime: WorkflowHandoffDeliveryRuntime;
+  getDispatch: () => Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null;
+} {
+  let capturedDispatch: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
+    null;
+  const requesterSessionKey =
+    readString(params.agentCtx.sessionKey) ?? `agent:${params.requesterRole}:main`;
+  const preferredSessionKeys =
+    params.preferredSessionKeys && params.preferredSessionKeys.length > 0
+      ? params.preferredSessionKeys
+      : deriveWorkflowDispatchSessionCandidates({
+          requesterSessionKey,
+          targetRole: params.targetRole,
+        });
+  return {
+    runtime: {
+      nativeDispatch: async () => {
+        capturedDispatch = await handoffWorkflowTaskToAgent({
+          runtimeSubagent: params.plugin.api.runtime?.subagent,
+          workflowPolicy: params.workflowPolicy,
+          requesterSessionKey: params.agentCtx.sessionKey,
+          requesterChannel: params.agentCtx.messageChannel,
+          fromRole: params.requesterRole,
+          toRole: params.targetRole,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          stage: params.stage,
+          summary: params.summary,
+          command: params.command,
+          mailboxMessageId: null,
+          requireMailboxAcknowledgement: true,
+          waitTimeoutMs: params.waitTimeoutMs,
+          retryOnTimeout: params.retryOnTimeout,
+          enableSpawnFallback: params.enableSpawnFallback,
+          autoModeActive: params.autoModeActive,
+          logger: params.plugin.api.logger,
+        });
+        return {
+          ok: capturedDispatch.dispatched,
+          runId: capturedDispatch.runId,
+          sessionKey: capturedDispatch.sessionKey,
+          error: capturedDispatch.error,
+        };
+      },
+      channelBroadcast: async (handoffIntent: { intentId: string }) => {
+        const result = await maybeBroadcastWorkflowStatusUpdate({
+          runtimeSubagent: params.plugin.api.runtime?.subagent,
+          bindingPolicy: params.workflowPolicy,
+          sessionKey: params.agentCtx.sessionKey,
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          status: "handoff_ready",
+          stage: params.stage,
+          summary: `Handoff ${handoffIntent.intentId} is ready for ${params.targetRole}: ${params.summary}`,
+          idempotencyKeySuffix: `handoff-channel:${handoffIntent.intentId}`,
+        });
+        return {
+          ok:
+            result.broadcasted ||
+            result.reasonSkipped === "duplicate_pending" ||
+            result.reasonSkipped === "duplicate_delivered",
+          runId: result.runId,
+          messageId: result.idempotencyKey,
+          error: result.reasonSkipped,
+        };
+      },
+      runtimeQueue: async (handoffIntent: { intentId: string }) => {
+        const queued = await enqueueQueuedBackgroundWorkflowRun({
+          source: "workflow_auto_stage",
+          ownerAgent: params.targetRole,
+          requesterSessionKey,
+          messageChannel: readString(params.agentCtx.messageChannel),
+          preferredSessionKey: preferredSessionKeys[0] ?? params.toSessionKey ?? null,
+          family: "research",
+          kind: "workflow_stage_dispatch",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          projectsRoot: params.workflowPolicy.projectsRoot,
+          queueKey: `handoff:${handoffIntent.intentId}`,
+          summary: `Queued handoff ${handoffIntent.intentId} for ${params.targetRole} after direct delivery fallback.`,
+          dispatchPayload: {
+            requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
+            requesterAccountId: null,
+            preferredSessionKeys,
+            fromRole: params.requesterRole,
+            toRole: params.targetRole,
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            stage: params.stage,
+            summary: params.summary,
+            command: params.command,
+            mailboxMessageId: null,
+            requireMailboxAcknowledgement: true,
+            extraBody:
+              "Workflow handoff delivery fallback. Continue only the assigned stage and keep durable state current.",
+            waitTimeoutMs: params.waitTimeoutMs ?? 5000,
+            retryOnTimeout: params.retryOnTimeout ?? false,
+            enableSpawnFallback:
+              params.enableSpawnFallback === false ? false : true,
+            useWorkflowHandoff: true,
+            autoModeActive: params.autoModeActive,
+          },
+        });
+        return { ok: true, queueKey: queued.entry.queueKey };
+      },
+      mailboxCompat: async (handoffIntent: { intentId: string }) => {
+        const messageId = await ensureWorkflowDispatchMailboxMessage({
+          projectRoot: params.projectRoot,
+          fromAgent: params.requesterRole,
+          toAgent: params.targetRole,
+          projectId: params.projectId,
+          stage: params.stage,
+          summary: `Compatibility handoff ${handoffIntent.intentId}: ${params.summary}`,
+          command: params.command,
+          queueKey: handoffIntent.intentId,
+          existingMessageId: null,
+        });
+        return {
+          ok: Boolean(messageId),
+          messageId,
+          error: messageId ? null : "mailbox_compat_unavailable",
+        };
+      },
+    },
+    getDispatch: () => capturedDispatch,
+  };
+}
+
 export async function maybeDispatchAutoIteratorTask(params: {
   plugin: PluginRegistrationContext;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -950,161 +1104,22 @@ export async function maybeDispatchAutoIteratorTask(params: {
     return null;
   }
 
-  const buildDeliveryRuntime = (intent: {
-    intentId: string;
-    projectRoot: string;
-    projectId: string | null;
-    toRole: string;
-    stageAfter?: string | null;
-    stage?: string | null;
-    summary?: string | null;
-    command?: string | null;
-    toSessionKey?: string | null;
-    preferredSessionKeys?: string[];
-  }) => {
-    let capturedDispatch: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
-      null;
-    const targetRole = intent.toRole as DispatchableWorkflowRole;
-    const requesterSessionKey =
-      readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
-    const preferredSessionKeys =
-      intent.preferredSessionKeys && intent.preferredSessionKeys.length > 0
-        ? intent.preferredSessionKeys
-        : deriveWorkflowDispatchSessionCandidates({
-            requesterSessionKey,
-            targetRole,
-          });
-    return {
-      runtime: {
-        nativeDispatch: async () => {
-          capturedDispatch = await handoffWorkflowTaskToAgent({
-            runtimeSubagent: params.plugin.api.runtime?.subagent,
-            workflowPolicy: params.workflowPolicy,
-            requesterSessionKey: params.agentCtx.sessionKey,
-            requesterChannel: params.agentCtx.messageChannel,
-            fromRole: requesterRole,
-            toRole: targetRole,
-            projectRoot: intent.projectRoot,
-            projectId: intent.projectId,
-            stage: intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
-            summary:
-              readString(intent.summary) ??
-              `Workflow handoff to ${targetRole}.`,
-            command: readString(intent.command),
-            mailboxMessageId: null,
-            requireMailboxAcknowledgement: true,
-            waitTimeoutMs: params.waitTimeoutMs,
-            retryOnTimeout: params.retryOnTimeout,
-            enableSpawnFallback: params.enableSpawnFallback,
-            autoModeActive,
-            logger: params.plugin.api.logger,
-          });
-          return {
-            ok: capturedDispatch.dispatched,
-            runId: capturedDispatch.runId,
-            sessionKey: capturedDispatch.sessionKey,
-            error: capturedDispatch.error,
-          };
-        },
-        channelBroadcast: async (handoffIntent: { intentId: string }) => {
-          const result = await maybeBroadcastWorkflowStatusUpdate({
-            runtimeSubagent: params.plugin.api.runtime?.subagent,
-            bindingPolicy: params.workflowPolicy,
-            sessionKey: params.agentCtx.sessionKey,
-            projectId: intent.projectId,
-            projectRoot: intent.projectRoot,
-            status: "handoff_ready",
-            stage:
-              intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
-            summary: `Handoff ${handoffIntent.intentId} is ready for ${targetRole}: ${readString(intent.summary) ?? "Continue the assigned stage."}`,
-            idempotencyKeySuffix: `handoff-channel:${handoffIntent.intentId}`,
-          });
-          return {
-            ok:
-              result.broadcasted ||
-              result.reasonSkipped === "duplicate_pending" ||
-              result.reasonSkipped === "duplicate_delivered",
-            runId: result.runId,
-            messageId: result.idempotencyKey,
-            error: result.reasonSkipped,
-          };
-        },
-        runtimeQueue: async (handoffIntent: { intentId: string }) => {
-          const queued = await enqueueQueuedBackgroundWorkflowRun({
-            source: "workflow_auto_stage",
-            ownerAgent: targetRole,
-            requesterSessionKey,
-            messageChannel: readString(params.agentCtx.messageChannel),
-            preferredSessionKey: preferredSessionKeys[0] ?? intent.toSessionKey ?? null,
-            family: "research",
-            kind: "workflow_stage_dispatch",
-            projectId: intent.projectId,
-            projectRoot: intent.projectRoot,
-            projectsRoot: params.workflowPolicy.projectsRoot,
-            queueKey: `handoff:${handoffIntent.intentId}`,
-            summary: `Queued handoff ${handoffIntent.intentId} for ${targetRole} after direct delivery fallback.`,
-            dispatchPayload: {
-              requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
-              requesterAccountId: null,
-              preferredSessionKeys,
-              fromRole: requesterRole,
-              toRole: targetRole,
-              projectRoot: intent.projectRoot,
-              projectId: intent.projectId,
-              stage:
-                intent.stageAfter ?? intent.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
-              summary:
-                readString(intent.summary) ??
-                `Workflow handoff to ${targetRole}.`,
-              command: readString(intent.command) ?? null,
-              mailboxMessageId: null,
-              requireMailboxAcknowledgement: true,
-              extraBody:
-                "Workflow handoff delivery fallback. Continue only the assigned stage and keep durable state current.",
-              waitTimeoutMs: params.waitTimeoutMs ?? 5000,
-              retryOnTimeout: params.retryOnTimeout ?? false,
-              enableSpawnFallback:
-                params.enableSpawnFallback === false ? false : true,
-              useWorkflowHandoff: true,
-              autoModeActive: true,
-            },
-          });
-          return { ok: true, queueKey: queued.entry.queueKey };
-        },
-        mailboxCompat: async (handoffIntent: { intentId: string }) => {
-          const messageId = await ensureWorkflowDispatchMailboxMessage({
-            projectRoot: intent.projectRoot,
-            fromAgent: requesterRole,
-            toAgent: targetRole,
-            projectId: intent.projectId,
-            stage:
-              intent.stageAfter ?? intent.stage ?? params.snapshot.currentStage,
-            summary:
-              `Compatibility handoff ${handoffIntent.intentId}: ${readString(intent.summary) ?? "Continue the assigned stage."}`,
-            command: readString(intent.command),
-            queueKey: handoffIntent.intentId,
-            existingMessageId: null,
-          });
-          return {
-            ok: Boolean(messageId),
-            messageId,
-            error: messageId ? null : "mailbox_compat_unavailable",
-          };
-        },
-      },
-      getDispatch: () => capturedDispatch,
-    };
-  };
-
   if (params.snapshot.projectRoot) {
-    const sweepRuntime = buildDeliveryRuntime({
-      intentId: "sweep",
+    const sweepRuntime = buildWorkflowHandoffDeliveryRuntime({
+      plugin: params.plugin,
+      workflowPolicy: params.workflowPolicy,
+      agentCtx: params.agentCtx,
+      requesterRole,
+      targetRole: ownerAfter,
       projectRoot: params.snapshot.projectRoot,
       projectId: params.snapshot.projectId,
-      toRole: ownerAfter,
-      stageAfter: params.result.stageAfter ?? params.snapshot.currentStage,
+      stage: params.result.stageAfter ?? params.snapshot.currentStage,
       summary: params.result.nextAction ?? "Retry the pending workflow handoff.",
       command: params.result.nextAction,
+      autoModeActive,
+      waitTimeoutMs: params.waitTimeoutMs,
+      retryOnTimeout: params.retryOnTimeout,
+      enableSpawnFallback: params.enableSpawnFallback,
     });
     await sweepPendingHandoffIntents({
       projectRoot: params.snapshot.projectRoot,
@@ -1179,17 +1194,25 @@ export async function maybeDispatchAutoIteratorTask(params: {
   });
   let dispatchedViaDelivery: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
     null;
-  const deliveryRuntime = buildDeliveryRuntime({
-    intentId: handoffIntent.intent.intentId,
+  const deliveryRuntime = buildWorkflowHandoffDeliveryRuntime({
+    plugin: params.plugin,
+    workflowPolicy: params.workflowPolicy,
+    agentCtx: params.agentCtx,
+    requesterRole,
+    targetRole: ownerAfter,
     projectRoot: handoffIntent.intent.projectRoot,
     projectId: handoffIntent.intent.projectId,
-    toRole: handoffIntent.intent.toRole,
-    stageAfter: handoffIntent.intent.stageAfter,
     stage: handoffIntent.intent.stage,
-    summary: handoffIntent.intent.summary,
+    summary:
+      handoffIntent.intent.summary ??
+      primaryAction.summary,
     command: handoffIntent.intent.command,
     toSessionKey: handoffIntent.intent.toSessionKey,
     preferredSessionKeys: handoffIntent.intent.preferredSessionKeys,
+    autoModeActive,
+    waitTimeoutMs: params.waitTimeoutMs,
+    retryOnTimeout: params.retryOnTimeout,
+    enableSpawnFallback: params.enableSpawnFallback,
   });
   const deliveryResult = params.forceQueueOnly
     ? null
@@ -1530,6 +1553,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "renew_task_lease",
               "release_task",
               "complete_task",
+              "prepare_stage_handoff",
               "get_handoff_intents",
               "ack_handoff_intent",
               "claim_handoff_intent",
@@ -1609,6 +1633,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           surveyReview: {
+            type: "object",
+            additionalProperties: true,
+          },
+          handoff: {
             type: "object",
             additionalProperties: true,
           },
@@ -4412,6 +4440,169 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "prepare_stage_handoff": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const actorRole = snapshot.role ?? ctx.agentId ?? null;
+              if (!actorRole) {
+                throw new Error("Current workflow role is required to prepare a stage handoff.");
+              }
+              const handoffPatch = asObject(params.handoff) ?? {};
+              const explicitToRole = inferTargetRoleFromToolParams({
+                agentId:
+                  readString(handoffPatch.toRole) ??
+                  readString(params.toAgent) ??
+                  undefined,
+              });
+              const explicitStageAfter =
+                readString(handoffPatch.stageAfter) ??
+                readString(handoffPatch.stage_after);
+              const autoIteratorResult =
+                explicitToRole && explicitStageAfter
+                  ? null
+                  : await runWorkflowAutoIterator({
+                      projectRoot: resolvedProjectRoot,
+                      policy: workflowPolicy,
+                      agentId: snapshot.role ?? ctx.agentId ?? undefined,
+                      mode: "prepare-handoff",
+                      queueMailbox: false,
+                    });
+              const stageAfter =
+                explicitStageAfter ??
+                autoIteratorResult?.stageAfter ??
+                null;
+              const toRole =
+                explicitToRole ??
+                (autoIteratorResult?.ownerAfter as DispatchableWorkflowRole | null) ??
+                null;
+              if (!stageAfter || !toRole) {
+                throw new Error(
+                  "prepare_stage_handoff requires a target stage and target role, either explicitly or from auto_iterator_tick."
+                );
+              }
+              if (actorRole === toRole) {
+                throw new Error(
+                  `prepare_stage_handoff only applies to cross-owner transitions (current role: ${actorRole}).`
+                );
+              }
+              const workflowLine =
+                readString(handoffPatch.workflowLine) === "survey"
+                  ? "survey"
+                  : readString(handoffPatch.workflowLine) === "experiment"
+                    ? "experiment"
+                    : resolveSnapshotWorkflowLine(snapshot);
+              const summary =
+                readString(handoffPatch.summary) ??
+                autoIteratorResult?.recommendedActions.find(
+                  (action) => action.kind === "drive_stage" && action.owner === toRole
+                )?.summary ??
+                `Workflow handoff ${actorRole} -> ${toRole}.`;
+              const command =
+                readString(handoffPatch.command) ??
+                autoIteratorResult?.recommendedActions.find(
+                  (action) => action.kind === "drive_stage" && action.owner === toRole
+                )?.command ??
+                autoIteratorResult?.nextAction ??
+                null;
+              const acceptanceChecks = Array.isArray(handoffPatch.acceptanceChecks)
+                ? handoffPatch.acceptanceChecks.filter(
+                    (entry): entry is string =>
+                      typeof entry === "string" && entry.trim().length > 0
+                  )
+                : buildStageHandoffAcceptanceChecks({
+                    workflowLine,
+                    stageAfter,
+                  });
+              const handoff = await createStageOwnerHandoffIntent({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                workflowLine,
+                stageBefore:
+                  readString(handoffPatch.stageBefore) ??
+                  autoIteratorResult?.stageBefore ??
+                  snapshot.currentStage,
+                stageAfter,
+                ownerBefore: actorRole,
+                ownerAfter: toRole,
+                fromSessionKey: ctx.sessionKey,
+                sessionBindingKey: snapshot.channelProjectBindingKey,
+                preferredSessionKeys: deriveWorkflowDispatchSessionCandidates({
+                  requesterSessionKey:
+                    readString(ctx.sessionKey) ?? `agent:${actorRole}:main`,
+                  targetRole: toRole,
+                }),
+                executionId:
+                  readString(handoffPatch.executionId) ??
+                  autoIteratorResult?.pendingHandoffExecutionId ??
+                  null,
+                summary,
+                acceptanceChecks,
+                nextAction: command,
+                resumeAction: command,
+                blockingReason:
+                  readString(handoffPatch.blockingReason) ??
+                  autoIteratorResult?.blockingReason ??
+                  null,
+                missingStageSignals:
+                  (autoIteratorResult?.missingStageSignals ?? []).slice(),
+                manifestRevision:
+                  autoIteratorResult?.pendingHandoffExecutionId ??
+                  readString((snapshot as Record<string, unknown>).manifestUpdatedAt) ??
+                  readString((snapshot as Record<string, unknown>).manifest_updated_at),
+              });
+              await syncPreparedWorkflowHandoffToManifest({
+                projectRoot: resolvedProjectRoot,
+                intent: handoff.intent,
+              });
+              const shouldDispatch = handoffPatch.dispatch !== false;
+              let deliveryResult = null;
+              if (shouldDispatch) {
+                const delivery = buildWorkflowHandoffDeliveryRuntime({
+                  plugin,
+                  workflowPolicy,
+                  agentCtx: ctx,
+                  requesterRole: actorRole as DispatchableWorkflowRole,
+                  targetRole: toRole,
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId,
+                  stage: stageAfter,
+                  summary,
+                  command,
+                  preferredSessionKeys: handoff.intent.preferredSessionKeys,
+                  toSessionKey: handoff.intent.toSessionKey,
+                  waitTimeoutMs: 5000,
+                  retryOnTimeout: false,
+                  enableSpawnFallback: true,
+                  autoModeActive:
+                    (autoIteratorResult?.effectiveAutoMode ?? workflowPolicy.autoMode ?? "off") !== "off",
+                });
+                deliveryResult = await deliverWorkflowHandoffIntent({
+                  intent: handoff.intent,
+                  bindingPolicy: workflowPolicy,
+                  lobsterMode: workflowPolicy.lobsterHandoff?.enabled
+                    ? "enabled"
+                    : "disabled",
+                  runtime: delivery.runtime,
+                });
+                if (deliveryResult?.intent) {
+                  await syncPreparedWorkflowHandoffToManifest({
+                    projectRoot: resolvedProjectRoot,
+                    intent: deliveryResult.intent,
+                  });
+                }
+              }
+              return textResponse(
+                JSON.stringify(
+                  {
+                    intent: deliveryResult?.intent ?? handoff.intent,
+                    created: handoff.created,
+                    dispatched: deliveryResult?.delivered ?? false,
+                    terminal: deliveryResult?.terminal ?? false,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
             case "get_handoff_intents": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const store = await readWorkflowHandoffIntentStore(resolvedProjectRoot);
@@ -4499,43 +4690,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   );
                 }
               }
-              const capabilitySnapshot =
-                (await readWorkflowAgentCapabilityStore(resolvedProjectRoot)).records.find(
-                  (entry) => entry.sessionKey === ctx.sessionKey
-                ) ?? null;
-              const now = new Date();
-              const leaseMs = Math.max(60_000, Math.floor((readNumber(params.waitSeconds) ?? 900) * 1000));
-              const claimableIntent =
-                currentIntent.status === "delivered"
-                  ? (await transitionWorkflowHandoffIntent({
-                      projectRoot: resolvedProjectRoot,
-                      intentId: currentIntent.intentId,
-                      toStatus: "acknowledged",
-                      summary: `Handoff acknowledged before claim by ${actorRole ?? "unknown"}.`,
-                    })) ?? currentIntent
-                  : currentIntent;
-              if (claimableIntent.status !== "acknowledged") {
-                throw new Error(
-                  `handoff intent must be acknowledged before claim (current: ${claimableIntent.status}).`
-                );
-              }
-              const intent = await transitionWorkflowHandoffIntent({
+              const leaseMs = Math.max(
+                60_000,
+                Math.floor((readNumber(params.waitSeconds) ?? 900) * 1000)
+              );
+              const intent = await claimAndActivateWorkflowHandoffForAgent({
                 projectRoot: resolvedProjectRoot,
-                intentId: claimableIntent.intentId,
-                toStatus: "claimed",
-                summary: `Handoff claimed by ${snapshot.role ?? ctx.agentId ?? "unknown"}.`,
-                patch: {
-                  toSessionKey: ctx.sessionKey ?? null,
-                  claimedAt: now.toISOString(),
-                  claimLeaseExpiresAt: new Date(now.getTime() + leaseMs).toISOString(),
-                  payload: {
-                    ...(claimableIntent.payload ?? {}),
-                    claimedCapability: capabilitySnapshot,
-                    claimedTask,
-                  },
-                },
+                role: currentIntent.toRole,
+                sessionKey: ctx.sessionKey,
+                claimLeaseMs: leaseMs,
+                intentId: currentIntent.intentId,
+                idempotencyKey: currentIntent.idempotencyKey,
               });
-              return textResponse(JSON.stringify(intent, null, 2));
+              return textResponse(JSON.stringify({ ...intent, claimedTask }, null, 2));
             }
             case "fail_handoff_intent": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

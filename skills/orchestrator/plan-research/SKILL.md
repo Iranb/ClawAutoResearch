@@ -197,6 +197,6 @@ Do not consider PLAN complete until all of the following are true:
 - `PLAN_AUDIT.md` says `Verdict: READY_FOR_CODE`
 - `PLAN_AUDIT.md` says `Ready to hand off to CODE: yes`
 
-When those conditions are satisfied, invoke the Lobster handoff workflow described in `{PLUGIN_ROOT}/lobster/QUICKSTART.md`.
+When those conditions are satisfied, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `plan -> code`.
 
 Do not hand off if the plan is still being revised, narrowed, or re-audited.

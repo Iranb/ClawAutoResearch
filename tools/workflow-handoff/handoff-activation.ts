@@ -58,8 +58,8 @@ export async function syncPreparedWorkflowHandoffToManifest(params: {
   const nextState = {
     ...orchestration,
     currentOwner:
-      orchestration.currentOwner ??
       readString(manifest.owner_agent) ??
+      orchestration.currentOwner ??
       params.intent.fromRole ??
       null,
     currentExecutionId:
@@ -108,6 +108,8 @@ function selectClaimableIntentForRole(params: {
   intents: WorkflowHandoffIntent[];
   role: string;
   pendingHandoffId: string | null;
+  intentId?: string | null;
+  idempotencyKey?: string | null;
 }): WorkflowHandoffIntent | null {
   const claimable = params.intents.filter((intent) => {
     if (intent.toRole !== params.role) {
@@ -128,6 +130,15 @@ function selectClaimableIntentForRole(params: {
   if (claimable.length === 0) {
     return null;
   }
+  if (params.intentId || params.idempotencyKey) {
+    return (
+      claimable.find(
+        (intent) =>
+          (params.intentId && intent.intentId === params.intentId) ||
+          (params.idempotencyKey && intent.idempotencyKey === params.idempotencyKey)
+      ) ?? null
+    );
+  }
   if (params.pendingHandoffId) {
     return (
       claimable.find((intent) => intent.intentId === params.pendingHandoffId) ?? null
@@ -144,6 +155,8 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
   role: string;
   sessionKey?: string | null;
   claimLeaseMs?: number | null;
+  intentId?: string | null;
+  idempotencyKey?: string | null;
 }): Promise<{
   intent: WorkflowHandoffIntent | null;
   claimed: boolean;
@@ -156,6 +169,8 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     intents: store.intents,
     role: params.role,
     pendingHandoffId: orchestration.pendingHandoffId,
+    intentId: params.intentId,
+    idempotencyKey: params.idempotencyKey,
   });
   if (!selectedIntent) {
     return { intent: null, claimed: false, activated: false };

@@ -401,6 +401,6 @@ Important:
 
 ## Stage Closeout
 
-When literature ingestion, preliminary brainstorming, and the durable outputs are complete, Researcher may trigger the Lobster handoff workflow only if the current stage is actually ready to advance.
+When literature ingestion, preliminary brainstorming, and the durable outputs are complete, Researcher may use the shared `workflow-handoff-signal` skill only if the current stage is actually ready to advance.
 
 Do not hand off if automatic graph catch-up is still pending, key papers are still missing from the shared graph, or brainstorming is still stale relative to the new papers.

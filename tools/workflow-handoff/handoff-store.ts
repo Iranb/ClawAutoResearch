@@ -341,7 +341,61 @@ export async function upsertWorkflowHandoffIntent(params: {
           isWorkflowHandoffActiveStatus(entry.status)
       );
       if (existing) {
-        return { intent: existing, created: false };
+        const mergedPayload =
+          params.payload || existing.payload
+            ? {
+                ...(existing.payload ?? {}),
+                ...(params.payload ?? {}),
+              }
+            : null;
+        const enriched: WorkflowHandoffIntent = {
+          ...existing,
+          projectId: readString(params.projectId) ?? existing.projectId,
+          workflowLine: params.workflowLine ?? existing.workflowLine,
+          stage: readString(params.stage) ?? existing.stage,
+          stageBefore: readString(params.stageBefore) ?? existing.stageBefore,
+          stageAfter: readString(params.stageAfter) ?? existing.stageAfter,
+          executionId: readString(params.executionId) ?? existing.executionId,
+          fromRole: readString(params.fromRole) ?? existing.fromRole,
+          fromSessionKey: readString(params.fromSessionKey) ?? existing.fromSessionKey,
+          toSessionKey: readString(params.toSessionKey) ?? existing.toSessionKey,
+          summary: readString(params.summary) ?? existing.summary,
+          command: readString(params.command) ?? existing.command,
+          blockerSummary: readString(params.blockerSummary) ?? existing.blockerSummary,
+          sessionBindingKey:
+            readString(params.sessionBindingKey) ?? existing.sessionBindingKey,
+          preferredSessionKeys:
+            Array.isArray(params.preferredSessionKeys) &&
+            params.preferredSessionKeys.length > 0
+              ? params.preferredSessionKeys
+                  .map(readString)
+                  .filter((entry): entry is string => Boolean(entry))
+              : existing.preferredSessionKeys,
+          payload: mergedPayload,
+          updatedAt: nowIso(),
+        };
+        const changed =
+          JSON.stringify(enriched) !== JSON.stringify(existing);
+        if (changed) {
+          const nextStore = {
+            ...store,
+            intents: store.intents.map((entry) =>
+              entry.intentId === existing.intentId ? enriched : entry
+            ),
+          };
+          await writeWorkflowHandoffIntentStore(nextStore);
+          await appendWorkflowHandoffEvent({
+            projectRoot,
+            projectId: enriched.projectId,
+            intentId: enriched.intentId,
+            idempotencyKey: enriched.idempotencyKey,
+            kind: "intent_enriched",
+            fromStatus: existing.status,
+            toStatus: enriched.status,
+            summary: "Updated an existing active handoff intent with stronger runtime context.",
+          });
+        }
+        return { intent: changed ? enriched : existing, created: false };
       }
       const now = new Date();
       const defaultPlan = buildDefaultWorkflowHandoffDeliveryPlan({

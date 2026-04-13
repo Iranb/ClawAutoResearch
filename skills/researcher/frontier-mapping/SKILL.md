@@ -158,6 +158,6 @@ After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
 
 ## Stage Closeout
 
-When `FRONTIER_REPORT.md` and the required frontier files under `{PROJ}/graph/` are complete and the project is ready to move into IDEA, Researcher should trigger the Lobster handoff workflow.
+When `FRONTIER_REPORT.md` and the required frontier files under `{PROJ}/graph/` are complete and the project is ready to move into IDEA, Researcher should use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff`.
 
 Do not hand off if the report still requests graph refresh, key frontier anchors are unresolved, or the current plan is to keep iterating inside frontier mapping.

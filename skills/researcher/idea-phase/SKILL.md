@@ -235,6 +235,6 @@ Phase 完成后更新 `{PMEM}/ideation-memory.md`：
 
 ## Stage Closeout
 
-When the surviving portfolio is locked and the project is genuinely ready to move into PLAN, Researcher should trigger the Lobster handoff workflow.
+When the surviving portfolio is locked and the project is genuinely ready to move into PLAN, Researcher should use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff`.
 
 Do not hand off if novelty / attacker review still requires another ideation pass, innovation reflection is still due, or the portfolio still needs another pilot or narrowing round.

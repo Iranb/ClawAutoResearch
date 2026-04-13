@@ -37,6 +37,7 @@ import {
 import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
+import { createStageOwnerHandoffIntent } from "../workflow-handoff/handoff-router";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
   AutoIteratorAction,
@@ -111,6 +112,69 @@ const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
   "innovation_fragile",
   "reconcile_runtime",
 ]);
+
+function buildAutoIteratorStageHandoffAcceptanceChecks(params: {
+  workflowLine: "experiment" | "survey";
+  stageAfter: string | null | undefined;
+}): string[] {
+  const stageAfter = normalizeStage(params.stageAfter);
+  if (params.workflowLine === "survey") {
+    if (stageAfter === "write") {
+      return [
+        "researcher/SURVEY_QUERY_REGISTRY.json exists",
+        "researcher/INCLUDED_PAPERS.json exists",
+        "researcher/EXCLUDED_PAPERS.json exists",
+        "researcher/SOTA_MATRIX.md exists",
+        "researcher/GAP_SYNTHESIS.md exists",
+        "researcher/SURVEY_BRIEF.md exists",
+      ];
+    }
+    if (stageAfter === "submit") {
+      return [
+        "academic_writer/paper/main.tex exists",
+        "academic_writer/WRITING_SIGNALS.md exists",
+      ];
+    }
+    return [];
+  }
+  switch (stageAfter) {
+    case "plan":
+      return [
+        "researcher/IDEA_REPORT.md exists",
+        "TRACK_REGISTRY.json exists",
+      ];
+    case "code":
+      return [
+        "orchestrator/PLAN.md exists",
+        "orchestrator/TODOS.md exists",
+        "orchestrator/PLAN_AUDIT.md exists",
+      ];
+    case "experiment":
+      return [
+        "coder/EXPERIMENT_INDEX.md exists",
+      ];
+    case "analyze":
+      return [
+        "researcher/EXPERIMENT_LEDGER.json is updated",
+      ];
+    case "write":
+      return [
+        "analyzer/CLAIM_EVIDENCE_MATRIX.md exists",
+        "analyzer/TRACK_VERDICTS.md exists",
+        "analyzer/QUALITY_AUDIT.md exists",
+      ];
+    case "review":
+      return [
+        "academic_writer/paper/main.tex exists",
+      ];
+    case "submit":
+      return [
+        "reviewer/REVIEW_REPORT.md exists",
+      ];
+    default:
+      return [];
+  }
+}
 
 function resolveExperimentRollbackStage(params: {
   decision: string | null;
@@ -960,10 +1024,6 @@ export async function runWorkflowAutoIteratorImpl(
     stageAfter === "experiment" &&
     experimentDecisionCommand?.command != null &&
     !experimentReviewCommand;
-  const dispatchStageSignals =
-    shouldMonitorExperiments || experimentDecisionOwnsNextStep
-      ? []
-      : activeStageSignals;
   const setupOnboardingCommand =
     stageAfter === "setup" &&
     activeStageSignals.some((signal) =>
@@ -988,6 +1048,14 @@ export async function runWorkflowAutoIteratorImpl(
     (experimentReviewCommand ? experimentReviewOwner : null) ??
     experimentDecisionCommand?.ownerOverride ??
     deps.stageOwner(stageAfter);
+  const crossOwnerStageTransition =
+    Boolean(ownerAfter) &&
+    Boolean(ownerBefore) &&
+    ownerAfter !== ownerBefore;
+  const dispatchStageSignals =
+    shouldMonitorExperiments || experimentDecisionOwnsNextStep || crossOwnerStageTransition
+      ? []
+      : activeStageSignals;
   const stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
   const stageReadinessRepairSummary =
@@ -1084,10 +1152,7 @@ export async function runWorkflowAutoIteratorImpl(
     pickString(existingOrchestrationState, ["stageRunId", "stage_run_id"]) ??
     null;
   const ownerTransitionRequiresClaim =
-    stageReadyForOwnerWork &&
-    Boolean(ownerAfter) &&
-    Boolean(ownerBefore) &&
-    ownerAfter !== ownerBefore;
+    crossOwnerStageTransition;
   const reusePendingExecutionId =
     ownerTransitionRequiresClaim &&
     pendingOwnerCandidate === ownerAfter &&
@@ -1099,6 +1164,31 @@ export async function runWorkflowAutoIteratorImpl(
     (stageAfter !== stageBefore || ownerBefore !== ownerAfter || regressed
       ? randomUUID()
       : existingExecutionId);
+  const preparedHandoff =
+    ownerTransitionRequiresClaim
+      ? await createStageOwnerHandoffIntent({
+          projectRoot,
+          projectId,
+          workflowLine: surveyWorkflow ? "survey" : "experiment",
+          stageBefore,
+          stageAfter,
+          ownerBefore,
+          ownerAfter: ownerAfter!,
+          nextAction,
+          resumeAction,
+          executionId: nextExecutionId,
+          summary:
+            deps.formatStageSummary(stageAfter) ??
+            `Workflow owner handoff ${ownerBefore ?? "unknown"} -> ${ownerAfter ?? "unknown"}.`,
+          acceptanceChecks: buildAutoIteratorStageHandoffAcceptanceChecks({
+            workflowLine: surveyWorkflow ? "survey" : "experiment",
+            stageAfter,
+          }),
+          blockingReason,
+          missingStageSignals: activeStageSignals,
+          manifestRevision: nextExecutionId,
+        })
+      : null;
   manifest.project_id = projectId;
   manifest.current_stage = ownerTransitionRequiresClaim ? stageBefore : stageAfter;
   manifest.owner_agent = ownerTransitionRequiresClaim ? ownerBefore : ownerAfter;
@@ -1150,10 +1240,9 @@ export async function runWorkflowAutoIteratorImpl(
         ? deps.stageOwner(orchestrationNextStage)
         : null,
     pending_handoff_id:
-      ownerTransitionRequiresClaim &&
-      pendingOwnerCandidate === ownerAfter &&
-      pendingStageCandidate === stageAfter
-        ? pickString(existingOrchestrationState, [
+      ownerTransitionRequiresClaim
+        ? preparedHandoff?.intent.intentId ??
+          pickString(existingOrchestrationState, [
             "pendingHandoffId",
             "pending_handoff_id",
           ])
@@ -1172,10 +1261,9 @@ export async function runWorkflowAutoIteratorImpl(
           ])
         : null,
     owner_activation_deadline:
-      ownerTransitionRequiresClaim &&
-      pendingOwnerCandidate === ownerAfter &&
-      pendingStageCandidate === stageAfter
-        ? pickString(existingOrchestrationState, [
+      ownerTransitionRequiresClaim
+        ? preparedHandoff?.intent.deliveryPlan.ackDeadlineAt ??
+          pickString(existingOrchestrationState, [
             "ownerActivationDeadline",
             "owner_activation_deadline",
           ])

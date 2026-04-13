@@ -325,6 +325,6 @@ Then append to `{PROJ}/orchestrator/TODOS.md`:
 
 ## Stage Closeout
 
-When the required ANALYZE artifacts are complete and the project is ready to move into REVIEW, invoke the Lobster handoff workflow from the quickstart.
+When the required ANALYZE artifacts are complete and the project is ready to move into REVIEW, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `analyze -> review`.
 
 Do not hand off if a central unsupported claim still requires returning to EXPERIMENT or if analysis explicitly requests more data collection.

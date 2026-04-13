@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
-import { upsertWorkflowHandoffIntent, transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
+import { readWorkflowHandoffIntentStore, upsertWorkflowHandoffIntent, transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
 
 function createTool(params) {
@@ -126,8 +126,63 @@ test("handoff ack/claim enforces owner and claims target task", async (t) => {
     action: "claim_handoff_intent",
     handoffIntentId: created.intent.intentId,
   });
-  assert.equal(claimed.status, "claimed");
+  assert.equal(claimed.claimed, true);
+  assert.equal(claimed.activated, true);
+  assert.equal(claimed.intent.status, "activated");
   const taskGraph = await readWorkflowTaskGraphStore(projectRoot);
   assert.equal(taskGraph.tasks[0].status, "claimed");
   assert.equal(taskGraph.tasks[0].lease.sessionKey, "agent:coder:main");
+});
+
+test("prepare_stage_handoff creates a real prepared handoff intent without switching the manifest owner", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-prepare-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo",
+        current_stage: "survey_review",
+        owner_agent: "researcher",
+        survey_review: {
+          status: "completed",
+          topic: "Demo survey",
+        },
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  const researcherTool = createTool({
+    projectRoot,
+    agentId: "researcher",
+    sessionKey: "agent:researcher:main",
+  });
+  const prepared = await execute(researcherTool, {
+    action: "prepare_stage_handoff",
+    handoff: {
+      stageAfter: "write",
+      toRole: "academic_writer",
+      summary: "Survey packet is complete and ready for write.",
+      command: "/paper-phase",
+      dispatch: false,
+    },
+  });
+
+  assert.equal(prepared.created, true);
+  assert.equal(prepared.intent.status, "prepared");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.owner_agent, "researcher");
+  assert.equal(manifest.orchestration_state.pending_owner_candidate, "academic_writer");
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents.length, 1);
+  assert.equal(store.intents[0].status, "prepared");
 });

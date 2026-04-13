@@ -188,7 +188,7 @@ Recommended: [submit / one more revision pass]
 `AUTO_PROCEED=false`: wait for user to review PDF before marking complete.
 `AUTO_PROCEED=true`: if Cross-Reviewer says PUBLICATION_READY and all checks pass → auto-complete.
 
-When WRITE is complete and the project is truly ready to move into SUBMIT, invoke the Lobster handoff workflow from the quickstart.
+When WRITE is complete and the project is truly ready to move into SUBMIT, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `write -> submit`.
 
 Do not hand off if Cross-Reviewer says `NEEDS_REVISION`, Reviewer asks for another writing pass, the user asks for changes, or citation integrity is not yet `verified`.
 

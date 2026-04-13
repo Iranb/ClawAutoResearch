@@ -493,6 +493,9 @@ test("completed survey review can advance into write stage", async (t) => {
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
-  assert.equal(manifest.current_stage, "write");
-  assert.equal(manifest.owner_agent, "academic_writer");
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.owner_agent, "researcher");
+  assert.equal(manifest.orchestration_state.pending_owner_candidate, "academic_writer");
+  assert.equal(manifest.orchestration_state.pending_stage_candidate, "write");
+  assert.equal(manifest.orchestration_state.handoff_phase, "prepared");
 });

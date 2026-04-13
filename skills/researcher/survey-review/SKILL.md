@@ -156,6 +156,10 @@ The survey is not done unless:
 - the review packet says what is missing, not just what was found
 - `SURVEY_BRIEF.md` exists and is graph-grounded enough for downstream reading
 
+## Stage Closeout
+
+When the survey packet is genuinely complete and the project is ready to move into `write`, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `survey_review -> write`.
+
 Avoid:
 
 - tiny candidate pools presented as “survey complete”
