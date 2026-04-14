@@ -122,6 +122,14 @@ If a template path is configured, read the project-local copied template and `{P
 
 Write the section as valid LaTeX in `{PROJ}/academic_writer/paper/sections/<section>.tex`.
 
+For long section rewrites, `main.tex`, `refs.bib`, or other multi-paragraph artifacts, use the `long-text-write` skill pattern and prefer:
+
+```json
+{"action":"write_text_artifact","artifactPath":"academic_writer/paper/sections/<section>.tex","content":"...full text..."}
+```
+
+Do not paste full section bodies into Bash heredocs or `python -c` inline writers; those long exec commands are blocked by OpenClaw's obfuscation guard.
+
 Update the workflow-visible writing progress as you go. The controlling truth is the process state, not whether every convenience artifact already exists:
 
 - outline / ordering ready

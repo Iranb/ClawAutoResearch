@@ -2329,6 +2329,117 @@ test("research_workflow get_snapshot restores mirrored authoring artifacts befor
   await fs.access(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
 });
 
+test("research_workflow write_text_artifact writes long writer artifacts without raw exec", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    current_micro_stage: "drafting",
+    owner_agent: "academic_writer",
+    idle_research: { enabled: false },
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:channel:test",
+  });
+
+  const sectionText =
+    "\\section{Taxonomy of GCD Methods}\n" +
+    `${"This survey paragraph expands the taxonomy evidence with durable prose. ".repeat(120)}\n`;
+
+  const result = await executeWorkflowTool(tool, {
+    action: "write_text_artifact",
+    artifactPath: "academic_writer/paper/sections/taxonomy.tex",
+    content: sectionText,
+    ensureTrailingNewline: true,
+  });
+
+  assert.equal(result.relativePath, "academic_writer/paper/sections/taxonomy.tex");
+  assert.equal(result.syncedAuthoringRecovery, true);
+
+  const liveText = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "taxonomy.tex"),
+    "utf8"
+  );
+  assert.equal(liveText, sectionText);
+
+  const recoveryStore = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "authoring-artifact-receipts.json"),
+      "utf8"
+    )
+  );
+  assert.ok(
+    recoveryStore.artifacts.some(
+      (entry) => entry.relativePath === "academic_writer/paper/sections/taxonomy.tex"
+    )
+  );
+  await fs.access(
+    path.join(
+      projectRoot,
+      ".openclaw-research",
+      "authoring-recovery-mirror",
+      "academic_writer",
+      "paper",
+      "sections",
+      "taxonomy.tex"
+    )
+  );
+});
+
+test("research_workflow write_text_artifact rejects writes outside the owner scope", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    current_micro_stage: "drafting",
+    owner_agent: "academic_writer",
+    idle_research: { enabled: false },
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:channel:test",
+  });
+
+  await assert.rejects(
+    () =>
+      tool.execute("test-call", {
+        action: "write_text_artifact",
+        artifactPath: "researcher/SURVEY_BRIEF.md",
+        content: "# not allowed\n",
+      }),
+    /academic_writer cannot write/i
+  );
+});
+
 test("research_workflow recover_survey_route preserves an active survey write stage", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

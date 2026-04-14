@@ -68,6 +68,7 @@
     "./shared/workflow-handoff-signal"
   ],
   "academic_writer": [
+    "./academic_writer/long-text-write",
     "./academic_writer/citation-preflight",
     "./academic_writer/citation-management",
     "./academic_writer/paper-plan",

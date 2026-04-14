@@ -81,6 +81,8 @@ When proof-aware writing is enabled, the main text should keep concise theorem /
 
 **Output**: process-first draft progress. In practice this usually means `{PROJ}/academic_writer/paper/sections/*.tex`, `main.tex`, progressively improved section packets / review notes, and updated `{PROJ}/academic_writer/WRITING_SIGNALS.md`. `refs.bib`, `main.pdf`, and full submit-ready cleanup can arrive later; they are not required just to keep drafting forward. Save prose reviews to `{PROJ}/cross-reviewer/prose/{section}-{date}.md`.
 
+When a section or support artifact is long, use the `long-text-write` skill pattern. Write it through `research_workflow` action `write_text_artifact` instead of Bash heredocs. Long prose belongs in workflow-owned text artifacts, not in raw `exec` command strings.
+
 ## Phase 3: Citation Preflight
 
 Before compiling the final paper, Writer should run:

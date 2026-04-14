@@ -222,7 +222,7 @@ export function buildFocusedPromptAssemblyImpl(
     "Interruptibility rule: keep the main session interruptible. If a task needs more than a quick turn to scope or execute safely, split it into a bounded packet, delegated branch, or workflow-owned background action instead of monopolizing the thread."
   );
   layer2Lines.push(
-    "Exec approval safety rule: do not paste long heredocs, multi-file generators, or commands over 800 characters into the exec tool. OpenClaw treats long commands as potential obfuscation and will block Discord execution. Use workflow materializers, multiple short file writes, or a file-backed exec packet via research_workflow.run_exec_packet instead."
+    'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.'
   );
   if (
     snapshot.role === "researcher" &&
@@ -540,7 +540,7 @@ export function formatWorkflowSnapshotForPromptImpl(
     "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
   );
   lines.push(
-    "Exec approval safety rule: do not paste long heredocs, multi-file generators, or commands over 800 characters into the exec tool. OpenClaw treats long commands as potential obfuscation and will block Discord execution. Use workflow materializers, multiple short file writes, or a file-backed exec packet via research_workflow.run_exec_packet instead."
+    'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.'
   );
   lines.push(
     "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."

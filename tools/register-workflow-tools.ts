@@ -116,6 +116,7 @@ import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
 import { captureWorkflowDiagnosticBundle } from "./workflow-diagnostic-bundle";
 import { evaluateExperimentSearchDecisionForProject } from "./workflow-experiment-decision";
 import { recordExperimentRuntimeSignal } from "./workflow-experiment-runtime-watch";
+import { normalizeWorkflowRole } from "./workflow-guard-policies/role-policy";
 import {
   dispatchWorkflowTaskToAgent,
   deriveWorkflowDispatchSessionCandidates,
@@ -159,6 +160,7 @@ import {
 } from "./plugin-registration-shared";
 import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { writeWorkflowTextArtifact } from "./workflow-artifact-text-writer";
 import {
   ensureSurveyWorkflowIdentity,
   resolveStageForWorkflowLine,
@@ -373,6 +375,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "read_mailbox",
   "send_mailbox",
   "ack_mailbox",
+  "write_text_artifact",
 ]);
 
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
@@ -520,6 +523,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   read_mailbox: "readWorkflowMailboxForAgent",
   send_mailbox: "queueWorkflowMailboxMessage",
   ack_mailbox: "acknowledgeWorkflowMailboxMessage",
+  write_text_artifact: "writeWorkflowTextArtifact",
 };
 
 async function resolveWorkflowToolState(params: {
@@ -1907,6 +1911,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "boolean",
           },
           enableSpawnFallback: {
+            type: "boolean",
+          },
+          artifactPath: {
+            type: "string",
+          },
+          content: {
+            type: "string",
+          },
+          mode: {
+            type: "string",
+            enum: ["replace", "append"],
+          },
+          ensureTrailingNewline: {
             type: "boolean",
           },
         },
@@ -3887,6 +3904,47 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const result = await setWritingSessionState({
                 projectRoot: resolvedProjectRoot,
                 writingSession: requireObject(params.writingSession, "writingSession"),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "write_text_artifact": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const actorRole =
+                normalizeWorkflowRole(snapshot.role) ??
+                normalizeWorkflowRole(bindingRole) ??
+                normalizeWorkflowRole(ctx.agentId);
+              if (!actorRole) {
+                throw new Error(
+                  "Could not resolve a workflow role for write_text_artifact."
+                );
+              }
+              const artifactPath =
+                readString(params.artifactPath) ??
+                readString(params.path) ??
+                readString(params.filePath) ??
+                readString(params.file_path);
+              if (!artifactPath) {
+                throw new Error("artifactPath is required for write_text_artifact.");
+              }
+              const content =
+                typeof params.content === "string"
+                  ? params.content
+                  : typeof params.text === "string"
+                    ? params.text
+                    : typeof params.body === "string"
+                      ? params.body
+                      : "";
+              const modeValue = readString(params.mode);
+              const result = await writeWorkflowTextArtifact({
+                projectRoot: resolvedProjectRoot,
+                role: actorRole,
+                artifactPath,
+                content,
+                mode: modeValue === "append" ? "append" : "replace",
+                ensureTrailingNewline:
+                  typeof params.ensureTrailingNewline === "boolean"
+                    ? params.ensureTrailingNewline
+                    : false,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

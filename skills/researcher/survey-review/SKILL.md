@@ -28,6 +28,7 @@ After each major pass, update or reconcile state through:
 
 - `research_workflow.set_survey_review`
 - `research_workflow.materialize_survey_review_state`
+- `research_workflow.write_text_artifact` for long survey Markdown / JSON artifacts instead of Bash heredocs or inline script writers
 
 The workflow uses these durable paths:
 
