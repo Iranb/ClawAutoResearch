@@ -135,6 +135,40 @@ test("evaluateWritingProcessReadiness only flags rebuilds when no reusable draft
   assert.match(readiness.summary, /rebuild=No sections have been materialized yet/i);
 });
 
+test("evaluateWritingProcessReadiness treats finalized compile-safe sections as ready even without section packets", () => {
+  const surveySections = [
+    "abstract",
+    "introduction",
+    "scope_and_protocol",
+    "taxonomy",
+    "evidence_synthesis",
+    "benchmark_landscape",
+    "open_problems",
+    "conclusion",
+  ];
+  const readiness = evaluateWritingProcessReadiness({
+    writingContract: {
+      requiredSections: surveySections,
+      sectionOrder: surveySections,
+    },
+    writingSession: {
+      status: "draft_complete",
+      currentSection: "conclusion",
+      draftOrder: surveySections,
+      finalizedSections: surveySections,
+      compileSafeSections: surveySections,
+      sectionPackets: {},
+      graphEvidenceCoverageStatus: "complete",
+      pendingReason: null,
+    },
+  });
+
+  assert.equal(readiness.processStatus, "ready_for_submit");
+  assert.equal(readiness.rebuildNeeded, false);
+  assert.deepEqual(readiness.missingSections, []);
+  assert.deepEqual(readiness.draftedSections, surveySections);
+});
+
 test("isGraphGuidedWritingReadyForSubmit ignores disabled graph guidance", () => {
   assert.equal(
     isGraphGuidedWritingReadyForSubmit({

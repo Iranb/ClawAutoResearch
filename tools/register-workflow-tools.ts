@@ -159,7 +159,10 @@ import {
 } from "./plugin-registration-shared";
 import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
-import { ensureSurveyWorkflowIdentity } from "./workflow-line-routing.js";
+import {
+  ensureSurveyWorkflowIdentity,
+  resolveStageForWorkflowLine,
+} from "./workflow-line-routing.js";
 import { loadTrackInnovationEvidence } from "./workflow-derived-state/track-evidence";
 import {
   buildWorkflowQueueContext,
@@ -3665,15 +3668,32 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 paper_type: "survey",
               });
               const surveyReview = asObject(surveyIdentity.manifest.survey_review);
+              const currentStage = readString(manifest.current_stage);
+              const recoveredStage =
+                resolveStageForWorkflowLine({
+                  stage: currentStage ?? null,
+                  manifest: surveyIdentity.manifest,
+                }) ?? "survey_review";
+              const recoveredOwner =
+                recoveredStage === "write"
+                  ? readString(manifest.owner_agent) ?? "academic_writer"
+                  : recoveredStage === "submit"
+                    ? readString(manifest.owner_agent) ?? "reviewer"
+                    : "researcher";
               const nextManifest = {
                 ...manifest,
                 ...surveyIdentity.manifest,
-                current_stage: "survey_review",
+                current_stage: recoveredStage,
                 current_micro_stage:
-                  readString(surveyReview?.current_phase) ?? "survey_route_recovery",
-                owner_agent: "researcher",
+                  recoveredStage === "survey_review"
+                    ? readString(surveyReview?.current_phase) ?? "survey_route_recovery"
+                    : readString(manifest.current_micro_stage) ?? recoveredStage,
+                owner_agent: recoveredOwner,
                 next_action:
-                  "Materialize survey_review state, then produce survey taxonomy, coverage matrix, and outline before write.",
+                  recoveredStage === "survey_review"
+                    ? "Materialize survey_review state, then produce survey taxonomy, coverage matrix, and outline before write."
+                    : readString(manifest.next_action) ??
+                      "Continue the current survey workflow stage.",
                 blocking_reason: null,
                 updated_at: new Date().toISOString(),
               };

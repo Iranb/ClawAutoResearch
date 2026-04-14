@@ -19,6 +19,17 @@ export const DEFAULT_WRITING_SECTION_ORDER = [
   "conclusion",
 ];
 
+export const DEFAULT_SURVEY_WRITING_SECTION_ORDER = [
+  "abstract",
+  "introduction",
+  "scope_and_protocol",
+  "taxonomy",
+  "evidence_synthesis",
+  "benchmark_landscape",
+  "open_problems",
+  "conclusion",
+];
+
 export const DEFAULT_PARAGRAPH_LOGIC_CHECKLIST = [
   "one_message_per_paragraph",
   "first_sentence_states_paragraph_role",
@@ -91,8 +102,13 @@ export function resolveWritingTemplatePath(
 
 export function normalizeWritingContractState(value: unknown): WritingContractState {
   const record = asRecord(value) ?? {};
+  const paperMode = normalizeWritingMode(record.paperMode ?? record.paper_mode);
+  const defaultSections =
+    paperMode === "survey"
+      ? DEFAULT_SURVEY_WRITING_SECTION_ORDER
+      : DEFAULT_WRITING_SECTION_ORDER;
   return {
-    paperMode: normalizeWritingMode(record.paperMode ?? record.paper_mode),
+    paperMode,
     templateRequired:
       pickBoolean(record, ["templateRequired", "template_required"]) ?? false,
     templatePath: pickString(record, ["templatePath", "template_path"]),
@@ -128,7 +144,8 @@ export function normalizeWritingContractState(value: unknown): WritingContractSt
       pickString(record, ["mainTextProofStyle", "main_text_proof_style"]) ??
       "lemma_result_only",
     proofAppendixRequired:
-      pickBoolean(record, ["proofAppendixRequired", "proof_appendix_required"]) ?? true,
+      pickBoolean(record, ["proofAppendixRequired", "proof_appendix_required"]) ??
+      (paperMode === "survey" ? false : true),
     proofAppendixPath:
       pickString(record, ["proofAppendixPath", "proof_appendix_path"]) ??
       "academic_writer/paper/sections/appendix_theory.tex",
@@ -157,11 +174,11 @@ export function normalizeWritingContractState(value: unknown): WritingContractSt
     requiredSections:
       asStringArray(record.requiredSections ?? record.required_sections).length > 0
         ? asStringArray(record.requiredSections ?? record.required_sections)
-        : [...DEFAULT_WRITING_SECTION_ORDER],
+        : [...defaultSections],
     sectionOrder:
       asStringArray(record.sectionOrder ?? record.section_order).length > 0
         ? asStringArray(record.sectionOrder ?? record.section_order)
-        : [...DEFAULT_WRITING_SECTION_ORDER],
+        : [...defaultSections],
     paragraphLogicChecklist:
       asStringArray(
         record.paragraphLogicChecklist ?? record.paragraph_logic_checklist

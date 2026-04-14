@@ -1,7 +1,10 @@
 import { asString, normalizeStage } from "./workflow-guard-core/coercion";
 import { STAGE_REQUIREMENTS } from "./workflow-guard-policies/role-policy";
 import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
-import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
+import {
+  normalizeWritingContractState,
+  serializeWritingContractState,
+} from "./workflow-guard-state/writing-contract";
 
 const SURVEY_WORKFLOW_RECOVERY_STAGES = new Set([
   "setup",
@@ -116,12 +119,14 @@ export function ensureSurveyWorkflowIdentity(manifest) {
     current_phase: currentSurveyReview.currentPhase ?? "retrieval",
     last_updated_at: currentSurveyReview.lastUpdatedAt ?? now,
   };
-  const nextWritingContract = {
-    ...(record.writing_contract && typeof record.writing_contract === "object"
-      ? record.writing_contract
-      : {}),
-    paper_mode: "survey",
-  };
+  const nextWritingContract = serializeWritingContractState(
+    normalizeWritingContractState({
+      ...(record.writing_contract && typeof record.writing_contract === "object"
+        ? record.writing_contract
+        : {}),
+      paper_mode: "survey",
+    })
+  );
   const next = {
     ...record,
     workflow_line: "survey",

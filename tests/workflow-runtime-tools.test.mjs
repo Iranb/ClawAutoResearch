@@ -2329,6 +2329,56 @@ test("research_workflow get_snapshot restores mirrored authoring artifacts befor
   await fs.access(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
 });
 
+test("research_workflow recover_survey_route preserves an active survey write stage", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:group:paper-lab",
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-demo-project",
+    workflow_line: "survey",
+    paper_type: "survey",
+    current_stage: "write",
+    current_micro_stage: "drafting",
+    owner_agent: "academic_writer",
+    idle_research: { enabled: false },
+    writing_contract: {
+      paper_mode: "survey",
+    },
+    survey_review: {
+      topic: "Survey demo",
+      status: "completed",
+      current_phase: "complete",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "recover_survey_route",
+  });
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stage, "write");
+  assert.equal(manifest.current_stage, "write");
+  assert.equal(manifest.owner_agent, "academic_writer");
+  assert.equal(manifest.current_micro_stage, "drafting");
+});
+
 test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

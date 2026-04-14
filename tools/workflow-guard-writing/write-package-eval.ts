@@ -193,6 +193,20 @@ function orderedUniqueSections(params: {
   return result;
 }
 
+function normalizeUniqueSections(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeStage(value) ?? value;
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
 export function evaluateWritingProcessReadiness(params: {
   writingSession: WritingSessionStateLike;
   writingContract: WritingContractStateLike;
@@ -201,7 +215,7 @@ export function evaluateWritingProcessReadiness(params: {
   const requiredSections = params.writingContract.requiredSections
     .map((entry) => normalizeStage(entry) ?? entry)
     .filter(Boolean);
-  const draftedSections = Object.entries(params.writingSession.sectionPackets)
+  const packetDraftedSections = Object.entries(params.writingSession.sectionPackets)
     .filter(([, packet]) => {
       const status = normalizeStage(packet.status);
       return status !== "missing" && status !== "pending";
@@ -219,6 +233,11 @@ export function evaluateWritingProcessReadiness(params: {
   const compileSafeSections = params.writingSession.compileSafeSections
     .map((entry) => normalizeStage(entry) ?? entry)
     .filter(Boolean);
+  const draftedSections = normalizeUniqueSections([
+    ...packetDraftedSections,
+    ...finalizedSections,
+    ...compileSafeSections,
+  ]);
   const missingSections = requiredSections.filter(
     (section) => !draftedSections.includes(section)
   );
