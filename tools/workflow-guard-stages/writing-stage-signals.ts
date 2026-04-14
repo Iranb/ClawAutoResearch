@@ -565,6 +565,16 @@ export async function collectSubmitStageMissingSignals(
         `PROJECT_MANIFEST.json.citation_integrity.verification_status = verified (current: ${citationIntegrity.verificationStatus})`
       );
     }
+    if (!citationIntegrity.allCitationsReal) {
+      missing.push(
+        "PROJECT_MANIFEST.json.citation_integrity.all_citations_real = true — reviewer must confirm that all cited references are real"
+      );
+    }
+    if (citationIntegrity.bibliographyPageCount < 1) {
+      missing.push(
+        `PROJECT_MANIFEST.json.citation_integrity.bibliography_page_count >= 1 (current: ${citationIntegrity.bibliographyPageCount})`
+      );
+    }
     if (
       citationIntegrity.unresolvedPlaceholderCount >
       citationIntegrity.allowedPlaceholderCount

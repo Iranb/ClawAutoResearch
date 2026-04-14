@@ -17,6 +17,8 @@ type CitationIntegrityStateLike = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string | null;
+  bibliographyPageCount: number;
+  allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
@@ -166,6 +168,16 @@ export async function recordCitationVerificationImpl(
     verificationStatus:
       normalizeStage(patch.verificationStatus ?? patch.verification_status) ??
       current.verificationStatus,
+    bibliographyPageCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["bibliographyPageCount", "bibliography_page_count"]) ??
+          current.bibliographyPageCount
+      )
+    ),
+    allCitationsReal:
+      pickBoolean(patch, ["allCitationsReal", "all_citations_real"]) ??
+      current.allCitationsReal,
     allowedPlaceholderCount: Math.max(
       0,
       Math.floor(
@@ -224,10 +236,20 @@ export async function recordCitationVerificationImpl(
       "Citation verification is still pending. Run the citation integrity gate before submission.";
   } else if (
     next.verificationStatus === "verified" &&
+    next.allCitationsReal &&
+    next.bibliographyPageCount >= 1 &&
     next.unresolvedPlaceholderCount <= next.allowedPlaceholderCount &&
     next.hallucinatedCitationCount === 0
   ) {
     next.pendingReason = null;
+  } else if (next.verificationStatus === "verified" && next.bibliographyPageCount < 1) {
+    next.pendingReason =
+      next.pendingReason ??
+      "Reviewer must confirm that the bibliography spans at least one full page before submission.";
+  } else if (next.verificationStatus === "verified" && !next.allCitationsReal) {
+    next.pendingReason =
+      next.pendingReason ??
+      "Reviewer has not yet confirmed that all cited references are real.";
   }
 
   manifest.citation_integrity = deps.serializeCitationIntegrityState(next);

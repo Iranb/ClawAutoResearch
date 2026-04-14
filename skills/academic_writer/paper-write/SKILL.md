@@ -224,6 +224,17 @@ Respect `allowed_placeholder_count` from citation integrity state. If the budget
 - Keep final manuscript prose in proper paragraphs rather than bullet-dump note form
 - Avoid: "In this paper, we…", "It is worth noting that…"
 
+## Advisory Section Lenses
+
+Use these as section-specific quality targets, not as hard blockers:
+
+- `Abstract`: one compact problem-method-evidence-implication arc
+- `Introduction`: why this problem matters now, what gap exists, and what the manuscript contributes
+- `Related Work` / comparison sections: synthesis over listing, with explicit contrast points
+- `Method`: clear mechanism, design motivation, and why each module exists
+- `Experiments` / benchmark sections: fair comparison, strongest evidence first, caveats immediately after claims
+- `Conclusion`: strongest takeaway, real limitation, and one concrete future direction
+
 **Paragraph logic rule**:
 - each paragraph has one explicit role: opening / challenge / method / evidence / limitation / transition
 - the first sentence should state that role or claim

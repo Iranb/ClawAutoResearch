@@ -3018,6 +3018,8 @@ test("maybeAdvanceAutoGateReviewForProject leaves submit under manual confirmati
     current_stage: "submit",
     citation_integrity: {
       verification_status: "verified",
+      bibliography_page_count: 1,
+      all_citations_real: true,
     },
     writing_contract: {
       template_status: "ready",
@@ -3129,6 +3131,8 @@ test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data b
     current_stage: "submit",
     citation_integrity: {
       verification_status: "verified",
+      bibliography_page_count: 1,
+      all_citations_real: true,
     },
     writing_contract: {
       template_status: "ready",

@@ -421,6 +421,8 @@ async function seedProjectReadyForWrite(projectRoot) {
       bibliography_path: "academic_writer/paper/refs.bib",
       verification_report_path: "reviewer/CITATION_VERIFICATION.md",
       verification_status: "verified",
+      bibliography_page_count: 1,
+      all_citations_real: true,
       allowed_placeholder_count: 0,
       unresolved_placeholder_count: 0,
       hallucinated_citation_count: 0,

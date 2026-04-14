@@ -889,6 +889,8 @@ type CitationIntegrityState = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string;
+  bibliographyPageCount: number;
+  allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
@@ -8737,6 +8739,8 @@ export async function recordCitationVerification(params: {
       "# Citation Verification",
       "",
       `Verification Status: ${result.state.verificationStatus ?? "unknown"}`,
+      `Bibliography Pages: ${result.state.bibliographyPageCount ?? 0}`,
+      `All Citations Real: ${result.state.allCitationsReal ? "yes" : "no"}`,
       `Verified Citations: ${result.state.verifiedCitationCount}`,
       `Suspicious Citations: ${result.state.suspiciousCitationCount}`,
       `Hallucinated Citations: ${result.state.hallucinatedCitationCount}`,

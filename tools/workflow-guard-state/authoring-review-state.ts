@@ -27,6 +27,8 @@ type CitationIntegrityStateLike = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string;
+  bibliographyPageCount: number;
+  allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
@@ -230,6 +232,33 @@ export function normalizeCitationIntegrityState(
       DEFAULT_CITATION_REPORT_PATH,
     verificationStatus:
       normalizeStage(record.verificationStatus ?? record.verification_status) ?? "pending",
+    bibliographyPageCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["bibliographyPageCount", "bibliography_page_count"]) ?? 0
+      )
+    ),
+    allCitationsReal:
+      pickBoolean(record, ["allCitationsReal", "all_citations_real"]) ??
+      ((normalizeStage(record.verificationStatus ?? record.verification_status) === "verified") &&
+        Math.max(
+          0,
+          Math.floor(
+            pickNumber(record, [
+              "suspiciousCitationCount",
+              "suspicious_citation_count",
+            ]) ?? 0
+          )
+        ) === 0 &&
+        Math.max(
+          0,
+          Math.floor(
+            pickNumber(record, [
+              "hallucinatedCitationCount",
+              "hallucinated_citation_count",
+            ]) ?? 0
+          )
+        ) === 0),
     allowedPlaceholderCount: Math.max(
       0,
       Math.floor(
@@ -287,6 +316,8 @@ export function serializeCitationIntegrityState(
     bibliography_path: state.bibliographyPath,
     verification_report_path: state.verificationReportPath,
     verification_status: state.verificationStatus,
+    bibliography_page_count: state.bibliographyPageCount,
+    all_citations_real: state.allCitationsReal,
     allowed_placeholder_count: state.allowedPlaceholderCount,
     unresolved_placeholder_count: state.unresolvedPlaceholderCount,
     verified_citation_count: state.verifiedCitationCount,

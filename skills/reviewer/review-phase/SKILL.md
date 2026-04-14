@@ -28,6 +28,24 @@ allowed-tools:
 - Treat **evaluation manipulation** as a review defect: hidden baselines, changed metrics, or selective slices should lower the verdict.
 - **Never fabricate citations** or prior-art comparisons in the review.
 
+## Advisory Section Lenses
+
+These are reviewer suggestions, not hard blockers by themselves:
+
+- `Abstract`: does it state problem, core idea, strongest evidence, and practical implication without overselling?
+- `Introduction`: does it explain why now, what gap exists, and what the paper adds beyond prior work?
+- `Related Work` / survey comparison sections: does it synthesize rather than list papers?
+- `Method`: are the central mechanism and design motivation actually clear?
+- `Experiments` / benchmark sections: are comparisons fair, explicit, and interpretable?
+- `Conclusion`: does it close with credible limitations instead of marketing language?
+
+When reviewing a survey / review paper, apply these extra advisory lenses:
+
+- coverage breadth across nearby directions
+- explicit comparison axes and tradeoffs
+- contradiction / non-comparability honesty
+- blind spots and scope boundaries
+
 ## Constants
 
 - **MAX_ROUNDS = 4**

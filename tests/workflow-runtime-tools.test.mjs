@@ -5502,6 +5502,8 @@ test("research_workflow runtime-state actions persist manifest state and append 
       verification_status: "verified",
       bibliography_path: "academic_writer/paper/refs.bib",
       verification_report_path: "reviewer/CITATION_VERIFICATION.md",
+      bibliography_page_count: 1,
+      all_citations_real: true,
       verified_citation_count: 12,
       suspicious_citation_count: 1,
       hallucinated_citation_count: 0,
@@ -5510,11 +5512,14 @@ test("research_workflow runtime-state actions persist manifest state and append 
     },
   });
   assert.equal(citationVerification.state.verificationStatus, "verified");
+  assert.equal(citationVerification.state.bibliographyPageCount, 1);
+  assert.equal(citationVerification.state.allCitationsReal, true);
   const citationVerificationReport = await fs.readFile(
     path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"),
     "utf8"
   );
   assert.match(citationVerificationReport, /Verification Status:\s+verified/i);
+  assert.match(citationVerificationReport, /Bibliography Pages:\s+1/i);
 
   const citationCollection = await executeWorkflowTool(tool, {
     action: "set_citation_collection",

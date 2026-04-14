@@ -87,6 +87,9 @@ Reviewer rule:
 - if the calibration helper reports `suspicious > 0`, the gate is `needs_revision`
 - if it reports `hallucinated > 0`, the gate is a hard failure
 - if both are `0`, continue with the usual claim-fit audit
+- for final submit readiness, also confirm:
+  - bibliography spans at least one full page in the compiled PDF
+  - all cited references are real, not merely plausible-looking placeholders
 
 ## Audit Procedure
 
@@ -189,6 +192,8 @@ Use this structure:
 - suspicious: N
 - hallucinated: N
 - placeholders: N
+- bibliography_pages: N
+- all_citations_real: yes / no
 - verdict: verified / needs_revision
 
 ## Verified Citations
@@ -221,6 +226,8 @@ If all of the following are true:
 - hallucinated citations = 0
 - suspicious citations = 0
 - unresolved placeholders <= allowed budget
+- bibliography_pages >= 1
+- all_citations_real = yes
 
 then record:
 
@@ -239,6 +246,8 @@ Call:
     "verification_report_path": "reviewer/CITATION_VERIFICATION.md",
     "bibliography_path": "academic_writer/paper/refs.bib",
     "verification_status": "verified or needs_revision",
+    "bibliography_page_count": 1,
+    "all_citations_real": true,
     "verified_citation_count": 0,
     "suspicious_citation_count": 0,
     "hallucinated_citation_count": 0,
@@ -260,6 +269,8 @@ Call:
 - suspicious citations: N
 - hallucinated citations: N
 - unresolved placeholders: N / allowed M
+- bibliography pages: N
+- all citations real: yes / no
 ```
 
 ## Rules
@@ -267,4 +278,6 @@ Call:
 - Do not trust Writer memory alone
 - Do not waive hallucinated citations
 - Do not mark `verified` while suspicious entries remain
+- Do not mark `verified` unless reviewer has explicitly confirmed bibliography_pages >= 1
+- Do not mark `verified` unless reviewer has explicitly confirmed all_citations_real = yes
 - A citation gate is about factual integrity, not stylistic polish
