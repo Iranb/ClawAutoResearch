@@ -10,6 +10,10 @@ import {
   writeJsonEnsured,
 } from "../workflow-guard-core/fs";
 import {
+  readWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeQueueStore,
+} from "../workflow-runtime-state";
+import {
   normalizeOrchestrationState,
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
@@ -42,6 +46,47 @@ async function readManifest(projectRoot: string): Promise<ManifestLike> {
 
 async function writeManifest(projectRoot: string, manifest: ManifestLike): Promise<void> {
   await writeJsonEnsured(getManifestPath(projectRoot), manifest);
+}
+
+async function completeRuntimeQueueForActivatedHandoff(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  intentId: string;
+}) {
+  const queueKey = `handoff:${params.intentId}`;
+  const queue = await readWorkflowRuntimeQueueStore(params.projectRoot).catch(() => null);
+  if (!queue) {
+    return;
+  }
+  let changed = false;
+  const now = nowIso();
+  const entries = queue.entries.map((entry) => {
+    if (entry.queueKey !== queueKey) {
+      return entry;
+    }
+    if (entry.status === "completed") {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      status: "completed" as const,
+      lastCheckedAt: now,
+      lastAttemptedAt: entry.lastAttemptedAt ?? now,
+      lastError: null,
+      summary:
+        entry.summary ??
+        `Handoff ${params.intentId} completed after target owner activation.`,
+    };
+  });
+  if (!changed) {
+    return;
+  }
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    entries,
+  });
 }
 
 function getIntentPayload(intent: WorkflowHandoffIntent): Record<string, unknown> {
@@ -263,6 +308,11 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
       projectRoot: params.projectRoot,
       intentId: claimedIntent.intentId,
     })) ?? claimedIntent;
+  await completeRuntimeQueueForActivatedHandoff({
+    projectRoot: params.projectRoot,
+    projectId: activatedIntent.projectId,
+    intentId: activatedIntent.intentId,
+  });
   return {
     intent: activatedIntent,
     claimed: true,

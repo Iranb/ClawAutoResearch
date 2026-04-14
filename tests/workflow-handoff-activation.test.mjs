@@ -10,6 +10,10 @@ import {
   syncPreparedWorkflowHandoffToManifest,
 } from "../tools/workflow-handoff/handoff-activation.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
+import {
+  readWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeQueueStore,
+} from "../tools/workflow-runtime-state.ts";
 
 test("claimAndActivateWorkflowHandoffForAgent switches owner only after the target role claims the prepared handoff", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-activation-"));
@@ -54,6 +58,41 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
     projectRoot,
     intent: created.intent,
   });
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "demo-project",
+    entries: [
+      {
+        transitionId: "queue-1",
+        queueId: "queue-1",
+        queueKey: `handoff:${created.intent.intentId}`,
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "academic_writer",
+        channelKey: "discord:channel:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:channel:paper-lab",
+        messageChannel: "discord",
+        preferredSessionKey: "agent:academic_writer:discord:channel:paper-lab",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "demo-project",
+        projectRoot,
+        queuedAt: "2026-04-14T02:00:00.000Z",
+        lastAttemptedAt: "2026-04-14T02:01:00.000Z",
+        lastCheckedAt: "2026-04-14T02:01:00.000Z",
+        attemptCount: 1,
+        summary: "queued writer handoff",
+        status: "degraded",
+        fallbackMode: null,
+        lastError: "Queued workflow dispatch did not start.",
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        runPayload: null,
+        dispatchPayload: null,
+      },
+    ],
+  });
 
   let manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
@@ -84,4 +123,7 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].status, "activated");
   assert.equal(store.intents[0].toSessionKey, "agent:academic_writer:discord:channel:paper-lab");
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queue.entries[0].status, "completed");
+  assert.equal(queue.entries[0].lastError, null);
 });

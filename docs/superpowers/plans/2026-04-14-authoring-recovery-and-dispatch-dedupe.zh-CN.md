@@ -76,10 +76,27 @@
 - 则将 intent 直接推进到可分发/已分发状态
 - 不再走 runtime queue 的重复补发
 
+### 5. Activated handoff queue reconciliation
+
+当 handoff intent 已经 `claimed` / `activated` 后：
+
+- 所有 `queueKey = handoff:<intentId>` 的 runtime queue entry 必须标记为 `completed`
+- 如果 queue entry 已经是 `degraded`，也要被 activation reconciliation 收敛为 `completed`
+- dashboard / runtime health 不应再出现“handoff 已成功但 queue degraded”
+
+### 6. Spawn fallback delay
+
+native delivery 不应在目标主 session 可派生时直接创建随机 `agent:<role>:subagent:<uuid>`：
+
+- 先尝试 canonical role session
+- 若已有 project-local registry session，直接复用
+- 只有没有任何可用目标 session，且 dispatch 明确失败，才允许 spawn fallback
+
 ## 验收标准
 
 1. `academic_writer/paper` 缺失但 recovery mirror 存在时，可自动恢复
 2. `writing_session` 丢失时，可从 recovery receipt 恢复而不是直接 full rebuild
 3. 当前 owner 已经是 writer 且 writer session 仍 active 时，不再 spawn 新 writer
 4. 同项目 write 阶段不会因为重复 handoff delivery 在 `/sessions` 中膨胀
-5. 相关 runtime / handoff / writer recovery 回归测试通过
+5. 已激活 handoff 不再留下 degraded runtime queue
+6. 相关 runtime / handoff / writer recovery 回归测试通过
