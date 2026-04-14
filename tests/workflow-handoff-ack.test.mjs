@@ -187,3 +187,60 @@ test("prepare_stage_handoff creates a real prepared handoff intent without switc
   assert.equal(store.intents[0].status, "prepared");
   assert.equal(store.intents[0].workflowLine, "survey");
 });
+
+test("prepare_stage_handoff uses writer-side submit readiness checks instead of requiring reviewer artifacts", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-submit-checks-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo",
+        workflow_line: "survey",
+        paper_type: "survey",
+        current_stage: "write",
+        owner_agent: "academic_writer",
+        writing_contract: {
+          paper_mode: "survey",
+        },
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  const writerTool = createTool({
+    projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:main",
+  });
+  const prepared = await execute(writerTool, {
+    action: "prepare_stage_handoff",
+    handoff: {
+      stageAfter: "submit",
+      toRole: "reviewer",
+      summary: "Survey draft is ready for reviewer-side submit work.",
+      command: "/review-phase",
+      dispatch: false,
+    },
+  });
+
+  const checks = prepared.intent.payload.acceptanceChecks;
+  assert.ok(Array.isArray(checks));
+  assert.ok(
+    checks.some((entry) =>
+      /writing_session reflects a reviewer-ready survey draft/i.test(entry)
+    )
+  );
+  assert.ok(
+    checks.some((entry) => /academic_writer\/paper\/main\.tex exists/i.test(entry))
+  );
+  assert.ok(
+    checks.some((entry) => /paper_qc\.compile_status = pass/i.test(entry))
+  );
+  assert.ok(
+    !checks.some((entry) => /reviewer\/REVIEW_PACKET\.json|reviewer\/CITATION_VERIFICATION\.md/i.test(entry))
+  );
+});

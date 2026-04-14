@@ -185,12 +185,17 @@ export async function collectWriteStageMissingSignals(
   deps: WritingStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+  const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
+  const surveyWriteMode =
+    writingContract.paperMode === "survey" || writingContract.paper_mode === "survey";
   const paperStoryState = deps.normalizePaperStoryState(ctx.manifest?.paper_story_state);
-  missing.push(...deps.getPaperStoryStateValidationErrors(paperStoryState));
+  if (!surveyWriteMode) {
+    missing.push(...deps.getPaperStoryStateValidationErrors(paperStoryState));
+  }
 
   // Phase 3.3 — Idea-to-claim traceability: every claim must be traceable to
   // an idea fragment via IDEA_TO_CLAIM_MAP.json before WRITE proceeds.
-  if (paperStoryState.ideaToClaimMapPath) {
+  if (!surveyWriteMode && paperStoryState.ideaToClaimMapPath) {
     const ideaToClaimMapResolved = deps.resolveProjectArtifactPath(
       ctx.projectRoot,
       paperStoryState.ideaToClaimMapPath
@@ -206,11 +211,13 @@ export async function collectWriteStageMissingSignals(
   const reviewPressurePacket = deps.normalizeReviewPressurePacketState(
     ctx.manifest?.review_pressure_packet
   );
-  missing.push(...deps.getReviewPressurePacketValidationErrors(reviewPressurePacket));
+  if (!surveyWriteMode) {
+    missing.push(...deps.getReviewPressurePacketValidationErrors(reviewPressurePacket));
+  }
 
-  const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
   const writePackage = deps.normalizeWritePackageState(ctx.manifest?.write_package);
   if (
+    !surveyWriteMode &&
     ctx.manifest?.cross_domain_inspiration &&
     typeof ctx.manifest.cross_domain_inspiration === "object"
   ) {
@@ -328,7 +335,7 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before write handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
     );
   }
-  if (deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
+  if (!surveyWriteMode && deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
     missing.push(
       "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before write handoff"
     );

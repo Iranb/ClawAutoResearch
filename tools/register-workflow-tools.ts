@@ -909,25 +909,23 @@ function buildStageHandoffAcceptanceChecks(params: {
   if (params.workflowLine === "survey") {
     if (stageAfter === "write") {
       return [
-        "researcher/SURVEY_QUERY_REGISTRY.json exists",
-        "researcher/INCLUDED_PAPERS.json exists",
-        "researcher/EXCLUDED_PAPERS.json exists",
-        "researcher/SOTA_MATRIX.md exists",
-        "researcher/GAP_SYNTHESIS.md exists",
+        "survey review packet exists and can support writing",
         "researcher/SURVEY_BRIEF.md exists",
+        "researcher/SOTA_MATRIX.md or researcher/LITERATURE_REVIEW.md exists",
       ];
     }
     if (stageAfter === "review") {
       return [
         "PROJECT_MANIFEST.json.writing_session reflects active draft progress",
         "academic_writer/paper/main.tex exists or writing section packets cover the required sections",
-        "writing process is manuscript_complete|compile_ready|ready_for_submit",
+        "writing process is drafting|section_review|manuscript_complete|compile_ready|ready_for_submit",
       ];
     }
     if (stageAfter === "submit") {
       return [
-        "reviewer/REVIEW_PACKET.json exists",
-        "reviewer/CITATION_VERIFICATION.md exists",
+        "PROJECT_MANIFEST.json.writing_session reflects a reviewer-ready survey draft",
+        "academic_writer/paper/main.tex exists",
+        "academic_writer/paper/main.pdf exists or PROJECT_MANIFEST.json.paper_qc.compile_status = pass",
       ];
     }
     return [];
@@ -964,11 +962,13 @@ function buildStageHandoffAcceptanceChecks(params: {
       return [
         "academic_writer/paper/main.tex exists",
         "academic_writer/story/ or section packets are present",
+        "writing process is drafting|section_review|manuscript_complete|compile_ready|ready_for_submit",
       ];
     case "submit":
       return [
-        "reviewer/REVIEW_PACKET.json exists",
-        "reviewer/CITATION_VERIFICATION.md exists",
+        "PROJECT_MANIFEST.json.writing_session reflects a reviewer-ready draft",
+        "academic_writer/paper/main.tex exists",
+        "academic_writer/paper/main.pdf exists or PROJECT_MANIFEST.json.paper_qc.compile_status = pass",
       ];
     default:
       return [];

@@ -176,6 +176,8 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   manifestAfterTransition.current_stage = "write";
   manifestAfterTransition.current_micro_stage = "writing_requested";
   manifestAfterTransition.owner_agent = "academic_writer";
+  delete manifestAfterTransition.paper_story_state;
+  delete manifestAfterTransition.review_pressure_packet;
   manifestAfterTransition.orchestration_state = {
     ...(manifestAfterTransition.orchestration_state ?? {}),
     current_owner: "academic_writer",
@@ -202,6 +204,11 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   assert.ok(
     !writeGate.missingStageSignals.some((signal) =>
       /appendix_theory\.tex|THEORY_STATE\.json/i.test(signal),
+    ),
+  );
+  assert.ok(
+    !writeGate.missingStageSignals.some((signal) =>
+      /paper_story_state|idea fragments|review_pressure_packet/i.test(signal),
     ),
   );
 });
