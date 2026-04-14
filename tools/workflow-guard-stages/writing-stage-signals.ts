@@ -63,6 +63,7 @@ export interface WritingStageDeps {
   normalizeExternalReviewState: (value: unknown) => any;
   isExternalReviewConclusionReady: (state: any) => boolean;
   hasPrefixedFile: (dir: string, prefix: string) => Promise<boolean>;
+  findAnyPdfInDir: (dir: string) => Promise<string | null>;
   DEFAULT_KG_STORYLINE_PACKET_PATH: string;
   DEFAULT_THEORY_APPENDIX_PLAN_PATH: string;
   DEFAULT_THEORY_APPENDIX_SECTION_PATH: string;
@@ -589,8 +590,13 @@ export async function collectSubmitStageMissingSignals(
     }
   }
 
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "paper", "main.pdf")))) {
-    missing.push("{PROJ}/academic_writer/paper/main.pdf");
+  const availablePdfPath = await deps.findAnyPdfInDir(
+    path.join(ctx.projectRoot, "academic_writer", "paper")
+  );
+  if (!availablePdfPath) {
+    missing.push(
+      "{PROJ}/academic_writer/paper/*.pdf — reviewer submit work requires at least one compiled PDF; rerun writer compile if none exists"
+    );
   }
   if (!(await deps.pathExists(path.join(ctx.projectRoot, "academic_writer", "WRITING_SIGNALS.md")))) {
     missing.push("{PROJ}/academic_writer/WRITING_SIGNALS.md");

@@ -219,7 +219,8 @@ Reviewer 先对当前 evidence packet 做一次本地反思：
 2. 写入最终审稿总结到 `{PROJ}/reviewer/REVIEW_REPORT.md`
 3. 先通过 `research_workflow.materialize_review_pressure_packet` 生成 `{PROJ}/reviewer/story-pressure/` 的 durable review-pressure packet，再用 `research_workflow.set_review_pressure_packet` 做必要的 bounded patch 同步 manifest
 4. 若需要回传分析/实验建议，把 action items 明确留在 Reviewer 产物中，并让 workflow control plane 决定是否回退到 `analyze` / `experiment` / `write`
-5. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
+5. 若 Writer 产物目录 `{PROJ}/academic_writer/paper/` 下已经存在任意 PDF，则进入外部审稿阶段并运行 `/paperreview-submit`
+6. 若 `{PROJ}/academic_writer/paper/` 下没有任何 PDF，不要假装 SUBMIT 已就绪；明确回退给 Writer 执行 `/paper-compile` 或等价 compile 流程，直到至少一个可审阅 PDF 落盘
 
 只有当 `REVIEW_REPORT.md` 明确写出：
 - `Verdict: READY` 或等价 ready 结论

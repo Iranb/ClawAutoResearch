@@ -5291,6 +5291,19 @@ async function hasPrefixedFile(dir: string, prefix: string): Promise<boolean> {
   }
 }
 
+async function findAnyPdfInDir(dir: string): Promise<string | null> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const candidates = entries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".pdf"))
+      .map((entry) => path.join(dir, entry.name))
+      .sort((left, right) => left.localeCompare(right));
+    return candidates[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function manifestFieldExists(manifest: ManifestLike | null, pathSpec: string[]): boolean {
   let current: unknown = manifest;
   for (const segment of pathSpec) {
@@ -5908,6 +5921,7 @@ async function getMissingStageSignals(params: {
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
+          findAnyPdfInDir,
           DEFAULT_KG_STORYLINE_PACKET_PATH,
           DEFAULT_THEORY_APPENDIX_PLAN_PATH,
           DEFAULT_THEORY_APPENDIX_SECTION_PATH,
@@ -5953,6 +5967,7 @@ async function getMissingStageSignals(params: {
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
+          findAnyPdfInDir,
           DEFAULT_KG_STORYLINE_PACKET_PATH,
           DEFAULT_THEORY_APPENDIX_PLAN_PATH,
           DEFAULT_THEORY_APPENDIX_SECTION_PATH,
@@ -7228,6 +7243,10 @@ export async function getExternalReviewStateSummary(params: {
     params.projectRoot,
     state.submittedPdfPath
   );
+  const discoveredPdfPath =
+    submittedPdfResolvedPath && (await pathExists(submittedPdfResolvedPath))
+      ? submittedPdfResolvedPath
+      : await findAnyPdfInDir(path.join(params.projectRoot, "academic_writer", "paper"));
   const externalReviewResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     state.externalReviewPath
@@ -7238,10 +7257,8 @@ export async function getExternalReviewStateSummary(params: {
   );
   return {
     state,
-    submittedPdfResolvedPath,
-    submittedPdfExists: submittedPdfResolvedPath
-      ? await pathExists(submittedPdfResolvedPath)
-      : false,
+    submittedPdfResolvedPath: discoveredPdfPath,
+    submittedPdfExists: Boolean(discoveredPdfPath),
     externalReviewResolvedPath,
     externalReviewExists: externalReviewResolvedPath
       ? await pathExists(externalReviewResolvedPath)

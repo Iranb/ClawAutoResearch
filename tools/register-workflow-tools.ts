@@ -929,7 +929,7 @@ function buildStageHandoffAcceptanceChecks(params: {
       return [
         "PROJECT_MANIFEST.json.writing_session reflects a reviewer-ready survey draft",
         "academic_writer/paper/main.tex exists",
-        "academic_writer/paper/main.pdf exists or PROJECT_MANIFEST.json.paper_qc.compile_status = pass",
+        "at least one PDF exists under academic_writer/paper/",
       ];
     }
     return [];
@@ -972,7 +972,7 @@ function buildStageHandoffAcceptanceChecks(params: {
       return [
         "PROJECT_MANIFEST.json.writing_session reflects a reviewer-ready draft",
         "academic_writer/paper/main.tex exists",
-        "academic_writer/paper/main.pdf exists or PROJECT_MANIFEST.json.paper_qc.compile_status = pass",
+        "at least one PDF exists under academic_writer/paper/",
       ];
     default:
       return [];

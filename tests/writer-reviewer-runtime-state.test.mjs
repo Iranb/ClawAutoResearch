@@ -727,6 +727,46 @@ test("external review summary persists Stanford reviewer conclusion", async (t) 
   assert.equal(summary.conclusionReady, true);
 });
 
+test("external review summary falls back to any compiled PDF under writer paper dir", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "camera_ready_v2.pdf"),
+    "pdf\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "external_review_2026-03-26.md"),
+    "# Stanford review\n"
+  );
+  await writeText(
+    path.join(projectRoot, "reviewer", "rebuttal_2026-03-26.md"),
+    "# rebuttal\n"
+  );
+
+  await setExternalReviewState({
+    projectRoot,
+    externalReview: {
+      status: "received",
+      provider: "paperreview.ai",
+      review_skill: "paperreview-submit",
+      source_label: "Stanford Agentic Reviewer",
+      submitted_pdf_path: "academic_writer/paper/main.pdf",
+      external_review_path: "reviewer/external_review_2026-03-26.md",
+      review_response_path: "reviewer/rebuttal_2026-03-26.md",
+      overall_recommendation: "minor_revision",
+      required_action: "rollback_write",
+    },
+  });
+
+  const summary = await getExternalReviewStateSummary({ projectRoot });
+  assert.equal(summary.submittedPdfExists, true);
+  assert.match(summary.submittedPdfResolvedPath ?? "", /camera_ready_v2\.pdf$/);
+});
+
 test("phase-2 runtime state summaries persist QC, issue tracking, and independent experiment search state", async (t) => {
   const projectRoot = await makeProjectRoot();
 

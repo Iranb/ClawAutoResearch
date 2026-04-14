@@ -238,7 +238,7 @@ test("prepare_stage_handoff uses writer-side submit readiness checks instead of 
     checks.some((entry) => /academic_writer\/paper\/main\.tex exists/i.test(entry))
   );
   assert.ok(
-    checks.some((entry) => /paper_qc\.compile_status = pass/i.test(entry))
+    checks.some((entry) => /at least one PDF exists under academic_writer\/paper\//i.test(entry))
   );
   assert.ok(
     !checks.some((entry) => /reviewer\/REVIEW_PACKET\.json|reviewer\/CITATION_VERIFICATION\.md/i.test(entry))
