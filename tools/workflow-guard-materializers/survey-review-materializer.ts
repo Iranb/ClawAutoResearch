@@ -201,7 +201,10 @@ export async function materializeSurveyReviewStateImpl(params: {
   } else if (queryRoundCount > 0 || literatureExists) {
     status = "searching";
     currentPhase = "retrieval";
-    pendingReason = "Continue broad retrieval until the review packet can be screened.";
+    pendingReason =
+      candidatePaperCount >= 40
+        ? "Candidate pool is broad enough to begin stricter screening; keep citation expansion bounded and start separating include vs exclude decisions."
+        : "Continue broad retrieval and citation expansion until the candidate pool reaches roughly 40-50 papers, or a smaller niche topic is explicitly saturated.";
   } else {
     status = "missing";
     currentPhase = "bootstrap";

@@ -354,20 +354,31 @@ export async function materializeSurveyReviewDiagnostics(params: {
     blockers: ["Add retrieval rounds, included papers, and a durable coverage summary before synthesis."],
   });
   if (queryRounds > 0 && includedPapers > 0) {
-    const breadthReady =
-      queryRounds >= 2 &&
-      (includedPapers >= 6 ||
-        (candidatePapers > 0 && candidatePapers <= 10 && includedPapers >= 3)) &&
+    const broadCoverageReady =
+      queryRounds >= 4 &&
+      candidatePapers >= 20 &&
+      includedPapers >= 10 &&
       coverageKeywords >= 2;
+    const nicheCoverageReady =
+      queryRounds >= 3 &&
+      candidatePapers > 0 &&
+      candidatePapers <= 15 &&
+      includedPapers >= 8 &&
+      excludedPapers >= 2 &&
+      coverageKeywords >= 3;
+    const breadthReady = broadCoverageReady || nicheCoverageReady;
     coverage = buildDiagnostic({
       status: breadthReady ? "ready" : "partial",
       summary: breadthReady
-        ? `Coverage looks reusable for synthesis: query_rounds=${queryRounds}, included=${includedPapers}, candidate=${candidatePapers}.`
-        : `Coverage is still thin or under-explained: query_rounds=${queryRounds}, included=${includedPapers}, candidate=${candidatePapers}.`,
+        ? `Coverage looks reusable for synthesis: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, candidate=${candidatePapers}.`
+        : `Coverage is still thin or under-explained: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, candidate=${candidatePapers}.`,
       evidencePaths: [params.state.queryRegistryPath ?? "", params.state.coverageSummaryPath ?? ""].filter(Boolean),
       blockers: breadthReady
         ? []
-        : ["Expand search breadth or strengthen COVERAGE_SUMMARY.md before finalizing the survey synthesis."],
+        : [
+            "Expand search breadth with more retrieval rounds and seed-based citation expansion before finalizing the survey synthesis.",
+            "For broad topics, aim for roughly 40-50 candidates and a screened included/excluded split before WRITE handoff.",
+          ],
       warnings:
         coverageKeywords >= 2
           ? []

@@ -190,12 +190,12 @@ export async function auditLiteratureCoverage(params: {
     .filter((entry) => entry.canonicalIds.length === 0 && entry.titles.length === 0)
     .map((entry) => entry.hint);
   const recommendations: string[] = [];
-  if (entries.length < 8) {
+  if (entries.length < 15) {
     recommendations.push(
       "Paper set is still thin; expand discovery before trusting frontier or survey synthesis."
     );
   }
-  if (recentPaperCount < 3) {
+  if (recentPaperCount < 5) {
     recommendations.push(
       "Recent-paper coverage is weak; add a bounded refresh focused on the last two years."
     );
@@ -210,15 +210,20 @@ export async function auditLiteratureCoverage(params: {
       "Discovery sources are concentrated; consider mixing papers.cool with PASA or manual venue sweeps."
     );
   }
+  if (entries.length < 25) {
+    recommendations.push(
+      "Keep citation expansion running until the project reaches a healthier paper pool (roughly 25+ for experimental work, 40+ for survey work) or until saturation is explicitly justified."
+    );
+  }
   if (recommendations.length === 0) {
     recommendations.push(
       "Coverage looks stable enough for graph refresh; keep diagnostics non-blocking and refresh only if the topic shifts."
     );
   }
   const verdict: LiteratureCoverageVerdict =
-    entries.length < 8 || missingBaselineHints.length > 0
+    entries.length < 15 || missingBaselineHints.length > 0
       ? "thin"
-      : recentPaperCount < 3
+      : recentPaperCount < 5
         ? "adequate"
         : "strong";
   const auditPath = path.join(params.projectRoot, "researcher", "LITERATURE_COVERAGE_AUDIT.json");
@@ -267,7 +272,7 @@ export async function planCitationExpansion(params: {
   const { entries } = await readWorkflowPaperSourceIndex({
     projectRoot: params.projectRoot,
   });
-  const maxSeeds = Math.max(1, Math.min(8, Math.floor(params.maxSeeds ?? 4)));
+  const maxSeeds = Math.max(1, Math.min(12, Math.floor(params.maxSeeds ?? 6)));
   const seeds = selectCitationSeeds(entries, maxSeeds);
   const packetPath = path.join(params.projectRoot, "researcher", "CITATION_EXPANSION_PACKET.json");
   const markdownPath = path.join(params.projectRoot, "researcher", "CITATION_EXPANSION_PACKET.md");
@@ -287,6 +292,20 @@ export async function planCitationExpansion(params: {
         seedTitle: seed.title,
         query: `Find recent follow-up papers that cite "${label}"`,
         rationale: "Refresh recent SOTA and successor work without broad uncontrolled search.",
+      },
+      {
+        type: "keyword_refresh" as const,
+        seedCanonicalId: seed.canonicalId,
+        seedTitle: seed.title,
+        query: `Expand benchmark settings, variants, and closely related methods around "${label}"`,
+        rationale: "Increase comparison breadth around each high-value seed rather than citing only one canonical paper.",
+      },
+      {
+        type: "keyword_refresh" as const,
+        seedCanonicalId: seed.canonicalId,
+        seedTitle: seed.title,
+        query: `Find limitations, failure cases, contradictions, or rebuttal papers related to "${label}"`,
+        rationale: "Increase critical coverage and avoid optimistic one-sided literature packets.",
       },
     ];
   });
@@ -317,6 +336,7 @@ export async function planCitationExpansion(params: {
     ],
     recommendations: [
       "Keep citation expansion bounded to these seeds before widening to free-form queries.",
+      "If coverage still looks thin, run another bounded citation-expansion round with refreshed seeds instead of stopping after a single packet.",
       "Merge newly accepted papers into PAPER_SOURCE_INDEX.json by canonical identity before re-running graph-build.",
       "Use this packet as a research aid, not as a stage blocker.",
     ],

@@ -1045,6 +1045,46 @@ test("research_workflow plan_citation_expansion writes a bounded seed packet", a
   assert.ok(result.packet.markdownPath);
 });
 
+test("research_workflow plan_citation_expansion defaults to a broader bounded seed set", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+  });
+  await seedPaperSourceIndex(
+    projectRoot,
+    Array.from({ length: 9 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.100${index}`,
+      arxiv_id: `2501.100${index}`,
+      title: `Expansion Seed ${index}`,
+      year: 2025,
+      citation_count: 100 - index,
+    }))
+  );
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "plan_citation_expansion",
+  });
+
+  assert.equal(result.packet.bounded, true);
+  assert.equal(result.packet.maxSeeds, 6);
+  assert.equal(result.packet.seeds.length, 6);
+  assert.equal(result.packet.queries.length >= 25, true);
+});
+
 test("research_workflow refresh_gpu_monitor persists idle-vs-busy GPU state for tracked runs", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

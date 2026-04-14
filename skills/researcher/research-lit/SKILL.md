@@ -64,6 +64,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
    - If baseline coverage, recent-paper coverage, or metadata quality still feels weak, run `research_workflow.audit_literature_coverage` as a non-blocking diagnosis pass
    - If only a few in-corpus anchors look strong, run `research_workflow.plan_citation_expansion` to create one bounded follow-up packet instead of widening into an uncontrolled crawl
+   - If the paper pool is still thin after one packet, run another bounded citation-expansion round with refreshed seeds; do not stop after a single seed packet when baseline coverage is still weak
    - Run one bounded brainstorm synthesis pass over the currently ingested papers; this is mandatory during research, not postponed to IDEA
 4. **After ALL searches complete**:
    - Write `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` with preliminary mechanism hypotheses, decomposition ideas, contradictions, and do-not-repeat constraints
@@ -83,6 +84,12 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 - Manually move UI/API-uploaded papers into the shared source tree when the queued PaperNexus import-task path is available
 - Call destructive PaperNexus backup / restore commands as part of normal literature work
 - Treat Zotero as a substitute for PaperNexus graph readiness or source-of-truth citation verification
+
+For experimental `auto-research`, do not treat a tiny literature set as enough just because ideation can start. A healthier default target is:
+
+- `15-25` canonical papers before serious idea locking
+- explicit strongest baselines and closest prior work identified
+- at least one bounded citation-expansion pass if baseline or recent-paper coverage still looks weak
 
 ---
 

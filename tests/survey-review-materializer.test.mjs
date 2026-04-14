@@ -16,6 +16,7 @@ import {
   DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH,
   DEFAULT_SURVEY_SOTA_MATRIX_PATH,
 } from "../tools/workflow-guard-state/survey-review.ts";
+import { normalizeWritingContractState } from "../tools/workflow-guard-state/writing-contract.ts";
 import {
   materializePaperStoryState,
   materializeSurveyReviewState,
@@ -56,7 +57,12 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
     rounds: [
       { query: "graph reasoning survey", provider: "papers-cool" },
       { query: "graph reasoning review", provider: "pasa-paper-search" },
+      { query: "graph reasoning benchmark comparison", provider: "papers-cool" },
+      { query: "graph reasoning agents survey", provider: "pasa-paper-search" },
+      { query: "graph reasoning failure analysis", provider: "papers-cool" },
+      { query: "graph reasoning recent papers", provider: "pasa-paper-search" },
     ],
+    candidate_paper_count: 48,
   });
   await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
   await writeText(
@@ -64,14 +70,14 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
     "# Review Protocol\n"
   );
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
-    papers: [
-      { canonical_id: "arxiv:2501.00001" },
-      { canonical_id: "arxiv:2501.00002" },
-      { canonical_id: "arxiv:2501.00004" },
-    ],
+    papers: Array.from({ length: 20 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.000${String(index + 1).padStart(2, "0")}`,
+    })),
   });
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
-    papers: [{ canonical_id: "arxiv:2401.00003" }],
+    papers: Array.from({ length: 8 }, (_unused, index) => ({
+      canonical_id: `arxiv:2401.100${index}`,
+    })),
   });
   await writeText(
     path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
@@ -82,11 +88,12 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
     [
       "# SOTA Matrix",
       "",
-      "| Paper | Family | Dataset | Metric |",
-      "| --- | --- | --- | --- |",
-      "| A | Retrieval | SurveyBench | Accuracy |",
-      "| B | Planning | GraphArena | F1 |",
-      "| C | Hybrid | TaskGraph | mAP |",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Retrieval | strong baseline | SurveyBench | Accuracy |",
+      "| B | Planning | structured reasoning | GraphArena | F1 |",
+      "| C | Hybrid | benchmark transfer | TaskGraph | mAP |",
+      "| D | Calibration | robustness caveat | OpenArena | AUC |",
       "",
     ].join("\n")
   );
@@ -111,9 +118,9 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
 
   assert.equal(result.state.status, "completed");
   assert.equal(result.state.currentPhase, "complete");
-  assert.equal(result.state.queryRoundCount, 2);
-  assert.equal(result.state.includedPaperCount, 3);
-  assert.equal(result.state.excludedPaperCount, 1);
+  assert.equal(result.state.queryRoundCount, 6);
+  assert.equal(result.state.includedPaperCount, 20);
+  assert.equal(result.state.excludedPaperCount, 8);
   assert.equal(result.state.graphGroundedBriefReady, true);
   assert.equal(result.state.gateReady, true);
   assert.equal(result.state.coverageStatus, "ready");
@@ -131,20 +138,23 @@ test("completed survey artifacts can seed survey-mode paper story and writing co
     rounds: [
       { query: "graph reasoning survey", provider: "papers-cool" },
       { query: "graph reasoning review", provider: "pasa-paper-search" },
+      { query: "graph reasoning benchmark comparison", provider: "papers-cool" },
+      { query: "graph reasoning agents survey", provider: "pasa-paper-search" },
+      { query: "graph reasoning failure analysis", provider: "papers-cool" },
+      { query: "graph reasoning recent papers", provider: "pasa-paper-search" },
     ],
-    candidate_paper_count: 9,
+    candidate_paper_count: 44,
   });
   await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
-    papers: [
-      { canonical_id: "arxiv:2501.00001" },
-      { canonical_id: "arxiv:2501.00002" },
-      { canonical_id: "arxiv:2501.00003" },
-      { canonical_id: "arxiv:2501.00004" },
-    ],
+    papers: Array.from({ length: 18 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.200${index}`,
+    })),
   });
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
-    papers: [{ canonical_id: "arxiv:2401.00003" }],
+    papers: Array.from({ length: 8 }, (_unused, index) => ({
+      canonical_id: `arxiv:2401.200${index}`,
+    })),
   });
   await writeText(
     path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
@@ -156,11 +166,12 @@ test("completed survey artifacts can seed survey-mode paper story and writing co
     [
       "# SOTA Matrix",
       "",
-      "| Paper | Family | Dataset | Metric |",
-      "| --- | --- | --- | --- |",
-      "| A | Graph pretraining | SurveyBench | Accuracy |",
-      "| B | Reasoning agents | GraphArena | F1 |",
-      "| C | Hybrid systems | TaskGraph | mAP |",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Graph pretraining | strong baseline | SurveyBench | Accuracy |",
+      "| B | Reasoning agents | multi-step planning | GraphArena | F1 |",
+      "| C | Hybrid systems | benchmark transfer | TaskGraph | mAP |",
+      "| D | Calibration | robustness caveat | OpenArena | AUC |",
       "",
     ].join("\n")
   );
@@ -196,8 +207,9 @@ test("completed survey artifacts can seed survey-mode paper story and writing co
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
-  assert.equal(manifest.writing_contract.paper_mode, "survey");
-  assert.deepEqual(manifest.writing_contract.required_sections, [
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  assert.equal(writingContract.paperMode, "survey");
+  assert.deepEqual(writingContract.requiredSections, [
     "abstract",
     "introduction",
     "scope_and_protocol",
@@ -207,7 +219,7 @@ test("completed survey artifacts can seed survey-mode paper story and writing co
     "open_problems",
     "conclusion",
   ]);
-  assert.equal(manifest.writing_contract.proof_appendix_required, false);
+  assert.equal(writingContract.proofAppendixRequired, false);
 });
 
 test("survey review stays blocked when survey-quality gates are not ready", async (t) => {
@@ -428,22 +440,23 @@ test("completed survey review can advance into write stage", async (t) => {
     rounds: [
       { query: "graph reasoning survey", provider: "papers-cool" },
       { query: "graph reasoning review", provider: "pasa-paper-search" },
+      { query: "graph reasoning benchmark comparison", provider: "papers-cool" },
+      { query: "graph reasoning agents survey", provider: "pasa-paper-search" },
+      { query: "graph reasoning failure analysis", provider: "papers-cool" },
+      { query: "graph reasoning recent papers", provider: "pasa-paper-search" },
     ],
-    candidate_paper_count: 18,
+    candidate_paper_count: 46,
   });
   await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n\n- Main benchmarks: SurveyBench, GraphArena.\n- Main metrics: Accuracy, F1.\n");
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
-    papers: [
-      { canonical_id: "arxiv:2501.00001" },
-      { canonical_id: "arxiv:2501.00002" },
-      { canonical_id: "arxiv:2501.00003" },
-      { canonical_id: "arxiv:2501.00004" },
-      { canonical_id: "arxiv:2501.00005" },
-      { canonical_id: "arxiv:2501.00006" },
-    ],
+    papers: Array.from({ length: 18 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.300${index}`,
+    })),
   });
   await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
-    papers: [{ canonical_id: "arxiv:2401.00003" }],
+    papers: Array.from({ length: 8 }, (_unused, index) => ({
+      canonical_id: `arxiv:2401.300${index}`,
+    })),
   });
   await writeText(
     path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
@@ -454,11 +467,12 @@ test("completed survey review can advance into write stage", async (t) => {
     [
       "# SOTA Matrix",
       "",
-      "| Paper | Family | Dataset | Metric |",
-      "| --- | --- | --- | --- |",
-      "| A | Graph pretraining | SurveyBench | Accuracy |",
-      "| B | Reasoning agents | GraphArena | F1 |",
-      "| C | Hybrid systems | TaskGraph | mAP |",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Graph pretraining | strong baseline | SurveyBench | Accuracy |",
+      "| B | Reasoning agents | multi-step planning | GraphArena | F1 |",
+      "| C | Hybrid systems | benchmark transfer | TaskGraph | mAP |",
+      "| D | Calibration | robustness caveat | OpenArena | AUC |",
       "",
     ].join("\n")
   );

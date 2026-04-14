@@ -90,6 +90,8 @@ When coverage still looks thin after a broad pass:
 
 - run `research_workflow.audit_literature_coverage` to make baseline and recency gaps explicit
 - if only a few anchor papers look strong, use `research_workflow.plan_citation_expansion` to generate one bounded seed packet
+- if coverage is still thin after one packet, repeat bounded citation expansion with refreshed seeds instead of stopping after a single round
+- for broad topics, aim for roughly **40-50 candidates** before calling the survey saturated; for smaller niche topics, make the saturation argument explicit in `COVERAGE_SUMMARY.md`
 - do not turn survey mode into an infinite citation crawl
 
 ## Screening Contract
@@ -108,6 +110,14 @@ Every screened paper must have:
 - one short reason
 
 Do not silently drop papers from the survey.
+
+For broad survey topics, a healthy screened packet usually looks more like:
+
+- `candidate_papers >= 40`
+- `included_papers >= 15-20`
+- explicit `excluded_papers`
+
+These are targets, not absolute laws for niche topics.
 
 ## Synthesis Contract
 

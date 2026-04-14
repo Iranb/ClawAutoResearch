@@ -121,6 +121,7 @@ In survey mode:
 - do not write one-paper-at-a-time summary chains as the dominant structure
 - every core section should synthesize across papers, families, or benchmarks
 - at least one paragraph per major section should make an explicit comparison or tradeoff
+- when evidence is available, use multiple representative citations per family / benchmark paragraph rather than anchoring the section on a single paper
 - if results are not directly comparable, say so instead of forcing a ranking
 - keep scope boundaries and blind spots visible
 - run the skeptical survey self-review before treating the draft as mature
