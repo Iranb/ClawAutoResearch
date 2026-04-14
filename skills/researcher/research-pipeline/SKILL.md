@@ -341,10 +341,10 @@ Experiment control rules:
 - do not enter full experiments for a weak track that failed its pilot
 - if budget is tight, prefer one strong track over two marginal ones
 
-### Stage 5: Auto Review
+### Stage 5: Review Handoff
 
 ```
-/review-phase                        → cross-agent review loop
+/review-phase                        → reviewer-owned internal review loop
 ```
 
 Precondition before Stage 5:
@@ -354,8 +354,8 @@ Precondition before Stage 5:
 
 If multiple tracks were pursued, review each independently:
 - strongest track gets first review slot
-- secondary track reviewed when the first completes or in parallel if reviewer agent allows
-- Review output saved to `{PROJ}/reviewer/REVIEW_REPORT.md`
+- secondary track reviewed when the first completes or in parallel if reviewer capacity allows
+- Review output is **owned by Reviewer** under `{PROJ}/reviewer/`
 
 **Gate 3** (per-idea, controlled by HUMAN_CHECKPOINT):
 - Show score + action items
@@ -367,25 +367,31 @@ If multiple tracks were pursued, review each independently:
 - Track 2 enters repair loop (up to MAX_REVIEW_ROUNDS)
 - If Track 2 still fails: park or kill it, focus on Track 1
 
-### Stage 6: Paper Writing
+Researcher responsibility at this point:
+- ensure the analysis packet is durable and reviewer-readable
+- trigger the handoff through workflow control plane
+- do **not** author review artifacts or impersonate Reviewer
+
+### Stage 6: Write Handoff
 
 ```
-spawn academic_writer → /paper-phase
+/paper-phase
 ```
 
-Writer produces LaTeX paper with cross-review at each section.
+Academic Writer owns the WRITE stage once the review packet says the work is ready.
+Researcher may monitor progress and continue literature / graph maintenance in the background, but should not draft paper sections directly unless the workflow explicitly routes ownership back.
 
 **Gate 4** — Paper draft complete, ready for external AI review.
 
-### Stage 7: External AI Review (Mandatory)
+### Stage 7: Submit / External Review (Mandatory)
 
 ```
 /paperreview-submit "{PROJ}/academic_writer/paper/main.pdf"
 ```
 
-Submit to paperreview.ai (Stanford Agentic Reviewer). Wait for results, save to `{PROJ}/reviewer/external_review_{date}.md`.
+This command is shown as the canonical submit-stage action, but the stage itself is **reviewer-owned**. Reviewer (not Researcher) should run the external AI review, save `{PROJ}/reviewer/external_review_{date}.md`, and prepare rebuttal / external-review packaging.
 
-After the external review lands, invoke:
+After the external review lands, Reviewer may invoke:
 
 ```
 /review-response
@@ -401,6 +407,11 @@ Based on Gate 5 decision:
 - `major-revision` → back to Stage 4 (EXPERIMENT)
 - `minor-revision` → back to Stage 6 (WRITE)
 - `accept-as-is` → Stage 9 (DONE)
+
+Routing rule:
+- If the project regresses back to `experiment`, Researcher resumes ownership.
+- If it regresses only to `write`, Academic Writer resumes ownership.
+- Do not keep Researcher as the default closer once the project has already handed off to Writer or Reviewer.
 
 ### Stage 9: DONE
 
@@ -485,12 +496,12 @@ Typical overnight workflow:
 │       ├── figures/                 Copied from analyzer/figures/ at paper-phase start
 │       └── refs.bib
 │
-├── reviewer/                        ← OWNED BY: reviewer (saved by researcher)
+├── reviewer/                        ← OWNED BY: reviewer
 │   ├── REVIEW_REPORT.md             Stage 5 output (internal review history)
 │   ├── external_review_{date}.md    Stage 7 output (external AI review)
 │   └── rebuttal_{date}.md           Stage 8 output (response draft)
 │
-└── cross-reviewer/                  ← OWNED BY: cross-reviewer (saved by calling agent)
+└── cross-reviewer/                  ← OWNED BY: cross-reviewer / calling owner
     ├── novelty/                     Stage 1 novelty assessments
     ├── outline/                     Stage 6 outline reviews
     └── prose/                       Stage 6 per-section prose reviews
@@ -505,6 +516,7 @@ Typical overnight workflow:
 - **Always maintain the state machine**: update `{PROJ}/PROJECT_MANIFEST.json` and `{PROJ}/TRACK_REGISTRY.json` at each stage transition
 - **Never let the track portfolio drift**: keep at most 2 active tracks unless budget explicitly allows more
 - **Never skip Stage 2 (Planning):** even when AUTO_PROCEED=true, wait for `PLAN.md`, `TODOS.md`, and a ready `PLAN_AUDIT.md` before spawning Coder. When any is missing, **proactively wake Orchestrator** (spawn with /plan-research) to produce them. See WORKFLOW.md "Stage transition preconditions" and "Wake Orchestrator on demand".
+- Once a later-stage owner is active (`orchestrator`, `coder`, `analyzer`, `academic_writer`, `reviewer`), Researcher should route and monitor rather than directly doing that owner's substantive work.
 - Stages 3–6 can run autonomously after Gate 1 (overnight mode)
 - Review max 4 rounds; if exceeded → stop and report
 - Multi-track mode: all tracks share the same project memory files but must remain explicitly separated in `TRACK_REGISTRY.json`

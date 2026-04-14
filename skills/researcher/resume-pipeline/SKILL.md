@@ -51,6 +51,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - `analyze` → `researcher/artifacts/results/`, `analyzer/QUALITY_AUDIT.md`
    - `review` → `researcher/REVIEW_STATE.json`, `reviewer/REVIEW_REPORT.md`
    - `write` → `academic_writer/PAPER_PLAN.md`, `paper/sections/`
+   - For non-Researcher-owned stages, these checks are **routing inputs**, not permission for Researcher to take over the stage.
 4. Reconcile literature source state:
    - read `paper_source_dir`, `graph_last_built_at`, and `paper_ingestion.*` from `PROJECT_MANIFEST.json`
    - read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` before interpreting wrapper/session state; use that phase/summary as the first PaperNexus resume signal
@@ -77,12 +78,13 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - reconcile against `EXPERIMENT_LEDGER.json` first, then `EXPERIMENT_REGISTRY.md`
    - if launches are missing but code bundles are ready, assign Coder `/run-experiment`
    - if runs are complete, sync artifacts, upsert the final experiment ledger entries, mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`, and only then advance to `ANALYZE`
-9. If current stage is `ANALYZE`, `REVIEW`, or `WRITE`, wake the owning agent's `/resume-pipeline`.
+9. If current stage is `ANALYZE`, `REVIEW`, `WRITE`, or `SUBMIT`, wake the owning agent's `/resume-pipeline` or route to that owner session through workflow control plane. Do not perform owner-only work from the Researcher lane unless ownership actually returns to Researcher.
 10. Update `PROJECT_MANIFEST.json` and `PROJECTS_STATE.json` with `updated_at`, `current_stage`, `current_micro_stage`, and `next_action`.
 
 ## Safety Rules
 
 - Never start a new stage until the recorded current stage is reconciled with on-disk artifacts.
+- Never treat foreign-owner artifacts as permission to do foreign-owner work. Researcher may inspect them to decide whether to route, retry, or report a blocker.
 - Never relaunch an experiment if remote `screen`, logs, or `REMOTE_RUN.json` show it is already active.
 - Never trust remembered experiment history over `{PROJ}/researcher/EXPERIMENT_LEDGER.json`; ledger beats chat memory.
 - Do not rerun `/idle-research` inside the cooldown window unless the user explicitly overrides it.
@@ -93,6 +95,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 - If PaperNexus import/reconcile work is already in flight, prefer resuming or reattaching to the bounded wrapper task state or batch manifest state instead of repeatedly forcing fresh graph work.
 - If upload work is missing entirely but staged papers still need syncing, queue a fresh workflow-owned upload request and let `/resume-pipeline` launch it before advancing the stage.
 - If a wrapper-driven paper import already reported completion or timeout through `research_workflow.set_paper_ingestion`, trust that durable state over waiting for a missing chat reply from the delegated sub-agent.
+- If `write` or `review` looks inconsistent, first route to Academic Writer or Reviewer. Researcher should only repair those stages directly when the workflow explicitly reassigns ownership.
 
 ## Output
 
@@ -104,5 +107,6 @@ Return:
 - **Stage reconciled**: {current_stage} / {current_micro_stage}
 - **Reality check**: [matched / drift fixed / blocked]
 - **Next action**: [exact next step]
+- **Owner routed**: [current owner or none]
 - **Agents woken**: [list or none]
 ```

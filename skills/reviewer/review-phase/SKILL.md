@@ -39,7 +39,9 @@ allowed-tools:
 
 ## State Persistence
 
-`{PROJ}/researcher/REVIEW_STATE.json` 支持 context compaction 后恢复：
+`PROJECT_MANIFEST.json.review_session` 与 `{PROJ}/reviewer/REVIEW_REPORT.md` 是 Reviewer 的主要 durable 状态。旧的 `{PROJ}/researcher/REVIEW_STATE.json` 仅可作为兼容读取输入，不应再被视为 Reviewer 的主写入位置。
+
+兼容读取示例：
 
 ```json
 {
@@ -76,7 +78,7 @@ allowed-tools:
 
 #### Phase A: Self-Reflection（同模型）
 
-Researcher Agent 自我反思当前工作：
+Reviewer 先对当前 evidence packet 做一次本地反思：
 
 - 实验覆盖了所有 baseline 吗？
 - 统计显著性足够吗（≥ 3 seeds，有 CI/error bars）？
@@ -86,7 +88,7 @@ Researcher Agent 自我反思当前工作：
 - 代码是否可复现（seeds、版本、配置记录完整）？
 - 当前 paper scope 是否已经足够，而不是还在无意义扩张？
 
-如果发现小问题（bug、参数调优），直接修复并重跑，不进入跨 Agent 审稿。
+如果发现的是小型分析/表述问题，可以在 reviewer scope 内指出；如果需要新增实验、改代码、或重写论文正文，应该把问题记录为 action items，并通过 workflow 把责任路由回 Analyzer / Coder / Academic Writer，而不是由 Reviewer 越权执行。
 
 #### Phase B: Cross-Agent Review（独立 Reviewer）
 
@@ -167,7 +169,7 @@ Researcher Agent 自我反思当前工作：
 
 #### Phase E: Document Round
 
-追加或重写 `{PROJ}/reviewer/REVIEW_REPORT.md`（Researcher 负责写入）。必须使用本技能目录中的 `REVIEW_REPORT_TEMPLATE.md` 作为结构起点：
+追加或重写 `{PROJ}/reviewer/REVIEW_REPORT.md`（**Reviewer 负责写入**）。必须使用本技能目录中的 `REVIEW_REPORT_TEMPLATE.md` 作为结构起点：
 
 ```markdown
 ## Round N (timestamp)
@@ -179,7 +181,21 @@ Researcher Agent 自我反思当前工作：
 - **Status**: [continuing / stopping]
 ```
 
-更新 `{PROJ}/researcher/REVIEW_STATE.json`。
+更新 durable review state through workflow:
+
+```json
+{
+  "action": "set_review_session",
+  "reviewSession": {
+    "stage_scope": "review",
+    "round": N,
+    "status": "in_progress|completed|needs_revision",
+    "verdict": "ready|almost|not_ready",
+    "review_packet_path": "reviewer/REVIEW_PACKET.json",
+    "latest_review_path": "reviewer/REVIEW_REPORT.md"
+  }
+}
+```
 
 同时把 adversarial paper-review 产物固定为 durable packet：
 - `reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
@@ -199,10 +215,10 @@ Researcher Agent 自我反思当前工作：
 
 ### Completion
 
-1. 更新 `{PROJ}/researcher/REVIEW_STATE.json` 为 `status: "completed"`
+1. 通过 `research_workflow.set_review_session` 把 review_session 置为 `completed`
 2. 写入最终审稿总结到 `{PROJ}/reviewer/REVIEW_REPORT.md`
 3. 先通过 `research_workflow.materialize_review_pressure_packet` 生成 `{PROJ}/reviewer/story-pressure/` 的 durable review-pressure packet，再用 `research_workflow.set_review_pressure_packet` 做必要的 bounded patch 同步 manifest
-4. 更新 `{PMEM}/experiment-memory.md`（ESE），`{PMEM}` = `{PROJ}/memory`
+4. 若需要回传分析/实验建议，把 action items 明确留在 Reviewer 产物中，并让 workflow control plane 决定是否回退到 `analyze` / `experiment` / `write`
 5. 若后续生成了 `{PROJ}/academic_writer/paper/main.pdf`，必须进入外部审稿阶段并运行 `/paperreview-submit`
 
 只有当 `REVIEW_REPORT.md` 明确写出：
