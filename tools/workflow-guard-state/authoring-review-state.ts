@@ -575,8 +575,9 @@ export function normalizeGraphGuidedWritingState(
   value: unknown
 ): GraphGuidedWritingStateLike {
   const record = asRecord(value) ?? {};
+  const hasConfig = Object.keys(record).length > 0;
   return {
-    enabled: pickBoolean(record, ["enabled"]) ?? true,
+    enabled: pickBoolean(record, ["enabled"]) ?? hasConfig,
     status: normalizeStage(record.status) ?? "missing",
     anchorIndexPath:
       pickString(record, ["anchorIndexPath", "anchor_index_path"]) ??

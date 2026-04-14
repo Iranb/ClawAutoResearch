@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  normalizeGraphGuidedWritingState,
+} from "../tools/workflow-guard-state/authoring-review-state.ts";
+import {
   evaluateWritingProcessReadiness,
   isExternalReviewConclusionReady,
   isGraphGuidedWritingReadyForSubmit,
@@ -191,6 +194,12 @@ test("isGraphGuidedWritingReadyForSubmit ignores disabled graph guidance", () =>
     }),
     true
   );
+});
+
+test("normalizeGraphGuidedWritingState keeps graph-guided writing disabled when no config exists", () => {
+  const state = normalizeGraphGuidedWritingState(undefined);
+  assert.equal(state.enabled, false);
+  assert.equal(state.status, "missing");
 });
 
 test("isExternalReviewConclusionReady requires a recommendation", () => {
