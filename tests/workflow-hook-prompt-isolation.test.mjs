@@ -90,11 +90,62 @@ test("before_prompt_build does not inject Workflow Guard into custom dashboard a
   assert.equal(result, undefined);
 });
 
-test("before_prompt_build still injects Workflow Guard into workflow agents", async () => {
+test("before_prompt_build skips empty workflow-agent boot checks without a project or explicit command", async () => {
   const harness = createHookHarness({
     injectWorkflowContext: true,
   });
   const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  delete process.env.OPENCLAW_PROJECT;
+  try {
+
+    const result = await beforePromptBuild(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "continue the workflow" }],
+          },
+        ],
+      },
+      {
+        agentId: "researcher",
+        workspaceDir: "/tmp/researcher-workspace",
+        sessionKey: "agent:researcher:dashboard:main-empty",
+        sessionId: "session-researcher",
+        messageChannel: "main",
+        trigger: "user",
+      }
+    );
+
+    assert.equal(result, undefined);
+  } finally {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+  }
+});
+
+test("before_prompt_build still injects Workflow Guard into workflow agents with a project", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-project-inject-"));
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+
+  t.after(async () => {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(workspaceDir, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    idle_research: { enabled: false },
+  });
+  await writeJson(path.join(workspaceDir, "TRACK_REGISTRY.json"), { tracks: [] });
 
   const result = await beforePromptBuild(
     {
@@ -107,8 +158,8 @@ test("before_prompt_build still injects Workflow Guard into workflow agents", as
     },
     {
       agentId: "researcher",
-      workspaceDir: "/tmp/researcher-workspace",
-      sessionKey: "agent:researcher:dashboard:main",
+      workspaceDir,
+      sessionKey: "agent:researcher:dashboard:project-inject",
       sessionId: "session-researcher",
       messageChannel: "main",
       trigger: "user",
@@ -116,6 +167,50 @@ test("before_prompt_build still injects Workflow Guard into workflow agents", as
   );
 
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
+});
+
+test("before_prompt_build suppresses duplicate heartbeat guard injection for unchanged session state", async (t) => {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-heartbeat-dedupe-"));
+  const harness = createHookHarness({
+    injectWorkflowContext: true,
+    heartbeatBackgroundChecks: true,
+  });
+  const beforePromptBuild = harness.getHandler("before_prompt_build");
+
+  t.after(async () => {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(workspaceDir, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "review",
+    owner_agent: "reviewer",
+    idle_research: { enabled: false },
+  });
+  await writeJson(path.join(workspaceDir, "TRACK_REGISTRY.json"), { tracks: [] });
+
+  const ctx = {
+    agentId: "reviewer",
+    workspaceDir,
+    sessionKey: "agent:reviewer:dashboard:heartbeat-dedupe",
+    sessionId: "session-reviewer",
+    messageChannel: "main",
+    trigger: "heartbeat",
+  };
+  const event = {
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "heartbeat" }],
+      },
+    ],
+  };
+
+  const first = await beforePromptBuild(event, ctx);
+  const second = await beforePromptBuild(event, ctx);
+
+  assert.match(first?.prependContext ?? "", /\[Workflow Guard\]/);
+  assert.equal(second, undefined);
 });
 
 test("before_prompt_build auto-acknowledges pending handoff mailbox items for the current workflow agent", async (t) => {
@@ -430,8 +525,7 @@ test("before_prompt_build ignores an out-of-root OPENCLAW_PROJECT instead of cra
     }
   );
 
-  assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
-  assert.match(result?.prependContext ?? "", /Project:\s+unset/);
+  assert.equal(result, undefined);
 });
 
 test("before_tool_call ignores workflow-specific guards for custom agents that inherit a workflow-like session key", async () => {

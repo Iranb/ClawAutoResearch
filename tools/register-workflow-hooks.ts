@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildFocusedPromptAssembly,
   buildWorkflowSnapshot,
@@ -73,6 +74,42 @@ const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "cross-reviewer",
 ] as const;
 
+const WORKFLOW_PROMPT_INJECTION_CACHE = new Map<
+  string,
+  { fingerprint: string; injectedAt: number }
+>();
+const WORKFLOW_PROMPT_INJECTION_CACHE_MAX = 512;
+
+function hashPromptState(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value ?? null))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function rememberWorkflowPromptInjection(params: {
+  sessionKey: string | null | undefined;
+  fingerprint: string;
+}) {
+  const sessionKey = readString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  WORKFLOW_PROMPT_INJECTION_CACHE.set(sessionKey, {
+    fingerprint: params.fingerprint,
+    injectedAt: Date.now(),
+  });
+  if (WORKFLOW_PROMPT_INJECTION_CACHE.size <= WORKFLOW_PROMPT_INJECTION_CACHE_MAX) {
+    return;
+  }
+  const oldest = [...WORKFLOW_PROMPT_INJECTION_CACHE.entries()].sort(
+    (left, right) => left[1].injectedAt - right[1].injectedAt
+  )[0]?.[0];
+  if (oldest) {
+    WORKFLOW_PROMPT_INJECTION_CACHE.delete(oldest);
+  }
+}
+
 function isExplicitWorkflowHookAgent(agentCtx: ToolContext): boolean {
   return isWorkflowManagedAgentContext({
     agentId: agentCtx.agentId,
@@ -142,6 +179,83 @@ function looksLikeSurveyPipelineCommand(text: string | null | undefined): boolea
 
 function looksLikePaperPlanCommand(text: string | null | undefined): boolean {
   return Boolean(text && /^\s*\/paper-plan\b/i.test(text));
+}
+
+function looksLikeExplicitWorkflowCommand(text: string | null | undefined): boolean {
+  return Boolean(
+    text &&
+      /^\s*\/(?:research-pipeline|research-queue|survey-pipeline|literature-review|resume-pipeline|paper-plan|graph-build|auto-review|auto-research|zotero-sync|papernexus-reflection)\b/i.test(
+        text
+      )
+  );
+}
+
+function looksLikeInjectedWorkflowGuard(text: string | null | undefined): boolean {
+  return Boolean(text && /\[Workflow Guard\]/i.test(text));
+}
+
+function snapshotHasWorkflowProject(snapshot: Record<string, unknown>): boolean {
+  return Boolean(readString(snapshot.projectRoot) ?? readString(snapshot.project_root));
+}
+
+function buildPromptInjectionFingerprint(params: {
+  snapshot: Record<string, unknown>;
+  trigger: string | null;
+  extraContext: string[];
+  heartbeatClaimedTaskId: string | null;
+}) {
+  const snapshot = params.snapshot;
+  return hashPromptState({
+    projectRoot: readString(snapshot.projectRoot) ?? readString(snapshot.project_root),
+    projectId: readString(snapshot.projectId) ?? readString(snapshot.project_id),
+    role: readString(snapshot.role),
+    ownerAgent: readString(snapshot.ownerAgent) ?? readString(snapshot.owner_agent),
+    currentStage: readString(snapshot.currentStage) ?? readString(snapshot.current_stage),
+    currentMicroStage:
+      readString(snapshot.currentMicroStage) ?? readString(snapshot.current_micro_stage),
+    nextAction: readString(snapshot.nextAction) ?? readString(snapshot.next_action),
+    pendingHandoffId:
+      readString(snapshot.pendingHandoffId) ?? readString(snapshot.pending_handoff_id),
+    missingStageSignals: Array.isArray(snapshot.missingStageSignals)
+      ? snapshot.missingStageSignals
+      : Array.isArray(snapshot.missing_stage_signals)
+        ? snapshot.missing_stage_signals
+        : [],
+    trigger: params.trigger,
+    extraContextHash: hashPromptState(params.extraContext),
+    heartbeatClaimedTaskId: params.heartbeatClaimedTaskId,
+  });
+}
+
+function shouldSkipWorkflowPromptInjection(params: {
+  snapshot: Record<string, unknown>;
+  trigger: string | null;
+  latestPromptLikeText: string | null;
+  heartbeatClaimedTaskId: string | null;
+  fingerprint: string;
+  sessionKey?: string | null;
+}) {
+  const hasProject = snapshotHasWorkflowProject(params.snapshot);
+  const explicitCommand = looksLikeExplicitWorkflowCommand(params.latestPromptLikeText);
+  const guardEcho = looksLikeInjectedWorkflowGuard(params.latestPromptLikeText);
+  if (!hasProject && !explicitCommand && !params.heartbeatClaimedTaskId) {
+    return true;
+  }
+  if (!hasProject && guardEcho && !params.heartbeatClaimedTaskId) {
+    return true;
+  }
+  const sessionKey = readString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const cached = WORKFLOW_PROMPT_INJECTION_CACHE.get(sessionKey);
+  if (!cached || cached.fingerprint !== params.fingerprint) {
+    return false;
+  }
+  if (params.trigger === "heartbeat") {
+    return true;
+  }
+  return guardEcho;
 }
 
 export function resolveQueuedLiteratureDiscoveryForegroundFastPath(params: {
@@ -860,6 +974,24 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               "[/Workflow-Owned Literature Fast Path]"
             );
           }
+          const promptFingerprint = buildPromptInjectionFingerprint({
+            snapshot: snapshot as Record<string, unknown>,
+            trigger: trigger ?? null,
+            extraContext,
+            heartbeatClaimedTaskId,
+          });
+          if (
+            shouldSkipWorkflowPromptInjection({
+              snapshot: snapshot as Record<string, unknown>,
+              trigger: trigger ?? null,
+              latestPromptLikeText,
+              heartbeatClaimedTaskId,
+              fingerprint: promptFingerprint,
+              sessionKey: agentCtx.sessionKey,
+            })
+          ) {
+            return;
+          }
           const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
           const focusedAssembly =
             detailLevel === "focused"
@@ -894,6 +1026,10 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               },
             });
           }
+          rememberWorkflowPromptInjection({
+            sessionKey: agentCtx.sessionKey,
+            fingerprint: promptFingerprint,
+          });
           return {
             prependContext: [...extraContext, workflowPrompt].filter(Boolean).join("\n"),
           };
