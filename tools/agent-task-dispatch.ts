@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   buildWorkflowSubagentSessionKey,
   derivePapernexusTaskLabel,
@@ -17,6 +18,11 @@ import {
   selectWorkflowCapableSession,
 } from "./workflow-handoff/agent-capabilities";
 import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state";
+import { readJsonIfExists } from "./workflow-guard-core/fs";
+import {
+  getPreferredWorkflowAgentSession,
+  upsertWorkflowAgentSessionRegistryEntry,
+} from "./workflow-agent-session-registry";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -52,7 +58,11 @@ type RuntimeSubagentApi = {
 };
 
 export type WorkflowTaskDispatchAttempt = {
-  strategy: "direct_session" | "alternate_session" | "spawn_fallback";
+  strategy:
+    | "direct_session"
+    | "alternate_session"
+    | "spawn_fallback"
+    | "already_active";
   sessionKey: string;
   runId: string | null;
   waitStatus: "ok" | "error" | "timeout" | null;
@@ -68,7 +78,12 @@ export type WorkflowTaskDispatchResult = {
   runId: string | null;
   waitStatus: "ok" | "error" | "timeout" | null;
   channel: "sessions_send" | "sessions_spawn" | null;
-  strategy: "direct_session" | "alternate_session" | "spawn_fallback" | null;
+  strategy:
+    | "direct_session"
+    | "alternate_session"
+    | "spawn_fallback"
+    | "already_active"
+    | null;
   attempts: WorkflowTaskDispatchAttempt[];
   fallbackSpawned: boolean;
   acknowledgedByMailbox: boolean;
@@ -160,6 +175,67 @@ function resolveRuntimeSessionStatus(params: {
   sessionKey: string;
 }): string | null {
   return params.runtimeSessionStatuses.get(params.sessionKey) ?? null;
+}
+
+async function findActiveTargetOwnerSession(params: {
+  projectRoot: string;
+  toRole: DispatchableWorkflowRole;
+  stage?: string | null;
+  requesterSessionKey?: string;
+}): Promise<string | null> {
+  const manifestPath = path.join(path.resolve(params.projectRoot), "PROJECT_MANIFEST.json");
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+  const ownerAgent =
+    typeof manifest.owner_agent === "string" ? manifest.owner_agent.trim() : null;
+  const currentStage =
+    typeof manifest.current_stage === "string" ? manifest.current_stage.trim() : null;
+  if (ownerAgent !== params.toRole) {
+    return null;
+  }
+  if (params.stage && currentStage && currentStage !== params.stage) {
+    return null;
+  }
+  const preferredRegistrySession = await getPreferredWorkflowAgentSession({
+    projectRoot: params.projectRoot,
+    role: params.toRole,
+    currentStage: params.stage ?? currentStage,
+  }).catch(() => null);
+  const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot).catch(
+    () => null
+  );
+  const candidates = uniqueStrings([
+    preferredRegistrySession?.sessionKey ?? null,
+    deriveAgentSessionKeyForRole({
+      requesterSessionKey: params.requesterSessionKey,
+      targetRole: params.toRole,
+    }),
+    ...((runtimeSessionsStore?.entries ?? [])
+      .filter(
+        (entry) =>
+          entry.projectRoot === path.resolve(params.projectRoot) &&
+          entry.ownerAgent === params.toRole &&
+          entry.status === "active"
+      )
+      .map((entry) => entry.sessionKey) ?? []),
+  ]);
+  if (candidates.length === 0) {
+    return null;
+  }
+  const activeSet = new Set(
+    (runtimeSessionsStore?.entries ?? [])
+      .filter(
+        (entry) =>
+          entry.projectRoot === path.resolve(params.projectRoot) &&
+          entry.ownerAgent === params.toRole &&
+          entry.status === "active"
+      )
+      .map((entry) => entry.sessionKey)
+  );
+  if (preferredRegistrySession?.sessionKey && candidates.includes(preferredRegistrySession.sessionKey)) {
+    return preferredRegistrySession.sessionKey;
+  }
+  return candidates.find((candidate) => activeSet.has(candidate)) ?? null;
 }
 
 export function buildWorkflowDispatchMessage(params: {
@@ -453,6 +529,46 @@ export async function dispatchWorkflowTaskToAgent(params: {
       error: "Plugin runtime subagent API is unavailable.",
     };
   }
+  const alreadyActiveSessionKey = await findActiveTargetOwnerSession({
+    projectRoot: params.projectRoot,
+    toRole: params.toRole,
+    stage: params.stage ?? null,
+    requesterSessionKey: params.requesterSessionKey,
+  });
+  if (alreadyActiveSessionKey) {
+    await upsertWorkflowAgentSessionRegistryEntry({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+      role: params.toRole,
+      sessionKey: alreadyActiveSessionKey,
+      currentStage: params.stage ?? null,
+      status: "active",
+      source: "recovery",
+    }).catch(() => null);
+    return {
+      dispatched: true,
+      sessionKey: alreadyActiveSessionKey,
+      runId: null,
+      waitStatus: null,
+      channel: "sessions_send",
+      strategy: "already_active",
+      attempts: [
+        {
+          strategy: "already_active",
+          sessionKey: alreadyActiveSessionKey,
+          runId: null,
+          waitStatus: null,
+          dispatched: true,
+          acceptedByMailbox: false,
+          acceptedByTranscript: true,
+          error: null,
+        },
+      ],
+      fallbackSpawned: false,
+      acknowledgedByMailbox: false,
+      error: null,
+    };
+  }
   const requireMailboxAcknowledgement =
     params.requireMailboxAcknowledgement !== false;
   const execPayload = await materializeExecPacketIfNeeded({
@@ -596,6 +712,15 @@ export async function dispatchWorkflowTaskToAgent(params: {
     });
     attempts.push(attemptResult.attempt);
     if (attemptResult.accepted) {
+      await upsertWorkflowAgentSessionRegistryEntry({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId ?? null,
+        role: params.toRole,
+        sessionKey,
+        currentStage: params.stage ?? null,
+        status: "active",
+        source: "dispatch",
+      }).catch(() => null);
       return {
         dispatched: true,
         sessionKey,
@@ -629,6 +754,15 @@ export async function dispatchWorkflowTaskToAgent(params: {
     });
     attempts.push(attemptResult.attempt);
     if (attemptResult.accepted) {
+      await upsertWorkflowAgentSessionRegistryEntry({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId ?? null,
+        role: params.toRole,
+        sessionKey: fallbackSessionKey,
+        currentStage: params.stage ?? null,
+        status: "active",
+        source: "dispatch",
+      }).catch(() => null);
       return {
         dispatched: true,
         sessionKey: fallbackSessionKey,

@@ -48,6 +48,7 @@ import {
   isGraphGuidedWritingReadyForSubmit,
   isWritingSessionReadyForSubmit,
 } from "../workflow-guard-writing/write-package-eval";
+import { syncAuthoringArtifactRecovery } from "../research-writing/authoring-artifact-recovery";
 import type { WorkflowGuardPolicy } from "../workflow-guard.js";
 
 type WritingMode = "conference" | "journal" | "survey";
@@ -831,6 +832,10 @@ export async function setWritingSessionState(params: {
 
   manifest.writing_session = serializeWritingSessionState(next);
   await saveManifest(params.projectRoot, manifest);
+  await syncAuthoringArtifactRecovery({
+    projectRoot: params.projectRoot,
+    writingSession: manifest.writing_session as Record<string, unknown>,
+  }).catch(() => null);
 
   const currentSectionPacket = next.currentSection
     ? next.sectionPackets[next.currentSection] ?? null

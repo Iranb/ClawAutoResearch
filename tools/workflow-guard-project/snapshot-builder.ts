@@ -111,6 +111,7 @@ import {
 import {
   normalizeCitationIntegrityState,
   normalizeWritingSessionState,
+  serializeWritingSessionState,
   normalizeReviewSessionState,
   normalizeGraphGuidedWritingState,
   normalizeExternalReviewState,
@@ -127,6 +128,11 @@ import {
 } from "../workflow-guard-policies/role-policy";
 import { countReviewIssueLanes } from "../workflow-guard-writing/paper-quality-eval";
 import { evaluateWritingProcessReadiness } from "../workflow-guard-writing/write-package-eval";
+import {
+  restoreAuthoringArtifactsFromRecovery,
+  syncAuthoringArtifactRecovery,
+  writingSessionLooksRecoverableEmpty,
+} from "../research-writing/authoring-artifact-recovery";
 import {
   normalizePapernexusAccessMode,
   normalizePapernexusApiTokenSource,
@@ -655,13 +661,53 @@ export async function buildWorkflowSnapshotFromProjectState(
   const citationIntegrity = normalizeCitationIntegrityState(
     asRecord(projectState.manifest?.citation_integrity)
   );
+  const authoringRecovery = projectState.projectRoot
+    ? await restoreAuthoringArtifactsFromRecovery({
+        projectRoot: projectState.projectRoot,
+      }).catch(() => null)
+    : null;
+  const recoveredWritingSession =
+    authoringRecovery?.store?.writingSession &&
+    typeof authoringRecovery.store.writingSession === "object" &&
+    !Array.isArray(authoringRecovery.store.writingSession)
+      ? asRecord(authoringRecovery.store.writingSession)
+      : null;
   const writingSession = normalizeWritingSessionState(
-    asRecord(projectState.manifest?.writing_session)
+    writingSessionLooksRecoverableEmpty(
+      asRecord(projectState.manifest?.writing_session)
+    ) && recoveredWritingSession
+      ? recoveredWritingSession
+      : asRecord(projectState.manifest?.writing_session)
   );
   const writingProcess = evaluateWritingProcessReadiness({
     writingSession,
     writingContract,
   });
+  if (projectState.projectRoot) {
+    await syncAuthoringArtifactRecovery({
+      projectRoot: projectState.projectRoot,
+      writingSession: {
+        ...serializeWritingSessionState(writingSession),
+        process_status: writingProcess.processStatus,
+        drafted_sections: writingProcess.draftedSections,
+        reviewed_sections: writingProcess.reviewedSections,
+        manuscript_complete: [
+          "manuscript_complete",
+          "compile_ready",
+          "ready_for_submit",
+        ].includes(writingProcess.processStatus),
+        compile_ready: ["compile_ready", "ready_for_submit"].includes(
+          writingProcess.processStatus
+        ),
+        next_suggested_section: writingProcess.nextSuggestedSection,
+        rebuild_needed: writingProcess.rebuildNeeded,
+        rebuild_reason: writingProcess.rebuildReason,
+        outline_ready: !["missing", "bootstrapping"].includes(
+          writingProcess.processStatus
+        ),
+      },
+    }).catch(() => null);
+  }
   const reviewSession = normalizeReviewSessionState(
     asRecord(projectState.manifest?.review_session)
   );

@@ -202,6 +202,7 @@ import {
   createWorkflowArtifactReceipt,
   readWorkflowArtifactReceiptStore,
 } from "./workflow-handoff/artifact-receipts";
+import { upsertWorkflowAgentSessionRegistryEntry } from "./workflow-agent-session-registry";
 import {
   readWorkflowHandoffIntentStore,
   transitionWorkflowHandoffIntent,
@@ -1963,6 +1964,16 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               canReceiveNativeDispatch: true,
               canRunExecPacket: true,
               confidence: "high",
+            });
+            await upsertWorkflowAgentSessionRegistryEntry({
+              projectRoot,
+              projectId: snapshot.projectId,
+              role: snapshot.role ?? ctx.agentId ?? "unknown",
+              sessionKey: ctx.sessionKey,
+              sessionId: ctx.sessionId,
+              currentStage: snapshot.currentStage,
+              status: "active",
+              source: "workflow_tool",
             });
           }
           const genericInboundBudget =

@@ -222,6 +222,11 @@ import {
   evaluateWritingProcessReadiness as evaluateWritingProcessReadinessFromModule,
 } from "./workflow-guard-writing/write-package-eval";
 import {
+  restoreAuthoringArtifactsFromRecovery,
+  syncAuthoringArtifactRecovery,
+  writingSessionLooksRecoverableEmpty,
+} from "./research-writing/authoring-artifact-recovery";
+import {
   normalizeAutonomousExecutionState,
   normalizeExperimentReviewState,
   serializeAutonomousExecutionState,
@@ -7062,13 +7067,44 @@ export async function getWritingSessionStateSummary(params: {
   rebuildReason: string | null;
   progressSummary: string;
 }> {
+  const recovery = await restoreAuthoringArtifactsFromRecovery({
+    projectRoot: params.projectRoot,
+  }).catch(() => null);
   const manifest = await readManifestEnsured(params.projectRoot);
+  if (
+    writingSessionLooksRecoverableEmpty(manifest.writing_session as Record<string, unknown> | null) &&
+    recovery?.store?.writingSession &&
+    typeof recovery.store.writingSession === "object" &&
+    !Array.isArray(recovery.store.writingSession)
+  ) {
+    manifest.writing_session = recovery.store.writingSession;
+    await saveManifest(params.projectRoot, manifest);
+  }
   const state = normalizeWritingSessionState(manifest.writing_session);
   const writingContract = normalizeWritingContractState(manifest.writing_contract);
   const process = evaluateWritingProcessReadinessFromModule({
     writingSession: state,
     writingContract,
   });
+  await syncAuthoringArtifactRecovery({
+    projectRoot: params.projectRoot,
+    writingSession: {
+      ...serializeWritingSessionState(state),
+      process_status: process.processStatus,
+      drafted_sections: process.draftedSections,
+      reviewed_sections: process.reviewedSections,
+      manuscript_complete: ["manuscript_complete", "compile_ready", "ready_for_submit"].includes(
+        process.processStatus
+      ),
+      compile_ready: ["compile_ready", "ready_for_submit"].includes(
+        process.processStatus
+      ),
+      next_suggested_section: process.nextSuggestedSection,
+      rebuild_needed: process.rebuildNeeded,
+      rebuild_reason: process.rebuildReason,
+      outline_ready: !["missing", "bootstrapping"].includes(process.processStatus),
+    },
+  }).catch(() => null);
   const sectionPacketDirResolvedPath = resolveProjectArtifactPath(
     params.projectRoot,
     DEFAULT_WRITING_SECTION_PACKET_DIR

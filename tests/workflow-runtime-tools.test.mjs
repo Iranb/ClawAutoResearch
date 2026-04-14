@@ -2217,6 +2217,118 @@ test("research_workflow materialize_writing_support_artifacts scaffolds durable 
   assert.ok(result.generatedFiles.some((entry) => /WRITING_REFERENCE_BUNDLE\.json$/.test(entry)));
 });
 
+test("research_workflow get_snapshot restores mirrored authoring artifacts before writer recovery falls back to full rebuild", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:group:paper-lab",
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    current_micro_stage: "drafting",
+    owner_agent: "academic_writer",
+    idle_research: { enabled: false },
+    writing_contract: {
+      paper_mode: "survey",
+      required_sections: ["abstract", "introduction"],
+      section_order: ["abstract", "introduction"],
+    },
+  });
+  await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"), "# plan\n");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"),
+    "# storyline\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"),
+    "# writing signals\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "\\input{sections/abstract}\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    "@article{demo,title={Demo}}\n"
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "abstract.tex"),
+    "\\section*{Abstract}\nRecovered abstract.\n"
+  );
+
+  await executeWorkflowTool(tool, {
+    action: "set_writing_session",
+    writingSession: {
+      status: "drafting",
+      current_section: "abstract",
+      draft_order: ["abstract", "introduction"],
+      section_packets: {
+        abstract: {
+          section: "abstract",
+          packet_path: "academic_writer/section-packets/abstract.json",
+          draft_path: "academic_writer/paper/sections/abstract.tex",
+          review_verdict: null,
+          status: "drafted",
+          forbidden_unsupported_claims: [],
+          missing_citation_placeholders: [],
+          required_graph_evidence_pointers: [],
+        },
+      },
+      headline_claim_evidence_status: "pending",
+      graph_evidence_coverage_status: "pending",
+    },
+  });
+
+  await fs.rm(path.join(projectRoot, "academic_writer", "paper"), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"), {
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"), {
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"), {
+    force: true,
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  manifest.writing_session = {};
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+
+  const snapshot = await executeWorkflowTool(tool, {
+    action: "get_snapshot",
+  });
+
+  assert.equal(snapshot.currentStage, "write");
+  assert.equal(snapshot.ownerAgent, "academic_writer");
+  assert.equal(snapshot.writingRebuildNeeded, false);
+  assert.equal(snapshot.writingProcessStatus, "drafting");
+  await fs.access(path.join(projectRoot, "academic_writer", "paper", "main.tex"));
+  await fs.access(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "abstract.tex")
+  );
+  await fs.access(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
+});
+
 test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

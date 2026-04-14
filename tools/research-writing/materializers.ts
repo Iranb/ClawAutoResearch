@@ -6,6 +6,7 @@ import type {
 } from "../workflow-guard.js";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import { setWritingSessionState } from "../workflow-guard-setters/writing-state-setters";
+import { syncAuthoringArtifactRecovery } from "./authoring-artifact-recovery";
 import {
   materializeFallbackActivation,
 } from "./fallback-activation";
@@ -140,6 +141,10 @@ export async function materializeWritingSupportArtifacts(params: {
   const writingSession = await bootstrapWritingSession({
     projectRoot: params.projectRoot,
   });
+  await syncAuthoringArtifactRecovery({
+    projectRoot: params.projectRoot,
+    writingSession,
+  }).catch(() => null);
 
   return {
     stage: params.stage,

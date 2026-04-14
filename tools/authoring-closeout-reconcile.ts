@@ -20,6 +20,7 @@ import {
 import { setReviewIssueTrackerState } from "./workflow-guard-setters/review-state-setters";
 import { setPaperQcState } from "./workflow-guard-setters/ingestion-state-setters";
 import { recordCitationVerification } from "./workflow-guard";
+import { syncAuthoringArtifactRecovery } from "./research-writing/authoring-artifact-recovery";
 
 const execFileAsync = promisify(execFile);
 
@@ -725,6 +726,10 @@ export async function reconcileAuthoringCloseout(params: {
     paper_mode: inferredPaperMode,
   };
   await writeJsonEnsured(path.join(projectRoot, "PROJECT_MANIFEST.json"), latestManifest);
+  await syncAuthoringArtifactRecovery({
+    projectRoot,
+    writingSession: latestManifest.writing_session as Record<string, unknown>,
+  }).catch(() => null);
 
   return {
     paperMode: inferredPaperMode,

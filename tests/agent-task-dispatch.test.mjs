@@ -97,6 +97,105 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
   assert.match(calls[0].message, /Implement the current experiment plan/);
 });
 
+test("dispatchWorkflowTaskToAgent reuses an already active owner session instead of spawning a fallback", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-already-active-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "write",
+        owner_agent: "academic_writer",
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-14T02:00:00.000Z",
+        projectId: "demo-project",
+        projectRoot,
+        entries: [
+          {
+            sessionKey: "agent:academic_writer:discord:group:paper-lab",
+            role: "academic_writer",
+            agentId: "academic_writer",
+            ownerAgent: "academic_writer",
+            projectRoot,
+            status: "active",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-agent-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-14T02:00:00.000Z",
+        entries: [
+          {
+            role: "academic_writer",
+            sessionKey: "agent:academic_writer:discord:group:paper-lab",
+            sessionId: null,
+            projectId: "demo-project",
+            projectRoot,
+            currentStage: "write",
+            status: "active",
+            source: "workflow_tool",
+            updatedAt: "2026-04-14T02:00:00.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  let runCalls = 0;
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run() {
+        runCalls += 1;
+        throw new Error("should not dispatch a new writer run");
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "academic_writer",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "write",
+    summary: "Continue the active write stage.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.strategy, "already_active");
+  assert.equal(result.sessionKey, "agent:academic_writer:discord:group:paper-lab");
+  assert.equal(result.runId, null);
+  assert.equal(runCalls, 0);
+});
+
 test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packets", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-dispatch-exec-packet-")
