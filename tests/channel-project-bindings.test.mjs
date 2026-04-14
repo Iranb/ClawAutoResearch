@@ -955,6 +955,71 @@ test("non-workflow rebinding preserves the workflow-owned broadcast session", as
   assert.equal(rebound.binding.sessionKeySample, designerSessionKey);
 });
 
+test("rebinding the same channel to a new project supersedes the older project binding", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRootA = await makeTempProject(workspaceRoot, "survey-a");
+  const projectRootB = await makeTempProject(workspaceRoot, "survey-b");
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const sessionKey = "agent:researcher:discord:group:survey-lab";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: projectRootA,
+    projectId: "survey-a",
+    boundByAgent: "researcher",
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot: projectRootB,
+    projectId: "survey-b",
+    boundByAgent: "researcher",
+    notes: "rebind to newer survey project",
+  });
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+
+  assert.equal(lookup.binding?.projectRoot, projectRootB);
+  assert.equal(lookup.binding?.projectId, "survey-b");
+
+  const firstStore = JSON.parse(
+    await fs.readFile(
+      path.join(projectRootA, ".openclaw-research", "channel-project-bindings.json"),
+      "utf8"
+    )
+  );
+  assert.equal(
+    firstStore.bindings.some((entry) => entry.channelKey === "discord:group:survey-lab"),
+    false
+  );
+});
+
 test("nested workflow runtime bindings keep the immediate parent session while preserving the root thread binding", async () => {
   const parentSessionKey =
     "agent:researcher:discord:group:runtime-room:subagent:workflow-stage";

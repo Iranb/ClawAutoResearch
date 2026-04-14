@@ -199,4 +199,10 @@ Do not consider PLAN complete until all of the following are true:
 
 When those conditions are satisfied, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `plan -> code`.
 
+If PLAN is already durable and the pipeline is idle:
+
+- call `research_workflow.auto_iterator_tick` once
+- if the owner should advance to `coder` but no handoff is progressing, proactively call `research_workflow.prepare_stage_handoff`
+- do not implement CODE work inside Orchestrator just because the handoff stalled
+
 Do not hand off if the plan is still being revised, narrowed, or re-audited.

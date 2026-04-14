@@ -724,6 +724,69 @@ async function updateBindingIndexForProjectStore(params: {
   });
 }
 
+async function pruneCompetingBindingsAcrossProjects(params: {
+  projectsRoot: string;
+  keepStorePath: string;
+  keepProjectRoot: string;
+  aliasKeys: string[];
+}): Promise<void> {
+  const candidateStorePaths = await listCandidateProjectBindingStorePaths(params.projectsRoot);
+  const normalizedKeepStorePath = path.resolve(expandHome(params.keepStorePath));
+  const normalizedKeepProjectRoot = path.resolve(expandHome(params.keepProjectRoot));
+  for (const candidatePath of candidateStorePaths) {
+    const normalizedCandidatePath = path.resolve(expandHome(candidatePath));
+    if (normalizedCandidatePath === normalizedKeepStorePath) {
+      continue;
+    }
+    const candidateStore = await readStoreAsync(normalizedCandidatePath);
+    const removedBindings = candidateStore.bindings.filter(
+      (entry) =>
+        params.aliasKeys.includes(entry.channelKey) &&
+        path.resolve(entry.projectRoot) !== normalizedKeepProjectRoot
+    );
+    if (removedBindings.length === 0) {
+      continue;
+    }
+    candidateStore.bindings = candidateStore.bindings.filter(
+      (entry) =>
+        !(
+          params.aliasKeys.includes(entry.channelKey) &&
+          path.resolve(entry.projectRoot) !== normalizedKeepProjectRoot
+        )
+    );
+    await saveStore(normalizedCandidatePath, candidateStore);
+    await updateBindingIndexForProjectStore({
+      projectsRoot: params.projectsRoot,
+      storePath: normalizedCandidatePath,
+      store: candidateStore,
+    });
+    await appendBindingAuditEvents({
+      projectsRoot: params.projectsRoot,
+      projectRoot: removedBindings[0]?.projectRoot ?? null,
+      events: removedBindings.map((binding) => ({
+        schemaVersion: 1,
+        eventId: randomUUID(),
+        action: "unbind" as const,
+        recordedAt: new Date().toISOString(),
+        channelKey: binding.channelKey,
+        projectRoot: binding.projectRoot,
+        projectId: binding.projectId,
+        previousProjectRoot: binding.projectRoot,
+        previousProjectId: binding.projectId,
+        messageChannel: binding.messageChannel,
+        sessionKey: binding.sessionKeySample,
+        sessionId: binding.sessionId,
+        workflowSessionKey: binding.workflowSessionKey,
+        workflowRole: binding.workflowRole,
+        actor: "workflow",
+        notes:
+          "Superseded because the same channel was explicitly rebound to a newer workflow project.",
+        storePath: normalizedCandidatePath,
+      })),
+    });
+  }
+}
+
 function readStore(storePath: string): ChannelProjectBindingsStore {
   try {
     const raw = fs.readFileSync(storePath, "utf8");
@@ -1343,6 +1406,12 @@ export async function setChannelProjectBinding(params: {
   ].sort((left, right) => left.channelKey.localeCompare(right.channelKey));
   await saveStore(storePath, store);
   if (projectsRoot) {
+    await pruneCompetingBindingsAcrossProjects({
+      projectsRoot,
+      keepStorePath: storePath,
+      keepProjectRoot: projectRoot,
+      aliasKeys,
+    });
     await updateBindingIndexForProjectStore({
       projectsRoot,
       storePath,

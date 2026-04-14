@@ -197,6 +197,15 @@ Rules:
 - treat `research_workflow.get_papernexus_progress` and `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` as the first PaperNexus progress ledger, `PROJECT_MANIFEST.json.paper_ingestion` as the second, and the background-session registry as the last; if the phase is `submitting`, `uploading`, `waiting_import`, or `verifying_graph`, do not interpret one stale `PAPERNEXUS_STATUS.json` snapshot as final failure
 - every wrapper-driven paper upload / parse / queue wait must update `research_workflow.set_paper_ingestion`; for batch imports that includes `active_batches`, `batch_items`, and `last_batch_manifest_path`, not only per-paper terminal states
 
+## Idle Handoff Recovery
+
+If Researcher has already completed the current owner-scoped packet and nobody is moving the workflow:
+
+- do **not** start the next owner's work directly
+- first call `research_workflow.auto_iterator_tick`
+- if the next owner should change and the handoff still is not moving, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff`
+- if the stage remains blocked, report the exact blocker and continue only bounded Researcher-owned maintenance
+
 Graph refresh trigger:
 - refresh immediately if 1 new paper changes the closest-prior-work or novelty picture
 - refresh when 3+ genuinely new canonical papers accumulate since the last graph sync

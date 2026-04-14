@@ -161,6 +161,12 @@ The survey is not done unless:
 
 When the survey packet is genuinely complete and the project is ready to move into `write`, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `survey_review -> write`.
 
+If the survey packet is already durable but the line looks idle / stalled:
+
+- call `research_workflow.auto_iterator_tick` once
+- if `survey_review` still belongs to Researcher and the next owner should be `academic_writer`, proactively call `research_workflow.prepare_stage_handoff`
+- do not start Writer work yourself
+
 Avoid:
 
 - tiny candidate pools presented as “survey complete”

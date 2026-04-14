@@ -218,6 +218,14 @@ After writing the files, call:
 }
 ```
 
+## Idle Handoff Recovery
+
+If analysis artifacts are already durable and the workflow is not advancing:
+
+- call `research_workflow.auto_iterator_tick`
+- if ANALYZE should hand off and no transition is moving, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff`
+- do not start Reviewer or Writer work directly from Analyzer
+
 For each packet, also call:
 
 ```json

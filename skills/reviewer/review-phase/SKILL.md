@@ -250,3 +250,9 @@ Reviewer 先对当前 evidence packet 做一次本地反思：
 如果当前结论是进入 WRITE，则在 durable review state 更新完成后使用共享 `workflow-handoff-signal` 技能，并调用 `research_workflow.prepare_stage_handoff` for `review -> write`。
 
 如果结论是补实验、缩 scope、继续 review 轮次，或回退到 IDEA / EXPERIMENT / ANALYZE，则不要向前 handoff。
+
+如果 REVIEW / SUBMIT 产物已经 durable 且 workflow 没人在推进：
+
+- 先调用 `research_workflow.auto_iterator_tick`
+- 若下一 owner 已明确、Reviewer 仍是当前 owner、且没有有效 handoff 在跑，则主动调用 `research_workflow.prepare_stage_handoff`
+- 不要因为 handoff 卡住就替 Writer / Researcher 越权执行别的阶段

@@ -98,3 +98,14 @@ The workflow control plane owns:
 - retry / backoff
 - claim / activation
 - rollback on failed handoff
+
+## Idle Recovery
+
+If your stage outputs are already durable but the workflow appears stuck and no one is advancing the handoff:
+
+1. call `research_workflow.get_snapshot`
+2. if you are still the live owner, call `research_workflow.auto_iterator_tick` once
+3. if the stage still belongs to you, the next owner is different, and no valid handoff is moving, call `research_workflow.prepare_stage_handoff`
+4. if the stage does **not** move, report the exact blocker instead of repeatedly pinging the next role
+
+This is a recovery path for idle / stalled transitions, not permission to start the next owner's work yourself.

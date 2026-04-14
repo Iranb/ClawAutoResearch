@@ -204,6 +204,12 @@ When WRITE is complete and the project is truly ready to move into SUBMIT, use t
 
 Do not hand off if Cross-Reviewer says `NEEDS_REVISION`, Reviewer asks for another writing pass, the user asks for changes, or citation integrity is not yet `verified`.
 
+If the draft and compile outputs are already durable but the workflow is idle:
+
+- call `research_workflow.auto_iterator_tick`
+- if the next owner should be `reviewer` and no valid handoff is moving, proactively call `research_workflow.prepare_stage_handoff`
+- do not perform reviewer-side submit packaging yourself unless ownership comes back to Writer
+
 ## Error Recovery
 
 | Scenario | Response |

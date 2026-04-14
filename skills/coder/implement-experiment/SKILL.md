@@ -219,6 +219,14 @@ uv run python train.py --config configs/proposed.yaml --seed 42 \
   --max_steps 2 --batch_size 2 --dry_run
 ```
 
+## Idle Handoff Recovery
+
+If the implementation bundle is already durable, validated, and Coder is still the live owner while nobody advances the workflow:
+
+- call `research_workflow.auto_iterator_tick`
+- if the next owner should change and the handoff is still idle, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff`
+- do not run experiment-monitoring or analyzer work yourself unless the workflow routes ownership back
+
 Expected: no crash, loss printed, no NaN.
 
 If the dry-run or mini-ablation is hard to interpret from logs alone, generate one bounded diagnostic plot with `/scientific-visualization` and store it in the experiment bundle so Analyzer can later reuse or re-render it.
