@@ -68,6 +68,7 @@ export async function materializeWritingReferenceBundle(params: {
       refPath("claim-verification-protocol.md"),
       refPath("paper-review.md"),
       refPath("does-my-writing-flow-source.md"),
+      refPath("survey-writing.md"),
     ]),
     stageBundles: {
       plan: {
@@ -101,6 +102,7 @@ export async function materializeWritingReferenceBundle(params: {
           refPath("conclusion.md"),
           refPath("paper-review.md"),
           "academic_writer/VENUE_ROUTING_PLAN.md",
+          refPath("survey-writing.md"),
         ]),
       },
       review: {
@@ -180,6 +182,44 @@ export async function materializeWritingReferenceBundle(params: {
         referencePaths: uniqueStrings([
           refPath("conclusion.md"),
           refPath("counterintuitive-writing.md"),
+        ]),
+      },
+      scope_and_protocol: {
+        referencePaths: uniqueStrings([
+          refPath("survey-writing.md"),
+          refPath("scope-and-protocol.md"),
+          refPath("does-my-writing-flow-source.md"),
+          refPath("claim-verification-protocol.md"),
+        ]),
+      },
+      taxonomy: {
+        referencePaths: uniqueStrings([
+          refPath("survey-writing.md"),
+          refPath("taxonomy.md"),
+          refPath("does-my-writing-flow-source.md"),
+          refPath("writing-quality-check.md"),
+        ]),
+      },
+      evidence_synthesis: {
+        referencePaths: uniqueStrings([
+          refPath("survey-writing.md"),
+          refPath("evidence-synthesis.md"),
+          refPath("claim-verification-protocol.md"),
+          refPath("paper-review.md"),
+        ]),
+      },
+      benchmark_landscape: {
+        referencePaths: uniqueStrings([
+          refPath("survey-writing.md"),
+          refPath("benchmark-landscape.md"),
+          refPath("claim-verification-protocol.md"),
+        ]),
+      },
+      open_problems: {
+        referencePaths: uniqueStrings([
+          refPath("survey-writing.md"),
+          refPath("open-problems.md"),
+          refPath("paper-review.md"),
         ]),
       },
     },

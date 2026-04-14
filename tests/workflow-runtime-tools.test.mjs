@@ -2217,6 +2217,118 @@ test("research_workflow materialize_writing_support_artifacts scaffolds durable 
   assert.ok(result.generatedFiles.some((entry) => /WRITING_REFERENCE_BUNDLE\.json$/.test(entry)));
 });
 
+test("research_workflow materialize_writing_support_artifacts adds survey-specific comparison and self-review packets", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-demo",
+    current_stage: "write",
+    owner_agent: "academic_writer",
+    writing_contract: {
+      paper_mode: "survey",
+      section_order: [
+        "abstract",
+        "introduction",
+        "scope_and_protocol",
+        "taxonomy",
+        "evidence_synthesis",
+        "benchmark_landscape",
+        "open_problems",
+        "conclusion",
+      ],
+    },
+    survey_review: {
+      status: "completed",
+      topic: "Generalized Category Discovery",
+      included_paper_count: 14,
+    },
+    paper_story_state: {
+      status: "ready",
+      story_spine_path: "academic_writer/story/STORY_SPINE.md",
+      claim_to_experiment_map_path: "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+      rejection_risk_table_path: "academic_writer/story/REJECTION_RISK_TABLE.md",
+      pipeline_figure_sketch_path: "academic_writer/story/PIPELINE_FIGURE_SKETCH.md",
+      module_motivation_map_path: "academic_writer/story/MODULE_MOTIVATION_MAP.md",
+      idea_to_claim_map_path: "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json",
+      claim_support_status: "partial",
+      supported_claim_count: 1,
+      partial_claim_count: 1,
+      unsupported_claim_count: 0,
+    },
+    review_pressure_packet: {
+      status: "ready",
+      reject_first_review_path: "reviewer/story-pressure/REJECT_FIRST_REVIEW.md",
+      novelty_attack_path: "reviewer/story-pressure/NOVELTY_ATTACK.md",
+      unsupported_claim_audit_path: "reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md",
+      reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+      figure_table_qc_path: "reviewer/story-pressure/FIGURE_TABLE_QC.md",
+      limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+    },
+  });
+
+  await writeText(path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"), "# Story\n");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "story", "CLAIM_TO_EXPERIMENT_MAP.md"),
+    "# Claims\n## Theme 1\n"
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "story", "FALLBACK_NARRATIVE.md"), "# Fallback\n");
+  await writeText(path.join(projectRoot, "academic_writer", "story", "REJECTION_RISK_TABLE.md"), "# Risks\n");
+  await writeText(path.join(projectRoot, "academic_writer", "story", "PIPELINE_FIGURE_SKETCH.md"), "# Figure\n");
+  await writeText(path.join(projectRoot, "academic_writer", "story", "MODULE_MOTIVATION_MAP.md"), "# Modules\n");
+  await writeJson(path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"), {
+    top_fragments: [],
+  });
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "REJECT_FIRST_REVIEW.md"), "# Reject\n");
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "NOVELTY_ATTACK.md"), "# Novelty Attack\n");
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "UNSUPPORTED_CLAIM_AUDIT.md"), "# Unsupported\n");
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "REVERSE_OUTLINE.md"), "# Reverse Outline\n");
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "FIGURE_TABLE_QC.md"), "# Figure QC\n");
+  await writeText(path.join(projectRoot, "reviewer", "story-pressure", "LIMITATION_AUDIT.md"), "# Limitation Audit\n");
+  await writeText(path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"), "# Survey Brief\n- six families\n- benchmark clusters\n");
+  await writeText(path.join(projectRoot, "researcher", "LITERATURE_REVIEW.md"), "# Literature Review\n- family comparison\n- contradiction zone\n");
+  await writeText(path.join(projectRoot, "researcher", "SOTA_MATRIX.md"), "# SOTA Matrix\n- dataset / metric comparison\n- tradeoff note\n");
+  await writeText(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n- coverage blind spot\n- unresolved comparison\n");
+  await writeText(path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"), "# Coverage Summary\n- broad scope\n- blind spots documented\n");
+  await writeText(path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"), "# Review Protocol\n- inclusion / exclusion logic\n");
+
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_writing_support_artifacts",
+    paperStoryMaterialization: {
+      basis_stage: "write",
+    },
+  });
+
+  assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md"));
+  assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_SECTION_BRIEFS.md"));
+  assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_SELF_REVIEW.md"));
+  assert.ok(
+    result.referenceBundle.sectionBundles.taxonomy.referencePaths.some((entry) =>
+      /survey-writing\.md$/.test(entry)
+    )
+  );
+
+  const comparative = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "SURVEY_COMPARATIVE_ANALYSIS.md"),
+    "utf8"
+  );
+  assert.match(comparative, /Required Comparison Axes/i);
+  assert.match(comparative, /tradeoff/i);
+});
+
 test("research_workflow get_snapshot restores mirrored authoring artifacts before writer recovery falls back to full rebuild", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

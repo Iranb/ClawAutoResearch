@@ -45,6 +45,9 @@ Section-by-section LaTeX generation with Cross-Reviewer quality gate after each 
 - `{PROJ}/academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md`
 - `{PROJ}/academic_writer/FIGURE_ANCHOR_PLAN.md`
 - `{PROJ}/academic_writer/VENUE_ROUTING_PLAN.md`
+- `{PROJ}/academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md` — survey mode comparison axes and tradeoff reminders
+- `{PROJ}/academic_writer/SURVEY_SECTION_BRIEFS.md` — survey mode section-by-section brief
+- `{PROJ}/academic_writer/SURVEY_SELF_REVIEW.md` — skeptical survey self-review questions
 - `{PROJ}/reviewer/story-pressure/REJECT_FIRST_REVIEW.md`
 - `{PROJ}/reviewer/story-pressure/NOVELTY_ATTACK.md`
 - `{PROJ}/reviewer/story-pressure/UNSUPPORTED_CLAIM_AUDIT.md`
@@ -98,6 +101,30 @@ Default drafting order when no user template overrides the section flow:
 
 If `writing_contract.section_order` or `TEMPLATE_MAPPING.md` specifies a different final section order, preserve that order in `main.tex`. You may still draft fact-heavy sections first for stability, but the final paper structure must follow the configured template.
 
+## Survey Mode Upgrade
+
+If `writing_contract.paper_mode = survey`, switch into **coverage-first + comparison-first** writing.
+
+Read these survey-native supports before expanding prose:
+
+- `{PROJ}/academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md`
+- `{PROJ}/academic_writer/SURVEY_SECTION_BRIEFS.md`
+- `{PROJ}/academic_writer/SURVEY_SELF_REVIEW.md`
+- `{PROJ}/researcher/SURVEY_BRIEF.md`
+- `{PROJ}/researcher/LITERATURE_REVIEW.md`
+- `{PROJ}/researcher/SOTA_MATRIX.md`
+- `{PROJ}/researcher/GAP_SYNTHESIS.md`
+- `{PROJ}/researcher/COVERAGE_SUMMARY.md`
+
+In survey mode:
+
+- do not write one-paper-at-a-time summary chains as the dominant structure
+- every core section should synthesize across papers, families, or benchmarks
+- at least one paragraph per major section should make an explicit comparison or tradeoff
+- if results are not directly comparable, say so instead of forcing a ranking
+- keep scope boundaries and blind spots visible
+- run the skeptical survey self-review before treating the draft as mature
+
 ## Per-Section Process
 
 ### Step A: Write Draft
@@ -129,6 +156,14 @@ For long section rewrites, `main.tex`, `refs.bib`, or other multi-paragraph arti
 ```
 
 Do not paste full section bodies into Bash heredocs or `python -c` inline writers; those long exec commands are blocked by OpenClaw's obfuscation guard.
+
+Before committing long prose for a survey section, make a mini-outline first:
+
+- section purpose
+- 2-4 paragraph roles
+- comparison axes
+- evidence sources
+- open caveat / limitation if needed
 
 Update the workflow-visible writing progress as you go. The controlling truth is the process state, not whether every convenience artifact already exists:
 

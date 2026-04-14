@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
 import type {
   PaperStoryState,
   ReviewPressurePacketState,
@@ -19,6 +20,198 @@ import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    results.push(normalized);
+  }
+  return results;
+}
+
+function collectMarkdownSignalLines(
+  rawText: string | null | undefined,
+  limit = 6
+): string[] {
+  if (!rawText) {
+    return [];
+  }
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !line.startsWith("#") &&
+        !/^[-*_]{3,}$/.test(line)
+    )
+    .map((line) => line.replace(/^[-*]\s+/, ""))
+    .filter((line) => line.length > 0);
+  return uniqueStrings(lines).slice(0, limit);
+}
+
+async function materializeSurveyWritingCompanionArtifacts(params: {
+  projectRoot: string;
+  paperStoryState: PaperStoryState;
+}) {
+  const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  const surveyReview =
+    manifest.survey_review && typeof manifest.survey_review === "object"
+      ? (manifest.survey_review as Record<string, unknown>)
+      : {};
+  const topic =
+    (typeof surveyReview.topic === "string" && surveyReview.topic.trim()) ||
+    "the survey topic";
+  const includedCount =
+    typeof surveyReview.included_paper_count === "number"
+      ? surveyReview.included_paper_count
+      : typeof surveyReview.includedPaperCount === "number"
+        ? surveyReview.includedPaperCount
+        : null;
+  const [
+    surveyBrief,
+    literatureReview,
+    sotaMatrix,
+    gapSynthesis,
+    coverageSummary,
+    reviewProtocol,
+  ] = await Promise.all([
+    readTextIfExists(path.join(params.projectRoot, "researcher", "SURVEY_BRIEF.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "LITERATURE_REVIEW.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "SOTA_MATRIX.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "GAP_SYNTHESIS.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "COVERAGE_SUMMARY.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "REVIEW_PROTOCOL.md")),
+  ]);
+
+  const comparativeLines = uniqueStrings([
+    ...collectMarkdownSignalLines(sotaMatrix, 8),
+    ...collectMarkdownSignalLines(literatureReview, 8),
+  ]).slice(0, 8);
+  const coverageLines = collectMarkdownSignalLines(coverageSummary, 5);
+  const gapLines = collectMarkdownSignalLines(gapSynthesis, 6);
+  const briefLines = collectMarkdownSignalLines(surveyBrief, 6);
+  const protocolLines = collectMarkdownSignalLines(reviewProtocol, 5);
+
+  const comparativeAnalysisPath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "SURVEY_COMPARATIVE_ANALYSIS.md"
+  );
+  const comparativeAnalysis = `# Survey Comparative Analysis
+
+## Topic
+- ${topic}
+- Included papers: ${includedCount ?? "unset"}
+
+## Required Comparison Axes
+- method family and organizing assumption
+- supervision / modality / backbone dependence
+- benchmark and metric coverage
+- strongest win vs strongest failure mode
+- contradiction or non-comparable result warning
+
+## Comparison Evidence To Reuse
+${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join("\n") : "- Expand SOTA matrix and literature review evidence before claiming strong comparative synthesis."}
+
+## Coverage / Boundary Reminders
+${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries, blind spots, and excluded directions explicit."}
+
+## Gap / Tradeoff Reminders
+${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie every open problem back to a concrete evidence gap rather than generic future work."}
+`;
+
+  const sectionBriefsPath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "SURVEY_SECTION_BRIEFS.md"
+  );
+  const sectionBriefs = `# Survey Section Briefs
+
+## Introduction
+- Explain why ${topic} needs a survey now.
+- State what this survey contributes beyond a paper list.
+- Preview the comparison axes and the field structure.
+
+## Scope and Protocol
+- Explain inclusion / exclusion logic and search boundary.
+- Surface blind spots, recency limits, and incomparable settings.
+- Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.
+
+## Taxonomy
+- Define stable method families and the principle that separates them.
+- Mention where family boundaries blur or overlap.
+- Compare families, do not just list them.
+
+## Evidence Synthesis
+- Use representative papers to compare strengths, weaknesses, and tradeoffs.
+- Include at least one contradiction / non-comparable warning paragraph.
+- Reuse: ${briefLines.length > 0 ? briefLines.slice(0, 3).map((line) => `"${line}"`).join(", ") : "SURVEY_BRIEF.md synthesis bullets"}.
+
+## Benchmark Landscape
+- State which benchmark comparisons are fair and which are shaky.
+- Compare datasets, metrics, and backbone/modality assumptions.
+- Do not collapse incompatible results into one ranking.
+
+## Open Problems
+- Rank the main unresolved problems by evidence gap importance.
+- Tie each open problem to missing comparisons, weak coverage, or contradiction zones.
+
+## Conclusion
+- Summarize what the field now understands with confidence.
+- Keep unresolved boundaries explicit.
+`;
+
+  const selfReviewPath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "SURVEY_SELF_REVIEW.md"
+  );
+  const selfReview = `# Survey Self Review
+
+Use this before calling the survey draft mature.
+
+## Coverage Breadth
+- Does the manuscript teach the field structure rather than only listing papers?
+- Are blind spots and exclusions explicit?
+
+## Comparative Depth
+- Does each core section compare families, assumptions, and tradeoffs?
+- Is there at least one explicit contradiction or non-comparable result warning?
+
+## Evidence Support
+- Can each synthesis claim be traced back to included papers, SOTA matrix evidence, or coverage artifacts?
+- Did any unsupported synthesis slip in?
+
+## Boundary Honesty
+- Did the draft admit where the packet is thin?
+- Did it avoid overclaiming field-wide consensus?
+
+## Final Skeptical Questions
+${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What would a skeptical reviewer say is still thin, unsupported, or unfairly compared?"}
+`;
+
+  await Promise.all([
+    writeTextEnsured(comparativeAnalysisPath, comparativeAnalysis),
+    writeTextEnsured(sectionBriefsPath, sectionBriefs),
+    writeTextEnsured(selfReviewPath, selfReview),
+  ]);
+
+  return {
+    generatedFiles: [
+      "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+      "academic_writer/SURVEY_SECTION_BRIEFS.md",
+      "academic_writer/SURVEY_SELF_REVIEW.md",
+    ],
+  };
+}
 
 async function bootstrapWritingSession(params: { projectRoot: string }) {
   const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
@@ -137,6 +330,17 @@ export async function materializeWritingSupportArtifacts(params: {
     revisionCycle?.path,
     rebuttalResponse?.path,
   ].filter((value): value is string => typeof value === "string");
+
+  const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  if (writingContract.paperMode === "survey") {
+    const surveySupport = await materializeSurveyWritingCompanionArtifacts({
+      projectRoot: params.projectRoot,
+      paperStoryState: params.paperStoryState,
+    });
+    generatedFiles.push(...surveySupport.generatedFiles);
+  }
 
   const writingSession = await bootstrapWritingSession({
     projectRoot: params.projectRoot,

@@ -428,7 +428,7 @@ ${crossDomainStorySection}
      )}
 2. Core synthesis layer
    - Theme/taxonomy organizer grounded in the survey packet
-   - Evidence bundling for benchmark clusters, disagreements, and open gaps
+   - Evidence bundling for benchmark clusters, disagreements, open gaps, and explicit comparison axes
 3. Outputs
    - Theme-to-evidence map for writing
    - Survey narrative bundle with explicit scope and limitation hooks
@@ -511,7 +511,7 @@ ${packetModuleMotivations.length > 0
 ## Module 2: Theme-to-evidence map
 - Design: bind each survey theme to representative papers, benchmark clusters, and contradiction notes
 - Motivation: prevent unsupported synthesis claims from entering the manuscript
-- Advantage: makes reviewer pressure explicit before writing`
+- Advantage: makes reviewer pressure explicit before writing and forces family-level comparison instead of one-paper-at-a-time narration`
       : `## Module 1: Graph-grounded support router
 - Design: route each claim through graph evidence packets before surface drafting
 - Motivation: reduce support attribution drift as the story widens
@@ -536,12 +536,12 @@ Survey mode note: this file acts as a theme-to-evidence map rather than an exper
 ## Theme 2 (theme-2)
 - Theme: Benchmark and evaluation clusters
 - Evidence target: SOTA matrix + coverage summary
-- Validation step: tie comparisons to explicit datasets/metrics instead of generic performance prose
+- Validation step: tie comparisons to explicit datasets/metrics instead of generic performance prose, and mark non-comparable settings explicitly
 
 ## Theme 3 (theme-3)
 - Theme: Open problems, disagreement zones, and unresolved gaps
 - Evidence target: gap synthesis + survey brief
-- Validation step: frame these as synthesis claims backed by included papers, not speculative future-work filler
+- Validation step: frame these as synthesis claims backed by included papers, not speculative future-work filler, and connect each gap to a comparison or coverage blind spot
 `
     : `# Claim To Experiment Map
 
