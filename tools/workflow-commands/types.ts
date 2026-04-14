@@ -14,7 +14,9 @@ import type {
   buildWorkflowSnapshot,
   bindChannelProjectForWorkflow,
   runWorkflowAutoIterator,
+  setGraphGuidedWritingState,
   setResearchProgramState,
+  setWritingContractState,
   unbindChannelProjectForWorkflow,
 } from "../workflow-guard.js";
 import type {
@@ -70,6 +72,8 @@ export type WorkflowCommandDependencies = {
   startBackgroundWorkflowRun: typeof startBackgroundWorkflowRun;
   bindChannelProjectForWorkflow: typeof bindChannelProjectForWorkflow;
   setResearchProgramState: typeof setResearchProgramState;
+  setWritingContractState: typeof setWritingContractState;
+  setGraphGuidedWritingState: typeof setGraphGuidedWritingState;
   unbindChannelProjectForWorkflow: typeof unbindChannelProjectForWorkflow;
   runIdeaCatalystResearch30: typeof runIdeaCatalystResearch30;
   runCitationCalibration: typeof runCitationCalibration;

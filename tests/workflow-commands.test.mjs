@@ -954,6 +954,12 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
     )
   );
   assert.equal(captured.boundProject.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(manifest.writing_contract.paper_mode, "conference");
+  assert.equal(manifest.writing_contract.storyline_source, "idea_catalyst");
+  assert.equal(manifest.writing_contract.kg_storyline_required, true);
+  assert.equal(manifest.graph_guided_writing.enabled, true);
+  assert.equal(manifest.graph_guided_writing.status, "pending");
+  assert.equal(manifest.graph_guided_writing.citation_source_mode, "graph_only");
   assert.equal(captured.backgroundParams.backgroundRun.kind, "research_pipeline");
   assert.match(
     captured.backgroundParams.backgroundRun.commandText,
@@ -1031,6 +1037,10 @@ test("auto-review command bootstraps a survey project and starts the background 
   assert.equal(manifest.current_stage, "survey_review");
   assert.equal(manifest.workflow_line, "survey");
   assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.equal(manifest.writing_contract.storyline_source, "survey_packet");
+  assert.equal(manifest.writing_contract.kg_storyline_required, false);
+  assert.equal(manifest.graph_guided_writing.enabled, false);
+  assert.equal(manifest.graph_guided_writing.status, "optional");
   assert.equal(captured.boundProject.projectId, "survey-graph-reasoning-survey");
   assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
   assert.match(

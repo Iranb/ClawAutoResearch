@@ -16,7 +16,9 @@ import {
   getWorkflowGuardPolicy,
   inferTargetRoleFromToolParams,
   runWorkflowAutoIterator,
+  setGraphGuidedWritingState,
   setResearchProgramState,
+  setWritingContractState,
   unbindChannelProjectForWorkflow,
 } from "./workflow-guard.js";
 import {
@@ -137,6 +139,8 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   startBackgroundWorkflowRun,
   bindChannelProjectForWorkflow,
   setResearchProgramState,
+  setWritingContractState,
+  setGraphGuidedWritingState,
   unbindChannelProjectForWorkflow,
   runIdeaCatalystResearch30,
   runCitationCalibration,
@@ -886,6 +890,51 @@ function buildAutoResearchBootstrapPatch(params: {
   };
 }
 
+function buildAutoResearchWritingBootstrapPatch() {
+  return {
+    paper_mode: "conference",
+    storyline_source: "idea_catalyst",
+    kg_storyline_required: true,
+    kg_storyline_status: "pending",
+    pending_reason:
+      "Auto-research defaults to Idea-Catalyst-style storyline synthesis: clarify target-domain questions, unresolved challenges, interdisciplinary bridges, and evidence-backed narrative anchors before final prose hardening.",
+  };
+}
+
+function buildAutoResearchGraphGuidedWritingBootstrapPatch() {
+  return {
+    enabled: true,
+    status: "pending",
+    evidence_coverage_status: "pending",
+    citation_source_mode: "graph_only",
+    scholar_query_reserved: true,
+    pending_reason:
+      "Graph-guided writing is enabled by default for auto-research. Use Idea-Catalyst-style storyline organization to map problem -> challenge -> interdisciplinary bridge -> evidence before tightening claims.",
+  };
+}
+
+function buildAutoReviewWritingBootstrapPatch() {
+  return {
+    paper_mode: "survey",
+    storyline_source: "survey_packet",
+    kg_storyline_required: false,
+    kg_storyline_status: "optional",
+    pending_reason:
+      "Auto-review prioritizes broad related-direction coverage and survey packet quality over graph-guided storyline enforcement.",
+  };
+}
+
+function buildAutoReviewGraphGuidedWritingBootstrapPatch() {
+  return {
+    enabled: false,
+    status: "optional",
+    evidence_coverage_status: "optional",
+    scholar_query_reserved: false,
+    pending_reason:
+      "Auto-review emphasizes breadth of adjacent directions, benchmarks, and unresolved gaps; graph-guided writing is advisory only unless explicitly enabled later.",
+  };
+}
+
 function createAutoResearchCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -954,6 +1003,15 @@ function createAutoResearchCommandHandler(
           zoteroProjectRoot: workflowPolicy.zoteroProjectRoot,
           current: currentSummary.state,
         }),
+      });
+      await deps.setWritingContractState({
+        projectRoot: ensuredProject.projectRoot,
+        policy: workflowPolicy,
+        writingContract: buildAutoResearchWritingBootstrapPatch(),
+      });
+      await deps.setGraphGuidedWritingState({
+        projectRoot: ensuredProject.projectRoot,
+        graphGuidedWriting: buildAutoResearchGraphGuidedWritingBootstrapPatch(),
       });
 
       const started = await deps.startBackgroundWorkflowRun({
@@ -1064,6 +1122,15 @@ function createAutoReviewCommandHandler(
         topic,
         boundByAgent: "researcher",
         notes: "Auto-bound during /auto-review bootstrap.",
+      });
+      await deps.setWritingContractState({
+        projectRoot: ensuredProject.projectRoot,
+        policy: workflowPolicy,
+        writingContract: buildAutoReviewWritingBootstrapPatch(),
+      });
+      await deps.setGraphGuidedWritingState({
+        projectRoot: ensuredProject.projectRoot,
+        graphGuidedWriting: buildAutoReviewGraphGuidedWritingBootstrapPatch(),
       });
 
       const started = await deps.startBackgroundWorkflowRun({
