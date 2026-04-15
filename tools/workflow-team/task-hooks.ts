@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { readJsonIfExists } from "../workflow-guard-core/fs";
+import { runWorkflowHookPointGate } from "../workflow-hooks/gateways.js";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
 import {
   normalizeAblationEvidenceState,
@@ -182,6 +183,13 @@ export async function completeWorkflowTaskAndContinue(params: {
   role: string;
   completionNote?: string | null;
   ttlMs?: number;
+  hookGateContext?: {
+    runtimeSubagent?: Parameters<typeof runWorkflowHookPointGate>[0]["runtimeSubagent"];
+    projectId?: string | null;
+    stage?: string | null;
+    requesterChannel?: string | null;
+    changedPaths?: string[];
+  };
   beforeCompleteHook?: (params: {
     projectRoot: string;
     task: WorkflowTaskGraphTask;
@@ -226,6 +234,38 @@ export async function completeWorkflowTaskAndContinue(params: {
       task: failed.task,
       nextTask: null,
       verification,
+    };
+  }
+  const defaultHookGate = await runWorkflowHookPointGate({
+    runtimeSubagent: params.hookGateContext?.runtimeSubagent,
+    projectRoot: params.projectRoot,
+    projectId: params.hookGateContext?.projectId ?? store?.projectId ?? null,
+    stage: params.hookGateContext?.stage ?? store?.stage ?? null,
+    hookPoint: "before_task_complete",
+    ownerRole: params.role,
+    actorRole: params.role,
+    requesterSessionKey: params.sessionKey,
+    requesterChannel: params.hookGateContext?.requesterChannel ?? null,
+    taskId: task.taskId,
+    taskTitle: task.title,
+    transition: "complete_task",
+    changedPaths: params.hookGateContext?.changedPaths ?? [],
+  });
+  if (defaultHookGate.aggregateVerdict !== "pass") {
+    const failed = await markWorkflowTaskNeedsRepair({
+      projectRoot: params.projectRoot,
+      taskId: params.taskId,
+      sessionKey: params.sessionKey,
+      reason: defaultHookGate.blockingReason ?? "Workflow hook blocked task completion.",
+    });
+    return {
+      completed: false,
+      task: failed.task,
+      nextTask: null,
+      verification: {
+        verified: false,
+        reason: defaultHookGate.blockingReason ?? "workflow_hook_blocked",
+      },
     };
   }
   if (params.beforeCompleteHook) {

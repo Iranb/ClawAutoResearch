@@ -58,6 +58,7 @@ import { readCodeReviewStore } from "../tools/workflow-code-review.ts";
 import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 import { readWorkflowArtifactReceiptStore } from "../tools/workflow-handoff/artifact-receipts.ts";
+import { readWorkflowHooksStateStore } from "../tools/workflow-hooks/state.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
@@ -1987,6 +1988,11 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
   const store = await readAutoModeDiscussionStore(projectRoot);
   assert.equal(store.currentRound?.status, "resolved");
   assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.auto-mode-risk:write"]?.status,
+    "passed"
+  );
 });
 
 test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over transcript polling", async (t) => {
@@ -3222,6 +3228,11 @@ test("maybeAdvanceAutoGateReviewForProject leaves submit under manual confirmati
   assert.equal(start.reason, "manual_confirmation_required");
   const store = await readGateReviewStore(projectRoot);
   assert.equal(store.currentRound, null);
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.submit-readiness:submit"]?.status,
+    "revise_requested"
+  );
 });
 
 test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data because final confirmation is manual", async (t) => {
@@ -3604,5 +3615,14 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   assert.equal(
     receiptStore.receipts.every((receipt) => receipt.verificationResult === "passed"),
     true
+  );
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.code-innovation-review:code"]?.status,
+    "passed"
+  );
+  assert.equal(
+    hookStore.hookPoints.before_stage_handoff?.code?.aggregateVerdict,
+    "pass"
   );
 });

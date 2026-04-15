@@ -1,6 +1,7 @@
 import { deriveAgentSessionKeyForRole } from "../agent-task-dispatch";
 import { readJsonIfExists } from "../workflow-guard-core/fs";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import { mergeBuiltinWorkflowHooksIntoSummary } from "./builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
 import type { WorkflowHookPoint, WorkflowLine, WorkflowPaperMode } from "./contracts.js";
@@ -115,7 +116,7 @@ export async function runWorkflowHookPointGate(params: {
   const environment = await readWorkflowHookEnvironment({
     projectRoot: params.projectRoot,
   });
-  return evaluateWorkflowHooksForPoint({
+  const summary = await evaluateWorkflowHooksForPoint({
     runtimeSubagent: params.runtimeSubagent,
     requesterSessionKey: params.requesterSessionKey,
     requesterChannel: params.requesterChannel,
@@ -183,5 +184,11 @@ export async function runWorkflowHookPointGate(params: {
           }
         : undefined,
     extractLatestText: extractLatestReadableText,
+  });
+  return mergeBuiltinWorkflowHooksIntoSummary({
+    projectRoot: params.projectRoot,
+    hookPoint: params.hookPoint,
+    stage: params.stage,
+    summary,
   });
 }

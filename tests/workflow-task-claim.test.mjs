@@ -10,6 +10,7 @@ import {
   readWorkflowTaskGraphStore,
 } from "../tools/workflow-team/task-graph.ts";
 import { completeWorkflowTaskAndContinue } from "../tools/workflow-team/task-hooks.ts";
+import { writeBuiltinWorkflowHookState } from "../tools/workflow-hooks/builtin-bridge.ts";
 
 test("workflow task claim runtime skips dependency-blocked tasks and auto-continues after completion", async (t) => {
   const projectRoot = await fs.mkdtemp(
@@ -227,4 +228,70 @@ test("completeWorkflowTaskAndContinue can be blocked by a before-complete hook",
     store?.tasks.find((task) => task.taskId === "review.audit_main_tex")?.status,
     "needs_repair"
   );
+});
+
+test("completeWorkflowTaskAndContinue runs the default workflow hook gate", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-task-default-hook-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "review",
+    topTierVerdict: null,
+    evidenceCloseout: {
+      status: "not_applicable",
+      topTierVerdict: null,
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: true,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "review.audit_appendix",
+        title: "Audit the appendix",
+        owner: "reviewer",
+        status: "blocked",
+        reason: "Needs audit",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+    ],
+  });
+
+  const claimed = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "reviewer",
+    sessionKey: "agent:reviewer:default-hook",
+  });
+  assert.equal(claimed.claimed, true);
+
+  await writeBuiltinWorkflowHookState({
+    projectRoot,
+    hookId: "builtin.synthetic-task-hook:review",
+    hookPoint: "before_task_complete",
+    stage: "review",
+    status: "revise_requested",
+    verdict: "revise",
+    blockingReason: "Default task hook still needs another revision round.",
+  });
+
+  const completion = await completeWorkflowTaskAndContinue({
+    projectRoot,
+    taskId: "review.audit_appendix",
+    sessionKey: "agent:reviewer:default-hook",
+    role: "reviewer",
+  });
+
+  assert.equal(completion.completed, false);
+  assert.equal(completion.verification.verified, false);
+  assert.match(completion.verification.reason ?? "", /revision round/i);
 });

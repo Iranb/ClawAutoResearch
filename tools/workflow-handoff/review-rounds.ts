@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  buildBuiltinReviewRoundHookId,
+  syncBuiltinReviewRoundHook,
+  writeBuiltinWorkflowHookState,
+} from "../workflow-hooks/builtin-bridge.js";
 import { createWorkflowArtifactReceipt } from "./artifact-receipts";
 import { routeWorkflowFailure } from "./failure-router";
 import { upsertWorkflowHandoffIntent } from "./handoff-store";
@@ -24,7 +29,7 @@ export async function createWorkflowReviewRoundHandoff(params: {
   subject: string;
   command?: string | null;
 }): Promise<{ intent: WorkflowHandoffIntent; created: boolean }> {
-  return upsertWorkflowHandoffIntent({
+  const handoff = await upsertWorkflowHandoffIntent({
     projectRoot: params.projectRoot,
     projectId: params.projectId,
     workflowLine: params.workflowLine ?? "experiment",
@@ -43,6 +48,19 @@ export async function createWorkflowReviewRoundHandoff(params: {
     summary: params.subject,
     command: params.command,
   });
+  await writeBuiltinWorkflowHookState({
+    projectRoot: params.projectRoot,
+    hookId: buildBuiltinReviewRoundHookId({
+      workflowLine: params.workflowLine,
+      stage: params.stage,
+    }),
+    hookPoint: "before_stage_handoff",
+    stage: params.stage ?? null,
+    status: "auditing",
+    verdict: null,
+    blockingReason: "Workflow review round is still pending.",
+  });
+  return handoff;
 }
 
 export async function recordWorkflowReviewRoundResults(params: {
@@ -81,6 +99,15 @@ export async function recordWorkflowReviewRoundResults(params: {
       })
     );
   }
+  const aggregateSummary =
+    params.results.map((entry) => entry.summary).filter(Boolean).join(" ") || null;
+  await syncBuiltinReviewRoundHook({
+    projectRoot: params.projectRoot,
+    workflowLine: params.workflowLine,
+    stage: params.stage ?? null,
+    aggregateVerdict,
+    summary: aggregateSummary,
+  });
 
   if (aggregateVerdict === "pass" && params.nextOwnerOnPass) {
     const handoff = await upsertWorkflowHandoffIntent({
