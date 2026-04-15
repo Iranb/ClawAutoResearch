@@ -1,1 +1,1 @@
-export { materializeBenchmarkRegistry } from "../research-evidence/benchmark-registry.ts";
+export { materializeBenchmarkRegistry } from "../research-evidence/benchmark-registry";

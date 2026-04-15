@@ -1,1 +1,1 @@
-export { materializeMechanismEvidence as materializeMechanismPacket } from "../research-evidence/mechanism-evidence.ts";
+export { materializeMechanismEvidence as materializeMechanismPacket } from "../research-evidence/mechanism-evidence";

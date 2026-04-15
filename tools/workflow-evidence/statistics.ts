@@ -1,1 +1,1 @@
-export { materializeStatisticalEvidence } from "../research-evidence/statistics.ts";
+export { materializeStatisticalEvidence } from "../research-evidence/statistics";

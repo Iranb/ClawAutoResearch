@@ -1,15 +1,15 @@
 import {
   normalizeCameraReadyEvidenceState,
   serializeCameraReadyEvidenceState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectManifest,
   writeProjectJson,
   writeProjectManifest,
-} from "../research-contracts/core/project-io.ts";
-import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry.ts";
-import { materializeManuscriptLintReport } from "../research-authoring/manuscript-lint.ts";
+} from "../research-contracts/core/project-io";
+import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
+import { materializeManuscriptLintReport } from "../research-authoring/manuscript-lint";
 
 export async function materializeCameraReadyAudit(params: {
   projectRoot: string;

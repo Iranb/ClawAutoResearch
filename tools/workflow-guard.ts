@@ -9083,6 +9083,7 @@ export async function runWorkflowAutoIterator(params: {
       resolveNextStageForWorkflow,
       STAGE_REQUIREMENTS,
       stageOwner,
+      loadExperimentSearchState,
       normalizeExperimentSearchState,
       normalizeAutonomousExecutionState,
       loadExperimentReviewState,

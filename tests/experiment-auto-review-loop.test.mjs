@@ -16,10 +16,24 @@ process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH = path.join(
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import {
+  clearBackgroundWorkflowQueueForTests,
+  clearBackgroundWorkflowRunRegistryForTests,
+} from "../tools/workflow-fast-paths.ts";
+import {
   maybeLaunchAutoStageForProject,
 } from "../tools/register-workflow-service.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import { runWorkflowAutoIterator } from "../tools/workflow-guard.ts";
+
+test.beforeEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
+});
+
+test.afterEach(async () => {
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
+});
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -841,7 +855,7 @@ test("maybeLaunchAutoStageForProject dispatches planner-owned reviewed-auto expe
       projectsRoot,
       heartbeatBackgroundChecks: true,
       agentContactCooldownSeconds: 300,
-      enableWorkflowMailbox: true,
+      enableWorkflowMailbox: false,
     },
     projectRoot,
     projectId: "demo-project",

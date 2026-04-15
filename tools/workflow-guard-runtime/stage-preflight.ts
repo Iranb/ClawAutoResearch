@@ -405,8 +405,14 @@ async function shouldMaterializeSurveyReviewState(params: {
   const state = normalizeSurveyReviewState(params.manifest.survey_review);
   const artifactMissing = await anyArtifactMissing(params.projectRoot, [
     state.queryRegistryPath,
-    state.literaturePath,
+    state.includedPapersPath,
+    state.excludedPapersPath,
+    state.literatureReviewPath,
     state.reviewProtocolPath,
+    state.sotaMatrixPath,
+    state.gapSynthesisPath,
+    state.coverageSummaryPath,
+    state.surveyBriefPath,
     state.diagnosticsPath,
   ]);
   return state.status !== "completed" || !state.gateReady || artifactMissing;
@@ -586,6 +592,16 @@ async function shouldMaterializeExperimentReview(params: {
   const stateTimestamp = parseTimestampMs(experimentReview.lastUpdatedAt);
   if (stateTimestamp === null) {
     return true;
+  }
+  const reviewInProgress =
+    normalizeStageValue(experimentReview.plannerStatus) === "ready" ||
+    normalizeStageValue(experimentReview.analyzerStatus) === "ready" ||
+    normalizeStageValue(experimentReview.crossReviewerStatus) === "ready" ||
+    normalizeStageValue(experimentReview.analyzerVerdict) != null ||
+    normalizeStageValue(experimentReview.crossReviewerVerdict) != null ||
+    experimentReview.launchApproved === true;
+  if (reviewInProgress) {
+    return false;
   }
   const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
     "TRACK_REGISTRY.json",

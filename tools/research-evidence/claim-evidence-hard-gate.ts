@@ -1,4 +1,4 @@
-import { readProjectText, writeProjectJson, writeProjectText } from "../research-contracts/core/project-io.ts";
+import { readProjectText, writeProjectJson, writeProjectText } from "../research-contracts/core/project-io";
 
 function extractMarkdownClaims(rawText: string): Array<{ claimId: string; claimText: string }> {
   return rawText

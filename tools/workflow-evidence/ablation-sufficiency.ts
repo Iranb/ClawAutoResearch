@@ -1,1 +1,1 @@
-export { materializeAblationSufficiency } from "../research-evidence/ablation-sufficiency.ts";
+export { materializeAblationSufficiency } from "../research-evidence/ablation-sufficiency";

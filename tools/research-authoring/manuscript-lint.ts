@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
-import { nowIso, projectPathExists, writeProjectJson } from "../research-contracts/core/project-io.ts";
+import { nowIso, projectPathExists, writeProjectJson } from "../research-contracts/core/project-io";
 
 const LINT_PATTERNS: Array<{ code: string; pattern: RegExp }> = [
   { code: "placeholder_table", pattern: /Table\??\s*\?\?/g },
@@ -13,7 +14,7 @@ const LINT_PATTERNS: Array<{ code: string; pattern: RegExp }> = [
 async function collectFiles(root: string): Promise<string[]> {
   const results: string[] = [];
   async function walk(current: string) {
-    let entries: fs.Dirent[] = [];
+    let entries: Dirent[] = [];
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch {

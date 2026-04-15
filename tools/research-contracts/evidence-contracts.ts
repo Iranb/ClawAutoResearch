@@ -1,12 +1,12 @@
 import {
   asRecord,
-} from "./core/project-io.ts";
+} from "./core/project-io";
 import {
   asStringArray,
   pickBoolean,
   pickNumber,
   pickString,
-} from "../workflow-guard-core/coercion.ts";
+} from "../workflow-guard-core/coercion";
 
 const CURRENT_EVIDENCE_SCHEMA_VERSION = 2;
 

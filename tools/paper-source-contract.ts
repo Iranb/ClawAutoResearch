@@ -85,7 +85,19 @@ const TITLE_SIGNATURE_STOPWORDS = new Set([
 ]);
 
 function normalizeTitleToken(value: string): string {
-  return value.replace(/[^a-z0-9]+/g, "").trim().toLowerCase();
+  let normalized = value.replace(/[^a-z0-9]+/g, "").trim().toLowerCase();
+  if (normalized.endsWith("ies") && normalized.length > 4) {
+    normalized = `${normalized.slice(0, -3)}y`;
+  } else if (normalized.endsWith("es") && normalized.length > 4) {
+    normalized = normalized.slice(0, -2);
+  } else if (
+    normalized.endsWith("s") &&
+    normalized.length > 3 &&
+    !normalized.endsWith("ss")
+  ) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
 }
 
 function isRemoteEndpointLike(value: string | null | undefined): boolean {

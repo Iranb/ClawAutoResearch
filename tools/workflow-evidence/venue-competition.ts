@@ -1,1 +1,1 @@
-export { materializeVenueCompetitionIntel as materializeVenueCompetition } from "../research-intel/venue-competition.ts";
+export { materializeVenueCompetitionIntel as materializeVenueCompetition } from "../research-intel/venue-competition";

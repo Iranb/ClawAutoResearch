@@ -1,15 +1,15 @@
 import {
   materializeSurveyReviewDiagnostics,
-} from "../survey-review-diagnostics.ts";
+} from "../survey-review-diagnostics";
 import {
   nowIso,
   readProjectManifest,
   readProjectText,
   writeProjectJson,
   writeProjectText,
-} from "../research-contracts/core/project-io.ts";
-import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review.ts";
-import { materializeFairCompareMatrix } from "../research-evidence/fair-compare.ts";
+} from "../research-contracts/core/project-io";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
+import { materializeFairCompareMatrix } from "../research-evidence/fair-compare";
 
 function extractMatrixMethods(matrixText: string): string[] {
   const methods = new Set<string>();

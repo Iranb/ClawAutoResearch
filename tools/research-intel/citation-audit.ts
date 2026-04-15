@@ -5,9 +5,9 @@ import {
   readProjectText,
   writeProjectJson,
   writeProjectManifest,
-} from "../research-contracts/core/project-io.ts";
-import { normalizeCitationIntegrityState, serializeCitationIntegrityState } from "../workflow-guard-state/authoring-review-state.ts";
-import { materializePaperIdentityRegistry } from "./paper-identity-registry.ts";
+} from "../research-contracts/core/project-io";
+import { normalizeCitationIntegrityState, serializeCitationIntegrityState } from "../workflow-guard-state/authoring-review-state";
+import { materializePaperIdentityRegistry } from "./paper-identity-registry";
 
 export type CitationAuditReport = {
   schemaVersion: number;

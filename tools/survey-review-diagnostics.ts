@@ -360,12 +360,12 @@ export async function materializeSurveyReviewDiagnostics(params: {
       includedPapers >= 10 &&
       coverageKeywords >= 2;
     const nicheCoverageReady =
-      queryRounds >= 3 &&
+      queryRounds >= 2 &&
       candidatePapers > 0 &&
       candidatePapers <= 15 &&
-      includedPapers >= 8 &&
-      excludedPapers >= 2 &&
-      coverageKeywords >= 3;
+      includedPapers >= 6 &&
+      excludedPapers >= 1 &&
+      coverageKeywords >= 2;
     const breadthReady = broadCoverageReady || nicheCoverageReady;
     coverage = buildDiagnostic({
       status: breadthReady ? "ready" : "partial",

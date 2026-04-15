@@ -3,14 +3,14 @@ import {
   readProjectManifest,
   writeProjectJson,
   writeProjectManifest,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 import {
   normalizeOpportunityScorecardState,
   normalizeVenueCompetitionState,
   serializeOpportunityScorecardState,
   serializeVenueCompetitionState,
-} from "../research-contracts/evidence-contracts.ts";
-import { materializePaperIdentityRegistry } from "./paper-identity-registry.ts";
+} from "../research-contracts/evidence-contracts";
+import { materializePaperIdentityRegistry } from "./paper-identity-registry";
 
 type CompetitorSlateEntry = {
   canonicalId: string;

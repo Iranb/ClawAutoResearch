@@ -1,1 +1,1 @@
-export { materializeReproPack as materializeReproducibilityPack } from "../research-submit/repro-pack.ts";
+export { materializeReproPack as materializeReproducibilityPack } from "../research-submit/repro-pack";

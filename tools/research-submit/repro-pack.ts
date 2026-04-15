@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import {
   normalizeReproducibilityPackState,
   serializeReproducibilityPackState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectJson,
@@ -12,7 +12,7 @@ import {
   writeProjectJson,
   writeProjectManifest,
   writeProjectText,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 
 export async function materializeReproPack(params: {
   projectRoot: string;

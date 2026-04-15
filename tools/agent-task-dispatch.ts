@@ -581,17 +581,20 @@ export async function dispatchWorkflowTaskToAgent(params: {
     budgetKind: "dispatch_command",
   });
 
-  const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
-    projectRoot: params.projectRoot,
-    fromAgent: params.fromRole,
-    toAgent: params.toRole,
-    projectId: params.projectId,
-    stage: params.stage,
-    summary: params.summary,
-    command: execPayload.commandForDispatch || params.command,
-    extraBody: execPayload.extraBodyForDispatch,
-    existingMessageId: params.mailboxMessageId,
-  });
+  const mailboxMessageId =
+    requireMailboxAcknowledgement || params.mailboxMessageId
+      ? await ensureWorkflowDispatchMailboxMessage({
+          projectRoot: params.projectRoot,
+          fromAgent: params.fromRole,
+          toAgent: params.toRole,
+          projectId: params.projectId,
+          stage: params.stage,
+          summary: params.summary,
+          command: execPayload.commandForDispatch || params.command,
+          extraBody: execPayload.extraBodyForDispatch,
+          existingMessageId: params.mailboxMessageId,
+        })
+      : null;
 
   const message = buildWorkflowDispatchMessage({
     projectRoot: params.projectRoot,

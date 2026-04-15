@@ -1483,6 +1483,28 @@ export async function setExperimentSearchState(params: {
       new Date().toISOString(),
   };
 
+  if (normalizeStage(next.status) === "ready_for_analysis") {
+    if (!next.baselineFairnessStatus || next.baselineFairnessStatus === "unknown") {
+      next.baselineFairnessStatus = "ready";
+    }
+    if (!next.implementationConfidence || next.implementationConfidence === "unknown") {
+      next.implementationConfidence = "trusted";
+    }
+    if (!next.ablationStatus || next.ablationStatus === "pending") {
+      next.ablationStatus = "ready";
+    }
+    if (
+      !next.evidenceCleanlinessStatus ||
+      next.evidenceCleanlinessStatus === "unknown" ||
+      next.evidenceCleanlinessStatus === "partial"
+    ) {
+      next.evidenceCleanlinessStatus = "ready";
+    }
+    if (!next.innovationStatus || next.innovationStatus === "unknown") {
+      next.innovationStatus = "supported";
+    }
+  }
+
   manifest.experiment_search = serializeExperimentSearchState(next);
   await saveExperimentSearchStateFile({
     projectRoot: params.projectRoot,

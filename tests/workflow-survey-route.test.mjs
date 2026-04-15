@@ -155,9 +155,18 @@ test("completed survey_review advances to survey-mode write without code or expe
 
   assert.equal(result.stageBefore, "survey_review");
   assert.equal(result.stageAfter, "write");
-  assert.equal(manifest.current_stage, "write");
-  assert.equal(manifest.owner_agent, "academic_writer");
+  assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.owner_agent, "researcher");
   assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.equal(
+    manifest.orchestration_state.pending_owner_candidate,
+    "academic_writer"
+  );
+  assert.equal(
+    manifest.orchestration_state.pending_stage_candidate,
+    "write"
+  );
+  assert.equal(manifest.orchestration_state.handoff_phase, "prepared");
   assert.ok(
     !result.recommendedActions.some(
       (action) => action.owner === "coder" || action.stage === "code" || action.stage === "experiment"

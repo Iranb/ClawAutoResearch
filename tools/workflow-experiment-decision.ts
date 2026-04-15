@@ -188,6 +188,7 @@ export function evaluateExperimentSearchDecision(params: {
   const innovationStatus = normalizeStageLike(search.innovationStatus);
   const searchExhaustionStatus = normalizeStageLike(search.searchExhaustionStatus);
   const evidenceCleanlinessStatus = normalizeStageLike(search.evidenceCleanlinessStatus);
+  const searchStatus = normalizeStageLike(search.status);
   const reviewBlockerCount =
     typeof experimentReview.blockerCount === "number"
       ? experimentReview.blockerCount
@@ -220,6 +221,42 @@ export function evaluateExperimentSearchDecision(params: {
     isReadyLike(search.multiSeedStatus) &&
     isReadyLike(ablationStatus) &&
     isReadyLike(evidenceCleanlinessStatus);
+
+  if (
+    searchStatus === "ready_for_analysis" &&
+    cleanEvidence &&
+    searchExhaustionStatus !== "exhausted"
+  ) {
+    return {
+      decision: "innovation_supported",
+      rationale:
+        "Experiment search is already marked ready_for_analysis with clean baseline, multi-seed, ablation, and evidence signals.",
+      decisionConfidence: "high",
+      implementationConfidence,
+      baselineFairnessStatus,
+      ablationStatus,
+      innovationStatus: isReadyLike(innovationStatus) ? innovationStatus : "supported",
+      searchExhaustionStatus,
+      evidenceCleanlinessStatus,
+      recommendedNextAction: "Freeze the current incumbent and proceed toward analysis.",
+      validationStage: "decision",
+      failureClusters,
+      persistedPatch: {
+        validation_stage: "decision",
+        baseline_fairness_status: baselineFairnessStatus,
+        implementation_confidence: implementationConfidence,
+        search_exhaustion_status: searchExhaustionStatus,
+        ablation_status: ablationStatus,
+        innovation_status: isReadyLike(innovationStatus) ? innovationStatus : "supported",
+        decision_confidence: "high",
+        recommended_next_action: "Freeze the current incumbent and proceed toward analysis.",
+        failure_cluster_ids: failureClusters.map((cluster) => cluster.clusterId),
+        evidence_cleanliness_status: evidenceCleanlinessStatus,
+        last_decision: "innovation_supported",
+        pending_reason: null,
+      },
+    };
+  }
 
   let decision: ExperimentSearchDecision = "continue_tuning";
   let rationale = "Search envelope is still active and no stronger terminal signal is present.";

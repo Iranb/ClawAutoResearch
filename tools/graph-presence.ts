@@ -1210,6 +1210,32 @@ function matchExpectedPaper(
     }
   }
 
+  const expectedSignature =
+    expected.titleSignature ??
+    buildTitleSignature(expected.normalizedTitle) ??
+    buildTitleSignature(expected.title) ??
+    buildTitleSignature(expected.sourceHints[0] ?? null);
+  if (expectedSignature) {
+    const match = activeCorpus.find((entry) =>
+      Array.from(entry.normalizedTitles).some(
+        (title) => buildTitleSignature(title) === expectedSignature
+      )
+    );
+    if (match) {
+      return {
+        canonicalId: expected.canonicalId,
+        title: expected.title,
+        sourceKind: expected.sourceKind,
+        sourceProvider: expected.sourceProvider,
+        retrievalProviders: expected.retrievalProviders,
+        matchedBy: "title",
+        corpusPaperId: match.paperId,
+        corpusPaperTitle: match.paperTitle,
+        corpusSourceKey: match.sourceKey,
+      };
+    }
+  }
+
   return null;
 }
 

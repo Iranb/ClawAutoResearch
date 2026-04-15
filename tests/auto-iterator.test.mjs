@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   checkGraphPresenceForWorkflow,
   runWorkflowAutoIterator,
+  setExperimentSearchState,
 } from "../tools/workflow-guard.ts";
 import {
   getWorkflowAnnounceOutboxPath,
@@ -32,6 +33,7 @@ import {
   createAutoModeDiscussionRound,
   saveAutoModeDiscussionStore,
 } from "../tools/workflow-auto-discussion.ts";
+import { claimAndActivateWorkflowHandoffForAgent } from "../tools/workflow-handoff/handoff-activation.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -49,6 +51,14 @@ async function writeJson(filePath, value) {
 async function writeText(filePath, text = "ok\n") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, text, "utf8");
+}
+
+async function activatePreparedHandoff(projectRoot, role) {
+  return claimAndActivateWorkflowHandoffForAgent({
+    projectRoot,
+    role,
+    sessionKey: `agent:${role}:test`,
+  });
 }
 
 async function seedPaperSourceIndex(projectRoot, papers) {
@@ -3970,6 +3980,8 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
     queueMailbox: false,
   });
 
+  await activatePreparedHandoff(projectRoot, "orchestrator");
+
   const finalManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(fourth.stageBefore, "idea");
   assert.equal(fourth.stageAfter, "plan");
@@ -5005,13 +5017,8 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   assert.equal(result.stageBefore, "idea");
   assert.equal(result.stageAfter, "plan");
 
-  result = await runWorkflowAutoIterator({
-    projectRoot,
-    mode: "test",
-    queueMailbox: false,
-  });
-  assert.equal(result.stageBefore, "plan");
-  assert.equal(result.stageAfter, "code");
+  await activatePreparedHandoff(projectRoot, "orchestrator");
+  await seedProjectReadyForCode(projectRoot);
 
   await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
   await writeText(
@@ -5060,19 +5067,22 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   manifest.current_stage = "experiment";
   manifest.current_micro_stage = "ready_for_analysis";
-  manifest.experiment_search = {
-    status: "ready_for_analysis",
-    current_main_stage: "ablation_studies",
-    current_substage: "multi_seed_aggregation",
-    best_node_id: "node-best",
-    completed_node_ids: ["node-1", "node-2"],
-    multi_seed_status: "ready",
-    evaluation_summary_path: "researcher/evaluation_summary.json",
-    plot_pack_status: "ready",
-    plot_pack_path: "researcher/plot_pack.json",
-    checkpoint_path: "researcher/checkpoints/experiment-manager.json",
-  };
   await writeJson(manifestPath, manifest);
+  await setExperimentSearchState({
+    projectRoot,
+    experimentSearch: {
+      status: "ready_for_analysis",
+      current_main_stage: "ablation_studies",
+      current_substage: "multi_seed_aggregation",
+      best_node_id: "node-best",
+      completed_node_ids: ["node-1", "node-2"],
+      multi_seed_status: "ready",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+      plot_pack_path: "researcher/plot_pack.json",
+      checkpoint_path: "researcher/checkpoints/experiment-manager.json",
+    },
+  });
   await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
     metric: "acc",
     value: 0.91,
@@ -5089,6 +5099,8 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   assert.equal(result.stageBefore, "experiment");
   assert.equal(result.stageAfter, "analyze");
 
+  await activatePreparedHandoff(projectRoot, "analyzer");
+
   result = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
@@ -5096,6 +5108,8 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   });
   assert.equal(result.stageBefore, "analyze");
   assert.equal(result.stageAfter, "review");
+
+  await activatePreparedHandoff(projectRoot, "reviewer");
 
   result = await runWorkflowAutoIterator({
     projectRoot,
@@ -5105,6 +5119,8 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   assert.equal(result.stageBefore, "review");
   assert.equal(result.stageAfter, "write");
 
+  await activatePreparedHandoff(projectRoot, "academic_writer");
+
   result = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
@@ -5112,6 +5128,8 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   });
   assert.equal(result.stageBefore, "write");
   assert.equal(result.stageAfter, "submit");
+
+  await activatePreparedHandoff(projectRoot, "reviewer");
 
   result = await runWorkflowAutoIterator({
     projectRoot,

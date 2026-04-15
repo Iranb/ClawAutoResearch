@@ -1808,23 +1808,27 @@ async function launchWorkflowDispatchTransition(params: {
   summary: string;
   command?: string | null;
   mailboxMessageId?: string | null;
+  requireMailboxAcknowledgement?: boolean;
   extraBody?: string | null;
   autoModeActive: boolean;
   fromRole?: string | null;
   logger?: WorkflowCoordinatorLogger;
 }) {
-  const mailboxMessageId = await ensureWorkflowDispatchMailboxMessage({
-    projectRoot: params.projectRoot,
-    fromAgent: params.fromRole ?? "researcher",
-    toAgent: params.owner,
-    projectId: params.projectId,
-    stage: params.stage,
-    summary: params.summary,
-    command: params.command ?? null,
-    extraBody: params.extraBody ?? null,
-    queueKey: params.queueKey,
-    existingMessageId: params.mailboxMessageId ?? null,
-  });
+  const mailboxMessageId =
+    params.requireMailboxAcknowledgement !== false || params.mailboxMessageId
+      ? await ensureWorkflowDispatchMailboxMessage({
+          projectRoot: params.projectRoot,
+          fromAgent: params.fromRole ?? "researcher",
+          toAgent: params.owner,
+          projectId: params.projectId,
+          stage: params.stage,
+          summary: params.summary,
+          command: params.command ?? null,
+          extraBody: params.extraBody ?? null,
+          queueKey: params.queueKey,
+          existingMessageId: params.mailboxMessageId ?? null,
+        })
+      : null;
   return orchestrateWorkflowTransition({
     transition: {
       projectRoot: params.projectRoot,
@@ -1857,7 +1861,8 @@ async function launchWorkflowDispatchTransition(params: {
         summary: params.summary,
         command: params.command ?? null,
         mailboxMessageId,
-        requireMailboxAcknowledgement: true,
+        requireMailboxAcknowledgement:
+          params.requireMailboxAcknowledgement !== false,
         extraBody: params.extraBody ?? null,
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
@@ -1881,7 +1886,8 @@ async function launchWorkflowDispatchTransition(params: {
         summary: params.summary,
         command: params.command ?? null,
         mailboxMessageId,
-        requireMailboxAcknowledgement: true,
+        requireMailboxAcknowledgement:
+          params.requireMailboxAcknowledgement !== false,
         extraBody: params.extraBody ?? null,
         waitTimeoutMs: 5000,
         retryOnTimeout: true,
@@ -2272,7 +2278,8 @@ export async function maybeLaunchAutoStageForProject(params: {
               summary: action.summary,
               command: action.command,
               mailboxMessageId: action.mailboxMessageId ?? null,
-              requireMailboxAcknowledgement: true,
+              requireMailboxAcknowledgement:
+                params.workflowPolicy.enableWorkflowMailbox !== false,
               extraBody:
                 buildAutoStageDispatchExtraBody({
                   stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
@@ -2332,6 +2339,8 @@ export async function maybeLaunchAutoStageForProject(params: {
         summary: action.summary,
         command: action.command,
         mailboxMessageId: action.mailboxMessageId ?? null,
+        requireMailboxAcknowledgement:
+          params.workflowPolicy.enableWorkflowMailbox !== false,
         extraBody:
           buildAutoStageDispatchExtraBody({
             stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,

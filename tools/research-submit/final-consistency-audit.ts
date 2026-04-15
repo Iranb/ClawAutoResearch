@@ -1,11 +1,11 @@
-import { materializeCitationAudit } from "../research-intel/citation-audit.ts";
-import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis.ts";
-import { materializeClaimEvidenceAudit } from "../research-evidence/claim-evidence-hard-gate.ts";
-import { materializeCameraReadyAudit } from "./camera-ready-gates.ts";
-import { materializeReproPack } from "./repro-pack.ts";
-import { materializeChecklistSyncReport } from "./checklist-sync.ts";
-import { readProjectManifest, writeProjectText } from "../research-contracts/core/project-io.ts";
-import { normalizeStatisticalEvidenceState } from "../research-contracts/evidence-contracts.ts";
+import { materializeCitationAudit } from "../research-intel/citation-audit";
+import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis";
+import { materializeClaimEvidenceAudit } from "../research-evidence/claim-evidence-hard-gate";
+import { materializeCameraReadyAudit } from "./camera-ready-gates";
+import { materializeReproPack } from "./repro-pack";
+import { materializeChecklistSyncReport } from "./checklist-sync";
+import { readProjectManifest, writeProjectText } from "../research-contracts/core/project-io";
+import { normalizeStatisticalEvidenceState } from "../research-contracts/evidence-contracts";
 
 export async function materializeFinalConsistencyAudit(params: {
   projectRoot: string;

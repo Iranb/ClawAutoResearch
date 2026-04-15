@@ -1,16 +1,16 @@
-import { normalizeExperimentSearchSpec } from "../workflow-guard-state/experiment-search-spec.ts";
-import { normalizeResearchProgramState } from "../workflow-guard-state/research-program.ts";
+import { normalizeExperimentSearchSpec } from "../workflow-guard-state/experiment-search-spec";
+import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
   normalizeBenchmarkProtocolState,
   serializeBenchmarkProtocolState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectJson,
   readProjectManifest,
   writeProjectJson,
   writeProjectManifest,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 
 type BenchmarkRegistryEntry = {
   benchmarkFamily: string | null;

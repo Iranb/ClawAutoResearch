@@ -1,8 +1,8 @@
-import { derivePapernexusEvidenceStatus, inspectPapernexusBridgeArtifacts } from "../workflow-evidence/papernexus-bridge.ts";
+import { derivePapernexusEvidenceStatus, inspectPapernexusBridgeArtifacts } from "../workflow-evidence/papernexus-bridge";
 import {
   normalizeMechanismEvidenceState,
   serializeMechanismEvidenceState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectManifest,
@@ -10,7 +10,7 @@ import {
   writeProjectJson,
   writeProjectManifest,
   writeProjectText,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 
 function inferMechanismFamilies(text: string): string[] {
   const families: string[] = [];
@@ -98,7 +98,7 @@ export async function materializeMechanismEvidence(params: {
     pending_reason:
       (typeof patch.pending_reason === "string" && patch.pending_reason) ||
       (typeof patch.pendingReason === "string" && patch.pendingReason) ||
-      (graphContextStatus === "missing" || graphContextStatus === "graph_unavailable"
+      (graphContextStatus === "graph_unavailable"
         ? "Mechanism evidence is not yet graph-grounded."
         : null),
     last_materialized_at: nowIso(),

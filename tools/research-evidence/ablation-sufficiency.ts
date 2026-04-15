@@ -1,15 +1,15 @@
-import { normalizeResearchProgramState } from "../workflow-guard-state/research-program.ts";
+import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
   normalizeAblationEvidenceState,
   serializeAblationEvidenceState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectJson,
   readProjectManifest,
   writeProjectJson,
   writeProjectManifest,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 
 function collectRequiredAblations(manifest: Record<string, unknown>): string[] {
   const researchProgram = normalizeResearchProgramState(manifest.research_program);

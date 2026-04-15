@@ -1,1 +1,1 @@
-export { materializeCameraReadyAudit as materializeCameraReadyPack } from "../research-submit/camera-ready-gates.ts";
+export { materializeCameraReadyAudit as materializeCameraReadyPack } from "../research-submit/camera-ready-gates";

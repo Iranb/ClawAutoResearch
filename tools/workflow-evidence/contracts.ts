@@ -1,1 +1,1 @@
-export * from "../research-contracts/evidence-contracts.ts";
+export * from "../research-contracts/evidence-contracts";

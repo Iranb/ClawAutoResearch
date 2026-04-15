@@ -217,6 +217,9 @@ export async function collectWriteStageMissingSignals(
   }
 
   const writePackage = deps.normalizeWritePackageState(ctx.manifest?.write_package);
+  if (!surveyWriteMode) {
+    missing.push(...deps.getWritePackageValidationErrors(writePackage));
+  }
   if (
     !surveyWriteMode &&
     ctx.manifest?.cross_domain_inspiration &&
@@ -390,6 +393,56 @@ export async function collectWriteStageMissingSignals(
     missing.push(
       `PROJECT_MANIFEST.json.citation_collection.hallucinated_count = 0 (current: ${citationCollection.hallucinatedCount})`
     );
+  }
+  const theorySupport = deps.normalizeTheorySupportState(ctx.manifest?.theory_state);
+  if (writingContract.proofAppendixRequired) {
+    const theoryStatePath = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      theorySupport.theoryStatePath
+    );
+    if (!theoryStatePath || !(await deps.pathExists(theoryStatePath))) {
+      missing.push("{PROJ}/analyzer/THEORY_STATE.json");
+    }
+    const proofPacketDir = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      theorySupport.proofPacketDir
+    );
+    if (!proofPacketDir || !(await deps.isNonEmptyDirectory(proofPacketDir))) {
+      missing.push("{PROJ}/analyzer/proof-packets/");
+    }
+    const appendixPlanPath = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      theorySupport.appendixPacketPath ?? deps.DEFAULT_THEORY_APPENDIX_PLAN_PATH
+    );
+    if (!appendixPlanPath || !(await deps.pathExists(appendixPlanPath))) {
+      missing.push(
+        "{PROJ}/academic_writer/THEORY_APPENDIX_PLAN.md (or theory_state.appendix_packet_path)"
+      );
+    }
+    const appendixDraftPath = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      writingContract.proofAppendixPath ?? deps.DEFAULT_THEORY_APPENDIX_SECTION_PATH
+    );
+    if (!appendixDraftPath || !(await deps.pathExists(appendixDraftPath))) {
+      missing.push(
+        "{PROJ}/academic_writer/paper/sections/appendix_theory.tex (or writing_contract.proof_appendix_path)"
+      );
+    }
+  }
+  const citationIntegrity = deps.normalizeCitationIntegrityState(
+    ctx.manifest?.citation_integrity
+  );
+  if (citationIntegrity.enabled && citationIntegrity.verificationRequired) {
+    if (citationIntegrity.verificationStatus !== "verified") {
+      missing.push(
+        `PROJECT_MANIFEST.json.citation_integrity.verification_status = verified (current: ${citationIntegrity.verificationStatus})`
+      );
+    }
+    if (!citationIntegrity.allCitationsReal) {
+      missing.push(
+        "PROJECT_MANIFEST.json.citation_integrity.all_citations_real = true before WRITE handoff"
+      );
+    }
   }
   appendTopTierOpportunitySignals({
     missing,

@@ -407,6 +407,10 @@ type AutoIteratorDeps = {
   }) => string | null;
   STAGE_REQUIREMENTS: Record<string, { nextStage?: string | null }>;
   stageOwner: (stage: string | null) => AutoIteratorAction["owner"];
+  loadExperimentSearchState?: (params: {
+    projectRoot: string;
+    manifest: ManifestLike | null;
+  }) => Promise<Record<string, unknown>>;
   normalizeExperimentSearchState: (value: unknown) => Record<string, unknown>;
   normalizeAutonomousExecutionState: (
     value: unknown
@@ -746,6 +750,17 @@ export async function runWorkflowAutoIteratorImpl(
   let regressionDepth = requestedGraphReentry ? 1 : 0;
   let regressionDepthCapped = false;
   while (stageEffective && !requestedGraphReentry) {
+    if (stageEffective === "experiment") {
+      const experimentSearchForRegression = deps.normalizeExperimentSearchState(
+        manifest.experiment_search
+      );
+      const experimentSearchStatus = normalizeStage(
+        experimentSearchForRegression.status
+      );
+      if (experimentSearchStatus && experimentSearchStatus !== "missing") {
+        break;
+      }
+    }
     if (regressionDepth >= MAX_REGRESSION_DEPTH) {
       regressionDepthCapped = true;
       break;
@@ -823,7 +838,12 @@ export async function runWorkflowAutoIteratorImpl(
   let stageAfter = stageEffective;
   const experimentSearchStateBeforeAdvance =
     stageEffective === "experiment"
-      ? deps.normalizeExperimentSearchState(manifest.experiment_search)
+      ? deps.loadExperimentSearchState
+        ? await deps.loadExperimentSearchState({
+            projectRoot,
+            manifest,
+          })
+        : deps.normalizeExperimentSearchState(manifest.experiment_search)
       : null;
   const experimentReviewStateBeforeAdvance =
     stageEffective === "experiment"
@@ -918,9 +938,23 @@ export async function runWorkflowAutoIteratorImpl(
       : effectiveMissingSignals;
 
   const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
+  const manifestOwner = asString(manifest.owner_agent);
+  const manifestStage = normalizeStage(manifest.current_stage);
+  const orchestrationOwner = pickString(existingOrchestrationState, [
+    "currentOwner",
+    "current_owner",
+  ]);
+  const canonicalStageOwner = deps.stageOwner(stageBefore);
+  const handoffPhase = normalizeStage(
+    pickString(existingOrchestrationState, ["handoffPhase", "handoff_phase"])
+  );
   const ownerBefore =
-    pickString(existingOrchestrationState, ["currentOwner", "current_owner"]) ??
-    asString(manifest.owner_agent);
+    ((manifestStage === stageBefore || !canonicalStageOwner) && manifestOwner
+      ? manifestOwner
+      : null) ??
+    ((handoffPhase === "prepared" || handoffPhase === "waiting") && orchestrationOwner
+      ? orchestrationOwner
+      : canonicalStageOwner ?? orchestrationOwner);
   const graphContextForActions = deriveWorkflowGraphContext({
     manifest,
     stage: stageAfter,
@@ -930,7 +964,14 @@ export async function runWorkflowAutoIteratorImpl(
   });
   const paperIngestionStateForActions = graphContextForActions.paperIngestionState;
   const experimentSearchState = deps.normalizeExperimentSearchState(
-    manifest.experiment_search
+    stageAfter === "experiment"
+      ? deps.loadExperimentSearchState
+        ? await deps.loadExperimentSearchState({
+            projectRoot,
+            manifest,
+          })
+        : manifest.experiment_search
+      : manifest.experiment_search
   );
   const autonomousExecutionState = deps.normalizeAutonomousExecutionState(
     manifest.autonomous_execution
@@ -1053,10 +1094,7 @@ export async function runWorkflowAutoIteratorImpl(
     Boolean(ownerAfter) &&
     Boolean(ownerBefore) &&
     ownerAfter !== ownerBefore;
-  const dispatchStageSignals =
-    shouldMonitorExperiments || experimentDecisionOwnsNextStep || crossOwnerStageTransition
-      ? []
-      : activeStageSignals;
+  const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
   const stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
   const stageReadinessRepairSummary =
@@ -1087,7 +1125,7 @@ export async function runWorkflowAutoIteratorImpl(
         : null;
   const stageReadyForOwnerWork =
     !gateEvaluation.blocking &&
-    dispatchStageSignals.length === 0 &&
+    (dispatchStageSignals.length === 0 || experimentDecisionOwnsNextStep) &&
     stageRepairCommand == null;
   const stageRepairBackgroundCommand = stageReadinessRepairSummary
     ? stageReadinessRepairSummary
@@ -1154,7 +1192,7 @@ export async function runWorkflowAutoIteratorImpl(
     pickString(existingOrchestrationState, ["stageRunId", "stage_run_id"]) ??
     null;
   const ownerTransitionRequiresClaim =
-    crossOwnerStageTransition;
+    crossOwnerStageTransition && !regressed && stageAfter !== stageBefore;
   const reusePendingExecutionId =
     ownerTransitionRequiresClaim &&
     pendingOwnerCandidate === ownerAfter &&
@@ -1198,9 +1236,7 @@ export async function runWorkflowAutoIteratorImpl(
   manifest.resume_action = resumeAction;
   manifest.blocking_reason = blockingReason;
   manifest.last_heartbeat_at = now;
-  manifest.current_micro_stage = ownerTransitionRequiresClaim
-    ? previousMicroStage
-    : nextMicroStage;
+  manifest.current_micro_stage = nextMicroStage;
   const rollbackReasonCategory =
     experimentRollbackStage != null
       ? normalizeStage(experimentDecisionBeforeAdvance?.decision) === "rollback_to_idea"

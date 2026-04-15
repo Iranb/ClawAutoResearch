@@ -3,12 +3,12 @@ import {
   nowIso,
   readProjectJson,
   writeProjectJson,
-} from "../research-contracts/core/project-io.ts";
+} from "../research-contracts/core/project-io";
 import {
   normalizeWorkflowPaperSourceEntry,
   parseWorkflowPaperSourceIndex,
   type WorkflowPaperSourceEntry,
-} from "../paper-source-index.ts";
+} from "../paper-source-index";
 
 export type CanonicalPaperMaturity =
   | "venue_published"

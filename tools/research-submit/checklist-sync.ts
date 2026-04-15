@@ -1,5 +1,5 @@
-import { writeProjectJson } from "../research-contracts/core/project-io.ts";
-import type { CitationAuditReport } from "../research-intel/citation-audit.ts";
+import { writeProjectJson } from "../research-contracts/core/project-io";
+import type { CitationAuditReport } from "../research-intel/citation-audit";
 
 export async function materializeChecklistSyncReport(params: {
   projectRoot: string;

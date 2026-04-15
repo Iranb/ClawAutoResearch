@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   normalizeStatisticalEvidenceState,
   serializeStatisticalEvidenceState,
-} from "../research-contracts/evidence-contracts.ts";
+} from "../research-contracts/evidence-contracts";
 import {
   nowIso,
   readProjectJson,
@@ -10,9 +10,9 @@ import {
   writeProjectJson,
   writeProjectManifest,
   writeProjectText,
-} from "../research-contracts/core/project-io.ts";
-import { normalizeExperimentSearchSpec } from "../workflow-guard-state/experiment-search-spec.ts";
-import { normalizeResearchProgramState } from "../workflow-guard-state/research-program.ts";
+} from "../research-contracts/core/project-io";
+import { normalizeExperimentSearchSpec } from "../workflow-guard-state/experiment-search-spec";
+import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 
 type LedgerExperiment = Record<string, unknown>;
 type GroupStats = {

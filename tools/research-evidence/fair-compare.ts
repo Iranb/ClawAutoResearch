@@ -1,4 +1,4 @@
-import { nowIso, writeProjectJson } from "../research-contracts/core/project-io.ts";
+import { nowIso, writeProjectJson } from "../research-contracts/core/project-io";
 
 export type FairCompareRow = {
   method: string;
