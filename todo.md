@@ -8,8 +8,8 @@
 - [x] Phase B-1: 给 hooks 增加 `filters / appliesWhen / workflow context / changedPaths`
 - [x] Phase B-2: 让 `write_text_artifact` 和 hook executor 支持 change-driven rerun
 - [x] Phase C-1: 把 `write` 阶段拆成稳定的 section-level task surface
-- [ ] Phase C-2: 基于 section packet / writing session 再做更细的 target resolution（当前仍以 canonical path 为主，section packet 为后续增强）
-- [ ] Phase D: survey-specific writing hooks（当前 survey 只吃 manuscript-level / policy-level约束，不强上 experiment-style section hooks）
+- [x] Phase C-2: 基于 section packet / writing session 再做更细的 target resolution
+- [x] Phase D: survey-specific writing hooks
 
 ## 当前实现的边界
 
@@ -31,9 +31,14 @@
   - `write.section.results`
   - `write.section.discussion`
   - `write.section.conclusion`
+  - `write.section.scope_and_protocol`
+  - `write.section.taxonomy`
+  - `write.section.evidence_synthesis`
+  - `write.section.benchmark_landscape`
+  - `write.section.open_problems`
 - 仍保守处理：
-  - survey 不开启 experiment-style section hooks
-  - task closeout 仍以 canonical section path 为主，不强依赖 packet path 作为唯一真相
+  - hook target resolution 已优先读取 `writing_session.section_packets[*].draft_path/packet_path/review_path`，但 packet-path 作为 target 的语义仍然偏保守，默认仍优先 draft prose
+  - survey hooks 目前主要覆盖 survey 专属 section 和 manuscript closeout，还没有进一步细分成更多 survey-only paragraph / sub-section 审核层
   - `stateScope` 已进入合同，但还没有扩成更复杂的 shared-state 调度策略
 
 目标：

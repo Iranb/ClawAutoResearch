@@ -30,16 +30,18 @@ const WRITING_HOOK_IDS = new Set([
   "conclusion-boundary-audit",
   "main-tex-consistency-audit",
   "figure-caption-audit",
+  "survey-abstract-synthesis-audit",
+  "survey-introduction-positioning-audit",
+  "survey-scope-protocol-audit",
+  "survey-taxonomy-audit",
+  "survey-evidence-synthesis-audit",
+  "survey-benchmark-landscape-audit",
+  "survey-open-problems-audit",
+  "survey-conclusion-boundary-audit",
 ]);
 
 const WRITING_POLICY_STAGES = new Set(["plan", "write", "review", "submit"]);
-const DEFERRED_SECTION_HOOK_IDS = new Set([
-  "abstract-claim-audit",
-  "introduction-gap-story-audit",
-  "results-claim-evidence-audit",
-  "related-work-positioning-audit",
-  "conclusion-boundary-audit",
-]);
+const DEFERRED_SECTION_HOOK_IDS = new Set<string>();
 
 function normalizeStage(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -387,7 +389,6 @@ function buildWritingHookPolicies(params: {
         filters: {
           taskIds: ["write.section.abstract"],
           fileGlobs: ["academic_writer/paper/sections/abstract.tex"],
-          changedPathsAny: ["academic_writer/paper/sections/abstract.tex"],
         },
       })
     );
@@ -417,7 +418,6 @@ function buildWritingHookPolicies(params: {
         filters: {
           taskIds: ["write.section.introduction"],
           fileGlobs: ["academic_writer/paper/sections/introduction.tex"],
-          changedPathsAny: ["academic_writer/paper/sections/introduction.tex"],
         },
       })
     );
@@ -450,10 +450,6 @@ function buildWritingHookPolicies(params: {
             "academic_writer/paper/sections/results.tex",
             "academic_writer/paper/sections/experiments.tex",
           ],
-          changedPathsAny: [
-            "academic_writer/paper/sections/results.tex",
-            "academic_writer/paper/sections/experiments.tex",
-          ],
         },
       })
     );
@@ -483,7 +479,6 @@ function buildWritingHookPolicies(params: {
         filters: {
           taskIds: ["write.section.related_work"],
           fileGlobs: ["academic_writer/paper/sections/related_work.tex"],
-          changedPathsAny: ["academic_writer/paper/sections/related_work.tex"],
         },
       })
     );
@@ -513,10 +508,257 @@ function buildWritingHookPolicies(params: {
         filters: {
           taskIds: ["write.section.conclusion"],
           fileGlobs: ["academic_writer/paper/sections/conclusion.tex"],
-          changedPathsAny: ["academic_writer/paper/sections/conclusion.tex"],
         },
       })
     );
+  }
+
+  if (surveyMode) {
+    const surveySectionArtifacts = uniqueStrings([
+      ...manuscriptArtifacts,
+      "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+      "academic_writer/SURVEY_SECTION_BRIEFS.md",
+      "academic_writer/SURVEY_SELF_REVIEW.md",
+      "researcher/SURVEY_BRIEF.md",
+      "researcher/LITERATURE_REVIEW.md",
+      "researcher/SOTA_MATRIX.md",
+      "researcher/GAP_SYNTHESIS.md",
+      "researcher/COVERAGE_SUMMARY.md",
+      "researcher/REVIEW_PROTOCOL.md",
+    ]);
+
+    if (sectionSet.has("abstract")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-abstract-synthesis-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 200,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/abstract.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey abstract",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "The abstract must summarize the survey scope, organizing thesis, evidence base, and main takeaways without pretending stronger consensus than the packet supports.",
+              "Any comparative or field-wide claim must be traceable to the survey evidence bundle.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.abstract"],
+            fileGlobs: ["academic_writer/paper/sections/abstract.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("introduction")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-introduction-positioning-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 205,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/introduction.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey introduction",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "The introduction must justify why this survey is needed now and what organizing lens it contributes beyond a paper list.",
+              "The survey framing must stay aligned with scope boundaries and known blind spots.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.introduction"],
+            fileGlobs: ["academic_writer/paper/sections/introduction.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("scope_and_protocol")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-scope-protocol-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 210,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/scope_and_protocol.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey scope and protocol",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "This section must explain inclusion/exclusion logic, retrieval boundary, and known blind spots clearly.",
+              "Do not let protocol language drift away from REVIEW_PROTOCOL.md or COVERAGE_SUMMARY.md.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.scope_and_protocol"],
+            fileGlobs: ["academic_writer/paper/sections/scope_and_protocol.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("taxonomy")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-taxonomy-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 220,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/taxonomy.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey taxonomy",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "The taxonomy must define stable method families or themes rather than list papers flatly.",
+              "When category boundaries are tentative or overlapping, the prose must say so instead of pretending a rigid taxonomy.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.taxonomy"],
+            fileGlobs: ["academic_writer/paper/sections/taxonomy.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("evidence_synthesis")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-evidence-synthesis-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 230,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/evidence_synthesis.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey evidence synthesis",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "This section must synthesize across papers, families, or benchmarks rather than summarize one paper at a time.",
+              "Comparative claims must stay evidence-backed, and non-comparable results must be called out explicitly.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.evidence_synthesis"],
+            fileGlobs: ["academic_writer/paper/sections/evidence_synthesis.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("benchmark_landscape")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-benchmark-landscape-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 240,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/benchmark_landscape.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey benchmark landscape",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "Benchmark comparisons must stay honest about dataset/metric incompatibility and missing fairness assumptions.",
+              "Do not collapse non-comparable setups into one scoreboard-like ranking.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.benchmark_landscape"],
+            fileGlobs: ["academic_writer/paper/sections/benchmark_landscape.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("open_problems")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-open-problems-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 250,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/open_problems.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey open problems",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "Open problems must tie back to concrete evidence gaps, contradictions, or thin coverage zones rather than generic future work prose.",
+              "The section should rank unresolved problems by evidential importance, not by rhetorical flourish.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.open_problems"],
+            fileGlobs: ["academic_writer/paper/sections/open_problems.tex"],
+          },
+        })
+      );
+    }
+    if (sectionSet.has("conclusion")) {
+      hooks.push(
+        buildHook({
+          hookId: "survey-conclusion-boundary-audit",
+          stage: "write",
+          hookPoint: "before_task_complete",
+          order: 260,
+          parallelGroup: "writing-section-draft",
+          filePath: "academic_writer/paper/sections/conclusion.tex",
+          blockingMode: "block_stage",
+          requirementPrompt: buildPrompt({
+            title: "survey conclusion",
+            paperMode: params.paperMode,
+            topTierVerdict: params.topTierVerdict,
+            requirements: [
+              "The conclusion must summarize what the field knows with confidence while keeping open boundaries and unresolved contradictions explicit.",
+              "Do not let the final section imply survey consensus stronger than the evidence bundle supports.",
+            ],
+            supportingArtifacts: surveySectionArtifacts,
+          }),
+          supportingArtifacts: surveySectionArtifacts,
+          appliesWhen: baseAppliesWhen,
+          filters: {
+            taskIds: ["write.section.conclusion"],
+            fileGlobs: ["academic_writer/paper/sections/conclusion.tex"],
+          },
+        })
+      );
+    }
   }
 
   return sortHookPolicies(hooks);

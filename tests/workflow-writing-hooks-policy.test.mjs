@@ -98,11 +98,29 @@ async function makeWritingHookProject({
       paper_mode: paperMode,
       required_sections:
         paperMode === "survey"
-          ? ["abstract", "introduction", "taxonomy", "open_problems", "conclusion"]
+          ? [
+              "abstract",
+              "introduction",
+              "scope_and_protocol",
+              "taxonomy",
+              "evidence_synthesis",
+              "benchmark_landscape",
+              "open_problems",
+              "conclusion",
+            ]
           : ["abstract", "introduction", "related_work", "experiments", "conclusion"],
       section_order:
         paperMode === "survey"
-          ? ["abstract", "introduction", "taxonomy", "open_problems", "conclusion"]
+          ? [
+              "abstract",
+              "introduction",
+              "scope_and_protocol",
+              "taxonomy",
+              "evidence_synthesis",
+              "benchmark_landscape",
+              "open_problems",
+              "conclusion",
+            ]
           : ["abstract", "introduction", "related_work", "experiments", "conclusion"],
     },
     paper_story_state: {
@@ -316,4 +334,34 @@ test("research_workflow materialize_writing_hook_policies writes the writing-own
     ),
     true
   );
+});
+
+test("materializeWritingHookPolicies generates survey-specific section hooks", async (t) => {
+  const projectRoot = await makeWritingHookProject({
+    stage: "write",
+    paperMode: "survey",
+  });
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializeWritingHookPolicies({
+    projectRoot,
+    stage: "write",
+    paperMode: "survey",
+  });
+
+  const hookIds = result.generatedHookIds;
+  assert.ok(hookIds.includes("survey-taxonomy-audit"));
+  assert.ok(hookIds.includes("survey-evidence-synthesis-audit"));
+  assert.ok(hookIds.includes("survey-open-problems-audit"));
+  assert.ok(hookIds.includes("survey-conclusion-boundary-audit"));
+
+  const taxonomyHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "survey-taxonomy-audit"
+  );
+  assert.ok(taxonomyHook);
+  assert.equal(taxonomyHook?.enabled, true);
+  assert.equal(taxonomyHook?.appliesWhen?.workflowLines?.[0], "survey");
+  assert.deepEqual(taxonomyHook?.filters?.taskIds, ["write.section.taxonomy"]);
 });

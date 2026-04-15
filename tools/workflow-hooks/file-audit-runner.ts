@@ -9,6 +9,7 @@ import {
   writeJsonEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import { normalizeWritingSessionState } from "../workflow-guard-state/authoring-review-state";
 import type {
   WorkflowFileAuditHookPolicy,
   WorkflowFileAuditResult,
@@ -62,6 +63,98 @@ function buildFileAuditPacketFingerprint(value: unknown): string {
   return `sha1:${createHash("sha1").update(JSON.stringify(value)).digest("hex")}`;
 }
 
+function normalizeSectionId(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function deriveSectionIdFromHook(params: {
+  policy: WorkflowFileAuditHookPolicy;
+  context: WorkflowHookPointContext;
+}): string | null {
+  const taskId = params.context.taskId?.trim() ?? "";
+  if (taskId.startsWith("write.section.")) {
+    return normalizeSectionId(taskId.slice("write.section.".length));
+  }
+  const fileName = params.policy.filePath.split("/").at(-1) ?? "";
+  if (fileName.endsWith(".tex")) {
+    return normalizeSectionId(fileName.slice(0, -4));
+  }
+  return null;
+}
+
+async function resolveWritingHookTarget(params: {
+  projectRoot: string;
+  policy: WorkflowFileAuditHookPolicy;
+  context: WorkflowHookPointContext;
+}): Promise<{
+  resolvedFilePath: string;
+  canonicalFilePath: string;
+  resolutionSource: "canonical" | "section_packet_draft" | "section_packet_packet" | "section_packet_review";
+  sectionId: string | null;
+}> {
+  const canonicalFilePath = params.policy.filePath;
+  const sectionId = deriveSectionIdFromHook({
+    policy: params.policy,
+    context: params.context,
+  });
+  if (!sectionId) {
+    return {
+      resolvedFilePath: canonicalFilePath,
+      canonicalFilePath,
+      resolutionSource: "canonical",
+      sectionId: null,
+    };
+  }
+
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const writingSession = normalizeWritingSessionState(manifest.writing_session);
+  const sectionPacket = writingSession.sectionPackets[sectionId] ?? null;
+  const candidates: Array<{
+    relativePath: string | null;
+    source: "section_packet_draft" | "section_packet_packet" | "section_packet_review";
+  }> = [
+    {
+      relativePath: sectionPacket?.draftPath ?? null,
+      source: "section_packet_draft",
+    },
+    {
+      relativePath: sectionPacket?.packetPath ?? null,
+      source: "section_packet_packet",
+    },
+    {
+      relativePath: sectionPacket?.reviewPath ?? null,
+      source: "section_packet_review",
+    },
+  ];
+  for (const candidate of candidates) {
+    if (!candidate.relativePath) {
+      continue;
+    }
+    const resolved = resolveProjectArtifactPath(params.projectRoot, candidate.relativePath);
+    if (resolved && (await pathExists(resolved))) {
+      return {
+        resolvedFilePath: candidate.relativePath,
+        canonicalFilePath,
+        resolutionSource: candidate.source,
+        sectionId,
+      };
+    }
+  }
+  return {
+    resolvedFilePath: canonicalFilePath,
+    canonicalFilePath,
+    resolutionSource: "canonical",
+    sectionId,
+  };
+}
+
 export async function computeProjectFileFingerprint(params: {
   projectRoot: string;
   filePath: string;
@@ -113,19 +206,30 @@ export async function inspectFileAuditPacketInputs(params: {
   policy: WorkflowFileAuditHookPolicy;
   context: WorkflowHookPointContext;
 }): Promise<{
+  resolution: {
+    resolvedFilePath: string;
+    canonicalFilePath: string;
+    resolutionSource: "canonical" | "section_packet_draft" | "section_packet_packet" | "section_packet_review";
+    sectionId: string | null;
+  };
   fileFingerprint: string | null;
   packetFingerprint: string;
   targetText: string | null;
   supportingArtifactSnapshots: FileAuditSupportingArtifactSnapshot[];
   packetJson: Record<string, unknown>;
 }> {
+  const resolution = await resolveWritingHookTarget({
+    projectRoot: params.projectRoot,
+    policy: params.policy,
+    context: params.context,
+  });
   const resolvedTargetPath = resolveProjectArtifactPath(
     params.projectRoot,
-    params.policy.filePath
+    resolution.resolvedFilePath
   );
   const fileFingerprint = await computeProjectFileFingerprint({
     projectRoot: params.projectRoot,
-    filePath: params.policy.filePath,
+    filePath: resolution.resolvedFilePath,
   });
   const targetText = resolvedTargetPath
     ? await readTextIfExists(resolvedTargetPath)
@@ -144,7 +248,10 @@ export async function inspectFileAuditPacketInputs(params: {
     actorRole: params.context.actorRole,
     targetRole: params.policy.targetRole,
     auditorRole: params.policy.auditorRole,
-    filePath: params.policy.filePath,
+    filePath: resolution.resolvedFilePath,
+    canonicalFilePath: resolution.canonicalFilePath,
+    resolutionSource: resolution.resolutionSource,
+    sectionId: resolution.sectionId,
     fileFingerprint,
     requirementPrompt: params.policy.requirementPrompt,
     supportingArtifacts: supportingArtifactSnapshots,
@@ -157,13 +264,16 @@ export async function inspectFileAuditPacketInputs(params: {
   const packetFingerprint = buildFileAuditPacketFingerprint({
     hookId: packetJsonBase.hookId,
     hookPoint: packetJsonBase.hookPoint,
-    stage: packetJsonBase.stage,
-    targetRole: packetJsonBase.targetRole,
-    auditorRole: packetJsonBase.auditorRole,
-    filePath: packetJsonBase.filePath,
-    fileFingerprint: packetJsonBase.fileFingerprint,
-    requirementPrompt: packetJsonBase.requirementPrompt,
-    supportingArtifacts: supportingArtifactSnapshots.map((entry) => ({
+        stage: packetJsonBase.stage,
+        targetRole: packetJsonBase.targetRole,
+        auditorRole: packetJsonBase.auditorRole,
+        filePath: packetJsonBase.filePath,
+        canonicalFilePath: packetJsonBase.canonicalFilePath,
+        resolutionSource: packetJsonBase.resolutionSource,
+        sectionId: packetJsonBase.sectionId,
+        fileFingerprint: packetJsonBase.fileFingerprint,
+        requirementPrompt: packetJsonBase.requirementPrompt,
+        supportingArtifacts: supportingArtifactSnapshots.map((entry) => ({
       path: entry.path,
       exists: entry.exists,
       contentFingerprint: entry.contentFingerprint,
@@ -172,6 +282,7 @@ export async function inspectFileAuditPacketInputs(params: {
     emittedHookEvents: packetJsonBase.emittedHookEvents,
   });
   return {
+    resolution,
     fileFingerprint,
     packetFingerprint,
     targetText,
@@ -213,6 +324,7 @@ export async function materializeFileAuditPacket(params: {
     context: params.context,
   });
   const {
+    resolution,
     fileFingerprint,
     packetFingerprint,
     targetText,
@@ -228,7 +340,9 @@ export async function materializeFileAuditPacket(params: {
     `- project_id: ${params.projectId ?? "unknown"}`,
     `- target_role: ${params.policy.targetRole ?? "unknown"}`,
     `- auditor_role: ${params.policy.auditorRole}`,
-    `- file_path: ${params.policy.filePath}`,
+    `- file_path: ${resolution.resolvedFilePath}`,
+    `- canonical_file_path: ${resolution.canonicalFilePath}`,
+    `- resolution_source: ${resolution.resolutionSource}`,
     `- file_fingerprint: ${fileFingerprint ?? "missing"}`,
     "",
     "## Requirement Prompt",
