@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 
 function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
@@ -103,4 +104,80 @@ test("research_workflow can set and read file audit policy and materialize a pac
     hookId: "writer-main-tex",
   });
   assert.match(packet.packetPath, /AUDIT_PACKET\.md$/);
+});
+
+test("prepare_stage_handoff is blocked before intent creation when prepare hooks are pending", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-workflow-prepare-hook-")
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.OPENCLAW_PROJECT = projectRoot;
+
+  await fs.mkdir(path.join(projectRoot, "reviewer"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "reviewer", "PREPARE_GATE.md"), "gate\n", "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "review",
+        owner_agent: "reviewer",
+        workflow_hooks: {
+          enabled: true,
+          audit_hooks: [
+            {
+              hook_id: "prepare-handoff-gate",
+              hook_type: "file_audit",
+              stage: "write",
+              hook_point: "before_prepare_handoff",
+              target_role: "academic_writer",
+              auditor_role: "reviewer",
+              file_path: "reviewer/PREPARE_GATE.md",
+              requirement_prompt: "Check whether the handoff may be prepared.",
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "reviewer",
+    sessionKey: "agent:reviewer:test",
+    runtime: {
+      subagent: {
+        async run() {
+          return { runId: "hook-run-1" };
+        },
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      tool.execute("test-call", {
+        action: "prepare_stage_handoff",
+        handoff: {
+          stageAfter: "write",
+          toRole: "academic_writer",
+          dispatch: false,
+        },
+      }),
+    /Workflow hook review is running|Workflow hooks are still running|blocked/i
+  );
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents.length, 0);
 });

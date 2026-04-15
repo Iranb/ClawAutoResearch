@@ -248,6 +248,7 @@ import {
 } from "./workflow-handoff/inbound-budget";
 import { WORKFLOW_INBOUND_AUTO_ITERATOR_INLINE_BUDGET_MS } from "./workflow-handoff/handoff-defaults";
 import { runWorkflowHookPointGate } from "./workflow-hooks/gateways.js";
+import { evaluateWorkflowHandoffHooks } from "./workflow-hooks/handoff-gates.js";
 import {
   getFileAuditStateSummary,
   readWorkflowHooksPolicyForProject,
@@ -4794,6 +4795,42 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     workflowLine,
                     stageAfter,
                   });
+              const prepareGate = await evaluateWorkflowHandoffHooks({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                hookPoint: "before_prepare_handoff",
+                stage: stageAfter,
+                ownerBefore: actorRole,
+                ownerAfter: toRole,
+                requesterSessionKey: ctx.sessionKey,
+                requesterChannel: ctx.messageChannel,
+                transition: "prepare_stage_handoff",
+              });
+              if (!prepareGate.allowed) {
+                throw new Error(
+                  prepareGate.blockingReason ??
+                    "Workflow hook gate blocked prepare_stage_handoff."
+                );
+              }
+              const stageGate = await evaluateWorkflowHandoffHooks({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                hookPoint: "before_stage_handoff",
+                stage: stageAfter,
+                ownerBefore: actorRole,
+                ownerAfter: toRole,
+                requesterSessionKey: ctx.sessionKey,
+                requesterChannel: ctx.messageChannel,
+                transition: "prepare_stage_handoff",
+              });
+              if (!stageGate.allowed) {
+                throw new Error(
+                  stageGate.blockingReason ??
+                    "Workflow hook gate blocked stage handoff preparation."
+                );
+              }
               const handoff = await createStageOwnerHandoffIntent({
                 projectRoot: resolvedProjectRoot,
                 projectId: snapshot.projectId,
@@ -4830,6 +4867,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   autoIteratorResult?.pendingHandoffExecutionId ??
                   readString((snapshot as Record<string, unknown>).manifestUpdatedAt) ??
                   readString((snapshot as Record<string, unknown>).manifest_updated_at),
+                hookGate: stageGate.hookGate ?? prepareGate.hookGate,
               });
               await syncPreparedWorkflowHandoffToManifest({
                 projectRoot: resolvedProjectRoot,
