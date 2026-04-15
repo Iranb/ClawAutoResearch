@@ -69,6 +69,9 @@
 - `send_mailbox`
 - `ack_mailbox`
 - channel binding 相关动作
+- `get_file_audit_state`
+- `set_file_audit_policy`
+- `materialize_file_audit_packet`
 
 ### Experiment / QC / review
 
@@ -102,7 +105,27 @@
 - `evaluate_experiment_search_decision`
   - 综合 `EXPERIMENT_SEARCH_SPEC.json`、`experiment_search`、`EXPERIMENT_LEDGER.json`、experiment review、experiment memory、GPU monitor
   - 输出 `repair_implementation / continue_tuning / require_multi_seed / require_ablation / rollback_to_plan / rollback_to_idea / reconcile_runtime`
-  - promotion 现在也有 runtime hard guard：如果 recorded basis 只引用 configured `non_promotion_signals`，candidate 不能被 promote
+- promotion 现在也有 runtime hard guard：如果 recorded basis 只引用 configured `non_promotion_signals`，candidate 不能被 promote
+
+## 3.5 workflow hooks 相关动作
+
+现在 `research_workflow` 还暴露了一组和 workflow hooks 直接相关的动作：
+
+| Action | 作用 | 常见场景 |
+| --- | --- | --- |
+| `get_file_audit_state` | 读取 manifest hook policy + runtime hook state | 排查某个 stage / handoff 为什么被 hook 挡住 |
+| `set_file_audit_policy` | 将 file audit hooks 写入 `PROJECT_MANIFEST.json.workflow_hooks` | 初始化项目审计策略、人工调整审核规则 |
+| `materialize_file_audit_packet` | 手动物化某个 hook 的 audit packet | 调试 hook 输入面、检查 supporting artifacts 是否正确 |
+
+这组动作和旧的 feature-specific review 不同：
+
+- 它们不是只服务某一个 stage
+- 它们是跨 `stage/task/handoff` 的节点级审核能力
+- 它们会和 `.openclaw-research/workflow-hooks-state.json`、`reviewer/file-audits/` 联动
+
+如果你想看完整架构背景，直接读：
+
+- [Workflow Hooks](../architecture/workflow-hooks.md)
 
 ## 4. 为什么 `auto_iterator_tick` 是最重要的入口
 

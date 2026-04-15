@@ -10,3 +10,9 @@
 4. [Configuration](./configuration.md)
 
 如果你在修 bug，通常先看 commands/tools，再看 state contracts，最后看 module map。
+
+如果你关注的是“某个节点为什么被挡住、审核 packet 在哪里、revision 是怎么派回去的”，建议把架构页里的：
+
+- [Workflow Hooks](../architecture/workflow-hooks.md)
+
+一起看。

@@ -15,6 +15,7 @@
 1. `docs/index.md`
 2. `docs/get-started/project-lifecycle.md`
 3. `docs/architecture/workflow-control-plane.md`
-4. `docs/architecture/lobster-handoffs.md`
-5. `docs/architecture/graph-memory.md`
-6. `docs/reference/state-contracts.md`
+4. `docs/architecture/workflow-hooks.md`
+5. `docs/architecture/lobster-handoffs.md`
+6. `docs/architecture/graph-memory.md`
+7. `docs/reference/state-contracts.md`

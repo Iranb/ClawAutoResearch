@@ -42,10 +42,19 @@
 - `workflow-runtime-sessions.json`
 - `workflow-announce-outbox.json`
 - `workflow-broadcast-outbox.json`
+- `workflow-hooks-state.json`
 - `workflow-events.jsonl`
 - `workflow-trace.jsonl`
 
 它们不只是 debug 文件，而是 runtime recovery 的关键依据。
+
+`workflow-hooks-state.json` 现在尤其重要，因为它记录：
+
+- 每个 hook 的当前状态
+- active audit round
+- last reviewed / last passed fingerprint
+- aggregate revision packet path
+- 某个 hook point 当前是 `auditing / revise_requested / passed / escalated`
 
 ## 5. Plan / Analyze / Review / Write 的 durable packets
 
@@ -59,6 +68,41 @@
 
 特别是 `paper_story_state`，它把 claim support、story spine、claim-to-experiment mapping 这些写作关键面从临时判断中抽离出来。
 
+现在还新增了一类 packet / report:
+
+- `reviewer/file-audits/<hook_id>/round-<n>/AUDIT_PACKET.md`
+- `reviewer/file-audits/<hook_id>/round-<n>/AUDIT_PACKET.json`
+- `reviewer/file-audits/<hook_id>/round-<n>/AUDIT_REPORT.json`
+- `reviewer/file-audits/<hook_id>/round-<n>/AUDIT_REPORT.md`
+- `reviewer/file-audits/_aggregate/<stage>-<hook_point>/AGGREGATE_REVISION_PACKET.md`
+
+它们服务的是 workflow hook 审核闭环，而不是传统的 late review 报告。
+
+## 5.5 workflow hook policy 合同
+
+hook policy 现在挂在：
+
+- `PROJECT_MANIFEST.json.workflow_hooks`
+
+兼容读取：
+
+- `PROJECT_MANIFEST.json.workflow_audit.checkpoints`
+
+当前稳定支持的 hook type 是：
+
+- `file_audit`
+
+一个典型 hook 会把这些事实写成 durable policy：
+
+- 审哪个阶段
+- 挂在哪个 hook point
+- target role 是谁
+- auditor role 是谁
+- 审哪个文件
+- requirement prompt 是什么
+- supporting artifacts 有哪些
+- revision 应该发回给谁
+
 ## 6. 不建议手工直接改的文件
 
 活跃 workflow 中尤其不建议手工编辑：
@@ -66,6 +110,7 @@
 - `PROJECT_MANIFEST.json`
 - `researcher/EXPERIMENT_LEDGER.json`
 - `workflow-mailbox.json`
+- `workflow-hooks-state.json`
 - runtime queue / sessions / trace 文件
 
 如果必须修复，优先通过对应工具动作、repair helper 或一次性迁移脚本完成。

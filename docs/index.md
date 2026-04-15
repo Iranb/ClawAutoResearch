@@ -26,6 +26,9 @@ features:
   - title: Workflow / 工作流控制平面
     details: 实验论文主线与综述主线、owner gate、auto_iterator_tick、回退与 repair 逻辑。
     link: /architecture/workflow-control-plane
+  - title: Workflow Hooks / 节点级审核
+    details: 关键产出节点、handoff 节点、task closeout 的 durable hook、file audit、revision dispatch 与 hook state。
+    link: /architecture/workflow-hooks
   - title: Graph & Memory / 图谱与记忆
     details: PaperNexus、shared corpus、graph presence、实验账本与 innovation reflection。
     link: /architecture/graph-memory
@@ -61,7 +64,7 @@ features:
   </div>
   <div class="portal-card">
     <h3>读者 2：要修系统的人</h3>
-    <p>重点读 <a href="/reference/module-map">Module Map</a>、<a href="/reference/state-contracts">State Contracts</a> 和 <a href="/operations/testing-and-debugging">测试与调试</a>。</p>
+    <p>重点读 <a href="/reference/module-map">Module Map</a>、<a href="/reference/state-contracts">State Contracts</a>、<a href="/architecture/workflow-hooks">Workflow Hooks</a> 和 <a href="/operations/testing-and-debugging">测试与调试</a>。</p>
   </div>
   <div class="portal-card">
     <h3>读者 3：要跑科研项目的人</h3>

@@ -62,6 +62,7 @@ export default defineConfig({
           items: [
             { text: '体系总览', link: '/architecture/' },
             { text: 'Workflow 控制平面', link: '/architecture/workflow-control-plane' },
+            { text: 'Workflow Hooks', link: '/architecture/workflow-hooks' },
             { text: 'Auto Pipeline Handoffs', link: '/architecture/auto-pipeline-handoffs' },
             { text: 'Lobster Handoffs', link: '/architecture/lobster-handoffs' },
             { text: 'Graph 与 Memory', link: '/architecture/graph-memory' },
