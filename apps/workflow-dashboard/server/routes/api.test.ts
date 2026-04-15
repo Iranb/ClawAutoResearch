@@ -1,5 +1,5 @@
 import path from "node:path";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 
 import request from "supertest";
@@ -171,5 +171,55 @@ describe("workflow-dashboard api routes", () => {
         currentStage: "graph_build",
       }),
     ]);
+  });
+
+  it("resolves summary routes through PROJECTS_STATE.dir when the project directory is nested", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const app = createApp({ projectsRoot });
+    const nestedProjectRoot = path.join(projectsRoot, "nested", "dir-mapped-project");
+
+    await mkdir(nestedProjectRoot, { recursive: true });
+    await writeFile(
+      path.join(nestedProjectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "dir-mapped-project",
+          title: "Dir Mapped Project",
+          current_stage: "code",
+          owner_agent: "coder",
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      JSON.stringify(
+        {
+          projects: [
+            {
+              id: "dir-mapped-project",
+              dir: "nested/dir-mapped-project/",
+              stage: "code",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const response = await request(app).get("/api/projects/dir-mapped-project/summary");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        id: "dir-mapped-project",
+        title: "Dir Mapped Project",
+        projectRoot: nestedProjectRoot,
+        currentStage: "code",
+        owner: "coder",
+      }),
+    );
   });
 });

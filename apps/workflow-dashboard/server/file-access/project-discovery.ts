@@ -1,10 +1,11 @@
 import path from "node:path";
 
 import { pathExists, readDirectoryNames, readJsonFileSafe } from "./fs.js";
-import { resolveProjectRoot } from "./project-root.js";
+import { resolveProjectRoot, resolveProjectRootFromDir } from "./project-root.js";
 
 type ProjectsStateEntry = {
   id?: string | null;
+  dir?: string | null;
 };
 
 type ProjectsStateFile = {
@@ -27,7 +28,9 @@ export async function discoverProjects(
 
   for (const entry of projectsState?.projects ?? []) {
     const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-    const projectRoot = resolveProjectRoot(projectsRoot, id);
+    const projectRoot =
+      resolveProjectRootFromDir(projectsRoot, entry?.dir) ??
+      resolveProjectRoot(projectsRoot, id);
 
     if (!id || !projectRoot || knownIds.has(id)) {
       continue;

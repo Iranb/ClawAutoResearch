@@ -65,6 +65,8 @@ Source reference for this check:
 
 Load only the needed section file:
 
+For concise English section-level drafting templates and chapter-by-chapter moves, prefer `paper-section-writing` and load its matching reference. Use the files below when you need the older detailed guide or example-bank links.
+
 - Introduction: `references/introduction.md`
 - Abstract: `references/abstract.md`
 - Related Work: `references/related-work.md`

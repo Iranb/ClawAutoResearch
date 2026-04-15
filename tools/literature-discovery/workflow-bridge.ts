@@ -2,7 +2,6 @@ import path from "node:path";
 import {
   asRecord,
   asString,
-  normalizeGraphPresenceStatus,
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
@@ -70,19 +69,6 @@ export function hasActiveLiteratureDiscoveryRequest(params: {
       isActiveQueuedRequestStatus(entry.status)
   );
   if (activeRequests.length === 0) {
-    return false;
-  }
-  const graphPresenceReady =
-    normalizeGraphPresenceStatus(params.graphPresenceStatus) === "ready";
-  const onlyDormantQueuedRequests = activeRequests.every(
-    (entry) =>
-      entry.status === "queued" &&
-      !entry.startedAt &&
-      !entry.lastRunId &&
-      !entry.lastSessionKey &&
-      entry.attemptCount === 0
-  );
-  if (graphPresenceReady && onlyDormantQueuedRequests) {
     return false;
   }
   return true;

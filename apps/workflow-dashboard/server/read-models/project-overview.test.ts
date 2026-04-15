@@ -217,4 +217,56 @@ describe("readProjectOverviews", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe("gcd-confirmation-bias-mitigation");
   });
+
+  it("uses PROJECTS_STATE.dir when it points to a nested project directory", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const nestedProjectRoot = path.join(projectsRoot, "nested", "dir-mapped-project");
+
+    await mkdir(nestedProjectRoot, { recursive: true });
+    await writeFile(
+      path.join(nestedProjectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "dir-mapped-project",
+          title: "Dir Mapped Project",
+          current_stage: "review",
+          next_action: "Review the mapped project.",
+          updated_at: "2026-04-15T10:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      JSON.stringify(
+        {
+          projects: [
+            {
+              id: "dir-mapped-project",
+              dir: "nested/dir-mapped-project/",
+              stage: "review",
+              updated: "2026-04-15T10:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectOverviews({ projectsRoot });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "dir-mapped-project",
+          projectRoot: nestedProjectRoot,
+          title: "Dir Mapped Project",
+          currentStage: "review",
+          source: "projects_state",
+        }),
+      ])
+    );
+  });
 });

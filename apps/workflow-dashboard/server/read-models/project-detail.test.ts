@@ -187,6 +187,57 @@ describe("readProjectDetailSummary", () => {
     });
   });
 
+  it("resolves a project through PROJECTS_STATE.dir when the directory differs from project id", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const nestedProjectRoot = path.join(projectsRoot, "nested", "dir-mapped-project");
+
+    await mkdir(nestedProjectRoot, { recursive: true });
+    await writeFile(
+      path.join(nestedProjectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "dir-mapped-project",
+          title: "Dir Mapped Project",
+          current_stage: "code",
+          owner_agent: "coder",
+          updated_at: "2026-04-15T10:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectsRoot, "PROJECTS_STATE.json"),
+      JSON.stringify(
+        {
+          projects: [
+            {
+              id: "dir-mapped-project",
+              dir: "nested/dir-mapped-project/",
+              stage: "code",
+              updated: "2026-04-15T10:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectDetailSummary({
+      projectsRoot,
+      projectId: "dir-mapped-project",
+    });
+
+    expect(result).toMatchObject({
+      id: "dir-mapped-project",
+      projectRoot: nestedProjectRoot,
+      title: "Dir Mapped Project",
+      currentStage: "code",
+      owner: "coder",
+    });
+  });
+
   it("surfaces team round and task graph summaries when runtime artifacts exist", async () => {
     const projectsRoot = await createProjectsRootFixture();
     const projectRoot = path.join(projectsRoot, "team-runtime-project");

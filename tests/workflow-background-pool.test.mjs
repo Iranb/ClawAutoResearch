@@ -97,6 +97,33 @@ test("workflow background pool tolerates an empty legacy registry file left by a
   assert.deepEqual(listed.entries, []);
 });
 
+test("workflow background pool serializes concurrent registry writes", async () => {
+  await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      recordBackgroundWorkflowRun({
+        ownerAgent: "researcher",
+        channelKey: "discord:channel:test-room",
+        requesterSessionKey: "agent:researcher:discord:channel:test-room",
+        backgroundSessionKey: `agent:researcher:discord:channel:test-room:subagent:${index}`,
+        runId: `run:${index}`,
+        family: "research",
+        kind: "resume_pipeline",
+      })
+    )
+  );
+
+  const listed = await listBackgroundWorkflowRuns({
+    ownerAgent: "researcher",
+    channelKey: "discord:channel:test-room",
+  });
+
+  assert.equal(listed.entries.length, 8);
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.runId).sort(),
+    Array.from({ length: 8 }, (_, index) => `run:${index}`)
+  );
+});
+
 test("workflow background pool tolerates malformed project manifests while reconciling stale papernexus sessions", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "workflow-background-pool-bad-manifest-")
