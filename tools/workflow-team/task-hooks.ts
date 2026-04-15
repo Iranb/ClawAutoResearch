@@ -182,6 +182,12 @@ export async function completeWorkflowTaskAndContinue(params: {
   role: string;
   completionNote?: string | null;
   ttlMs?: number;
+  beforeCompleteHook?: (params: {
+    projectRoot: string;
+    task: WorkflowTaskGraphTask;
+    sessionKey: string;
+    role: string;
+  }) => Promise<{ allow: boolean; reason?: string | null }>;
 }): Promise<{
   completed: boolean;
   task: WorkflowTaskGraphTask | null;
@@ -221,6 +227,31 @@ export async function completeWorkflowTaskAndContinue(params: {
       nextTask: null,
       verification,
     };
+  }
+  if (params.beforeCompleteHook) {
+    const hookGate = await params.beforeCompleteHook({
+      projectRoot: params.projectRoot,
+      task,
+      sessionKey: params.sessionKey,
+      role: params.role,
+    });
+    if (!hookGate.allow) {
+      const failed = await markWorkflowTaskNeedsRepair({
+        projectRoot: params.projectRoot,
+        taskId: params.taskId,
+        sessionKey: params.sessionKey,
+        reason: hookGate.reason ?? "Workflow hook blocked task completion.",
+      });
+      return {
+        completed: false,
+        task: failed.task,
+        nextTask: null,
+        verification: {
+          verified: false,
+          reason: hookGate.reason ?? "workflow_hook_blocked",
+        },
+      };
+    }
   }
 
   const completed = await completeWorkflowTask({

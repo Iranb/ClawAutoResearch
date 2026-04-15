@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { ensureWorkflowProjectRoot } from "./workflow-guard";
-import { migrateWorkflowRuntimeState } from "./workflow-runtime-state";
+import { migrateWorkflowRuntimeState } from "./workflow-runtime-state.js";
 import { evaluateExperimentSearchDecisionForProject } from "./workflow-experiment-decision";
 import { ensureSurveyWorkflowIdentity, isSurveyWorkflow } from "./workflow-line-routing.js";
 import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";

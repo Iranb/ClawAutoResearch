@@ -16,7 +16,7 @@ import {
 import { writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import type {
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
-} from "./workflow-runtime-state";
+} from "./workflow-runtime-state.js";
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

@@ -111,6 +111,10 @@ import {
   collectSubmitStageMissingSignals,
   collectWriteStageMissingSignals,
 } from "./workflow-guard-stages/writing-stage-signals";
+import type {
+  WorkflowHookEvent,
+  WorkflowMaterializedArtifact,
+} from "./workflow-hooks/contracts.js";
 import {
   collectSurveyReviewStageMissingSignals as collectSurveyReviewStageMissingSignalsFromModule,
 } from "./workflow-guard-stages/survey-stage-signals";
@@ -2053,7 +2057,13 @@ type GateState = {
 };
 
 export type AutoIteratorAction = {
-  kind: "drive_stage" | "background" | "wait_human" | "switch_project";
+  kind:
+    | "drive_stage"
+    | "background"
+    | "wait_human"
+    | "switch_project"
+    | "audit_hook"
+    | "revise_hook";
   stage: string | null;
   owner: WorkflowRole | null;
   summary: string;
@@ -2100,6 +2110,8 @@ export type AutoIteratorResult = {
   graphPresenceCheck: GraphPresenceCheckResult | null;
   projectsStateUpdated: boolean;
   auditPath: string | null;
+  materializedArtifacts: WorkflowMaterializedArtifact[];
+  hookEvents: WorkflowHookEvent[];
   recommendedActions: AutoIteratorAction[];
 };
 

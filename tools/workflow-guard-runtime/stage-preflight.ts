@@ -40,6 +40,10 @@ import {
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 import { resolveStageReadiness } from "../workflow-derived-state/stage-readiness.js";
+import type {
+  WorkflowHookEvent,
+  WorkflowMaterializedArtifact,
+} from "../workflow-hooks/contracts";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -815,6 +819,8 @@ export async function maybePrepareWorkflowStageContracts(params: {
 }): Promise<{
   manifest: ManifestLike;
   materializedContracts: string[];
+  materializedArtifacts: WorkflowMaterializedArtifact[];
+  emittedHookEvents: WorkflowHookEvent[];
   errors: Array<{ contract: string; message: string }>;
 }> {
   const projectRoot = params.projectRoot;
@@ -826,6 +832,9 @@ export async function maybePrepareWorkflowStageContracts(params: {
   const errors: Array<{ contract: string; message: string }> = [];
   const trigger = params.trigger ?? "stage_preflight";
 
+  const materializedArtifacts: WorkflowMaterializedArtifact[] = [];
+  const emittedHookEvents: WorkflowHookEvent[] = [];
+
   const ideaCatalystReconciliation = await reconcileSatisfiedIdeaCatalystRequisition({
     projectRoot,
     manifest,
@@ -833,6 +842,17 @@ export async function maybePrepareWorkflowStageContracts(params: {
   if (ideaCatalystReconciliation.updated) {
     manifest = ideaCatalystReconciliation.manifest;
     materializedContracts.push("idea_catalyst_requisition_reconciled");
+    materializedArtifacts.push({
+      contract: "idea_catalyst_requisition_reconciled",
+      artifactPath: null,
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "idea_catalyst_requisition_reconciled",
+      artifactPath: null,
+    });
   }
   const literatureDiscoveryReconciliation =
     await reconcileSatisfiedLiteratureDiscoveryRequisition({
@@ -843,6 +863,17 @@ export async function maybePrepareWorkflowStageContracts(params: {
   if (literatureDiscoveryReconciliation.updated) {
     manifest = literatureDiscoveryReconciliation.manifest;
     materializedContracts.push("literature_discovery_requisition_reconciled");
+    materializedArtifacts.push({
+      contract: "literature_discovery_requisition_reconciled",
+      artifactPath: null,
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "literature_discovery_requisition_reconciled",
+      artifactPath: null,
+    });
   }
 
   const runStep = async (
@@ -856,6 +887,17 @@ export async function maybePrepareWorkflowStageContracts(params: {
     try {
       await action();
       materializedContracts.push(contract);
+      materializedArtifacts.push({
+        contract,
+        artifactPath: null,
+        fingerprint: null,
+        action: "updated",
+      });
+      emittedHookEvents.push({
+        hookPoint: "artifact_materialized",
+        contract,
+        artifactPath: null,
+      });
       manifest =
         (await readJsonIfExists<ManifestLike>(
           resolveProjectArtifactPath(projectRoot, "PROJECT_MANIFEST.json")
@@ -1016,6 +1058,8 @@ export async function maybePrepareWorkflowStageContracts(params: {
   return {
     manifest,
     materializedContracts,
+    materializedArtifacts,
+    emittedHookEvents,
     errors,
   };
 }

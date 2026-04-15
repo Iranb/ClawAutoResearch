@@ -113,6 +113,9 @@ import {
   createWorkflowReviewRoundHandoff,
   recordWorkflowReviewRoundResults,
 } from "./workflow-handoff/review-rounds";
+import { evaluateWorkflowHooksForPoint } from "./workflow-hooks/executor.js";
+import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
+import type { WorkflowHookPoint } from "./workflow-hooks/contracts.js";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -393,6 +396,29 @@ type AutoModeDiscussionAttempt = {
   roundId: string | null;
   packetPath: string | null;
   resolved: boolean;
+};
+
+type WorkflowHookPointAttempt = {
+  launched: boolean;
+  reason:
+    | "disabled"
+    | "no_hooks"
+    | "no_runtime_subagent"
+    | "started"
+    | "reviewing"
+    | "updated"
+    | "passed"
+    | "blocked";
+  projectId: string | null;
+  projectRoot: string;
+  hookPoint: WorkflowHookPoint;
+  stage: string | null;
+  status: string | null;
+  hookCount: number;
+  approved: boolean;
+  aggregateVerdict: string | null;
+  blockingReason: string | null;
+  aggregateRevisionPacketPath: string | null;
 };
 
 type AutoModeMitigationDispatchAttempt = {
@@ -864,6 +890,8 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   stageAfter: string | null;
   timedDefaultTriggered?: boolean;
   timedDefaultSummary?: string | null;
+  artifactHooks?: WorkflowHookPointAttempt;
+  beforeStageHandoffHooks?: WorkflowHookPointAttempt;
   autoCodeReview?: AutoCodeReviewAttempt;
   autoGateReview: AutoGateReviewAttempt;
   autoModeDiscussion: AutoModeDiscussionAttempt;
@@ -918,6 +946,52 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
         params.autoMitigationDispatch.owner,
         params.autoMitigationDispatch.reusedServiceSession ? "reused" : "fresh",
+      ].join(":"),
+    };
+  }
+  const blockingHookAttempt =
+    params.beforeStageHandoffHooks?.approved === false &&
+    params.beforeStageHandoffHooks.reason === "blocked"
+      ? params.beforeStageHandoffHooks
+      : params.artifactHooks?.approved === false &&
+          params.artifactHooks.reason === "blocked"
+        ? params.artifactHooks
+        : null;
+  if (blockingHookAttempt) {
+    return {
+      status: "blocked",
+      stage: blockingHookAttempt.stage ?? params.stageAfter ?? null,
+      summary:
+        blockingHookAttempt.blockingReason ??
+        `Workflow hooks at ${blockingHookAttempt.hookPoint} blocked the current transition.`,
+      dedupeKey: [
+        "workflow-hooks",
+        "blocked",
+        blockingHookAttempt.hookPoint,
+        blockingHookAttempt.stage ?? params.stageAfter ?? "unknown",
+      ].join(":"),
+    };
+  }
+  const waitingHookAttempt =
+    params.beforeStageHandoffHooks?.reason === "started" ||
+    params.beforeStageHandoffHooks?.reason === "reviewing"
+      ? params.beforeStageHandoffHooks
+      : params.artifactHooks?.reason === "started" ||
+          params.artifactHooks?.reason === "reviewing"
+        ? params.artifactHooks
+        : null;
+  if (waitingHookAttempt) {
+    return {
+      status: "waiting",
+      stage: waitingHookAttempt.stage ?? params.stageAfter ?? null,
+      summary:
+        waitingHookAttempt.blockingReason ??
+        `Waiting for workflow hooks at ${waitingHookAttempt.hookPoint} before continuing.`,
+      dedupeKey: [
+        "workflow-hooks",
+        waitingHookAttempt.reason,
+        waitingHookAttempt.hookPoint,
+        waitingHookAttempt.stage ?? params.stageAfter ?? "unknown",
       ].join(":"),
     };
   }
@@ -2870,6 +2944,189 @@ function buildAutoMitigationExtraBody(params: {
     .join("\n");
 }
 
+function normalizeHookReviewerRole(
+  value: string | null | undefined
+): DispatchableWorkflowRole | null {
+  if (
+    value === "researcher" ||
+    value === "planner" ||
+    value === "orchestrator" ||
+    value === "coder" ||
+    value === "analyzer" ||
+    value === "academic_writer" ||
+    value === "reviewer" ||
+    value === "cross-reviewer"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+export async function maybeAdvanceWorkflowHookPointForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  hookPoint: WorkflowHookPoint;
+  autoIteratorResult: {
+    effectiveAutoMode?: string | null;
+    stageAfter?: string | null;
+    ownerAfter?: string | null;
+    ownerBefore?: string | null;
+    materializedArtifacts?: Array<{
+      contract: string;
+      artifactPath: string | null;
+      fingerprint: string | null;
+      action: "created" | "updated" | "reconciled";
+    }>;
+    hookEvents?: Array<{
+      hookPoint: WorkflowHookPoint;
+      contract: string | null;
+      artifactPath: string | null;
+    }>;
+  };
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
+  return enqueueWorkflowTask({
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
+    label: `workflow_hook_point:${params.hookPoint}`,
+    logger: params.logger,
+    task: async (): Promise<WorkflowHookPointAttempt> => {
+      const runtimeSubagent = params.runtimeSubagent;
+      if ((params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) === "off") {
+        return {
+          launched: false,
+          reason: "disabled",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          hookPoint: params.hookPoint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: null,
+          hookCount: 0,
+          approved: true,
+          aggregateVerdict: "pass",
+          blockingReason: null,
+          aggregateRevisionPacketPath: null,
+        };
+      }
+      const requesterBinding = resolveWorkflowRequesterBinding({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      const requesterSessionKey =
+        requesterBinding.sessionKey ?? "agent:researcher:main";
+      const summary = await evaluateWorkflowHooksForPoint({
+        runtimeSubagent,
+        context: buildWorkflowHookPointContext({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          hookPoint: params.hookPoint,
+          ownerRole: params.autoIteratorResult.ownerAfter ?? params.autoIteratorResult.ownerBefore ?? null,
+          actorRole: "researcher",
+          materializedArtifacts: params.autoIteratorResult.materializedArtifacts ?? [],
+          emittedHookEvents: (params.autoIteratorResult.hookEvents ?? []).filter(
+            (entry) => entry.hookPoint === params.hookPoint
+          ),
+        }),
+        requesterSessionKey,
+        requesterChannel: requesterBinding.channelKey ? "discord" : null,
+        launchReviewerRun: runtimeSubagent
+          ? async (launchParams) => {
+              const reviewerRole = normalizeHookReviewerRole(launchParams.reviewerRole);
+              if (!reviewerRole) {
+                return {
+                  launched: false,
+                  runId: null,
+                  sessionKey: launchParams.sessionKey,
+                  error: `Unsupported hook reviewer role: ${launchParams.reviewerRole}`,
+                };
+              }
+              const preferredSessionKey = deriveAgentSessionKeyForRole({
+                requesterSessionKey,
+                targetRole: reviewerRole,
+              });
+              const started = await launchWorkflowNestedRunTransition({
+                runtimeSubagent,
+                source: "workflow_hook_file_audit",
+                queueKey: `workflow-hook:${launchParams.idempotencyKey}`,
+                ownerAgent: reviewerRole,
+                sessionKey: preferredSessionKey,
+                requesterSessionKey,
+                projectRoot: launchParams.projectRoot,
+                projectId: launchParams.projectId,
+                family: "review",
+                kind: "workflow_hook_file_audit",
+                summary: launchParams.summary,
+                message: launchParams.message,
+                idempotencyKey: launchParams.idempotencyKey,
+                extraSystemPrompt:
+                  "Workflow file audit reviewer.\n" +
+                  "Audit only the supplied target file packet and return the required JSON schema.",
+              });
+              return {
+                launched: started.launched,
+                runId: started.runId ?? null,
+                sessionKey: started.sessionKey ?? preferredSessionKey,
+                error: started.error ?? null,
+              };
+            }
+          : undefined,
+        extractLatestText: extractLatestAssistantText,
+      });
+      if (summary.hooksRun.length === 0) {
+        return {
+          launched: false,
+          reason: "no_hooks",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          hookPoint: params.hookPoint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: "idle",
+          hookCount: 0,
+          approved: true,
+          aggregateVerdict: "pass",
+          blockingReason: null,
+          aggregateRevisionPacketPath: null,
+        };
+      }
+      const launched = summary.hooksRun.some((entry) => entry.launched);
+      const pending = summary.aggregateStatus === "auditing";
+      const approved = summary.aggregateVerdict === "pass";
+      return {
+        launched,
+        reason:
+          approved
+            ? "passed"
+            : pending
+              ? launched
+                ? "started"
+                : "reviewing"
+              : params.runtimeSubagent
+                ? "blocked"
+                : "no_runtime_subagent",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        hookPoint: params.hookPoint,
+        stage: params.autoIteratorResult.stageAfter ?? null,
+        status: summary.aggregateStatus,
+        hookCount: summary.hooksRun.length,
+        approved,
+        aggregateVerdict: summary.aggregateVerdict,
+        blockingReason: summary.blockingReason,
+        aggregateRevisionPacketPath: summary.aggregateRevisionPacketPath,
+      };
+    },
+  });
+}
+
 export async function maybeAdvanceAutoCodeReviewForProject(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
@@ -4193,6 +4450,20 @@ export function createWorkflowCoordinatorService(
             })
           )
         );
+        const artifactHookAttempts = await Promise.all(
+          results.map((entry) =>
+            maybeAdvanceWorkflowHookPointForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              hookPoint: "artifact_materialized",
+              autoIteratorResult: entry.result,
+              logger,
+              deps: resolvedDeps,
+            })
+          )
+        );
         const autoCodeReviews = await Promise.all(
           results.map((entry) =>
             maybeAdvanceAutoCodeReviewForProject({
@@ -4335,9 +4606,46 @@ export function createWorkflowCoordinatorService(
           )
         );
         const autoMitigationDispatches = autoMitigationAttempts.filter((entry) => entry.launched);
-        const autoStageAttempts = await Promise.all(
+        const beforeStageHandoffHookAttempts = await Promise.all(
           discussionRefreshedResults.map((entry) =>
-            maybeLaunchAutoStageForProject({
+            maybeAdvanceWorkflowHookPointForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              hookPoint: "before_stage_handoff",
+              autoIteratorResult: entry.result,
+              logger,
+              deps: resolvedDeps,
+            })
+          )
+        );
+        const autoStageAttempts = await Promise.all(
+          discussionRefreshedResults.map((entry, index) => {
+            if (
+              artifactHookAttempts[index]?.approved === false ||
+              beforeStageHandoffHookAttempts[index]?.approved === false
+            ) {
+              return Promise.resolve({
+                launched: false,
+                reason: "gate_blocked",
+                projectId: entry.projectId,
+                projectRoot: entry.projectRoot,
+                stage: entry.result.stageAfter ?? null,
+                owner: null,
+                sessionKey: null,
+                runId: null,
+                dispatchStrategy: null,
+                launchKey: null,
+                error:
+                  beforeStageHandoffHookAttempts[index]?.blockingReason ??
+                  artifactHookAttempts[index]?.blockingReason ??
+                  "Workflow hooks blocked the current stage handoff.",
+                reusedServiceSession: false,
+                activeResearcherSessionsInChannel: null,
+              } satisfies AutoStageLaunchAttempt);
+            }
+            return maybeLaunchAutoStageForProject({
               runtimeSubagent: plugin.api.runtime?.subagent,
               workflowPolicy,
               projectRoot: entry.projectRoot,
@@ -4346,8 +4654,8 @@ export function createWorkflowCoordinatorService(
               launchedStageKeys,
               logger,
               deps,
-            })
-          )
+            });
+          })
         );
         const autoStageLaunches = autoStageAttempts.filter((entry) => entry.launched);
         const idleResearchAttempts = await Promise.all(
@@ -4404,6 +4712,8 @@ export function createWorkflowCoordinatorService(
               stageAfter: entry.result.stageAfter ?? null,
               timedDefaultTriggered: entry.result.timedDefaultTriggered === true,
               timedDefaultSummary: entry.result.gateReason,
+              artifactHooks: artifactHookAttempts[index],
+              beforeStageHandoffHooks: beforeStageHandoffHookAttempts[index],
               autoCodeReview: autoCodeReviews[index],
               autoGateReview: autoGateReviews[index],
               autoModeDiscussion: autoModeDiscussions[index],
@@ -4440,10 +4750,12 @@ export function createWorkflowCoordinatorService(
           queuedBackgroundRunsRemaining: drainedQueue.remaining.length,
           projectCount: discussionRefreshedResults.length,
           results: summarizeCoordinatorPass(discussionRefreshedResults),
+          artifactHookAttempts,
           autoCodeReviews,
           autoGateReviews,
           autoModeDiscussions,
           autoMitigationDispatches,
+          beforeStageHandoffHookAttempts,
           autoStageLaunches,
           idleResearchLaunches,
           autoZoteroSyncLaunches,

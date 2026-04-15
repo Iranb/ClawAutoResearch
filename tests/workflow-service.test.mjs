@@ -22,6 +22,7 @@ import {
   readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
 } from "../tools/workflow-runtime-state.ts";
+import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 import {
   claimWorkflowTask,
   materializeWorkflowTaskGraph,
@@ -2714,6 +2715,100 @@ test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states"
   assert.equal(waiting?.status, "waiting");
   assert.match(waiting?.summary ?? "", /human confirmation|OpenReview/i);
 
+  const hookBlocked = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "write",
+    artifactHooks: {
+      launched: false,
+      reason: "blocked",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      hookPoint: "artifact_materialized",
+      stage: "write",
+      status: "revise_requested",
+      hookCount: 1,
+      approved: false,
+      aggregateVerdict: "revise",
+      blockingReason: "A file audit hook requested revision before handoff.",
+      aggregateRevisionPacketPath:
+        "reviewer/file-audits/_aggregate/write-artifact_materialized/AGGREGATE_REVISION_PACKET.md",
+    },
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "write",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "write",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "write",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "gate_blocked",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "write",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+  assert.equal(hookBlocked?.status, "blocked");
+  assert.match(hookBlocked?.summary ?? "", /file audit hook requested revision/i);
+
   const timedDefault = deriveWorkflowCoordinatorStatusUpdate({
     projectId: "alpha",
     projectRoot: "/tmp/projects/alpha",
@@ -2916,6 +3011,16 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
     },
   };
 
+  await bindChannelProjectForWorkflow({
+    projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    sessionId: "session-alpha",
+    channelKey: "discord:group:paper-lab",
+    messageChannel: "discord",
+    policy: plugin.getWorkflowPolicy(),
+    boundByAgent: "researcher",
+  });
+
   const service = createWorkflowCoordinatorService(plugin, {
     async listWorkflowCoordinatorProjects() {
       return [
@@ -2978,7 +3083,7 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
       warn() {},
     },
   });
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
     if (
       runs.some(
         (entry) =>

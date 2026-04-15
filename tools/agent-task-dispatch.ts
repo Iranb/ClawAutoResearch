@@ -17,7 +17,7 @@ import {
   readWorkflowAgentCapabilityStore,
   selectWorkflowCapableSession,
 } from "./workflow-handoff/agent-capabilities";
-import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state";
+import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import {
   getPreferredWorkflowAgentSession,

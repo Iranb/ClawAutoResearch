@@ -162,3 +162,69 @@ test("workflow task claim blocks active write-scope conflicts", async (t) => {
   assert.equal(second.claimed, false);
   assert.match(second.reason ?? "", /^write_scope_conflict:/);
 });
+
+test("completeWorkflowTaskAndContinue can be blocked by a before-complete hook", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-task-complete-hook-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "review",
+    topTierVerdict: null,
+    evidenceCloseout: {
+      status: "not_applicable",
+      topTierVerdict: null,
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: true,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "review.audit_main_tex",
+        title: "Audit the main tex",
+        owner: "reviewer",
+        status: "blocked",
+        reason: "Needs audit",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+    ],
+  });
+
+  const claimed = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "reviewer",
+    sessionKey: "agent:reviewer:test",
+  });
+  assert.equal(claimed.claimed, true);
+
+  const completion = await completeWorkflowTaskAndContinue({
+    projectRoot,
+    taskId: "review.audit_main_tex",
+    sessionKey: "agent:reviewer:test",
+    role: "reviewer",
+    beforeCompleteHook: async () => ({
+      allow: false,
+      reason: "Workflow hook requested another revision round.",
+    }),
+  });
+
+  assert.equal(completion.completed, false);
+  assert.equal(completion.verification.verified, false);
+  assert.match(completion.verification.reason ?? "", /revision round/i);
+
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(
+    store?.tasks.find((task) => task.taskId === "review.audit_main_tex")?.status,
+    "needs_repair"
+  );
+});

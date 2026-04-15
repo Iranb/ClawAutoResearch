@@ -3,7 +3,7 @@ import { readWorkflowMailbox } from "../workflow-collaboration/mailbox";
 import {
   readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
-} from "../workflow-runtime-state";
+} from "../workflow-runtime-state.js";
 import { readJsonIfExists } from "../workflow-guard-core/fs";
 import { normalizeOrchestrationState } from "../workflow-guard-state/execution-state";
 import {
