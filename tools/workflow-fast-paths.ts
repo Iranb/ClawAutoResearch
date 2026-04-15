@@ -65,7 +65,7 @@ import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet"
 import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
-} from "./workflow-runtime-state";
+} from "./workflow-runtime-state.js";
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

@@ -63,6 +63,7 @@ import { resolveWorkflowSnapshotContext } from "./workflow-runtime-snapshot";
 import { claimNextWorkflowTaskForOwner } from "./workflow-team/task-graph";
 import { recordWorkflowTeamRoundClaim } from "./workflow-team/team-round";
 import { upsertWorkflowAgentCapability } from "./workflow-handoff/agent-capabilities";
+import { runWorkflowHookPointGate } from "./workflow-hooks/gateways.js";
 
 const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "researcher",
@@ -785,6 +786,38 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               role: snapshot.role,
               sessionKey: agentCtx.sessionKey,
               claimLeaseMs: 15 * 60 * 1000,
+              beforeActivateHook: async ({ intent, stageAfter }) => {
+                const hookSummary = await runWorkflowHookPointGate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  projectRoot: snapshot.projectRoot!,
+                  projectId: snapshot.projectId,
+                  stage: stageAfter,
+                  hookPoint: "before_handoff_activation",
+                  ownerRole: snapshot.role,
+                  actorRole: snapshot.role,
+                  requesterSessionKey: agentCtx.sessionKey,
+                  requesterChannel: agentCtx.messageChannel,
+                  handoffIntentId: intent.intentId,
+                });
+                return {
+                  allow: hookSummary.aggregateVerdict === "pass",
+                  blockingReason: hookSummary.blockingReason,
+                };
+              },
+              afterActivateHook: async ({ intent, stageAfter }) => {
+                await runWorkflowHookPointGate({
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  projectRoot: snapshot.projectRoot!,
+                  projectId: snapshot.projectId,
+                  stage: stageAfter,
+                  hookPoint: "after_handoff_activation",
+                  ownerRole: snapshot.role,
+                  actorRole: snapshot.role,
+                  requesterSessionKey: agentCtx.sessionKey,
+                  requesterChannel: agentCtx.messageChannel,
+                  handoffIntentId: intent.intentId,
+                });
+              },
             }).catch(() => null);
             if (claimedHandoff?.claimed) {
               const refreshed = await resolveWorkflowSnapshotForAgentContext({

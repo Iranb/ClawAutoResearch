@@ -18,7 +18,7 @@ import type {
   WorkflowRuntimeAnnounceOutboxStore,
   WorkflowRuntimeBroadcastEntry,
   WorkflowRuntimeBroadcastOutboxStore,
-} from "./workflow-runtime-state";
+} from "./workflow-runtime-state.js";
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;

@@ -1659,6 +1659,8 @@ export async function runWorkflowAutoIteratorImpl(
     graphPresenceCheck,
     projectsStateUpdated,
     auditPath: null,
+    materializedArtifacts: stagePreflight.materializedArtifacts,
+    hookEvents: stagePreflight.emittedHookEvents,
     recommendedActions,
   };
 

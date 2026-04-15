@@ -127,3 +127,64 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
   assert.equal(queue.entries[0].status, "completed");
   assert.equal(queue.entries[0].lastError, null);
 });
+
+test("claimAndActivateWorkflowHandoffForAgent can be blocked by a before-activation hook", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-hook-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "review",
+        owner_agent: "reviewer",
+        orchestration_state: {
+          status: "waiting",
+          current_owner: "reviewer",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const created = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "demo-project",
+    workflowLine: "experiment",
+    stageBefore: "review",
+    stageAfter: "write",
+    ownerBefore: "reviewer",
+    ownerAfter: "academic_writer",
+    executionId: "exec-2",
+    nextAction: "Start writing.",
+  });
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot,
+    intent: created.intent,
+  });
+
+  const activation = await claimAndActivateWorkflowHandoffForAgent({
+    projectRoot,
+    role: "academic_writer",
+    sessionKey: "agent:academic_writer:test",
+    beforeActivateHook: async () => ({
+      allow: false,
+      blockingReason: "File audit hook blocked activation.",
+    }),
+  });
+
+  assert.equal(activation.claimed, true);
+  assert.equal(activation.activated, false);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.owner_agent, "reviewer");
+  assert.equal(manifest.current_stage, "review");
+  assert.equal(manifest.blocking_reason, "File audit hook blocked activation.");
+});

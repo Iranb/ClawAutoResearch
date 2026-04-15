@@ -12,7 +12,7 @@ import {
 import {
   readWorkflowRuntimeQueueStore,
   writeWorkflowRuntimeQueueStore,
-} from "../workflow-runtime-state";
+} from "../workflow-runtime-state.js";
 import {
   normalizeOrchestrationState,
   serializeOrchestrationState,
@@ -202,6 +202,20 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
   claimLeaseMs?: number | null;
   intentId?: string | null;
   idempotencyKey?: string | null;
+  beforeActivateHook?: (params: {
+    projectRoot: string;
+    role: string;
+    sessionKey?: string | null;
+    intent: WorkflowHandoffIntent;
+    stageAfter: string | null;
+  }) => Promise<{ allow: boolean; blockingReason?: string | null }>;
+  afterActivateHook?: (params: {
+    projectRoot: string;
+    role: string;
+    sessionKey?: string | null;
+    intent: WorkflowHandoffIntent;
+    stageAfter: string | null;
+  }) => Promise<void>;
 }): Promise<{
   intent: WorkflowHandoffIntent | null;
   claimed: boolean;
@@ -268,6 +282,27 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     readString(manifest.blocking_reason);
   const nextMicroStage = normalizeStage(payload.nextMicroStage);
 
+  if (params.beforeActivateHook) {
+    const gate = await params.beforeActivateHook({
+      projectRoot: params.projectRoot,
+      role: params.role,
+      sessionKey: readString(params.sessionKey),
+      intent: claimedIntent,
+      stageAfter,
+    });
+    if (!gate.allow) {
+      await syncPreparedWorkflowHandoffToManifest({
+        projectRoot: params.projectRoot,
+        intent: claimedIntent,
+      });
+      const blockedManifest = await readManifest(params.projectRoot);
+      blockedManifest.blocking_reason =
+        gate.blockingReason ?? blockedManifest.blocking_reason;
+      await writeManifest(params.projectRoot, blockedManifest);
+      return { intent: claimedIntent, claimed: true, activated: false };
+    }
+  }
+
   manifest.current_stage = stageAfter ?? manifest.current_stage;
   manifest.owner_agent = claimedIntent.toRole;
   if (nextMicroStage) {
@@ -313,6 +348,15 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     projectId: activatedIntent.projectId,
     intentId: activatedIntent.intentId,
   });
+  if (params.afterActivateHook) {
+    await params.afterActivateHook({
+      projectRoot: params.projectRoot,
+      role: params.role,
+      sessionKey: readString(params.sessionKey),
+      intent: activatedIntent,
+      stageAfter,
+    });
+  }
   return {
     intent: activatedIntent,
     claimed: true,

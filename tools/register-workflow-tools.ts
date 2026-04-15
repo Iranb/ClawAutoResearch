@@ -247,6 +247,14 @@ import {
   recordWorkflowInboundTurnStarted,
 } from "./workflow-handoff/inbound-budget";
 import { WORKFLOW_INBOUND_AUTO_ITERATOR_INLINE_BUDGET_MS } from "./workflow-handoff/handoff-defaults";
+import { runWorkflowHookPointGate } from "./workflow-hooks/gateways.js";
+import {
+  getFileAuditStateSummary,
+  readWorkflowHooksPolicyForProject,
+  setFileAuditPolicyForProject,
+} from "./workflow-hooks/state.js";
+import { materializeFileAuditPacket } from "./workflow-hooks/file-audit-runner.js";
+import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -334,6 +342,9 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_idea_catalyst_state",
   "run_idea_catalyst_research30",
   "capture_diagnostic_bundle",
+  "get_file_audit_state",
+  "set_file_audit_policy",
+  "materialize_file_audit_packet",
   "set_survey_review",
   "refresh_gpu_monitor",
   "set_ideation_contract",
@@ -420,6 +431,9 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   run_idea_catalyst_research30: "runIdeaCatalystResearch30",
   capture_diagnostic_bundle: "captureWorkflowDiagnosticBundle",
+  get_file_audit_state: "getFileAuditStateSummary",
+  set_file_audit_policy: "setFileAuditPolicyForProject",
+  materialize_file_audit_packet: "materializeFileAuditPacket",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
@@ -1525,6 +1539,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_cycle_memory",
               "materialize_survey_review_state",
               "run_idea_catalyst_research30",
+              "get_file_audit_state",
+              "set_file_audit_policy",
+              "materialize_file_audit_packet",
               "get_cross_domain_inspiration",
               "set_cross_domain_inspiration",
               "materialize_cross_domain_requisition",
@@ -1685,6 +1702,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           surveyReview: {
             type: "object",
             additionalProperties: true,
+          },
+          fileAuditPolicy: {
+            type: "object",
+            additionalProperties: true,
+          },
+          fileAuditPolicies: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: true,
+            },
           },
           handoff: {
             type: "object",
@@ -1899,6 +1927,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "string",
           },
           handoffIntentId: {
+            type: "string",
+          },
+          hookId: {
+            type: "string",
+          },
+          hookPoint: {
             type: "string",
           },
           artifactReceipt: {
@@ -3195,6 +3229,24 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 sessionKey: ctx.sessionKey,
                 role: snapshot.role,
                 completionNote: readString(params.completionNote),
+                beforeCompleteHook: async ({ task }) => {
+                  const hookSummary = await runWorkflowHookPointGate({
+                    runtimeSubagent: plugin.api.runtime?.subagent,
+                    projectRoot: resolvedProjectRoot,
+                    projectId: snapshot.projectId,
+                    stage: snapshot.currentStage,
+                    hookPoint: "before_task_complete",
+                    ownerRole: snapshot.role,
+                    actorRole: snapshot.role,
+                    requesterSessionKey: ctx.sessionKey,
+                    requesterChannel: ctx.messageChannel,
+                    taskId: task.taskId,
+                  });
+                  return {
+                    allow: hookSummary.aggregateVerdict === "pass",
+                    reason: hookSummary.blockingReason,
+                  };
+                },
               });
               if (!completion.verification.verified) {
                 await routeWorkflowFailure({
@@ -3436,6 +3488,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "get_survey_review": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getSurveyReviewStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_file_audit_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getFileAuditStateSummary({
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
@@ -3711,6 +3770,50 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "set_file_audit_policy": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const hookPolicies = Array.isArray(params.fileAuditPolicies)
+                ? params.fileAuditPolicies
+                : params.fileAuditPolicy
+                  ? [params.fileAuditPolicy]
+                  : [];
+              const result = await setFileAuditPolicyForProject({
+                projectRoot: resolvedProjectRoot,
+                hookPolicies,
+                mode: readString(params.mode) === "replace" ? "replace" : "append",
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_file_audit_packet": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const hookId = readString(params.hookId);
+              if (!hookId) {
+                throw new Error("hookId is required for materialize_file_audit_packet.");
+              }
+              const policy = (await readWorkflowHooksPolicyForProject(
+                resolvedProjectRoot
+              )).auditHooks.find((entry) => entry.hookId === hookId);
+              if (!policy) {
+                throw new Error(`Unknown file audit hook: ${hookId}`);
+              }
+              const result = await materializeFileAuditPacket({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId,
+                policy,
+                context: buildWorkflowHookPointContext({
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId,
+                  stage: snapshot.currentStage,
+                  hookPoint:
+                    (readString(params.hookPoint) as typeof policy.hookPoint | null) ??
+                    policy.hookPoint,
+                  ownerRole: snapshot.ownerAgent ?? snapshot.role,
+                  actorRole: snapshot.role,
+                }),
+                roundNumber: 1,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "set_survey_review": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -4877,6 +4980,38 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 claimLeaseMs: leaseMs,
                 intentId: currentIntent.intentId,
                 idempotencyKey: currentIntent.idempotencyKey,
+                beforeActivateHook: async ({ intent, stageAfter }) => {
+                  const hookSummary = await runWorkflowHookPointGate({
+                    runtimeSubagent: plugin.api.runtime?.subagent,
+                    projectRoot: resolvedProjectRoot,
+                    projectId: snapshot.projectId,
+                    stage: stageAfter,
+                    hookPoint: "before_handoff_activation",
+                    ownerRole: currentIntent.toRole,
+                    actorRole: snapshot.role,
+                    requesterSessionKey: ctx.sessionKey,
+                    requesterChannel: ctx.messageChannel,
+                    handoffIntentId: intent.intentId,
+                  });
+                  return {
+                    allow: hookSummary.aggregateVerdict === "pass",
+                    blockingReason: hookSummary.blockingReason,
+                  };
+                },
+                afterActivateHook: async ({ intent, stageAfter }) => {
+                  await runWorkflowHookPointGate({
+                    runtimeSubagent: plugin.api.runtime?.subagent,
+                    projectRoot: resolvedProjectRoot,
+                    projectId: snapshot.projectId,
+                    stage: stageAfter,
+                    hookPoint: "after_handoff_activation",
+                    ownerRole: currentIntent.toRole,
+                    actorRole: snapshot.role,
+                    requesterSessionKey: ctx.sessionKey,
+                    requesterChannel: ctx.messageChannel,
+                    handoffIntentId: intent.intentId,
+                  });
+                },
               });
               return textResponse(JSON.stringify({ ...intent, claimedTask }, null, 2));
             }

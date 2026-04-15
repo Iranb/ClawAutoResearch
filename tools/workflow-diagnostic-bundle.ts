@@ -23,7 +23,7 @@ import {
   getWorkflowRuntimeQueuePath,
   getWorkflowRuntimeSessionsPath,
   readWorkflowRuntimeEvents,
-} from "./workflow-runtime-state";
+} from "./workflow-runtime-state.js";
 import { readWorkflowMailbox } from "./workflow-collaboration/mailbox";
 import { readWorkflowHandoffIntentStore } from "./workflow-handoff/handoff-store";
 import { readWorkflowHandoffEvents } from "./workflow-handoff/handoff-events";
