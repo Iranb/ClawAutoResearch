@@ -10,6 +10,7 @@ import {
 } from "../tools/workflow-handoff/review-rounds.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 import { readWorkflowArtifactReceiptStore } from "../tools/workflow-handoff/artifact-receipts.ts";
+import { readWorkflowHooksStateStore } from "../tools/workflow-hooks/state.ts";
 
 test("review round creates handoff intents and receipts", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-round-"));
@@ -50,4 +51,13 @@ test("review round creates handoff intents and receipts", async (t) => {
   const receiptStore = await readWorkflowArtifactReceiptStore(projectRoot);
   assert.equal(receiptStore.receipts.length, 1);
   assert.equal(receiptStore.receipts[0].verificationResult, "failed");
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.review-round:experiment:code"]?.status,
+    "revise_requested"
+  );
+  assert.equal(
+    hookStore.hookPoints.before_stage_handoff?.code?.aggregateVerdict,
+    "revise"
+  );
 });

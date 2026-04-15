@@ -3238,34 +3238,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 sessionKey: ctx.sessionKey,
                 role: snapshot.role,
                 completionNote: readString(params.completionNote),
-                beforeCompleteHook: async ({ task }) => {
-                  const changedPaths = [
+                hookGateContext: {
+                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  projectId: snapshot.projectId,
+                  stage: snapshot.currentStage,
+                  requesterChannel: ctx.messageChannel,
+                  changedPaths: [
                     ...(Array.isArray(receiptPayload?.changedFiles)
                       ? receiptPayload.changedFiles
                       : []),
                     ...(Array.isArray(receiptPayload?.artifactPaths)
                       ? receiptPayload.artifactPaths
                       : []),
-                  ].filter((entry): entry is string => typeof entry === "string");
-                  const hookSummary = await runWorkflowHookPointGate({
-                    runtimeSubagent: plugin.api.runtime?.subagent,
-                    projectRoot: resolvedProjectRoot,
-                    projectId: snapshot.projectId,
-                    stage: snapshot.currentStage,
-                    hookPoint: "before_task_complete",
-                    ownerRole: snapshot.role,
-                    actorRole: snapshot.role,
-                    requesterSessionKey: ctx.sessionKey,
-                    requesterChannel: ctx.messageChannel,
-                    taskId: task.taskId,
-                    taskTitle: task.title,
-                    transition: "complete_task",
-                    changedPaths,
-                  });
-                  return {
-                    allow: hookSummary.aggregateVerdict === "pass",
-                    reason: hookSummary.blockingReason,
-                  };
+                  ].filter((entry): entry is string => typeof entry === "string"),
                 },
               });
               if (!completion.verification.verified) {

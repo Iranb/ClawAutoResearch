@@ -11,6 +11,7 @@ import {
   readWorkflowHooksPolicyForProject,
   readWorkflowHooksStateStore,
 } from "./state.js";
+import { mergeBuiltinWorkflowHooksIntoSummary } from "./builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
 import type {
@@ -229,6 +230,12 @@ export async function evaluateWorkflowHandoffHooks(params: {
           }
         : undefined,
   });
+  const mergedSummary = await mergeBuiltinWorkflowHooksIntoSummary({
+    projectRoot: params.projectRoot,
+    hookPoint: params.hookPoint,
+    stage: params.stage,
+    summary,
+  });
   const hookGate = buildWorkflowHandoffHookGateRecord({
     projectRoot: params.projectRoot,
     projectId: params.projectId,
@@ -236,17 +243,17 @@ export async function evaluateWorkflowHandoffHooks(params: {
     stage: params.stage,
     ownerBefore: params.ownerBefore,
     ownerAfter: params.ownerAfter,
-    summary,
+    summary: mergedSummary,
   });
   const allowed =
-    summary.hooksRun.length === 0 || summary.aggregateVerdict === "pass";
+    mergedSummary.hooksRun.length === 0 || mergedSummary.aggregateVerdict === "pass";
   return {
     allowed,
     hookPoint: params.hookPoint,
-    aggregateVerdict: summary.aggregateVerdict,
-    aggregateStatus: summary.aggregateStatus,
-    blockingReason: summary.blockingReason,
-    aggregateRevisionPacketPath: summary.aggregateRevisionPacketPath,
+    aggregateVerdict: mergedSummary.aggregateVerdict,
+    aggregateStatus: mergedSummary.aggregateStatus,
+    blockingReason: mergedSummary.blockingReason,
+    aggregateRevisionPacketPath: mergedSummary.aggregateRevisionPacketPath,
     hookGate,
   };
 }

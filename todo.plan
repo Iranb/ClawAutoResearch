@@ -246,9 +246,16 @@ hook 的职责应该是：
 - [x] `deliverWorkflowHandoffIntent(...)` delivery 前会检查 hook gate freshness
 - [x] `sweepPendingHandoffIntents(...)` 和 runtime maintenance retry 通过 delivery 层继承 freshness check
 - [x] stale hook-gated handoff 会被 suppress / supersede，而不是继续投递
-- [ ] legacy auto code/gate/discussion loops 仍未完全迁移成 built-in hook policies
-- [ ] review-rounds 仍未完全迁移成 hook aggregate 体系
-- [ ] `completeWorkflowTaskAndContinue(...)` 仍通过调用方注入 hook gate，而不是内部强制默认 gate
+- [x] legacy auto code/gate/discussion loops 已通过 built-in hook bridge 暴露到 `workflow-hooks`
+- [x] review-rounds 已把 pending/pass/revise/block 同步进 hook aggregate 体系
+- [x] `completeWorkflowTaskAndContinue(...)` 已内置默认 `before_task_complete` hook gate
+
+当前实现补充：
+
+- legacy auto code review / submit readiness / auto mode discussion 会把 durable verdict 同步进 built-in hook state，再由 `before_stage_handoff` gateway 统一聚合
+- `prepare_stage_handoff` 和显式 handoff gate 现在可以读取 built-in hook aggregate，而不只看 manifest 里的 `file_audit`
+- review-round 创建时会先把状态标成 `auditing`，结果回写时再同步成 `pass / revise / block`
+- `research_workflow.complete_task` 不再需要自己拼 `before_task_complete` callback，只需提供 hook context
 
 目标：
 

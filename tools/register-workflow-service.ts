@@ -114,6 +114,12 @@ import {
   createWorkflowReviewRoundHandoff,
   recordWorkflowReviewRoundResults,
 } from "./workflow-handoff/review-rounds";
+import {
+  mergeBuiltinWorkflowHooksIntoSummary,
+  syncBuiltinAutoCodeReviewHook,
+  syncBuiltinAutoModeRiskHook,
+  syncBuiltinSubmitReadinessHook,
+} from "./workflow-hooks/builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./workflow-hooks/executor.js";
 import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
 import type { WorkflowHookPoint } from "./workflow-hooks/contracts.js";
@@ -3112,7 +3118,13 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           : undefined,
         extractLatestText: extractLatestAssistantText,
       });
-      if (summary.hooksRun.length === 0) {
+      const mergedSummary = await mergeBuiltinWorkflowHooksIntoSummary({
+        projectRoot: params.projectRoot,
+        hookPoint: params.hookPoint,
+        stage: params.autoIteratorResult.stageAfter ?? null,
+        summary,
+      });
+      if (mergedSummary.hooksRun.length === 0) {
         return {
           launched: false,
           reason: "no_hooks",
@@ -3128,9 +3140,9 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           aggregateRevisionPacketPath: null,
         };
       }
-      const launched = summary.hooksRun.some((entry) => entry.launched);
-      const pending = summary.aggregateStatus === "auditing";
-      const approved = summary.aggregateVerdict === "pass";
+      const launched = mergedSummary.hooksRun.some((entry) => entry.launched);
+      const pending = mergedSummary.aggregateStatus === "auditing";
+      const approved = mergedSummary.aggregateVerdict === "pass";
       return {
         launched,
         reason:
@@ -3147,12 +3159,12 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
         projectRoot: params.projectRoot,
         hookPoint: params.hookPoint,
         stage: params.autoIteratorResult.stageAfter ?? null,
-        status: summary.aggregateStatus,
-        hookCount: summary.hooksRun.length,
+        status: mergedSummary.aggregateStatus,
+        hookCount: mergedSummary.hooksRun.length,
         approved,
-        aggregateVerdict: summary.aggregateVerdict,
-        blockingReason: summary.blockingReason,
-        aggregateRevisionPacketPath: summary.aggregateRevisionPacketPath,
+        aggregateVerdict: mergedSummary.aggregateVerdict,
+        blockingReason: mergedSummary.blockingReason,
+        aggregateRevisionPacketPath: mergedSummary.aggregateRevisionPacketPath,
       };
     },
   });
@@ -3185,12 +3197,22 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
     label: "workflow_auto_code_review",
     logger: params.logger,
     task: async (): Promise<AutoCodeReviewAttempt> => {
+      const finish = async (
+        attempt: AutoCodeReviewAttempt
+      ): Promise<AutoCodeReviewAttempt> => {
+        await syncBuiltinAutoCodeReviewHook({
+          projectRoot: params.projectRoot,
+          stage: attempt.stage,
+          attempt,
+        });
+        return attempt;
+      };
       if (
         !params.workflowPolicy.autoGate.enabled ||
         (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !==
           "aggressive"
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "disabled",
           projectId: params.projectId,
@@ -3200,13 +3222,13 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: null,
           reviewCount: 0,
           approved: false,
-        };
+        });
       }
       if (
         params.autoIteratorResult.stageAfter !== "code" ||
         params.autoIteratorResult.gateBlocking !== true
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "not_code_gate",
           projectId: params.projectId,
@@ -3216,7 +3238,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: null,
           reviewCount: 0,
           approved: false,
-        };
+        });
       }
 
       const missingStageSignals = Array.isArray(params.autoIteratorResult.missingStageSignals)
@@ -3225,7 +3247,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           )
         : [];
       if (missingStageSignals.length > 0) {
-        return {
+        return finish({
           launched: false,
           reason: "bundle_incomplete",
           projectId: params.projectId,
@@ -3235,7 +3257,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: null,
           reviewCount: 0,
           approved: false,
-        };
+        });
       }
 
       const packet = await materializeCodeReviewPacket({
@@ -3249,7 +3271,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         currentRound.packetFingerprint === packet.packetFingerprint &&
         currentRound.status === "approved"
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "already_approved",
           projectId: params.projectId,
@@ -3259,14 +3281,14 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: currentRound.status,
           reviewCount: currentRound.aggregate?.reviewCount ?? 0,
           approved: true,
-        };
+        });
       }
       if (
         currentRound?.gateId === "CODE-REVIEW" &&
         currentRound.packetFingerprint === packet.packetFingerprint &&
         currentRound.status === "rejected"
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "already_rejected",
           projectId: params.projectId,
@@ -3276,10 +3298,10 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: currentRound.status,
           reviewCount: currentRound.aggregate?.reviewCount ?? 0,
           approved: false,
-        };
+        });
       }
       if (!params.runtimeSubagent) {
-        return {
+        return finish({
           launched: false,
           reason: "no_runtime_subagent",
           projectId: params.projectId,
@@ -3289,7 +3311,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: currentRound?.status ?? null,
           reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
           approved: false,
-        };
+        });
       }
 
       if (
@@ -3347,7 +3369,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
             nextOwnerOnPass: nextRound.aggregate?.approved ? "researcher" : null,
           });
         }
-        return {
+        return finish({
           launched: false,
           reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
           projectId: params.projectId,
@@ -3357,11 +3379,11 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: nextRound.status,
           reviewCount: nextRound.aggregate?.reviewCount ?? 0,
           approved: nextRound.aggregate?.approved === true,
-        };
+        });
       }
 
       if (store.roundsStarted >= params.workflowPolicy.autoGate.maxReviewRounds) {
-        return {
+        return finish({
           launched: false,
           reason: "already_rejected",
           projectId: params.projectId,
@@ -3371,7 +3393,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           status: "rejected",
           reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
           approved: false,
-        };
+        });
       }
 
       const requesterSessionKey = resolveWorkflowRequesterSessionKey({
@@ -3481,7 +3503,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           })
         )
       );
-      return {
+      return finish({
         launched: true,
         reason: "started",
         projectId: params.projectId,
@@ -3491,7 +3513,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         status: round.status,
         reviewCount: 0,
         approved: false,
-      };
+      });
     },
   });
 }
@@ -3521,12 +3543,22 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
     label: "workflow_auto_gate_review",
     logger: params.logger,
     task: async (): Promise<AutoGateReviewAttempt> => {
+      const finish = async (
+        attempt: AutoGateReviewAttempt
+      ): Promise<AutoGateReviewAttempt> => {
+        await syncBuiltinSubmitReadinessHook({
+          projectRoot: params.projectRoot,
+          stage: attempt.stage,
+          attempt,
+        });
+        return attempt;
+      };
       if (
         !params.workflowPolicy.autoGate.enabled ||
         (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !==
           "aggressive"
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "disabled",
           projectId: params.projectId,
@@ -3536,13 +3568,13 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           status: null,
           reviewCount: 0,
           approved: false,
-        };
+        });
       }
       if (
         params.autoIteratorResult.stageAfter !== "submit" ||
         params.autoIteratorResult.gateBlocking !== true
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "not_submit_gate",
           projectId: params.projectId,
@@ -3552,7 +3584,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           status: null,
           reviewCount: 0,
           approved: false,
-        };
+        });
       }
       const manifest = await readJsonIfExists<Record<string, unknown>>(
         path.join(params.projectRoot, "PROJECT_MANIFEST.json")
@@ -3563,7 +3595,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
         params.workflowPolicy.autoGate
       );
       if (scoreEvaluation.scoreRecordCount > 0 && !scoreEvaluation.pass) {
-        return {
+        return finish({
           launched: false,
           reason: "already_rejected",
           projectId: params.projectId,
@@ -3573,9 +3605,9 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           status: "rejected",
           reviewCount: scoreEvaluation.scoreRecordCount,
           approved: false,
-        };
+        });
       }
-      return {
+      return finish({
         launched: false,
         reason: "manual_confirmation_required",
         projectId: params.projectId,
@@ -3588,7 +3620,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
             : null,
         reviewCount: scoreEvaluation.scoreRecordCount,
         approved: false,
-      };
+      });
     },
   });
 }
@@ -3623,6 +3655,16 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
     label: "workflow_auto_mode_discussion",
     logger: params.logger,
     task: async (): Promise<AutoModeDiscussionAttempt> => {
+      const finish = async (
+        attempt: AutoModeDiscussionAttempt
+      ): Promise<AutoModeDiscussionAttempt> => {
+        await syncBuiltinAutoModeRiskHook({
+          projectRoot: params.projectRoot,
+          stage: attempt.stage,
+          attempt,
+        });
+        return attempt;
+      };
       const configuredMode =
         readString(params.autoIteratorResult.configuredAutoMode) ??
         params.workflowPolicy.autoMode;
@@ -3642,7 +3684,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           )
         : [];
       if (configuredMode === "off") {
-        return {
+        return finish({
           launched: false,
           reason: "disabled",
           projectId: params.projectId,
@@ -3660,10 +3702,10 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: null,
           packetPath: null,
           resolved: false,
-        };
+        });
       }
       if (riskLevel == null || riskLevel === "stable" || !fingerprint) {
-        return {
+        return finish({
           launched: false,
           reason: "stable",
           projectId: params.projectId,
@@ -3681,7 +3723,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: null,
           packetPath: null,
           resolved: false,
-        };
+        });
       }
 
       const packet = await materializeAutoModeDiscussionPacket({
@@ -3703,7 +3745,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         currentRound?.packetFingerprint === packet.packetFingerprint &&
         currentRound.status === "resolved"
       ) {
-        return {
+        return finish({
           launched: false,
           reason: "resolved",
           projectId: params.projectId,
@@ -3721,7 +3763,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: currentRound.roundId,
           packetPath: currentRound.packetPath,
           resolved: true,
-        };
+        });
       }
 
       if (
@@ -3729,7 +3771,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         currentRound.status === "reviewing"
       ) {
         if (!params.runtimeSubagent) {
-          return {
+          return finish({
             launched: false,
             reason: "no_runtime_subagent",
             projectId: params.projectId,
@@ -3747,7 +3789,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             roundId: currentRound.roundId,
             packetPath: currentRound.packetPath,
             resolved: false,
-          };
+          });
         }
         const attempts = await pollAutoModeDiscussionAttempts({
           runtimeSubagent: params.runtimeSubagent,
@@ -3772,7 +3814,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           currentRound: nextRound,
         };
         await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
-        return {
+        return finish({
           launched: false,
           reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
           projectId: params.projectId,
@@ -3790,11 +3832,11 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: nextRound.roundId,
           packetPath: nextRound.packetPath,
           resolved: nextRound.status === "resolved",
-        };
+        });
       }
 
       if (roundsStarted >= params.workflowPolicy.autoGate.maxMitigationRounds) {
-        return {
+        return finish({
           launched: false,
           reason: "round_limit_reached",
           projectId: params.projectId,
@@ -3812,10 +3854,10 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: currentRound?.roundId ?? null,
           packetPath: currentRound?.packetPath ?? packet.packetPath,
           resolved: false,
-        };
+        });
       }
       if (!params.runtimeSubagent) {
-        return {
+        return finish({
           launched: false,
           reason: "no_runtime_subagent",
           projectId: params.projectId,
@@ -3833,7 +3875,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           roundId: null,
           packetPath: packet.packetPath,
           resolved: false,
-        };
+        });
       }
 
       const requesterBinding = resolveWorkflowRequesterBinding({
@@ -4046,7 +4088,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         currentRound: round,
       };
       await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
-      return {
+      return finish({
         launched: true,
         reason: "started",
         projectId: params.projectId,
@@ -4064,7 +4106,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         roundId: round.roundId,
         packetPath: round.packetPath,
         resolved: false,
-      };
+      });
     },
   });
 }

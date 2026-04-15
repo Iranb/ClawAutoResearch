@@ -7,6 +7,7 @@ import path from "node:path";
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
+import { writeBuiltinWorkflowHookState } from "../tools/workflow-hooks/builtin-bridge.ts";
 
 function createResearchWorkflowTool(params = {}) {
   let registeredTool = null;
@@ -176,6 +177,67 @@ test("prepare_stage_handoff is blocked before intent creation when prepare hooks
         },
       }),
     /Workflow hook review is running|Workflow hooks are still running|blocked/i
+  );
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents.length, 0);
+});
+
+test("prepare_stage_handoff also respects built-in handoff hook state", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-workflow-prepare-builtin-hook-")
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.OPENCLAW_PROJECT = projectRoot;
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "code",
+        owner_agent: "researcher",
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await writeBuiltinWorkflowHookState({
+    projectRoot,
+    hookId: "builtin.code-innovation-review:code",
+    hookPoint: "before_stage_handoff",
+    stage: "code",
+    status: "failed",
+    verdict: "block",
+    blockingReason: "Code innovation review rejected the bundle.",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "researcher",
+    sessionKey: "agent:researcher:test",
+  });
+
+  await assert.rejects(
+    () =>
+      tool.execute("test-call", {
+        action: "prepare_stage_handoff",
+        handoff: {
+          stageAfter: "code",
+          toRole: "coder",
+          dispatch: false,
+        },
+      }),
+    /Code innovation review rejected the bundle|Workflow hooks blocked/i
   );
 
   const store = await readWorkflowHandoffIntentStore(projectRoot);
