@@ -16,7 +16,36 @@ export type WorkflowArtifactTextWriteResult = {
   bytes: number;
   mode: WorkflowArtifactWriteMode;
   syncedAuthoringRecovery: boolean;
+  changed: boolean;
+  changedPaths: string[];
+  artifactKinds: string[];
 };
+
+function inferArtifactKinds(relativePath: string): string[] {
+  const kinds = new Set<string>();
+  if (relativePath.startsWith("academic_writer/")) {
+    kinds.add("writing");
+  }
+  if (relativePath.includes("/paper/sections/")) {
+    kinds.add("paper_section");
+  }
+  if (relativePath.endsWith("/paper/main.tex") || relativePath.endsWith("paper/main.tex")) {
+    kinds.add("paper_main_tex");
+  }
+  if (relativePath.endsWith(".tex")) {
+    kinds.add("latex");
+  }
+  if (relativePath.endsWith(".md")) {
+    kinds.add("markdown");
+  }
+  if (relativePath.endsWith(".json")) {
+    kinds.add("json");
+  }
+  if (/figure|caption/i.test(relativePath)) {
+    kinds.add("figure_related");
+  }
+  return [...kinds];
+}
 
 function isInside(parentPath: string, childPath: string): boolean {
   const relative = path.relative(parentPath, childPath);
@@ -120,11 +149,12 @@ export async function writeWorkflowTextArtifact(params: {
     absolutePath,
   });
 
-  const existing = mode === "append" ? (await readTextIfExists(absolutePath)) ?? "" : "";
+  const existing = (await readTextIfExists(absolutePath)) ?? "";
   let nextValue = mode === "append" ? `${existing}${params.content}` : params.content;
   if (params.ensureTrailingNewline && nextValue && !nextValue.endsWith("\n")) {
     nextValue = `${nextValue}\n`;
   }
+  const changed = existing !== nextValue;
 
   await writeTextEnsured(absolutePath, nextValue);
 
@@ -140,5 +170,8 @@ export async function writeWorkflowTextArtifact(params: {
     bytes: Buffer.byteLength(nextValue, "utf8"),
     mode,
     syncedAuthoringRecovery,
+    changed,
+    changedPaths: changed ? [relativePath] : [],
+    artifactKinds: inferArtifactKinds(relativePath),
   };
 }

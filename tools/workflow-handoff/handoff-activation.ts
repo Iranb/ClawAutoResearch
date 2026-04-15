@@ -152,13 +152,22 @@ export async function syncPreparedWorkflowHandoffToManifest(params: {
 function selectClaimableIntentForRole(params: {
   intents: WorkflowHandoffIntent[];
   role: string;
+  sessionKey?: string | null;
   pendingHandoffId: string | null;
   intentId?: string | null;
   idempotencyKey?: string | null;
 }): WorkflowHandoffIntent | null {
+  const sessionKey = readString(params.sessionKey);
   const claimable = params.intents.filter((intent) => {
     if (intent.toRole !== params.role) {
       return false;
+    }
+    if (intent.status === "claimed") {
+      const explicitlyRequested =
+        (params.intentId && intent.intentId === params.intentId) ||
+        (params.idempotencyKey && intent.idempotencyKey === params.idempotencyKey) ||
+        (params.pendingHandoffId && intent.intentId === params.pendingHandoffId);
+      return explicitlyRequested && Boolean(sessionKey) && intent.toSessionKey === sessionKey;
     }
     return [
       "prepared",
@@ -227,6 +236,7 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
   const selectedIntent = selectClaimableIntentForRole({
     intents: store.intents,
     role: params.role,
+    sessionKey: readString(params.sessionKey),
     pendingHandoffId: orchestration.pendingHandoffId,
     intentId: params.intentId,
     idempotencyKey: params.idempotencyKey,
@@ -299,6 +309,14 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
       blockedManifest.blocking_reason =
         gate.blockingReason ?? blockedManifest.blocking_reason;
       await writeManifest(params.projectRoot, blockedManifest);
+      await syncPreparedWorkflowHandoffToManifest({
+        projectRoot: params.projectRoot,
+        intent: {
+          ...claimedIntent,
+          status: "claimed",
+          blockerSummary: gate.blockingReason ?? claimedIntent.blockerSummary,
+        },
+      });
       return { intent: claimedIntent, claimed: true, activated: false };
     }
   }

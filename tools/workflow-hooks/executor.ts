@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import type { WorkflowRuntimeAnnounceEntry } from "../workflow-execution/runtime-store";
 import {
   buildFileAuditPrompt,
-  computeProjectFileFingerprint,
   createFileAuditRoundState,
+  inspectFileAuditPacketInputs,
   materializeFileAuditPacket,
   parseFileAuditResult,
   writeFileAuditReport,
@@ -32,6 +33,95 @@ import type {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*") {
+      const next = pattern[index + 1];
+      if (next === "*") {
+        source += ".*";
+        index += 1;
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegExp(char);
+  }
+  return new RegExp(`^${source}$`);
+}
+
+function matchesAnyGlob(patterns: string[], values: string[]): boolean {
+  if (patterns.length === 0) {
+    return true;
+  }
+  const normalizedValues = values
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => toPosixPath(entry));
+  if (normalizedValues.length === 0) {
+    return false;
+  }
+  const regexes = patterns.map((entry) => globToRegExp(toPosixPath(entry)));
+  return normalizedValues.some((value) => regexes.some((regex) => regex.test(value)));
+}
+
+function matchesStringFilter(
+  allowed: string[] | undefined,
+  values: Array<string | null | undefined>
+): boolean {
+  if (!allowed?.length) {
+    return true;
+  }
+  const normalizedAllowed = new Set(allowed.map((entry) => entry.trim()).filter(Boolean));
+  if (normalizedAllowed.size === 0) {
+    return true;
+  }
+  return values.some((entry) => Boolean(entry && normalizedAllowed.has(entry.trim())));
+}
+
+function collectMaterializedContracts(context: WorkflowHookPointContext): string[] {
+  return [
+    ...context.materializedArtifacts.map((entry) => entry.contract),
+    ...context.emittedHookEvents
+      .map((entry) => entry.contract)
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0),
+  ];
+}
+
+function buildExecutionFingerprint(params: {
+  packetFingerprint: string;
+  policy: WorkflowFileAuditHookPolicy;
+  context: WorkflowHookPointContext;
+}): string {
+  return `sha1:${createHash("sha1")
+    .update(
+      JSON.stringify({
+        packetFingerprint: params.packetFingerprint,
+        hookId: params.policy.hookId,
+        workflowLine: params.context.workflowLine,
+        paperMode: params.context.paperMode,
+        targetStage: params.context.targetStage ?? params.context.stage,
+        transition: params.context.transition,
+        targetRole: params.context.targetRole,
+        artifactKinds: [...params.context.artifactKinds].sort(),
+      })
+    )
+    .digest("hex")}`;
 }
 
 type LaunchHookReviewerRun = (params: {
@@ -66,6 +156,87 @@ function shouldTriggerFileAuditHook(params: {
     return false;
   }
   if (params.policy.hookPoint !== params.context.hookPoint) {
+    return false;
+  }
+  if (
+    params.policy.appliesWhen?.workflowLines?.length &&
+    !matchesStringFilter(params.policy.appliesWhen.workflowLines, [
+      params.context.workflowLine,
+    ])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.appliesWhen?.paperModes?.length &&
+    !matchesStringFilter(params.policy.appliesWhen.paperModes, [params.context.paperMode])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.appliesWhen?.stages?.length &&
+    !matchesStringFilter(params.policy.appliesWhen.stages, [
+      params.context.targetStage,
+      params.context.stage,
+    ])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.filters?.workflowLines?.length &&
+    !matchesStringFilter(params.policy.filters.workflowLines, [params.context.workflowLine])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.filters?.paperModes?.length &&
+    !matchesStringFilter(params.policy.filters.paperModes, [params.context.paperMode])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.filters?.targetRoles?.length &&
+    !matchesStringFilter(params.policy.filters.targetRoles, [
+      params.context.targetRole,
+      params.context.ownerRole,
+      params.context.actorRole,
+    ])
+  ) {
+    return false;
+  }
+  if (
+    params.policy.filters?.taskIds?.length &&
+    !matchesStringFilter(params.policy.filters.taskIds, [params.context.taskId])
+  ) {
+    return false;
+  }
+  if (params.policy.filters?.taskPrefixes?.length) {
+    const taskId = params.context.taskId ?? "";
+    if (
+      !params.policy.filters.taskPrefixes.some(
+        (prefix) => typeof prefix === "string" && prefix.length > 0 && taskId.startsWith(prefix)
+      )
+    ) {
+      return false;
+    }
+  }
+  if (params.policy.filters?.fileGlobs?.length) {
+    if (!matchesAnyGlob(params.policy.filters.fileGlobs, [params.policy.filePath])) {
+      return false;
+    }
+  }
+  if (
+    params.policy.filters?.materializedContracts?.length &&
+    !matchesStringFilter(
+      params.policy.filters.materializedContracts,
+      collectMaterializedContracts(params.context)
+    )
+  ) {
+    return false;
+  }
+  if (
+    params.policy.filters?.changedPathsAny?.length &&
+    !matchesAnyGlob(params.policy.filters.changedPathsAny, params.context.changedPaths)
+  ) {
     return false;
   }
   if (params.context.hookPoint === "artifact_materialized") {
@@ -124,6 +295,30 @@ function extractLatestReadableText(messages: unknown[]): string | null {
   return null;
 }
 
+function getReviewedExecutionFingerprint(params: {
+  lastReviewedExecutionFingerprint: string | null;
+  lastReviewedPacketFingerprint: string | null;
+  lastReviewedFingerprint: string | null;
+}): string | null {
+  return (
+    params.lastReviewedExecutionFingerprint ??
+    params.lastReviewedPacketFingerprint ??
+    params.lastReviewedFingerprint
+  );
+}
+
+function getPassedExecutionFingerprint(params: {
+  lastPassedExecutionFingerprint: string | null;
+  lastPassedPacketFingerprint: string | null;
+  lastPassedFingerprint: string | null;
+}): string | null {
+  return (
+    params.lastPassedExecutionFingerprint ??
+    params.lastPassedPacketFingerprint ??
+    params.lastPassedFingerprint
+  );
+}
+
 export async function evaluateWorkflowHooksForPoint(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   context: WorkflowHookPointContext;
@@ -172,12 +367,31 @@ export async function evaluateWorkflowHooksForPoint(params: {
         hookPoint: hook.hookPoint,
         stage: hook.stage,
       });
-    const currentFingerprint = await computeProjectFileFingerprint({
+    let liveInputs = await inspectFileAuditPacketInputs({
       projectRoot: params.context.projectRoot,
-      filePath: hook.filePath,
+      projectId: params.context.projectId,
+      policy: hook,
+      context: params.context,
+    });
+    const currentFingerprint = liveInputs.fileFingerprint;
+    const currentPacketFingerprint = liveInputs.packetFingerprint;
+    const currentExecutionFingerprint = buildExecutionFingerprint({
+      packetFingerprint: currentPacketFingerprint,
+      policy: hook,
+      context: params.context,
+    });
+    const lastPassedExecutionFingerprint = getPassedExecutionFingerprint({
+      lastPassedExecutionFingerprint: existingState.lastPassedExecutionFingerprint,
+      lastPassedPacketFingerprint: existingState.lastPassedPacketFingerprint,
+      lastPassedFingerprint: existingState.lastPassedFingerprint,
+    });
+    const lastReviewedExecutionFingerprint = getReviewedExecutionFingerprint({
+      lastReviewedExecutionFingerprint: existingState.lastReviewedExecutionFingerprint,
+      lastReviewedPacketFingerprint: existingState.lastReviewedPacketFingerprint,
+      lastReviewedFingerprint: existingState.lastReviewedFingerprint,
     });
 
-    if (currentFingerprint && existingState.lastPassedFingerprint === currentFingerprint) {
+    if (lastPassedExecutionFingerprint === currentExecutionFingerprint) {
       const nextState = {
         ...existingState,
         status: "passed" as const,
@@ -206,7 +420,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
 
     if (
       existingState.status === "revise_requested" &&
-      existingState.lastReviewedFingerprint === currentFingerprint
+      lastReviewedExecutionFingerprint === currentExecutionFingerprint
     ) {
       executions.push({
         hookId: hook.hookId,
@@ -263,9 +477,24 @@ export async function evaluateWorkflowHooksForPoint(params: {
     }
 
     if (existingState.status === "auditing" && existingState.activeRound) {
+      const activeRound = existingState.activeRound;
+      if (
+        activeRound.executionFingerprint &&
+        activeRound.executionFingerprint !== currentExecutionFingerprint
+      ) {
+        const nextState = {
+          ...existingState,
+          activeRound: null,
+          status: "idle" as const,
+          blockedReason:
+            "Workflow hook inputs changed while the review was running; restarting the audit on the latest packet.",
+          updatedAt: nowIso(),
+        };
+        store.hooks[hook.hookId] = nextState;
+      } else {
       const attempts = await pollHookReviewerAttempts({
         runtimeSubagent: params.runtimeSubagent ?? {},
-        attempts: [toAttempt(existingState.activeRound)],
+        attempts: [toAttempt(activeRound)],
         projectRoot: params.context.projectRoot,
         projectId: params.context.projectId,
         announceIdPrefix: `hook-audit:${hook.hookId}`,
@@ -295,7 +524,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
               }),
             reviewerRole: attempt.reviewerRole,
             filePath: hook.filePath,
-            fileFingerprint: currentFingerprint,
+            fileFingerprint: activeRound.fileFingerprint,
             runId: attempt.runId,
           }),
         buildFailedResult: ({ error, attempt }) =>
@@ -316,7 +545,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
             }),
             reviewerRole: attempt.reviewerRole,
             filePath: hook.filePath,
-            fileFingerprint: currentFingerprint,
+            fileFingerprint: activeRound.fileFingerprint,
             runId: attempt.runId,
           }),
         summarizeCompleted: ({ attempt, result }) =>
@@ -325,8 +554,13 @@ export async function evaluateWorkflowHooksForPoint(params: {
           `Workflow hook ${hook.hookId} reviewer ${attempt.reviewerRole} failed: ${error}`,
       });
       const updatedAttempt = attempts[0];
-      const nextRound = fromAttempt(existingState.activeRound, updatedAttempt);
+      const nextRound = fromAttempt(activeRound, updatedAttempt);
       if (nextRound.result) {
+        nextRound.result = {
+          ...nextRound.result,
+          fileFingerprint: activeRound.fileFingerprint,
+          packetFingerprint: activeRound.packetFingerprint,
+        };
         await writeFileAuditReport({
           projectRoot: params.context.projectRoot,
           round: nextRound,
@@ -335,13 +569,15 @@ export async function evaluateWorkflowHooksForPoint(params: {
         });
       }
       const unchanged =
-        currentFingerprint != null &&
-        existingState.lastReviewedFingerprint != null &&
-        currentFingerprint === existingState.lastReviewedFingerprint;
+        activeRound.executionFingerprint != null &&
+        lastReviewedExecutionFingerprint != null &&
+        activeRound.executionFingerprint === lastReviewedExecutionFingerprint;
       const nextState = {
         ...existingState,
         activeRound: null,
-        lastReviewedFingerprint: currentFingerprint,
+        lastReviewedFingerprint: activeRound.fileFingerprint,
+        lastReviewedPacketFingerprint: activeRound.packetFingerprint,
+        lastReviewedExecutionFingerprint: activeRound.executionFingerprint ?? null,
         lastVerdict: nextRound.result?.verdict ?? "block",
         consecutiveUnchangedRounds: unchanged
           ? existingState.consecutiveUnchangedRounds + 1
@@ -358,7 +594,17 @@ export async function evaluateWorkflowHooksForPoint(params: {
               : ("failed" as const),
         updatedAt: nowIso(),
         lastPassedFingerprint:
-          nextRound.result?.verdict === "pass" ? currentFingerprint : existingState.lastPassedFingerprint,
+          nextRound.result?.verdict === "pass"
+            ? activeRound.fileFingerprint
+            : existingState.lastPassedFingerprint,
+        lastPassedPacketFingerprint:
+          nextRound.result?.verdict === "pass"
+            ? activeRound.packetFingerprint
+            : existingState.lastPassedPacketFingerprint,
+        lastPassedExecutionFingerprint:
+          nextRound.result?.verdict === "pass"
+            ? activeRound.executionFingerprint ?? null
+            : existingState.lastPassedExecutionFingerprint ?? null,
       };
       store.hooks[hook.hookId] = nextState;
       const execution: WorkflowHookExecutionResult = {
@@ -376,7 +622,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
           hook.blockingMode !== "warn_only" &&
           nextRound.result?.verdict !== "pass",
         escalated: false,
-        fileFingerprint: currentFingerprint,
+        fileFingerprint: activeRound.fileFingerprint,
         result: nextRound.result,
         revisionDispatch: existingState.lastRevisionDispatch,
         blockingReason:
@@ -391,6 +637,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
       }
       executions.push(execution);
       continue;
+      }
     }
 
     if (!params.runtimeSubagent || !params.launchReviewerRun) {
@@ -470,9 +717,11 @@ export async function evaluateWorkflowHooksForPoint(params: {
       reportPath: packet.reportPath,
       reportMarkdownPath: packet.reportMarkdownPath,
       fileFingerprint: packet.fileFingerprint,
+      packetFingerprint: packet.packetFingerprint,
       sessionKey: launch.sessionKey,
       runId: launch.runId,
     });
+    nextRound.executionFingerprint = currentExecutionFingerprint;
     store.hooks[hook.hookId] = {
       ...existingState,
       roundsStarted: roundNumber,

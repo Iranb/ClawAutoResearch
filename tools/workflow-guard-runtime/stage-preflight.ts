@@ -8,6 +8,7 @@ import {
 } from "../workflow-guard-state/paper-ingestion";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
+import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import {
   normalizeAutonomousExecutionState,
   normalizeExperimentReviewState,
@@ -30,6 +31,7 @@ import {
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
+import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
 import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
 import {
   isNonEmptyDirectory,
@@ -94,6 +96,12 @@ type StagePreflightDeps = {
     projectRoot: string;
     trigger?: string | null;
     agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeWritingHookPolicies?: (params: {
+    projectRoot: string;
+    stage: string | null;
+    paperMode?: "conference" | "journal" | "survey" | null;
+    topTierVerdict?: string | null;
   }) => Promise<unknown>;
   queueIdeaCatalystRequisition: (params: {
     projectRoot: string;
@@ -226,6 +234,20 @@ function normalizeStageValue(value: unknown): string | null {
   }
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : null;
+}
+
+function extractGeneratedFiles(result: unknown): string[] {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  const generatedFiles = record.generatedFiles ?? record.generated_files;
+  if (!Array.isArray(generatedFiles)) {
+    return [];
+  }
+  return generatedFiles.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+  );
 }
 
 function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): string[] {
@@ -885,19 +907,38 @@ export async function maybePrepareWorkflowStageContracts(params: {
       return;
     }
     try {
-      await action();
+      const result = await action();
       materializedContracts.push(contract);
-      materializedArtifacts.push({
-        contract,
-        artifactPath: null,
-        fingerprint: null,
-        action: "updated",
-      });
-      emittedHookEvents.push({
-        hookPoint: "artifact_materialized",
-        contract,
-        artifactPath: null,
-      });
+      const generatedFiles = extractGeneratedFiles(result);
+      if (generatedFiles.length > 0) {
+        for (const generatedFile of generatedFiles) {
+          materializedArtifacts.push({
+            contract,
+            artifactPath: generatedFile,
+            fingerprint: null,
+            action: "updated",
+            kind: contract,
+          });
+          emittedHookEvents.push({
+            hookPoint: "artifact_materialized",
+            contract,
+            artifactPath: generatedFile,
+          });
+        }
+      } else {
+        materializedArtifacts.push({
+          contract,
+          artifactPath: null,
+          fingerprint: null,
+          action: "updated",
+          kind: contract,
+        });
+        emittedHookEvents.push({
+          hookPoint: "artifact_materialized",
+          contract,
+          artifactPath: null,
+        });
+      }
       manifest =
         (await readJsonIfExists<ManifestLike>(
           resolveProjectArtifactPath(projectRoot, "PROJECT_MANIFEST.json")
@@ -1046,6 +1087,26 @@ export async function maybePrepareWorkflowStageContracts(params: {
       stage: params.stage,
       paperStoryState,
       reviewPressureState,
+    });
+  });
+  await runStep("writing_hook_policies", shouldMaterializeWritingSupport, async () => {
+    const writingContract =
+      manifest.writing_contract && typeof manifest.writing_contract === "object"
+        ? manifest.writing_contract
+        : {};
+    const paperMode = normalizeWritingContractState(writingContract).paperMode;
+    const topTierVerdict =
+      typeof (manifest.opportunity_scorecard as Record<string, unknown> | undefined)?.verdict ===
+      "string"
+        ? ((manifest.opportunity_scorecard as Record<string, unknown>).verdict as string)
+        : null;
+    return (
+      params.deps.materializeWritingHookPolicies ?? materializeWritingHookPolicies
+    )({
+      projectRoot,
+      stage: params.stage,
+      paperMode,
+      topTierVerdict,
     });
   });
   await runStep("cycle_memory", shouldRefreshCycleMemory, async () => {

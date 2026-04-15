@@ -587,11 +587,15 @@ export async function buildWorkflowSnapshotFromProjectState(
   const opportunityScorecard = normalizeOpportunityScorecardState(
     asRecord(projectState.manifest?.opportunity_scorecard)
   );
+  const writingContract = normalizeWritingContractState(
+    asRecord(projectState.manifest?.writing_contract)
+  );
   const evidenceCloseout = summarizeEvidenceCloseoutState(projectState.manifest);
   const teamTaskPreview = buildWorkflowStageTaskPreview({
     currentStage,
     topTierVerdict: opportunityScorecard.verdict,
     evidenceCloseout,
+    writingSectionOrder: writingContract.sectionOrder,
   });
   const taskGraphStore = projectState.projectRoot
     ? await readWorkflowTaskGraphStore(projectState.projectRoot)
@@ -654,9 +658,6 @@ export async function buildWorkflowSnapshotFromProjectState(
   );
   const theorySupport = normalizeTheorySupportState(
     asRecord(projectState.manifest?.theory_state)
-  );
-  const writingContract = normalizeWritingContractState(
-    asRecord(projectState.manifest?.writing_contract)
   );
   const citationIntegrity = normalizeCitationIntegrityState(
     asRecord(projectState.manifest?.citation_integrity)

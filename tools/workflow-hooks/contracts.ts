@@ -23,6 +23,12 @@ export type WorkflowHookBlockingMode = (typeof WORKFLOW_HOOK_BLOCKING_MODES)[num
 export const WORKFLOW_FILE_AUDIT_VERDICTS = ["pass", "revise", "block"] as const;
 export type WorkflowFileAuditVerdict = (typeof WORKFLOW_FILE_AUDIT_VERDICTS)[number];
 
+export const WORKFLOW_LINES = ["experiment", "survey", "unknown"] as const;
+export type WorkflowLine = (typeof WORKFLOW_LINES)[number];
+
+export const WORKFLOW_PAPER_MODES = ["conference", "journal", "survey"] as const;
+export type WorkflowPaperMode = (typeof WORKFLOW_PAPER_MODES)[number];
+
 export type WorkflowFileAuditViolation = {
   rule: string;
   severity: "low" | "medium" | "high" | "critical";
@@ -42,6 +48,7 @@ export type WorkflowFileAuditResult = {
   reviewerRole: string;
   filePath: string;
   fileFingerprint: string | null;
+  packetFingerprint: string | null;
   createdAt: string;
 };
 
@@ -50,6 +57,7 @@ export type WorkflowMaterializedArtifact = {
   artifactPath: string | null;
   fingerprint: string | null;
   action: "created" | "updated" | "reconciled";
+  kind?: string | null;
 };
 
 export type WorkflowHookEvent = {
@@ -65,10 +73,35 @@ export type WorkflowHookPointContext = {
   hookPoint: WorkflowHookPoint;
   ownerRole: string | null;
   actorRole: string | null;
+  targetRole: string | null;
   taskId: string | null;
+  taskTitle: string | null;
   handoffIntentId: string | null;
+  workflowLine: WorkflowLine;
+  paperMode: WorkflowPaperMode | null;
+  targetStage: string | null;
+  transition: string | null;
   materializedArtifacts: WorkflowMaterializedArtifact[];
   emittedHookEvents: WorkflowHookEvent[];
+  artifactKinds: string[];
+  changedPaths: string[];
+};
+
+export type WorkflowHookFilters = {
+  workflowLines?: WorkflowLine[];
+  paperModes?: WorkflowPaperMode[];
+  targetRoles?: string[];
+  taskIds?: string[];
+  taskPrefixes?: string[];
+  fileGlobs?: string[];
+  materializedContracts?: string[];
+  changedPathsAny?: string[];
+};
+
+export type WorkflowHookAppliesWhen = {
+  workflowLines?: WorkflowLine[];
+  paperModes?: WorkflowPaperMode[];
+  stages?: string[];
 };
 
 export type WorkflowFileAuditHookPolicy = {
@@ -90,6 +123,9 @@ export type WorkflowFileAuditHookPolicy = {
   reviseOwnerRole: string | null;
   reviseCommand: string | null;
   reportDir: string | null;
+  filters: WorkflowHookFilters | null;
+  appliesWhen: WorkflowHookAppliesWhen | null;
+  stateScope: "isolated" | "shared_by_stage" | "shared_by_transition";
 };
 
 export type WorkflowHooksPolicy = {
@@ -128,6 +164,8 @@ export type WorkflowFileAuditRoundState = {
   targetRole: string | null;
   filePath: string;
   fileFingerprint: string | null;
+  packetFingerprint: string | null;
+  executionFingerprint?: string | null;
   packetPath: string;
   packetJsonPath: string;
   reportPath: string;
@@ -156,7 +194,11 @@ export type WorkflowFileAuditHookState = {
   roundsStarted: number;
   activeRound: WorkflowFileAuditRoundState | null;
   lastPassedFingerprint: string | null;
+  lastPassedPacketFingerprint: string | null;
+  lastPassedExecutionFingerprint: string | null;
   lastReviewedFingerprint: string | null;
+  lastReviewedPacketFingerprint: string | null;
+  lastReviewedExecutionFingerprint: string | null;
   lastVerdict: WorkflowFileAuditVerdict | null;
   lastRevisionDispatch: WorkflowHookRevisionDispatchState | null;
   consecutiveUnchangedRounds: number;

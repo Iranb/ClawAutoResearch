@@ -187,4 +187,17 @@ test("claimAndActivateWorkflowHandoffForAgent can be blocked by a before-activat
   assert.equal(manifest.owner_agent, "reviewer");
   assert.equal(manifest.current_stage, "review");
   assert.equal(manifest.blocking_reason, "File audit hook blocked activation.");
+
+  const retried = await claimAndActivateWorkflowHandoffForAgent({
+    projectRoot,
+    role: "academic_writer",
+    sessionKey: "agent:academic_writer:test",
+    intentId: created.intent.intentId,
+    beforeActivateHook: async () => ({
+      allow: true,
+    }),
+  });
+
+  assert.equal(retried.claimed, true);
+  assert.equal(retried.activated, true);
 });

@@ -10,6 +10,10 @@ import {
   parseFileAuditResult,
 } from "../tools/workflow-hooks/file-audit-runner.ts";
 import { buildWorkflowHookPointContext } from "../tools/workflow-hooks/point-context.ts";
+import {
+  dispatchAggregateHookRevision,
+  getAggregateRevisionPacketPath,
+} from "../tools/workflow-hooks/revision-dispatch.ts";
 
 test("materializeFileAuditPacket writes packet artifacts and prompt references them", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-audit-"));
@@ -122,4 +126,163 @@ test("parseFileAuditResult accepts valid JSON and hard-fails invalid JSON", () =
   });
   assert.equal(fallback.verdict, "block");
   assert.equal(fallback.violations[0]?.rule, "invalid_json");
+});
+
+test("dispatchAggregateHookRevision writes per-target aggregate packets", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-audit-dispatch-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "demo-project", current_stage: "review" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const executions = [
+    {
+      policy: {
+        hookId: "writer-main-tex",
+        hookType: "file_audit",
+        enabled: true,
+        stage: "review",
+        hookPoint: "before_stage_handoff",
+        order: 100,
+        parallelGroup: null,
+        targetRole: "academic_writer",
+        auditorRole: "reviewer",
+        filePath: "academic_writer/paper/main.tex",
+        requirementPrompt: "Check unsupported claims.",
+        supportingArtifacts: [],
+        blockingMode: "block_stage",
+        maxRounds: 3,
+        maxUnchangedRounds: 2,
+        reviseOwnerRole: "academic_writer",
+        reviseCommand: "Revise writer draft.",
+        reportDir: "reviewer/file-audits/writer-main-tex",
+      },
+      execution: {
+        hookId: "writer-main-tex",
+        hookPoint: "before_stage_handoff",
+        stage: "review",
+        verdict: "revise",
+        status: "revise_requested",
+        pending: false,
+        launched: false,
+        revisedRequested: true,
+        escalated: false,
+        fileFingerprint: "sha1:writer",
+        result: {
+          verdict: "revise",
+          summary: "Writer draft needs revision.",
+          violations: [],
+          requiredFixes: ["Tighten the claim wording."],
+          reviewedArtifacts: ["academic_writer/paper/main.tex"],
+          confidence: 0.8,
+          runId: "run-writer",
+          rawText: "{}",
+          reviewerRole: "reviewer",
+          filePath: "academic_writer/paper/main.tex",
+          fileFingerprint: "sha1:writer",
+          packetFingerprint: "sha1:packet-writer",
+          createdAt: new Date().toISOString(),
+        },
+        revisionDispatch: null,
+        blockingReason: "Writer draft needs revision.",
+      },
+    },
+    {
+      policy: {
+        hookId: "coder-plan",
+        hookType: "file_audit",
+        enabled: true,
+        stage: "review",
+        hookPoint: "before_stage_handoff",
+        order: 100,
+        parallelGroup: null,
+        targetRole: "coder",
+        auditorRole: "reviewer",
+        filePath: "coder/PLAN.md",
+        requirementPrompt: "Check experiment plan.",
+        supportingArtifacts: [],
+        blockingMode: "block_stage",
+        maxRounds: 3,
+        maxUnchangedRounds: 2,
+        reviseOwnerRole: "coder",
+        reviseCommand: "Revise coder plan.",
+        reportDir: "reviewer/file-audits/coder-plan",
+      },
+      execution: {
+        hookId: "coder-plan",
+        hookPoint: "before_stage_handoff",
+        stage: "review",
+        verdict: "revise",
+        status: "revise_requested",
+        pending: false,
+        launched: false,
+        revisedRequested: true,
+        escalated: false,
+        fileFingerprint: "sha1:coder",
+        result: {
+          verdict: "revise",
+          summary: "Coder plan needs revision.",
+          violations: [],
+          requiredFixes: ["Split the experiment into two steps."],
+          reviewedArtifacts: ["coder/PLAN.md"],
+          confidence: 0.8,
+          runId: "run-coder",
+          rawText: "{}",
+          reviewerRole: "reviewer",
+          filePath: "coder/PLAN.md",
+          fileFingerprint: "sha1:coder",
+          packetFingerprint: "sha1:packet-coder",
+          createdAt: new Date().toISOString(),
+        },
+        revisionDispatch: null,
+        blockingReason: "Coder plan needs revision.",
+      },
+    },
+  ];
+
+  const calls = [];
+  const results = await dispatchAggregateHookRevision({
+    runtimeSubagent: {
+      async run(params) {
+        calls.push(params);
+        return { runId: `run-${calls.length}` };
+      },
+    },
+    requesterSessionKey: "agent:researcher:main",
+    requesterChannel: "discord",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "review",
+    hookPoint: "before_stage_handoff",
+    executions,
+  });
+
+  assert.equal(results.length, 2);
+  const writerPacket = path.join(
+    projectRoot,
+    getAggregateRevisionPacketPath({
+      hookPoint: "before_stage_handoff",
+      stage: "review",
+      targetRole: "academic_writer",
+    })
+  );
+  const coderPacket = path.join(
+    projectRoot,
+    getAggregateRevisionPacketPath({
+      hookPoint: "before_stage_handoff",
+      stage: "review",
+      targetRole: "coder",
+    })
+  );
+  const writerText = await fs.readFile(writerPacket, "utf8");
+  const coderText = await fs.readFile(coderPacket, "utf8");
+  assert.match(writerText, /writer-main-tex/);
+  assert.doesNotMatch(writerText, /coder-plan/);
+  assert.match(coderText, /coder-plan/);
+  assert.doesNotMatch(coderText, /writer-main-tex/);
 });
