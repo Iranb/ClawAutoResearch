@@ -23,6 +23,7 @@ import type {
   startBackgroundWorkflowRun,
 } from "../workflow-fast-paths.js";
 import type { runIdeaCatalystResearch30 } from "../research30/bridge.ts";
+import type { runBroadPaperSearch } from "../research30/workflow-bridge.ts";
 import type { runCitationCalibration } from "../research-writing/citation-calibration.ts";
 import type { stagePapernexusRemoteSources } from "../papernexus-remote-stage.ts";
 import type { reconcileAuthoringCloseout } from "../authoring-closeout-reconcile.ts";
@@ -58,6 +59,7 @@ export type WorkflowCommandKind =
   | "show_commands"
   | "survey_graph_build"
   | "idea_catalyst_search"
+  | "broad_paper_search"
   | "citation_calibrate"
   | "papernexus_stage_remote"
   | "authoring_closeout"
@@ -76,6 +78,7 @@ export type WorkflowCommandDependencies = {
   setGraphGuidedWritingState: typeof setGraphGuidedWritingState;
   unbindChannelProjectForWorkflow: typeof unbindChannelProjectForWorkflow;
   runIdeaCatalystResearch30: typeof runIdeaCatalystResearch30;
+  runBroadPaperSearch: typeof runBroadPaperSearch;
   runCitationCalibration: typeof runCitationCalibration;
   stagePapernexusRemoteSources: typeof stagePapernexusRemoteSources;
   reconcileAuthoringCloseout: typeof reconcileAuthoringCloseout;
@@ -144,6 +147,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   show_commands: "/show-commands",
   survey_graph_build: "/survey-graph-build",
   idea_catalyst_search: "/idea-catalyst-search",
+  broad_paper_search: "/broad-paper-search",
   citation_calibrate: "/citation-calibrate",
   papernexus_stage_remote: "/papernexus-stage-remote",
   authoring_closeout: "/authoring-closeout",

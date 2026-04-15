@@ -1,6 +1,6 @@
 ---
 name: research-lit
-description: "Literature survey using papers.cool plus optional PASA retrieval, then markdown-first full-text ingestion and graph grounding. Use when starting a new research direction."
+description: "Literature survey using the workflow-owned broad retrieval backbone plus papers.cool/PASA supplementary recall, then markdown-first full-text ingestion and graph grounding. Use when starting a new research direction."
 argument-hint: "[research topic or question]"
 allowed-tools:
   - Read
@@ -14,7 +14,7 @@ allowed-tools:
 
 # Research Lit
 
-Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-search`, building a structured research landscape with gaps and baselines.
+Multi-source literature survey via the workflow-owned broad retrieval backbone, with `/papers-cool` plus optional `/pasa-paper-search` retained as supplementary recall for arXiv- and venue-heavy AI topics.
 
 > **File ownership**: Write ONLY to `{PROJ}/researcher/`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}` (see `CONFIG.md` for `{PROJECTS_ROOT}`)
 
@@ -28,7 +28,7 @@ Multi-source literature survey via `/papers-cool` plus optional `/pasa-paper-sea
 - **Never manipulate evaluation** by selecting only flattering baselines or citations from the literature sweep.
 - **Never fabricate citations** or paper metadata; verify title, authors, year, venue, and identifier from the source.
 
-Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/pasa-paper-search` as a second discovery source and merge the two result sets by canonical paper identity. Do not use `web_search` or `web_fetch` to find papers.
+Use the workflow-owned broad retrieval backbone as the primary discovery path when coverage breadth matters. Keep `/papers-cool` as the guaranteed retrieval baseline and `/pasa-paper-search` as an optional second AI-heavy discovery source. Do not use `web_search` or `web_fetch` to find papers.
 
 ---
 
@@ -37,6 +37,7 @@ Use `/papers-cool` as the guaranteed retrieval baseline. When available, use `/p
 **When invoked by `/research-pipeline` or `/research-queue`:**
 
 1. **Search multiple keywords** (3-5 queries covering different angles)
+   - first run the workflow-owned broad retrieval backbone when the topic is broad, journal-heavy, proceedings-heavy, or not obviously arXiv-centric
    - always run `papers-cool`
    - if possible, also run `pasa-paper-search` with equivalent English queries
    - if PASA fails, continue with `papers-cool` only

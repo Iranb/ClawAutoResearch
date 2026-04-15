@@ -6,6 +6,14 @@ import {
   inspectPapernexusRemoteAccess,
   type PapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
+import {
+  buildCanonicalPaperRecordFromRecord,
+  collectRetrievalProviders as collectRetrievalProvidersShared,
+  inferPaperSourceProvider as inferSourceProviderShared,
+  mergeCanonicalPaperRecords,
+  sourceKindRank as sourceKindRankShared,
+  sourceProviderRank as sourceProviderRankShared,
+} from "./paper-source-contract";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
   DEFAULT_SHARED_PAPERNEXUS_CORPUS,
@@ -456,24 +464,7 @@ function normalizeProvider(value: string | null | undefined): string | null {
 }
 
 function collectRetrievalProviders(record: Record<string, unknown> | null): string[] {
-  if (!record) {
-    return [];
-  }
-  return uniqueStrings(
-    [
-      pickString(record, ["retrieval_provider", "retrievalProvider"]),
-      pickString(record, ["search_provider", "searchProvider"]),
-      pickString(record, ["discovered_by", "discoveredBy"]),
-      ...asStringArray(record.retrieval_providers),
-      ...asStringArray(record.retrievalProviders),
-      ...asStringArray(record.search_providers),
-      ...asStringArray(record.searchProviders),
-      ...asStringArray(record.discovered_by),
-      ...asStringArray(record.discoveredBy),
-    ]
-      .map((item) => normalizeProvider(item))
-      .filter((item): item is string => Boolean(item))
-  );
+  return collectRetrievalProvidersShared(record);
 }
 
 function inferSourceProvider(
@@ -481,65 +472,15 @@ function inferSourceProvider(
   sourceKind: "markdown" | "pdf" | "unknown",
   sourceHints: string[]
 ): string | null {
-  const explicit = normalizeProvider(
-    pickString(record, [
-      "source_provider",
-      "sourceProvider",
-      "content_provider",
-      "contentProvider",
-      "provider",
-    ])
-  );
-  if (explicit) {
-    return explicit;
-  }
-  const joinedHints = sourceHints.join(" ").toLowerCase();
-  if (joinedHints.includes("huggingface") || joinedHints.includes("/hf/")) {
-    return "hf";
-  }
-  if (joinedHints.includes("arxiv2md")) {
-    if (joinedHints.includes("api/markdown") || joinedHints.includes("arxiv2md-api")) {
-      return "arxiv2md-api";
-    }
-    return "arxiv2md";
-  }
-  if (sourceKind === "pdf") {
-    return "pdf";
-  }
-  return null;
+  return inferSourceProviderShared(record, sourceKind, sourceHints);
 }
 
 function sourceKindRank(kind: "markdown" | "pdf" | "unknown"): number {
-  if (kind === "markdown") {
-    return 0;
-  }
-  if (kind === "pdf") {
-    return 1;
-  }
-  return 2;
+  return sourceKindRankShared(kind);
 }
 
 function sourceProviderRank(provider: string | null): number {
-  const normalized = normalizeProvider(provider);
-  switch (normalized) {
-    case "hf":
-    case "huggingface":
-    case "hugging-face-paper-pages":
-      return 0;
-    case "arxiv2md-api":
-      return 1;
-    case "arxiv2md":
-      return 2;
-    case "pdf":
-      return 3;
-    case "papers-cool":
-      return 4;
-    case "pasa":
-    case "pasa-paper-search":
-      return 5;
-    default:
-      return 5;
-  }
+  return sourceProviderRankShared(provider);
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -753,78 +694,90 @@ function buildExpectedPaperFromRecord(
   raw: Record<string, unknown>,
   fallbackCanonicalId?: string
 ): ExpectedPaper | null {
-  const sourceHints = collectSourceHints(raw);
-  const title =
-    pickString(raw, ["title", "paper_title", "paperTitle", "name"]) ??
-    (sourceHints.length > 0
-      ? path.basename(sourceHints[0], path.extname(sourceHints[0]))
-      : null);
-  const arxivId =
-    pickString(raw, ["arxiv_id", "arxivId", "arxiv"]) ??
-    sourceHints.find((hint) => Boolean(normalizeArxivId(hint))) ??
-    fallbackCanonicalId ??
-    null;
-  const doi =
-    pickString(raw, ["doi", "doi_url", "doiUrl"]) ??
-    sourceHints.find((hint) => Boolean(normalizeDoi(hint))) ??
-    fallbackCanonicalId ??
-    null;
-  const normalizedTitle =
-    pickString(raw, ["normalized_title", "normalizedTitle"]) ??
-    normalizeTitle(title) ??
-    normalizeTitle(fallbackCanonicalId) ??
-    (sourceHints.length > 0 ? normalizeTitle(sourceHints[0]) : null);
-  const canonicalId =
-    pickString(raw, ["canonical_id", "canonicalId", "id", "paper_id", "paperId"]) ??
-    (normalizeArxivId(arxivId) ? `arxiv:${normalizeArxivId(arxivId)}` : null) ??
-    (normalizeDoi(doi) ? `doi:${normalizeDoi(doi)}` : null) ??
-    (normalizedTitle ? `title:${normalizedTitle}` : null) ??
-    fallbackCanonicalId ??
-    null;
-
-  if (!canonicalId && !title && sourceHints.length === 0) {
+  const paper = buildCanonicalPaperRecordFromRecord(raw, fallbackCanonicalId);
+  if (!paper) {
     return null;
   }
-
   return {
-    canonicalId: canonicalId ?? `title:${normalizedTitle ?? "unknown"}`,
-    title,
-    normalizedTitle,
-    titleSignature:
-      pickString(raw, ["title_signature", "titleSignature"]) ??
-      buildTitleSignature(title) ??
-      buildTitleSignature(sourceHints[0]) ??
-      null,
-    arxivId: normalizeArxivId(arxivId),
-    doi: normalizeDoi(doi),
-    sourceHints,
-    sourceKind: inferSourceKind(sourceHints),
-    sourceProvider: inferSourceProvider(raw, inferSourceKind(sourceHints), sourceHints),
-    retrievalProviders: collectRetrievalProviders(raw),
+    canonicalId: paper.canonicalId,
+    title: paper.title,
+    normalizedTitle: paper.normalizedTitle,
+    titleSignature: paper.titleSignature,
+    arxivId: paper.arxivId,
+    doi: paper.doi,
+    sourceHints: paper.sourceHints,
+    sourceKind: paper.sourceKind,
+    sourceProvider: paper.sourceProvider,
+    retrievalProviders: paper.retrievalProviders,
   };
 }
 
 function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): ExpectedPaper {
-  const incomingPreferred =
-    sourceKindRank(incoming.sourceKind) < sourceKindRank(target.sourceKind) ||
-    (sourceKindRank(incoming.sourceKind) === sourceKindRank(target.sourceKind) &&
-      sourceProviderRank(incoming.sourceProvider) < sourceProviderRank(target.sourceProvider));
+  const merged = mergeCanonicalPaperRecords(
+    {
+      canonicalId: target.canonicalId,
+      title: target.title,
+      normalizedTitle: target.normalizedTitle,
+      titleSignature: target.titleSignature,
+      arxivId: target.arxivId,
+      doi: target.doi,
+      pmid: null,
+      pmcid: null,
+      year: null,
+      venue: null,
+      venueFamily: null,
+      venueType: "unknown",
+      venuePackHits: [],
+      venueAliasesMatched: [],
+      sourceHints: target.sourceHints,
+      sourceKind: target.sourceKind,
+      sourceProvider: target.sourceProvider,
+      sourcePath: target.sourceHints[0] ?? null,
+      retrievalProviders: target.retrievalProviders,
+      citationCount: null,
+      bestOaUrl: null,
+      pdfUrl: null,
+      resolutionStatus: "unknown",
+      resolutionAttempts: [],
+    },
+    {
+      canonicalId: incoming.canonicalId,
+      title: incoming.title,
+      normalizedTitle: incoming.normalizedTitle,
+      titleSignature: incoming.titleSignature,
+      arxivId: incoming.arxivId,
+      doi: incoming.doi,
+      pmid: null,
+      pmcid: null,
+      year: null,
+      venue: null,
+      venueFamily: null,
+      venueType: "unknown",
+      venuePackHits: [],
+      venueAliasesMatched: [],
+      sourceHints: incoming.sourceHints,
+      sourceKind: incoming.sourceKind,
+      sourceProvider: incoming.sourceProvider,
+      sourcePath: incoming.sourceHints[0] ?? null,
+      retrievalProviders: incoming.retrievalProviders,
+      citationCount: null,
+      bestOaUrl: null,
+      pdfUrl: null,
+      resolutionStatus: "unknown",
+      resolutionAttempts: [],
+    }
+  );
   return {
-    canonicalId: target.canonicalId,
-    title: target.title ?? incoming.title,
-    normalizedTitle: target.normalizedTitle ?? incoming.normalizedTitle,
-    titleSignature: target.titleSignature ?? incoming.titleSignature,
-    arxivId: target.arxivId ?? incoming.arxivId,
-    doi: target.doi ?? incoming.doi,
-    sourceHints: uniqueStrings([...target.sourceHints, ...incoming.sourceHints]),
-    sourceKind: incomingPreferred ? incoming.sourceKind : target.sourceKind,
-    sourceProvider: incomingPreferred
-      ? incoming.sourceProvider ?? target.sourceProvider
-      : target.sourceProvider ?? incoming.sourceProvider,
-    retrievalProviders: uniqueStrings([
-      ...target.retrievalProviders,
-      ...incoming.retrievalProviders,
-    ]),
+    canonicalId: merged.canonicalId,
+    title: merged.title,
+    normalizedTitle: merged.normalizedTitle,
+    titleSignature: merged.titleSignature,
+    arxivId: merged.arxivId,
+    doi: merged.doi,
+    sourceHints: merged.sourceHints,
+    sourceKind: merged.sourceKind,
+    sourceProvider: merged.sourceProvider,
+    retrievalProviders: merged.retrievalProviders,
   };
 }
 

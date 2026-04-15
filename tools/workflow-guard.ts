@@ -27,6 +27,7 @@ import {
   type CitationExpansionPacket,
   type LiteratureCoverageAudit,
 } from "./paper-discovery-diagnostics";
+import { runBroadPaperSearch } from "./research30/workflow-bridge";
 import {
   applyPaperIngestionValidationToRequest,
   defaultPaperIngestionMaxAttempts,
@@ -7764,6 +7765,40 @@ export async function planCitationExpansionForWorkflow(params: {
       maxSeeds: params.maxSeeds,
     }),
   };
+}
+
+export async function runBroadPaperSearchForWorkflow(params: {
+  projectRoot: string;
+  topic: string;
+  depth?: "quick" | "default" | "deep";
+  maxQueries?: number | null;
+  maxResultsPerQuery?: number | null;
+  maxIndexEntries?: number | null;
+  maxResolutionAttempts?: number | null;
+}): Promise<Awaited<ReturnType<typeof runBroadPaperSearch>>> {
+  return runBroadPaperSearch({
+    projectRoot: params.projectRoot,
+    topic: params.topic,
+    depth: params.depth,
+    maxQueries:
+      typeof params.maxQueries === "number" && Number.isFinite(params.maxQueries)
+        ? Math.floor(params.maxQueries)
+        : undefined,
+    maxResultsPerQuery:
+      typeof params.maxResultsPerQuery === "number" &&
+      Number.isFinite(params.maxResultsPerQuery)
+        ? Math.floor(params.maxResultsPerQuery)
+        : undefined,
+    maxIndexEntries:
+      typeof params.maxIndexEntries === "number" && Number.isFinite(params.maxIndexEntries)
+        ? Math.floor(params.maxIndexEntries)
+        : undefined,
+    maxResolutionAttempts:
+      typeof params.maxResolutionAttempts === "number" &&
+      Number.isFinite(params.maxResolutionAttempts)
+        ? Math.floor(params.maxResolutionAttempts)
+        : undefined,
+  });
 }
 
 export async function getCitationCollectionStateSummary(params: {

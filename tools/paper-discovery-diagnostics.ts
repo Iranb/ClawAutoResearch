@@ -21,6 +21,7 @@ export type LiteratureCoverageAudit = {
     missingYear: number;
     missingVenue: number;
     missingSourcePath: number;
+    metadataOnlyUnresolved: number;
   };
   providerCoverage: Record<string, number>;
   venueCoverage: Record<string, number>;
@@ -128,6 +129,7 @@ function buildCoverageMarkdown(audit: LiteratureCoverageAudit): string {
     `- Verdict: ${audit.verdict}`,
     `- Total papers: ${audit.totalPapers}`,
     `- Recent papers (last 2 years): ${audit.recentPaperCount}`,
+    `- Metadata-only unresolved: ${audit.metadataGaps.metadataOnlyUnresolved}`,
     `- Missing baseline hints: ${audit.missingBaselineHints.join(", ") || "none"}`,
     "",
     "## Recommendations",
@@ -245,6 +247,9 @@ export async function auditLiteratureCoverage(params: {
       missingYear: entries.filter((entry) => entry.year == null).length,
       missingVenue: entries.filter((entry) => !entry.venue).length,
       missingSourcePath: entries.filter((entry) => !entry.sourcePath).length,
+      metadataOnlyUnresolved: entries.filter(
+        (entry) => entry.resolutionStatus === "metadata_only_unresolved"
+      ).length,
     },
     providerCoverage: countBy(entries.map((entry) => entry.sourceProvider)),
     venueCoverage: countBy(entries.map((entry) => entry.venue)),
