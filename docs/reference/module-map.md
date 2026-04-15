@@ -37,7 +37,21 @@
 | `tools/papernexus-*` | remote access、progress、wrapper、packet materialization |
 | `tools/workflow-runtime-refresh.ts` | 运行时 refresh 与 snapshot 同步 |
 
-## 4. ideation / literature / writing families
+## 4. broad paper search / literature backbone
+
+| 路径 | 重点 |
+| --- | --- |
+| `tools/paper-source-contract.ts` | canonical paper/source contract、resolution status、metadata-only 语义 |
+| `tools/paper-source-index-writer.ts` | `PAPER_SOURCE_INDEX.json` 的 authoritative merge / upsert writer |
+| `tools/research30/query-planner.ts` | deterministic query planning |
+| `tools/research30/provider-*.ts` | OpenAlex / Semantic Scholar / Crossref / Unpaywall / CORE / DBLP provider adapters |
+| `tools/research30/venue-registry.ts` | top-tier venue alias normalization 与 venue packs |
+| `tools/research30/merge.ts` | canonical merge、provider agreement、selection scoring |
+| `tools/research30/source-resolution.ts` | OA/PDF resolution 与 metadata-only fallback |
+| `tools/research30/diagnostics.ts` | broad search diagnostics / Markdown report |
+| `tools/research30/workflow-bridge.ts` | broad search workflow entrypoint，负责 artifact 落盘与 source-index 更新 |
+
+## 5. ideation / literature / writing families
 
 | 路径 | 重点 |
 | --- | --- |
@@ -45,7 +59,7 @@
 | `tools/literature-discovery/` | discovery requisition、frontier support |
 | `tools/research-writing/` | story bridge、citation grounding、revision cycle、写作支撑产物 |
 
-## 5. tests 应该怎么看
+## 6. tests 应该怎么看
 
 优先看这些回归套件：
 
@@ -76,7 +90,13 @@
 - `tests/workflow-guard-review-state-setters.test.mjs`
 - `tests/workflow-guard-ingestion-state-setters.test.mjs`
 
-## 6. agents 和 skills 所在位置
+新增的 broad paper search 相关回归：
+
+- `tests/paper-source-index-writer.test.mjs`
+- `tests/research30-query-planner.test.mjs`
+- `tests/research30-workflow-bridge.test.mjs`
+
+## 7. agents 和 skills 所在位置
 
 - `agents/`：角色配置、BOOTSTRAP、HEARTBEAT、TOOLS 等。
 - `skills/`：分角色和分阶段的执行协议。
