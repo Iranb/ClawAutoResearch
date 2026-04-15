@@ -128,6 +128,95 @@ test("parseFileAuditResult accepts valid JSON and hard-fails invalid JSON", () =
   assert.equal(fallback.violations[0]?.rule, "invalid_json");
 });
 
+test("materializeFileAuditPacket prefers writing_session section draft paths over canonical paths", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-audit-section-target-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper", "sections"), {
+    recursive: true,
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "alternate"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "academic_writer", "alternate", "custom-abstract.tex"),
+    "Resolved abstract body.\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "write",
+        writing_session: {
+          current_section: "abstract",
+          section_packets: {
+            abstract: {
+              status: "drafting",
+              draft_path: "academic_writer/alternate/custom-abstract.tex",
+            },
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const policy = {
+    hookId: "abstract-hook",
+    hookType: "file_audit",
+    enabled: true,
+    stage: "write",
+    hookPoint: "before_task_complete",
+    order: 100,
+    parallelGroup: null,
+    targetRole: "academic_writer",
+    auditorRole: "reviewer",
+    filePath: "academic_writer/paper/sections/abstract.tex",
+    requirementPrompt: "Check the abstract.",
+    supportingArtifacts: [],
+    blockingMode: "block_stage",
+    maxRounds: 3,
+    maxUnchangedRounds: 2,
+    reviseOwnerRole: "academic_writer",
+    reviseCommand: "Revise and rerun.",
+    reportDir: "reviewer/file-audits/abstract-hook",
+    filters: null,
+    appliesWhen: null,
+    stateScope: "shared_by_transition",
+  };
+  const context = buildWorkflowHookPointContext({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "write",
+    hookPoint: "before_task_complete",
+    ownerRole: "academic_writer",
+    actorRole: "academic_writer",
+    targetRole: "academic_writer",
+    taskId: "write.section.abstract",
+  });
+
+  const packet = await materializeFileAuditPacket({
+    projectRoot,
+    projectId: "demo-project",
+    policy,
+    context,
+    roundNumber: 1,
+  });
+
+  const packetJson = JSON.parse(
+    await fs.readFile(path.join(projectRoot, packet.packetJsonPath), "utf8")
+  );
+  assert.equal(packetJson.filePath, "academic_writer/alternate/custom-abstract.tex");
+  assert.equal(packetJson.canonicalFilePath, "academic_writer/paper/sections/abstract.tex");
+  assert.equal(packetJson.resolutionSource, "section_packet_draft");
+});
+
 test("dispatchAggregateHookRevision writes per-target aggregate packets", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-audit-dispatch-"));
   t.after(async () => {
