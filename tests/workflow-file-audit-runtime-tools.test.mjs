@@ -43,9 +43,16 @@ test("research_workflow can set and read file audit policy and materialize a pac
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-workflow-tool-file-audit-")
   );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
   t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
+  process.env.OPENCLAW_PROJECT = projectRoot;
 
   await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
   await fs.writeFile(

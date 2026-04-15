@@ -42,6 +42,36 @@
 6. 只有 `drive_stage` 才会成为真正可派发的 owner handoff；其他结果会转成 repair/background guidance，而不是伪 handoff。
 7. 必要时通过 mailbox、queue 或 broadcast 把 handoff 变成结构化事件。
 
+## 3.5 workflow hooks 在控制平面里的位置
+
+现在控制平面多了一层显式的 `workflow hooks`:
+
+- hook policy 存在 `PROJECT_MANIFEST.json.workflow_hooks`
+- hook runtime state 存在 `.openclaw-research/workflow-hooks-state.json`
+- hook packet/report 落在 `reviewer/file-audits/`
+
+它的作用不是替代 gate，而是把“关键节点上的审查 / revision / 放行”做成 durable control-plane 能力。
+
+当前最关键的 hook 点是：
+
+- `artifact_materialized`
+- `before_stage_handoff`
+- `before_task_complete`
+- `before_handoff_activation`
+- `after_handoff_activation`
+
+这意味着一次标准推进现在更像：
+
+1. `stage-preflight` materialize/reconcile contracts
+2. system 发出 `artifact_materialized` events
+3. `auto_iterator_tick` 计算 readiness 与 recommended actions
+4. service 在 `before_stage_handoff` 处运行 hooks
+5. handoff 真正激活前再过 `before_handoff_activation`
+
+如果你想完整理解这层，请直接读：
+
+- [Workflow Hooks](./workflow-hooks.md)
+
 ## 4. 为什么需要回退能力
 
 科研流程不是线性的。下面这些情况都应该触发回退：
@@ -121,3 +151,7 @@ Lobster 在这里的角色是：
 
 > [!TIP]
 > 如果你已经理解这里，下一页建议读 [Graph 与 Memory](./graph-memory.md)。这两页合起来才是这套系统真正的心脏。
+
+如果你正在做节点级审核、handoff gating、task closeout 审查，则更建议下一页直接读：
+
+- [Workflow Hooks](./workflow-hooks.md)

@@ -26,6 +26,7 @@
 | `tools/workflow-guard-guidance/` | prompt-layer guidance 与 dynamic tasks |
 | `tools/workflow-guard-runtime/` | auto iterator、background continuation、session orchestration |
 | `tools/workflow-guard-recorders/` | experiment/review/writing 等 runtime recorder 与 append-only 写入 |
+| `tools/workflow-hooks/` | hook policy/state、file audit runner、aggregate revision dispatch、hook gateway execution |
 | `tools/lobster-handoff.ts` | Lobster 作为可选 handoff backend 的接入点，负责 Lobster/native 选择与 fallback |
 | `tools/workflow-handoff-runtime.ts` | mailbox handoff item、ack 与 handoff runtime 细节 |
 
@@ -70,8 +71,12 @@
 - `tests/writer-reviewer-runtime-state.test.mjs`
 - `tests/workflow-writing-lines-e2e.test.mjs`
 - `tests/lobster-handoff.test.mjs`
+- `tests/workflow-hooks-state.test.mjs`
+- `tests/workflow-hooks-executor.test.mjs`
+- `tests/workflow-file-audit.test.mjs`
+- `tests/workflow-file-audit-runtime-tools.test.mjs`
 
-它们分别守住推进器、工具接口、控制平面阶段约束、文档站结构、Lobster fallback 语义，以及普通论文/综述论文两条写作主线。
+它们分别守住推进器、工具接口、控制平面阶段约束、文档站结构、Lobster fallback 语义、workflow hooks/control-plane 审计闭环，以及普通论文/综述论文两条写作主线。
 
 新增的 decomposition-focused 套件：
 

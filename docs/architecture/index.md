@@ -34,6 +34,9 @@ Researcher、Orchestrator、Coder、Analyzer、Academic Writer、Reviewer、Cros
 
 - [Workflow 控制平面](./workflow-control-plane.md)
 - [Broad Paper Search](./broad-paper-search.md)
+- [Workflow Hooks](./workflow-hooks.md)
+- [Workflow Hooks](./workflow-hooks.md)
+- [Broad Paper Search](./broad-paper-search.md)
 - [Auto Research / Auto Review Handoffs](./auto-pipeline-handoffs.md)
 - [Lobster Handoffs](./lobster-handoffs.md)
 - [Graph 与 Memory](./graph-memory.md)
