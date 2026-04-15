@@ -18,6 +18,7 @@ import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
+import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
 
@@ -204,11 +205,17 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What
     writeTextEnsured(selfReviewPath, selfReview),
   ]);
 
+  await materializeSurveyAnalysis({
+    projectRoot: params.projectRoot,
+  });
+
   return {
     generatedFiles: [
       "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+      "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
       "academic_writer/SURVEY_SECTION_BRIEFS.md",
       "academic_writer/SURVEY_SELF_REVIEW.md",
+      "researcher/SOURCE_TO_CLAIM_INDEX.json",
     ],
   };
 }
