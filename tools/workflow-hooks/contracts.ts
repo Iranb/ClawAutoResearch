@@ -1,6 +1,8 @@
 export const WORKFLOW_HOOK_POINTS = [
   "artifact_materialized",
+  "before_prepare_handoff",
   "before_stage_handoff",
+  "before_handoff_delivery",
   "after_stage_handoff",
   "before_task_complete",
   "before_stage_complete",

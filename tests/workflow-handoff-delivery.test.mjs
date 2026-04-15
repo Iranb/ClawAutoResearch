@@ -122,6 +122,74 @@ test("deliverWorkflowHandoffIntent falls back from native failure to runtime que
   );
 });
 
+test("deliverWorkflowHandoffIntent suppresses stale hook-gated handoffs before delivery", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-hook-gate-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        workflow_hooks: {
+          enabled: true,
+          audit_hooks: [
+            {
+              hook_id: "delivery-gate",
+              hook_type: "file_audit",
+              stage: "write",
+              hook_point: "before_handoff_delivery",
+              target_role: "academic_writer",
+              auditor_role: "reviewer",
+              file_path: "academic_writer/paper/main.tex",
+              requirement_prompt: "Check delivery freshness.",
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    idempotencyKey: "deliver-stale-hook",
+    projectId: "demo-project",
+    stage: "write",
+    stageAfter: "write",
+    fromRole: "reviewer",
+    toRole: "academic_writer",
+    reason: "stage_owner_change",
+    payload: {
+      hookGatePoint: "before_handoff_delivery",
+      hookGateFingerprint: "sha1:stale",
+      hookGateVerdict: "pass",
+      hookGateStatus: "passed",
+      hookGatePolicyIds: ["delivery-gate"],
+    },
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 2,
+    },
+  });
+
+  const result = await deliverWorkflowHandoffIntent({
+    intent: created.intent,
+    runtime: {
+      async nativeDispatch() {
+        throw new Error("should not dispatch stale hook-gated handoff");
+      },
+    },
+  });
+
+  assert.equal(result.delivered, false);
+  assert.equal(result.terminal, true);
+  assert.equal(result.reason, "hook_gate_stale");
+  assert.equal(result.intent.status, "superseded");
+});
+
 test("deliverWorkflowHandoffIntent escalates when all automatic delivery channels fail", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-"));
   t.after(async () => {

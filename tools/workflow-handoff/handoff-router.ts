@@ -4,6 +4,7 @@ import type {
   WorkflowHandoffIntent,
   WorkflowHandoffReason,
 } from "./handoff-types";
+import type { WorkflowHandoffHookGateRecord } from "../workflow-hooks/handoff-gates.js";
 
 function hashFragment(value: unknown): string {
   return createHash("sha256")
@@ -59,6 +60,7 @@ export async function createStageOwnerHandoffIntent(params: {
   missingStageSignals?: string[];
   manifestRevision?: string | number | null;
   routeRevision?: string | number | null;
+  hookGate?: WorkflowHandoffHookGateRecord | null;
   deliveryPlan?: Parameters<typeof upsertWorkflowHandoffIntent>[0]["deliveryPlan"];
 }): Promise<{ intent: WorkflowHandoffIntent; created: boolean }> {
   return upsertWorkflowHandoffIntent({
@@ -95,6 +97,17 @@ export async function createStageOwnerHandoffIntent(params: {
       nextMicroStage: params.nextMicroStage ?? null,
       executionId: params.executionId ?? null,
       missingStageSignals: params.missingStageSignals ?? [],
+      ...(params.hookGate
+        ? {
+            hookGatePoint: params.hookGate.hookGatePoint,
+            hookGateFingerprint: params.hookGate.hookGateFingerprint,
+            hookGateVerdict: params.hookGate.hookGateVerdict,
+            hookGateStatus: params.hookGate.hookGateStatus,
+            hookGateCheckedAt: params.hookGate.hookGateCheckedAt,
+            hookGatePolicyIds: params.hookGate.hookGatePolicyIds,
+            hookGateRevisionPacketPath: params.hookGate.hookGateRevisionPacketPath,
+          }
+        : {}),
     },
     deliveryPlan: params.deliveryPlan,
   });

@@ -9,6 +9,7 @@ import {
   evaluateChannelProjectBindingGate,
   type ChannelProjectBindingPolicy,
 } from "../channel-project-bindings";
+import { checkHandoffHookFreshness } from "../workflow-hooks/handoff-gates.js";
 import type {
   WorkflowHandoffDeliveryChannel,
   WorkflowHandoffIntent,
@@ -102,6 +103,29 @@ export async function deliverWorkflowHandoffIntent(params: {
       intent: escalated,
       terminal: true,
       reason: "delivery_attempt_budget_exhausted",
+    };
+  }
+
+  const hookFreshness = await checkHandoffHookFreshness({
+    intent,
+    defaultHookPoint: "before_handoff_delivery",
+  });
+  if (!hookFreshness.allowed) {
+    const superseded =
+      (await transitionWorkflowHandoffIntent({
+        projectRoot: intent.projectRoot,
+        intentId: intent.intentId,
+        toStatus: "superseded",
+        terminalReason: "hook_gate_stale",
+        summary:
+          hookFreshness.blockingReason ??
+          "Suppressed stale handoff because hook gate freshness failed.",
+      })) ?? intent;
+    return {
+      delivered: false,
+      intent: superseded,
+      terminal: true,
+      reason: "hook_gate_stale",
     };
   }
 
