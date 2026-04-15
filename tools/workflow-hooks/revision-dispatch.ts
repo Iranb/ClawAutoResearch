@@ -51,13 +51,15 @@ function toDispatchRole(value: string | null | undefined): DispatchableWorkflowR
 export function getAggregateRevisionPacketPath(params: {
   hookPoint: WorkflowHookPoint;
   stage: string | null;
+  targetRole?: string | null;
 }): string {
   const stagePart = params.stage ?? "global";
+  const targetPart = params.targetRole ? `-${params.targetRole}` : "";
   return path.join(
     "reviewer",
     "file-audits",
     "_aggregate",
-    `${stagePart}-${params.hookPoint}`,
+    `${stagePart}-${params.hookPoint}${targetPart}`,
     "AGGREGATE_REVISION_PACKET.md"
   );
 }
@@ -66,6 +68,7 @@ async function writeAggregateRevisionPacket(params: {
   projectRoot: string;
   hookPoint: WorkflowHookPoint;
   stage: string | null;
+  targetRole?: string | null;
   executions: Array<{
     policy: WorkflowFileAuditHookPolicy;
     execution: WorkflowHookExecutionResult;
@@ -74,6 +77,7 @@ async function writeAggregateRevisionPacket(params: {
   const markdownPath = getAggregateRevisionPacketPath({
     hookPoint: params.hookPoint,
     stage: params.stage,
+    targetRole: params.targetRole,
   });
   const jsonPath = markdownPath.replace(/\.md$/i, ".json");
   const resolvedMarkdown = resolveProjectArtifactPath(params.projectRoot, markdownPath);
@@ -84,6 +88,7 @@ async function writeAggregateRevisionPacket(params: {
   const payload = {
     hookPoint: params.hookPoint,
     stage: params.stage,
+    targetRole: params.targetRole ?? null,
     generatedAt: nowIso(),
     items: params.executions.map(({ policy, execution }) => ({
       hookId: policy.hookId,
@@ -95,8 +100,7 @@ async function writeAggregateRevisionPacket(params: {
       requiredFixes: execution.result?.requiredFixes ?? [],
       reviewedArtifacts: execution.result?.reviewedArtifacts ?? [],
       reportDir: policy.reportDir,
-      reportPath:
-        execution.revisionDispatch?.aggregateRevisionPacketPath ?? null,
+      reportPath: null,
     })),
   };
   const markdown = [
@@ -155,14 +159,15 @@ export async function dispatchAggregateHookRevision(params: {
     bucket.push(item);
     byTarget.set(dispatchRole, bucket);
   }
-  const packetPath = await writeAggregateRevisionPacket({
-    projectRoot: params.projectRoot,
-    hookPoint: params.hookPoint,
-    stage: params.stage,
-    executions: params.executions,
-  });
   const results: WorkflowHookRevisionDispatchState[] = [];
   for (const [targetRole, items] of byTarget.entries()) {
+    const packetPath = await writeAggregateRevisionPacket({
+      projectRoot: params.projectRoot,
+      hookPoint: params.hookPoint,
+      stage: params.stage,
+      targetRole,
+      executions: items,
+    });
     const dispatch = await dispatchWorkflowTaskToAgent({
       runtimeSubagent:
         params.runtimeSubagent && typeof params.runtimeSubagent.run === "function"

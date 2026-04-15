@@ -91,6 +91,7 @@ import {
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 import {
@@ -2978,6 +2979,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
       artifactPath: string | null;
       fingerprint: string | null;
       action: "created" | "updated" | "reconciled";
+      kind?: string | null;
     }>;
     hookEvents?: Array<{
       hookPoint: WorkflowHookPoint;
@@ -3022,6 +3024,18 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
       });
       const requesterSessionKey =
         requesterBinding.sessionKey ?? "agent:researcher:main";
+      const manifest =
+        (await readJsonIfExists<Record<string, unknown>>(
+          path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+        )) ?? {};
+      const writingContract = normalizeWritingContractState(manifest.writing_contract);
+      const workflowLine =
+        readString(manifest.workflow_line) === "survey" ||
+        readString(manifest.paper_type) === "survey" ||
+        writingContract.paperMode === "survey" ||
+        readString(manifest.current_stage) === "survey_review"
+          ? "survey"
+          : "experiment";
       const summary = await evaluateWorkflowHooksForPoint({
         runtimeSubagent,
         context: buildWorkflowHookPointContext({
@@ -3031,6 +3045,23 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           hookPoint: params.hookPoint,
           ownerRole: params.autoIteratorResult.ownerAfter ?? params.autoIteratorResult.ownerBefore ?? null,
           actorRole: "researcher",
+          targetRole:
+            params.autoIteratorResult.ownerAfter ??
+            params.autoIteratorResult.ownerBefore ??
+            null,
+          workflowLine,
+          paperMode: writingContract.paperMode,
+          targetStage: params.autoIteratorResult.stageAfter ?? null,
+          transition:
+            params.hookPoint === "artifact_materialized"
+              ? "stage_preflight_materialization"
+              : "service_stage_handoff",
+          changedPaths: (params.autoIteratorResult.materializedArtifacts ?? [])
+            .map((entry) => entry.artifactPath)
+            .filter((entry): entry is string => typeof entry === "string"),
+          artifactKinds: (params.autoIteratorResult.materializedArtifacts ?? [])
+            .map((entry) => entry.kind)
+            .filter((entry): entry is string => typeof entry === "string"),
           materializedArtifacts: params.autoIteratorResult.materializedArtifacts ?? [],
           emittedHookEvents: (params.autoIteratorResult.hookEvents ?? []).filter(
             (entry) => entry.hookPoint === params.hookPoint

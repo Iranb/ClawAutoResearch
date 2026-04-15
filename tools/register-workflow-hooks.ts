@@ -798,6 +798,8 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
                   requesterSessionKey: agentCtx.sessionKey,
                   requesterChannel: agentCtx.messageChannel,
                   handoffIntentId: intent.intentId,
+                  targetStage: stageAfter,
+                  transition: "prompt_handoff_activation",
                 });
                 return {
                   allow: hookSummary.aggregateVerdict === "pass",
@@ -816,6 +818,8 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
                   requesterSessionKey: agentCtx.sessionKey,
                   requesterChannel: agentCtx.messageChannel,
                   handoffIntentId: intent.intentId,
+                  targetStage: stageAfter,
+                  transition: "prompt_handoff_activation",
                 });
               },
             }).catch(() => null);

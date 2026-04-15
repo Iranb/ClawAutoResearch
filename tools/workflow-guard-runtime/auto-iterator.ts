@@ -28,6 +28,7 @@ import {
 } from "../workflow-kernel/graph-context";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
 import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
+import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import {
   getWorkflowTaskGraphPath,
   materializeWorkflowTaskGraph,
@@ -1062,18 +1063,19 @@ export async function runWorkflowAutoIteratorImpl(
     dispatchStageSignals.length > 0
       ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
       : stageRepairCommand;
+  const prioritizedExperimentCommand =
+    experimentMonitorCommand ??
+    experimentReviewCommand ??
+    experimentDecisionCommand?.command ??
+    null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : experimentDecisionCommand?.command ??
-      experimentMonitorCommand ??
-      experimentReviewCommand ??
+    : prioritizedExperimentCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : experimentDecisionCommand?.command ??
-      experimentMonitorCommand ??
-      experimentReviewCommand ??
+    : prioritizedExperimentCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
@@ -1337,10 +1339,12 @@ export async function runWorkflowAutoIteratorImpl(
 
   if (workflowPolicy.teamRuntime?.enabled !== false) {
     const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);
+    const writingContract = normalizeWritingContractState(manifest.writing_contract);
     const teamTaskPreview = buildWorkflowStageTaskPreview({
       currentStage: stageAfter,
       topTierVerdict: evidenceCloseout.topTierVerdict,
       evidenceCloseout,
+      writingSectionOrder: writingContract.sectionOrder,
     });
     await materializeWorkflowTaskGraph({
       projectRoot,

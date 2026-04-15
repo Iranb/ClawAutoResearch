@@ -551,6 +551,10 @@ export async function materializeWorkflowTaskGraph(params: {
             ? "Task already satisfied by current evidence state."
             : "Task materialized from the current stage profile."),
         latestEventAt: existingTask?.latestEventAt ?? nowIso(),
+        writeScope:
+          task.writeScope ??
+          existingTask?.writeScope ??
+          undefined,
       };
     }),
   };

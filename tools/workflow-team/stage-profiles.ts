@@ -1,4 +1,5 @@
 import type { EvidenceCloseoutSummary } from "../workflow-evidence/closeout-summary";
+import type { WorkflowWriteScopeMode } from "../workflow-handoff/write-scope";
 
 export type WorkflowTaskVerificationRule =
   | "none"
@@ -20,7 +21,24 @@ export type WorkflowStageTaskPreview = {
   reason: string | null;
   dependsOn: string[];
   verificationRule: WorkflowTaskVerificationRule;
+  writeScope?: {
+    ownedDirs: string[];
+    exclusiveFiles: string[];
+    mode: WorkflowWriteScopeMode;
+  };
 };
+
+const DEFAULT_WRITE_SECTION_ORDER = [
+  "abstract",
+  "introduction",
+  "related_work",
+  "method",
+  "experiments",
+  "results",
+  "discussion",
+  "limitations",
+  "conclusion",
+] as const;
 
 function makeTask(
   taskId: string,
@@ -31,6 +49,7 @@ function makeTask(
   options: {
     dependsOn?: string[];
     verificationRule?: WorkflowTaskVerificationRule;
+    writeScope?: WorkflowStageTaskPreview["writeScope"];
   } = {}
 ): WorkflowStageTaskPreview {
   return {
@@ -41,13 +60,111 @@ function makeTask(
     reason,
     dependsOn: options.dependsOn ?? [],
     verificationRule: options.verificationRule ?? "none",
+    writeScope: options.writeScope,
   };
+}
+
+function buildSectionWriteScope(sectionId: string): WorkflowStageTaskPreview["writeScope"] {
+  return {
+    ownedDirs: [],
+    exclusiveFiles: [
+      `academic_writer/paper/sections/${sectionId}.tex`,
+      `academic_writer/section-packets/${sectionId}.json`,
+      `academic_writer/section_packets/${sectionId}.md`,
+    ],
+    mode: "exclusive_write",
+  };
+}
+
+function normalizeWriteSectionOrder(value: string[] | null | undefined): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value ?? []) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const sectionId = entry.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (!sectionId || seen.has(sectionId)) {
+      continue;
+    }
+    seen.add(sectionId);
+    normalized.push(sectionId);
+  }
+  return normalized.length > 0 ? normalized : [...DEFAULT_WRITE_SECTION_ORDER];
+}
+
+function humanizeSectionId(sectionId: string): string {
+  return sectionId
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function buildWriteSectionTaskPreview(params: {
+  sectionOrder: string[] | null | undefined;
+  initialDependsOnTaskId?: string | null;
+  finalTaskId: string;
+  finalTaskTitle: string;
+  finalVerificationRule: WorkflowTaskVerificationRule;
+}): WorkflowStageTaskPreview[] {
+  const sectionOrder = normalizeWriteSectionOrder(params.sectionOrder);
+  const tasks: WorkflowStageTaskPreview[] = [];
+  let previousTaskId =
+    typeof params.initialDependsOnTaskId === "string" &&
+    params.initialDependsOnTaskId.trim()
+      ? params.initialDependsOnTaskId.trim()
+      : null;
+
+  for (const sectionId of sectionOrder) {
+    const taskId = `write.section.${sectionId}`;
+    tasks.push(
+      makeTask(
+        taskId,
+        `Draft and harden the ${humanizeSectionId(sectionId)} section`,
+        "academic_writer",
+        "blocked",
+        null,
+        {
+          dependsOn: previousTaskId ? [previousTaskId] : [],
+          verificationRule: "none",
+          writeScope: buildSectionWriteScope(sectionId),
+        }
+      )
+    );
+    previousTaskId = taskId;
+  }
+
+  tasks.push(
+    makeTask(
+      params.finalTaskId,
+      params.finalTaskTitle,
+      "academic_writer",
+      "blocked",
+      null,
+      {
+        dependsOn: previousTaskId ? [previousTaskId] : [],
+        verificationRule: params.finalVerificationRule,
+        writeScope: {
+          ownedDirs: [],
+          exclusiveFiles: [
+            "academic_writer/paper/main.tex",
+            "academic_writer/WRITING_SIGNALS.md",
+          ],
+          mode: "exclusive_write",
+        },
+      }
+    )
+  );
+
+  return tasks;
 }
 
 export function buildWorkflowStageTaskPreview(params: {
   currentStage: string | null;
   topTierVerdict: string | null;
   evidenceCloseout: EvidenceCloseoutSummary;
+  writingSectionOrder?: string[] | null;
 }): WorkflowStageTaskPreview[] {
   const stage = params.currentStage;
   const topTier = params.topTierVerdict === "worth_top_tier_bet";
@@ -70,16 +187,13 @@ export function buildWorkflowStageTaskPreview(params: {
           ),
         ];
       case "write":
-        return [
-          makeTask(
-            "write.polish_and_compile",
+        return buildWriteSectionTaskPreview({
+          sectionOrder: params.writingSectionOrder,
+          finalTaskId: "write.polish_and_compile",
+          finalTaskTitle:
             "Polish the draft, keep graph evidence aligned, and maintain compile-safe sections",
-            "academic_writer",
-            "ready",
-            null,
-            { verificationRule: "none" }
-          ),
-        ];
+          finalVerificationRule: "none",
+        });
       default:
         return [];
     }
@@ -189,17 +303,14 @@ export function buildWorkflowStageTaskPreview(params: {
             : "Reproducibility pack or graph-grounded opportunity context is incomplete.",
           { verificationRule: "reproducibility_pack" }
         ),
-        makeTask(
-          "write.keep_story_and_evidence_aligned",
-          "Keep story, evidence, and venue positioning aligned while drafting",
-          "academic_writer",
-          "ready",
-          null,
-          {
-            dependsOn: ["write.complete_repro_pack"],
-            verificationRule: "write_closeout",
-          }
-        ),
+        ...buildWriteSectionTaskPreview({
+          sectionOrder: params.writingSectionOrder,
+          initialDependsOnTaskId: "write.complete_repro_pack",
+          finalTaskId: "write.keep_story_and_evidence_aligned",
+          finalTaskTitle:
+            "Keep story, evidence, and venue positioning aligned while drafting",
+          finalVerificationRule: "write_closeout",
+        }),
       ];
     case "submit":
       return [

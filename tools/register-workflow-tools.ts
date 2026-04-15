@@ -110,6 +110,7 @@ import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/work
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
+import { materializeWritingHookPolicies } from "./research-writing/hook-policies";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
@@ -336,6 +337,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
   "materialize_writing_support_artifacts",
+  "materialize_writing_hook_policies",
   "reconcile_authoring_closeout",
   "materialize_cycle_memory",
   "materialize_survey_review_state",
@@ -436,6 +438,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_file_audit_packet: "materializeFileAuditPacket",
   materialize_paper_story_state: "materializePaperStoryState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
+  materialize_writing_hook_policies: "materializeWritingHookPolicies",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
   materialize_cycle_memory: "materializeCycleMemory",
   materialize_survey_review_state: "materializeSurveyReviewState",
@@ -1535,6 +1538,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
               "materialize_writing_support_artifacts",
+              "materialize_writing_hook_policies",
               "reconcile_authoring_closeout",
               "materialize_cycle_memory",
               "materialize_survey_review_state",
@@ -1743,6 +1747,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           writingSupportMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          writingHookPolicyMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -3230,6 +3238,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 role: snapshot.role,
                 completionNote: readString(params.completionNote),
                 beforeCompleteHook: async ({ task }) => {
+                  const changedPaths = [
+                    ...(Array.isArray(receiptPayload?.changedFiles)
+                      ? receiptPayload.changedFiles
+                      : []),
+                    ...(Array.isArray(receiptPayload?.artifactPaths)
+                      ? receiptPayload.artifactPaths
+                      : []),
+                  ].filter((entry): entry is string => typeof entry === "string");
                   const hookSummary = await runWorkflowHookPointGate({
                     runtimeSubagent: plugin.api.runtime?.subagent,
                     projectRoot: resolvedProjectRoot,
@@ -3241,6 +3257,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     requesterSessionKey: ctx.sessionKey,
                     requesterChannel: ctx.messageChannel,
                     taskId: task.taskId,
+                    taskTitle: task.title,
+                    transition: "complete_task",
+                    changedPaths,
                   });
                   return {
                     allow: hookSummary.aggregateVerdict === "pass",
@@ -3988,6 +4007,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 stage: basisStage,
                 paperStoryState: paperStorySummary.state,
                 reviewPressureState: reviewPressureSummary.state,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_writing_hook_policies": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.writingHookPolicyMaterialization) ??
+                asObject(params.writingHookMaterialization);
+              const basisStage =
+                readString(payload?.basis_stage) ??
+                readString(payload?.basisStage) ??
+                snapshot.currentStage ??
+                "write";
+              const result = await materializeWritingHookPolicies({
+                projectRoot: resolvedProjectRoot,
+                stage: basisStage,
+                paperMode:
+                  readString(payload?.paperMode) === "conference" ||
+                  readString(payload?.paper_mode) === "conference"
+                    ? "conference"
+                    : readString(payload?.paperMode) === "journal" ||
+                        readString(payload?.paper_mode) === "journal"
+                      ? "journal"
+                      : readString(payload?.paperMode) === "survey" ||
+                          readString(payload?.paper_mode) === "survey"
+                        ? "survey"
+                        : undefined,
+                topTierVerdict:
+                  readString(payload?.topTierVerdict) ??
+                  readString(payload?.top_tier_verdict) ??
+                  null,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -4992,6 +5042,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     requesterSessionKey: ctx.sessionKey,
                     requesterChannel: ctx.messageChannel,
                     handoffIntentId: intent.intentId,
+                    targetStage: stageAfter,
+                    transition: "handoff_activation",
                   });
                   return {
                     allow: hookSummary.aggregateVerdict === "pass",
@@ -5010,6 +5062,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     requesterSessionKey: ctx.sessionKey,
                     requesterChannel: ctx.messageChannel,
                     handoffIntentId: intent.intentId,
+                    targetStage: stageAfter,
+                    transition: "handoff_activation",
                   });
                 },
               });

@@ -21,6 +21,7 @@ import {
   recordWorkflowTeamRoundClaim,
   summarizeWorkflowTeamRoundStore,
 } from "../tools/workflow-team/team-round.ts";
+import { buildWorkflowStageTaskPreview } from "../tools/workflow-team/stage-profiles.ts";
 
 test("workflow task graph store persists preview tasks as claimable/satisfied summary state", async (t) => {
   const projectRoot = await fs.mkdtemp(
@@ -243,6 +244,98 @@ test("workflow task graph can assign the next claimable task for an owner sessio
     satisfiedCount: 1,
     optionalCount: 0,
   });
+});
+
+test("write stage preview expands into ordered section tasks that make before_task_complete hooks targetable", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-write-sections-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const previewTasks = buildWorkflowStageTaskPreview({
+    currentStage: "write",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    writingSectionOrder: [
+      "abstract",
+      "introduction",
+      "related_work",
+      "method",
+      "results",
+      "discussion",
+      "conclusion",
+    ],
+  });
+
+  assert.deepEqual(
+    previewTasks.map((task) => task.taskId),
+    [
+      "write.complete_repro_pack",
+      "write.section.abstract",
+      "write.section.introduction",
+      "write.section.related_work",
+      "write.section.method",
+      "write.section.results",
+      "write.section.discussion",
+      "write.section.conclusion",
+      "write.keep_story_and_evidence_aligned",
+    ]
+  );
+  assert.deepEqual(previewTasks[1].dependsOn, ["write.complete_repro_pack"]);
+  assert.deepEqual(previewTasks[2].dependsOn, ["write.section.abstract"]);
+  assert.deepEqual(previewTasks.at(-1)?.dependsOn, ["write.section.conclusion"]);
+
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo-project",
+    stage: "write",
+    topTierVerdict: "worth_top_tier_bet",
+    evidenceCloseout: {
+      status: "blocked",
+      topTierVerdict: "worth_top_tier_bet",
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: false,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks,
+  });
+
+  const claim = await claimNextWorkflowTaskForOwner({
+    projectRoot,
+    owner: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:group:paper-lab",
+  });
+
+  assert.equal(claim.claimed, true);
+  assert.equal(claim.task?.taskId, "write.section.abstract");
+  assert.equal(claim.task?.verificationRule, "none");
+
+  const store = await readWorkflowTaskGraphStore(projectRoot);
+  assert.equal(
+    store?.tasks.find((task) => task.taskId === "write.complete_repro_pack")?.status,
+    "satisfied"
+  );
+  assert.equal(
+    store?.tasks.find((task) => task.taskId === "write.keep_story_and_evidence_aligned")?.status,
+    "claimable"
+  );
 });
 
 test("workflow team round persists lead, active sessions, and last claimed task", async (t) => {

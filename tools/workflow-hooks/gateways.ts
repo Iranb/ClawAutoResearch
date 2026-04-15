@@ -1,7 +1,9 @@
 import { deriveAgentSessionKeyForRole } from "../agent-task-dispatch";
+import { readJsonIfExists } from "../workflow-guard-core/fs";
+import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
-import type { WorkflowHookPoint } from "./contracts.js";
+import type { WorkflowHookPoint, WorkflowLine, WorkflowPaperMode } from "./contracts.js";
 
 type RuntimeSubagentApi = {
   run?: (params: {
@@ -56,6 +58,30 @@ function normalizeHookReviewerRole(
   return null;
 }
 
+async function readWorkflowHookEnvironment(params: {
+  projectRoot: string;
+}): Promise<{
+  workflowLine: WorkflowLine;
+  paperMode: WorkflowPaperMode | null;
+}> {
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      `${params.projectRoot}/PROJECT_MANIFEST.json`
+    )) ?? {};
+  const writingContract = normalizeWritingContractState(manifest.writing_contract);
+  const workflowLine =
+    manifest.workflow_line === "survey" ||
+    manifest.paper_type === "survey" ||
+    writingContract.paperMode === "survey" ||
+    manifest.current_stage === "survey_review"
+      ? "survey"
+      : "experiment";
+  return {
+    workflowLine,
+    paperMode: writingContract.paperMode,
+  };
+}
+
 export async function runWorkflowHookPointGate(params: {
   runtimeSubagent?: RuntimeSubagentApi;
   projectRoot: string;
@@ -67,8 +93,28 @@ export async function runWorkflowHookPointGate(params: {
   requesterSessionKey?: string | null;
   requesterChannel?: string | null;
   taskId?: string | null;
+  taskTitle?: string | null;
   handoffIntentId?: string | null;
+  targetStage?: string | null;
+  transition?: string | null;
+  changedPaths?: string[];
+  artifactKinds?: string[];
+  materializedArtifacts?: Array<{
+    contract: string;
+    artifactPath: string | null;
+    fingerprint: string | null;
+    action: "created" | "updated" | "reconciled";
+    kind?: string | null;
+  }>;
+  emittedHookEvents?: Array<{
+    hookPoint: WorkflowHookPoint;
+    contract: string | null;
+    artifactPath: string | null;
+  }>;
 }) {
+  const environment = await readWorkflowHookEnvironment({
+    projectRoot: params.projectRoot,
+  });
   return evaluateWorkflowHooksForPoint({
     runtimeSubagent: params.runtimeSubagent,
     requesterSessionKey: params.requesterSessionKey,
@@ -80,8 +126,18 @@ export async function runWorkflowHookPointGate(params: {
       hookPoint: params.hookPoint,
       ownerRole: params.ownerRole,
       actorRole: params.actorRole,
+      targetRole: params.ownerRole,
       taskId: params.taskId,
+      taskTitle: params.taskTitle,
       handoffIntentId: params.handoffIntentId,
+      workflowLine: environment.workflowLine,
+      paperMode: environment.paperMode,
+      targetStage: params.targetStage ?? params.stage,
+      transition: params.transition,
+      changedPaths: params.changedPaths,
+      artifactKinds: params.artifactKinds,
+      materializedArtifacts: params.materializedArtifacts,
+      emittedHookEvents: params.emittedHookEvents,
     }),
     launchReviewerRun:
       params.runtimeSubagent?.run != null

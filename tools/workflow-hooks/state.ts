@@ -13,8 +13,11 @@ import type {
   WorkflowFileAuditHookState,
   WorkflowFileAuditResult,
   WorkflowFileAuditRoundState,
+  WorkflowHookAppliesWhen,
   WorkflowHookEvent,
+  WorkflowHookFilters,
   WorkflowHookExecutionResult,
+  WorkflowHookPointContext,
   WorkflowHookPoint,
   WorkflowHookPointAggregateState,
   WorkflowHookPointAggregateVerdict,
@@ -22,14 +25,22 @@ import type {
   WorkflowHooksStateStore,
   WorkflowHookRevisionDispatchState,
   WorkflowMaterializedArtifact,
+  WorkflowLine,
+  WorkflowPaperMode,
 } from "./contracts.js";
 import {
   WORKFLOW_HOOK_BLOCKING_MODES,
   WORKFLOW_HOOK_POINTS,
+  WORKFLOW_LINES,
+  WORKFLOW_PAPER_MODES,
 } from "./contracts.js";
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 export function getWorkflowHooksStatePath(projectRoot: string): string {
@@ -43,11 +54,156 @@ function normalizeHookPoint(value: unknown): WorkflowHookPoint {
     : "before_stage_handoff";
 }
 
+function normalizeWorkflowLine(value: unknown): WorkflowLine {
+  const normalized = normalizeStage(value);
+  return (WORKFLOW_LINES as readonly string[]).includes(normalized ?? "")
+    ? (normalized as WorkflowLine)
+    : "unknown";
+}
+
+function normalizePaperMode(value: unknown): WorkflowPaperMode | null {
+  const normalized = normalizeStage(value);
+  return (WORKFLOW_PAPER_MODES as readonly string[]).includes(normalized ?? "")
+    ? (normalized as WorkflowPaperMode)
+    : null;
+}
+
 function normalizeBlockingMode(value: unknown): WorkflowFileAuditHookPolicy["blockingMode"] {
   const normalized = normalizeStage(value);
   return (WORKFLOW_HOOK_BLOCKING_MODES as readonly string[]).includes(normalized ?? "")
     ? (normalized as WorkflowFileAuditHookPolicy["blockingMode"])
     : "block_stage";
+}
+
+function normalizeNonEmptyStrings(values: unknown): string[] {
+  return asStringArray(values)
+    .map((entry) => toPosixPath(entry.trim()))
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeHookFilters(value: unknown): WorkflowHookFilters | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const workflowLines = normalizeNonEmptyStrings(record.workflowLines ?? record.workflow_lines)
+    .map((entry) => normalizeWorkflowLine(entry));
+  const paperModes = normalizeNonEmptyStrings(record.paperModes ?? record.paper_modes)
+    .map((entry) => normalizePaperMode(entry))
+    .filter((entry): entry is WorkflowPaperMode => Boolean(entry));
+  const targetRoles = normalizeNonEmptyStrings(record.targetRoles ?? record.target_roles);
+  const taskIds = normalizeNonEmptyStrings(record.taskIds ?? record.task_ids);
+  const taskPrefixes = normalizeNonEmptyStrings(record.taskPrefixes ?? record.task_prefixes);
+  const fileGlobs = normalizeNonEmptyStrings(record.fileGlobs ?? record.file_globs);
+  const materializedContracts = normalizeNonEmptyStrings(
+    record.materializedContracts ?? record.materialized_contracts
+  );
+  const changedPathsAny = normalizeNonEmptyStrings(
+    record.changedPathsAny ?? record.changed_paths_any
+  );
+  const normalized: WorkflowHookFilters = {};
+  if (workflowLines.length > 0) {
+    normalized.workflowLines = workflowLines;
+  }
+  if (paperModes.length > 0) {
+    normalized.paperModes = paperModes;
+  }
+  if (targetRoles.length > 0) {
+    normalized.targetRoles = targetRoles;
+  }
+  if (taskIds.length > 0) {
+    normalized.taskIds = taskIds;
+  }
+  if (taskPrefixes.length > 0) {
+    normalized.taskPrefixes = taskPrefixes;
+  }
+  if (fileGlobs.length > 0) {
+    normalized.fileGlobs = fileGlobs;
+  }
+  if (materializedContracts.length > 0) {
+    normalized.materializedContracts = materializedContracts;
+  }
+  if (changedPathsAny.length > 0) {
+    normalized.changedPathsAny = changedPathsAny;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function serializeHookFilters(
+  filters: WorkflowHookFilters | null
+): Record<string, unknown> | null {
+  if (!filters) {
+    return null;
+  }
+  const normalized: Record<string, unknown> = {};
+  if (filters.workflowLines?.length) {
+    normalized.workflow_lines = filters.workflowLines;
+  }
+  if (filters.paperModes?.length) {
+    normalized.paper_modes = filters.paperModes;
+  }
+  if (filters.targetRoles?.length) {
+    normalized.target_roles = filters.targetRoles;
+  }
+  if (filters.taskIds?.length) {
+    normalized.task_ids = filters.taskIds;
+  }
+  if (filters.taskPrefixes?.length) {
+    normalized.task_prefixes = filters.taskPrefixes;
+  }
+  if (filters.fileGlobs?.length) {
+    normalized.file_globs = filters.fileGlobs;
+  }
+  if (filters.materializedContracts?.length) {
+    normalized.materialized_contracts = filters.materializedContracts;
+  }
+  if (filters.changedPathsAny?.length) {
+    normalized.changed_paths_any = filters.changedPathsAny;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function normalizeHookAppliesWhen(value: unknown): WorkflowHookAppliesWhen | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const workflowLines = normalizeNonEmptyStrings(record.workflowLines ?? record.workflow_lines)
+    .map((entry) => normalizeWorkflowLine(entry));
+  const paperModes = normalizeNonEmptyStrings(record.paperModes ?? record.paper_modes)
+    .map((entry) => normalizePaperMode(entry))
+    .filter((entry): entry is WorkflowPaperMode => Boolean(entry));
+  const stages = normalizeNonEmptyStrings(record.stages);
+  const normalized: WorkflowHookAppliesWhen = {};
+  if (workflowLines.length > 0) {
+    normalized.workflowLines = workflowLines;
+  }
+  if (paperModes.length > 0) {
+    normalized.paperModes = paperModes;
+  }
+  if (stages.length > 0) {
+    normalized.stages = stages;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function serializeHookAppliesWhen(
+  appliesWhen: WorkflowHookAppliesWhen | null
+): Record<string, unknown> | null {
+  if (!appliesWhen) {
+    return null;
+  }
+  const normalized: Record<string, unknown> = {};
+  if (appliesWhen.workflowLines?.length) {
+    normalized.workflow_lines = appliesWhen.workflowLines;
+  }
+  if (appliesWhen.paperModes?.length) {
+    normalized.paper_modes = appliesWhen.paperModes;
+  }
+  if (appliesWhen.stages?.length) {
+    normalized.stages = appliesWhen.stages;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 function normalizeOptionalVerdict(
@@ -94,6 +250,7 @@ function normalizeOptionalResult(value: unknown): WorkflowFileAuditResult | null
     reviewerRole: pickString(record, ["reviewerRole", "reviewer_role"]) ?? "reviewer",
     filePath: pickString(record, ["filePath", "file_path"]) ?? "",
     fileFingerprint: pickString(record, ["fileFingerprint", "file_fingerprint"]),
+    packetFingerprint: pickString(record, ["packetFingerprint", "packet_fingerprint"]),
     createdAt: pickString(record, ["createdAt", "created_at"]) ?? nowIso(),
   };
 }
@@ -116,6 +273,11 @@ function normalizeRoundState(value: unknown): WorkflowFileAuditRoundState | null
     targetRole: pickString(record, ["targetRole", "target_role"]),
     filePath: pickString(record, ["filePath", "file_path"]) ?? "",
     fileFingerprint: pickString(record, ["fileFingerprint", "file_fingerprint"]),
+    packetFingerprint: pickString(record, ["packetFingerprint", "packet_fingerprint"]),
+    executionFingerprint: pickString(record, [
+      "executionFingerprint",
+      "execution_fingerprint",
+    ]),
     packetPath: pickString(record, ["packetPath", "packet_path"]) ?? "",
     packetJsonPath: pickString(record, ["packetJsonPath", "packet_json_path"]) ?? "",
     reportPath: pickString(record, ["reportPath", "report_path"]) ?? "",
@@ -197,6 +359,16 @@ export function normalizeFileAuditHookPolicy(value: unknown): WorkflowFileAuditH
       pickString(record, ["targetRole", "target_role"]),
     reviseCommand: pickString(record, ["reviseCommand", "revise_command"]),
     reportDir: pickString(record, ["reportDir", "report_dir"]),
+    filters: normalizeHookFilters(record.filters),
+    appliesWhen: normalizeHookAppliesWhen(
+      record.appliesWhen ?? record.applies_when ?? record.applyToContext ?? record.apply_to_context
+    ),
+    stateScope:
+      pickString(record, ["stateScope", "state_scope"]) === "shared_by_stage"
+        ? "shared_by_stage"
+        : pickString(record, ["stateScope", "state_scope"]) === "shared_by_transition"
+          ? "shared_by_transition"
+          : "isolated",
   };
 }
 
@@ -259,6 +431,9 @@ export function serializeFileAuditHookPolicy(
     revise_owner_role: policy.reviseOwnerRole,
     revise_command: policy.reviseCommand,
     report_dir: policy.reportDir,
+    filters: serializeHookFilters(policy.filters),
+    applies_when: serializeHookAppliesWhen(policy.appliesWhen),
+    state_scope: policy.stateScope,
   };
 }
 
@@ -299,9 +474,25 @@ function normalizeHookState(value: unknown): WorkflowFileAuditHookState | null {
       "lastPassedFingerprint",
       "last_passed_fingerprint",
     ]),
+    lastPassedPacketFingerprint: pickString(record, [
+      "lastPassedPacketFingerprint",
+      "last_passed_packet_fingerprint",
+    ]),
+    lastPassedExecutionFingerprint: pickString(record, [
+      "lastPassedExecutionFingerprint",
+      "last_passed_execution_fingerprint",
+    ]),
     lastReviewedFingerprint: pickString(record, [
       "lastReviewedFingerprint",
       "last_reviewed_fingerprint",
+    ]),
+    lastReviewedPacketFingerprint: pickString(record, [
+      "lastReviewedPacketFingerprint",
+      "last_reviewed_packet_fingerprint",
+    ]),
+    lastReviewedExecutionFingerprint: pickString(record, [
+      "lastReviewedExecutionFingerprint",
+      "last_reviewed_execution_fingerprint",
     ]),
     lastVerdict: normalizeOptionalVerdict(record.lastVerdict ?? record.last_verdict),
     lastRevisionDispatch: normalizeRevisionDispatch(
@@ -336,7 +527,11 @@ export function serializeHookState(
     rounds_started: state.roundsStarted,
     active_round: state.activeRound,
     last_passed_fingerprint: state.lastPassedFingerprint,
+    last_passed_packet_fingerprint: state.lastPassedPacketFingerprint,
+    last_passed_execution_fingerprint: state.lastPassedExecutionFingerprint,
     last_reviewed_fingerprint: state.lastReviewedFingerprint,
+    last_reviewed_packet_fingerprint: state.lastReviewedPacketFingerprint,
+    last_reviewed_execution_fingerprint: state.lastReviewedExecutionFingerprint,
     last_verdict: state.lastVerdict,
     last_revision_dispatch: state.lastRevisionDispatch,
     consecutive_unchanged_rounds: state.consecutiveUnchangedRounds,
@@ -472,7 +667,11 @@ export function buildDefaultFileAuditHookState(params: {
     roundsStarted: 0,
     activeRound: null,
     lastPassedFingerprint: null,
+    lastPassedPacketFingerprint: null,
+    lastPassedExecutionFingerprint: null,
     lastReviewedFingerprint: null,
+    lastReviewedPacketFingerprint: null,
+    lastReviewedExecutionFingerprint: null,
     lastVerdict: null,
     lastRevisionDispatch: null,
     consecutiveUnchangedRounds: 0,
@@ -555,26 +754,100 @@ export type WorkflowHookPointContextInput = {
   hookPoint: WorkflowHookPoint;
   ownerRole?: string | null;
   actorRole?: string | null;
+  targetRole?: string | null;
   taskId?: string | null;
+  taskTitle?: string | null;
   handoffIntentId?: string | null;
+  workflowLine?: WorkflowLine | null;
+  paperMode?: WorkflowPaperMode | null;
+  targetStage?: string | null;
+  transition?: string | null;
   materializedArtifacts?: WorkflowMaterializedArtifact[];
   emittedHookEvents?: WorkflowHookEvent[];
+  artifactKinds?: string[];
+  changedPaths?: string[];
 };
+
+function inferArtifactKinds(params: {
+  materializedArtifacts: WorkflowMaterializedArtifact[];
+  artifactKinds: string[];
+}): string[] {
+  const kinds = new Set<string>(
+    params.artifactKinds.map((entry) => normalizeNonEmptyStrings([entry])).flat()
+  );
+  for (const artifact of params.materializedArtifacts) {
+    for (const candidate of normalizeNonEmptyStrings([artifact.kind])) {
+      kinds.add(candidate);
+    }
+    const artifactPath = artifact.artifactPath ? toPosixPath(artifact.artifactPath) : null;
+    if (!artifactPath) {
+      continue;
+    }
+    if (artifactPath.startsWith("academic_writer/")) {
+      kinds.add("writing");
+    }
+    if (artifactPath.includes("/paper/sections/")) {
+      kinds.add("paper_section");
+    }
+    if (artifactPath.endsWith("/paper/main.tex") || artifactPath.endsWith("paper/main.tex")) {
+      kinds.add("paper_main_tex");
+    }
+    if (artifactPath.endsWith(".tex")) {
+      kinds.add("latex");
+    }
+    if (artifactPath.endsWith(".md")) {
+      kinds.add("markdown");
+    }
+    if (artifactPath.endsWith(".json")) {
+      kinds.add("json");
+    }
+    if (/figure|caption/i.test(artifactPath)) {
+      kinds.add("figure_related");
+    }
+  }
+  return [...kinds];
+}
+
+function inferChangedPaths(input: WorkflowHookPointContextInput): string[] {
+  const explicit = normalizeNonEmptyStrings(input.changedPaths ?? []);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  return (input.materializedArtifacts ?? [])
+    .filter((artifact) => artifact.artifactPath)
+    .map((artifact) => artifact.artifactPath as string)
+    .map((artifactPath) => toPosixPath(artifactPath));
+}
 
 export function buildWorkflowHookPointContext(
   input: WorkflowHookPointContextInput
-) {
+): WorkflowHookPointContext {
+  const stage = normalizeStage(input.stage);
+  const materializedArtifacts = input.materializedArtifacts ?? [];
   return {
     projectRoot: input.projectRoot,
     projectId: input.projectId,
-    stage: input.stage,
+    stage,
     hookPoint: input.hookPoint,
     ownerRole: input.ownerRole ?? null,
     actorRole: input.actorRole ?? null,
+    targetRole: input.targetRole ?? input.ownerRole ?? input.actorRole ?? null,
     taskId: input.taskId ?? null,
+    taskTitle: input.taskTitle ?? null,
     handoffIntentId: input.handoffIntentId ?? null,
-    materializedArtifacts: input.materializedArtifacts ?? [],
+    workflowLine: normalizeWorkflowLine(input.workflowLine),
+    paperMode: normalizePaperMode(input.paperMode),
+    targetStage: normalizeStage(input.targetStage) ?? stage,
+    transition: typeof input.transition === "string" && input.transition.trim()
+      ? input.transition.trim()
+      : null,
+    materializedArtifacts,
     emittedHookEvents: input.emittedHookEvents ?? [],
+    artifactKinds: inferArtifactKinds({
+      materializedArtifacts,
+      artifactKinds: input.artifactKinds ?? [],
+    }),
+    changedPaths: inferChangedPaths(input),
   };
 }
 

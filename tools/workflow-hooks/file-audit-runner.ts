@@ -58,6 +58,10 @@ export function defaultFileAuditReportDir(policy: WorkflowFileAuditHookPolicy): 
   return policy.reportDir ?? path.join("reviewer", "file-audits", policy.hookId);
 }
 
+function buildFileAuditPacketFingerprint(value: unknown): string {
+  return `sha1:${createHash("sha1").update(JSON.stringify(value)).digest("hex")}`;
+}
+
 export async function computeProjectFileFingerprint(params: {
   projectRoot: string;
   filePath: string;
@@ -74,28 +78,47 @@ export async function computeProjectFileFingerprint(params: {
   }
 }
 
-export async function materializeFileAuditPacket(params: {
+type FileAuditSupportingArtifactSnapshot = {
+  path: string;
+  exists: boolean;
+  preview: string | null;
+  contentFingerprint: string | null;
+};
+
+async function collectSupportingArtifactSnapshots(params: {
+  projectRoot: string;
+  supportingArtifacts: string[];
+}): Promise<FileAuditSupportingArtifactSnapshot[]> {
+  return Promise.all(
+    params.supportingArtifacts.map(async (relativePath) => {
+      const resolved = resolveProjectArtifactPath(params.projectRoot, relativePath);
+      const exists = resolved ? await pathExists(resolved) : false;
+      const text = exists && resolved ? await readTextIfExists(resolved) : null;
+      return {
+        path: relativePath,
+        exists,
+        preview: text ? text.slice(0, 6000) : null,
+        contentFingerprint:
+          text != null
+            ? `sha1:${createHash("sha1").update(text).digest("hex")}`
+            : null,
+      };
+    })
+  );
+}
+
+export async function inspectFileAuditPacketInputs(params: {
   projectRoot: string;
   projectId: string | null;
   policy: WorkflowFileAuditHookPolicy;
   context: WorkflowHookPointContext;
-  roundNumber: number;
 }): Promise<{
-  packetPath: string;
-  packetJsonPath: string;
-  reportPath: string;
-  reportMarkdownPath: string;
   fileFingerprint: string | null;
+  packetFingerprint: string;
+  targetText: string | null;
+  supportingArtifactSnapshots: FileAuditSupportingArtifactSnapshot[];
+  packetJson: Record<string, unknown>;
 }> {
-  const reportDir = path.join(
-    params.projectRoot,
-    defaultFileAuditReportDir(params.policy),
-    `round-${params.roundNumber}`
-  );
-  const packetPath = path.join(reportDir, "AUDIT_PACKET.md");
-  const packetJsonPath = path.join(reportDir, "AUDIT_PACKET.json");
-  const reportPath = path.join(reportDir, "AUDIT_REPORT.json");
-  const reportMarkdownPath = path.join(reportDir, "AUDIT_REPORT.md");
   const resolvedTargetPath = resolveProjectArtifactPath(
     params.projectRoot,
     params.policy.filePath
@@ -107,19 +130,11 @@ export async function materializeFileAuditPacket(params: {
   const targetText = resolvedTargetPath
     ? await readTextIfExists(resolvedTargetPath)
     : null;
-  const supportingArtifactSnapshots = await Promise.all(
-    params.policy.supportingArtifacts.map(async (relativePath) => {
-      const resolved = resolveProjectArtifactPath(params.projectRoot, relativePath);
-      const exists = resolved ? await pathExists(resolved) : false;
-      const text = exists && resolved ? await readTextIfExists(resolved) : null;
-      return {
-        path: relativePath,
-        exists,
-        preview: text ? text.slice(0, 6000) : null,
-      };
-    })
-  );
-  const packetJson = {
+  const supportingArtifactSnapshots = await collectSupportingArtifactSnapshots({
+    projectRoot: params.projectRoot,
+    supportingArtifacts: params.policy.supportingArtifacts,
+  });
+  const packetJsonBase = {
     hookId: params.policy.hookId,
     hookPoint: params.context.hookPoint,
     projectId: params.projectId,
@@ -139,6 +154,71 @@ export async function materializeFileAuditPacket(params: {
     targetFileText: targetText,
     createdAt: nowIso(),
   };
+  const packetFingerprint = buildFileAuditPacketFingerprint({
+    hookId: packetJsonBase.hookId,
+    hookPoint: packetJsonBase.hookPoint,
+    stage: packetJsonBase.stage,
+    targetRole: packetJsonBase.targetRole,
+    auditorRole: packetJsonBase.auditorRole,
+    filePath: packetJsonBase.filePath,
+    fileFingerprint: packetJsonBase.fileFingerprint,
+    requirementPrompt: packetJsonBase.requirementPrompt,
+    supportingArtifacts: supportingArtifactSnapshots.map((entry) => ({
+      path: entry.path,
+      exists: entry.exists,
+      contentFingerprint: entry.contentFingerprint,
+    })),
+    materializedArtifacts: packetJsonBase.materializedArtifacts,
+    emittedHookEvents: packetJsonBase.emittedHookEvents,
+  });
+  return {
+    fileFingerprint,
+    packetFingerprint,
+    targetText,
+    supportingArtifactSnapshots,
+    packetJson: {
+      ...packetJsonBase,
+      packetFingerprint,
+    },
+  };
+}
+
+export async function materializeFileAuditPacket(params: {
+  projectRoot: string;
+  projectId: string | null;
+  policy: WorkflowFileAuditHookPolicy;
+  context: WorkflowHookPointContext;
+  roundNumber: number;
+}): Promise<{
+  packetPath: string;
+  packetJsonPath: string;
+  reportPath: string;
+  reportMarkdownPath: string;
+  fileFingerprint: string | null;
+  packetFingerprint: string;
+}> {
+  const reportDir = path.join(
+    params.projectRoot,
+    defaultFileAuditReportDir(params.policy),
+    `round-${params.roundNumber}`
+  );
+  const packetPath = path.join(reportDir, "AUDIT_PACKET.md");
+  const packetJsonPath = path.join(reportDir, "AUDIT_PACKET.json");
+  const reportPath = path.join(reportDir, "AUDIT_REPORT.json");
+  const reportMarkdownPath = path.join(reportDir, "AUDIT_REPORT.md");
+  const inspected = await inspectFileAuditPacketInputs({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    policy: params.policy,
+    context: params.context,
+  });
+  const {
+    fileFingerprint,
+    packetFingerprint,
+    targetText,
+    supportingArtifactSnapshots,
+    packetJson,
+  } = inspected;
   const markdown = [
     "# Workflow File Audit Packet",
     "",
@@ -178,6 +258,7 @@ export async function materializeFileAuditPacket(params: {
     reportPath: path.relative(params.projectRoot, reportPath),
     reportMarkdownPath: path.relative(params.projectRoot, reportMarkdownPath),
     fileFingerprint,
+    packetFingerprint,
   };
 }
 
@@ -245,6 +326,7 @@ export function parseFileAuditResult(params: {
     reviewerRole: params.reviewerRole,
     filePath: params.filePath,
     fileFingerprint: params.fileFingerprint,
+    packetFingerprint: null,
     createdAt: nowIso(),
   };
   try {
@@ -287,6 +369,7 @@ export function parseFileAuditResult(params: {
       reviewerRole: params.reviewerRole,
       filePath: params.filePath,
       fileFingerprint: params.fileFingerprint,
+      packetFingerprint: pickString(record, ["packetFingerprint", "packet_fingerprint"]),
       createdAt: nowIso(),
     };
   } catch {
@@ -326,6 +409,7 @@ export async function writeFileAuditReport(params: {
     `- reviewer_role: ${params.result.reviewerRole}`,
     `- file_path: ${params.result.filePath}`,
     `- file_fingerprint: ${params.result.fileFingerprint ?? "missing"}`,
+    `- packet_fingerprint: ${params.result.packetFingerprint ?? "missing"}`,
     `- confidence: ${params.result.confidence ?? "n/a"}`,
     "",
     "## Summary",
@@ -364,6 +448,7 @@ export function createFileAuditRoundState(params: {
   fileFingerprint: string | null;
   sessionKey: string;
   runId: string | null;
+  packetFingerprint: string;
 }): WorkflowFileAuditRoundState {
   return {
     roundId: randomUUID(),
@@ -375,6 +460,7 @@ export function createFileAuditRoundState(params: {
     targetRole: params.policy.targetRole,
     filePath: params.policy.filePath,
     fileFingerprint: params.fileFingerprint,
+    packetFingerprint: params.packetFingerprint,
     packetPath: params.packetPath,
     packetJsonPath: params.packetJsonPath,
     reportPath: params.reportPath,
