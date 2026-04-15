@@ -77,8 +77,8 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
       "{PROJECTS_ROOT}/PROJECTS_STATE.json",
     ],
     backgroundTasks: [
-      "Continue literature survey and venue sweeps with /research-lit or /papers-cool; if PASA is responsive, use /pasa-paper-search as a second retrieval source and merge by canonical identity.",
-      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first, then arxiv2md-api for arXiv papers, then arxiv2md as the legacy webpage fallback, and use papers-cool PDF fallback only if all Markdown sources are unavailable. Record source_provider and retrieval_providers in PAPER_SOURCE_INDEX.json.",
+      "Continue literature survey and venue sweeps with /research-lit or /broad-paper-search; keep /papers-cool as the guaranteed baseline and use /pasa-paper-search as an optional second retrieval source when it is responsive.",
+      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first for arXiv papers, then arxiv2md-api, then arxiv2md, and use PDF fallback only if all Markdown sources are unavailable. Preserve metadata-only canonical entries for important unresolved papers and record source_provider / retrieval_providers in PAPER_SOURCE_INDEX.json.",
       "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
       "Keep reasoning packets and manifest next_action/resume_action current.",
     ],

@@ -25,6 +25,7 @@
     "./researcher/zotero-project-library",
     "./researcher/scientific-brainstorming",
     "./researcher/idle-research",
+    "./researcher/broad-paper-search",
     "./researcher/papers-cool",
     "./researcher/pasa-paper-search",
     "./researcher/hugging-face-paper-pages",

@@ -28,6 +28,7 @@ import {
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
   auditLiteratureCoverageForWorkflow,
+  runBroadPaperSearchForWorkflow,
   materializeIdeationContract,
   materializeExperimentMemoryPacket,
   materializeExperimentReviewState,
@@ -390,6 +391,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   accept_remote_graph_ready: "checkGraphPresenceForWorkflow",
   audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
+  run_broad_paper_search: "runBroadPaperSearchForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
   start_background_run: "startBackgroundWorkflowRun",
   run_papernexus_wrapper: "buildPapernexusWrapperBackgroundRunRequest",
@@ -1489,9 +1491,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "check_graph_presence",
               "refresh_graph_presence",
               "accept_remote_graph_ready",
-              "audit_literature_coverage",
-              "plan_citation_expansion",
-              "auto_iterator_tick",
+  "audit_literature_coverage",
+  "plan_citation_expansion",
+  "run_broad_paper_search",
+  "auto_iterator_tick",
               "start_background_run",
               "run_papernexus_wrapper",
               "queue_paper_ingestion",
@@ -1644,6 +1647,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           citationExpansion: {
+            type: "object",
+            additionalProperties: true,
+          },
+          broadPaperSearch: {
             type: "object",
             additionalProperties: true,
           },
@@ -1830,6 +1837,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           ideaCatalystResearch30: {
             type: "object",
             additionalProperties: true,
+          },
+          topic: {
+            type: "string",
           },
           papernexusRemoteStage: {
             type: "object",
@@ -2174,6 +2184,43 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
               });
               return textResponse(JSON.stringify(packet, null, 2));
+            }
+            case "run_broad_paper_search": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const broadPaperSearch = asObject(params.broadPaperSearch);
+              const depthValue = readString(
+                broadPaperSearch?.depth ?? broadPaperSearch?.searchDepth
+              );
+              const result = await runBroadPaperSearchForWorkflow({
+                projectRoot: resolvedProjectRoot,
+                topic:
+                  readString(broadPaperSearch?.topic) ??
+                  readString(params.topic) ??
+                  (() => {
+                    throw new Error("run_broad_paper_search requires a topic.");
+                  })(),
+                depth:
+                  depthValue === "quick" ||
+                  depthValue === "default" ||
+                  depthValue === "deep"
+                    ? depthValue
+                    : undefined,
+                maxQueries: readNumber(
+                  broadPaperSearch?.maxQueries ?? broadPaperSearch?.max_queries
+                ),
+                maxResultsPerQuery: readNumber(
+                  broadPaperSearch?.maxResultsPerQuery ??
+                    broadPaperSearch?.max_results_per_query
+                ),
+                maxIndexEntries: readNumber(
+                  broadPaperSearch?.maxIndexEntries ?? broadPaperSearch?.max_index_entries
+                ),
+                maxResolutionAttempts: readNumber(
+                  broadPaperSearch?.maxResolutionAttempts ??
+                    broadPaperSearch?.max_resolution_attempts
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "get_channel_project_binding": {
               const binding = getChannelProjectBindingForWorkflow({

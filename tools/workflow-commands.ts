@@ -26,6 +26,7 @@ import {
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
+import { runBroadPaperSearch } from "./research30/workflow-bridge";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
@@ -143,6 +144,7 @@ const DEFAULT_DEPS: _WorkflowCommandDependencies = {
   setGraphGuidedWritingState,
   unbindChannelProjectForWorkflow,
   runIdeaCatalystResearch30,
+  runBroadPaperSearch,
   runCitationCalibration,
   stagePapernexusRemoteSources,
   reconcileAuthoringCloseout,
@@ -1529,6 +1531,49 @@ function createIdeaCatalystSearchCommandHandler(
   };
 }
 
+function createBroadPaperSearchCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    try {
+      const resolved = await resolveProjectRootForProjectBoundCommand({
+        api,
+        ctx,
+        deps,
+        explicitArgument: extractQuotedSegment(ctx.args),
+      });
+      const depth = hasCommandFlag(ctx.commandBody, "--deep")
+        ? "deep"
+        : hasCommandFlag(ctx.commandBody, "--quick")
+          ? "quick"
+          : "default";
+      const topic =
+        extractQuotedSegment(ctx.args) ??
+        readString(ctx.args) ??
+        resolved.projectId;
+      const result = await deps.runBroadPaperSearch({
+        projectRoot: resolved.projectRoot,
+        topic,
+        depth,
+      });
+      return {
+        text:
+          `Broad paper search completed for ${resolved.projectId}.\n` +
+          `queries=${result.queryPlan.length}, merged_candidates=${result.mergedCandidates.length}, index_updates=${result.sourceIndexUpdate.updatedCanonicalIds.length}\n` +
+          `plan={PROJ}/${path.relative(resolved.projectRoot, result.artifacts.queryPlanPath)}\n` +
+          `merged={PROJ}/${path.relative(resolved.projectRoot, result.artifacts.mergedCandidatesPath)}\n` +
+          `report={PROJ}/${path.relative(resolved.projectRoot, result.artifacts.reportMarkdownPath)}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return {
+        text: `❌ Failed to run /broad-paper-search: ${message}`,
+      };
+    }
+  };
+}
+
 function createCitationCalibrateCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -1840,6 +1885,13 @@ export function createResearchWorkflowCommands(
         "Run the workflow-owned research30 cross-domain search for the current project's IDEA-CATALYST scouting state.",
       acceptsArgs: true,
       handler: createIdeaCatalystSearchCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "broad-paper-search",
+      description:
+        "Run the broad multi-provider literature search backbone for the current project topic and persist merged paper candidates.",
+      acceptsArgs: true,
+      handler: createBroadPaperSearchCommandHandler(api, resolvedDeps),
     },
     {
       name: "citation-calibrate",
