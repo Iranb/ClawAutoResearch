@@ -53,6 +53,56 @@ async function writeText(filePath, text = "ok\n") {
   await fs.writeFile(filePath, text, "utf8");
 }
 
+function buildCompliantFigureTableLatex({
+  figures = 5,
+  tables = 4,
+} = {}) {
+  const figureBlocks = Array.from({ length: figures }, (_, index) => {
+    const number = index + 1;
+    const label =
+      number === 1 ? "fig:framework-overview" : `fig:analysis-${number}`;
+    const caption =
+      number === 1
+        ? "Framework overview of the proposed method and workflow."
+        : `Analysis figure ${number} showing evidence-grounded behavior.`;
+    return [
+      "\\begin{figure}",
+      "\\centering",
+      `\\caption{${caption}}`,
+      `\\label{${label}}`,
+      "\\end{figure}",
+    ].join("\n");
+  });
+  const tableBlocks = Array.from({ length: tables }, (_, index) => {
+    const number = index + 1;
+    const label =
+      number <= 2 ? `tab:experiment-results-${number}` : `tab:analysis-${number}`;
+    const caption =
+      number <= 2
+        ? `Experiment result table ${number} with benchmark metrics.`
+        : `Comparison table ${number} summarizing analysis evidence.`;
+    return [
+      "\\begin{table}",
+      "\\centering",
+      `\\caption{${caption}}`,
+      `\\label{${label}}`,
+      "\\begin{tabular}{lc}",
+      "Metric & Value \\\\",
+      "Accuracy & 0.90 \\\\",
+      "\\end{tabular}",
+      "\\end{table}",
+    ].join("\n");
+  });
+  return [
+    "\\section{Method}",
+    "Figure~\\ref{fig:framework-overview} defines the framework.",
+    "\\section{Results}",
+    "Tables~\\ref{tab:experiment-results-1} and~\\ref{tab:experiment-results-2} report experiment results.",
+    ...figureBlocks,
+    ...tableBlocks,
+  ].join("\n\n");
+}
+
 async function activatePreparedHandoff(projectRoot, role) {
   return claimAndActivateWorkflowHandoffForAgent({
     projectRoot,
@@ -948,6 +998,10 @@ async function seedProjectReadyForSubmit(projectRoot) {
 
   await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
   await writeText(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    buildCompliantFigureTableLatex()
+  );
   await writeText(path.join(projectRoot, "academic_writer", "THEORY_APPENDIX_PLAN.md"));
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex")

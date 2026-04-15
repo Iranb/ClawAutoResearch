@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import type { StageSignalsContext } from "./types";
 import {
   evaluateCrossDomainInspirationGate,
@@ -83,6 +84,138 @@ async function pushMissingNonEmptyArtifact(
   const resolvedPath = deps.resolveProjectArtifactPath(projectRoot, relativePath);
   if (!(await deps.fileHasNonWhitespaceContent(resolvedPath))) {
     missing.push(`{PROJ}/${relativePath}`);
+  }
+}
+
+async function readJsonIfExists<T>(targetPath: string | null): Promise<T | null> {
+  if (!targetPath) {
+    return null;
+  }
+  try {
+    return JSON.parse(await fs.readFile(targetPath, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+function readNumberField(record: Record<string, unknown> | null, keys: string[]): number {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+  }
+  return 0;
+}
+
+function countRegistryEntries(record: Record<string, unknown> | null): number {
+  const entries = record?.entries;
+  return Array.isArray(entries) ? entries.length : 0;
+}
+
+async function readFigureTableBudget(params: {
+  projectRoot: string;
+  deps: Pick<WritingStageDeps, "resolveProjectArtifactPath">;
+}): Promise<{
+  figureCount: number;
+  tableCount: number;
+  frameworkFigureCount: number;
+  experimentTableCount: number;
+  unresolvedFigurePlaceholders: number;
+  unresolvedTablePlaceholders: number;
+}> {
+  const figureRegistryPath = params.deps.resolveProjectArtifactPath(
+    params.projectRoot,
+    "academic_writer/FIGURE_REGISTRY.json"
+  );
+  const tableRegistryPath = params.deps.resolveProjectArtifactPath(
+    params.projectRoot,
+    "academic_writer/TABLE_REGISTRY.json"
+  );
+  const figureRegistry = await readJsonIfExists<Record<string, unknown>>(figureRegistryPath);
+  const tableRegistry = await readJsonIfExists<Record<string, unknown>>(tableRegistryPath);
+  return {
+    figureCount:
+      readNumberField(figureRegistry, ["totalFigureCount", "total_figure_count"]) ||
+      countRegistryEntries(figureRegistry),
+    tableCount:
+      readNumberField(tableRegistry, ["totalTableCount", "total_table_count"]) ||
+      countRegistryEntries(tableRegistry),
+    frameworkFigureCount: readNumberField(figureRegistry, [
+      "frameworkFigureCount",
+      "framework_figure_count",
+    ]),
+    experimentTableCount: readNumberField(tableRegistry, [
+      "experimentTableCount",
+      "experiment_table_count",
+    ]),
+    unresolvedFigurePlaceholders: readNumberField(figureRegistry, [
+      "unresolvedPlaceholderCount",
+      "unresolved_placeholder_count",
+    ]),
+    unresolvedTablePlaceholders: readNumberField(tableRegistry, [
+      "unresolvedPlaceholderCount",
+      "unresolved_placeholder_count",
+    ]),
+  };
+}
+
+function appendFigureTableBudgetSignals(params: {
+  missing: string[];
+  budget: {
+    figureCount: number;
+    tableCount: number;
+    frameworkFigureCount: number;
+    experimentTableCount: number;
+    unresolvedFigurePlaceholders: number;
+    unresolvedTablePlaceholders: number;
+  };
+  phase: "write" | "submit";
+}) {
+  const writeMinimums = [
+    {
+      label: "framework figure",
+      current: params.budget.frameworkFigureCount,
+      required: 1,
+      message:
+        "academic_writer figure/table contract requires at least 1 framework/pipeline/method figure before WRITE handoff",
+    },
+    {
+      label: "experiment table",
+      current: params.budget.experimentTableCount,
+      required: 2,
+      message:
+        "academic_writer figure/table contract requires at least 2 experiment/result tables before WRITE handoff",
+    },
+  ];
+  for (const minimum of writeMinimums) {
+    if (minimum.current < minimum.required) {
+      params.missing.push(
+        `${minimum.message} (current ${minimum.current}/${minimum.required})`
+      );
+    }
+  }
+  if (params.phase === "submit") {
+    if (params.budget.figureCount < 5) {
+      params.missing.push(
+        `academic_writer final figure budget requires at least 5 figures before SUBMIT (current ${params.budget.figureCount}/5)`
+      );
+    }
+    if (params.budget.tableCount < 4) {
+      params.missing.push(
+        `academic_writer final table budget requires at least 4 tables before SUBMIT (current ${params.budget.tableCount}/4)`
+      );
+    }
+  }
+  if (params.budget.unresolvedFigurePlaceholders > 0) {
+    params.missing.push(
+      `academic_writer figure registry has unresolved figure placeholders (current ${params.budget.unresolvedFigurePlaceholders})`
+    );
+  }
+  if (params.budget.unresolvedTablePlaceholders > 0) {
+    params.missing.push(
+      `academic_writer table registry has unresolved table placeholders (current ${params.budget.unresolvedTablePlaceholders})`
+    );
   }
 }
 
@@ -381,6 +514,14 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
     );
   }
+  appendFigureTableBudgetSignals({
+    missing,
+    budget: await readFigureTableBudget({
+      projectRoot: ctx.projectRoot,
+      deps,
+    }),
+    phase: "write",
+  });
   const citationCollection = deps.normalizeCitationCollectionState(
     ctx.manifest?.citation_collection
   );
@@ -541,6 +682,14 @@ export async function collectSubmitStageMissingSignals(
       `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
     );
   }
+  appendFigureTableBudgetSignals({
+    missing,
+    budget: await readFigureTableBudget({
+      projectRoot: ctx.projectRoot,
+      deps,
+    }),
+    phase: "submit",
+  });
   const citationCollection = deps.normalizeCitationCollectionState(
     ctx.manifest?.citation_collection
   );

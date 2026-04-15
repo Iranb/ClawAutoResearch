@@ -18,6 +18,7 @@ import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
+import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
 import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
@@ -305,6 +306,9 @@ export async function materializeWritingSupportArtifacts(params: {
     paperStoryState: params.paperStoryState,
     reviewPressureState: params.reviewPressureState,
   });
+  const figureTableRegistry = await materializeFigureTableRegistry({
+    projectRoot: params.projectRoot,
+  });
 
   let fallbackActivation = null;
   let revisionCycle = null;
@@ -333,6 +337,9 @@ export async function materializeWritingSupportArtifacts(params: {
     storyBridge.path,
     figureAnchor.path,
     venueRouting.path,
+    figureTableRegistry.figureRegistryPath,
+    figureTableRegistry.tableRegistryPath,
+    figureTableRegistry.alignmentPath,
     fallbackActivation?.path,
     revisionCycle?.path,
     rebuttalResponse?.path,
@@ -363,6 +370,7 @@ export async function materializeWritingSupportArtifacts(params: {
     prewriteRejection: { path: prewriteRejection.path },
     contributionToStoryBridge: { path: storyBridge.path },
     figureAnchorPlan: { path: figureAnchor.path },
+    figureTableRegistry,
     venueRoutingPlan: { path: venueRouting.path, recommendedVenue: venueRouting.recommendedVenue },
     fallbackActivation: fallbackActivation?.activation ?? null,
     revisionCycle: revisionCycle?.state ?? null,
