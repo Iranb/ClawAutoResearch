@@ -260,6 +260,96 @@ test("survey-pipeline command starts a projectless background continuation on th
   );
 });
 
+test("survey-pipeline reroutes orchestrator-targeted sessions onto researcher automatically", async () => {
+  let captured = null;
+  const api = makeApi({
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return `/tmp/workspace-${agentId}`;
+        },
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute() {
+            return {
+              agentId: "orchestrator",
+              sessionKey: "agent:orchestrator:discord:group:survey-lab",
+            };
+          },
+        },
+      },
+      subagent: {
+        async run() {
+          return { runId: "bg-run-1" };
+        },
+      },
+    },
+  });
+  const surveyCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:orchestrator:discord:group:survey-lab",
+        };
+      },
+      async buildWorkflowSnapshot(params) {
+        captured = {
+          ...(captured ?? {}),
+          snapshotParams: params,
+        };
+        return {
+          role: "researcher",
+          projectRoot: null,
+          projectId: null,
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-survey-reroute",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background survey pipeline started.",
+        };
+      },
+    }),
+    "survey-pipeline"
+  );
+
+  const result = await surveyCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/survey-pipeline "OmniModel"',
+    args: '"OmniModel"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "Background survey pipeline started.");
+  assert.equal(
+    captured.snapshotParams.sessionKey,
+    "agent:researcher:discord:group:survey-lab"
+  );
+  assert.equal(
+    captured.backgroundParams.agentCtx.sessionKey,
+    "agent:researcher:discord:group:survey-lab"
+  );
+  assert.equal(captured.backgroundParams.agentCtx.agentId, "researcher");
+  assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
+});
+
 test("survey-pipeline command still responds when opportunistic queue replay times out", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "paper-lab");

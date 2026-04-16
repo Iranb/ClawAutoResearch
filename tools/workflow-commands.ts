@@ -577,6 +577,40 @@ export function resolveWorkflowCommandSessionTarget(
   };
 }
 
+function coerceTargetToResearcherWorkflowSession(params: {
+  api: Pick<WorkflowCommandApi, "runtime">;
+  config: PluginCommandContext["config"];
+  target: ResolvedWorkflowCommandTarget;
+}): ResolvedWorkflowCommandTarget | null {
+  const currentSessionKey = readString(params.target.sessionKey) ?? null;
+  if (!currentSessionKey) {
+    return null;
+  }
+  const researcherSessionKey =
+    deriveAgentSessionKeyForRole({
+      requesterSessionKey: currentSessionKey,
+      targetRole: "researcher",
+    }) ?? null;
+  if (!researcherSessionKey) {
+    return null;
+  }
+  const workspaceDir =
+    typeof params.api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
+      ? readString(
+          params.api.runtime.agent.resolveAgentWorkspaceDir(
+            params.config,
+            "researcher"
+          )
+        ) ?? params.target.workspaceDir
+      : params.target.workspaceDir;
+  return {
+    ...params.target,
+    sessionKey: researcherSessionKey,
+    agentId: "researcher",
+    workspaceDir,
+  };
+}
+
 function createBackgroundWorkflowCommandHandler(
   api: WorkflowCommandApi,
   kind: WorkflowBackgroundCommandKind,
@@ -587,12 +621,12 @@ function createBackgroundWorkflowCommandHandler(
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
       await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
-      const target = resolveWorkflowCommandSessionTarget(
+      let target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
         deps.resolveConversationBindingRecord
       );
-      const targetSessionKey = target.sessionKey;
+      let targetSessionKey = target.sessionKey;
 
       if (!targetSessionKey) {
         return {
@@ -602,7 +636,7 @@ function createBackgroundWorkflowCommandHandler(
         };
       }
 
-      const targetRole = inferTargetRoleFromToolParams({
+      let targetRole = inferTargetRoleFromToolParams({
         agentId: target.agentId ?? undefined,
         sessionKey: targetSessionKey,
       });
@@ -611,12 +645,31 @@ function createBackgroundWorkflowCommandHandler(
         kind === "research_queue" ||
         kind === "literature_review" ||
         kind === "survey_review";
+      const shouldAutoRerouteToResearcher =
+        kind === "survey_review";
       if (requiresResearcherSession && targetRole !== "researcher") {
-        return {
-          text:
-            `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
-            `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
-        };
+        if (!shouldAutoRerouteToResearcher) {
+          return {
+            text:
+              `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
+              `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
+          };
+        }
+        const reroutedTarget = coerceTargetToResearcherWorkflowSession({
+          api,
+          config: ctx.config,
+          target,
+        });
+        if (!reroutedTarget) {
+          return {
+            text:
+              `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
+              `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
+          };
+        }
+        target = reroutedTarget;
+        targetSessionKey = reroutedTarget.sessionKey;
+        targetRole = "researcher";
       }
       if (!requiresResearcherSession && !targetRole) {
         return {
@@ -630,7 +683,7 @@ function createBackgroundWorkflowCommandHandler(
         policy: workflowPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: targetSessionKey ?? undefined,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
       });
@@ -679,7 +732,7 @@ function createBackgroundWorkflowCommandHandler(
             policy: workflowPolicy,
             agentId: target.agentId ?? undefined,
             workspaceDir: target.workspaceDir ?? undefined,
-            sessionKey: targetSessionKey,
+            sessionKey: targetSessionKey ?? undefined,
             messageChannel: ctx.channel,
             channelKey: target.bindingChannelKey ?? undefined,
           });
@@ -722,7 +775,7 @@ function createBackgroundWorkflowCommandHandler(
             agentCtx: {
               agentId: resolvedBackgroundAgentId,
               workspaceDir: resolvedBackgroundWorkspaceDir,
-              sessionKey: targetSessionKey,
+              sessionKey: targetSessionKey ?? undefined,
               messageChannel: ctx.channel,
               channelKey: target.bindingChannelKey ?? undefined,
             },
@@ -1445,7 +1498,7 @@ function createWorkflowStatusCommandHandler(
         policy: workflowPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: targetSessionKey ?? undefined,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
       });
@@ -1571,12 +1624,12 @@ function createSurveyGraphBuildCommandHandler(
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
       await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
-      const target = resolveWorkflowCommandSessionTarget(
+      let target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
         deps.resolveConversationBindingRecord
       );
-      const targetSessionKey = target.sessionKey;
+      let targetSessionKey = target.sessionKey;
       if (!targetSessionKey) {
         return {
           text:
@@ -1584,23 +1637,33 @@ function createSurveyGraphBuildCommandHandler(
             "Run it from a Researcher-bound conversation.",
         };
       }
-      const targetRole = inferTargetRoleFromToolParams({
+      let targetRole = inferTargetRoleFromToolParams({
         agentId: target.agentId ?? undefined,
         sessionKey: targetSessionKey,
       });
       if (targetRole !== "researcher") {
-        return {
-          text:
-            `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
-            `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
-        };
+        const reroutedTarget = coerceTargetToResearcherWorkflowSession({
+          api,
+          config: ctx.config,
+          target,
+        });
+        if (!reroutedTarget) {
+          return {
+            text:
+              `❌ ${commandLabel} can only start from a Researcher workflow session. ` +
+              `Current target: ${targetRole ?? target.agentId ?? target.sessionKey}.`,
+          };
+        }
+        target = reroutedTarget;
+        targetSessionKey = reroutedTarget.sessionKey;
+        targetRole = "researcher";
       }
 
       const snapshot = await deps.buildWorkflowSnapshot({
         policy: workflowPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: targetSessionKey,
+        sessionKey: targetSessionKey ?? undefined,
         messageChannel: ctx.channel,
         channelKey: target.bindingChannelKey ?? undefined,
       });
@@ -1612,7 +1675,7 @@ function createSurveyGraphBuildCommandHandler(
         agentCtx: {
           agentId: "researcher",
           workspaceDir: target.workspaceDir ?? undefined,
-          sessionKey: targetSessionKey,
+          sessionKey: targetSessionKey ?? undefined,
           sessionId: undefined,
           messageChannel: ctx.channel,
           channelKey: target.bindingChannelKey ?? undefined,
