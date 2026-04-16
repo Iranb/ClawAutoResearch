@@ -321,8 +321,18 @@ export function evaluateExperimentSearchDecision(params: {
     candidateTexts,
     tolerance: outerLoop.innovationDeviationTolerance,
   });
+  const candidateIdentityPresent =
+    preferredExperimentIds.length > 0 ||
+    Boolean(search.lastCandidateBranch) ||
+    Boolean(search.lastCandidateCommit);
   const effectiveCandidateClaimed =
-    search.lastDecision === "advance" || isReadyLike(search.innovationStatus);
+    candidateIdentityPresent &&
+    (
+      search.lastDecision === "advance" ||
+      innovationStatus === "supported" ||
+      innovationStatus === "fragile" ||
+      isReadyLike(search.innovationStatus)
+    );
 
   const cleanEvidence =
     isReadyLike(baselineFairnessStatus) &&
