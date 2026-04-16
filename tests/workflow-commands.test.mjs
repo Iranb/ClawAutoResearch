@@ -9,7 +9,11 @@ import {
   resolveBindingConversationFromCommandContext,
   resolveWorkflowCommandSessionTarget,
 } from "../tools/workflow-commands.ts";
-import { drainQueuedBackgroundWorkflowRuns } from "../tools/workflow-fast-paths.ts";
+import {
+  clearBackgroundWorkflowQueueForTests,
+  drainQueuedBackgroundWorkflowRuns,
+  enqueueQueuedBackgroundWorkflowRun,
+} from "../tools/workflow-fast-paths.ts";
 import { readWorkflowRuntimeQueueStore } from "../tools/workflow-runtime-state.ts";
 import {
   createAutoModeDiscussionRound,
@@ -254,6 +258,139 @@ test("survey-pipeline command starts a projectless background continuation on th
     captured.backgroundParams.backgroundRun.commandText,
     /^\/survey-pipeline\b/
   );
+});
+
+test("survey-pipeline command still responds when opportunistic queue replay times out", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "paper-lab");
+  const queuePath = path.join(
+    os.tmpdir(),
+    `openclaw-research-background-queue-workflow-commands-${Date.now()}-timeout.json`
+  );
+  const previousQueuePath = process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+    await fs.rm(queuePath, { force: true });
+    await clearBackgroundWorkflowQueueForTests();
+    if (previousQueuePath === undefined) {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
+    } else {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH = previousQueuePath;
+    }
+  });
+
+  process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH = queuePath;
+  await clearBackgroundWorkflowQueueForTests();
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:discord:group:survey-lab",
+    messageChannel: "discord",
+    channelKey: "discord:group:survey-lab",
+    preferredSessionKey: "agent:researcher:discord:group:survey-lab:queued",
+    family: "research",
+    kind: "survey_review",
+    projectId: "paper-lab",
+    projectRoot,
+    projectsRoot,
+    summary: "Queued background workflow for timeout test.",
+    runPayload: {
+      message: '/survey-pipeline "queued timeout topic"',
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "queued-timeout-test",
+      extraSystemPrompt: null,
+    },
+  });
+
+  let captured = null;
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return `/tmp/workspace-${agentId}`;
+        },
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute() {
+            return {
+              agentId: "researcher",
+              sessionKey: "agent:researcher:discord:group:survey-lab",
+            };
+          },
+        },
+      },
+      subagent: {
+        async run() {
+          return await new Promise(() => {});
+        },
+      },
+    },
+  });
+  const surveyCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:survey-lab",
+        };
+      },
+      async buildWorkflowSnapshot(params) {
+        captured = {
+          ...(captured ?? {}),
+          snapshotParams: params,
+        };
+        return {
+          role: "researcher",
+          projectRoot: null,
+          projectId: null,
+          channelProjectBindingsEnabled: true,
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-survey-timeout",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          summary: "Background survey pipeline started.",
+        };
+      },
+    }),
+    "survey-pipeline"
+  );
+
+  const startedAt = Date.now();
+  const result = await surveyCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/survey-pipeline "OmniModel"',
+    args: '"OmniModel"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(result.text, "Background survey pipeline started.");
+  assert.ok(elapsedMs < 3000, `Expected command to respond quickly, got ${elapsedMs}ms`);
+  assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
 });
 
 test("survey-graph-build command starts a non-blocking literature-review continuation with graph-missing and dedupe guidance", async () => {

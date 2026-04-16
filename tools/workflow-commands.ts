@@ -1905,12 +1905,20 @@ async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
     return;
   }
   try {
-    await drainQueuedBackgroundWorkflowRuns({
-      runtimeSubagent: api.runtime?.subagent,
-      workflowPolicy,
-      projectsRoot: workflowPolicy.projectsRoot,
-      ignoreRetryBackoff: true,
-    });
+    await Promise.race([
+      drainQueuedBackgroundWorkflowRuns({
+        runtimeSubagent: api.runtime?.subagent,
+        workflowPolicy,
+        projectsRoot: workflowPolicy.projectsRoot,
+        ignoreRetryBackoff: true,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("workflow command queue replay timed out")),
+          750
+        )
+      ),
+    ]);
   } catch (error) {
     api.logger?.debug?.("Failed opportunistic workflow queue replay from command runtime.", {
       error: error instanceof Error ? error.message : String(error),
