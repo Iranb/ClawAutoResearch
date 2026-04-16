@@ -1,4 +1,6 @@
 import path from "node:path";
+import fs from "node:fs/promises";
+import os from "node:os";
 
 import { describe, expect, it } from "vitest";
 
@@ -27,9 +29,41 @@ describe("resolveProjectsRoot", () => {
     ).toBe(path.resolve(envRoot));
   });
 
-  it("throws a readable error when projectsRoot is missing", () => {
-    expect(() => resolveProjectsRoot({})).toThrowError(
-      /projectsRoot.*OPENCLAW_PROJECTS_ROOT/i,
+  it("reads projectsRoot from the default plugin config when no CLI or env override is passed", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dashboard-config-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const configuredRoot = path.join(tempDir, "projects-from-config");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          plugins: {
+            entries: {
+              ClawAutoResearch: {
+                config: {
+                  projectsRoot: configuredRoot,
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
     );
+
+    expect(
+      resolveProjectsRoot({
+        configPath,
+      }),
+    ).toBe(path.resolve(configuredRoot));
+  });
+
+  it("falls back to ~/.openclaw/projects when CLI, env, and plugin config are all absent", () => {
+    expect(
+      resolveProjectsRoot({
+        configPath: path.join(os.tmpdir(), "missing-openclaw-config.json"),
+      }),
+    ).toBe(path.resolve(os.homedir(), ".openclaw", "projects"));
   });
 });

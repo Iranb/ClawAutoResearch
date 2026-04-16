@@ -61,6 +61,12 @@ function countQueryRounds(value: unknown): number {
   if (Array.isArray(record.rounds)) {
     return record.rounds.length;
   }
+  if (Array.isArray(record.retrieval_rounds)) {
+    return record.retrieval_rounds.length;
+  }
+  if (Array.isArray(record.retrievalRounds)) {
+    return record.retrievalRounds.length;
+  }
   if (Array.isArray(record.queryRounds)) {
     return record.queryRounds.length;
   }
@@ -68,6 +74,22 @@ function countQueryRounds(value: unknown): number {
     return record.queries.length;
   }
   return 0;
+}
+
+function countPendingPlannedRounds(value: unknown): number {
+  const record = asRecord(value);
+  if (!record) {
+    return 0;
+  }
+  const planned =
+    (Array.isArray(record.planned_rounds) ? record.planned_rounds : null) ??
+    (Array.isArray(record.plannedRounds) ? record.plannedRounds : null) ??
+    [];
+  return planned.filter((entry) => {
+    const item = asRecord(entry);
+    const status = typeof item?.status === "string" ? item.status.trim().toLowerCase() : "";
+    return !status || status === "pending" || status === "planned" || status === "queued";
+  }).length;
 }
 
 async function hasNonWhitespaceContent(filePath: string | null): Promise<boolean> {
@@ -140,6 +162,7 @@ export async function materializeSurveyReviewStateImpl(params: {
   ]);
 
   const queryRoundCount = countQueryRounds(queryRegistry);
+  const pendingPlannedRounds = countPendingPlannedRounds(queryRegistry);
   const includedPaperCount = countPaperEntries(includedJson);
   const excludedPaperCount = countPaperEntries(excludedJson);
   const candidatePaperCount =
@@ -188,6 +211,18 @@ export async function materializeSurveyReviewStateImpl(params: {
     status = "completed";
     currentPhase = "complete";
     pendingReason = null;
+  } else if (
+    queryRoundCount > 0 &&
+    (diagnostics.coverage.status !== "ready" || pendingPlannedRounds > 0)
+  ) {
+    status = "searching";
+    currentPhase = "retrieval";
+    pendingReason =
+      pendingPlannedRounds > 0
+        ? `Continue retrieval before synthesis; ${pendingPlannedRounds} planned survey search rounds are still pending.`
+        : diagnostics.coverage.blockers[0] ??
+          diagnostics.coverage.summary ??
+          "Continue retrieval until survey coverage is ready.";
   } else if (literatureReviewExists || sotaExists || gapExists) {
     status = "synthesizing";
     currentPhase = "synthesis";

@@ -351,6 +351,86 @@ test("materializeSurveyReviewState understands modern survey packet field names 
   assert.equal(result.state.coverageStatus, "ready");
 });
 
+test("materializeSurveyReviewState keeps survey review in retrieval when retrieval_rounds exist but coverage is still incomplete", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    topic: "OmniModel",
+    mode: "survey",
+    retrieval_rounds: [
+      { round: 1, source: "arXiv API", status: "completed" },
+      { round: 2, source: "arXiv API", status: "completed" },
+      { round: 3, source: "Semantic Scholar", status: "partial" },
+      { round: 4, source: "arXiv API", status: "completed" },
+    ],
+    planned_rounds: [
+      { round: 5, source: "Semantic Scholar", status: "pending" },
+      { round: 6, source: "arXiv API", status: "pending" },
+    ],
+    totalCount: 31,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH),
+    "# Review Protocol\n"
+  );
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 31 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.500${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: [],
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Speech omni\n- End-to-end omni\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Omni | baseline | OmniBench | Accuracy |",
+      "| B | Speech | audio | OmniEval | F1 |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- Better benchmark alignment\n- More non-English omni models\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    [
+      "# Coverage Summary",
+      "",
+      "- Coverage spans the initial omni-model candidate pool.",
+      "- Retrieval gaps remain for benchmark breadth and non-English models.",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Speech omni\n- End-to-end omni\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-retrieval-rounds",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.queryRoundCount, 4);
+  assert.equal(result.state.status, "searching");
+  assert.equal(result.state.currentPhase, "retrieval");
+  assert.match(result.state.pendingReason ?? "", /planned survey search rounds are still pending/i);
+  assert.equal(result.state.coverageStatus, "partial");
+});
+
 test("materializeSurveyReviewState uses the representative-method and benchmark tables instead of the first protocol table", async (t) => {
   const projectRoot = await makeSurveyProjectRoot();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

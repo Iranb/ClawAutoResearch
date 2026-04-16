@@ -82,6 +82,12 @@ function countQueryRounds(value: unknown): number {
   if (Array.isArray(record.rounds)) {
     return record.rounds.length;
   }
+  if (Array.isArray(record.retrieval_rounds)) {
+    return record.retrieval_rounds.length;
+  }
+  if (Array.isArray(record.retrievalRounds)) {
+    return record.retrievalRounds.length;
+  }
   if (Array.isArray(record.queryRounds)) {
     return record.queryRounds.length;
   }

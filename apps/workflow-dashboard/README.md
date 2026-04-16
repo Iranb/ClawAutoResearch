@@ -7,7 +7,7 @@ Read-only local dashboard package for viewing workflow state without mutating th
 From the repository root:
 
 ```bash
-OPENCLAW_PROJECTS_ROOT=/absolute/path/to/projects npm run dashboard:dev
+npm run dashboard:dev
 ```
 
 This starts two local processes:
@@ -15,7 +15,14 @@ This starts two local processes:
 - the read-only API server from `apps/workflow-dashboard/server/index.ts`
 - the Vite frontend, which proxies `/api/*` requests to the local API server during development
 
-You can also pass the projects root directly to the server process:
+By default the dashboard now resolves `projectsRoot` in this order:
+
+1. CLI input: `--projectsRoot /path/to/projects`
+2. Environment: `OPENCLAW_PROJECTS_ROOT=/path/to/projects`
+3. Plugin config: `~/.openclaw/openclaw.json` → `plugins.entries.ClawAutoResearch.config.projectsRoot`
+4. Fallback default: `~/.openclaw/projects`
+
+You can still pass the projects root directly to the server process:
 
 ```bash
 npm --prefix apps/workflow-dashboard run dev:server -- --projectsRoot /absolute/path/to/projects
@@ -23,12 +30,10 @@ npm --prefix apps/workflow-dashboard run dev:server -- --projectsRoot /absolute/
 
 ## Required configuration
 
-The dashboard needs a `projectsRoot` value to know which local project tree to inspect.
+In the common case, no extra configuration is needed if your plugin config already has
+`projectsRoot` in `~/.openclaw/openclaw.json`.
 
-- CLI input wins: `--projectsRoot /path/to/projects`
-- Environment fallback: `OPENCLAW_PROJECTS_ROOT=/path/to/projects`
-
-If neither is provided, the server exits with a readable configuration error.
+Explicit overrides are only needed when you want to inspect a different projects tree.
 
 ## Read-only note
 
@@ -74,6 +79,12 @@ Artifact drill-down:
 ## Operator workflow
 
 Typical usage from the repo root:
+
+```bash
+npm run dashboard:dev
+```
+
+Override the project root only when needed:
 
 ```bash
 OPENCLAW_PROJECTS_ROOT="$PWD" npm run dashboard:dev
