@@ -789,6 +789,26 @@ export function formatWorkflowSnapshotForPromptImpl(
       );
     }
   }
+  if (snapshot.bootstrapRequestRawRequest) {
+    lines.push(
+      `Bootstrap request: source=${snapshot.bootstrapRequestSourceCommand ?? "unset"}, clean_topic=${snapshot.bootstrapRequestCleanTopic ?? "unset"}`
+    );
+    if (
+      snapshot.bootstrapRequestRawRequest !== snapshot.bootstrapRequestCleanTopic
+    ) {
+      lines.push(`Bootstrap full request: ${snapshot.bootstrapRequestRawRequest}`);
+    }
+    if ((snapshot.bootstrapRequestReferenceHints ?? []).length > 0) {
+      lines.push(
+        `Bootstrap references: ${(snapshot.bootstrapRequestReferenceHints ?? []).join("; ")}`
+      );
+    }
+    if ((snapshot.bootstrapRequestExplicitRequirements ?? []).length > 0) {
+      lines.push(
+        `Bootstrap requirements: ${(snapshot.bootstrapRequestExplicitRequirements ?? []).join("; ")}`
+      );
+    }
+  }
   if (snapshot.orchestrationStatus) {
     lines.push(
       `Orchestration: status=${snapshot.orchestrationStatus}, next_transition=${snapshot.orchestrationNextTransitionCandidate ?? "unset"}, blocking_category=${snapshot.orchestrationBlockingCategory ?? "none"}, retry_budget_remaining=${snapshot.orchestrationRetryBudgetRemaining ?? "unset"}, rollback_target=${snapshot.orchestrationRollbackTargetStage ?? "unset"}`
@@ -797,6 +817,12 @@ export function formatWorkflowSnapshotForPromptImpl(
   if (snapshot.experimentSearchStatus) {
     lines.push(
       `Experiment search: status=${snapshot.experimentSearchStatus}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
+    );
+    lines.push(
+      `Experiment inner loop: mode=${snapshot.experimentSearchInnerLoopMode ?? "unset"}, trial_budget_min=${snapshot.experimentSearchTrialTimeBudgetMinutes ?? "unset"}, one_change_signature=${snapshot.experimentSearchOneChangeSignature ?? "unset"}, one_change=${snapshot.experimentSearchOneChangeValidationStatus ?? "unset"}, comparable_budget=${snapshot.experimentSearchComparableTrialBudgetStatus ?? "unset"}, last_trial=${snapshot.experimentSearchLastTrialOutcome ?? "unset"}`
+    );
+    lines.push(
+      `Experiment outer loop: dataset_coverage=${snapshot.experimentSearchBaselineDatasetCoverageStatus ?? "unset"}, innovation_deviation=${snapshot.experimentSearchInnovationDeviationStatus ?? "unset"}, deviation_score=${snapshot.experimentSearchInnovationDeviationScore ?? "unset"}`
     );
   }
   if (snapshot.paperStoryStatus) {

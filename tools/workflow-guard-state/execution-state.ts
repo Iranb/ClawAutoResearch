@@ -16,6 +16,15 @@ type ExperimentSearchStateLike = {
   currentMainStage: string | null;
   currentSubstage: string | null;
   validationStage: string | null;
+  innerLoopMode: string | null;
+  trialTimeBudgetMinutes: number | null;
+  strictComparableBudget: boolean;
+  requireOneChangeSignature: boolean;
+  oneChangeSignature: string | null;
+  oneChangeValidationStatus: string;
+  keepDiscardRule: string | null;
+  lastTrialOutcome: string | null;
+  comparableTrialBudgetStatus: string;
   searchSessionId: string | null;
   searchSpecPath: string | null;
   searchStatePath: string | null;
@@ -55,6 +64,15 @@ type ExperimentSearchStateLike = {
   recommendedNextAction: string | null;
   failureClusterIds: string[];
   evidenceCleanlinessStatus: string;
+  baselineDatasetEnvelope: string[];
+  validatedDatasetEnvelope: string[];
+  baselineDatasetCoverageStatus: string;
+  baselineDatasetCoverageMissing: string[];
+  baselineDatasetCoverageSummary: string | null;
+  innovationAnchorPoints: string[];
+  innovationDeviationStatus: string;
+  innovationDeviationScore: number | null;
+  innovationDeviationSummary: string | null;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
@@ -213,6 +231,44 @@ export function normalizeExperimentSearchState(
       normalizeStage(record.currentSubstage ?? record.current_substage) ?? null,
     validationStage:
       normalizeStage(record.validationStage ?? record.validation_stage) ?? null,
+    innerLoopMode:
+      normalizeStage(record.innerLoopMode ?? record.inner_loop_mode) ?? null,
+    trialTimeBudgetMinutes:
+      pickNumber(record, ["trialTimeBudgetMinutes", "trial_time_budget_minutes"]) ??
+      null,
+    strictComparableBudget:
+      typeof record.strictComparableBudget === "boolean"
+        ? record.strictComparableBudget
+        : typeof record.strict_comparable_budget === "boolean"
+          ? record.strict_comparable_budget
+          : false,
+    requireOneChangeSignature:
+      typeof record.requireOneChangeSignature === "boolean"
+        ? record.requireOneChangeSignature
+        : typeof record.require_one_change_signature === "boolean"
+          ? record.require_one_change_signature
+          : false,
+    oneChangeSignature: pickString(record, [
+      "oneChangeSignature",
+      "one_change_signature",
+    ]),
+    oneChangeValidationStatus:
+      normalizeStage(
+        record.oneChangeValidationStatus ?? record.one_change_validation_status
+      ) ?? "unknown",
+    keepDiscardRule: pickString(record, [
+      "keepDiscardRule",
+      "keep_discard_rule",
+    ]),
+    lastTrialOutcome: pickString(record, [
+      "lastTrialOutcome",
+      "last_trial_outcome",
+    ]),
+    comparableTrialBudgetStatus:
+      normalizeStage(
+        record.comparableTrialBudgetStatus ??
+          record.comparable_trial_budget_status
+      ) ?? "unknown",
     searchSessionId: pickString(record, ["searchSessionId", "search_session_id"]),
     searchSpecPath: pickString(record, ["searchSpecPath", "search_spec_path"]),
     searchStatePath: pickString(record, ["searchStatePath", "search_state_path"]),
@@ -333,6 +389,42 @@ export function normalizeExperimentSearchState(
       normalizeStage(
         record.evidenceCleanlinessStatus ?? record.evidence_cleanliness_status
       ) ?? "unknown",
+    baselineDatasetEnvelope: asStringArray(
+      record.baselineDatasetEnvelope ?? record.baseline_dataset_envelope
+    ),
+    validatedDatasetEnvelope: asStringArray(
+      record.validatedDatasetEnvelope ?? record.validated_dataset_envelope
+    ),
+    baselineDatasetCoverageStatus:
+      normalizeStage(
+        record.baselineDatasetCoverageStatus ??
+          record.baseline_dataset_coverage_status
+      ) ?? "unknown",
+    baselineDatasetCoverageMissing: asStringArray(
+      record.baselineDatasetCoverageMissing ??
+        record.baseline_dataset_coverage_missing
+    ),
+    baselineDatasetCoverageSummary: pickString(record, [
+      "baselineDatasetCoverageSummary",
+      "baseline_dataset_coverage_summary",
+    ]),
+    innovationAnchorPoints: asStringArray(
+      record.innovationAnchorPoints ?? record.innovation_anchor_points
+    ),
+    innovationDeviationStatus:
+      normalizeStage(
+        record.innovationDeviationStatus ??
+          record.innovation_deviation_status
+      ) ?? "unknown",
+    innovationDeviationScore:
+      pickNumber(record, [
+        "innovationDeviationScore",
+        "innovation_deviation_score",
+      ]) ?? null,
+    innovationDeviationSummary: pickString(record, [
+      "innovationDeviationSummary",
+      "innovation_deviation_summary",
+    ]),
     evaluationSummaryPath: pickString(record, [
       "evaluationSummaryPath",
       "evaluation_summary_path",
@@ -372,6 +464,15 @@ export function serializeExperimentSearchState(
     track_id: state.trackId,
     current_main_stage: state.currentMainStage,
     current_substage: state.currentSubstage,
+    inner_loop_mode: state.innerLoopMode,
+    trial_time_budget_minutes: state.trialTimeBudgetMinutes,
+    strict_comparable_budget: state.strictComparableBudget,
+    require_one_change_signature: state.requireOneChangeSignature,
+    one_change_signature: state.oneChangeSignature,
+    one_change_validation_status: state.oneChangeValidationStatus,
+    keep_discard_rule: state.keepDiscardRule,
+    last_trial_outcome: state.lastTrialOutcome,
+    comparable_trial_budget_status: state.comparableTrialBudgetStatus,
     search_session_id: state.searchSessionId,
     search_spec_path: state.searchSpecPath,
     search_state_path: state.searchStatePath,
@@ -412,6 +513,15 @@ export function serializeExperimentSearchState(
     recommended_next_action: state.recommendedNextAction,
     failure_cluster_ids: state.failureClusterIds,
     evidence_cleanliness_status: state.evidenceCleanlinessStatus,
+    baseline_dataset_envelope: state.baselineDatasetEnvelope,
+    validated_dataset_envelope: state.validatedDatasetEnvelope,
+    baseline_dataset_coverage_status: state.baselineDatasetCoverageStatus,
+    baseline_dataset_coverage_missing: state.baselineDatasetCoverageMissing,
+    baseline_dataset_coverage_summary: state.baselineDatasetCoverageSummary,
+    innovation_anchor_points: state.innovationAnchorPoints,
+    innovation_deviation_status: state.innovationDeviationStatus,
+    innovation_deviation_score: state.innovationDeviationScore,
+    innovation_deviation_summary: state.innovationDeviationSummary,
     evaluation_summary_path: state.evaluationSummaryPath,
     plot_pack_status: state.plotPackStatus,
     plot_pack_path: state.plotPackPath,

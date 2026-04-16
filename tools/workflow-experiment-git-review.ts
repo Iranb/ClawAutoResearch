@@ -32,6 +32,12 @@ import {
   resolveExperimentSearchSpecPath,
 } from "./workflow-guard-state/experiment-search-spec.js";
 import {
+  buildOneChangeSignature,
+  collectBaselineDatasetEnvelope,
+  collectInnovationAnchorPoints,
+  normalizeExperimentInnerLoopContract,
+} from "./workflow-experiment-loop.js";
+import {
   serializeExperimentSearchState,
 } from "./workflow-guard-state/execution-state";
 import {
@@ -149,6 +155,46 @@ export async function requestExperimentGitOpImpl(
   searchState: Awaited<ReturnType<typeof loadExperimentSearchState>>;
 }> {
   const manifest = await deps.readManifestEnsured(params.projectRoot);
+  const searchState = await loadExperimentSearchState({
+    projectRoot: params.projectRoot,
+    manifest,
+    readJsonIfExists,
+  });
+  const specPath = resolveExperimentSearchSpecPath({
+    projectRoot: params.projectRoot,
+    manifest,
+    searchSpecPath: searchState.searchSpecPath,
+  });
+  const spec = normalizeExperimentSearchSpec(
+    await readJsonIfExists<Record<string, unknown>>(specPath)
+  );
+  const innerLoop = normalizeExperimentInnerLoopContract(spec);
+  const researchProgramTracks = Array.isArray(
+    (manifest.research_program as Record<string, unknown> | undefined)?.tracks
+  )
+    ? (((manifest.research_program as Record<string, unknown>).tracks as unknown[]) ?? [])
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>)
+            : null
+        )
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .filter((entry) => {
+          const trackId = pickString(entry, ["track_id", "trackId"]);
+          return !searchState.trackId || trackId === searchState.trackId;
+        })
+    : [];
+  const defaultOneChangeSignature = buildOneChangeSignature({
+    trackRecords: researchProgramTracks,
+  });
+  const baselineDatasetEnvelope = collectBaselineDatasetEnvelope({
+    manifest,
+    trackRecords: researchProgramTracks,
+  });
+  const innovationAnchorPoints = collectInnovationAnchorPoints({
+    manifest,
+    trackRecords: researchProgramTracks,
+  });
   const materialized = await materializeExperimentSearchReviewStateImpl(
     {
       projectRoot: params.projectRoot,
@@ -158,13 +204,32 @@ export async function requestExperimentGitOpImpl(
     },
     deps
   );
-  const searchState = await loadExperimentSearchState({
-    projectRoot: params.projectRoot,
-    manifest,
-    readJsonIfExists,
-  });
   const nextSearchState = {
     ...searchState,
+    innerLoopMode: searchState.innerLoopMode ?? innerLoop.mode,
+    trialTimeBudgetMinutes:
+      searchState.trialTimeBudgetMinutes ?? innerLoop.trialTimeBudgetMinutes,
+    strictComparableBudget:
+      searchState.strictComparableBudget || innerLoop.strictComparableBudget,
+    requireOneChangeSignature:
+      searchState.requireOneChangeSignature ||
+      (innerLoop.requireOneChangeSignature && Boolean(defaultOneChangeSignature)),
+    oneChangeSignature: searchState.oneChangeSignature ?? defaultOneChangeSignature,
+    oneChangeValidationStatus:
+      searchState.oneChangeValidationStatus !== "unknown"
+        ? searchState.oneChangeValidationStatus
+        : defaultOneChangeSignature
+          ? "ready"
+          : "unknown",
+    keepDiscardRule: searchState.keepDiscardRule ?? innerLoop.keepDiscardRule,
+    baselineDatasetEnvelope:
+      searchState.baselineDatasetEnvelope.length > 0
+        ? searchState.baselineDatasetEnvelope
+        : baselineDatasetEnvelope,
+    innovationAnchorPoints:
+      searchState.innovationAnchorPoints.length > 0
+        ? searchState.innovationAnchorPoints
+        : innovationAnchorPoints,
     requestedGitOp: materialized.state.actionType,
     gitOpStatus: deriveSearchGitOpStatus(materialized.state),
     gitReviewStorePath:
@@ -475,6 +540,22 @@ export async function applyExperimentGitOpImpl(
     );
   }
   if (actionType === "promote_candidate") {
+    if (
+      searchState.requireOneChangeSignature === true &&
+      normalizeStage(searchState.oneChangeValidationStatus) !== "ready"
+    ) {
+      throw new Error(
+        "Promotion is blocked until experiment_search.one_change_validation_status = ready and the retained candidate is attributable to one bounded change."
+      );
+    }
+    if (
+      searchState.strictComparableBudget === true &&
+      normalizeStage(searchState.comparableTrialBudgetStatus) === "over_budget"
+    ) {
+      throw new Error(
+        "Promotion is blocked because the retained candidate exceeded the fixed trial-time budget and is not strictly comparable to prior trials."
+      );
+    }
     const basisSignals = uniqueNormalizedSignals(reviewState.promotionBasisSignals);
     if (basisSignals.length === 0) {
       throw new Error(

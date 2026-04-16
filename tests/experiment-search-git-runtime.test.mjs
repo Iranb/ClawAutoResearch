@@ -497,6 +497,110 @@ test("research_workflow blocks promotion when the recorded basis only cites non-
   );
 });
 
+test("research_workflow blocks promotion when the retained candidate lacks a one_change_signature", async () => {
+  const { projectRoot, trackId, incumbentCommit, incumbentBranch } =
+    await makeSearchGitProject();
+  const tool = createResearchWorkflowTool(projectRoot);
+  const candidateWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-nosignature-${Date.now()}`
+  );
+
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_search",
+    experimentSearch: {
+      require_one_change_signature: true,
+      one_change_validation_status: "missing",
+    },
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "promote_candidate",
+      experiment_id: "exp-cand-5",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_branch: `candidate-${trackId}/exp-cand-5`,
+      candidate_commit: incumbentCommit,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+      promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+    },
+    /one_change_signature|one bounded change/i
+  );
+});
+
+test("research_workflow blocks promotion when the retained candidate exceeded the fixed trial budget", async () => {
+  const { projectRoot, trackId, incumbentCommit, incumbentBranch } =
+    await makeSearchGitProject();
+  const tool = createResearchWorkflowTool(projectRoot);
+  const candidateWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-overbudget-${Date.now()}`
+  );
+
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_search",
+    experimentSearch: {
+      strict_comparable_budget: true,
+      comparable_trial_budget_status: "over_budget",
+      one_change_validation_status: "ready",
+      one_change_signature: "routing frequency sweep",
+    },
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "promote_candidate",
+      experiment_id: "exp-cand-6",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_branch: `candidate-${trackId}/exp-cand-6`,
+      candidate_commit: incumbentCommit,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+      promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      await executeWorkflowTool(tool, { action: "apply_experiment_git_op" });
+    },
+    /fixed trial-time budget|not strictly comparable/i
+  );
+});
+
 test("research_workflow records search-session discard metadata in the ledger", async () => {
   const { projectRoot, trackId, incumbentCommit, incumbentBranch } =
     await makeSearchGitProject();

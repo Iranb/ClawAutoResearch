@@ -488,6 +488,12 @@ export async function buildWorkflowSnapshotFromProjectState(
   });
   const paperIngestion = asRecord(projectState.manifest?.paper_ingestion);
   const paperIngestionState = normalizePaperIngestionState(paperIngestion);
+  const bootstrapRequest =
+    projectState.manifest?.bootstrap_request &&
+    typeof projectState.manifest.bootstrap_request === "object" &&
+    !Array.isArray(projectState.manifest.bootstrap_request)
+      ? (projectState.manifest.bootstrap_request as Record<string, unknown>)
+      : null;
   const papernexusProgress = projectState.projectRoot
     ? await loadPapernexusProgress({
         projectRoot: projectState.projectRoot,
@@ -1134,6 +1140,21 @@ export async function buildWorkflowSnapshotFromProjectState(
     researchProgramZoteroProjectPath:
       researchProgram.zoteroProjectPath ??
       defaultResearchProgramZoteroProjectPath(projectState.projectId),
+    bootstrapRequestSourceCommand: asString(bootstrapRequest?.source_command) ?? null,
+    bootstrapRequestCleanTopic: asString(bootstrapRequest?.clean_topic) ?? null,
+    bootstrapRequestRawRequest: asString(bootstrapRequest?.raw_request) ?? null,
+    bootstrapRequestReferenceHints: Array.isArray(bootstrapRequest?.reference_hints)
+      ? bootstrapRequest.reference_hints
+          .map((entry) => asString(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      : [],
+    bootstrapRequestExplicitRequirements: Array.isArray(
+      bootstrapRequest?.explicit_requirements
+    )
+      ? bootstrapRequest.explicit_requirements
+          .map((entry) => asString(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      : [],
     benchmarkProtocolStatus: benchmarkProtocol.status,
     benchmarkProtocolFamily: benchmarkProtocol.benchmarkFamily,
     benchmarkProtocolLocked: benchmarkProtocol.locked,
@@ -1268,6 +1289,15 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchCurrentSubstage: experimentSearch.currentSubstage,
     experimentSearchValidationStage:
       experimentSearch.validationStage ?? experimentSearchDecision.validationStage,
+    experimentSearchInnerLoopMode: experimentSearch.innerLoopMode,
+    experimentSearchTrialTimeBudgetMinutes: experimentSearch.trialTimeBudgetMinutes,
+    experimentSearchOneChangeSignature: experimentSearch.oneChangeSignature,
+    experimentSearchOneChangeValidationStatus:
+      experimentSearch.oneChangeValidationStatus,
+    experimentSearchComparableTrialBudgetStatus:
+      experimentSearch.comparableTrialBudgetStatus,
+    experimentSearchKeepDiscardRule: experimentSearch.keepDiscardRule,
+    experimentSearchLastTrialOutcome: experimentSearch.lastTrialOutcome,
     experimentSearchSessionId: experimentSearch.searchSessionId,
     experimentSearchSpecPath: experimentSearch.searchSpecPath,
     experimentSearchStatePath: experimentSearch.searchStatePath,
@@ -1306,6 +1336,18 @@ export async function buildWorkflowSnapshotFromProjectState(
         : experimentSearchDecision.failureClusters.map((cluster) => cluster.clusterId),
     experimentSearchEvidenceCleanlinessStatus:
       experimentSearch.evidenceCleanlinessStatus,
+    experimentSearchBaselineDatasetCoverageStatus:
+      experimentSearch.baselineDatasetCoverageStatus,
+    experimentSearchBaselineDatasetCoverageMissing:
+      experimentSearch.baselineDatasetCoverageMissing,
+    experimentSearchBaselineDatasetCoverageSummary:
+      experimentSearch.baselineDatasetCoverageSummary,
+    experimentSearchInnovationDeviationStatus:
+      experimentSearch.innovationDeviationStatus,
+    experimentSearchInnovationDeviationScore:
+      experimentSearch.innovationDeviationScore,
+    experimentSearchInnovationDeviationSummary:
+      experimentSearch.innovationDeviationSummary,
     experimentSearchDecision: experimentSearchDecision.decision,
     experimentSearchPlotPackStatus: experimentSearch.plotPackStatus,
     experimentSearchGraphMemoryPacketPath: experimentSearch.graphMemoryPacketPath,

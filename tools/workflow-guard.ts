@@ -1034,6 +1034,15 @@ type ExperimentSearchState = {
   currentMainStage: string | null;
   currentSubstage: string | null;
   validationStage: string | null;
+  innerLoopMode: string | null;
+  trialTimeBudgetMinutes: number | null;
+  strictComparableBudget: boolean;
+  requireOneChangeSignature: boolean;
+  oneChangeSignature: string | null;
+  oneChangeValidationStatus: string;
+  keepDiscardRule: string | null;
+  lastTrialOutcome: string | null;
+  comparableTrialBudgetStatus: string;
   searchSessionId: string | null;
   searchSpecPath: string | null;
   searchStatePath: string | null;
@@ -1073,6 +1082,15 @@ type ExperimentSearchState = {
   recommendedNextAction: string | null;
   failureClusterIds: string[];
   evidenceCleanlinessStatus: string;
+  baselineDatasetEnvelope: string[];
+  validatedDatasetEnvelope: string[];
+  baselineDatasetCoverageStatus: string;
+  baselineDatasetCoverageMissing: string[];
+  baselineDatasetCoverageSummary: string | null;
+  innovationAnchorPoints: string[];
+  innovationDeviationStatus: string;
+  innovationDeviationScore: number | null;
+  innovationDeviationSummary: string | null;
   evaluationSummaryPath: string | null;
   plotPackStatus: string;
   plotPackPath: string | null;
@@ -1782,6 +1800,11 @@ export type WorkflowSnapshot = {
   researchProgramDatasetCount: number | null;
   researchProgramSuccessCriteriaCount: number | null;
   researchProgramZoteroProjectPath: string | null;
+  bootstrapRequestSourceCommand: string | null;
+  bootstrapRequestCleanTopic: string | null;
+  bootstrapRequestRawRequest: string | null;
+  bootstrapRequestReferenceHints: string[];
+  bootstrapRequestExplicitRequirements: string[];
   benchmarkProtocolStatus: string | null;
   benchmarkProtocolFamily: string | null;
   benchmarkProtocolLocked: boolean;
@@ -1890,6 +1913,13 @@ export type WorkflowSnapshot = {
   experimentSearchCurrentMainStage: string | null;
   experimentSearchCurrentSubstage: string | null;
   experimentSearchValidationStage: string | null;
+  experimentSearchInnerLoopMode: string | null;
+  experimentSearchTrialTimeBudgetMinutes: number | null;
+  experimentSearchOneChangeSignature: string | null;
+  experimentSearchOneChangeValidationStatus: string | null;
+  experimentSearchComparableTrialBudgetStatus: string | null;
+  experimentSearchKeepDiscardRule: string | null;
+  experimentSearchLastTrialOutcome: string | null;
   experimentSearchSessionId: string | null;
   experimentSearchSpecPath: string | null;
   experimentSearchStatePath: string | null;
@@ -1918,6 +1948,12 @@ export type WorkflowSnapshot = {
   experimentSearchRecommendedNextAction: string | null;
   experimentSearchFailureClusterIds: string[];
   experimentSearchEvidenceCleanlinessStatus: string | null;
+  experimentSearchBaselineDatasetCoverageStatus: string | null;
+  experimentSearchBaselineDatasetCoverageMissing: string[];
+  experimentSearchBaselineDatasetCoverageSummary: string | null;
+  experimentSearchInnovationDeviationStatus: string | null;
+  experimentSearchInnovationDeviationScore: number | null;
+  experimentSearchInnovationDeviationSummary: string | null;
   experimentSearchDecision: string | null;
   experimentSearchPlotPackStatus: string | null;
   experimentSearchGraphMemoryPacketPath: string | null;
@@ -5021,6 +5057,66 @@ type ExperimentBundleSummary = {
   manifestPath: string;
   manifest: Record<string, unknown> | null;
 };
+
+async function findExperimentBundleManifest(params: {
+  projectRoot: string;
+  experimentId: string | null;
+  trackId?: string | null;
+}): Promise<Record<string, unknown> | null> {
+  if (!params.experimentId) {
+    return null;
+  }
+  const bundles = await listExperimentBundles(params.projectRoot);
+  for (const bundle of bundles) {
+    const record = bundle.manifest;
+    if (!record) {
+      continue;
+    }
+    const manifestExperimentId = pickString(record, ["experiment_id", "experimentId"]);
+    const manifestTrackId = pickString(record, ["track_id", "trackId"]);
+    if (
+      manifestExperimentId === params.experimentId &&
+      (!params.trackId || manifestTrackId === params.trackId)
+    ) {
+      return record;
+    }
+  }
+  return null;
+}
+
+function buildExperimentMetadataFromBundleManifest(
+  record: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (!record) {
+    return null;
+  }
+  const datasetPath = pickString(record, ["dataset_path", "datasetPath"]);
+  const baselineReference = pickString(record, [
+    "baseline_reference",
+    "baselineReference",
+  ]);
+  const normalizedDatasetPath = datasetPath?.replace(/[\\/]+$/, "") ?? null;
+  const datasetName =
+    normalizedDatasetPath != null ? path.basename(normalizedDatasetPath) : null;
+  const innovationPoints = listStructuredAlignmentStrings(
+    record.innovation_points ?? record.innovationPoints
+  );
+  const metadata: Record<string, unknown> = {};
+  if (normalizedDatasetPath) {
+    metadata.datasets = [normalizedDatasetPath];
+  }
+  if (datasetName) {
+    metadata.dataset_names = [datasetName];
+    metadata.validation_datasets = [datasetName];
+  }
+  if (baselineReference) {
+    metadata.baseline_reference = baselineReference;
+  }
+  if (innovationPoints.length > 0) {
+    metadata.innovation_points = innovationPoints;
+  }
+  return Object.keys(metadata).length > 0 ? metadata : null;
+}
 
 async function listExperimentBundles(
   projectRoot: string
@@ -9169,7 +9265,39 @@ export async function upsertExperimentLedgerEntry(params: {
   summary: ExperimentLedgerSummary;
   recentExperiments: ExperimentMemoryDigest[];
 }> {
-  const result = await upsertExperimentLedgerEntryImpl(params, {
+  const experimentId =
+    pickString(params.experiment, ["experimentId", "experiment_id", "id"]) ?? null;
+  const trackId =
+    pickString(params.experiment, ["trackId", "track_id"]) ?? null;
+  const currentMetadata = asRecord(params.experiment.metadata) ?? {};
+  const hasDatasetMetadata =
+    asStringArray(currentMetadata.datasets).length > 0 ||
+    asStringArray(currentMetadata.dataset_names).length > 0 ||
+    asStringArray(currentMetadata.validation_datasets).length > 0;
+  let enrichedExperiment = params.experiment;
+  if (!hasDatasetMetadata && experimentId) {
+    const bundleManifest = await findExperimentBundleManifest({
+      projectRoot: params.projectRoot,
+      experimentId,
+      trackId,
+    });
+    const derivedMetadata = buildExperimentMetadataFromBundleManifest(bundleManifest);
+    if (derivedMetadata) {
+      enrichedExperiment = {
+        ...params.experiment,
+        metadata: {
+          ...derivedMetadata,
+          ...currentMetadata,
+        },
+      };
+    }
+  }
+  const result = await upsertExperimentLedgerEntryImpl(
+    {
+      ...params,
+      experiment: enrichedExperiment,
+    },
+    {
     readManifestEnsured,
     saveManifest,
     normalizeCitationIntegrityState,

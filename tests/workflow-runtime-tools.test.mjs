@@ -4250,6 +4250,92 @@ test("research_workflow materializes paper story and review pressure contracts f
   assert.match(discoveryPacket.next_action_suggestion ?? "", /graph_build/i);
 });
 
+test("research_workflow upsert_experiment enriches ledger metadata from EXPERIMENT_MANIFEST dataset_path", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+  });
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      "track-main",
+      "exp-7__coverage",
+      "train.py"
+    ),
+    "print('train')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      "track-main",
+      "exp-7__coverage",
+      "README.md"
+    ),
+    "# bundle\n"
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      "track-main",
+      "exp-7__coverage",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    {
+      experiment_id: "exp-7",
+      track_id: "track-main",
+      dataset_path: "/data/datasets/CUB-200",
+      baseline_reference: "ProtoGCD",
+      innovation_points: ["graph grounded routing"],
+    }
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "upsert_experiment",
+    experiment: {
+      experiment_id: "exp-7",
+      track_id: "track-main",
+      status: "completed",
+      decision: "advance",
+      summary: "Completed run.",
+    },
+  });
+
+  assert.equal(result.entry.metadata.datasets[0], "/data/datasets/CUB-200");
+  assert.equal(result.entry.metadata.dataset_names[0], "CUB-200");
+  assert.equal(result.entry.metadata.validation_datasets[0], "CUB-200");
+  assert.equal(result.entry.metadata.baseline_reference, "ProtoGCD");
+
+  const ledger = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"),
+      "utf8"
+    )
+  );
+  const entry = ledger.experiments.find((item) => item.experiment_id === "exp-7");
+  assert.equal(entry.metadata.datasets[0], "/data/datasets/CUB-200");
+});
+
 test("research_workflow run_citation_calibration updates citation integrity from calibrated refs", async (t) => {
   const projectRoot = await makeProjectRoot();
   const tool = createResearchWorkflowTool({

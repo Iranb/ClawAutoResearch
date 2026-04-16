@@ -35,6 +35,8 @@ test("experiment decision requires multi-seed after a promising candidate but be
       last_decision: "advance",
       baseline_fairness_status: "ready",
       implementation_confidence: "trusted",
+      one_change_signature: "routing frequency sweep",
+      one_change_validation_status: "ready",
       multi_seed_status: "pending",
       plot_pack_status: "ready",
       ablation_status: "pending",
@@ -194,6 +196,157 @@ test("experiment decision rolls back when implementation instability exhausts th
 
   assert.equal(result.decision, "rollback_to_plan");
   assert.match(result.rationale, /implementation\/runtime instability/i);
+});
+
+test("experiment decision downgrades a promising candidate when the fixed trial budget is exceeded", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "running",
+      last_decision: "advance",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "pending",
+      plot_pack_status: "ready",
+      ablation_status: "pending",
+      innovation_status: "unknown",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      last_candidate_experiment_id: "exp-3",
+      one_change_signature: "routing frequency sweep",
+      one_change_validation_status: "ready",
+    },
+    experimentSearchSpec: {
+      inner_loop_policy: {
+        trial_time_budget_minutes: 5,
+        strict_comparable_budget: true,
+      },
+    },
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-3",
+          launched_at: "2026-04-16T00:00:00.000Z",
+          completed_at: "2026-04-16T00:07:30.000Z",
+          summary: "Candidate exceeded runtime budget but looked promising.",
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "continue_tuning");
+  assert.equal(result.validationStage, "inner_loop_validation");
+  assert.match(result.rationale, /fixed trial budget/i);
+  assert.equal(result.persistedPatch.comparable_trial_budget_status, "over_budget");
+});
+
+test("experiment decision downgrades effective candidates when baseline dataset coverage is still incomplete", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "ready_for_analysis",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "graph grounded routing",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_candidate_experiment_id: "exp-4",
+    },
+    experimentSearchSpec: {
+      outer_loop_policy: {
+        require_baseline_dataset_coverage_for_effective_candidates: true,
+      },
+    },
+    manifest: {
+      research_program: {
+        datasets: ["CUB-200", "ImageNet-Subset"],
+        tracks: [
+          {
+            track_id: "track-a",
+            hypothesis: "Graph grounded routing improves support precision.",
+            novelty_basis: "Route evidence through graph support signals.",
+          },
+        ],
+      },
+    },
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-4",
+          metadata: {
+            datasets: ["CUB-200"],
+          },
+          summary: "The candidate improved support precision on CUB-200.",
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "innovation_fragile");
+  assert.equal(result.validationStage, "dataset_coverage_validation");
+  assert.equal(result.persistedPatch.baseline_dataset_coverage_status, "partial");
+  assert.deepEqual(result.persistedPatch.baseline_dataset_coverage_missing, [
+    "ImageNet-Subset",
+  ]);
+});
+
+test("experiment decision downgrades broad innovation drift only after a candidate looks effective", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "ready_for_analysis",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "graph grounded routing",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_candidate_experiment_id: "exp-5",
+    },
+    experimentSearchSpec: {
+      outer_loop_policy: {
+        innovation_deviation_tolerance: "wide",
+      },
+    },
+    manifest: {
+      research_program: {
+        datasets: ["CUB-200"],
+        tracks: [
+          {
+            track_id: "track-a",
+            hypothesis: "Graph grounded routing improves support precision.",
+            novelty_basis: "Route evidence through graph support signals.",
+            innovation_points: ["graph grounded routing", "support precision"],
+          },
+        ],
+      },
+    },
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-5",
+          metadata: {
+            datasets: ["CUB-200"],
+          },
+          summary:
+            "This candidate now focuses on a diffusion denoiser curriculum for image generation fidelity.",
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "innovation_fragile");
+  assert.equal(result.validationStage, "innovation_alignment_review");
+  assert.equal(result.persistedPatch.innovation_deviation_status, "broad_drift");
 });
 
 test("failure clustering groups repeated signatures by failure class", () => {

@@ -7,7 +7,7 @@ import {
   writeTextEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
-import { asStringArray, pickString } from "../workflow-guard-core/coercion";
+import { asRecord, asStringArray, pickString } from "../workflow-guard-core/coercion";
 import {
   buildExperimentReviewPacketFingerprint,
   loadExperimentReviewState,
@@ -24,6 +24,17 @@ import {
   serializeExperimentReviewState,
   type ExperimentReviewStateLike,
 } from "../workflow-guard-state/experiment-review";
+import {
+  normalizeExperimentSearchSpec,
+  resolveExperimentSearchSpecPath,
+} from "../workflow-guard-state/experiment-search-spec";
+import {
+  buildOneChangeSignature,
+  collectBaselineDatasetEnvelope,
+  collectInnovationAnchorPoints,
+  normalizeExperimentInnerLoopContract,
+  normalizeExperimentOuterLoopPolicy,
+} from "../workflow-experiment-loop";
 
 type MaterializerDeps = {
   readManifestEnsured: (projectRoot: string) => Promise<Record<string, unknown>>;
@@ -297,6 +308,20 @@ export async function materializeExperimentReviewStateImpl(
   );
   const claimIds = collectClaimIds(claimMapText);
   const activeTrackRecords = getResearchProgramTrackRecords(manifest, trackIds);
+  const searchSpecPath = resolveExperimentSearchSpecPath({
+    projectRoot,
+    manifest,
+    searchSpecPath:
+      pickString(asRecord(manifest.experiment_search) ?? {}, [
+        "searchSpecPath",
+        "search_spec_path",
+      ]) ?? null,
+  });
+  const searchSpec = normalizeExperimentSearchSpec(
+    await readJsonIfExists<Record<string, unknown>>(searchSpecPath)
+  );
+  const innerLoop = normalizeExperimentInnerLoopContract(searchSpec);
+  const outerLoop = normalizeExperimentOuterLoopPolicy(searchSpec);
   const experimentLedger =
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json")
@@ -332,6 +357,17 @@ export async function materializeExperimentReviewStateImpl(
       ? asStringArray((manifest.research_program as Record<string, unknown>).datasets)
       : []
   );
+  const baselineDatasetEnvelope = collectBaselineDatasetEnvelope({
+    manifest,
+    trackRecords: activeTrackRecords,
+  });
+  const innovationAnchorPoints = collectInnovationAnchorPoints({
+    manifest,
+    trackRecords: activeTrackRecords,
+  });
+  const oneChangeSignature = buildOneChangeSignature({
+    trackRecords: activeTrackRecords,
+  });
   const packet = {
     schema_version: 1,
     trigger: params.trigger ?? "materialize_experiment_review_state",
@@ -351,22 +387,32 @@ export async function materializeExperimentReviewStateImpl(
       null,
     claim_ids: claimIds,
     claim_map_path: claimMapPath,
-    one_variable_change:
-      uniqueStrings(
-        activeTrackRecords.flatMap((track) => [
-          ...asStringArray(track.innovation_points),
-          pickString(track, ["hypothesis"]),
-          pickString(track, ["novelty_basis", "noveltyBasis"]),
-        ])
-      )[0] ?? null,
+    one_variable_change: oneChangeSignature,
+    one_change_signature: oneChangeSignature,
     baselines,
     datasets,
+    baseline_dataset_envelope: baselineDatasetEnvelope,
     metrics,
     ablations,
     falsifiers,
     stop_rules: stopRules,
     compute_budget:
       activeTrackRecords.length === 1 ? activeTrackRecords[0].budget ?? null : null,
+    inner_loop: {
+      mode: innerLoop.mode,
+      trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+      strict_comparable_budget: innerLoop.strictComparableBudget,
+      require_one_change_signature: innerLoop.requireOneChangeSignature,
+      keep_discard_rule: innerLoop.keepDiscardRule,
+      one_change_signature: oneChangeSignature,
+    },
+    outer_loop: {
+      require_baseline_dataset_coverage_for_effective_candidates:
+        outerLoop.requireBaselineDatasetCoverageForEffectiveCandidates,
+      innovation_deviation_tolerance: outerLoop.innovationDeviationTolerance,
+      baseline_dataset_envelope: baselineDatasetEnvelope,
+      innovation_anchor_points: innovationAnchorPoints,
+    },
     expected_artifacts: [
       "researcher/artifacts/results/",
       "researcher/EXPERIMENT_LEDGER.json",
@@ -389,6 +435,7 @@ export async function materializeExperimentReviewStateImpl(
       required_controls: asStringArray(track.required_controls),
       stop_rules: asStringArray(track.stop_rules ?? track.stopRules),
       budget: track.budget ?? null,
+      datasets: asStringArray(track.datasets ?? track.dataset_scope ?? track.datasetScope),
     })),
     prior_experiment_verdicts: summarizePriorExperimentVerdicts(experimentLedger),
     review_principles: [
@@ -398,6 +445,9 @@ export async function materializeExperimentReviewStateImpl(
       "seed / variance adequacy",
       "explicit falsifier coverage",
       "clear stop rules",
+      "fixed trial-time budget for comparable inner-loop trials",
+      "baseline dataset envelope should be covered before declaring an effective candidate stable",
+      "innovation drift should stay broad and reviewable rather than silently rewriting the thesis",
     ],
   } as Record<string, unknown>;
   const packetFingerprint = buildExperimentReviewPacketFingerprint({

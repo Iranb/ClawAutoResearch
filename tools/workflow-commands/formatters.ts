@@ -343,8 +343,24 @@ export function formatWorkflowStatusText(params: {
       `Experiment search: status=${snapshot.experimentSearchStatus}, session=${snapshot.experimentSearchSessionId ?? "unset"}, main_stage=${snapshot.experimentSearchCurrentMainStage ?? "unset"}, substage=${snapshot.experimentSearchCurrentSubstage ?? "unset"}, best_node=${snapshot.experimentSearchBestNodeId ?? "unset"}, incumbent_exp=${snapshot.experimentSearchIncumbentExperimentId ?? "unset"}, incumbent_branch=${snapshot.experimentSearchIncumbentBranch ?? "unset"}, incumbent_commit=${snapshot.experimentSearchIncumbentCommit ?? "unset"}, multi_seed=${snapshot.experimentSearchMultiSeedStatus ?? "unset"}, plot_pack=${snapshot.experimentSearchPlotPackStatus ?? "unset"}`
     );
     lines.push(
+      `Experiment inner loop: mode=${snapshot.experimentSearchInnerLoopMode ?? "unset"}, trial_budget_min=${snapshot.experimentSearchTrialTimeBudgetMinutes ?? "unset"}, one_change=${snapshot.experimentSearchOneChangeValidationStatus ?? "unset"}, comparable_budget=${snapshot.experimentSearchComparableTrialBudgetStatus ?? "unset"}, keep_discard_rule=${snapshot.experimentSearchKeepDiscardRule ?? "unset"}, last_trial=${snapshot.experimentSearchLastTrialOutcome ?? "unset"}`
+    );
+    lines.push(
       `Experiment search decision: decision=${snapshot.experimentSearchDecision ?? "unset"}, validation_stage=${snapshot.experimentSearchValidationStage ?? "unset"}, fairness=${snapshot.experimentSearchBaselineFairnessStatus ?? "unset"}, impl_confidence=${snapshot.experimentSearchImplementationConfidence ?? "unset"}, ablation=${snapshot.experimentSearchAblationStatus ?? "unset"}, innovation=${snapshot.experimentSearchInnovationStatus ?? "unset"}, exhaustion=${snapshot.experimentSearchSearchExhaustionStatus ?? "unset"}, evidence=${snapshot.experimentSearchEvidenceCleanlinessStatus ?? "unset"}, confidence=${snapshot.experimentSearchDecisionConfidence ?? "unset"}`
     );
+    lines.push(
+      `Experiment outer loop: dataset_coverage=${snapshot.experimentSearchBaselineDatasetCoverageStatus ?? "unset"}, missing_datasets=${(snapshot.experimentSearchBaselineDatasetCoverageMissing ?? []).join(", ") || "none"}, innovation_deviation=${snapshot.experimentSearchInnovationDeviationStatus ?? "unset"}, deviation_score=${snapshot.experimentSearchInnovationDeviationScore ?? "unset"}`
+    );
+    if (snapshot.experimentSearchBaselineDatasetCoverageSummary) {
+      lines.push(
+        `Experiment dataset coverage detail: ${snapshot.experimentSearchBaselineDatasetCoverageSummary}`
+      );
+    }
+    if (snapshot.experimentSearchInnovationDeviationSummary) {
+      lines.push(
+        `Experiment innovation alignment detail: ${snapshot.experimentSearchInnovationDeviationSummary}`
+      );
+    }
     if (snapshot.experimentSearchRecommendedNextAction) {
       lines.push(
         `Experiment search next action: ${snapshot.experimentSearchRecommendedNextAction}`
@@ -413,6 +429,26 @@ export function formatWorkflowStatusText(params: {
     if ((snapshot.researchProgramOnboardingMissing ?? []).length > 0) {
       lines.push(
         `Research program checklist: missing=${snapshot.researchProgramOnboardingMissing.join(", ")}`
+      );
+    }
+  }
+  if (snapshot.bootstrapRequestRawRequest) {
+    lines.push(
+      `Bootstrap request: source=${snapshot.bootstrapRequestSourceCommand ?? "unset"}, clean_topic=${snapshot.bootstrapRequestCleanTopic ?? "unset"}`
+    );
+    if (
+      snapshot.bootstrapRequestRawRequest !== snapshot.bootstrapRequestCleanTopic
+    ) {
+      lines.push(`Bootstrap full request: ${snapshot.bootstrapRequestRawRequest}`);
+    }
+    if ((snapshot.bootstrapRequestReferenceHints ?? []).length > 0) {
+      lines.push(
+        `Bootstrap references: ${(snapshot.bootstrapRequestReferenceHints ?? []).join("; ")}`
+      );
+    }
+    if ((snapshot.bootstrapRequestExplicitRequirements ?? []).length > 0) {
+      lines.push(
+        `Bootstrap requirements: ${(snapshot.bootstrapRequestExplicitRequirements ?? []).join("; ")}`
       );
     }
   }

@@ -68,6 +68,16 @@ import {
   saveExperimentSearchStateFile,
 } from "../workflow-guard-experiment-history";
 import {
+  buildOneChangeSignature,
+  collectBaselineDatasetEnvelope,
+  collectInnovationAnchorPoints,
+  normalizeExperimentInnerLoopContract,
+} from "../workflow-experiment-loop";
+import {
+  normalizeExperimentSearchSpec,
+  resolveExperimentSearchSpecPath,
+} from "../workflow-guard-state/experiment-search-spec";
+import {
   getExperimentReviewStatePath,
   loadExperimentReviewState,
   saveExperimentReviewStateFile,
@@ -1325,6 +1335,51 @@ export async function setExperimentSearchState(params: {
     readJsonIfExists,
   });
   const patch = asRecord(params.experimentSearch) ?? {};
+  const searchSpecPath =
+    pickString(patch, ["searchSpecPath", "search_spec_path"]) ??
+    current.searchSpecPath ??
+    pickString(asRecord(manifest.experiment_search) ?? {}, [
+      "searchSpecPath",
+      "search_spec_path",
+    ]) ??
+    null;
+  const specResolvedPath = resolveExperimentSearchSpecPath({
+    projectRoot: params.projectRoot,
+    manifest,
+    searchSpecPath,
+  });
+  const searchSpec = normalizeExperimentSearchSpec(
+    await readJsonIfExists<Record<string, unknown>>(specResolvedPath)
+  );
+  const innerLoop = normalizeExperimentInnerLoopContract(searchSpec);
+  const researchProgram = normalizeResearchProgramState(manifest.research_program);
+  const rawProgramTracks = Array.isArray(
+    (manifest.research_program as Record<string, unknown> | undefined)?.tracks
+  )
+    ? (((manifest.research_program as Record<string, unknown>).tracks as unknown[]) ?? [])
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>)
+            : null
+        )
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const activeTrackRecords = rawProgramTracks.filter((track) => {
+    const trackId = pickString(track, ["track_id", "trackId"]);
+    const status = normalizeStage(track.status);
+    return current.trackId ? trackId === current.trackId : status === "active";
+  });
+  const defaultOneChangeSignature = buildOneChangeSignature({
+    trackRecords: activeTrackRecords,
+  });
+  const baselineDatasetEnvelope = collectBaselineDatasetEnvelope({
+    manifest,
+    trackRecords: activeTrackRecords,
+  });
+  const innovationAnchorPoints = collectInnovationAnchorPoints({
+    manifest,
+    trackRecords: activeTrackRecords,
+  });
   const next: ExperimentSearchState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
@@ -1340,6 +1395,47 @@ export async function setExperimentSearchState(params: {
     validationStage:
       normalizeStage(patch.validationStage ?? patch.validation_stage) ??
       current.validationStage,
+    innerLoopMode:
+      normalizeStage(patch.innerLoopMode ?? patch.inner_loop_mode) ??
+      current.innerLoopMode ??
+      innerLoop.mode,
+    trialTimeBudgetMinutes:
+      pickNumber(patch, ["trialTimeBudgetMinutes", "trial_time_budget_minutes"]) ??
+      current.trialTimeBudgetMinutes ??
+      innerLoop.trialTimeBudgetMinutes,
+    strictComparableBudget:
+      pickBoolean(patch, ["strictComparableBudget", "strict_comparable_budget"]) ??
+      current.strictComparableBudget ??
+      innerLoop.strictComparableBudget,
+    requireOneChangeSignature:
+      pickBoolean(patch, [
+        "requireOneChangeSignature",
+        "require_one_change_signature",
+      ]) ??
+      current.requireOneChangeSignature ??
+      innerLoop.requireOneChangeSignature,
+    oneChangeSignature:
+      pickString(patch, ["oneChangeSignature", "one_change_signature"]) ??
+      current.oneChangeSignature ??
+      defaultOneChangeSignature,
+    oneChangeValidationStatus:
+      normalizeStage(
+        patch.oneChangeValidationStatus ?? patch.one_change_validation_status
+      ) ??
+      current.oneChangeValidationStatus ??
+      (defaultOneChangeSignature ? "ready" : "missing"),
+    keepDiscardRule:
+      pickString(patch, ["keepDiscardRule", "keep_discard_rule"]) ??
+      current.keepDiscardRule ??
+      innerLoop.keepDiscardRule,
+    lastTrialOutcome:
+      pickString(patch, ["lastTrialOutcome", "last_trial_outcome"]) ??
+      current.lastTrialOutcome,
+    comparableTrialBudgetStatus:
+      normalizeStage(
+        patch.comparableTrialBudgetStatus ??
+          patch.comparable_trial_budget_status
+      ) ?? current.comparableTrialBudgetStatus,
     searchSessionId:
       pickString(patch, ["searchSessionId", "search_session_id"]) ??
       current.searchSessionId,
@@ -1476,6 +1572,60 @@ export async function setExperimentSearchState(params: {
     graphMemorySyncStatus:
       normalizeStage(patch.graphMemorySyncStatus ?? patch.graph_memory_sync_status) ??
       current.graphMemorySyncStatus,
+    baselineDatasetEnvelope:
+      patch.baselineDatasetEnvelope || patch.baseline_dataset_envelope
+        ? asStringArray(
+            patch.baselineDatasetEnvelope ?? patch.baseline_dataset_envelope
+          )
+        : current.baselineDatasetEnvelope.length > 0
+          ? current.baselineDatasetEnvelope
+          : baselineDatasetEnvelope,
+    validatedDatasetEnvelope:
+      patch.validatedDatasetEnvelope || patch.validated_dataset_envelope
+        ? asStringArray(
+            patch.validatedDatasetEnvelope ?? patch.validated_dataset_envelope
+          )
+        : current.validatedDatasetEnvelope,
+    baselineDatasetCoverageStatus:
+      normalizeStage(
+        patch.baselineDatasetCoverageStatus ??
+          patch.baseline_dataset_coverage_status
+      ) ?? current.baselineDatasetCoverageStatus,
+    baselineDatasetCoverageMissing:
+      patch.baselineDatasetCoverageMissing || patch.baseline_dataset_coverage_missing
+        ? asStringArray(
+            patch.baselineDatasetCoverageMissing ??
+              patch.baseline_dataset_coverage_missing
+          )
+        : current.baselineDatasetCoverageMissing,
+    baselineDatasetCoverageSummary:
+      pickString(patch, [
+        "baselineDatasetCoverageSummary",
+        "baseline_dataset_coverage_summary",
+      ]) ?? current.baselineDatasetCoverageSummary,
+    innovationAnchorPoints:
+      patch.innovationAnchorPoints || patch.innovation_anchor_points
+        ? asStringArray(
+            patch.innovationAnchorPoints ?? patch.innovation_anchor_points
+          )
+        : current.innovationAnchorPoints.length > 0
+          ? current.innovationAnchorPoints
+          : innovationAnchorPoints,
+    innovationDeviationStatus:
+      normalizeStage(
+        patch.innovationDeviationStatus ??
+          patch.innovation_deviation_status
+      ) ?? current.innovationDeviationStatus,
+    innovationDeviationScore:
+      pickNumber(patch, [
+        "innovationDeviationScore",
+        "innovation_deviation_score",
+      ]) ?? current.innovationDeviationScore,
+    innovationDeviationSummary:
+      pickString(patch, [
+        "innovationDeviationSummary",
+        "innovation_deviation_summary",
+      ]) ?? current.innovationDeviationSummary,
     pendingReason:
       pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
     lastUpdatedAt:

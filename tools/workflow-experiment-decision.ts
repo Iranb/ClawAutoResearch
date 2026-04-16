@@ -12,6 +12,17 @@ import {
 } from "./workflow-guard-experiment-history";
 import type { ExperimentGpuMonitorState } from "./workflow-gpu-monitor";
 import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
+import {
+  collectBaselineDatasetEnvelope,
+  collectInnovationAnchorPoints,
+  collectValidatedDatasetsFromLedger,
+  deriveBaselineDatasetCoverage,
+  deriveComparableTrialBudgetStatus,
+  deriveInnovationDeviation,
+  deriveMeasuredTrialDurationMinutes,
+  normalizeExperimentInnerLoopContract,
+  normalizeExperimentOuterLoopPolicy,
+} from "./workflow-experiment-loop";
 
 type FailureClass = "runtime" | "implementation" | "scientific" | "unknown";
 
@@ -167,9 +178,31 @@ export function evaluateExperimentSearchDecision(params: {
   gpuMonitor?: ExperimentGpuMonitorState | Record<string, unknown> | null;
   experimentReviewState?: unknown;
   experimentMemory?: unknown;
+  manifest?: unknown;
 }): ExperimentSearchDecisionSummary {
   const search = normalizeExperimentSearchState(params.experimentSearch);
   const spec = normalizeExperimentSearchSpec(params.experimentSearchSpec);
+  const innerLoop = normalizeExperimentInnerLoopContract(spec);
+  const outerLoop = normalizeExperimentOuterLoopPolicy(spec);
+  const manifestRecord =
+    params.manifest && typeof params.manifest === "object" && !Array.isArray(params.manifest)
+      ? (params.manifest as Record<string, unknown>)
+      : null;
+  const researchProgramTracks = Array.isArray(
+    (manifestRecord?.research_program as Record<string, unknown> | undefined)?.tracks
+  )
+    ? (((manifestRecord?.research_program as Record<string, unknown>).tracks as unknown[]) ?? [])
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>)
+            : null
+        )
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .filter((entry) => {
+          const trackId = readString(entry.track_id) ?? readString(entry.trackId);
+          return !search.trackId || trackId === search.trackId;
+        })
+    : [];
   const failureClusters = summarizeExperimentFailureClusters(params.experimentLedger ?? {});
   const gpuMonitor = (params.gpuMonitor ?? {}) as Record<string, unknown>;
   const experimentReview = ((params.experimentReviewState ?? {}) as Record<string, unknown>) ?? {};
@@ -214,6 +247,82 @@ export function evaluateExperimentSearchDecision(params: {
   const scientificFailureCount = failureClusters
     .filter((cluster) => cluster.failureClass === "scientific")
     .reduce((sum, cluster) => sum + cluster.count, 0);
+  const preferredExperimentIds = [
+    search.lastCandidateExperimentId,
+    search.incumbentExperimentId,
+  ].filter((entry): entry is string => Boolean(entry));
+  const measuredTrialDurationMinutes = deriveMeasuredTrialDurationMinutes({
+    ledgerLike: params.experimentLedger,
+    preferredExperimentIds,
+  });
+  const comparableTrialBudgetStatus = deriveComparableTrialBudgetStatus({
+    innerLoop,
+    measuredDurationMinutes: measuredTrialDurationMinutes,
+  });
+  const oneChangeValidationStatus =
+    search.requireOneChangeSignature || innerLoop.requireOneChangeSignature
+      ? search.oneChangeSignature || readString(search.bestNodeId)
+        ? search.oneChangeValidationStatus === "unknown"
+          ? "ready"
+          : search.oneChangeValidationStatus
+        : "missing"
+      : "not_required";
+  const innovationAnchorPoints =
+    search.innovationAnchorPoints.length > 0
+      ? search.innovationAnchorPoints
+      : collectInnovationAnchorPoints({
+          manifest: manifestRecord,
+          trackRecords: researchProgramTracks,
+        });
+  const validatedDatasets = collectValidatedDatasetsFromLedger({
+    ledgerLike: params.experimentLedger,
+    trackId: search.trackId,
+    experimentIds: preferredExperimentIds,
+  });
+  const baselineDatasetCoverage = deriveBaselineDatasetCoverage({
+    baselineDatasets:
+      search.baselineDatasetEnvelope.length > 0
+        ? search.baselineDatasetEnvelope
+        : collectBaselineDatasetEnvelope({
+            manifest: manifestRecord,
+            trackRecords: researchProgramTracks,
+          }),
+    validatedDatasets:
+      search.validatedDatasetEnvelope.length > 0
+        ? search.validatedDatasetEnvelope
+        : validatedDatasets,
+    required:
+      outerLoop.requireBaselineDatasetCoverageForEffectiveCandidates,
+  });
+  const ledgerExperiments = Array.isArray((params.experimentLedger as Record<string, unknown> | null)?.experiments)
+    ? (((params.experimentLedger as Record<string, unknown>).experiments as unknown[]) ?? [])
+    : [];
+  const candidateTexts = ledgerExperiments
+    .map((entry) =>
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>)
+        : null
+    )
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter((entry) => {
+      const experimentId =
+        readString(entry.experiment_id) ?? readString(entry.experimentId);
+      return preferredExperimentIds.length === 0 || (experimentId != null && preferredExperimentIds.includes(experimentId));
+    })
+    .flatMap((entry) => [
+      readString(entry.name),
+      readString(entry.hypothesis),
+      readString(entry.summary),
+      ...(Array.isArray(entry.notes) ? entry.notes.map((value) => String(value)) : []),
+    ])
+    .filter((entry): entry is string => Boolean(entry));
+  const innovationDeviation = deriveInnovationDeviation({
+    anchorPoints: innovationAnchorPoints,
+    candidateTexts,
+    tolerance: outerLoop.innovationDeviationTolerance,
+  });
+  const effectiveCandidateClaimed =
+    search.lastDecision === "advance" || isReadyLike(search.innovationStatus);
 
   const cleanEvidence =
     isReadyLike(baselineFairnessStatus) &&
@@ -227,6 +336,101 @@ export function evaluateExperimentSearchDecision(params: {
     cleanEvidence &&
     searchExhaustionStatus !== "exhausted"
   ) {
+    if (
+      effectiveCandidateClaimed &&
+      (
+        comparableTrialBudgetStatus === "over_budget" ||
+        oneChangeValidationStatus === "missing" ||
+        baselineDatasetCoverage.status === "partial" ||
+        baselineDatasetCoverage.status === "missing" ||
+        innovationDeviation.status === "broad_drift"
+      )
+    ) {
+      return {
+        decision: "innovation_fragile",
+        rationale:
+          comparableTrialBudgetStatus === "over_budget"
+            ? `The current candidate exceeded the fixed trial budget (${measuredTrialDurationMinutes}m > ${innerLoop.trialTimeBudgetMinutes}m), so the gain is not yet apples-to-apples comparable.`
+            : oneChangeValidationStatus === "missing"
+              ? "The current candidate lacks a stable one_change_signature, so the retained gain is not yet attributable to one bounded intervention."
+              : baselineDatasetCoverage.status === "partial" ||
+                  baselineDatasetCoverage.status === "missing"
+                ? baselineDatasetCoverage.summary ??
+                  "The current candidate still needs validation on the baseline dataset envelope before it can be treated as stably effective."
+                : innovationDeviation.summary ??
+                  "The current candidate appears to be drifting too far from the original innovation anchors.",
+        decisionConfidence: "medium",
+        implementationConfidence,
+        baselineFairnessStatus,
+        ablationStatus,
+        innovationStatus: "fragile",
+        searchExhaustionStatus,
+        evidenceCleanlinessStatus,
+        recommendedNextAction:
+          baselineDatasetCoverage.status === "partial" ||
+          baselineDatasetCoverage.status === "missing"
+            ? "Extend validation to the datasets already named in the baseline envelope before analysis."
+            : innovationDeviation.status === "broad_drift"
+              ? "Realign the next candidate with the original innovation anchors instead of widening into a new idea."
+              : comparableTrialBudgetStatus === "over_budget"
+                ? "Rerun the candidate inside the fixed trial budget before keeping it."
+                : "Tighten the candidate so one bounded change explains the gain before analysis.",
+        validationStage:
+          baselineDatasetCoverage.status === "partial" ||
+          baselineDatasetCoverage.status === "missing"
+            ? "dataset_coverage_validation"
+            : innovationDeviation.status === "broad_drift"
+              ? "innovation_alignment_review"
+              : "inner_loop_validation",
+        failureClusters,
+        persistedPatch: {
+          validation_stage:
+            baselineDatasetCoverage.status === "partial" ||
+            baselineDatasetCoverage.status === "missing"
+              ? "dataset_coverage_validation"
+              : innovationDeviation.status === "broad_drift"
+                ? "innovation_alignment_review"
+                : "inner_loop_validation",
+          inner_loop_mode: innerLoop.mode,
+          trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+          strict_comparable_budget: innerLoop.strictComparableBudget,
+          require_one_change_signature: innerLoop.requireOneChangeSignature,
+          one_change_signature: search.oneChangeSignature,
+          one_change_validation_status: oneChangeValidationStatus,
+          comparable_trial_budget_status: comparableTrialBudgetStatus,
+          last_trial_outcome: "keep_candidate_pending_outer_review",
+          keep_discard_rule: innerLoop.keepDiscardRule,
+          baseline_dataset_envelope: baselineDatasetCoverage.baselineDatasets,
+          validated_dataset_envelope: baselineDatasetCoverage.validatedDatasets,
+          baseline_dataset_coverage_status: baselineDatasetCoverage.status,
+          baseline_dataset_coverage_missing: baselineDatasetCoverage.missingDatasets,
+          baseline_dataset_coverage_summary: baselineDatasetCoverage.summary,
+          innovation_anchor_points: innovationAnchorPoints,
+          innovation_deviation_status: innovationDeviation.status,
+          innovation_deviation_score: innovationDeviation.score,
+          innovation_deviation_summary: innovationDeviation.summary,
+          baseline_fairness_status: baselineFairnessStatus,
+          implementation_confidence: implementationConfidence,
+          search_exhaustion_status: searchExhaustionStatus,
+          ablation_status: ablationStatus,
+          innovation_status: "fragile",
+          decision_confidence: "medium",
+          recommended_next_action:
+            baselineDatasetCoverage.status === "partial" ||
+            baselineDatasetCoverage.status === "missing"
+              ? "Extend validation to the datasets already named in the baseline envelope before analysis."
+              : innovationDeviation.status === "broad_drift"
+                ? "Realign the next candidate with the original innovation anchors instead of widening into a new idea."
+                : comparableTrialBudgetStatus === "over_budget"
+                  ? "Rerun the candidate inside the fixed trial budget before keeping it."
+                  : "Tighten the candidate so one bounded change explains the gain before analysis.",
+          failure_cluster_ids: failureClusters.map((cluster) => cluster.clusterId),
+          evidence_cleanliness_status: evidenceCleanlinessStatus,
+          last_decision: "innovation_fragile",
+          pending_reason: null,
+        },
+      };
+    }
     return {
       decision: "innovation_supported",
       rationale:
@@ -331,6 +535,32 @@ export function evaluateExperimentSearchDecision(params: {
     recommendedNextAction =
       "Stabilize implementation/runtime, then rerun comparable candidates before judging the innovation.";
     validationStage = "repair_implementation";
+  } else if (
+    effectiveCandidateClaimed &&
+    searchExhaustionStatus !== "exhausted" &&
+    innerLoop.requireOneChangeSignature &&
+    oneChangeValidationStatus === "missing"
+  ) {
+    decision = "repair_implementation";
+    rationale =
+      "The candidate still lacks a stable one_change_signature, so the gain cannot be attributed to one bounded intervention.";
+    decisionConfidence = "high";
+    recommendedNextAction =
+      "Restate the candidate as one bounded change, persist the one_change_signature, and rerun the trial before keeping it.";
+    validationStage = "inner_loop_validation";
+  } else if (
+    effectiveCandidateClaimed &&
+    searchExhaustionStatus !== "exhausted" &&
+    innerLoop.strictComparableBudget &&
+    comparableTrialBudgetStatus === "over_budget"
+  ) {
+    decision = "continue_tuning";
+    rationale =
+      `The latest candidate exceeded the fixed trial budget (${measuredTrialDurationMinutes}m > ${innerLoop.trialTimeBudgetMinutes}m), so the result is not yet strictly comparable to prior trials.`;
+    decisionConfidence = "medium";
+    recommendedNextAction =
+      "Trim the candidate back under the fixed trial budget and rerun before treating it as a keep/discard win.";
+    validationStage = "inner_loop_validation";
   } else if (!isReadyLike(search.multiSeedStatus)) {
     decision = search.lastDecision === "advance" ? "require_multi_seed" : "continue_tuning";
     rationale = isReadyLike(search.plotPackStatus)
@@ -362,6 +592,29 @@ export function evaluateExperimentSearchDecision(params: {
         ? "Freeze the current incumbent and proceed toward analysis."
         : "Narrow search around the incumbent or gather one more robustness slice before final analysis.";
     validationStage = "decision";
+    if (
+      outerLoop.requireBaselineDatasetCoverageForEffectiveCandidates &&
+      (baselineDatasetCoverage.status === "partial" ||
+        baselineDatasetCoverage.status === "missing")
+    ) {
+      decision = "innovation_fragile";
+      rationale =
+        baselineDatasetCoverage.summary ??
+        "The current candidate still needs validation on the baseline dataset envelope before it can be treated as stably effective.";
+      decisionConfidence = "medium";
+      recommendedNextAction =
+        "Extend validation to the datasets already named in the baseline envelope before analysis.";
+      validationStage = "dataset_coverage_validation";
+    } else if (innovationDeviation.status === "broad_drift") {
+      decision = "innovation_fragile";
+      rationale =
+        innovationDeviation.summary ??
+        "The current candidate appears to be drifting too far from the original innovation anchors.";
+      decisionConfidence = "medium";
+      recommendedNextAction =
+        "Realign the next candidate with the original innovation anchors instead of widening into a new idea.";
+      validationStage = "innovation_alignment_review";
+    }
   } else if (
     searchExhaustionStatus === "exhausted" &&
     cleanEvidence &&
@@ -387,6 +640,31 @@ export function evaluateExperimentSearchDecision(params: {
   }
 
   const persistedPatch = {
+    inner_loop_mode: innerLoop.mode,
+    trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+    strict_comparable_budget: innerLoop.strictComparableBudget,
+    require_one_change_signature: innerLoop.requireOneChangeSignature,
+    one_change_signature: search.oneChangeSignature,
+    one_change_validation_status: oneChangeValidationStatus,
+    comparable_trial_budget_status: comparableTrialBudgetStatus,
+    keep_discard_rule: innerLoop.keepDiscardRule,
+    last_trial_outcome:
+      decision === "innovation_supported"
+        ? "keep"
+        : decision === "innovation_fragile"
+          ? "keep_candidate_pending_outer_review"
+          : decision === "rollback_to_plan" || decision === "rollback_to_idea"
+            ? "discard"
+            : search.lastTrialOutcome,
+    baseline_dataset_envelope: baselineDatasetCoverage.baselineDatasets,
+    validated_dataset_envelope: baselineDatasetCoverage.validatedDatasets,
+    baseline_dataset_coverage_status: baselineDatasetCoverage.status,
+    baseline_dataset_coverage_missing: baselineDatasetCoverage.missingDatasets,
+    baseline_dataset_coverage_summary: baselineDatasetCoverage.summary,
+    innovation_anchor_points: innovationAnchorPoints,
+    innovation_deviation_status: innovationDeviation.status,
+    innovation_deviation_score: innovationDeviation.score,
+    innovation_deviation_summary: innovationDeviation.summary,
     validation_stage: validationStage,
     baseline_fairness_status: baselineFairnessStatus,
     implementation_confidence: implementationConfidence,
@@ -468,6 +746,7 @@ export async function evaluateExperimentSearchDecisionForProject(params: {
     gpuMonitor: gpuMonitorRaw,
     experimentReviewState: manifest.experiment_review_state,
     experimentMemory: manifest.experiment_memory,
+    manifest,
   });
 
   if (params.persist !== false) {

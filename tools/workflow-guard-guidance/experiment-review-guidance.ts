@@ -34,7 +34,7 @@ export function buildExperimentReviewGuidance(
 
   if (params.role === "planner") {
     prepend.push(
-      `Reviewed-auto launch is active. Refresh ${packetPath} and ${plannerPlanPath} so claim coverage, one-variable change, baselines, falsifiers, stop rules, compute budget, and PaperNexus-backed norms are explicit before reviewer passes begin.`
+      `Reviewed-auto launch is active. Refresh ${packetPath} and ${plannerPlanPath} so claim coverage, one-variable change, one_change_signature, fixed trial-time budget, baselines, falsifiers, stop rules, compute budget, and PaperNexus-backed norms are explicit before reviewer passes begin.`
     );
   }
 
@@ -61,7 +61,7 @@ export function buildExperimentReviewGuidance(
 
   if (params.role === "coder") {
     prepend.push(
-      `Launch only from the approved reviewed-auto packet. Require ${launchDecisionPath} with launch_approved=true plus a stable packet fingerprint before running /run-experiment; otherwise bounce back to Researcher.`
+      `Launch only from the approved reviewed-auto packet. Require ${launchDecisionPath} with launch_approved=true plus a stable packet fingerprint, one_change_signature, and fixed trial-time budget before running /run-experiment; otherwise bounce back to Researcher.`
     );
   }
 

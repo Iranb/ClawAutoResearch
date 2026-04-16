@@ -1028,7 +1028,7 @@ test("auto-review command bootstraps a survey project and starts the background 
     getCurrentConversationBinding: async () => null,
   });
 
-  const projectRoot = path.join(projectsRoot, "survey-graph-reasoning-survey");
+  const projectRoot = captured.boundProject.projectRoot;
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
@@ -1046,6 +1046,185 @@ test("auto-review command bootstraps a survey project and starts the background 
   assert.match(
     captured.backgroundParams.backgroundRun.commandText,
     /^\/survey-pipeline\b/
+  );
+});
+
+test("auto-research keeps project naming clean while preserving richer request context", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  let captured = null;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoResearchCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async bindChannelProjectForWorkflow(params) {
+        captured = {
+          ...(captured ?? {}),
+          boundProject: params,
+        };
+        return {
+          binding: {
+            channelKey: params.channelKey ?? "discord:group:gcd-lab",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          },
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-auto-rich-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Full-auto research pipeline started.",
+        };
+      },
+    }),
+    "auto-research"
+  );
+
+  const commandBody =
+    '/auto-research "gcd confirmation bias mitigation" 参考 SimGCD 和 Uno 的方法；要求保留 baseline fairness；重点验证 CUB-200';
+  const result = await autoResearchCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody,
+    args:
+      '"gcd confirmation bias mitigation" 参考 SimGCD 和 Uno 的方法；要求保留 baseline fairness；重点验证 CUB-200',
+    config: {},
+    from: "discord:channel:gcd-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(captured.boundProject.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(captured.backgroundParams.backgroundRun.topic, "gcd confirmation bias mitigation");
+  assert.match(result.text ?? "", /preserved_request=/i);
+  assert.equal(manifest.bootstrap_request.clean_topic, "gcd confirmation bias mitigation");
+  assert.match(manifest.bootstrap_request.raw_request, /SimGCD/);
+  assert.equal(Array.isArray(manifest.bootstrap_request.reference_hints), true);
+  assert.equal(manifest.bootstrap_request.reference_hints.length >= 1, true);
+  assert.equal(Array.isArray(manifest.bootstrap_request.explicit_requirements), true);
+  assert.equal(manifest.bootstrap_request.explicit_requirements.length >= 1, true);
+  assert.equal(
+    manifest.research_program.constraints.some((entry) => /SimGCD|Uno|baseline fairness|CUB-200/i.test(entry)),
+    true
+  );
+  assert.match(captured.boundProject.notes ?? "", /Full request:/i);
+  assert.match(
+    captured.backgroundParams.backgroundRun.extraSystemPrompt ?? "",
+    /Paper \/ method references to consider:/i
+  );
+  assert.match(
+    captured.backgroundParams.backgroundRun.extraSystemPrompt ?? "",
+    /Explicit user requirements:/i
+  );
+});
+
+test("auto-review can derive a clean survey project name from an unquoted rich request", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  let captured = null;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoReviewCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async bindChannelProjectForWorkflow(params) {
+        captured = {
+          ...(captured ?? {}),
+          boundProject: params,
+        };
+        return {
+          binding: {
+            channelKey: params.channelKey ?? "discord:group:survey-lab",
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          },
+        };
+      },
+      async startBackgroundWorkflowRun(params) {
+        captured = {
+          ...(captured ?? {}),
+          backgroundParams: params,
+        };
+        return {
+          started: true,
+          runId: "bg-run-auto-review-rich-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Full-auto survey pipeline started.",
+        };
+      },
+    }),
+    "auto-review"
+  );
+
+  const args =
+    "graph reasoning survey 参考 GraphRAG Survey 2024 的分类方式，要求突出 benchmark gaps";
+  const result = await autoReviewCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: `/auto-review ${args}`,
+    args,
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectRoot = captured.boundProject.projectRoot;
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(captured.boundProject.projectId, "survey-graph-reasoning-survey");
+  assert.equal(captured.backgroundParams.backgroundRun.topic, "graph reasoning survey");
+  assert.equal(manifest.bootstrap_request.clean_topic, "graph reasoning survey");
+  assert.match(manifest.bootstrap_request.raw_request, /GraphRAG Survey 2024/i);
+  assert.equal(manifest.bootstrap_request.reference_hints.length >= 1, true);
+  assert.equal(manifest.bootstrap_request.explicit_requirements.length >= 1, true);
+  assert.match(result.text ?? "", /preserved_request=/i);
+  assert.match(captured.boundProject.notes ?? "", /Full request:/i);
+  assert.match(
+    captured.backgroundParams.backgroundRun.extraSystemPrompt ?? "",
+    /GraphRAG Survey 2024/i
+  );
+  assert.match(
+    captured.backgroundParams.backgroundRun.commandText,
+    /\/survey-pipeline "graph reasoning survey"/i
   );
 });
 

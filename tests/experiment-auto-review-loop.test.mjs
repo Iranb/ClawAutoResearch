@@ -594,6 +594,14 @@ test("research_workflow experiment review actions persist durable reviewed-auto 
   assert.equal(packet.baselines[0], "ProtoGCD");
   assert.equal(packet.metrics[0], "H-score");
   assert.match(packet.one_variable_change ?? "", /frequency/i);
+  assert.equal(packet.one_change_signature, packet.one_variable_change);
+  assert.equal(packet.inner_loop?.mode, "karpathy_fast_keep_discard");
+  assert.equal(packet.inner_loop?.trial_time_budget_minutes, 5);
+  assert.equal(packet.inner_loop?.require_one_change_signature, true);
+  assert.equal(
+    packet.outer_loop?.require_baseline_dataset_coverage_for_effective_candidates,
+    true
+  );
   assert.equal(Array.isArray(packet.prior_experiment_verdicts), true);
 
   const updated = await executeWorkflowTool(tool, {

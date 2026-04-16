@@ -29,6 +29,20 @@ export type ExperimentSearchBudgetLike = {
   maxGpuHours: number | null;
   noImprovementPatience: number | null;
   baselineUnderperformPatience: number | null;
+  trialTimeBudgetMinutes: number | null;
+};
+
+export type ExperimentSearchInnerLoopPolicyLike = {
+  mode: string | null;
+  trialTimeBudgetMinutes: number | null;
+  strictComparableBudget: boolean;
+  requireOneChangeSignature: boolean;
+  keepDiscardRule: string | null;
+};
+
+export type ExperimentSearchOuterLoopPolicyLike = {
+  requireBaselineDatasetCoverageForEffectiveCandidates: boolean;
+  innovationDeviationTolerance: string | null;
 };
 
 export type ExperimentSearchGraphMemoryBasisLike = {
@@ -68,6 +82,8 @@ export type ExperimentSearchSpecLike = {
   searchEnvelope: Record<string, unknown> | null;
   comparisonPolicy: ExperimentSearchComparisonPolicyLike;
   budget: ExperimentSearchBudgetLike;
+  innerLoopPolicy: ExperimentSearchInnerLoopPolicyLike;
+  outerLoopPolicy: ExperimentSearchOuterLoopPolicyLike;
   graphMemoryBasis: ExperimentSearchGraphMemoryBasisLike;
   primaryMetricContract: ExperimentSearchMetricContractLike;
   baselineFairnessContract: ExperimentSearchBaselineFairnessContractLike;
@@ -85,6 +101,10 @@ export function normalizeExperimentSearchSpec(
   const comparisonPolicy =
     asRecord(record.comparisonPolicy ?? record.comparison_policy) ?? {};
   const budget = asRecord(record.budget) ?? {};
+  const innerLoopPolicy =
+    asRecord(record.innerLoopPolicy ?? record.inner_loop_policy) ?? {};
+  const outerLoopPolicy =
+    asRecord(record.outerLoopPolicy ?? record.outer_loop_policy) ?? {};
   const graphMemoryBasis =
     asRecord(record.graphMemoryBasis ?? record.graph_memory_basis) ?? {};
   const primaryMetricContract =
@@ -201,6 +221,62 @@ export function normalizeExperimentSearchSpec(
                 ])!
               )
             ),
+      trialTimeBudgetMinutes:
+        pickNumber(budget, [
+          "trialTimeBudgetMinutes",
+          "trial_time_budget_minutes",
+        ]) == null
+          ? null
+          : Math.max(
+              0,
+              Number(
+                pickNumber(budget, [
+                  "trialTimeBudgetMinutes",
+                  "trial_time_budget_minutes",
+                ])!
+              )
+            ),
+    },
+    innerLoopPolicy: {
+      mode:
+        pickString(innerLoopPolicy, ["mode"]) ??
+        pickString(record, ["innerLoopMode", "inner_loop_mode"]) ??
+        "karpathy_fast_keep_discard",
+      trialTimeBudgetMinutes:
+        pickNumber(innerLoopPolicy, [
+          "trialTimeBudgetMinutes",
+          "trial_time_budget_minutes",
+        ]) ??
+        pickNumber(budget, [
+          "trialTimeBudgetMinutes",
+          "trial_time_budget_minutes",
+        ]) ??
+        5,
+      strictComparableBudget:
+        pickBoolean(innerLoopPolicy, [
+          "strictComparableBudget",
+          "strict_comparable_budget",
+        ]) ?? true,
+      requireOneChangeSignature:
+        pickBoolean(innerLoopPolicy, [
+          "requireOneChangeSignature",
+          "require_one_change_signature",
+        ]) ?? true,
+      keepDiscardRule:
+        pickString(innerLoopPolicy, ["keepDiscardRule", "keep_discard_rule"]) ??
+        "primary_metric_keep_discard",
+    },
+    outerLoopPolicy: {
+      requireBaselineDatasetCoverageForEffectiveCandidates:
+        pickBoolean(outerLoopPolicy, [
+          "requireBaselineDatasetCoverageForEffectiveCandidates",
+          "require_baseline_dataset_coverage_for_effective_candidates",
+        ]) ?? true,
+      innovationDeviationTolerance:
+        pickString(outerLoopPolicy, [
+          "innovationDeviationTolerance",
+          "innovation_deviation_tolerance",
+        ]) ?? "wide",
     },
     graphMemoryBasis: {
       packetPath: pickString(graphMemoryBasis, ["packetPath", "packet_path"]),

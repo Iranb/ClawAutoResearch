@@ -77,6 +77,7 @@ import {
   extractQuotedSegment,
   formatWorkflowCommandArgument,
 } from "./workflow-commands/parsers.js";
+import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
 
 import {
   formatWorkflowStatusText,
@@ -854,26 +855,42 @@ function createProjectInitCommandHandler(
 }
 
 function buildAutoResearchBootstrapPatch(params: {
-  topic: string;
+  intent: AutoBootstrapIntent;
   projectId: string;
   zoteroProjectRoot?: string | null;
   current: Awaited<ReturnType<typeof getResearchProgramStateSummary>>["state"];
 }) {
+  const intentConstraints = [
+    ...params.intent.referenceHints.map(
+      (entry) => `Reference method hint: ${entry}`
+    ),
+    ...params.intent.explicitRequirements.map(
+      (entry) => `User requirement: ${entry}`
+    ),
+  ];
   return {
     status:
       params.current.status === "missing" ? "draft" : params.current.status,
-    goal: params.current.goal ?? params.topic,
-    problem_statement: params.current.problemStatement ?? params.topic,
+    goal: params.current.goal ?? params.intent.cleanTopic,
+    problem_statement:
+      params.current.problemStatement ??
+      (params.intent.rawRequest !== params.intent.cleanTopic
+        ? params.intent.rawRequest
+        : params.intent.cleanTopic),
     baseline_reference:
       params.current.baselineReference ??
-      `${params.topic} literature baseline (auto-bootstrap)`,
+      `${params.intent.cleanTopic} literature baseline (auto-bootstrap)`,
     primary_metric:
       params.current.primaryMetric ??
       "literature-grounded primary metric (auto-bootstrap)",
     datasets:
       params.current.datasets.length > 0
         ? params.current.datasets
-        : [`${params.topic} target dataset (auto-bootstrap)`],
+        : [`${params.intent.cleanTopic} target dataset (auto-bootstrap)`],
+    constraints:
+      params.current.constraints.length > 0
+        ? params.current.constraints
+        : intentConstraints,
     success_criteria:
       params.current.successCriteria.length > 0
         ? params.current.successCriteria
@@ -888,7 +905,9 @@ function buildAutoResearchBootstrapPatch(params: {
       ),
     pending_reason:
       params.current.pendingReason ??
-      "Auto-research bootstrap seeded provisional onboarding values from the topic; refine them with literature/graph evidence as the workflow advances.",
+      (params.intent.rawRequest !== params.intent.cleanTopic
+        ? "Auto-research bootstrap preserved richer request context (paper references / explicit requirements); refine the provisional onboarding values with literature/graph evidence while honoring that context."
+        : "Auto-research bootstrap seeded provisional onboarding values from the topic; refine them with literature/graph evidence as the workflow advances."),
   };
 }
 
@@ -937,21 +956,157 @@ function buildAutoReviewGraphGuidedWritingBootstrapPatch() {
   };
 }
 
+type AutoBootstrapIntent = {
+  sourceCommand: "auto_research" | "auto_review";
+  rawRequest: string;
+  cleanTopic: string;
+  supplementalContext: string | null;
+  referenceHints: string[];
+  explicitRequirements: string[];
+};
+
+function trimBootstrapPunctuation(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/^[\s,，;；:：\-–—]+/, "")
+    .replace(/[\s,，;；:：\-–—]+$/, "")
+    .trim();
+}
+
+function splitIntentClauses(value: string | null | undefined): string[] {
+  return String(value ?? "")
+    .split(/[\n。；;]+/g)
+    .map((entry) => trimBootstrapPunctuation(entry))
+    .filter(Boolean);
+}
+
+function isReferenceHint(value: string): boolean {
+  return /(参考论文|参考|参照|借鉴|基于|方法|paper|papers|arxiv|doi|inspired by|using|reference)/i.test(
+    value
+  );
+}
+
+function isExplicitRequirement(value: string): boolean {
+  return /(要求|需要|并且|同时|must|require|requirements|constraint|constraints|focus on|重点|请)/i.test(
+    value
+  );
+}
+
+function parseAutoBootstrapIntent(params: {
+  sourceCommand: "auto_research" | "auto_review";
+  args: string;
+}): AutoBootstrapIntent | null {
+  const rawRequest = trimBootstrapPunctuation(params.args);
+  if (!rawRequest) {
+    return null;
+  }
+  const quotedTopic =
+    /^"([^"]+)"/.exec(rawRequest)?.[1]?.trim() ??
+    /^'([^']+)'/.exec(rawRequest)?.[1]?.trim() ??
+    null;
+  let cleanTopic = quotedTopic ? trimBootstrapPunctuation(quotedTopic) : "";
+  let supplementalContext: string | null = null;
+  if (quotedTopic) {
+    const quotedIndex = rawRequest.indexOf(`"${quotedTopic}"`);
+    if (quotedIndex >= 0) {
+      supplementalContext = trimBootstrapPunctuation(
+        `${rawRequest.slice(0, quotedIndex)} ${rawRequest.slice(
+          quotedIndex + quotedTopic.length + 2
+        )}`
+      );
+    }
+  } else {
+    const markerMatch = rawRequest.match(
+      /^(.*?)(?:[\s,，;；:：\-–—]+)?(参考论文|参考|参照|借鉴|基于|使用|要求|需要|并且|同时|\bwith\b|\busing\b|\binspired by\b|\breference\b|\breferences\b|\brequire\b|\brequirements\b|\bconstraint\b|\bconstraints\b|\bmust\b)/i
+    );
+    if (markerMatch?.[1]) {
+      cleanTopic = trimBootstrapPunctuation(markerMatch[1]);
+      supplementalContext = trimBootstrapPunctuation(
+        rawRequest.slice(markerMatch[1].length)
+      );
+    } else {
+      cleanTopic = rawRequest;
+    }
+  }
+  if (!cleanTopic) {
+    cleanTopic = rawRequest;
+  }
+  const clauses = splitIntentClauses(supplementalContext);
+  const referenceHints = clauses.filter((entry) => isReferenceHint(entry));
+  const explicitRequirements = clauses.filter((entry) =>
+    isExplicitRequirement(entry)
+  );
+  return {
+    sourceCommand: params.sourceCommand,
+    rawRequest,
+    cleanTopic,
+    supplementalContext,
+    referenceHints,
+    explicitRequirements,
+  };
+}
+
+function buildBootstrapRequestManifestPatch(
+  intent: AutoBootstrapIntent
+): Record<string, unknown> {
+  return {
+    bootstrap_request: {
+      source_command: intent.sourceCommand,
+      raw_request: intent.rawRequest,
+      clean_topic: intent.cleanTopic,
+      supplemental_context: intent.supplementalContext,
+      reference_hints: intent.referenceHints,
+      explicit_requirements: intent.explicitRequirements,
+      last_updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function buildBootstrapContextPrompt(intent: AutoBootstrapIntent): string | null {
+  const lines = [
+    `Bootstrap topic: ${intent.cleanTopic}`,
+    intent.rawRequest !== intent.cleanTopic ? `Full user request: ${intent.rawRequest}` : null,
+    intent.referenceHints.length > 0 ? "Paper / method references to consider:" : null,
+    ...intent.referenceHints.map((entry) => `- ${entry}`),
+    intent.explicitRequirements.length > 0 ? "Explicit user requirements:" : null,
+    ...intent.explicitRequirements.map((entry) => `- ${entry}`),
+    "Naming rule: keep project naming anchored to the clean topic, but preserve and honor the richer request context during bootstrap and downstream planning.",
+  ].filter((entry): entry is string => Boolean(entry));
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+async function persistBootstrapRequest(
+  projectRoot: string,
+  intent: AutoBootstrapIntent
+): Promise<void> {
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+  await writeJsonEnsured(manifestPath, {
+    ...manifest,
+    ...buildBootstrapRequestManifestPatch(intent),
+  });
+}
+
 function createAutoResearchCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
 ) {
   return async (ctx: PluginCommandContext) => {
-    const commandLabel = COMMAND_LABELS.auto_research;
+      const commandLabel = COMMAND_LABELS.auto_research;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
       await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
-      const topic = extractQuotedSegment(ctx.args) ?? readString(ctx.args);
-      if (!topic) {
+      const intent = parseAutoBootstrapIntent({
+        sourceCommand: "auto_research",
+        args: readString(ctx.args) ?? "",
+      });
+      if (!intent) {
         return {
           text: `❌ ${commandLabel} requires a topic, for example: /auto-research "gcd confirmation bias mitigation"`,
         };
       }
+      const topic = intent.cleanTopic;
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -979,6 +1134,7 @@ function createAutoResearchCommandHandler(
         title: topic,
         topic,
       });
+      await persistBootstrapRequest(ensuredProject.projectRoot, intent);
 
       await deps.bindChannelProjectForWorkflow({
         policy: workflowPolicy,
@@ -991,7 +1147,10 @@ function createAutoResearchCommandHandler(
         title: ensuredProject.title,
         topic,
         boundByAgent: "researcher",
-        notes: "Auto-bound during /auto-research bootstrap.",
+        notes:
+          intent.rawRequest === intent.cleanTopic
+            ? "Auto-bound during /auto-research bootstrap."
+            : `Auto-bound during /auto-research bootstrap. Full request: ${intent.rawRequest}`,
       });
 
       const currentSummary = await getResearchProgramStateSummary({
@@ -1000,7 +1159,7 @@ function createAutoResearchCommandHandler(
       const update = await deps.setResearchProgramState({
         projectRoot: ensuredProject.projectRoot,
         researchProgram: buildAutoResearchBootstrapPatch({
-          topic,
+          intent,
           projectId: ensuredProject.projectId,
           zoteroProjectRoot: workflowPolicy.zoteroProjectRoot,
           current: currentSummary.state,
@@ -1044,6 +1203,7 @@ function createAutoResearchCommandHandler(
           commandText: buildResearchPipelineBackgroundCommand(
             `/research-pipeline ${JSON.stringify(topic)} -- AUTO_PROCEED: true`
           ),
+          extraSystemPrompt: buildBootstrapContextPrompt(intent) ?? undefined,
         },
       });
 
@@ -1052,6 +1212,9 @@ function createAutoResearchCommandHandler(
           `Full-auto research pipeline started for ${ensuredProject.projectId}.\n` +
           `project_root=${ensuredProject.projectRoot}\n` +
           `onboarding=${update.onboardingStatus}\n` +
+          (intent.rawRequest !== intent.cleanTopic
+            ? `preserved_request=${intent.rawRequest}\n`
+            : "") +
           `summary=${started.summary}`,
       };
     } catch (error) {
@@ -1072,16 +1235,20 @@ function createAutoReviewCommandHandler(
   deps: WorkflowCommandDependencies
 ) {
   return async (ctx: PluginCommandContext) => {
-    const commandLabel = COMMAND_LABELS.auto_review;
+      const commandLabel = COMMAND_LABELS.auto_review;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
       await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
-      const topic = extractQuotedSegment(ctx.args) ?? readString(ctx.args);
-      if (!topic) {
+      const intent = parseAutoBootstrapIntent({
+        sourceCommand: "auto_review",
+        args: readString(ctx.args) ?? "",
+      });
+      if (!intent) {
         return {
           text: `❌ ${commandLabel} requires a topic, for example: /auto-review "graph reasoning survey"`,
         };
       }
+      const topic = intent.cleanTopic;
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -1111,6 +1278,7 @@ function createAutoReviewCommandHandler(
         topic,
         workflowLine: "survey",
       });
+      await persistBootstrapRequest(ensuredProject.projectRoot, intent);
 
       await deps.bindChannelProjectForWorkflow({
         policy: workflowPolicy,
@@ -1123,7 +1291,10 @@ function createAutoReviewCommandHandler(
         title: ensuredProject.title,
         topic,
         boundByAgent: "researcher",
-        notes: "Auto-bound during /auto-review bootstrap.",
+        notes:
+          intent.rawRequest === intent.cleanTopic
+            ? "Auto-bound during /auto-review bootstrap."
+            : `Auto-bound during /auto-review bootstrap. Full request: ${intent.rawRequest}`,
       });
       await deps.setWritingContractState({
         projectRoot: ensuredProject.projectRoot,
@@ -1163,6 +1334,7 @@ function createAutoReviewCommandHandler(
           commandText: buildSurveyReviewBackgroundCommand(
             `/survey-pipeline ${JSON.stringify(topic)}`
           ),
+          extraSystemPrompt: buildBootstrapContextPrompt(intent) ?? undefined,
         },
       });
 
@@ -1170,6 +1342,9 @@ function createAutoReviewCommandHandler(
         text:
           `Full-auto survey pipeline started for ${ensuredProject.projectId}.\n` +
           `project_root=${ensuredProject.projectRoot}\n` +
+          (intent.rawRequest !== intent.cleanTopic
+            ? `preserved_request=${intent.rawRequest}\n`
+            : "") +
           `summary=${started.summary}`,
       };
     } catch (error) {

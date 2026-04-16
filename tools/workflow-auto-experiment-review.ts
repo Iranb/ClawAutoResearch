@@ -127,7 +127,7 @@ export function buildExperimentReviewCommand(params: {
 }): string | null {
   switch (params.owner) {
     case "planner":
-      return "Run /experiment-plan to assemble or refresh planner/EXPERIMENT_REVIEW_PACKET.json, planner/EXPERIMENT_PLAN.md, falsifiers, stop rules, compute budget, and claim-to-experiment coverage before reviewer launch.";
+      return "Run /experiment-plan to assemble or refresh planner/EXPERIMENT_REVIEW_PACKET.json, planner/EXPERIMENT_PLAN.md, falsifiers, stop rules, compute budget, fixed trial-time budget, one_change_signature, and claim-to-experiment coverage before reviewer launch.";
     case "analyzer":
       return "Run /experiment-design-review to audit causal attribution, baseline fairness, metric sufficiency, compute realism, and claim coverage, then persist analyzer/EXPERIMENT_REASONABLENESS_REPORT.md plus experiment_review_state.analyzer_* fields.";
     case "cross-reviewer":
@@ -135,7 +135,7 @@ export function buildExperimentReviewCommand(params: {
     case "researcher":
       return "Review planner/analyzer/cross-reviewer findings, revise the packet if needed, and update researcher/EXPERIMENT_LAUNCH_DECISION.json plus experiment_review_state.launch_approved only when the bundle is truly ready.";
     case "coder":
-      return "Run /run-experiment only against the approved planner packet, keep the launch bounded to the reviewed bundle, and persist launch metadata before monitor mode takes over.";
+      return "Run /run-experiment only against the approved planner packet, keep the launch bounded to the reviewed bundle and fixed trial-time budget, preserve the one_change_signature, and persist launch metadata before monitor mode takes over.";
     default:
       return null;
   }

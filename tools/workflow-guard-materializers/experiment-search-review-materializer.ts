@@ -34,6 +34,10 @@ import {
   resolveExperimentSearchSpecPath,
   DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH,
 } from "../workflow-guard-state/experiment-search-spec.js";
+import {
+  normalizeExperimentInnerLoopContract,
+  normalizeExperimentOuterLoopPolicy,
+} from "../workflow-experiment-loop.js";
 
 type MaterializerDeps = {
   readManifestEnsured: (projectRoot: string) => Promise<Record<string, unknown>>;
@@ -105,6 +109,8 @@ function buildPlannerPlanMarkdown(params: {
   candidateBranch: string | null;
   candidateWorktreePath: string | null;
   requestSummary: string | null;
+  oneChangeSignature: string | null;
+  trialTimeBudgetMinutes: number | null;
 }) {
   return `# Experiment Search Git Plan
 
@@ -120,6 +126,10 @@ function buildPlannerPlanMarkdown(params: {
 
 ## Request Summary
 - ${params.requestSummary ?? "no summary provided"}
+
+## Inner Loop Contract
+- one_change_signature: ${params.oneChangeSignature ?? "unresolved"}
+- trial_time_budget_minutes: ${params.trialTimeBudgetMinutes ?? "unset"}
 
 ## Required Checks
 - the action stays inside the approved search envelope
@@ -290,6 +300,8 @@ export async function materializeExperimentSearchReviewStateImpl(
   });
   const specRaw = await readJsonIfExists<Record<string, unknown>>(specResolvedPath);
   const spec = normalizeExperimentSearchSpec(specRaw);
+  const innerLoop = normalizeExperimentInnerLoopContract(spec);
+  const outerLoop = normalizeExperimentOuterLoopPolicy(spec);
   const actionType =
     pickString(patch, ["actionType", "action_type"]) ?? current.actionType ?? null;
   const experimentId =
@@ -398,6 +410,25 @@ export async function materializeExperimentSearchReviewStateImpl(
       promotion_rule: spec.comparisonPolicy.promotionRule,
       non_promotion_signals: spec.comparisonPolicy.nonPromotionSignals,
     },
+    inner_loop: {
+      mode: innerLoop.mode,
+      trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+      strict_comparable_budget: innerLoop.strictComparableBudget,
+      require_one_change_signature: innerLoop.requireOneChangeSignature,
+      keep_discard_rule: innerLoop.keepDiscardRule,
+      one_change_signature: searchState.oneChangeSignature,
+    },
+    outer_loop: {
+      require_baseline_dataset_coverage_for_effective_candidates:
+        outerLoop.requireBaselineDatasetCoverageForEffectiveCandidates,
+      innovation_deviation_tolerance: outerLoop.innovationDeviationTolerance,
+      baseline_dataset_envelope: searchState.baselineDatasetEnvelope,
+      baseline_dataset_coverage_status: searchState.baselineDatasetCoverageStatus,
+      baseline_dataset_coverage_missing: searchState.baselineDatasetCoverageMissing,
+      innovation_anchor_points: searchState.innovationAnchorPoints,
+      innovation_deviation_status: searchState.innovationDeviationStatus,
+      innovation_deviation_summary: searchState.innovationDeviationSummary,
+    },
     git_strategy: {
       incumbent_branch: spec.gitStrategy.incumbentBranch,
       candidate_branch_prefix: spec.gitStrategy.candidateBranchPrefix,
@@ -451,6 +482,8 @@ export async function materializeExperimentSearchReviewStateImpl(
       candidateBranch,
       candidateWorktreePath,
       requestSummary,
+      oneChangeSignature: searchState.oneChangeSignature,
+      trialTimeBudgetMinutes: searchState.trialTimeBudgetMinutes,
     })
   );
 
