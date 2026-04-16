@@ -27,14 +27,18 @@ import {
   getPapernexusProgressSummary,
   getPaperIngestionStateSummary,
   getPaperStoryStateSummary,
+  getInnovationSynthesisStateSummary,
+  getResultsStorylineStateSummary,
   auditLiteratureCoverageForWorkflow,
   runBroadPaperSearchForWorkflow,
   materializeIdeationContract,
   materializeExperimentMemoryPacket,
   materializeExperimentReviewState,
+  materializeInnovationSynthesisState,
   materializeLiteratureDiscoveryPacket,
   materializePlanState,
   materializePaperStoryState,
+  materializeResultsStorylineState,
   planCitationExpansionForWorkflow,
   queuePaperIngestionRequest,
   getPaperQcStateSummary,
@@ -43,9 +47,11 @@ import {
   getProjectRootForWorkflow,
   getReviewIssueTrackerStateSummary,
   getReviewSessionStateSummary,
+  getStoryGapSearchRequisitionStateSummary,
   getSurveyReviewStateSummary,
   getTheoryStateSummary,
   getWorkflowContactCooldown,
+  getTitleAbstractIntroWorkbenchStateSummary,
   getWritePackageStateSummary,
   getWritingContractStateSummary,
   getWritingSessionStateSummary,
@@ -53,6 +59,7 @@ import {
   listChannelProjectBindingsForWorkflow,
   materializeReviewPressurePacket,
   materializeSurveyReviewState,
+  materializeTitleAbstractIntroWorkbenchState,
   materializeTheoryAppendix,
   queueWorkflowMailboxMessage,
   readWorkflowMailboxForAgent,
@@ -337,6 +344,9 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
+  "materialize_results_storyline_state",
+  "materialize_title_abstract_intro_workbench_state",
+  "materialize_innovation_synthesis_state",
   "materialize_writing_support_artifacts",
   "materialize_writing_hook_policies",
   "reconcile_authoring_closeout",
@@ -438,6 +448,10 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_file_audit_policy: "setFileAuditPolicyForProject",
   materialize_file_audit_packet: "materializeFileAuditPacket",
   materialize_paper_story_state: "materializePaperStoryState",
+  materialize_results_storyline_state: "materializeResultsStorylineState",
+  materialize_title_abstract_intro_workbench_state:
+    "materializeTitleAbstractIntroWorkbenchState",
+  materialize_innovation_synthesis_state: "materializeInnovationSynthesisState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_writing_hook_policies: "materializeWritingHookPolicies",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
@@ -462,6 +476,11 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
   get_paper_story_state: "getPaperStoryStateSummary",
+  get_results_storyline_state: "getResultsStorylineStateSummary",
+  get_innovation_synthesis_state: "getInnovationSynthesisStateSummary",
+  get_title_abstract_intro_workbench_state:
+    "getTitleAbstractIntroWorkbenchStateSummary",
+  get_story_gap_search_requisition: "getStoryGapSearchRequisitionStateSummary",
   set_paper_story_state: "setPaperStoryState",
   materialize_review_pressure_packet: "materializeReviewPressurePacket",
   get_write_package: "getWritePackageStateSummary",
@@ -1538,6 +1557,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_plan_state",
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
+              "materialize_results_storyline_state",
+              "materialize_title_abstract_intro_workbench_state",
+              "materialize_innovation_synthesis_state",
               "materialize_writing_support_artifacts",
               "materialize_writing_hook_policies",
               "reconcile_authoring_closeout",
@@ -1559,10 +1581,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_orchestration_state",
               "get_paper_ingestion",
               "set_paper_ingestion",
-              "get_theory_state",
-              "get_writing_contract",
-              "get_paper_story_state",
-              "set_paper_story_state",
+  "get_theory_state",
+  "get_writing_contract",
+  "get_paper_story_state",
+  "get_results_storyline_state",
+  "get_innovation_synthesis_state",
+  "get_title_abstract_intro_workbench_state",
+  "get_story_gap_search_requisition",
+  "set_paper_story_state",
               "get_write_package",
               "set_write_package",
               "assemble_write_package",
@@ -3935,6 +3961,34 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_results_storyline_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getResultsStorylineStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_innovation_synthesis_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getInnovationSynthesisStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_title_abstract_intro_workbench_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getTitleAbstractIntroWorkbenchStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
+            case "get_story_gap_search_requisition": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getStoryGapSearchRequisitionStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "materialize_literature_discovery_packet": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await materializeLiteratureDiscoveryPacket({
@@ -3971,6 +4025,54 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_results_storyline_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.resultsStorylineMaterialization) ??
+                asObject(params.resultsStoryline) ??
+                {};
+              const result = await materializeResultsStorylineState({
+                projectRoot: resolvedProjectRoot,
+                stage:
+                  readString(payload.basis_stage) ??
+                  readString(payload.basisStage) ??
+                  snapshot.currentStage ??
+                  null,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_title_abstract_intro_workbench_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.titleAbstractIntroWorkbenchMaterialization) ??
+                asObject(params.titleAbstractIntroWorkbench) ??
+                {};
+              const result = await materializeTitleAbstractIntroWorkbenchState({
+                projectRoot: resolvedProjectRoot,
+                stage:
+                  readString(payload.basis_stage) ??
+                  readString(payload.basisStage) ??
+                  snapshot.currentStage ??
+                  null,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_innovation_synthesis_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.innovationSynthesisMaterialization) ??
+                asObject(params.innovationSynthesis) ??
+                {};
+              const result = await materializeInnovationSynthesisState({
+                projectRoot: resolvedProjectRoot,
+                stage:
+                  readString(payload.basis_stage) ??
+                  readString(payload.basisStage) ??
+                  snapshot.currentStage ??
+                  null,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

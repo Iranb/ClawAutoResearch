@@ -30,8 +30,18 @@ import { materializeCycleMemory } from "../research-memory-cycle";
 import {
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
+import { materializeResultsStoryline } from "../research-writing/results-storyline";
+import { materializeTitleAbstractIntroWorkbench } from "../research-writing/title-abstract-intro-workbench";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
+import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
 import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
+import {
+  normalizeInnovationSynthesisState,
+  normalizeStoryGapSearchRequisitionState,
+} from "../workflow-guard-state/innovation-synthesis";
+import { normalizeWritePackageState } from "../workflow-guard-state/execution-state";
+import { normalizeResultsStorylineState } from "../workflow-guard-state/results-storyline";
+import { normalizeTitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
 import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
 import {
   isNonEmptyDirectory,
@@ -103,6 +113,18 @@ type StagePreflightDeps = {
     paperMode?: "conference" | "journal" | "survey" | null;
     topTierVerdict?: string | null;
   }) => Promise<unknown>;
+  materializeInnovationSynthesisState?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
+  materializeResultsStoryline?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
+  materializeTitleAbstractIntroWorkbench?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
   queueIdeaCatalystRequisition: (params: {
     projectRoot: string;
     trigger?: string | null;
@@ -168,6 +190,9 @@ const LITERATURE_DISCOVERY_PREP_STAGES = new Set([
   "submit",
 ]);
 const WRITING_SUPPORT_PREP_STAGES = new Set(["plan", "write", "review", "submit"]);
+const INNOVATION_SYNTHESIS_PREP_STAGES = new Set(["write", "review", "submit"]);
+const RESULTS_STORYLINE_PREP_STAGES = new Set(["write", "review", "submit"]);
+const TITLE_ABSTRACT_INTRO_PREP_STAGES = new Set(["write", "review", "submit"]);
 const CYCLE_MEMORY_PREP_STAGES = new Set(["idea", "review", "write", "submit"]);
 
 function parseTimestampMs(value: string | null | undefined): number | null {
@@ -847,6 +872,130 @@ async function shouldRefreshCycleMemory(params: {
   return Boolean(params.stage && CYCLE_MEMORY_PREP_STAGES.has(params.stage));
 }
 
+async function shouldMaterializeInnovationSynthesis(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !INNOVATION_SYNTHESIS_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  if (paperStory.status !== "ready") {
+    return false;
+  }
+  const current = normalizeInnovationSynthesisState(
+    params.manifest.innovation_synthesis_state
+  );
+  const storyGap = normalizeStoryGapSearchRequisitionState(
+    params.manifest.story_gap_search_requisition
+  );
+  const writePackage = normalizeWritePackageState(params.manifest.write_package);
+  if (current.status === "missing") {
+    return true;
+  }
+  if (storyGap.status === "queued" || storyGap.status === "running") {
+    return true;
+  }
+  const stateTimestamp = parseTimestampMs(current.lastUpdatedAt);
+  if (stateTimestamp === null) {
+    return true;
+  }
+  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
+    paperStory.storySpinePath,
+    paperStory.contributionToStoryBridgePath,
+    paperStory.claimToExperimentMapPath,
+    paperStory.claimEvidenceMatrixPath,
+    "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+    "academic_writer/RESULTS_QUESTION_ORDER.md",
+    writePackage.evaluationSummaryPath,
+    writePackage.ablationSummaryPath,
+  ]);
+  return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
+}
+
+async function shouldMaterializeResultsStoryline(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !RESULTS_STORYLINE_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  if (paperStory.status !== "ready") {
+    return false;
+  }
+  const current = normalizeResultsStorylineState(params.manifest.results_storyline);
+  if (current.status === "missing") {
+    return true;
+  }
+  const stateTimestamp = parseTimestampMs(current.lastUpdatedAt);
+  if (stateTimestamp === null) {
+    return true;
+  }
+  const writePackage = normalizeWritePackageState(params.manifest.write_package);
+  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
+    paperStory.storySpinePath,
+    paperStory.claimToExperimentMapPath,
+    paperStory.claimEvidenceMatrixPath,
+    paperStory.trackVerdictsPath,
+    paperStory.unsupportedClaimsPath,
+    "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+    writePackage.evaluationSummaryPath,
+    writePackage.ablationSummaryPath,
+    "academic_writer/SURVEY_SECTION_BRIEFS.md",
+    "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+    "academic_writer/SURVEY_SELF_REVIEW.md",
+  ]);
+  return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
+}
+
+async function shouldMaterializeTitleAbstractIntroWorkbench(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !TITLE_ABSTRACT_INTRO_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  if (paperStory.status !== "ready") {
+    return false;
+  }
+  const current = normalizeTitleAbstractIntroWorkbenchState(
+    params.manifest.title_abstract_intro_workbench
+  );
+  if (current.status === "missing") {
+    return true;
+  }
+  const stateTimestamp = parseTimestampMs(current.lastUpdatedAt);
+  if (stateTimestamp === null) {
+    return true;
+  }
+  const resultsStoryline = normalizeResultsStorylineState(params.manifest.results_storyline);
+  const innovationSynthesis = normalizeInnovationSynthesisState(
+    params.manifest.innovation_synthesis_state
+  );
+  const reviewPressure = normalizeReviewPressurePacketState(
+    params.manifest.review_pressure_packet
+  );
+  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
+    paperStory.storySpinePath,
+    paperStory.challengeStatementPath,
+    paperStory.contributionToStoryBridgePath,
+    paperStory.claimToExperimentMapPath,
+    paperStory.fallbackNarrativePath,
+    reviewPressure.reverseOutlinePath,
+    reviewPressure.limitationAuditPath,
+    resultsStoryline.resultsQuestionOrderPath,
+    innovationSynthesis.synthesisMemoPath,
+    innovationSynthesis.integratedContributionStatementPath,
+    "academic_writer/paper/main.tex",
+  ]);
+  return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
+}
+
 export async function maybePrepareWorkflowStageContracts(params: {
   projectRoot: string;
   manifest?: ManifestLike | null;
@@ -1105,6 +1254,30 @@ export async function maybePrepareWorkflowStageContracts(params: {
       reviewPressureState,
     });
   });
+  await runStep("results_storyline", shouldMaterializeResultsStoryline, () =>
+    (params.deps.materializeResultsStoryline ?? materializeResultsStoryline)({
+      projectRoot,
+      stage: params.stage,
+    })
+  );
+  await runStep("innovation_synthesis_state", shouldMaterializeInnovationSynthesis, () =>
+    (params.deps.materializeInnovationSynthesisState ?? materializeInnovationSynthesis)({
+      projectRoot,
+      stage: params.stage,
+    })
+  );
+  await runStep(
+    "title_abstract_intro_workbench",
+    shouldMaterializeTitleAbstractIntroWorkbench,
+    () =>
+      (
+        params.deps.materializeTitleAbstractIntroWorkbench ??
+        materializeTitleAbstractIntroWorkbench
+      )({
+        projectRoot,
+        stage: params.stage,
+      })
+  );
   await runStep("writing_hook_policies", shouldMaterializeWritingSupport, async () => {
     const writingContract =
       manifest.writing_contract && typeof manifest.writing_contract === "object"

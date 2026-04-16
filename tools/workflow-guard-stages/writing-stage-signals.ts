@@ -1,6 +1,8 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { StageSignalsContext } from "./types";
+import type { ResultsStorylineState } from "../workflow-guard-state/results-storyline";
+import type { TitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
 import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
@@ -62,6 +64,12 @@ export interface WritingStageDeps {
   normalizeStage: (value: unknown) => string | null;
   normalizeCitationIntegrityState: (value: unknown) => any;
   normalizeExternalReviewState: (value: unknown) => any;
+  normalizeInnovationSynthesisState: (value: unknown) => any;
+  normalizeResultsStorylineState: (value: unknown) => ResultsStorylineState;
+  normalizeStoryGapSearchRequisitionState: (value: unknown) => any;
+  normalizeTitleAbstractIntroWorkbenchState: (
+    value: unknown
+  ) => TitleAbstractIntroWorkbenchState;
   isExternalReviewConclusionReady: (state: any) => boolean;
   hasPrefixedFile: (dir: string, prefix: string) => Promise<boolean>;
   findAnyPdfInDir: (dir: string) => Promise<string | null>;
@@ -322,6 +330,18 @@ export async function collectWriteStageMissingSignals(
   const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
   const surveyWriteMode =
     writingContract.paperMode === "survey" || writingContract.paper_mode === "survey";
+  const innovationSynthesis = deps.normalizeInnovationSynthesisState(
+    ctx.manifest?.innovation_synthesis_state
+  );
+  const resultsStoryline = deps.normalizeResultsStorylineState(
+    ctx.manifest?.results_storyline
+  );
+  const storyGapSearch = deps.normalizeStoryGapSearchRequisitionState(
+    ctx.manifest?.story_gap_search_requisition
+  );
+  const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
+    ctx.manifest?.title_abstract_intro_workbench
+  );
   const paperStoryState = deps.normalizePaperStoryState(ctx.manifest?.paper_story_state);
   if (!surveyWriteMode) {
     missing.push(...deps.getPaperStoryStateValidationErrors(paperStoryState));
@@ -596,6 +616,21 @@ export async function collectWriteStageMissingSignals(
     phase: "write",
     deps,
   });
+  if (deps.normalizeStage(innovationSynthesis.status) === "needs_search") {
+    missing.push(
+      `innovation_synthesis requires supplemental search before WRITE handoff (search_gap_count=${innovationSynthesis.searchGapCount ?? 0}, search_status=${storyGapSearch.status ?? "missing"})`
+    );
+  }
+  if (deps.normalizeStage(resultsStoryline.status) === "missing") {
+    missing.push(
+      "PROJECT_MANIFEST.json.results_storyline.status must not be missing during WRITE; materialize RESULTS_QUESTION_ORDER.md before handoff."
+    );
+  }
+  if (deps.normalizeStage(titleAbstractIntroWorkbench.status) === "missing") {
+    missing.push(
+      "PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must not be missing during WRITE; materialize title / abstract / intro workbench artifacts before handoff."
+    );
+  }
   return missing;
 }
 
@@ -605,6 +640,15 @@ export async function collectSubmitStageMissingSignals(
 ): Promise<string[]> {
   const missing: string[] = [];
   const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
+  const innovationSynthesis = deps.normalizeInnovationSynthesisState(
+    ctx.manifest?.innovation_synthesis_state
+  );
+  const resultsStoryline = deps.normalizeResultsStorylineState(
+    ctx.manifest?.results_storyline
+  );
+  const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
+    ctx.manifest?.title_abstract_intro_workbench
+  );
   const writingSession = deps.normalizeWritingSessionState(ctx.manifest?.writing_session);
   const writingProcess = deps.evaluateWritingProcessReadiness({
     writingSession,
@@ -613,6 +657,21 @@ export async function collectSubmitStageMissingSignals(
   if (!deps.isWritingSessionReadyForSubmit(writingSession)) {
     missing.push(
       `PROJECT_MANIFEST.json.writing_session must be ready_for_submit before SUBMIT (current: ${writingProcess.summary})`
+    );
+  }
+  if (deps.normalizeStage(innovationSynthesis.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.innovation_synthesis_state.status must be ready before SUBMIT (current: ${innovationSynthesis.status})`
+    );
+  }
+  if (deps.normalizeStage(resultsStoryline.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.results_storyline.status must be ready before SUBMIT (current: ${resultsStoryline.status})`
+    );
+  }
+  if (deps.normalizeStage(titleAbstractIntroWorkbench.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must be ready before SUBMIT (current: ${titleAbstractIntroWorkbench.status})`
     );
   }
   missing.push(

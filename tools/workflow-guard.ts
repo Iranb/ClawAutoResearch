@@ -172,6 +172,18 @@ import {
   serializeReviewPressurePacketState,
 } from "./workflow-guard-state/review-pressure";
 import {
+  normalizeInnovationSynthesisState,
+  normalizeStoryGapSearchRequisitionState,
+  serializeInnovationSynthesisState,
+  serializeStoryGapSearchRequisitionState,
+} from "./workflow-guard-state/innovation-synthesis";
+import {
+  normalizeResultsStorylineState,
+} from "./workflow-guard-state/results-storyline";
+import {
+  normalizeTitleAbstractIntroWorkbenchState,
+} from "./workflow-guard-state/title-abstract-intro-workbench";
+import {
   getSurveyReviewStateSummary as getSurveyReviewStateSummaryFromModule,
   normalizeSurveyReviewState,
 } from "./workflow-guard-state/survey-review";
@@ -320,6 +332,9 @@ import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/p
 import { materializePlanStateImpl } from "./workflow-guard-materializers/plan-state-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
 import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
+import { materializeInnovationSynthesis } from "./research-writing/innovation-synthesis";
+import { materializeResultsStoryline } from "./research-writing/results-storyline";
+import { materializeTitleAbstractIntroWorkbench } from "./research-writing/title-abstract-intro-workbench";
 import {
   buildNonOwnerRoutingAdvice as buildNonOwnerRoutingAdviceImpl,
   acknowledgeWorkflowMailboxMessageImpl,
@@ -1295,6 +1310,18 @@ export type ReviewPressurePacketState = {
 };
 
 export type SurveyReviewState = ReturnType<typeof normalizeSurveyReviewState>;
+export type InnovationSynthesisState = ReturnType<
+  typeof normalizeInnovationSynthesisState
+>;
+export type StoryGapSearchRequisitionState = ReturnType<
+  typeof normalizeStoryGapSearchRequisitionState
+>;
+export type ResultsStorylineState = ReturnType<
+  typeof normalizeResultsStorylineState
+>;
+export type TitleAbstractIntroWorkbenchState = ReturnType<
+  typeof normalizeTitleAbstractIntroWorkbenchState
+>;
 
 type OrchestrationState = {
   status: string;
@@ -5826,6 +5853,8 @@ async function getMissingStageSignals(params: {
           normalizeReviewPressurePacketState,
           getReviewPressurePacketValidationErrors,
           normalizeWritingContractState,
+          normalizeResultsStorylineState,
+          normalizeTitleAbstractIntroWorkbenchState,
           fileHasNonWhitespaceContent,
           DEFAULT_FIGURE_REVIEW_PATH,
           DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH,
@@ -5859,6 +5888,8 @@ async function getMissingStageSignals(params: {
           normalizeReviewPressurePacketState,
           getReviewPressurePacketValidationErrors,
           normalizeWritingContractState,
+          normalizeResultsStorylineState,
+          normalizeTitleAbstractIntroWorkbenchState,
           fileHasNonWhitespaceContent,
           DEFAULT_FIGURE_REVIEW_PATH,
           DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH,
@@ -5888,13 +5919,15 @@ async function getMissingStageSignals(params: {
           normalizeStage,
           normalizeFigureQcState,
           resolveProjectArtifactPath,
-          findUnsupportedPrimaryClaimsInSelectedWritingScope,
-          normalizeReviewPressurePacketState,
-          getReviewPressurePacketValidationErrors,
-          normalizeWritingContractState,
-          fileHasNonWhitespaceContent,
-          DEFAULT_FIGURE_REVIEW_PATH,
-          DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH,
+	          findUnsupportedPrimaryClaimsInSelectedWritingScope,
+	          normalizeReviewPressurePacketState,
+	          getReviewPressurePacketValidationErrors,
+	          normalizeWritingContractState,
+          normalizeResultsStorylineState,
+          normalizeTitleAbstractIntroWorkbenchState,
+	          fileHasNonWhitespaceContent,
+	          DEFAULT_FIGURE_REVIEW_PATH,
+	          DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH,
         }
       );
     }
@@ -5933,6 +5966,10 @@ async function getMissingStageSignals(params: {
           normalizeTheorySupportState,
           normalizeStage,
           normalizeCitationIntegrityState,
+          normalizeInnovationSynthesisState,
+          normalizeResultsStorylineState,
+          normalizeStoryGapSearchRequisitionState,
+          normalizeTitleAbstractIntroWorkbenchState,
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
@@ -5979,6 +6016,10 @@ async function getMissingStageSignals(params: {
           normalizeTheorySupportState,
           normalizeStage,
           normalizeCitationIntegrityState,
+          normalizeInnovationSynthesisState,
+          normalizeResultsStorylineState,
+          normalizeStoryGapSearchRequisitionState,
+          normalizeTitleAbstractIntroWorkbenchState,
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
@@ -6650,6 +6691,146 @@ export async function getReviewPressurePacketStateSummary(params: {
     getReviewPressurePacketValidationErrors,
     fileHasNonWhitespaceContent,
   });
+}
+
+export async function getInnovationSynthesisStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: InnovationSynthesisState;
+  synthesisMemoResolvedPath: string | null;
+  synthesisMemoExists: boolean;
+  graphResolvedPath: string | null;
+  graphExists: boolean;
+  statementResolvedPath: string | null;
+  statementExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeInnovationSynthesisState(
+    manifest.innovation_synthesis_state
+  );
+  const synthesisMemoResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.synthesisMemoPath
+  );
+  const graphResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.storyDependencyGraphPath
+  );
+  const statementResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.integratedContributionStatementPath
+  );
+  return {
+    state,
+    synthesisMemoResolvedPath,
+    synthesisMemoExists: synthesisMemoResolvedPath
+      ? await pathExists(synthesisMemoResolvedPath)
+      : false,
+    graphResolvedPath,
+    graphExists: graphResolvedPath ? await pathExists(graphResolvedPath) : false,
+    statementResolvedPath,
+    statementExists: statementResolvedPath
+      ? await pathExists(statementResolvedPath)
+      : false,
+  };
+}
+
+export async function getStoryGapSearchRequisitionStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: StoryGapSearchRequisitionState;
+  packetResolvedPath: string | null;
+  packetExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeStoryGapSearchRequisitionState(
+    manifest.story_gap_search_requisition
+  );
+  const packetResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.packetPath
+  );
+  return {
+    state,
+    packetResolvedPath,
+    packetExists: packetResolvedPath ? await pathExists(packetResolvedPath) : false,
+  };
+}
+
+export async function getResultsStorylineStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: ResultsStorylineState;
+  questionOrderResolvedPath: string | null;
+  questionOrderExists: boolean;
+  evidenceSequenceResolvedPath: string | null;
+  evidenceSequenceExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeResultsStorylineState(manifest.results_storyline);
+  const questionOrderResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.resultsQuestionOrderPath
+  );
+  const evidenceSequenceResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.experimentEvidenceSequencePath
+  );
+  return {
+    state,
+    questionOrderResolvedPath,
+    questionOrderExists: questionOrderResolvedPath
+      ? await pathExists(questionOrderResolvedPath)
+      : false,
+    evidenceSequenceResolvedPath,
+    evidenceSequenceExists: evidenceSequenceResolvedPath
+      ? await pathExists(evidenceSequenceResolvedPath)
+      : false,
+  };
+}
+
+export async function getTitleAbstractIntroWorkbenchStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: TitleAbstractIntroWorkbenchState;
+  titleCandidatesResolvedPath: string | null;
+  titleCandidatesExists: boolean;
+  abstractWorkbenchResolvedPath: string | null;
+  abstractWorkbenchExists: boolean;
+  introWorkbenchResolvedPath: string | null;
+  introWorkbenchExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeTitleAbstractIntroWorkbenchState(
+    manifest.title_abstract_intro_workbench
+  );
+  const titleCandidatesResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.titleCandidatesPath
+  );
+  const abstractWorkbenchResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.abstractWorkbenchPath
+  );
+  const introWorkbenchResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.introWorkbenchPath
+  );
+  return {
+    state,
+    titleCandidatesResolvedPath,
+    titleCandidatesExists: titleCandidatesResolvedPath
+      ? await pathExists(titleCandidatesResolvedPath)
+      : false,
+    abstractWorkbenchResolvedPath,
+    abstractWorkbenchExists: abstractWorkbenchResolvedPath
+      ? await pathExists(abstractWorkbenchResolvedPath)
+      : false,
+    introWorkbenchResolvedPath,
+    introWorkbenchExists: introWorkbenchResolvedPath
+      ? await pathExists(introWorkbenchResolvedPath)
+      : false,
+  };
 }
 
 export async function getWritePackageStateSummary(params: {
@@ -8595,6 +8776,37 @@ export async function materializeReviewPressurePacket(params: {
   });
 }
 
+export async function materializeInnovationSynthesisState(params: {
+  projectRoot: string;
+  stage?: string | null;
+}): Promise<{
+  state: InnovationSynthesisState;
+  storyGapSearch: StoryGapSearchRequisitionState | null;
+  generatedFiles: string[];
+}> {
+  return materializeInnovationSynthesis(params);
+}
+
+export async function materializeResultsStorylineState(params: {
+  projectRoot: string;
+  stage?: string | null;
+}): Promise<{
+  state: ResultsStorylineState;
+  generatedFiles: string[];
+}> {
+  return materializeResultsStoryline(params);
+}
+
+export async function materializeTitleAbstractIntroWorkbenchState(params: {
+  projectRoot: string;
+  stage?: string | null;
+}): Promise<{
+  state: TitleAbstractIntroWorkbenchState;
+  generatedFiles: string[];
+}> {
+  return materializeTitleAbstractIntroWorkbench(params);
+}
+
 export async function materializeLiteratureDiscoveryPacket(params: {
   projectRoot: string;
   literatureDiscoveryMaterialization?: Record<string, unknown>;
@@ -9118,6 +9330,10 @@ export async function runWorkflowAutoIterator(params: {
       materializeExperimentReviewState,
       materializeReviewPressurePacket,
       materializeSurveyReviewState,
+      materializeInnovationSynthesisState,
+      materializeResultsStoryline: materializeResultsStorylineState,
+      materializeTitleAbstractIntroWorkbench:
+        materializeTitleAbstractIntroWorkbenchState,
     } as any);
   } catch (error) {
     const failedAt = new Date().toISOString();

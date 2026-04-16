@@ -551,6 +551,18 @@ type AutoIteratorDeps = {
     trigger?: string | null;
     agentId?: string | null;
   }) => Promise<unknown>;
+  materializeInnovationSynthesisState?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
+  materializeResultsStoryline?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
+  materializeTitleAbstractIntroWorkbench?: (params: {
+    projectRoot: string;
+    stage?: string | null;
+  }) => Promise<unknown>;
   materializeIdeaCatalystState: (params: {
     projectRoot: string;
     ideaCatalystMaterialization?: Record<string, unknown>;
@@ -656,6 +668,10 @@ export async function runWorkflowAutoIteratorImpl(
       materializeExperimentReviewState: deps.materializeExperimentReviewState,
       materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
       materializeSurveyReviewState: deps.materializeSurveyReviewState,
+      materializeInnovationSynthesisState: deps.materializeInnovationSynthesisState,
+      materializeResultsStoryline: deps.materializeResultsStoryline,
+      materializeTitleAbstractIntroWorkbench:
+        deps.materializeTitleAbstractIntroWorkbench,
       materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
       materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
       materializePapernexusPacketContracts: deps.materializePapernexusPacketContracts,

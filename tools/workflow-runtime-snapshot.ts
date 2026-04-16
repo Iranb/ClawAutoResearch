@@ -2,10 +2,13 @@ import {
   buildWorkflowSnapshot,
   materializeExperimentReviewState,
   materializeIdeationContract,
+  materializeResultsStorylineState,
+  materializeInnovationSynthesisState,
   materializeLiteratureDiscoveryPacket,
   materializePaperStoryState,
   materializeReviewPressurePacket,
   materializeSurveyReviewState,
+  materializeTitleAbstractIntroWorkbenchState,
 } from "./workflow-guard";
 import { materializeIdeaCatalystState } from "./idea-catalyst/materializers";
 import { queueIdeaCatalystRequisition } from "./idea-catalyst/workflow-bridge";
@@ -103,6 +106,10 @@ export async function resolveWorkflowSnapshotContext(params: {
         materializeReviewPressurePacket,
         materializeExperimentReviewState,
         materializeSurveyReviewState,
+        materializeInnovationSynthesisState,
+        materializeResultsStoryline: materializeResultsStorylineState,
+        materializeTitleAbstractIntroWorkbench:
+          materializeTitleAbstractIntroWorkbenchState,
         materializeIdeaCatalystState,
         materializeLiteratureDiscoveryPacket,
         materializePapernexusPacketContracts,

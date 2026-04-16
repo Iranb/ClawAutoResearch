@@ -24,6 +24,9 @@ const WRITING_HOOK_IDS = new Set([
   "paper-plan-thesis-audit",
   "paper-plan-figure-anchor-audit",
   "figure-table-alignment-audit",
+  "innovation-synthesis-audit",
+  "results-storyline-audit",
+  "title-abstract-intro-alignment-audit",
   "abstract-claim-audit",
   "introduction-gap-story-audit",
   "results-claim-evidence-audit",
@@ -241,6 +244,27 @@ function buildWritingHookPolicies(params: {
     params.reviewPressure.figureTableQcPath,
     ...(surveyMode ? surveyArtifacts : []),
   ]);
+  const innovationSynthesisArtifacts = uniqueStrings([
+    ...manuscriptArtifacts,
+    "academic_writer/INNOVATION_SYNTHESIS_MEMO.md",
+    "academic_writer/INNOVATION_SYNTHESIS_GRAPH.json",
+    "academic_writer/INTEGRATED_CONTRIBUTION_STATEMENT.md",
+    "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+    "academic_writer/RESULTS_QUESTION_ORDER.md",
+  ]);
+  const resultsStorylineArtifacts = uniqueStrings([
+    ...manuscriptArtifacts,
+    "academic_writer/RESULTS_QUESTION_ORDER.md",
+    "academic_writer/EXPERIMENT_EVIDENCE_SEQUENCE.json",
+    "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+  ]);
+  const titleAbstractIntroArtifacts = uniqueStrings([
+    ...innovationSynthesisArtifacts,
+    "academic_writer/TITLE_CANDIDATES.md",
+    "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
+    "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
+    "academic_writer/paper/main.tex",
+  ]);
 
   const hooks: WorkflowFileAuditHookPolicy[] = [
     buildHook({
@@ -347,6 +371,114 @@ function buildWritingHookPolicies(params: {
         materializedContracts: ["writing_support_artifacts"],
         changedPathsAny: ["academic_writer/FIGURE_TABLE_ALIGNMENT.md"],
         fileGlobs: ["academic_writer/FIGURE_TABLE_ALIGNMENT.md"],
+      },
+    }),
+    buildHook({
+      hookId: "innovation-synthesis-audit",
+      stage: "review",
+      hookPoint: "before_handoff_activation",
+      order: 280,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/INNOVATION_SYNTHESIS_MEMO.md",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "post-draft innovation synthesis bundle before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: surveyMode
+          ? [
+              "The synthesis memo must unify the survey's organizing thesis, comparative structure, and open-problem arc into one coherent story rather than disconnected themes.",
+              "Any claimed field-wide narrative must stay aligned with the evidence synthesis, benchmark landscape, and scope boundaries.",
+              "If the memo still says more search is required, or if the integrated contribution statement disagrees with the manuscript, request revision or block.",
+            ]
+          : [
+              "The synthesis memo must explain one central thesis and show how the validated innovation points function as one integrated mechanism rather than a stacked contribution list.",
+              "Each innovation point must have a concrete role in the story, evidence mapping, and an explicit explanation of what breaks if that point is removed.",
+              "Figure 1 story, results order rationale, and the integrated contribution statement must agree with the current manuscript wording in main.tex.",
+              "If the memo still indicates unresolved search gaps, stale bridge evidence, or contradictory contribution wording, request revision or block.",
+            ],
+        supportingArtifacts: innovationSynthesisArtifacts,
+      }),
+      supportingArtifacts: innovationSynthesisArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          "academic_writer/INNOVATION_SYNTHESIS_MEMO.md",
+          "academic_writer/INTEGRATED_CONTRIBUTION_STATEMENT.md",
+          "academic_writer/paper/main.tex",
+        ],
+      },
+    }),
+    buildHook({
+      hookId: "results-storyline-audit",
+      stage: "review",
+      hookPoint: "before_handoff_activation",
+      order: 285,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/RESULTS_QUESTION_ORDER.md",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "results storyline bundle before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: surveyMode
+          ? [
+              "The storyline must organize the survey synthesis in an order that teaches scope, taxonomy, evidence synthesis, benchmark landscape, and open problems rather than listing papers.",
+              "Each major synthesis question must map to evidence modules or comparison artifacts, and must keep non-comparable results explicit.",
+            ]
+          : [
+              "The results storyline must answer reviewer questions in argument order instead of mirroring execution order or experiment chronology.",
+              "Each major question must bind to concrete evidence identifiers and figure/table anchors.",
+              "Boundary and robustness questions must be visible in the sequence; they must not disappear into limitations footnotes.",
+            ],
+        supportingArtifacts: resultsStorylineArtifacts,
+      }),
+      supportingArtifacts: resultsStorylineArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          "academic_writer/RESULTS_QUESTION_ORDER.md",
+          "academic_writer/EXPERIMENT_EVIDENCE_SEQUENCE.json",
+          "academic_writer/paper/main.tex",
+        ],
+      },
+    }),
+    buildHook({
+      hookId: "title-abstract-intro-alignment-audit",
+      stage: "review",
+      hookPoint: "before_handoff_activation",
+      order: 290,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "title / abstract / introduction workbench before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: surveyMode
+          ? [
+              "The preferred title, abstract skeleton, and introduction workbench must all tell the same survey thesis and organizing lens.",
+              "The abstract and introduction workbench must keep scope boundaries, evidence base, and contribution lens aligned with the manuscript and survey evidence packet.",
+            ]
+          : [
+              "The preferred title, abstract workbench, and introduction workbench must all express the same central thesis and contribution wording.",
+              "The abstract workbench must preserve a five-sentence problem-gap-mechanism-result-implication arc without drifting beyond the evidence ledger.",
+              "The introduction workbench must preview the same argument order that the results storyline and integrated contribution statement require.",
+            ],
+        supportingArtifacts: titleAbstractIntroArtifacts,
+      }),
+      supportingArtifacts: titleAbstractIntroArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          "academic_writer/TITLE_CANDIDATES.md",
+          "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
+          "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
+          "academic_writer/paper/main.tex",
+        ],
       },
     }),
     buildHook({

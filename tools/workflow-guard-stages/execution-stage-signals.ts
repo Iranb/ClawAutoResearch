@@ -60,6 +60,8 @@ export interface ExecutionStageDeps {
   normalizeReviewPressurePacketState: (value: unknown) => any;
   getReviewPressurePacketValidationErrors: (state: any) => string[];
   normalizeWritingContractState: (value: unknown) => any;
+  normalizeResultsStorylineState: (value: unknown) => any;
+  normalizeTitleAbstractIntroWorkbenchState: (value: unknown) => any;
   fileHasNonWhitespaceContent: (targetPath: string | null) => Promise<boolean>;
   DEFAULT_FIGURE_REVIEW_PATH: string;
   DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH: string;
@@ -374,6 +376,12 @@ export async function collectReviewStageMissingSignals(
   const reviewPressurePacket = deps.normalizeReviewPressurePacketState(
     ctx.manifest?.review_pressure_packet
   );
+  const resultsStoryline = deps.normalizeResultsStorylineState(
+    ctx.manifest?.results_storyline
+  );
+  const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
+    ctx.manifest?.title_abstract_intro_workbench
+  );
   missing.push(...deps.getReviewPressurePacketValidationErrors(reviewPressurePacket));
   for (const relativePath of [
     reviewPressurePacket.rejectFirstReviewPath,
@@ -387,6 +395,16 @@ export async function collectReviewStageMissingSignals(
     if (!(await deps.fileHasNonWhitespaceContent(resolvedPath)) && relativePath) {
       missing.push(`{PROJ}/${relativePath}`);
     }
+  }
+  if (deps.normalizeStage(resultsStoryline.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.results_storyline.status must be ready before REVIEW closeout (current: ${resultsStoryline.status})`
+    );
+  }
+  if (deps.normalizeStage(titleAbstractIntroWorkbench.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must be ready before REVIEW closeout (current: ${titleAbstractIntroWorkbench.status})`
+    );
   }
   return missing;
 }

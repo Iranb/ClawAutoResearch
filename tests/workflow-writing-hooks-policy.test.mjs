@@ -239,6 +239,9 @@ test("materializeWritingHookPolicies preserves non-writing hooks and is idempote
   assert.ok(first.generatedHookIds.includes("paper-plan-thesis-audit"));
   assert.ok(first.generatedHookIds.includes("main-tex-consistency-audit"));
   assert.ok(first.generatedHookIds.includes("figure-table-alignment-audit"));
+  assert.ok(first.generatedHookIds.includes("innovation-synthesis-audit"));
+  assert.ok(first.generatedHookIds.includes("results-storyline-audit"));
+  assert.ok(first.generatedHookIds.includes("title-abstract-intro-alignment-audit"));
   assert.ok(first.generatedHookIds.includes("final-figure-table-budget-audit"));
   assert.ok(first.enabledHookIds.includes("paper-plan-thesis-audit"));
   assert.ok(first.enabledHookIds.includes("abstract-claim-audit"));
@@ -298,6 +301,9 @@ test("maybePrepareWorkflowStageContracts materializes writing hook policies afte
   assert.ok(hookIds.includes("main-tex-consistency-audit"));
   assert.ok(hookIds.includes("figure-caption-audit"));
   assert.ok(hookIds.includes("figure-table-alignment-audit"));
+  assert.ok(hookIds.includes("innovation-synthesis-audit"));
+  assert.ok(hookIds.includes("results-storyline-audit"));
+  assert.ok(hookIds.includes("title-abstract-intro-alignment-audit"));
 });
 
 test("research_workflow materialize_writing_hook_policies writes the writing-owned hook catalog", async (t) => {
@@ -328,6 +334,9 @@ test("research_workflow materialize_writing_hook_policies writes the writing-own
   assert.equal(result.stage, "submit");
   assert.ok(result.generatedHookIds.includes("paper-plan-thesis-audit"));
   assert.ok(result.enabledHookIds.includes("figure-caption-audit"));
+  assert.ok(result.enabledHookIds.includes("innovation-synthesis-audit"));
+  assert.ok(result.enabledHookIds.includes("results-storyline-audit"));
+  assert.ok(result.enabledHookIds.includes("title-abstract-intro-alignment-audit"));
   assert.ok(result.enabledHookIds.includes("final-figure-table-budget-audit"));
   assert.ok(result.policy.auditHooks.some((entry) => entry.hookId === "main-tex-consistency-audit"));
 
