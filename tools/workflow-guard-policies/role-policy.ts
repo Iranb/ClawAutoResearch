@@ -1,5 +1,25 @@
+/**
+ * 角色策略定义。
+ *
+ * 定义 8 种 Agent 角色的权限、可接触的目录/文件、可联系的其他角色、
+ * 以及每个阶段的负责人和下一阶段。
+ *
+ * 将策略与代码分离的原因：策略规则经常变化（新的门禁条件、新的角色权限），
+ * 将它们从主逻辑中分离出来，使得策略变更不需要修改核心代码。
+ */
 import { normalizeStage, asString } from "../workflow-guard-core/coercion";
 
+/**
+ * 8 种工作流角色，覆盖科研全流程：
+ * - researcher: 调研、创意生成、实验规划
+ * - planner: 实验设计、搜索策略规划
+ * - orchestrator: 流程编排、资源协调
+ * - coder: 实验实现、代码修改
+ * - analyzer: 结果分析
+ * - academic_writer: 论文撰写
+ * - reviewer: 论文审查
+ * - cross-reviewer: 独立交叉审查
+ */
 export type WorkflowRole =
   | "researcher"
   | "planner"
@@ -10,6 +30,16 @@ export type WorkflowRole =
   | "reviewer"
   | "cross-reviewer";
 
+/**
+ * 角色策略。
+ *
+ * 定义每个角色的权限边界：
+ * - allowedContacts: 可以直接联系的其他角色
+ * - allowedSpawns: 可以创建的子 Agent 角色
+ * - allowedProjectDirs/Files: 可以读写的目录和文件
+ * - writeScopeLabels: 写入范围的标签化描述
+ * - backgroundTasks: 空闲时可执行的后台任务
+ */
 export interface RolePolicy {
   allowedContacts: WorkflowRole[];
   allowedSpawns: WorkflowRole[];
@@ -20,11 +50,22 @@ export interface RolePolicy {
   backgroundTasks: string[];
 }
 
+/**
+ * 阶段需求。
+ *
+ * 定义每个阶段的负责人和下一阶段。
+ * 这是阶段流水线的 "路由表"——修改流水线只需要改这个对象。
+ */
 export interface StageRequirement {
   owner: WorkflowRole;
   nextStage: string | null;
 }
 
+/**
+ * 角色优先级顺序。
+ *
+ * 用于角色消歧——当输入模糊匹配多个角色时，靠前的优先。
+ */
 export const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
   "researcher",
   "planner",
@@ -36,6 +77,16 @@ export const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
   "cross-reviewer",
 ];
 
+/**
+ * 各角色策略配置。
+ *
+ * 关键设计：
+ * - Researcher 是唯一可以联系所有角色的角色（协调整个流程）
+ * - Cross-reviewer 是最受限的角色——不能联系任何人、不能写任何文件
+ *   这是为了防止交叉审查受到外部信息影响，保持审查的独立性
+ * - 每个角色的 writeScopeLabels 定义了可以写入的具体路径范围
+ * - backgroundTasks 定义了角色空闲时可以做的有价值的事
+ */
 export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
   researcher: {
     allowedContacts: [
@@ -78,7 +129,7 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
     ],
     backgroundTasks: [
       "Continue literature survey and venue sweeps with /research-lit or /broad-paper-search; keep /papers-cool as the guaranteed baseline and use /pasa-paper-search as an optional second retrieval source when it is responsive.",
-      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first for arXiv papers, then arxiv2md-api, then arxiv2md, and use PDF fallback only if all Markdown sources are unavailable. Preserve metadata-only canonical entries for important unresolved papers and record source_provider / retrieval_providers in PAPER_SOURCE_INDEX.json.",
+      "Acquire full text for key papers: once a paper identity is confirmed, call hugging-face-paper-pages first for arXiv papers, then arxiv2md-api, then markxiv, then arxiv2md, and use PDF fallback only if all Markdown sources are unavailable. Preserve metadata-only canonical entries for important unresolved papers and record source_provider / retrieval_providers in PAPER_SOURCE_INDEX.json.",
       "Refresh PaperNexus when newly ingested papers may change novelty, baselines, or closest prior work.",
       "Keep reasoning packets and manifest next_action/resume_action current.",
     ],
@@ -181,6 +232,17 @@ export const ROLE_POLICIES: Record<WorkflowRole, RolePolicy> = {
   },
 };
 
+/**
+ * 阶段路由表。
+ *
+ * 定义每个阶段的负责人（owner）和下一阶段（nextStage）。
+ * 修改流水线只需要修改这个对象。
+ *
+ * 流水线顺序:
+ * setup → graph_build → frontier_mapping → idea → plan → code → experiment → analyze → review → write → submit → done
+ * survey_review → write（综述工作流跳过实验阶段）
+ * revise → write（修订阶段）
+ */
 export const STAGE_REQUIREMENTS: Record<string, StageRequirement> = {
   setup: { owner: "researcher", nextStage: "graph_build" },
   survey_review: { owner: "researcher", nextStage: "write" },
@@ -198,6 +260,11 @@ export const STAGE_REQUIREMENTS: Record<string, StageRequirement> = {
   done: { owner: "researcher", nextStage: "done" },
 };
 
+/**
+ * 自动生成的前一阶段映射。
+ *
+ * 从 STAGE_REQUIREMENTS 反向推导——当需要知道 "从哪个阶段来的" 时使用。
+ */
 const PREVIOUS_STAGE: Record<string, string> = Object.entries(STAGE_REQUIREMENTS).reduce(
   (acc, [stage, requirement]) => {
     if (requirement.nextStage && requirement.nextStage !== stage && !(requirement.nextStage in acc)) {
@@ -208,6 +275,20 @@ const PREVIOUS_STAGE: Record<string, string> = Object.entries(STAGE_REQUIREMENTS
   {} as Record<string, string>
 );
 
+/**
+ * 标准化角色名称。
+ *
+ * 兼容多种输入格式：
+ * - "cross_reviewer" / "cross-reviewer" → "cross-reviewer"
+ * - "academic_writer" / "academic-writer" / "writer" → "academic_writer"
+ * - "planner" / "planning" → "planner"
+ *
+ * 因为角色名称可能来自不同来源（用户输入、配置文件、其他系统），
+ * 格式不统一，需要模糊匹配。
+ *
+ * @param value 原始角色名称
+ * @returns 标准化的角色名称，或 null
+ */
 export function normalizeWorkflowRole(value: string | null | undefined): WorkflowRole | null {
   if (!value) {
     return null;
@@ -229,6 +310,15 @@ export function normalizeWorkflowRole(value: string | null | undefined): Workflo
   return WORKFLOW_ROLE_ORDER.find((role) => normalized.includes(role)) ?? null;
 }
 
+/**
+ * 检查一个角色是否可以联系另一个角色。
+ *
+ * 用于权限控制——防止角色越权通信。
+ *
+ * @param fromRole 发起方角色
+ * @param toRole 目标角色
+ * @returns 是否允许联系
+ */
 export function canRoleContact(
   fromRole: WorkflowRole | null,
   toRole: WorkflowRole | null
@@ -239,6 +329,15 @@ export function canRoleContact(
   return ROLE_POLICIES[fromRole].allowedContacts.includes(toRole);
 }
 
+/**
+ * 检查一个角色是否可以创建另一个角色的子 Agent。
+ *
+ * 只有 Researcher 可以创建子 Agent，其他角色不可以。
+ *
+ * @param fromRole 发起方角色
+ * @param toRole 目标角色
+ * @returns 是否允许创建
+ */
 export function canRoleSpawn(
   fromRole: WorkflowRole | null,
   toRole: WorkflowRole | null
@@ -249,6 +348,14 @@ export function canRoleSpawn(
   return ROLE_POLICIES[fromRole].allowedSpawns.includes(toRole);
 }
 
+/**
+ * 获取当前阶段的下一阶段负责人角色。
+ *
+ * 例如：当前阶段是 "experiment"，下一阶段是 "analyze"，负责人是 "analyzer"。
+ *
+ * @param currentStage 当前阶段
+ * @returns 下一阶段负责人角色，或 null
+ */
 export function getForwardStageHandoffTargetRole(
   currentStage: string | null
 ): WorkflowRole | null {
@@ -264,6 +371,16 @@ export function getForwardStageHandoffTargetRole(
   return STAGE_REQUIREMENTS[nextStage]?.owner ?? null;
 }
 
+/**
+ * 检查是否可以使用阶段前向手递手。
+ *
+ * 条件：当前角色是当前阶段的负责人，目标角色是下一阶段的负责人。
+ *
+ * @param params.fromRole 当前角色
+ * @param params.toRole 目标角色
+ * @param params.currentStage 当前阶段
+ * @returns 是否允许
+ */
 export function canRoleUseForwardStageHandoff(params: {
   fromRole: WorkflowRole | null;
   toRole: WorkflowRole | null;
@@ -280,6 +397,16 @@ export function canRoleUseForwardStageHandoff(params: {
   return getForwardStageHandoffTargetRole(normalizedStage) === params.toRole;
 }
 
+/**
+ * 检查角色间是否可以联系（考虑当前阶段上下文）。
+ *
+ * 两种情况允许联系：
+ * 1. 角色策略允许直接联系
+ * 2. 是合法的阶段前向手递手
+ *
+ * @param params 联系参数
+ * @returns 是否允许
+ */
 export function canRoleContactInWorkflow(params: {
   fromRole: WorkflowRole | null;
   toRole: WorkflowRole | null;
@@ -291,6 +418,16 @@ export function canRoleContactInWorkflow(params: {
   );
 }
 
+/**
+ * 检查角色间是否可以创建子 Agent（考虑当前阶段上下文）。
+ *
+ * 两种情况允许创建：
+ * 1. 角色策略允许创建
+ * 2. 是合法的阶段前向手递手
+ *
+ * @param params 创建参数
+ * @returns 是否允许
+ */
 export function canRoleSpawnInWorkflow(params: {
   fromRole: WorkflowRole | null;
   toRole: WorkflowRole | null;
@@ -299,6 +436,15 @@ export function canRoleSpawnInWorkflow(params: {
   return canRoleSpawn(params.fromRole, params.toRole) || canRoleUseForwardStageHandoff(params);
 }
 
+/**
+ * 从工具调用参数中推断目标角色。
+ *
+ * 尝试从多个字段名中提取角色信息（agentId / label / sessionKey），
+ * 兼容不同的调用方格式。
+ *
+ * @param params 工具调用参数
+ * @returns 推断的目标角色，或 null
+ */
 export function inferTargetRoleFromToolParams(
   params: Record<string, unknown>
 ): WorkflowRole | null {

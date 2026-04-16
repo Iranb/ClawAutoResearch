@@ -20,7 +20,7 @@ function createTool(params) {
     registerTool(spec) {
       registered = spec;
     },
-    runtime: {},
+    runtime: params.runtime ?? {},
     logger: {},
   });
   registerWorkflowTools(plugin);
@@ -186,6 +186,159 @@ test("prepare_stage_handoff creates a real prepared handoff intent without switc
   assert.equal(store.intents.length, 1);
   assert.equal(store.intents[0].status, "prepared");
   assert.equal(store.intents[0].workflowLine, "survey");
+});
+
+test("handoff lifecycle actions broadcast simple Discord status updates", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-broadcasts-"));
+  const runtimeCalls = [];
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      { project_id: "demo", current_stage: "code", owner_agent: "coder" },
+      null,
+      2
+    )}\n`
+  );
+  await materializeWorkflowTaskGraph({
+    projectRoot,
+    projectId: "demo",
+    stage: "code",
+    topTierVerdict: null,
+    evidenceCloseout: {
+      status: "not_applicable",
+      topTierVerdict: null,
+      blockers: [],
+      experimentAnalyzeReady: true,
+      analyzeReviewReady: true,
+      writeReady: true,
+      submitReady: true,
+      graphDependentBlockerCount: 0,
+      localEvidenceBlockerCount: 0,
+    },
+    previewTasks: [
+      {
+        taskId: "code.task",
+        title: "Code task",
+        owner: "coder",
+        status: "blocked",
+        reason: "Needs code.",
+        dependsOn: [],
+        verificationRule: "none",
+      },
+    ],
+  });
+
+  const researcherTool = createTool({
+    projectRoot,
+    agentId: "researcher",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const prepared = await execute(researcherTool, {
+    action: "prepare_stage_handoff",
+    handoff: {
+      stageAfter: "write",
+      toRole: "academic_writer",
+      summary: "Code work is ready for write.",
+      command: "/paper-phase",
+      dispatch: false,
+    },
+  });
+
+  assert.equal(prepared.prepareBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: handoff ready/i.test(entry.message) &&
+        /Handoff prepared: researcher -> academic_writer for write\./i.test(entry.message)
+    )
+  );
+
+  const handoffIntentId = prepared.intent.intentId;
+
+  const writerTool = createTool({
+    projectRoot,
+    agentId: "academic_writer",
+    sessionKey: "agent:academic_writer:discord:group:paper-lab",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const acked = await execute(writerTool, {
+    action: "ack_handoff_intent",
+    handoffIntentId,
+  });
+  assert.equal(acked.ackBroadcast.broadcasted, true);
+
+  const claimed = await execute(writerTool, {
+    action: "claim_handoff_intent",
+    handoffIntentId,
+  });
+  assert.equal(claimed.activationBroadcast.broadcasted, true);
+
+  const failureIntent = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "handoff-fail-demo",
+    toRole: "reviewer",
+    reason: "stage_owner_change",
+    status: "prepared",
+    stageAfter: "review",
+  });
+
+  const failed = await execute(researcherTool, {
+    action: "fail_handoff_intent",
+    handoffIntentId: failureIntent.intent.intentId,
+    failure: {
+      failureReason: "Mailbox handoff stalled.",
+      failureKind: "stale_claim",
+    },
+  });
+  assert.equal(failed.failureBroadcast.broadcasted, true);
+
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /Status: waiting/i.test(entry.message) &&
+        /Handoff acknowledged by academic_writer/i.test(entry.message)
+    )
+  );
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /Status: continued/i.test(entry.message) &&
+        /Handoff activated: academic_writer is now active for write\./i.test(entry.message)
+    )
+  );
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /Status: blocked/i.test(entry.message) &&
+        /Handoff failed: Mailbox handoff stalled\./i.test(entry.message)
+    )
+  );
 });
 
 test("prepare_stage_handoff uses writer-side submit readiness checks instead of requiring reviewer artifacts", async (t) => {

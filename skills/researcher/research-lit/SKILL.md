@@ -45,21 +45,22 @@ Use the workflow-owned broad retrieval backbone as the primary discovery path wh
    - **Step 1:** Once the paper identity is confirmed (arXiv ID / paper URL), check HuggingFace for markdown (`/hugging-face-paper-pages`) immediately
    - **Step 2:** Validate the downloaded Markdown; if it is really HTML / error text / tiny stub, delete it and retry the HF fetch
    - **Step 3:** If HF still has no valid markdown and the paper is on arXiv, try `/arxiv2md-api`
-   - **Step 4:** If direct API markdown still fails, try `/arxiv2md`
-   - **Step 5:** Validate the arXiv markdown; if it is HTML / error text / tiny stub, delete it and retry once
-   - **Step 6:** If all Markdown sources fail → download PDF to the project-local staging dir under `paper_source_dir/pdf/`
-   - **Step 7:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
-   - **Step 8:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
-   - **Step 9:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers over manually copying the upload into workflow-owned shared storage
-   - **Step 10:** For one staged paper, queue one workflow-owned upload request that will later execute `pn_import_submit.py` plus `pn_import_queue.py`; for 2 or more staged papers, create one manifest and queue one workflow-owned `pn_batch_import.py` request. Use `research_workflow.queue_paper_ingestion` for this instead of running the upload wrapper inline from Researcher
-   - **Step 10a:** The workflow now validates staged files in code. If the queued request lands in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and the JSON report under `{PROJ}/graph/paper-ingestion-validation/` before retrying
-   - **Step 11:** Do not hand-roll shell loops or one-paper submit loops for multi-paper sync. Reuse the same batch manifest for `submit`, `status`, and bounded `wait`, but let the workflow PaperNexus upload worker trigger the actual wrapper run
-   - **Step 12:** Once the request is queued, do not block the literature sweep waiting for upload completion. The workflow-owned upload worker, `/graph-build`, or `/resume-pipeline` pass will launch the queued upload and preserve its intermediate state if the runtime restarts
-   - **Step 13:** When a workflow-owned PaperNexus import task truly reaches `completed`, the dedicated workflow session must call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
-   - **Step 14:** For batch imports, the workflow-owned upload session must also write `active_batches`, `batch_items`, `queued_requests`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
-   - **Step 15:** Do not rely on a free-form chat reply as the upload progress signal. `research_workflow.queue_paper_ingestion` plus the later `research_workflow.set_paper_ingestion` updates are the required feedback path for per-paper or per-batch progress
-   - **Step 15a:** Read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` when you need one authoritative status line. Prefer that snapshot before improvising from `paper_ingestion`, wrapper logs, or the background-session registry
-   - **Step 16:** If local Zotero MCP is available, sync verified paper identities into the configured project Zotero `selected` collection and put baseline-defining papers into the project `baselines` collection; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
+   - **Step 4:** If direct API markdown still fails, try `/markxiv`
+   - **Step 5:** If `markxiv` still fails, try `/arxiv2md`
+   - **Step 6:** Validate the arXiv markdown; if it is HTML / error text / tiny stub, delete it and retry once
+   - **Step 7:** If all Markdown sources fail → download PDF to the project-local staging dir under `paper_source_dir/pdf/`
+   - **Step 8:** Validate the PDF; if it is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
+   - **Step 9:** Ensure later `/graph-build` sees a canonical Markdown-first corpus where same-paper Markdown overrides PDF
+   - **Step 10:** If the file enters through a PaperNexus UI/API upload path instead of the markdown/PDF fetcher flow, prefer the queued import-task wrappers over manually copying the upload into workflow-owned shared storage
+   - **Step 11:** For one staged paper, queue one workflow-owned upload request that will later execute `pn_import_submit.py` plus `pn_import_queue.py`; for 2 or more staged papers, create one manifest and queue one workflow-owned `pn_batch_import.py` request. Use `research_workflow.queue_paper_ingestion` for this instead of running the upload wrapper inline from Researcher
+   - **Step 11a:** The workflow now validates staged files in code. If the queued request lands in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and the JSON report under `{PROJ}/graph/paper-ingestion-validation/` before retrying
+   - **Step 12:** Do not hand-roll shell loops or one-paper submit loops for multi-paper sync. Reuse the same batch manifest for `submit`, `status`, and bounded `wait`, but let the workflow PaperNexus upload worker trigger the actual wrapper run
+   - **Step 13:** Once the request is queued, do not block the literature sweep waiting for upload completion. The workflow-owned upload worker, `/graph-build`, or `/resume-pipeline` pass will launch the queued upload and preserve its intermediate state if the runtime restarts
+   - **Step 14:** When a workflow-owned PaperNexus import task truly reaches `completed`, the dedicated workflow session must call `research_workflow.set_paper_ingestion` with one `completed_papers` entry containing `canonical_id`, `title`, and `import_task_id` so the workflow can persist the completion and send one Discord-visible completion update
+   - **Step 15:** For batch imports, the workflow-owned upload session must also write `active_batches`, `batch_items`, `queued_requests`, and `last_batch_manifest_path` through `research_workflow.set_paper_ingestion` so `/workflow-status` can show manifest-driven progress even before every item is done
+   - **Step 16:** Do not rely on a free-form chat reply as the upload progress signal. `research_workflow.queue_paper_ingestion` plus the later `research_workflow.set_paper_ingestion` updates are the required feedback path for per-paper or per-batch progress
+   - **Step 16a:** Read `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json` when you need one authoritative status line. Prefer that snapshot before improvising from `paper_ingestion`, wrapper logs, or the background-session registry
+   - **Step 17:** If local Zotero MCP is available, sync verified paper identities into the configured project Zotero `selected` collection and put baseline-defining papers into the project `baselines` collection; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
    - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
@@ -158,7 +159,7 @@ Recommended per-paper fields:
   "arxiv_id": "2502.00032",
   "title": "Retrieval-Augmented Experiment Planning",
   "source_kind": "markdown",
-  "source_provider": "arxiv2md",
+  "source_provider": "markxiv",
   "source_path": "{paper_source_dir}/md/2502.00032.md",
   "retrieval_providers": ["papers-cool", "pasa-paper-search"]
 }
@@ -167,6 +168,8 @@ Recommended per-paper fields:
 `source_provider` should describe the full-text origin:
 
 - `hf`
+- `arxiv2md-api`
+- `markxiv`
 - `arxiv2md`
 - `pdf`
 
@@ -231,14 +234,22 @@ Rules:
    - Continue to next paper
 
 3. **If HuggingFace NO valid markdown and the paper has an arXiv ID:**
-   - Try `/arxiv2md`:
+   - Try `/arxiv2md-api`:
+     ```
+     /arxiv2md-api <arxiv_id>
+     ```
+   - If needed, then try `/markxiv`:
+     ```
+     /markxiv <arxiv_id>
+     ```
+   - If needed, then try `/arxiv2md`:
      ```
      /arxiv2md <arxiv_id>
      ```
    - Save or rename the validated file to `<arxiv-id>.md`
    - The saved markdown must also pass format validation before being counted as ingested
 
-4. **If both Markdown sources fail:**
+4. **If all Markdown sources fail:**
    - Download PDF via `/papers-cool`:
      ```
      /papers-cool Download PDF for arxiv:<arxiv_id> to {paper_source_dir}/pdf/
@@ -318,7 +329,7 @@ Also refresh `{PROJ}/researcher/RESEARCH_BRAINSTORM.md` so the literature stage 
 
 ## HuggingFace Integration (PRIORITY 1)
 
-**Always check HuggingFace first, then arxiv2md-api, then arxiv2md, before downloading PDFs.**
+**Always check HuggingFace first, then arxiv2md-api, then markxiv, then arxiv2md, before downloading PDFs.**
 
 ### Why HuggingFace?
 
@@ -335,7 +346,7 @@ For each arXiv ID from search results:
 ```
 
 **Success:** Markdown saved, ready for automatic graph catch-up and the next `/graph-build` status pass  
-**Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md-api`, then `arxiv2md`, and only then fall back to PDF download
+**Failure:** Delete the invalid file if needed, retry once, then try `arxiv2md-api`, then `markxiv`, then `arxiv2md`, and only then fall back to PDF download
 
 ### Batch Processing
 
@@ -388,6 +399,7 @@ Important:
 - `/pasa-paper-search` — Optional PASA-ranked discovery source to merge with papers.cool
 - `/hugging-face-paper-pages` — Fetch markdown from HuggingFace
 - `/arxiv2md-api` — Direct raw markdown fallback for arXiv papers
+- `/markxiv` — Markdown fallback that mirrors arXiv URLs onto markxiv
 - `/arxiv2md` — Legacy webpage markdown fallback for arXiv papers
 - `/graph-build` — Validate automatic graph catch-up and refresh graph-grounded brainstorm artifacts
 - `/papernexus-research-chains` — Refresh `brainstorm-brief`, `research-brief`, and other typed chain bundles after the graph catches up

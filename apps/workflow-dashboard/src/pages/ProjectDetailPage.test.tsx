@@ -20,6 +20,25 @@ const projectSummaryResponse = {
   surveyStatus: null,
   surveyTopic: null,
   surveyProgressSummary: null,
+  paperStoryStatus: "ready",
+  paperStoryClaimSupportStatus: "supported",
+  paperStorySupportedClaimCount: 3,
+  paperStoryUnsupportedClaimCount: 0,
+  resultsStorylineStatus: "ready",
+  resultsStorylineQuestionCount: 5,
+  innovationSynthesisStatus: "ready",
+  innovationSynthesisIntegrationPattern: "complementary_modules",
+  innovationSynthesisPointCount: 3,
+  titleAbstractIntroStatus: "ready",
+  titleAbstractIntroAlignmentStatus: "aligned",
+  titleAbstractIntroSelectedTitle:
+    "Graph-Grounded Routing for Confirmation Bias Mitigation",
+  reviewPressureStatus: "ready",
+  citationIntegrityStatus: "verified",
+  suspiciousCitationCount: 0,
+  hallucinatedCitationCount: 0,
+  figureTableArtifactSummary: "3/3 core outputs ready",
+  surveyAuthoringArtifactSummary: null,
   papernexusPhase: "waiting_import",
   papernexusProgressSummary: "8/12 completed (4 remaining)",
   topTierVerdict: "worth_top_tier_bet",
@@ -120,6 +139,11 @@ describe("ProjectDetailPage", () => {
     expect(screen.getAllByText(/task graph/i)[0]).toBeInTheDocument();
     expect(screen.getByText(/2 tasks/)).toBeInTheDocument();
     expect(screen.getAllByText(/team round/i)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/paper story/i)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/ready · supported/i)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/innovation synthesis/i)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/ready · complementary_modules/i)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/citation integrity/i)[0]).toBeInTheDocument();
 
     expect(screen.getByText(/blocking reason/i)).toBeInTheDocument();
     expect(screen.getByText(projectSummaryResponse.blockingReason)).toBeInTheDocument();
@@ -132,6 +156,7 @@ describe("ProjectDetailPage", () => {
     expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Manifest" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Graph" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Outputs" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Runtime" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Raw JSON" })).toBeInTheDocument();
   });

@@ -12,4 +12,4 @@
 `DOC/` 目录只保留旧链接兼容和历史快照。
 
 论文摄取顺序保持 markdown-first：
-`hugging-face-paper-pages` -> `arxiv2md-api` -> `arxiv2md` -> PDF 最后兜底。
+`hugging-face-paper-pages` -> `arxiv2md-api` -> `markxiv` -> `arxiv2md` -> PDF 最后兜底。

@@ -119,6 +119,7 @@ import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import { materializeWritingHookPolicies } from "./research-writing/hook-policies";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
+import { materializeCitationAudit } from "./research-intel/citation-audit";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
@@ -684,6 +685,143 @@ function resolveWorkflowProjectRootWithOverride(params: {
     return path.resolve(explicit);
   }
   return requireWorkflowProjectRoot(params.state);
+}
+
+async function maybeBroadcastSimpleHandoffStatus(params: {
+  runtimeSubagent?: {
+    run: (params: {
+      sessionKey: string;
+      message: string;
+      lane?: string;
+      deliver?: boolean;
+      idempotencyKey?: string;
+      extraSystemPrompt?: string;
+    }) => Promise<{ runId: string }>;
+  };
+  bindingPolicy?: Parameters<typeof maybeBroadcastWorkflowStatusUpdate>[0]["bindingPolicy"];
+  sessionKey?: string | null;
+  projectId: string | null;
+  projectRoot: string | null;
+  status:
+    | "handoff_ready"
+    | "handed_off"
+    | "waiting"
+    | "continued"
+    | "blocked";
+  stage?: string | null;
+  summary: string;
+  intentId?: string | null;
+  phase: string;
+}) {
+  return maybeBroadcastWorkflowStatusUpdate({
+    runtimeSubagent: params.runtimeSubagent,
+    bindingPolicy: params.bindingPolicy,
+    sessionKey: params.sessionKey,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    status: params.status,
+    stage: params.stage,
+    summary: params.summary,
+    idempotencyKeySuffix: [
+      "handoff",
+      params.phase,
+      params.intentId ?? "unknown-intent",
+    ].join(":"),
+  });
+}
+
+async function maybeAutoRefreshCitationVerification(params: {
+  projectRoot: string;
+  triggerAction: string;
+  bibliographyPathOverride?: string | null;
+}): Promise<{
+  triggered: boolean;
+  skippedReason: string | null;
+  calibration?: Awaited<ReturnType<typeof runCitationCalibration>>;
+  audit?: Awaited<ReturnType<typeof materializeCitationAudit>>;
+  verification?: Awaited<ReturnType<typeof recordCitationVerification>>;
+  error?: string | null;
+}> {
+  try {
+    const citationSummary = await getCitationIntegrityStateSummary({
+      projectRoot: params.projectRoot,
+    });
+    const bibliographyPath =
+      readString(params.bibliographyPathOverride) ??
+      citationSummary.state.bibliographyPath ??
+      "academic_writer/paper/refs.bib";
+    const bibliographyResolvedPath =
+      citationSummary.bibliographyResolvedPath ??
+      resolveProjectArtifactPath(params.projectRoot, bibliographyPath) ??
+      path.join(params.projectRoot, bibliographyPath);
+    if (!bibliographyResolvedPath || !(await pathExists(bibliographyResolvedPath))) {
+      return {
+        triggered: false,
+        skippedReason: `No bibliography found for auto citation verification after ${params.triggerAction}.`,
+      };
+    }
+    const calibration = await runCitationCalibration({
+      projectRoot: params.projectRoot,
+      bibliographyPath,
+    });
+    const audit = await materializeCitationAudit({
+      projectRoot: params.projectRoot,
+      bibliographyPath: calibration.outputBibPath,
+      outputPath: "researcher/CITATION_AUDIT_REPORT.json",
+    });
+    const verificationStatus =
+      calibration.hallucinatedCount > 0 ||
+      calibration.suspiciousCount > 0 ||
+      audit.hallucinatedCitationCount > 0 ||
+      audit.suspiciousCitationCount > 0 ||
+      audit.unresolvedPlaceholderCount > 0
+        ? "needs_revision"
+        : "verified";
+    const verification = await recordCitationVerification({
+      projectRoot: params.projectRoot,
+      citationVerification: {
+        source_of_truth: [
+          "paper_refs_bib",
+          "citation_calibration",
+          "paper_identity_registry",
+        ],
+        bibliography_path: calibration.outputBibPath,
+        verification_report_path:
+          calibration.verificationReportPath ?? "reviewer/CITATION_VERIFICATION.md",
+        verification_status: verificationStatus,
+        verified_citation_count: Math.max(
+          calibration.verifiedCount,
+          audit.verifiedCitationCount
+        ),
+        suspicious_citation_count: Math.max(
+          calibration.suspiciousCount,
+          audit.suspiciousCitationCount
+        ),
+        hallucinated_citation_count: Math.max(
+          calibration.hallucinatedCount,
+          audit.hallucinatedCitationCount
+        ),
+        unresolved_placeholder_count: audit.unresolvedPlaceholderCount,
+        pending_reason:
+          verificationStatus === "verified"
+            ? `Automatic citation verification refreshed cleanly after ${params.triggerAction}.`
+            : `Automatic citation verification found suspicious bibliography entries after ${params.triggerAction}.`,
+      },
+    });
+    return {
+      triggered: true,
+      skippedReason: null,
+      calibration,
+      audit,
+      verification,
+    };
+  } catch (error) {
+    return {
+      triggered: false,
+      skippedReason: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function normalizeTrackStatus(value: unknown): string | null {
@@ -2252,7 +2390,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   citationExpansion?.maxSeeds ?? citationExpansion?.max_seeds
                 ),
               });
-              return textResponse(JSON.stringify(packet, null, 2));
+              const autoCitationVerification =
+                await maybeAutoRefreshCitationVerification({
+                  projectRoot: resolvedProjectRoot,
+                  triggerAction: "plan_citation_expansion",
+                });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...packet,
+                    autoCitationVerification,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "run_broad_paper_search": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -2289,7 +2441,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     broadPaperSearch?.max_resolution_attempts
                 ),
               });
-              return textResponse(JSON.stringify(result, null, 2));
+              const autoCitationVerification =
+                await maybeAutoRefreshCitationVerification({
+                  projectRoot: resolvedProjectRoot,
+                  triggerAction: "run_broad_paper_search",
+                });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...result,
+                    autoCitationVerification,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "get_channel_project_binding": {
               const binding = getChannelProjectBindingForWorkflow({
@@ -4234,7 +4400,28 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     ? params.ensureTrailingNewline
                     : false,
               });
-              return textResponse(JSON.stringify(result, null, 2));
+              const bibliographyWrite =
+                /(^|\/)refs(?:\.calibrated)?\.bib$/i.test(artifactPath);
+              const autoCitationVerification = bibliographyWrite
+                ? await maybeAutoRefreshCitationVerification({
+                    projectRoot: resolvedProjectRoot,
+                    triggerAction: "write_text_artifact",
+                    bibliographyPathOverride: artifactPath,
+                  })
+                : {
+                    triggered: false,
+                    skippedReason: null,
+                  };
+              return textResponse(
+                JSON.stringify(
+                  {
+                    ...result,
+                    autoCitationVerification,
+                  },
+                  null,
+                  2
+                )
+              );
             }
             case "get_review_session": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -5007,8 +5194,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot: resolvedProjectRoot,
                 intent: handoff.intent,
               });
+              const prepareBroadcast = await maybeBroadcastSimpleHandoffStatus({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                bindingPolicy: workflowPolicy,
+                sessionKey: ctx.sessionKey,
+                projectId: snapshot.projectId,
+                projectRoot: resolvedProjectRoot,
+                status: "handoff_ready",
+                stage: stageAfter,
+                intentId: handoff.intent.intentId,
+                phase: "prepared",
+                summary: `Handoff prepared: ${actorRole} -> ${toRole} for ${stageAfter}.`,
+              });
               const shouldDispatch = handoffPatch.dispatch !== false;
               let deliveryResult = null;
+              let dispatchBroadcast = null;
               if (shouldDispatch) {
                 const delivery = buildWorkflowHandoffDeliveryRuntime({
                   plugin,
@@ -5042,6 +5242,20 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     projectRoot: resolvedProjectRoot,
                     intent: deliveryResult.intent,
                   });
+                  if (deliveryResult.delivered) {
+                    dispatchBroadcast = await maybeBroadcastSimpleHandoffStatus({
+                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
+                      sessionKey: ctx.sessionKey,
+                      projectId: snapshot.projectId,
+                      projectRoot: resolvedProjectRoot,
+                      status: "handed_off",
+                      stage: stageAfter,
+                      intentId: deliveryResult.intent.intentId,
+                      phase: "dispatched",
+                      summary: `Handoff dispatched: ${actorRole} -> ${toRole} for ${stageAfter}.`,
+                    });
+                  }
                 }
               }
               return textResponse(
@@ -5051,6 +5265,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     created: handoff.created,
                     dispatched: deliveryResult?.delivered ?? false,
                     terminal: deliveryResult?.terminal ?? false,
+                    prepareBroadcast,
+                    dispatchBroadcast,
                   },
                   null,
                   2
@@ -5097,7 +5313,24 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 toStatus: "acknowledged",
                 summary: `Handoff acknowledged by ${snapshot.role ?? ctx.agentId ?? "unknown"}.`,
               });
-              return textResponse(JSON.stringify(intent, null, 2));
+              const payload = asObject(intent?.payload) ?? {};
+              const ackBroadcast = await maybeBroadcastSimpleHandoffStatus({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                bindingPolicy: workflowPolicy,
+                sessionKey: ctx.sessionKey,
+                projectId: snapshot.projectId,
+                projectRoot: resolvedProjectRoot,
+                status: "waiting",
+                stage:
+                  intent?.stageAfter ??
+                  readString(payload.stageAfter) ??
+                  intent?.stage ??
+                  snapshot.currentStage,
+                intentId: intent?.intentId ?? currentIntent.intentId,
+                phase: "acknowledged",
+                summary: `Handoff acknowledged by ${snapshot.role ?? ctx.agentId ?? "unknown"} for ${currentIntent.toRole}.`,
+              });
+              return textResponse(JSON.stringify({ ...intent, ackBroadcast }, null, 2));
             }
             case "claim_handoff_intent": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -5192,7 +5425,30 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   });
                 },
               });
-              return textResponse(JSON.stringify({ ...intent, claimedTask }, null, 2));
+              const activatedIntent = intent.intent;
+              const activatedPayload = asObject(activatedIntent?.payload) ?? {};
+              const activationBroadcast =
+                activatedIntent && intent.activated
+                  ? await maybeBroadcastSimpleHandoffStatus({
+                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      bindingPolicy: workflowPolicy,
+                      sessionKey: ctx.sessionKey,
+                      projectId: snapshot.projectId,
+                      projectRoot: resolvedProjectRoot,
+                      status: "continued",
+                      stage:
+                        activatedIntent.stageAfter ??
+                        readString(activatedPayload.stageAfter) ??
+                        activatedIntent.stage ??
+                        snapshot.currentStage,
+                      intentId: activatedIntent.intentId,
+                      phase: "activated",
+                      summary: `Handoff activated: ${activatedIntent.toRole} is now active for ${activatedIntent.stageAfter ?? readString(activatedPayload.stageAfter) ?? activatedIntent.stage ?? snapshot.currentStage ?? "the current stage"}.`,
+                    })
+                  : null;
+              return textResponse(
+                JSON.stringify({ ...intent, claimedTask, activationBroadcast }, null, 2)
+              );
             }
             case "fail_handoff_intent": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -5230,7 +5486,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summary: failureReason,
                 });
               }
-              return textResponse(JSON.stringify(routed, null, 2));
+              const failureBroadcast = await maybeBroadcastSimpleHandoffStatus({
+                runtimeSubagent: plugin.api.runtime?.subagent,
+                bindingPolicy: workflowPolicy,
+                sessionKey: ctx.sessionKey,
+                projectId: snapshot.projectId,
+                projectRoot: resolvedProjectRoot,
+                status: "blocked",
+                stage: snapshot.currentStage,
+                intentId: handoffIntentId,
+                phase: "failed",
+                summary: `Handoff failed: ${failureReason}`,
+              });
+              return textResponse(
+                JSON.stringify({ ...routed, failureBroadcast }, null, 2)
+              );
             }
             case "get_artifact_receipts": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

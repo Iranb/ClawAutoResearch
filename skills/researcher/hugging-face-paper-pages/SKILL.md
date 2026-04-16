@@ -18,7 +18,7 @@ allowed-tools:
 Use Hugging Face paper pages as the preferred full-text markdown source before PaperNexus graph build.
 
 > **Primary use in this repo**: save paper markdown into project-local staging so the workflow can upload/import it through the configured remote PaperNexus wrapper flow before `graph-build`.
-> **Preferred fallback order in this repo**: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
+> **Preferred fallback order in this repo**: `hugging-face-paper-pages -> arxiv2md-api -> markxiv -> arxiv2md -> papers-cool PDF`.
 
 ## Inputs
 
@@ -98,8 +98,9 @@ If validation fails:
 1. delete the bad file
 2. retry the Hugging Face markdown fetch
 3. if it still fails, report Markdown unavailable and let the caller try `/arxiv2md-api`
-4. if the direct raw-markdown API also fails, let the caller try `/arxiv2md`
-5. only after both markdown fallbacks fail should the caller use `/papers-cool` PDF download
+4. if the direct raw-markdown API also fails, let the caller try `/markxiv`
+5. if `markxiv` also fails, let the caller try `/arxiv2md`
+6. only after all markdown fallbacks fail should the caller use `/papers-cool` PDF download
 
 If the markdown endpoint returns `404`, report that Hugging Face paper pages do not currently provide markdown for this paper. Do not fabricate content.
 
@@ -107,5 +108,5 @@ If the markdown endpoint returns `404`, report that Hugging Face paper pages do 
 
 - Prefer the `.md` endpoint for PaperNexus ingestion.
 - Prefer the API endpoint when you need structured metadata such as GitHub repo, project page, linked models, or datasets.
-- If markdown is unavailable, let the caller try `/arxiv2md-api` first, then `/arxiv2md`, then `/papers-cool` PDF download.
+- If markdown is unavailable, let the caller try `/arxiv2md-api` first, then `/markxiv`, then `/arxiv2md`, then `/papers-cool` PDF download.
 - Inside this repo, Markdown should land in the `md/` subdirectory of project-local staging so the workflow can upload/import a Markdown-first canonical corpus through remote PaperNexus.

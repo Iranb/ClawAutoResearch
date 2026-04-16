@@ -72,6 +72,7 @@ Survey mode is broader than startup research mode.
   - `/pasa-paper-search` when available
   - `/hugging-face-paper-pages`
   - `/arxiv2md-api`
+  - `/markxiv`
   - `/arxiv2md`
   - PaperNexus graph expansion and citation-neighbor lookup
   - `research_workflow.audit_literature_coverage` for non-blocking survey coverage diagnostics

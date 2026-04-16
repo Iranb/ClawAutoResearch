@@ -23,8 +23,9 @@ PaperNexus 在这里承担的是 shared research substrate，而不是附属工�
 2. `pasa-paper-search`（可选补充）
 3. `hugging-face-paper-pages`
 4. `arxiv2md-api`
-5. `arxiv2md`
-6. PDF fallback
+5. `markxiv`
+6. `arxiv2md`
+7. PDF fallback
 7. queue import / graph refresh
 
 这个顺序的意义是尽可能优先拿 Markdown，再把 canonical papers 映射到共享图里。

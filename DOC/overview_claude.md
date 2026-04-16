@@ -321,13 +321,13 @@
        - tournament scoreboard: competitive idea ranking
 
        ---
-       13. SKILL INVENTORY (38+ Skills)
+       13. SKILL INVENTORY (39+ Skills)
 
-       Researcher Skills (26):
+       Researcher Skills (27):
 
        research-pipeline, graph-build, frontier-mapping, idea-phase, research-ideation, idea-catalyst-, idea-generator, idea-tournament, novelty-check, experiment-phase, monitor-experiment, parallel-experiments,
        resume-pipeline, research-reflect, innovation-reflection, research-lit, literature-review, zotero-project-library, scientific-brainstorming, idle-research, papers-cool, pasa-paper-search,
-       hugging-face-paper-pages, arxiv2md-api, arxiv2md, papernexus, crawl4ai-search, research-queue
+       hugging-face-paper-pages, arxiv2md-api, markxiv, arxiv2md, papernexus, crawl4ai-search, research-queue
 
        Orchestrator Skills (2):
 

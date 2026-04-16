@@ -322,6 +322,91 @@ describe("readProjectDetailSummary", () => {
     expect(result?.taskBoard).toHaveLength(3);
   });
 
+  it("surfaces writing-support states and output artifact summaries from the latest manifest contracts", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const projectRoot = path.join(projectsRoot, "writing-support-project");
+
+    await mkdir(path.join(projectRoot, "academic_writer", "story"), { recursive: true });
+    await mkdir(path.join(projectRoot, "academic_writer"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "PROJECT_MANIFEST.json"),
+      JSON.stringify(
+        {
+          project_id: "writing-support-project",
+          current_stage: "write",
+          owner_agent: "academic_writer",
+          paper_story_state: {
+            status: "ready",
+            claim_support_status: "supported",
+            supported_claim_count: 4,
+            unsupported_claim_count: 1,
+          },
+          results_storyline: {
+            status: "ready",
+            question_order: [{ question_id: "q1" }, { question_id: "q2" }],
+          },
+          innovation_synthesis_state: {
+            status: "ready",
+            integration_pattern: "causal_chain",
+            innovation_points: [{ id: "i1" }, { id: "i2" }, { id: "i3" }],
+          },
+          title_abstract_intro_workbench: {
+            status: "ready",
+            alignment_status: "aligned",
+            selected_title: "Aligned Title",
+          },
+          review_pressure_packet: {
+            status: "ready",
+          },
+          citation_integrity: {
+            verification_status: "verified",
+            suspicious_citation_count: 1,
+            hallucinated_citation_count: 0,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      path.join(projectRoot, "academic_writer", "FIGURE_TABLE_ALIGNMENT.md"),
+      "# alignment\n",
+    );
+    await writeFile(
+      path.join(projectRoot, "academic_writer", "FIGURE_REGISTRY.json"),
+      JSON.stringify({ figures: [] }, null, 2),
+    );
+    await writeFile(
+      path.join(projectRoot, "academic_writer", "TABLE_REGISTRY.json"),
+      JSON.stringify({ tables: [] }, null, 2),
+    );
+
+    const result = await readProjectDetailSummary({
+      projectsRoot,
+      projectId: "writing-support-project",
+    });
+
+    expect(result).toMatchObject({
+      paperStoryStatus: "ready",
+      paperStoryClaimSupportStatus: "supported",
+      paperStorySupportedClaimCount: 4,
+      paperStoryUnsupportedClaimCount: 1,
+      resultsStorylineStatus: "ready",
+      resultsStorylineQuestionCount: 2,
+      innovationSynthesisStatus: "ready",
+      innovationSynthesisIntegrationPattern: "causal_chain",
+      innovationSynthesisPointCount: 3,
+      titleAbstractIntroStatus: "ready",
+      titleAbstractIntroAlignmentStatus: "aligned",
+      titleAbstractIntroSelectedTitle: "Aligned Title",
+      reviewPressureStatus: "ready",
+      citationIntegrityStatus: "verified",
+      suspiciousCitationCount: 1,
+      hallucinatedCitationCount: 0,
+      figureTableArtifactSummary: "3/3 core outputs ready",
+    });
+  });
+
   it("rejects project ids that escape the configured projects root", async () => {
     const projectsRoot = await createProjectsRootFixture();
 

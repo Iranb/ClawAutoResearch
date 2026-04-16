@@ -204,6 +204,88 @@ export function ProjectDetailPage() {
     topTierVerdict: null,
     evidenceCloseoutStatus: null,
   };
+  const writingSupportCards =
+    summary
+      ? [
+          {
+            label: "Paper story",
+            value: formatEvidenceLine(
+              summary.paperStoryStatus,
+              summary.paperStoryClaimSupportStatus
+                ? [
+                    summary.paperStoryClaimSupportStatus,
+                    summary.paperStorySupportedClaimCount !== null
+                      ? `${summary.paperStorySupportedClaimCount} supported`
+                      : null,
+                    summary.paperStoryUnsupportedClaimCount !== null
+                      ? `${summary.paperStoryUnsupportedClaimCount} unsupported`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ")
+                : null,
+            ),
+          },
+          {
+            label: "Results storyline",
+            value: formatEvidenceLine(
+              summary.resultsStorylineStatus,
+              summary.resultsStorylineQuestionCount !== null
+                ? `${summary.resultsStorylineQuestionCount} questions`
+                : null,
+            ),
+          },
+          {
+            label: "Innovation synthesis",
+            value: formatEvidenceLine(
+              summary.innovationSynthesisStatus,
+              [
+                summary.innovationSynthesisIntegrationPattern,
+                summary.innovationSynthesisPointCount !== null
+                  ? `${summary.innovationSynthesisPointCount} points`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" / "),
+            ),
+          },
+          {
+            label: "Title / Abstract / Intro",
+            value: formatEvidenceLine(
+              summary.titleAbstractIntroStatus,
+              summary.titleAbstractIntroAlignmentStatus,
+            ),
+          },
+          {
+            label: "Review pressure",
+            value: summary.reviewPressureStatus ?? "Unknown",
+          },
+          {
+            label: "Citation integrity",
+            value: formatEvidenceLine(
+              summary.citationIntegrityStatus,
+              [
+                summary.suspiciousCitationCount !== null
+                  ? `${summary.suspiciousCitationCount} suspicious`
+                  : null,
+                summary.hallucinatedCitationCount !== null
+                  ? `${summary.hallucinatedCitationCount} hallucinated`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" / "),
+            ),
+          },
+          {
+            label: "Figure / Table pack",
+            value: summary.figureTableArtifactSummary ?? "Unknown",
+          },
+          {
+            label: "Survey authoring pack",
+            value: summary.surveyAuthoringArtifactSummary ?? "n/a",
+          },
+        ]
+      : [];
 
   return (
     <AppShell
@@ -236,6 +318,14 @@ export function ProjectDetailPage() {
           <ArtifactTabs activeTab={activeTab} onTabChange={setActiveTab}>
             {activeTab === "summary" ? (
               <>
+                <section className="detail-grid detail-grid--secondary">
+                  {writingSupportCards.map((item) => (
+                    <article className="detail-card" key={item.label}>
+                      <p className="detail-card__label">{item.label}</p>
+                      <p className="detail-card__value">{item.value}</p>
+                    </article>
+                  ))}
+                </section>
                 <section className="detail-grid detail-grid--secondary">
                   <article className="detail-card">
                     <p className="detail-card__label">PaperNexus phase</p>
@@ -502,8 +592,12 @@ function filterArtifactsForTab(
     return artifacts.filter((artifact) => artifact.key.startsWith("graph_"));
   }
 
+  if (tab === "outputs") {
+    return artifacts.filter((artifact) => artifact.group === "outputs");
+  }
+
   if (tab === "runtime") {
-    return artifacts.filter((artifact) => artifact.key.startsWith("runtime_"));
+    return artifacts.filter((artifact) => artifact.group === "runtime");
   }
 
   if (tab === "raw") {

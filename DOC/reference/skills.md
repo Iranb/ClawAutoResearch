@@ -91,8 +91,11 @@
 - `arxiv2md-api`  
   当 Hugging Face 没有有效 Markdown 时，优先尝试 arxiv2md 的 direct raw markdown API。
 
+- `markxiv`  
+  当 arxiv2md 的 direct API 仍拿不到稳定 Markdown 时，使用 markxiv 的 `arxiv -> markxiv` Markdown endpoint 作为下一层 fallback。
+
 - `arxiv2md`  
-  当 direct raw markdown API 不可用时，用 arxiv2md 页面端作为下一层 Markdown fallback。
+  当 markxiv 也不可用时，用 arxiv2md 页面端作为 legacy Markdown fallback。
 
 - `papernexus`  
   调用或接入 PaperNexus 功能做图谱构建与操作，默认走远程 HTTP MCP；导入/排队类任务再走 wrappers。

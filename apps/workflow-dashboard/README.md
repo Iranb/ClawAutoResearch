@@ -52,16 +52,21 @@ Homepage matrix:
 Project detail page:
 
 - summary cards come from `{project}/PROJECT_MANIFEST.json`
-- summary cards now surface `workflow line`, `paper mode`, and survey-specific status when present
+- summary cards now surface `workflow line`, `paper mode`, survey-specific status, and the newer writing/review support states when present
 - PaperNexus phase/progress comes from `{project}/graph/PAPERNEXUS_PROGRESS.json`
 - artifact tabs enumerate files from:
   - `{project}/PROJECT_MANIFEST.json`
   - `{project}/graph/*.json`
   - `{project}/.openclaw-research/*`
+  - `{project}/academic_writer/*`
+  - `{project}/academic_writer/story/*`
+  - `{project}/reviewer/*`
+  - `{project}/reviewer/story-pressure/*`
+  - `{project}/researcher/*`
 
 Artifact drill-down:
 
-- `Manifest`, `Graph`, `Runtime`, and `Raw JSON` tabs lazily fetch artifact metadata and raw formatted content from the local API
+- `Manifest`, `Graph`, `Outputs`, `Runtime`, and `Raw JSON` tabs lazily fetch artifact metadata and raw formatted content from the local API
 - JSON artifacts are pretty-rendered
 - JSONL artifacts show recent lines with truncation metadata when applicable
 - missing or invalid artifacts are shown explicitly instead of being hidden
@@ -80,7 +85,8 @@ Then:
 2. scan the homepage matrix for blocked or active projects
 3. click a project name to open the detail view
 4. review `Current stage`, `Owner`, `Status`, `Updated`, `Blocking reason`, and `Next action`
-5. open `Manifest`, `Graph`, `Runtime`, or `Raw JSON` only when you need source evidence
+5. open `Outputs` when you want the latest writing/review/post-draft artifacts without digging through raw state
+6. open `Manifest`, `Graph`, `Runtime`, or `Raw JSON` only when you need source evidence
 
 ## Page structure
 
@@ -93,8 +99,9 @@ Homepage:
 Project detail:
 
 - first screen shows `Current stage`, `Owner`, `Status`, `Updated`, `Blocking reason`, and `Next action`
+- first screen also surfaces paper story, results storyline, innovation synthesis, title/abstract/intro workbench, review pressure, citation integrity, and figure/table pack readiness
 - `Summary` tab keeps the lightweight project interpretation layer first
-- `Manifest`, `Graph`, `Runtime`, and `Raw JSON` tabs expose the underlying artifacts on demand
+- `Manifest`, `Graph`, `Outputs`, `Runtime`, and `Raw JSON` tabs expose the underlying artifacts on demand
 
 Artifact viewer:
 

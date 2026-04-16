@@ -30,6 +30,7 @@
     "./researcher/pasa-paper-search",
     "./researcher/hugging-face-paper-pages",
     "./researcher/arxiv2md-api",
+    "./researcher/markxiv",
     "./researcher/arxiv2md",
     "./researcher/papernexus",
     "./researcher/papernexus-agentic-reasoning",

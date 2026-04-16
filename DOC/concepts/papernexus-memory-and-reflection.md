@@ -18,8 +18,9 @@
 1. 先用 `papers-cool` 检索论文，必要时可合并 `pasa-paper-search` 结果
 2. 优先去 `hugging-face-paper-pages` 查找论文 Markdown
 3. 如果 Hugging Face 没有有效 Markdown，再尝试 `arxiv2md-api`
-4. 如果 direct raw markdown 也失败，再尝试 `arxiv2md`
-5. 如果三路 Markdown 都失败，再回退到 PDF 下载
+4. 如果 direct raw markdown 也失败，再尝试 `markxiv`
+5. 如果 `markxiv` 也失败，再尝试 `arxiv2md`
+6. 如果四路 Markdown 都失败，再回退到 PDF 下载
 6. 将新论文纳入图谱构建或刷新
 7. 更新 `paper_ingestion` 和图谱相关状态
 

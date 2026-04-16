@@ -150,8 +150,11 @@
 - `/arxiv2md-api`  
   当 Hugging Face 没有有效 Markdown 时，优先抓取 arxiv2md 的 direct raw markdown。
 
+- `/markxiv`  
+  当 direct raw markdown 仍不可用时，抓取 markxiv 的 Markdown endpoint。
+
 - `/arxiv2md`  
-  当 direct raw markdown 不可用时，抓取 arxiv2md 页面端的 Markdown。
+  当 markxiv 也不可用时，抓取 arxiv2md 页面端的 Markdown。
 
 - `/graph-build`  
   Discord 可见的后台 Researcher 命令。检查项目论文是否已被自动同步进共享图，并刷新 graph readiness 与 brainstorm bundle，live graph 走远程 HTTP MCP，导入/排队走 queued wrappers；如果本地 Zotero MCP server 已配置，还要同步更新配置好的 Zotero 项目集合里的 `selected`、`baselines` 和项目侧 `ZOTERO_PACKET.md`。

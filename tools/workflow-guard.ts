@@ -1,3 +1,37 @@
+/**
+ * 工作流守卫（Workflow Guard）——系统中枢。
+ *
+ * 这是整个系统的入口——统一处理命令、状态、阶段切换、手递手、
+ * 实验搜索、论文摄入、写作、审查等所有工作流相关操作。
+ *
+ * 为什么这个文件有 9000+ 行？因为它是一个"Facade"——
+ * 将 50+ 个子模块的能力统一暴露为 MCP 工具调用。
+ * 子模块负责具体逻辑，workflow-guard.ts 负责协调。
+ *
+ * 核心设计模式：
+ * 1. load/normalize → evaluate → materialize → save
+ *    （加载状态 → 评估 → 物化制品 → 保存）
+ * 2. coerce → normalize → serialize
+ *    （宽容输入 → 标准化 → 序列化输出）
+ * 3. 策略与代码分离（role-policy.ts 定义权限，stage-registry.ts 定义阶段）
+ *
+ * 这个文件不直接实现业务逻辑——它调用各子模块：
+ * - workflow-guard-core/: 类型转换、文件系统、路径解析
+ * - workflow-guard-state/: 状态类型定义和 normalize/serialize
+ * - workflow-guard-policies/: 角色策略和阶段路由
+ * - workflow-guard-stages/: 各阶段的缺失信号检查
+ * - workflow-guard-materializers/: 制品物化
+ * - workflow-guard-summaries/: 状态摘要
+ * - idea-catalyst/: 创意系统
+ * - workflow-handoff/: 手递手系统
+ * - research-writing/: 写作系统
+ * - workflow-experiment-* family: 实验搜索和审查
+ * - paper-ingestion-validation/: 论文摄入验证
+ * - workflow-guard-collaboration/: 角色协作（邮箱、联系人）
+ * - workflow-guard-experiment-history/: 实验历史
+ * - workflow-kernel/: 阶段注册表
+ * - workflow-hooks/: 钩子系统
+ */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import * as fs from "node:fs/promises";
@@ -5,7 +39,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 // Workflow-owned PaperNexus stays MCP-first via research_lookup, research_briefing,
 // idea_catalyst, and import_workflow. Ingestion stays hugging-face-paper-pages ->
-// arxiv2md-api -> arxiv2md -> PDF fallback only.
+// arxiv2md-api -> markxiv -> arxiv2md -> PDF fallback only.
 import { appendWorkflowTraceEvent } from "./workflow-trace";
 import {
   clearChannelProjectBinding,

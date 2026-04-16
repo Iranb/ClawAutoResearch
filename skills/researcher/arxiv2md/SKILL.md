@@ -17,7 +17,7 @@ allowed-tools:
 
 Use [arxiv2md.org](https://arxiv2md.org/) as the legacy webpage-based markdown fallback for arXiv papers after the direct API markdown fetch.
 
-> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
+> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md-api -> markxiv -> arxiv2md -> papers-cool PDF`.
 
 ## Inputs
 

@@ -17,7 +17,7 @@ allowed-tools:
 
 Use the direct raw-markdown API from [arxiv2md.org](https://arxiv2md.org/) as the preferred agent-friendly fallback for arXiv papers when Hugging Face paper pages do not provide valid markdown.
 
-> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md-api -> arxiv2md -> papers-cool PDF`.
+> In this repo, the preferred full-text order is: `hugging-face-paper-pages -> arxiv2md-api -> markxiv -> arxiv2md -> papers-cool PDF`.
 
 ## Why This Skill Exists
 
@@ -67,8 +67,9 @@ If validation fails:
 
 1. delete the bad file
 2. retry the API fetch
-3. if it still fails, report direct markdown unavailable and let the caller try `/arxiv2md`
-4. only after both markdown fallbacks fail should the caller fall back to `/papers-cool` PDF download
+3. if it still fails, report direct markdown unavailable and let the caller try `/markxiv`
+4. if `markxiv` also fails, let the caller try `/arxiv2md`
+5. only after all markdown fallbacks fail should the caller fall back to `/papers-cool` PDF download
 
 ## Output
 

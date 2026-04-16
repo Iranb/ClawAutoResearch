@@ -44,8 +44,9 @@ allowed-tools:
 - 如果稳定可用，可额外用 `/pasa-paper-search` 做第二检索源，并按 canonical identity 合并结果
 - 对关键论文优先用 `/hugging-face-paper-pages` 拉取全文 markdown
 - 若 Hugging Face 拿不到有效 markdown，则先回退到 `/arxiv2md-api`
-- 若 direct markdown API 也失败，再回退到 `/arxiv2md`
-- 若三路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
+- 若 direct markdown API 也失败，再回退到 `/markxiv`
+- 若 `markxiv` 也失败，再回退到 `/arxiv2md`
+- 若四路 markdown 都失败，则回退到 `/papers-cool` 下载 PDF
 - 把 markdown / PDF 保存到 `{PROJ}/researcher/paper-staging/` 作为项目内 staging，再通过远程导入进入 `/graph-build`
 - 如果当前 graph 里还没有这些关键论文，必须先刷新 graph，再进入创新点分析
 - 如果主题跨度大、baseline 多、或者后续需要严谨对比矩阵，先补一轮 `/literature-review`

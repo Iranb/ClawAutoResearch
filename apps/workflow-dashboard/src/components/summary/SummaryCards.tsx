@@ -48,6 +48,52 @@ export function SummaryCards(props: SummaryCardsProps) {
         ? `${props.summary.teamRoundLead} · ${props.summary.teamRoundActiveSessions ?? 0} active`
         : "none",
     },
+    {
+      label: "Paper story",
+      value: formatCompactLine(
+        props.summary.paperStoryStatus,
+        props.summary.paperStoryClaimSupportStatus,
+      ),
+    },
+    {
+      label: "Results storyline",
+      value: formatCompactLine(
+        props.summary.resultsStorylineStatus,
+        props.summary.resultsStorylineQuestionCount !== null
+          ? `${props.summary.resultsStorylineQuestionCount} questions`
+          : null,
+      ),
+    },
+    {
+      label: "Innovation synthesis",
+      value: formatCompactLine(
+        props.summary.innovationSynthesisStatus,
+        props.summary.innovationSynthesisIntegrationPattern,
+      ),
+    },
+    {
+      label: "Title / Abstract / Intro",
+      value: formatCompactLine(
+        props.summary.titleAbstractIntroStatus,
+        props.summary.titleAbstractIntroAlignmentStatus,
+      ),
+    },
+    {
+      label: "Citation integrity",
+      value: formatCompactLine(
+        props.summary.citationIntegrityStatus,
+        [
+          props.summary.suspiciousCitationCount !== null
+            ? `${props.summary.suspiciousCitationCount} suspicious`
+            : null,
+          props.summary.hallucinatedCitationCount !== null
+            ? `${props.summary.hallucinatedCitationCount} hallucinated`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+    },
   ];
 
   return (
@@ -60,4 +106,11 @@ export function SummaryCards(props: SummaryCardsProps) {
       ))}
     </section>
   );
+}
+
+function formatCompactLine(primary: string | null, secondary: string | null): string {
+  if (primary && secondary) {
+    return `${primary} · ${secondary}`;
+  }
+  return primary ?? secondary ?? "none";
 }

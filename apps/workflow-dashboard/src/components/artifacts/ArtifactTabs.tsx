@@ -4,6 +4,7 @@ export const ARTIFACT_TABS = [
   { id: "summary", label: "Summary" },
   { id: "manifest", label: "Manifest" },
   { id: "graph", label: "Graph" },
+  { id: "outputs", label: "Outputs" },
   { id: "runtime", label: "Runtime" },
   { id: "raw", label: "Raw JSON" },
 ] as const;

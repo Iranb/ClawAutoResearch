@@ -96,6 +96,35 @@ describe("workflow-dashboard api routes", () => {
     );
   });
 
+  it("returns output artifact descriptors for latest writing-support files", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const app = createApp({ projectsRoot });
+    const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+
+    await mkdir(path.join(projectRoot, "academic_writer"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "academic_writer", "INNOVATION_SYNTHESIS_MEMO.md"),
+      "# memo\n",
+    );
+
+    const response = await request(app).get(
+      "/api/projects/gcd-confirmation-bias-mitigation/artifacts",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "innovation_synthesis_memo",
+          label: "Innovation Synthesis Memo",
+          kind: "markdown",
+          group: "outputs",
+          exists: true,
+        }),
+      ]),
+    );
+  });
+
   it("returns formatted raw artifact content", async () => {
     const projectsRoot = await createProjectsRootFixture();
     const app = createApp({ projectsRoot });

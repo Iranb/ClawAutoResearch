@@ -7,7 +7,7 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
-test("researcher exposes a direct markdown fallback skill before legacy arxiv2md and docs follow the new order", async () => {
+test("researcher exposes markxiv between the direct arxiv2md API and legacy arxiv2md, and docs follow the new order", async () => {
   const repoRoot = process.cwd();
   const skillIndexPath = path.join(repoRoot, "skills", "index.json");
   const skillIndex = await readJson(skillIndexPath);
@@ -17,26 +17,30 @@ test("researcher exposes a direct markdown fallback skill before legacy arxiv2md
 
   const huggingFaceIndex = researcherSkills.indexOf("./researcher/hugging-face-paper-pages");
   const directMarkdownIndex = researcherSkills.indexOf("./researcher/arxiv2md-api");
+  const markxivIndex = researcherSkills.indexOf("./researcher/markxiv");
   const arxiv2mdIndex = researcherSkills.indexOf("./researcher/arxiv2md");
 
   assert.notEqual(huggingFaceIndex, -1);
   assert.notEqual(directMarkdownIndex, -1);
+  assert.notEqual(markxivIndex, -1);
   assert.notEqual(arxiv2mdIndex, -1);
   assert.ok(
-    huggingFaceIndex < directMarkdownIndex && directMarkdownIndex < arxiv2mdIndex,
-    "Expected arxiv2md-api to sit between hugging-face-paper-pages and arxiv2md."
+    huggingFaceIndex < directMarkdownIndex &&
+      directMarkdownIndex < markxivIndex &&
+      markxivIndex < arxiv2mdIndex,
+    "Expected markxiv to sit between arxiv2md-api and arxiv2md."
   );
 
-  const newSkillRoot = path.join(repoRoot, "skills", "researcher", "arxiv2md-api");
+  const newSkillRoot = path.join(repoRoot, "skills", "researcher", "markxiv");
   const skillMarkdown = await fs.readFile(path.join(newSkillRoot, "SKILL.md"), "utf8");
   const skillScript = await fs.readFile(
-    path.join(newSkillRoot, "scripts", "fetch_arxiv2md_api.py"),
+    path.join(newSkillRoot, "scripts", "fetch_markxiv.py"),
     "utf8"
   );
 
-  assert.match(skillMarkdown, /^---[\s\S]*name:\s*arxiv2md-api/m);
-  assert.match(skillMarkdown, /https:\/\/arxiv2md\.org\/api\/markdown\?url=/);
-  assert.match(skillScript, /https:\/\/arxiv2md\.org\/api\/markdown\?url=/);
+  assert.match(skillMarkdown, /^---[\s\S]*name:\s*markxiv/m);
+  assert.match(skillMarkdown, /https:\/\/markxiv\.org\/abs\//);
+  assert.match(skillScript, /https:\/\/markxiv\.org\/abs\//);
 
   const fullOrderDocs = [
     path.join(repoRoot, "DOC", "overview.md"),
@@ -45,6 +49,7 @@ test("researcher exposes a direct markdown fallback skill before legacy arxiv2md
     path.join(repoRoot, "DOC", "concepts", "papernexus-memory-and-reflection.md"),
     path.join(repoRoot, "skills", "researcher", "papers-cool", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "hugging-face-paper-pages", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "markxiv", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "arxiv2md", "SKILL.md"),
     path.join(repoRoot, "tools", "workflow-guard.ts"),
   ];
@@ -54,9 +59,9 @@ test("researcher exposes a direct markdown fallback skill before legacy arxiv2md
   ];
 
   const expectedOrderPattern =
-    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}arxiv2md[\s\S]{0,220}(PDF|pdf)/i;
+    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}markxiv[\s\S]{0,220}arxiv2md[\s\S]{0,220}(PDF|pdf)/i;
   const expectedListOrderPattern =
-    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}arxiv2md/i;
+    /hugging-face-paper-pages[\s\S]{0,220}arxiv2md-api[\s\S]{0,220}markxiv[\s\S]{0,220}arxiv2md/i;
 
   for (const filePath of fullOrderDocs) {
     const content = await fs.readFile(filePath, "utf8");
@@ -85,6 +90,7 @@ test("workflow-owned researcher skills describe remote-only staging instead of l
     path.join(repoRoot, "skills", "researcher", "papers-cool", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "hugging-face-paper-pages", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "arxiv2md-api", "SKILL.md"),
+    path.join(repoRoot, "skills", "researcher", "markxiv", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "arxiv2md", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "graph-build", "SKILL.md"),
     path.join(repoRoot, "skills", "researcher", "frontier-mapping", "SKILL.md"),

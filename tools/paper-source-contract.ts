@@ -267,6 +267,9 @@ export function inferPaperSourceProvider(
     }
     return "arxiv2md";
   }
+  if (joinedHints.includes("markxiv")) {
+    return "markxiv";
+  }
   if (joinedHints.includes("papers.cool")) {
     return sourceKind === "pdf" ? "papers-cool" : "papers-cool";
   }
@@ -303,20 +306,22 @@ export function sourceProviderRank(provider: string | null): number {
       return 0;
     case "arxiv2md-api":
       return 1;
-    case "arxiv2md":
+    case "markxiv":
       return 2;
+    case "arxiv2md":
+      return 3;
     case "openalex":
     case "semanticscholar":
     case "unpaywall":
     case "core":
-      return 3;
-    case "pdf":
       return 4;
-    case "papers-cool":
+    case "pdf":
       return 5;
+    case "papers-cool":
+      return 6;
     case "pasa":
     case "pasa-paper-search":
-      return 6;
+      return 7;
     default:
       return 10;
   }

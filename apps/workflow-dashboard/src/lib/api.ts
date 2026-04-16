@@ -31,6 +31,24 @@ export type ProjectDetailSummary = {
   surveyStatus: string | null;
   surveyTopic: string | null;
   surveyProgressSummary: string | null;
+  paperStoryStatus: string | null;
+  paperStoryClaimSupportStatus: string | null;
+  paperStorySupportedClaimCount: number | null;
+  paperStoryUnsupportedClaimCount: number | null;
+  resultsStorylineStatus: string | null;
+  resultsStorylineQuestionCount: number | null;
+  innovationSynthesisStatus: string | null;
+  innovationSynthesisIntegrationPattern: string | null;
+  innovationSynthesisPointCount: number | null;
+  titleAbstractIntroStatus: string | null;
+  titleAbstractIntroAlignmentStatus: string | null;
+  titleAbstractIntroSelectedTitle: string | null;
+  reviewPressureStatus: string | null;
+  citationIntegrityStatus: string | null;
+  suspiciousCitationCount: number | null;
+  hallucinatedCitationCount: number | null;
+  figureTableArtifactSummary: string | null;
+  surveyAuthoringArtifactSummary: string | null;
   papernexusPhase: string | null;
   papernexusProgressSummary: string | null;
   topTierVerdict: string | null;
@@ -104,12 +122,37 @@ export type ArtifactDescriptor = {
     | "agent_capabilities"
     | "write_scopes"
     | "inbound_turns"
+    | "paper_story_spine"
+    | "paper_story_claim_map"
+    | "paper_story_bridge"
+    | "review_pressure_reverse_outline"
+    | "review_pressure_novelty_attack"
+    | "results_question_order"
+    | "experiment_evidence_sequence"
+    | "innovation_synthesis_memo"
+    | "innovation_synthesis_graph"
+    | "integrated_contribution_statement"
+    | "title_candidates"
+    | "abstract_workbench"
+    | "intro_workbench"
+    | "figure_alignment"
+    | "figure_registry"
+    | "table_registry"
+    | "citation_calibration_json"
+    | "citation_calibration_md"
+    | "citation_verification"
+    | "citation_audit"
+    | "survey_comparative_analysis"
+    | "survey_comparability_report"
+    | "survey_section_briefs"
+    | "survey_self_review"
     | "e2e_report"
     | "e2e_artifact_checklist"
     | "e2e_state_timeline";
   label: string;
   path: string;
   kind: "json" | "jsonl" | "markdown" | "text";
+  group: "manifest" | "graph" | "runtime" | "outputs";
   exists: boolean;
 };
 

@@ -69,9 +69,10 @@ Runtime fields such as `last_run_at`, `last_digest_path`, `last_source_update_at
    - rename or save the validated file as `<arxiv-id>.md` when arXiv ID exists; otherwise use a transliterated, special-character-safe title slug
    - if the downloaded Markdown is HTML / error text / tiny stub, delete it and retry once
    - if Hugging Face still has no valid markdown and the paper has an arXiv ID, try `/arxiv2md-api`
-   - if the direct raw-markdown API still fails, try `/arxiv2md`
+   - if the direct raw-markdown API still fails, try `/markxiv`
+   - if `markxiv` still fails, try `/arxiv2md`
    - save the first valid arXiv markdown output as `<arxiv-id>.md`
-   - if both arXiv markdown fallbacks fail, use `/papers-cool` PDF fallback into `paper_source_dir/pdf/`
+   - if all arXiv markdown fallbacks fail, use `/papers-cool` PDF fallback into `paper_source_dir/pdf/`
    - save PDF fallback as `<arxiv-id>.pdf` when possible; otherwise use the normalized title slug
    - if the downloaded PDF is HTML / ASCII error output instead of a real PDF, delete it and retry the next PDF source
    - update `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` by canonical identity, preserving `source_provider` and `retrieval_providers`
@@ -111,6 +112,7 @@ research_workflow.get_idle_research
   -> /pasa-paper-search (optional, non-fatal)
   -> /hugging-face-paper-pages
   -> /arxiv2md-api
+  -> /markxiv
   -> /arxiv2md
   -> /papers-cool (PDF fallback)
   -> update PAPER_SOURCE_INDEX.json
