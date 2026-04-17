@@ -242,6 +242,9 @@ test("materializeWritingHookPolicies preserves non-writing hooks and is idempote
   assert.ok(first.generatedHookIds.includes("innovation-synthesis-audit"));
   assert.ok(first.generatedHookIds.includes("results-storyline-audit"));
   assert.ok(first.generatedHookIds.includes("title-abstract-intro-alignment-audit"));
+  assert.ok(first.generatedHookIds.includes("citation-topicality-audit"));
+  assert.ok(first.generatedHookIds.includes("method-comparison-coverage-audit"));
+  assert.ok(first.generatedHookIds.includes("reviewer-issues-appendix-audit"));
   assert.ok(first.generatedHookIds.includes("final-figure-table-budget-audit"));
   assert.ok(first.enabledHookIds.includes("paper-plan-thesis-audit"));
   assert.ok(first.enabledHookIds.includes("abstract-claim-audit"));
@@ -270,7 +273,12 @@ test("materializeWritingHookPolicies preserves non-writing hooks and is idempote
     projectRoot,
     stage: "review",
   });
-  assert.equal(second.updated, false);
+  assert.deepEqual(second.generatedHookIds, first.generatedHookIds);
+  assert.deepEqual(second.enabledHookIds, first.enabledHookIds);
+  assert.equal(
+    new Set(second.policy.auditHooks.map((entry) => entry.hookId)).size,
+    second.policy.auditHooks.length
+  );
 
   const manifest = await readManifest(projectRoot);
   assert.equal(
@@ -337,6 +345,9 @@ test("research_workflow materialize_writing_hook_policies writes the writing-own
   assert.ok(result.enabledHookIds.includes("innovation-synthesis-audit"));
   assert.ok(result.enabledHookIds.includes("results-storyline-audit"));
   assert.ok(result.enabledHookIds.includes("title-abstract-intro-alignment-audit"));
+  assert.ok(result.enabledHookIds.includes("citation-topicality-audit"));
+  assert.ok(result.enabledHookIds.includes("method-comparison-coverage-audit"));
+  assert.ok(result.enabledHookIds.includes("reviewer-issues-appendix-audit"));
   assert.ok(result.enabledHookIds.includes("final-figure-table-budget-audit"));
   assert.ok(result.policy.auditHooks.some((entry) => entry.hookId === "main-tex-consistency-audit"));
 
@@ -369,6 +380,9 @@ test("materializeWritingHookPolicies generates survey-specific section hooks", a
   assert.ok(hookIds.includes("survey-evidence-synthesis-audit"));
   assert.ok(hookIds.includes("survey-open-problems-audit"));
   assert.ok(hookIds.includes("survey-conclusion-boundary-audit"));
+  assert.ok(hookIds.includes("citation-topicality-audit"));
+  assert.ok(hookIds.includes("method-comparison-coverage-audit"));
+  assert.ok(hookIds.includes("reviewer-issues-appendix-audit"));
 
   const taxonomyHook = result.policy.auditHooks.find(
     (entry) => entry.hookId === "survey-taxonomy-audit"
@@ -377,4 +391,30 @@ test("materializeWritingHookPolicies generates survey-specific section hooks", a
   assert.equal(taxonomyHook?.enabled, true);
   assert.equal(taxonomyHook?.appliesWhen?.workflowLines?.[0], "survey");
   assert.deepEqual(taxonomyHook?.filters?.taskIds, ["write.section.taxonomy"]);
+
+  const citationHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "citation-topicality-audit"
+  );
+  assert.ok(citationHook);
+  assert.equal(citationHook?.blockingMode, "block_stage");
+  assert.equal(citationHook?.hookPoint, "before_stage_handoff");
+  assert.deepEqual(citationHook?.appliesWhen?.paperModes, ["survey", "journal"]);
+  assert.match(citationHook?.requirementPrompt ?? "", /at least 50 cited works/i);
+
+  const comparisonHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "method-comparison-coverage-audit"
+  );
+  assert.ok(comparisonHook);
+  assert.equal(comparisonHook?.hookPoint, "before_stage_handoff");
+
+  const appendixHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "reviewer-issues-appendix-audit"
+  );
+  assert.ok(appendixHook);
+  assert.equal(appendixHook?.auditorRole, "cross-reviewer");
+  assert.equal(appendixHook?.hookPoint, "before_stage_handoff");
+  assert.match(
+    appendixHook?.requirementPrompt ?? "",
+    /appendix_reviewer_responses\.tex/i
+  );
 });

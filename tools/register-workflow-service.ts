@@ -1996,6 +1996,8 @@ export async function maybeLaunchAutoStageForProject(params: {
     gateBlocking?: boolean;
     stageAfter?: string | null;
     missingStageSignals?: string[];
+    pendingHandoff?: boolean;
+    pendingHandoffPhase?: string | null;
     recommendedActions: Array<{
       kind: string;
       owner: string | null;
@@ -2103,6 +2105,8 @@ export async function maybeLaunchAutoStageForProject(params: {
       >[0]["autoIteratorResult"] = {
         gateBlocking: params.autoIteratorResult.gateBlocking ?? false,
         missingStageSignals: params.autoIteratorResult.missingStageSignals ?? [],
+        pendingHandoff: params.autoIteratorResult.pendingHandoff === true,
+        pendingHandoffPhase: params.autoIteratorResult.pendingHandoffPhase ?? null,
         recommendedActions: (params.autoIteratorResult.recommendedActions ?? []).map(
           (entry) => ({
             kind: entry.kind as "drive_stage" | "background" | "wait_human" | "switch_project",

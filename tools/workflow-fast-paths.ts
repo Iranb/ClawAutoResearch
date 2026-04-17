@@ -2904,10 +2904,21 @@ export async function startBackgroundWorkflowRun(params: {
       params.snapshot.channelProjectBindingsEnabled &&
       (params.agentCtx.sessionKey || params.agentCtx.sessionId)
     ) {
+      const ensuredManifest =
+        (await readJsonIfExists<Record<string, unknown>>(
+          path.join(ensuredProject.projectRoot, "PROJECT_MANIFEST.json")
+        )) ?? {};
+      const bindingOwnerAgent =
+        normalizeAgentId(ensuredManifest.owner_agent) ?? ownerAgent;
+      const bindingSessionKey =
+        resolveRequesterSessionKeyForOwner({
+          requesterSessionKey: params.agentCtx.sessionKey,
+          ownerAgent: bindingOwnerAgent,
+        }) ?? requesterSessionKeyForOwner;
       await bindChannelProjectForWorkflow({
         policy: params.workflowPolicy,
         workspaceDir: params.agentCtx.workspaceDir,
-        sessionKey: requesterSessionKeyForOwner,
+        sessionKey: bindingSessionKey ?? undefined,
         sessionId: params.agentCtx.sessionId,
         messageChannel: params.agentCtx.messageChannel,
         channelKey: params.agentCtx.channelKey,
@@ -2915,7 +2926,7 @@ export async function startBackgroundWorkflowRun(params: {
         projectId: ensuredProject.projectId,
         title: ensuredProject.title,
         topic,
-        boundByAgent: params.agentCtx.agentId ?? params.snapshot.role,
+        boundByAgent: bindingOwnerAgent ?? params.agentCtx.agentId ?? params.snapshot.role,
         notes: "Auto-bound during slash fast-path workflow startup.",
       });
     }

@@ -269,3 +269,74 @@ test("camera-ready and citation audits surface placeholder regressions", async (
   assert.equal(citation.allCitationsReal, false);
   assert.match(citation.issues.join(","), /placeholder/i);
 });
+
+test("citation audit enforces survey minimum count and topicality", async (t) => {
+  const projectRoot = await setupProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "survey",
+  };
+  manifest.survey_review = {
+    ...(manifest.survey_review ?? {}),
+    topic: "Generalized Category Discovery",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    [
+      "@inproceedings{simgcd,title={Generalized Category Discovery},author={Vaze, Sona},booktitle={ECCV},year={2022}}",
+      "@book{thinkingfastslow,title={Thinking, Fast and Slow},author={Kahneman, Daniel},year={2011}}",
+    ].join("\n")
+  );
+
+  const citation = await materializeCitationAudit({ projectRoot });
+
+  assert.equal(citation.minimumCitationCount, 50);
+  assert.equal(citation.bibliographyEntryCount, 2);
+  assert.equal(citation.citationCountStatus, "needs_revision");
+  assert.equal(citation.topicRelevanceStatus, "needs_revision");
+  assert.equal(citation.offTopicCitationCount, 1);
+  assert.match(citation.issues.join(","), /minimum_count|off_topic/i);
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.citation_integrity.minimum_citation_count, 50);
+  assert.equal(updatedManifest.citation_integrity.off_topic_citation_count, 1);
+});
+
+test("citation audit enforces journal minimum count", async (t) => {
+  const projectRoot = await setupProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "journal",
+  };
+  manifest.research_program = {
+    ...(manifest.research_program ?? {}),
+    goal: "Generalized Category Discovery journal manuscript",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const bibEntries = Array.from({ length: 39 }, (_unused, index) =>
+    `@article{gcd${index},title={Generalized Category Discovery Variant ${index}},author={Test, Author},journal={TPAMI},year={2025}}`
+  ).join("\n");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    bibEntries
+  );
+
+  const citation = await materializeCitationAudit({ projectRoot });
+
+  assert.equal(citation.minimumCitationCount, 40);
+  assert.equal(citation.bibliographyEntryCount, 39);
+  assert.equal(citation.citationCountStatus, "needs_revision");
+  assert.match(citation.issues.join(","), /minimum_count/i);
+});

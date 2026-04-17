@@ -17,13 +17,20 @@ type CitationIntegrityStateLike = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string | null;
+  bibliographyEntryCount: number;
   bibliographyPageCount: number;
+  minimumCitationCount: number;
   allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
   suspiciousCitationCount: number;
   hallucinatedCitationCount: number;
+  topicRelevanceTopic: string | null;
+  topicRelevanceStatus: string;
+  relevantCitationCount: number;
+  offTopicCitationCount: number;
+  topicRelevanceSummary: string | null;
   lastVerifiedAt: string | null;
   pendingReason: string | null;
 };
@@ -168,11 +175,25 @@ export async function recordCitationVerificationImpl(
     verificationStatus:
       normalizeStage(patch.verificationStatus ?? patch.verification_status) ??
       current.verificationStatus,
+    bibliographyEntryCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["bibliographyEntryCount", "bibliography_entry_count"]) ??
+          current.bibliographyEntryCount
+      )
+    ),
     bibliographyPageCount: Math.max(
       0,
       Math.floor(
         pickNumber(patch, ["bibliographyPageCount", "bibliography_page_count"]) ??
           current.bibliographyPageCount
+      )
+    ),
+    minimumCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["minimumCitationCount", "minimum_citation_count"]) ??
+          current.minimumCitationCount
       )
     ),
     allCitationsReal:
@@ -221,6 +242,29 @@ export async function recordCitationVerificationImpl(
         ]) ?? current.hallucinatedCitationCount
       )
     ),
+    topicRelevanceTopic:
+      pickString(patch, ["topicRelevanceTopic", "topic_relevance_topic"]) ??
+      current.topicRelevanceTopic,
+    topicRelevanceStatus:
+      normalizeStage(patch.topicRelevanceStatus ?? patch.topic_relevance_status) ??
+      current.topicRelevanceStatus,
+    relevantCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["relevantCitationCount", "relevant_citation_count"]) ??
+          current.relevantCitationCount
+      )
+    ),
+    offTopicCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, ["offTopicCitationCount", "off_topic_citation_count"]) ??
+          current.offTopicCitationCount
+      )
+    ),
+    topicRelevanceSummary:
+      pickString(patch, ["topicRelevanceSummary", "topic_relevance_summary"]) ??
+      current.topicRelevanceSummary,
     lastVerifiedAt:
       pickString(patch, ["lastVerifiedAt", "last_verified_at"]) ??
       current.lastVerifiedAt,
@@ -236,20 +280,37 @@ export async function recordCitationVerificationImpl(
       "Citation verification is still pending. Run the citation integrity gate before submission.";
   } else if (
     next.verificationStatus === "verified" &&
+    next.bibliographyEntryCount >= next.minimumCitationCount &&
     next.allCitationsReal &&
     next.bibliographyPageCount >= 1 &&
     next.unresolvedPlaceholderCount <= next.allowedPlaceholderCount &&
-    next.hallucinatedCitationCount === 0
+    next.hallucinatedCitationCount === 0 &&
+    next.topicRelevanceStatus === "ready"
   ) {
     next.pendingReason = null;
   } else if (next.verificationStatus === "verified" && next.bibliographyPageCount < 1) {
     next.pendingReason =
       next.pendingReason ??
       "Reviewer must confirm that the bibliography spans at least one full page before submission.";
+  } else if (
+    next.verificationStatus === "verified" &&
+    next.minimumCitationCount > 0 &&
+    next.bibliographyEntryCount < next.minimumCitationCount
+  ) {
+    next.pendingReason =
+      next.pendingReason ??
+      `Bibliography does not meet the minimum citation count for this paper mode (${next.bibliographyEntryCount}/${next.minimumCitationCount}).`;
   } else if (next.verificationStatus === "verified" && !next.allCitationsReal) {
     next.pendingReason =
       next.pendingReason ??
       "Reviewer has not yet confirmed that all cited references are real.";
+  } else if (
+    next.verificationStatus === "verified" &&
+    next.topicRelevanceStatus !== "ready"
+  ) {
+    next.pendingReason =
+      next.pendingReason ??
+      "Reviewer has not yet confirmed that the bibliography is topically relevant to the manuscript.";
   }
 
   manifest.citation_integrity = deps.serializeCitationIntegrityState(next);

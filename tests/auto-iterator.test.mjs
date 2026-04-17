@@ -4697,7 +4697,7 @@ test("auto iterator clears stale submit gate timestamps after regression and res
     now: "2026-03-28T10:05:00.000Z",
   });
 
-  assert.equal(regressed.stageAfter, "write");
+  assert.equal(regressed.stageAfter, "review");
   const regressedGate = JSON.parse(await fs.readFile(gatePath, "utf8"));
   assert.equal(regressedGate.gate_timestamp, null);
   assert.equal(regressedGate.last_gate, null);
@@ -4867,7 +4867,7 @@ test("auto iterator keeps submit blocked when citation verification is not compl
   });
 
   assert.equal(result.stageBefore, "submit");
-  assert.equal(result.stageAfter, "write");
+  assert.equal(result.stageAfter, "review");
   assert.equal(result.gateBlocking, false);
   assert.match(result.blockingReason ?? "", /citation/i);
   assert.ok(
@@ -4886,9 +4886,48 @@ test("auto iterator keeps submit blocked when citation verification is not compl
       },
     },
   });
-  assert.equal(aggressiveResult.stageAfter, "write");
+  assert.equal(aggressiveResult.stageAfter, "review");
   assert.ok(
     aggressiveResult.autoModeReasons.some((reason) => /citation/i.test(reason))
+  );
+});
+
+test("auto iterator keeps submit blocked when survey citation count or topicality gates are not ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "survey",
+  };
+  manifest.citation_integrity.verification_status = "verified";
+  manifest.citation_integrity.all_citations_real = true;
+  manifest.citation_integrity.minimum_citation_count = 50;
+  manifest.citation_integrity.bibliography_entry_count = 40;
+  manifest.citation_integrity.topic_relevance_status = "needs_revision";
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) => /citation count >= 50/i.test(signal))
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) => /topic_relevance_status/i.test(signal))
   );
 });
 

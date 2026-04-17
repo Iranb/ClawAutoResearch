@@ -844,11 +844,27 @@ export async function collectSubmitStageMissingSignals(
         `citation placeholders <= ${citationIntegrity.allowedPlaceholderCount} (current: ${citationIntegrity.unresolvedPlaceholderCount})`
       );
     }
-    if (citationIntegrity.hallucinatedCitationCount > 0) {
-      missing.push(
-        `citation hallucinations = 0 (current: ${citationIntegrity.hallucinatedCitationCount})`
-      );
-    }
+  if (citationIntegrity.hallucinatedCitationCount > 0) {
+    missing.push(
+      `citation hallucinations = 0 (current: ${citationIntegrity.hallucinatedCitationCount})`
+    );
+  }
+  if (
+    citationIntegrity.minimumCitationCount > 0 &&
+    citationIntegrity.bibliographyEntryCount < citationIntegrity.minimumCitationCount
+  ) {
+    missing.push(
+      `citation count >= ${citationIntegrity.minimumCitationCount} (current: ${citationIntegrity.bibliographyEntryCount})`
+    );
+  }
+  if (
+    citationIntegrity.minimumCitationCount > 0 &&
+    citationIntegrity.topicRelevanceStatus !== "ready"
+  ) {
+    missing.push(
+      `PROJECT_MANIFEST.json.citation_integrity.topic_relevance_status = ready (current: ${citationIntegrity.topicRelevanceStatus})`
+    );
+  }
     if (!verificationReportPath || !(await deps.pathExists(verificationReportPath))) {
       missing.push(
         `{PROJ}/${citationIntegrity.verificationReportPath ?? deps.DEFAULT_CITATION_REPORT_PATH}`

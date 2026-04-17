@@ -297,14 +297,24 @@ function buildExperimentDecisionCommand(params: {
 export function selectDispatchableAutoStageAction(params: {
   autoIteratorResult: Pick<
     AutoIteratorResult,
-    "gateBlocking" | "missingStageSignals" | "recommendedActions"
+    | "gateBlocking"
+    | "missingStageSignals"
+    | "pendingHandoff"
+    | "pendingHandoffPhase"
+    | "recommendedActions"
   >;
   owner?: AutoIteratorAction["owner"] | null;
 }): AutoIteratorAction | null {
   if (params.autoIteratorResult.gateBlocking) {
     return null;
   }
-  if ((params.autoIteratorResult.missingStageSignals ?? []).length > 0) {
+  const allowPreparedOwnerHandoff =
+    params.autoIteratorResult.pendingHandoff === true &&
+    params.autoIteratorResult.pendingHandoffPhase === "prepared";
+  if (
+    (params.autoIteratorResult.missingStageSignals ?? []).length > 0 &&
+    !allowPreparedOwnerHandoff
+  ) {
     return null;
   }
   return (
@@ -607,6 +617,8 @@ export async function runWorkflowAutoIteratorImpl(
     cooldownSeconds?: number;
     policy?: WorkflowGuardPolicy;
     now?: string;
+    requesterSessionKey?: string | null;
+    sessionBindingKey?: string | null;
   },
   deps: AutoIteratorDeps
 ): Promise<AutoIteratorResult> {
@@ -1230,6 +1242,8 @@ export async function runWorkflowAutoIteratorImpl(
           stageAfter,
           ownerBefore,
           ownerAfter: ownerAfter!,
+          fromSessionKey: asString(params.requesterSessionKey) ?? null,
+          sessionBindingKey: asString(params.sessionBindingKey) ?? null,
           nextAction,
           resumeAction,
           executionId: nextExecutionId,
@@ -1503,6 +1517,8 @@ export async function runWorkflowAutoIteratorImpl(
   }
 
   const recommendedActions: AutoIteratorAction[] = [];
+  const shouldDispatchPreparedOwnerHandoff =
+    ownerTransitionRequiresClaim && !gateEvaluation.blocking && stageRepairCommand == null;
   if (gateEvaluation.blocking) {
     recommendedActions.push({
       kind: "wait_human",
@@ -1515,7 +1531,7 @@ export async function runWorkflowAutoIteratorImpl(
       cooldownRemainingSeconds: null,
       blocking: true,
     });
-  } else if (stageReadyForOwnerWork) {
+  } else if (stageReadyForOwnerWork || shouldDispatchPreparedOwnerHandoff) {
     const mailbox =
       params.queueMailbox === false
         ? {

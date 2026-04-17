@@ -816,6 +816,76 @@ test("startBackgroundWorkflowRun keeps survey continuations on the survey line a
   assert.equal(manifest.writing_contract.paper_mode, "survey");
 });
 
+test("startBackgroundWorkflowRun binds the channel back to the manifest owner instead of the invoking orchestrator", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "survey-omnimodel");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-omnimodel",
+    current_stage: "survey_review",
+    owner_agent: "researcher",
+    survey_review: {
+      topic: "OmniModel",
+      status: "searching",
+    },
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "bg-run-resume-owner-fix" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "orchestrator",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:orchestrator:discord:channel:1493115797856452619",
+      sessionId: "session-bg-owner-fix",
+      messageChannel: "discord",
+      channelKey: "binding:discord:researcher:channel:1493115797856452619",
+    },
+    snapshot: {
+      role: "orchestrator",
+      projectRoot,
+      projectId: "survey-omnimodel",
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "resume_pipeline",
+      projectId: "survey-omnimodel",
+      projectRoot,
+      summary: "Resume the survey project.",
+      commandText: "/resume-pipeline survey-omnimodel -- __BACKGROUND_CONTINUATION__: true",
+    },
+  });
+
+  assert.equal(result.started, true);
+
+  const bound = await getChannelProjectBindingForWorkflow({
+    policy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    channelKey: "binding:discord:researcher:channel:1493115797856452619",
+  });
+  assert.equal(bound.binding?.workflowRole, "researcher");
+  assert.equal(
+    bound.binding?.workflowSessionKey,
+    "agent:researcher:discord:channel:1493115797856452619"
+  );
+  assert.equal(bound.binding?.boundByAgent, "researcher");
+});
+
 test("buildLiteratureReviewBackgroundCommand appends the background continuation marker once", () => {
   assert.equal(
     buildLiteratureReviewBackgroundCommand('/literature-review "baseline coverage refresh"'),

@@ -27,6 +27,9 @@ const WRITING_HOOK_IDS = new Set([
   "innovation-synthesis-audit",
   "results-storyline-audit",
   "title-abstract-intro-alignment-audit",
+  "citation-topicality-audit",
+  "method-comparison-coverage-audit",
+  "reviewer-issues-appendix-audit",
   "abstract-claim-audit",
   "introduction-gap-story-audit",
   "results-claim-evidence-audit",
@@ -47,6 +50,8 @@ const WRITING_HOOK_IDS = new Set([
 
 const WRITING_POLICY_STAGES = new Set(["plan", "write", "review", "submit"]);
 const DEFERRED_SECTION_HOOK_IDS = new Set<string>();
+const DEFAULT_REVIEWER_RESPONSE_APPENDIX_PATH =
+  "academic_writer/paper/sections/appendix_reviewer_responses.tex";
 
 function normalizeStage(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -150,6 +155,9 @@ function buildHook(params: {
   filters?: WorkflowHookFilters | null;
   appliesWhen?: WorkflowHookAppliesWhen | null;
   stateScope?: WorkflowFileAuditHookPolicy["stateScope"];
+  targetRole?: string | null;
+  auditorRole?: string;
+  reviseOwnerRole?: string | null;
 }): WorkflowFileAuditHookPolicy {
   return {
     hookId: params.hookId,
@@ -159,15 +167,15 @@ function buildHook(params: {
     hookPoint: params.hookPoint,
     order: params.order,
     parallelGroup: params.parallelGroup ?? null,
-    targetRole: "academic_writer",
-    auditorRole: "reviewer",
+    targetRole: params.targetRole ?? "academic_writer",
+    auditorRole: params.auditorRole ?? "reviewer",
     filePath: params.filePath,
     requirementPrompt: params.requirementPrompt,
     supportingArtifacts: uniqueStrings(params.supportingArtifacts),
     blockingMode: params.blockingMode,
     maxRounds: params.maxRounds ?? (params.blockingMode === "warn_only" ? 1 : 3),
     maxUnchangedRounds: params.maxUnchangedRounds ?? 2,
-    reviseOwnerRole: "academic_writer",
+    reviseOwnerRole: params.reviseOwnerRole ?? "academic_writer",
     reviseCommand: null,
     reportDir: `reviewer/file-audits/${params.hookId}`,
     filters: params.filters ?? null,
@@ -263,6 +271,33 @@ function buildWritingHookPolicies(params: {
     "academic_writer/TITLE_CANDIDATES.md",
     "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
     "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
+    "academic_writer/paper/main.tex",
+  ]);
+  const citationAuditArtifacts = uniqueStrings([
+    "academic_writer/paper/refs.bib",
+    "reviewer/CITATION_VERIFICATION.md",
+    "researcher/CITATION_AUDIT_REPORT.json",
+    "academic_writer/paper/main.tex",
+    params.paperStory.storySpinePath,
+    params.paperStory.claimEvidenceMatrixPath,
+    ...(surveyMode ? surveyArtifacts : []),
+  ]);
+  const comparisonCoverageArtifacts = uniqueStrings([
+    ...resultsStorylineArtifacts,
+    "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+    "academic_writer/FIGURE_REGISTRY.json",
+    "academic_writer/TABLE_REGISTRY.json",
+    "academic_writer/paper/main.tex",
+    "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+    "researcher/SOTA_MATRIX.md",
+  ]);
+  const reviewerResponseAppendixArtifacts = uniqueStrings([
+    ...manuscriptArtifacts,
+    "reviewer/REVIEW_REPORT.md",
+    "reviewer/REVIEW_ISSUES.json",
+    "reviewer/SUBMISSION_SIMULATION_REVIEW.json",
+    "reviewer/CITATION_VERIFICATION.md",
+    DEFAULT_REVIEWER_RESPONSE_APPENDIX_PATH,
     "academic_writer/paper/main.tex",
   ]);
 
@@ -482,6 +517,89 @@ function buildWritingHookPolicies(params: {
       },
     }),
     buildHook({
+      hookId: "citation-topicality-audit",
+      stage: "review",
+      hookPoint: "before_stage_handoff",
+      order: 295,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/paper/refs.bib",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "bibliography integrity and topicality before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements:
+          params.paperMode === "survey"
+            ? [
+                "The bibliography must contain at least 50 cited works before the survey exits review.",
+                "Every kept citation should support the survey topic, taxonomy, comparison axes, benchmark landscape, or open-problem synthesis; decorative or generic off-topic references should be revised out.",
+                "If reviewer/CITATION_VERIFICATION.md or researcher/CITATION_AUDIT_REPORT.json says topic relevance is weak, count is below threshold, or suspicious references remain, require revision instead of passing.",
+              ]
+            : params.paperMode === "journal"
+              ? [
+                  "The bibliography must contain at least 40 cited works before the journal manuscript exits review.",
+                  "Citations should stay tied to the paper's problem, method, baselines, benchmarks, mechanisms, or limitations; broad motivational references with no real topical connection should be revised out or explicitly justified.",
+                  "If reviewer/CITATION_VERIFICATION.md or researcher/CITATION_AUDIT_REPORT.json says topic relevance is weak, count is below threshold, or suspicious references remain, require revision instead of passing.",
+                ]
+              : [
+                  "Check that bibliography entries remain relevant to the manuscript's actual topic and evidence story.",
+                  "If reviewer/CITATION_VERIFICATION.md or researcher/CITATION_AUDIT_REPORT.json says topic relevance is weak or suspicious references remain, require revision instead of passing.",
+                ],
+        supportingArtifacts: citationAuditArtifacts,
+      }),
+      supportingArtifacts: citationAuditArtifacts,
+      appliesWhen: {
+        paperModes: ["survey", "journal"],
+      },
+      filters: {
+        fileGlobs: [
+          "academic_writer/paper/refs.bib",
+          "reviewer/CITATION_VERIFICATION.md",
+          "researcher/CITATION_AUDIT_REPORT.json",
+        ],
+      },
+    }),
+    buildHook({
+      hookId: "method-comparison-coverage-audit",
+      stage: "review",
+      hookPoint: "before_stage_handoff",
+      order: 297,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/paper/main.tex",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "method comparison coverage before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: surveyMode
+          ? [
+              "The manuscript must contain or explicitly plan method-performance comparison tables that compare families or representative methods across multiple metrics, datasets, or evaluation angles.",
+              "The manuscript must contain or explicitly plan at least one comparison-oriented figure that helps readers see strengths, weaknesses, trade-offs, or taxonomy-level contrasts at a glance.",
+              "The prose must analyze comparative advantages and disadvantages from more than one angle instead of only reporting a single best score.",
+              "Using multiple tables for different metrics or evaluation slices is encouraged when one table cannot honestly carry the comparison.",
+            ]
+          : [
+              "The manuscript must contain or explicitly plan at least one method-performance comparison table and at least one comparison-oriented figure.",
+              "The results discussion must compare strengths and weaknesses from more than one angle, such as accuracy, robustness, efficiency, ablation sensitivity, calibration, or transfer behavior.",
+              "If one table cannot honestly cover the comparison, multiple tables for different metrics or evaluation slices should be used instead of collapsing everything into a single leaderboard.",
+              "A draft that only celebrates the best number without discussing trade-offs or failure regimes should be revised.",
+            ],
+        supportingArtifacts: comparisonCoverageArtifacts,
+      }),
+      supportingArtifacts: comparisonCoverageArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          "academic_writer/paper/main.tex",
+          "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
+          "academic_writer/FIGURE_REGISTRY.json",
+          "academic_writer/TABLE_REGISTRY.json",
+        ],
+      },
+    }),
+    buildHook({
       hookId: "main-tex-consistency-audit",
       stage: "write",
       hookPoint: "before_handoff_activation",
@@ -535,6 +653,41 @@ function buildWritingHookPolicies(params: {
       appliesWhen: baseAppliesWhen,
       filters: {
         fileGlobs: ["academic_writer/paper/main.tex"],
+      },
+    }),
+    buildHook({
+      hookId: "reviewer-issues-appendix-audit",
+      stage: "submit",
+      hookPoint: "before_stage_handoff",
+      order: 345,
+      parallelGroup: "writing-closeout",
+      filePath: DEFAULT_REVIEWER_RESPONSE_APPENDIX_PATH,
+      blockingMode: "block_stage",
+      auditorRole: "cross-reviewer",
+      requirementPrompt: buildPrompt({
+        title:
+          "reviewer-response appendix before the submit-stage handoff is activated",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: [
+          `Create a dedicated appendix section at ${DEFAULT_REVIEWER_RESPONSE_APPENDIX_PATH} and ensure main.tex clearly includes or references it as part of the appendix.`,
+          "The appendix must answer reviewer-raised points in detailed paragraph form rather than terse bullet acknowledgements.",
+          "Each major point from REVIEW_REPORT.md, REVIEW_ISSUES.json, and submission simulation feedback should be reflected with concrete response text, evidence, or manuscript changes.",
+          "The appendix may and should use tables or figures when they clarify rebuttal evidence, comparative metrics, ablations, or implementation details better than prose alone.",
+          "If a reviewer concern is only partially addressed, the appendix must say so explicitly instead of pretending it is fully resolved.",
+        ],
+        supportingArtifacts: reviewerResponseAppendixArtifacts,
+      }),
+      supportingArtifacts: reviewerResponseAppendixArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          DEFAULT_REVIEWER_RESPONSE_APPENDIX_PATH,
+          "academic_writer/paper/main.tex",
+          "reviewer/REVIEW_REPORT.md",
+          "reviewer/REVIEW_ISSUES.json",
+          "reviewer/SUBMISSION_SIMULATION_REVIEW.json",
+        ],
       },
     }),
     buildHook({

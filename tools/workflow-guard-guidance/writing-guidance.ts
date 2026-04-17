@@ -89,6 +89,14 @@ export function buildWritingGuidance(
         `Citations must come from real sources of truth (${params.citationIntegrity.sourceOfTruth.join(", ")}). Keep placeholders <= ${params.citationIntegrity.allowedPlaceholderCount}.`
       );
     }
+    if (params.currentStage === "review" || params.currentStage === "submit") {
+      append.push(
+        "Before review/submit closeout, make sure the manuscript has explicit method-comparison tables plus at least one comparison-oriented figure, and discuss strengths/weaknesses from multiple angles instead of only best-case numbers."
+      );
+      append.push(
+        "Post-review rule: answer reviewer-raised points in academic_writer/paper/sections/appendix_reviewer_responses.tex using detailed paragraphs. Tables and figures are allowed and encouraged when they clarify the response better than prose alone."
+      );
+    }
   }
 
   if (

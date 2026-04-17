@@ -1716,12 +1716,9 @@ test("auto iterator enforces research program semantics, experiment-search readi
     mode: "phase-3-write-gate",
     queueMailbox: false,
   });
-  assert.equal(result.stageAfter, "write");
+  assert.equal(result.stageAfter, "review");
   assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("write_package"))
-  );
-  assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("citation_integrity"))
+    result.missingStageSignals.some((signal) => /citation|topic_relevance|count/i.test(signal))
   );
 });
 

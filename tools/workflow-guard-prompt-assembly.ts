@@ -864,7 +864,7 @@ export function formatWorkflowSnapshotForPromptImpl(
   }
   if (snapshot.citationVerificationRequired) {
     lines.push(
-      `Citation integrity: status=${snapshot.citationVerificationStatus ?? "unknown"}, placeholders=${snapshot.citationUnresolvedPlaceholderCount ?? "unknown"}/${snapshot.citationAllowedPlaceholderCount ?? "unknown"}, verified=${snapshot.citationVerifiedCount ?? 0}, suspicious=${snapshot.citationSuspiciousCount ?? 0}, hallucinated=${snapshot.citationHallucinatedCount ?? 0}`
+      `Citation integrity: status=${snapshot.citationVerificationStatus ?? "unknown"}, count=${snapshot.citationBibliographyEntryCount ?? 0}/${snapshot.citationMinimumCount ?? 0}, placeholders=${snapshot.citationUnresolvedPlaceholderCount ?? "unknown"}/${snapshot.citationAllowedPlaceholderCount ?? "unknown"}, verified=${snapshot.citationVerifiedCount ?? 0}, suspicious=${snapshot.citationSuspiciousCount ?? 0}, hallucinated=${snapshot.citationHallucinatedCount ?? 0}, topic_relevance=${snapshot.citationTopicRelevanceStatus ?? "unknown"}`
     );
     if (snapshot.citationBibliographyPath) {
       lines.push(`Citation bibliography: ${snapshot.citationBibliographyPath}`);
@@ -877,6 +877,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
     if (snapshot.citationPendingReason) {
       lines.push(`Citation pending_reason: ${snapshot.citationPendingReason}`);
+    }
+    if (snapshot.citationTopicRelevanceSummary) {
+      lines.push(`Citation topicality: ${snapshot.citationTopicRelevanceSummary}`);
     }
   }
   if (snapshot.writingSessionStatus && snapshot.writingSessionStatus !== "missing") {

@@ -1,3 +1,19 @@
+/**
+ * 写作和审查状态类型定义。
+ *
+ * 定义写作流程中各子系统的状态——
+ * CitationIntegrityState: 引用完整性（验证引用是否真实存在、检测幻觉引用）
+ * WritingSectionPacketState: 章节写作包（每章的目标、允许的主张、需要的图谱证据）
+ * WritingSessionState: 写作会话（当前进度、完成的章节）
+ * ReviewSessionState: 审查会话（审查轮次、评分、裁决）
+ * ReviewScoreRecord: 审查分数记录（每轮的得分和评语）
+ * ExternalReviewState: 外部审查
+ * GraphGuidedWritingState: 图谱引导写作
+ *
+ * 为什么需要引用完整性检查？因为 LLM 可能编造不存在的引用——
+ * 需要逐个验证每个引用是否来自真实的论文来源（sourceOfTruth）。
+ * DEFAULT_CITATION_SOURCE_OF_TRUTH 定义了可以引用的来源列表。
+ */
 import {
   asRecord,
   asStringArray,
@@ -27,13 +43,20 @@ type CitationIntegrityStateLike = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string;
+  bibliographyEntryCount: number;
   bibliographyPageCount: number;
+  minimumCitationCount: number;
   allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
   suspiciousCitationCount: number;
   hallucinatedCitationCount: number;
+  topicRelevanceTopic: string | null;
+  topicRelevanceStatus: string;
+  relevantCitationCount: number;
+  offTopicCitationCount: number;
+  topicRelevanceSummary: string | null;
   lastVerifiedAt: string | null;
   pendingReason: string | null;
 };
@@ -130,6 +153,11 @@ export type ReviewScoreRecord = {
   timestamp: string;
 };
 
+/**
+ * 解析单条审查分数记录。
+ *
+ * 记录一次审查的评分——总体得分、各维度分数、评语。
+ */
 export function normalizeReviewScoreRecord(value: unknown): ReviewScoreRecord | null {
   if (!value || typeof value !== "object") return null;
   const rec = value as Record<string, unknown>;
@@ -170,6 +198,9 @@ export function normalizeReviewScoreRecord(value: unknown): ReviewScoreRecord | 
   };
 }
 
+/**
+ * 解析审查分数记录列表。
+ */
 export function normalizeReviewScoreRecords(value: unknown): ReviewScoreRecord[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -212,6 +243,12 @@ type ExternalReviewStateLike = {
   pendingReason: string | null;
 };
 
+/**
+ * 解析引用完整性状态。
+ *
+ * 从 unknown JSON 安全转换。记录引用验证的状态——
+ * 已验证数量、可疑数量、幻觉数量、所有引用是否真实。
+ */
 export function normalizeCitationIntegrityState(
   value: unknown
 ): CitationIntegrityStateLike {
@@ -232,10 +269,22 @@ export function normalizeCitationIntegrityState(
       DEFAULT_CITATION_REPORT_PATH,
     verificationStatus:
       normalizeStage(record.verificationStatus ?? record.verification_status) ?? "pending",
+    bibliographyEntryCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["bibliographyEntryCount", "bibliography_entry_count"]) ?? 0
+      )
+    ),
     bibliographyPageCount: Math.max(
       0,
       Math.floor(
         pickNumber(record, ["bibliographyPageCount", "bibliography_page_count"]) ?? 0
+      )
+    ),
+    minimumCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["minimumCitationCount", "minimum_citation_count"]) ?? 0
       )
     ),
     allCitationsReal:
@@ -301,11 +350,38 @@ export function normalizeCitationIntegrityState(
         ]) ?? 0
       )
     ),
+    topicRelevanceTopic: pickString(record, [
+      "topicRelevanceTopic",
+      "topic_relevance_topic",
+    ]),
+    topicRelevanceStatus:
+      normalizeStage(
+        record.topicRelevanceStatus ?? record.topic_relevance_status
+      ) ?? "unknown",
+    relevantCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["relevantCitationCount", "relevant_citation_count"]) ?? 0
+      )
+    ),
+    offTopicCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["offTopicCitationCount", "off_topic_citation_count"]) ?? 0
+      )
+    ),
+    topicRelevanceSummary: pickString(record, [
+      "topicRelevanceSummary",
+      "topic_relevance_summary",
+    ]),
     lastVerifiedAt: pickString(record, ["lastVerifiedAt", "last_verified_at"]),
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
   };
 }
 
+/**
+ * 序列化引用完整性状态。
+ */
 export function serializeCitationIntegrityState(
   state: CitationIntegrityStateLike
 ): Record<string, unknown> {
@@ -316,18 +392,31 @@ export function serializeCitationIntegrityState(
     bibliography_path: state.bibliographyPath,
     verification_report_path: state.verificationReportPath,
     verification_status: state.verificationStatus,
+    bibliography_entry_count: state.bibliographyEntryCount,
     bibliography_page_count: state.bibliographyPageCount,
+    minimum_citation_count: state.minimumCitationCount,
     all_citations_real: state.allCitationsReal,
     allowed_placeholder_count: state.allowedPlaceholderCount,
     unresolved_placeholder_count: state.unresolvedPlaceholderCount,
     verified_citation_count: state.verifiedCitationCount,
     suspicious_citation_count: state.suspiciousCitationCount,
     hallucinated_citation_count: state.hallucinatedCitationCount,
+    topic_relevance_topic: state.topicRelevanceTopic,
+    topic_relevance_status: state.topicRelevanceStatus,
+    relevant_citation_count: state.relevantCitationCount,
+    off_topic_citation_count: state.offTopicCitationCount,
+    topic_relevance_summary: state.topicRelevanceSummary,
     last_verified_at: state.lastVerifiedAt,
     pending_reason: state.pendingReason,
   };
 }
 
+/**
+ * 解析章节写作包状态。
+ *
+ * 记录每章的写作指导——目标、允许的主张、需要的图谱证据、
+ * 禁止的无支持主张、需要的引用数量、需要的图表等。
+ */
 export function normalizeWritingSectionPacketState(
   key: string,
   value: unknown
@@ -373,6 +462,9 @@ export function normalizeWritingSectionPacketState(
   };
 }
 
+/**
+ * 序列化章节写作包状态。
+ */
 export function serializeWritingSectionPacketState(
   state: WritingSectionPacketStateLike
 ): Record<string, unknown> {
@@ -397,6 +489,12 @@ export function serializeWritingSectionPacketState(
   };
 }
 
+/**
+ * 解析写作会话状态。
+ *
+ * 记录写作会话的完整状态——已完成的章节、当前进度、各章节包、
+ * 写作模板、段落逻辑检查状态等。
+ */
 export function normalizeWritingSessionState(
   value: unknown
 ): WritingSessionStateLike {
@@ -479,6 +577,9 @@ export function normalizeWritingSessionState(
   };
 }
 
+/**
+ * 序列化写作会话状态。
+ */
 export function serializeWritingSessionState(
   state: WritingSessionStateLike
 ): Record<string, unknown> {
@@ -514,6 +615,11 @@ export function serializeWritingSessionState(
   };
 }
 
+/**
+ * 解析审查会话评分标准。
+ *
+ * 定义审查的评分维度——创新性、技术质量、写作质量等。
+ */
 export function normalizeReviewSessionRubric(
   value: unknown
 ): ReviewSessionRubricLike {
@@ -535,6 +641,9 @@ export function normalizeReviewSessionRubric(
   };
 }
 
+/**
+ * 序列化审查会话评分标准。
+ */
 export function serializeReviewSessionRubric(
   rubric: ReviewSessionRubricLike
 ): Record<string, unknown> {
@@ -550,6 +659,11 @@ export function serializeReviewSessionRubric(
   };
 }
 
+/**
+ * 解析审查会话状态。
+ *
+ * 记录审查会话——评分标准、分数记录、裁决、待解决原因。
+ */
 export function normalizeReviewSessionState(
   value: unknown
 ): ReviewSessionStateLike {
@@ -582,6 +696,9 @@ export function normalizeReviewSessionState(
   };
 }
 
+/**
+ * 序列化审查会话状态。
+ */
 export function serializeReviewSessionState(
   state: ReviewSessionStateLike
 ): Record<string, unknown> {
@@ -602,6 +719,12 @@ export function serializeReviewSessionState(
   };
 }
 
+/**
+ * 解析图谱引导写作状态。
+ *
+ * 记录基于知识图谱的写作引导——图谱证据摘要、
+ * 已使用的图谱节点、待解决的证据缺口。
+ */
 export function normalizeGraphGuidedWritingState(
   value: unknown
 ): GraphGuidedWritingStateLike {
@@ -668,6 +791,9 @@ export function normalizeGraphGuidedWritingState(
   };
 }
 
+/**
+ * 序列化图谱引导写作状态。
+ */
 export function serializeGraphGuidedWritingState(
   state: GraphGuidedWritingStateLike
 ): Record<string, unknown> {
@@ -691,6 +817,9 @@ export function serializeGraphGuidedWritingState(
   };
 }
 
+/**
+ * 解析外部审查状态。
+ */
 export function normalizeExternalReviewState(
   value: unknown
 ): ExternalReviewStateLike {
@@ -728,6 +857,9 @@ export function normalizeExternalReviewState(
   };
 }
 
+/**
+ * 序列化外部审查状态。
+ */
 export function serializeExternalReviewState(
   state: ExternalReviewStateLike
 ): Record<string, unknown> {

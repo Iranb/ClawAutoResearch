@@ -943,13 +943,20 @@ type CitationIntegrityState = {
   bibliographyPath: string | null;
   verificationReportPath: string | null;
   verificationStatus: string;
+  bibliographyEntryCount: number;
   bibliographyPageCount: number;
+  minimumCitationCount: number;
   allCitationsReal: boolean;
   allowedPlaceholderCount: number;
   unresolvedPlaceholderCount: number;
   verifiedCitationCount: number;
   suspiciousCitationCount: number;
   hallucinatedCitationCount: number;
+  topicRelevanceTopic: string | null;
+  topicRelevanceStatus: string;
+  relevantCitationCount: number;
+  offTopicCitationCount: number;
+  topicRelevanceSummary: string | null;
   lastVerifiedAt: string | null;
   pendingReason: string | null;
 };
@@ -2043,11 +2050,18 @@ export type WorkflowSnapshot = {
   citationVerificationReportPath: string | null;
   citationBibliographyPath: string | null;
   citationSourceOfTruth: string[];
+  citationBibliographyEntryCount: number | null;
+  citationMinimumCount: number | null;
   citationUnresolvedPlaceholderCount: number | null;
   citationAllowedPlaceholderCount: number | null;
   citationVerifiedCount: number | null;
   citationSuspiciousCount: number | null;
   citationHallucinatedCount: number | null;
+  citationTopicRelevanceTopic: string | null;
+  citationTopicRelevanceStatus: string | null;
+  citationRelevantCount: number | null;
+  citationOffTopicCount: number | null;
+  citationTopicRelevanceSummary: string | null;
   citationPendingReason: string | null;
   citationCollectionStatus: string | null;
   citationCollectionCandidateCount: number | null;
@@ -6053,6 +6067,7 @@ async function getMissingStageSignals(params: {
 	          normalizeReviewPressurePacketState,
 	          getReviewPressurePacketValidationErrors,
 	          normalizeWritingContractState,
+          normalizeCitationIntegrityState,
           normalizeResultsStorylineState,
           normalizeTitleAbstractIntroWorkbenchState,
 	          fileHasNonWhitespaceContent,
@@ -9128,11 +9143,18 @@ export async function recordCitationVerification(params: {
       "# Citation Verification",
       "",
       `Verification Status: ${result.state.verificationStatus ?? "unknown"}`,
+      `Bibliography Entries: ${result.state.bibliographyEntryCount ?? 0}`,
+      `Minimum Citation Count: ${result.state.minimumCitationCount ?? 0}`,
       `Bibliography Pages: ${result.state.bibliographyPageCount ?? 0}`,
       `All Citations Real: ${result.state.allCitationsReal ? "yes" : "no"}`,
       `Verified Citations: ${result.state.verifiedCitationCount}`,
       `Suspicious Citations: ${result.state.suspiciousCitationCount}`,
       `Hallucinated Citations: ${result.state.hallucinatedCitationCount}`,
+      `Topic Relevance Topic: ${result.state.topicRelevanceTopic ?? "unset"}`,
+      `Topic Relevance Status: ${result.state.topicRelevanceStatus ?? "unknown"}`,
+      `Relevant Citations: ${result.state.relevantCitationCount ?? 0}`,
+      `Off-Topic Citations: ${result.state.offTopicCitationCount ?? 0}`,
+      `Topic Relevance Summary: ${result.state.topicRelevanceSummary ?? "none"}`,
       `Unresolved Placeholders: ${result.state.unresolvedPlaceholderCount}/${result.state.allowedPlaceholderCount}`,
       `Last Verified At: ${result.state.lastVerifiedAt ?? "unset"}`,
       `Pending Reason: ${result.state.pendingReason ?? "none"}`,
@@ -9389,6 +9411,8 @@ export async function runWorkflowAutoIterator(params: {
   cooldownSeconds?: number;
   policy?: WorkflowGuardPolicy;
   now?: string;
+  requesterSessionKey?: string | null;
+  sessionBindingKey?: string | null;
 }): Promise<AutoIteratorResult> {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();

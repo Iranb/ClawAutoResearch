@@ -993,6 +993,87 @@ test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair gu
   assert.equal(runs.length, 0);
 });
 
+test("maybeLaunchAutoStageForProject dispatches a prepared owner handoff even when next-owner bootstrap signals are still missing", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "write",
+      pendingHandoff: true,
+      pendingHandoffPhase: "prepared",
+      missingStageSignals: [
+        "PROJECT_MANIFEST.json.results_storyline.status must not be missing during WRITE",
+      ],
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "academic_writer",
+          stage: "write",
+          summary: "Draft the paper under the active writing contract.",
+          command: "/paper-phase",
+          mailboxMessageId: "mailbox-1",
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.owner, "academic_writer");
+  assert.equal(launch.sessionKey, "agent:academic_writer:discord:group:paper-lab");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message, /Immediate command: \/paper-phase/);
+});
+
 test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated subagent session", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");

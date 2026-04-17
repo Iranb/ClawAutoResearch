@@ -60,6 +60,7 @@ export interface ExecutionStageDeps {
   normalizeReviewPressurePacketState: (value: unknown) => any;
   getReviewPressurePacketValidationErrors: (state: any) => string[];
   normalizeWritingContractState: (value: unknown) => any;
+  normalizeCitationIntegrityState?: (value: unknown) => any;
   normalizeResultsStorylineState: (value: unknown) => any;
   normalizeTitleAbstractIntroWorkbenchState: (value: unknown) => any;
   fileHasNonWhitespaceContent: (targetPath: string | null) => Promise<boolean>;
@@ -405,6 +406,39 @@ export async function collectReviewStageMissingSignals(
     missing.push(
       `PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must be ready before REVIEW closeout (current: ${titleAbstractIntroWorkbench.status})`
     );
+  }
+  const citationIntegrity = deps.normalizeCitationIntegrityState
+    ? deps.normalizeCitationIntegrityState(ctx.manifest?.citation_integrity)
+    : {
+        enabled: false,
+        verificationRequired: false,
+        verificationStatus: "missing",
+        bibliographyEntryCount: 0,
+        minimumCitationCount: 0,
+        topicRelevanceStatus: "unknown",
+      };
+  if (citationIntegrity.enabled && citationIntegrity.verificationRequired) {
+    if (citationIntegrity.verificationStatus !== "verified") {
+      missing.push(
+        `PROJECT_MANIFEST.json.citation_integrity.verification_status must be verified before REVIEW closeout (current: ${citationIntegrity.verificationStatus})`
+      );
+    }
+    if (
+      citationIntegrity.minimumCitationCount > 0 &&
+      citationIntegrity.bibliographyEntryCount < citationIntegrity.minimumCitationCount
+    ) {
+      missing.push(
+        `citation count must reach ${citationIntegrity.minimumCitationCount} before REVIEW closeout (current: ${citationIntegrity.bibliographyEntryCount})`
+      );
+    }
+    if (
+      citationIntegrity.minimumCitationCount > 0 &&
+      citationIntegrity.topicRelevanceStatus !== "ready"
+    ) {
+      missing.push(
+        `PROJECT_MANIFEST.json.citation_integrity.topic_relevance_status must be ready before REVIEW closeout (current: ${citationIntegrity.topicRelevanceStatus})`
+      );
+    }
   }
   return missing;
 }

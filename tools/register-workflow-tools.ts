@@ -774,7 +774,9 @@ async function maybeAutoRefreshCitationVerification(params: {
       calibration.suspiciousCount > 0 ||
       audit.hallucinatedCitationCount > 0 ||
       audit.suspiciousCitationCount > 0 ||
-      audit.unresolvedPlaceholderCount > 0
+      audit.unresolvedPlaceholderCount > 0 ||
+      audit.citationCountStatus !== "ready" ||
+      audit.topicRelevanceStatus === "needs_revision"
         ? "needs_revision"
         : "verified";
     const verification = await recordCitationVerification({
@@ -2562,6 +2564,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 projectRoot,
                 policy: workflowPolicy,
                 agentId: ctx.agentId,
+                requesterSessionKey: ctx.sessionKey,
+                sessionBindingKey: snapshot.channelProjectBindingKey,
                 mode: readString(iterator?.mode),
                 queueMailbox:
                   iterator?.queueMailbox === false ||

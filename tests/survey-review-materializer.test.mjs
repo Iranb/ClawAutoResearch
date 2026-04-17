@@ -592,4 +592,17 @@ test("completed survey review can advance into write stage", async (t) => {
   assert.equal(manifest.orchestration_state.pending_owner_candidate, "academic_writer");
   assert.equal(manifest.orchestration_state.pending_stage_candidate, "write");
   assert.equal(manifest.orchestration_state.handoff_phase, "prepared");
+  assert.equal(result.pendingHandoff, true);
+  assert.equal(result.pendingHandoffPhase, "prepared");
+  assert.equal(
+    result.recommendedActions.some(
+      (action) =>
+        action.kind === "drive_stage" &&
+        action.owner === "academic_writer" &&
+        action.stage === "write" &&
+        typeof action.command === "string" &&
+        action.command.includes("/paper-phase")
+    ),
+    true
+  );
 });
