@@ -287,6 +287,7 @@ function buildWritingHookPolicies(params: {
     "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
     "academic_writer/FIGURE_REGISTRY.json",
     "academic_writer/TABLE_REGISTRY.json",
+    "academic_writer/SURVEY_VISUALIZATION_PLAN.md",
     "academic_writer/paper/main.tex",
     "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
     "researcher/SOTA_MATRIX.md",

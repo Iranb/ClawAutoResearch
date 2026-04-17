@@ -1,5 +1,9 @@
 import * as path from "node:path";
 import type { ManifestLike, StageSignalsContext } from "./types";
+import {
+  auditExperimentLaunchDecisionObject,
+  auditTheoryStateObject,
+} from "../workflow-intermediate-artifact-audit";
 
 function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -101,6 +105,17 @@ export async function collectExperimentStageMissingSignals(
       const resolved = deps.resolveProjectArtifactPath(ctx.projectRoot, artifactPath);
       if (!resolved || !(await deps.pathExists(resolved))) {
         missing.push(`{PROJ}/${artifactPath}`);
+      }
+    }
+    const launchDecisionResolvedPath = experimentReview.launchDecisionPath
+      ? deps.resolveProjectArtifactPath(ctx.projectRoot, experimentReview.launchDecisionPath)
+      : null;
+    if (launchDecisionResolvedPath) {
+      const decisionAudit = auditExperimentLaunchDecisionObject(
+        await deps.readJsonIfExists(launchDecisionResolvedPath)
+      );
+      if (!decisionAudit.ok) {
+        missing.push(...decisionAudit.issues);
       }
     }
     if (!isReviewCompleted(experimentReview.plannerStatus, null)) {
@@ -283,6 +298,13 @@ export async function collectAnalyzeStageMissingSignals(
       if (!(await deps.pathExists(path.join(ctx.projectRoot, "analyzer", file)))) {
         missing.push(`{PROJ}/analyzer/${file}`);
       }
+    }
+    const theoryStatePath = path.join(ctx.projectRoot, "analyzer", "THEORY_STATE.json");
+    const theoryAudit = auditTheoryStateObject(
+      await deps.readJsonIfExists(theoryStatePath)
+    );
+    if (!theoryAudit.ok) {
+      missing.push(...theoryAudit.issues);
     }
     if (
       !(await deps.isNonEmptyDirectory(path.join(ctx.projectRoot, "analyzer", "proof-packets")))

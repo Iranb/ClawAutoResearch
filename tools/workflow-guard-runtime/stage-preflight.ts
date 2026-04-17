@@ -35,6 +35,7 @@ import { materializeTitleAbstractIntroWorkbench } from "../research-writing/titl
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
 import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
+import { materializeIntermediateArtifactHookPolicies } from "../workflow-intermediate-artifact-hook-policies";
 import {
   normalizeInnovationSynthesisState,
   normalizeStoryGapSearchRequisitionState,
@@ -112,6 +113,11 @@ type StagePreflightDeps = {
     stage: string | null;
     paperMode?: "conference" | "journal" | "survey" | null;
     topTierVerdict?: string | null;
+  }) => Promise<unknown>;
+  materializeIntermediateArtifactHookPolicies?: (params: {
+    projectRoot: string;
+    stage: string | null;
+    paperMode?: "conference" | "journal" | "survey" | null;
   }) => Promise<unknown>;
   materializeInnovationSynthesisState?: (params: {
     projectRoot: string;
@@ -1298,6 +1304,26 @@ export async function maybePrepareWorkflowStageContracts(params: {
       topTierVerdict,
     });
   });
+  await runStep(
+    "intermediate_artifact_hook_policies",
+    async ({ stage }) =>
+      ["frontier_mapping", "idea", "analyze", "submit"].includes(stage ?? ""),
+    async () => {
+      const writingContract =
+        manifest.writing_contract && typeof manifest.writing_contract === "object"
+          ? manifest.writing_contract
+          : {};
+      const paperMode = normalizeWritingContractState(writingContract).paperMode;
+      return (
+        params.deps.materializeIntermediateArtifactHookPolicies ??
+        materializeIntermediateArtifactHookPolicies
+      )({
+        projectRoot,
+        stage: params.stage,
+        paperMode,
+      });
+    }
+  );
   await runStep("cycle_memory", shouldRefreshCycleMemory, async () => {
     await materializeCycleMemory({
       projectRoot,

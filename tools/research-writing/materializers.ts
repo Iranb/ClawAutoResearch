@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { writeProjectJson } from "../research-contracts/core/project-io";
 import type {
   PaperStoryState,
   ReviewPressurePacketState,
@@ -200,10 +201,200 @@ Use this before calling the survey draft mature.
 ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What would a skeptical reviewer say is still thin, unsupported, or unfairly compared?"}
 `;
 
+  const visualizationPlanPath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "SURVEY_VISUALIZATION_PLAN.md"
+  );
+  const visualizationPlan = `# Survey Visualization Plan
+
+## Goal
+Turn the survey from a bibliography dump into a comparison-driven manuscript with explicit tables and figures.
+
+## Minimum Comparison Tables
+
+### Table 1 — Family / Taxonomy Overview
+- Purpose: compare the main method families or organizing themes in one place.
+- Suggested columns: family, core assumption, representative methods, strengths, weaknesses, blind spots.
+- Reuse signals:
+${briefLines.length > 0 ? briefLines.map((line) => `  - ${line}`).join("\n") : "  - Derive family labels from SURVEY_BRIEF.md and LITERATURE_REVIEW.md."}
+
+### Table 2 — Benchmark / Metric Landscape
+- Purpose: compare datasets, metrics, and evaluation settings without collapsing incomparable results.
+- Suggested columns: method, dataset, metric, backbone or modality, best result, caveat / fairness warning.
+- Reuse signals:
+${comparativeLines.length > 0 ? comparativeLines.map((line) => `  - ${line}`).join("\n") : "  - Pull comparison rows from SOTA_MATRIX.md and REVIEW_PROTOCOL.md."}
+
+### Optional Table 3 — Tradeoffs / Failure Modes
+- Use when one table cannot honestly carry robustness, efficiency, calibration, or failure-mode comparisons.
+- Suggested columns: method, best-case win, known weakness, robustness note, efficiency note, contradiction / non-comparable warning.
+- Trigger:
+${gapLines.length > 0 ? gapLines.map((line) => `  - ${line}`).join("\n") : "  - Add this table when the evidence synthesis still feels like prose-only comparison."}
+
+## Minimum Figures
+
+### Figure 1 — Survey Taxonomy / Field Map
+- Purpose: show how the field is partitioned and where boundaries blur.
+- Candidate formats: hierarchy, flow chart, 2-axis matrix, or concept map.
+- Backing artifacts:
+  - academic_writer/story/PIPELINE_FIGURE_SKETCH.md
+  - academic_writer/SURVEY_SECTION_BRIEFS.md
+
+### Figure 2 — Benchmark / Comparison Landscape
+- Purpose: show comparison coverage at a glance.
+- Candidate formats: dataset-metric heatmap, benchmark matrix, timeline, or tradeoff map.
+- Backing artifacts:
+  - academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md
+  - researcher/SOTA_MATRIX.md
+  - researcher/COVERAGE_SUMMARY.md
+
+## Section-to-Visual Mapping
+- taxonomy -> Table 1 + Figure 1
+- evidence_synthesis -> Table 1 or Table 3, depending on tradeoff depth
+- benchmark_landscape -> Table 2 + Figure 2
+- open_problems -> add a small synthesis table if prose alone cannot keep the contrast honest
+
+## Writer Rule
+- Multiple tables are allowed and encouraged when different metrics, datasets, or evaluation assumptions cannot be represented honestly in a single leaderboard.
+- Prefer explicit strengths / weaknesses / caveats columns over raw score dumps.
+- If a comparison is not fair, label it as non-comparable instead of forcing it into the same table.
+`;
+
+  const tableDraftDir = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "paper",
+    "tables"
+  );
+  const figureDraftDir = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "paper",
+    "figures"
+  );
+  const taxonomyTablePath = path.join(tableDraftDir, "survey_taxonomy_overview.tex");
+  const benchmarkTablePath = path.join(tableDraftDir, "survey_benchmark_landscape.tex");
+  const taxonomyFigureSpecPath = path.join(
+    figureDraftDir,
+    "survey_taxonomy_map.md"
+  );
+  const benchmarkFigureSpecPath = path.join(
+    figureDraftDir,
+    "survey_benchmark_comparison_map.md"
+  );
+  const visualAssetIndexPath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "SURVEY_VISUAL_ASSET_INDEX.json"
+  );
+
+  const taxonomyRows = briefLines
+    .slice(0, 4)
+    .map((line, index) => `Family ${index + 1} & ${line} & representative papers here & strengths here & weaknesses here \\\\`);
+  const benchmarkRows = comparativeLines
+    .slice(0, 4)
+    .map(
+      (line, index) =>
+        `Method ${index + 1} & dataset here & metric here & best result here & ${line} \\\\`
+    );
+  const taxonomyTable = `%% Survey taxonomy comparison draft
+%% Fill the placeholders from SURVEY_BRIEF.md / LITERATURE_REVIEW.md before including in main.tex.
+\\begin{table*}[t]
+\\centering
+\\caption{Taxonomy / family overview for the survey topic. Replace placeholders with concrete family names, representative methods, and evidence-backed strengths / weaknesses.}
+\\begin{tabular}{p{0.14\\textwidth} p{0.18\\textwidth} p{0.22\\textwidth} p{0.2\\textwidth} p{0.2\\textwidth}}
+\\hline
+Family & Core assumption & Representative methods & Strengths & Weaknesses \\\\
+\\hline
+${taxonomyRows.length > 0 ? taxonomyRows.join("\n") : "Family A & assumption here & representative methods here & strengths here & weaknesses here \\\\"}
+\\hline
+\\end{tabular}
+\\end{table*}
+`;
+  const benchmarkTable = `%% Survey benchmark / metric landscape draft
+%% Separate incompatible settings into additional tables if one table becomes misleading.
+\\begin{table*}[t]
+\\centering
+\\caption{Benchmark and metric landscape. Replace placeholders with evidence-backed numbers and mark non-comparable settings explicitly.}
+\\begin{tabular}{p{0.16\\textwidth} p{0.16\\textwidth} p{0.14\\textwidth} p{0.16\\textwidth} p{0.28\\textwidth}}
+\\hline
+Method & Dataset & Metric & Best result & Caveat / fairness warning \\\\
+\\hline
+${benchmarkRows.length > 0 ? benchmarkRows.join("\n") : "Method A & dataset here & metric here & result here & caveat / fairness warning here \\\\"}
+\\hline
+\\end{tabular}
+\\end{table*}
+`;
+  const taxonomyFigureSpec = `# Survey Taxonomy Figure Spec
+
+## Purpose
+- Show the field partition and where boundaries blur.
+
+## Candidate encodings
+- hierarchy
+- 2-axis matrix
+- concept map
+
+## Inputs to reuse
+${briefLines.length > 0 ? briefLines.map((line) => `- ${line}`).join("\n") : "- Derive family labels from SURVEY_BRIEF.md and LITERATURE_REVIEW.md."}
+
+## Annotation reminders
+- label overlap zones explicitly
+- do not imply a rigid taxonomy if boundaries are fuzzy
+- keep the figure aligned with the taxonomy section headings
+`;
+  const benchmarkFigureSpec = `# Survey Benchmark Comparison Figure Spec
+
+## Purpose
+- Show benchmark and comparison coverage at a glance.
+
+## Candidate encodings
+- dataset-metric heatmap
+- tradeoff matrix
+- benchmark timeline
+
+## Inputs to reuse
+${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join("\n") : "- Reuse rows from SOTA_MATRIX.md and REVIEW_PROTOCOL.md."}
+
+## Annotation reminders
+- highlight incomparable settings instead of collapsing them
+- emphasize strengths / weaknesses / tradeoffs, not only the top score
+- use additional tables when one figure cannot honestly summarize the evidence
+`;
+
   await Promise.all([
+    fs.mkdir(tableDraftDir, { recursive: true }),
+    fs.mkdir(figureDraftDir, { recursive: true }),
     writeTextEnsured(comparativeAnalysisPath, comparativeAnalysis),
     writeTextEnsured(sectionBriefsPath, sectionBriefs),
     writeTextEnsured(selfReviewPath, selfReview),
+    writeTextEnsured(visualizationPlanPath, visualizationPlan),
+    writeTextEnsured(taxonomyTablePath, taxonomyTable),
+    writeTextEnsured(benchmarkTablePath, benchmarkTable),
+    writeTextEnsured(taxonomyFigureSpecPath, taxonomyFigureSpec),
+    writeTextEnsured(benchmarkFigureSpecPath, benchmarkFigureSpec),
+    writeProjectJson(params.projectRoot, "academic_writer/SURVEY_VISUAL_ASSET_INDEX.json", {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      topic,
+      tableDrafts: [
+        "academic_writer/paper/tables/survey_taxonomy_overview.tex",
+        "academic_writer/paper/tables/survey_benchmark_landscape.tex",
+      ],
+      figureSpecs: [
+        "academic_writer/paper/figures/survey_taxonomy_map.md",
+        "academic_writer/paper/figures/survey_benchmark_comparison_map.md",
+      ],
+      sourceArtifacts: [
+        "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
+        "academic_writer/SURVEY_SECTION_BRIEFS.md",
+        "academic_writer/SURVEY_SELF_REVIEW.md",
+        "researcher/SOTA_MATRIX.md",
+        "researcher/COVERAGE_SUMMARY.md",
+        "researcher/GAP_SYNTHESIS.md",
+        "researcher/REVIEW_PROTOCOL.md",
+      ],
+    }),
   ]);
 
   await materializeSurveyAnalysis({
@@ -216,6 +407,12 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What
       "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
       "academic_writer/SURVEY_SECTION_BRIEFS.md",
       "academic_writer/SURVEY_SELF_REVIEW.md",
+      "academic_writer/SURVEY_VISUALIZATION_PLAN.md",
+      "academic_writer/SURVEY_VISUAL_ASSET_INDEX.json",
+      "academic_writer/paper/tables/survey_taxonomy_overview.tex",
+      "academic_writer/paper/tables/survey_benchmark_landscape.tex",
+      "academic_writer/paper/figures/survey_taxonomy_map.md",
+      "academic_writer/paper/figures/survey_benchmark_comparison_map.md",
       "researcher/SOURCE_TO_CLAIM_INDEX.json",
     ],
   };

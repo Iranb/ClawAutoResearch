@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { readTextIfExists } from "../workflow-guard-core/fs";
 import {
   getIdeaCatalystRequisitionBlockingSignal,
   getIdeaCatalystRequiredArtifactPaths,
@@ -8,6 +9,10 @@ import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
+import {
+  auditIdeaAuditText,
+  auditIdeaReportText,
+} from "../workflow-intermediate-artifact-audit";
 import type {
   ManifestLike,
   StageSignalsContext,
@@ -114,11 +119,23 @@ export async function collectIdeaStageMissingSignals(
     }
   }
 
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "researcher", "IDEA_REPORT.md")))) {
+  const ideaReportPath = path.join(ctx.projectRoot, "researcher", "IDEA_REPORT.md");
+  if (!(await deps.pathExists(ideaReportPath))) {
     missing.push("{PROJ}/researcher/IDEA_REPORT.md");
+  } else {
+    const audit = auditIdeaReportText(await readTextIfExists(ideaReportPath));
+    if (!audit.ok) {
+      missing.push(...audit.issues);
+    }
   }
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "researcher", "IDEA_AUDIT.md")))) {
+  const ideaAuditPath = path.join(ctx.projectRoot, "researcher", "IDEA_AUDIT.md");
+  if (!(await deps.pathExists(ideaAuditPath))) {
     missing.push("{PROJ}/researcher/IDEA_AUDIT.md");
+  } else {
+    const audit = auditIdeaAuditText(await readTextIfExists(ideaAuditPath));
+    if (!audit.ok) {
+      missing.push(...audit.issues);
+    }
   }
 
   const ideationContract = deps.normalizeIdeationContractState(

@@ -546,9 +546,32 @@ async function seedPlanProject(projectRoot) {
   ]) {
     await writeText(path.join(projectRoot, "graph", name));
   }
-  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
-  await writeText(path.join(projectRoot, "researcher", "IDEA_REPORT.md"));
-  await writeText(path.join(projectRoot, "researcher", "IDEA_AUDIT.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    [
+      "# Frontier Report",
+      "- limitation: current corpus under-covers long-tail failure modes.",
+      "- contradiction: methods with stronger benchmarks still depend on brittle supervision.",
+      "- transfer opportunity: graph-grounded retrieval could stabilize evaluation coverage.",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "IDEA_REPORT.md"),
+    [
+      "# Idea Report",
+      "- candidate: build a graph-grounded benchmark taxonomy and compare families by evidence regime.",
+      "- advantage: creates a stronger planning target than a generic benchmark expansion.",
+      "- tradeoff: requires tighter screening discipline and clearer exclusion rules.",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "IDEA_AUDIT.md"),
+    [
+      "# Idea Audit",
+      "- risk: taxonomy-first framing may hide unresolved benchmark gaps unless exclusion logic stays explicit.",
+      "- reject: generic corpus growth without a benchmark taxonomy because it does not create a sharp plan target.",
+    ].join("\n")
+  );
   await writeJson(
     path.join(projectRoot, "researcher", "reasoning", "track-main", "TOPIC_SUMMARY.json"),
     {
@@ -866,7 +889,9 @@ async function seedWriteProject(projectRoot) {
     schema_version: 1,
     status: "draft",
     overall_signal: "green",
-    theorem_candidates: [],
+    body_guidance:
+      "Keep the main text to the stability claim and push derivation detail into the appendix.",
+    theorem_candidates: [{ statement: "Bounded drift preserves ranking stability." }],
     lemma_packets: [],
     appendix_sections: [],
   });

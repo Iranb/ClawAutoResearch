@@ -16,6 +16,21 @@ allowed-tools:
 
 Use when the internal review loop was interrupted and Reviewer needs to continue from durable review state.
 
+## Workflow Orientation
+
+This skill is the recovery entrypoint for Reviewer inside the review / revise / write loop.
+
+Before acting, classify the current state:
+- ordinary in-progress review round
+- stale interrupted review round
+- write-side revise packet waiting for recheck
+- submit-side package verification pass
+
+Downstream contract:
+- if you conclude `revise`, the system should be able to route a bounded revision packet back to Writer
+- if you conclude `pass`, the project may continue toward submit packaging
+- if you conclude `block`, make the integrity failure explicit enough that revision is clearly insufficient
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** in resumed review reasoning; if attribution was already muddy, keep that concern visible.

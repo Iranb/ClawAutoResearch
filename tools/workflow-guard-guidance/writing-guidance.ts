@@ -12,6 +12,8 @@ export function buildWritingGuidance(
   const append: string[] = [];
   const paperStory = deps.asRecord(params.manifest?.paper_story_state);
   const reviewPressure = deps.asRecord(params.manifest?.review_pressure_packet);
+  const writingFlowMap =
+    "Writing flow map: write builds or revises manuscript artifacts, review stress-tests them, submit packages the final response bundle, and any revise verdict should route back into another targeted write pass instead of widening scope.";
 
   if (
     params.role === "researcher" &&
@@ -25,6 +27,7 @@ export function buildWritingGuidance(
   }
 
   if (params.role === "academic_writer") {
+    prepend.push(writingFlowMap);
     if (params.writingContract.paperMode) {
       prepend.push(
         `Honor writing mode ${params.writingContract.paperMode}: body=${params.writingContract.bodyPageBudget ?? "unset"} pages, refs=${params.writingContract.referencePageBudget ?? "unset"} pages, body_words=${params.writingContract.bodyWordTargetMin ?? "unset"}-${params.writingContract.bodyWordTargetMax ?? "unset"}.`
@@ -73,6 +76,9 @@ export function buildWritingGuidance(
         `Keep the revision scaffold current via ${deps.asString(paperStory.revision_cycle_path) ?? "academic_writer/PAPER_REVISION_STATE.json"} so section pass, intro-method consistency, and full-paper adversarial review stay explicit.`
       );
       append.push(
+        "Revision loop rule: when review or cross-review returns revise, expect the next pass to be targeted. Update only the cited artifacts, preserve the rest of the manuscript state, then hand control back through auto_iterator_tick."
+      );
+      append.push(
         "Treat the writing-quality sweep, reader-journey check, and claim-verification sweep as mandatory before section sign-off, not optional polish."
       );
     }
@@ -97,6 +103,11 @@ export function buildWritingGuidance(
         "Post-review rule: answer reviewer-raised points in academic_writer/paper/sections/appendix_reviewer_responses.tex using detailed paragraphs. Tables and figures are allowed and encouraged when they clarify the response better than prose alone."
       );
     }
+    if (params.writingContract.paperMode === "survey") {
+      append.push(
+        "Survey visualization rule: use academic_writer/SURVEY_VISUALIZATION_PLAN.md to plan taxonomy figures and multi-table comparison layouts before treating the draft as structurally complete."
+      );
+    }
   }
 
   if (
@@ -105,6 +116,7 @@ export function buildWritingGuidance(
     params.citationIntegrity.enabled &&
     params.citationIntegrity.verificationRequired
   ) {
+    prepend.push(writingFlowMap);
     prepend.push(
       `Run the citation integrity gate before submission and update ${params.citationReportPath ?? deps.DEFAULT_CITATION_REPORT_PATH}.`
     );
@@ -122,6 +134,16 @@ export function buildWritingGuidance(
   ) {
     append.push(
       `Run reject-first and novelty attack story-pressure checks from ${deps.asString(reviewPressure.reject_first_review_path) ?? "reviewer/story-pressure/REJECT_FIRST_REVIEW.md"} and ${deps.asString(reviewPressure.novelty_attack_path) ?? "reviewer/story-pressure/NOVELTY_ATTACK.md"} before signing off on the manuscript arc.`
+    );
+    append.push(
+      "Review routing rule: use pass/revise/block as workflow control signals. Revise should describe bounded repair work that can be handed back to Writer, not a vague request to rethink the whole paper."
+    );
+  }
+
+  if (params.role === "cross-reviewer") {
+    prepend.push(writingFlowMap);
+    append.push(
+      "Cross-review rule: act like an independent late-stage critic. When you return revise, make the packet precise enough that Writer can answer it in one bounded revision pass or in the rebuttal appendix."
     );
   }
 

@@ -138,6 +138,21 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(paperWrite, /reader'?s journey|where am i\?|load-bearing paragraph|clarity test/i);
   assert.match(paperWrite, /claim verification|major distortion|unverifiable/i);
 
+  const paperPhase = await fs.readFile(
+    path.join(repoRoot, "skills", "academic_writer", "paper-phase", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(paperPhase, /Workflow Orientation/i);
+  assert.match(paperPhase, /analyze -> review -> write -> submit/i);
+  assert.match(paperPhase, /Revision contract:/i);
+
+  const writerResume = await fs.readFile(
+    path.join(repoRoot, "skills", "academic_writer", "resume-pipeline", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(writerResume, /review-driven revise loop/i);
+  assert.match(writerResume, /current revision packet/i);
+
   const researchPaperWriting = await fs.readFile(
     path.join(repoRoot, "skills", "academic_writer", "research-paper-writing", "SKILL.md"),
     "utf8"
@@ -170,6 +185,8 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     reviewPhase,
     /originality|methodological rigor|evidence sufficiency|argument coherence|writing quality/i
   );
+  assert.match(reviewPhase, /Workflow Orientation/i);
+  assert.match(reviewPhase, /revise.*routes back to Writer/i);
 
   const paperReview = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "paper-review", "SKILL.md"),
@@ -190,6 +207,13 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
     /fix_now|downgrade_claim|defer_with_scope_boundary|rebut_with_existing_evidence/i
   );
   assert.match(reviewResponse, /red|amber|green/i);
+
+  const reviewerResume = await fs.readFile(
+    path.join(repoRoot, "skills", "reviewer", "resume-pipeline", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(reviewerResume, /review \/ revise \/ write loop/i);
+  assert.match(reviewerResume, /bounded revision packet back to Writer/i);
 
   const rebuttalTemplate = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "review-response", "REBUTTAL_TEMPLATE.md"),

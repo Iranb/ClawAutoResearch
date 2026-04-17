@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   collectIdeaStageMissingSignals,
 } from "../tools/workflow-guard-stages/ideation-stage-signals.ts";
+import { collectFrontierMappingStageMissingSignals } from "../tools/workflow-guard-stages/foundation-stage-signals.ts";
 import { maybePrepareWorkflowStageContracts } from "../tools/workflow-guard-runtime/stage-preflight.ts";
 import {
   isNonEmptyDirectory,
@@ -208,6 +209,74 @@ test("collectIdeaStageMissingSignals accepts file-backed GRAPH_EVIDENCE.json for
     missing.join("\n"),
     new RegExp(`${seeded.trackId} missing graph-backed innovation evidence`, "i")
   );
+});
+
+test("stage signals reject hollow frontier and idea markdown stubs", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"), "# Frontier\n");
+  await writeText(path.join(projectRoot, "researcher", "IDEA_REPORT.md"), "# Idea Report\n");
+  await writeText(path.join(projectRoot, "researcher", "IDEA_AUDIT.md"), "# Idea Audit\n");
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  for (const file of [
+    "LIMITATION_FRONTIER.md",
+    "CONTRADICTION_FRONTIER.md",
+    "TRANSFER_FRONTIER.md",
+    "COMPOSITION_FRONTIER.md",
+    "ANCHOR_INDEX.md",
+  ]) {
+    await writeText(path.join(projectRoot, "graph", file), "# graph\n");
+  }
+
+  const frontierMissing = await collectFrontierMappingStageMissingSignals(
+    {
+      projectRoot,
+      manifest: {
+        current_stage: "frontier_mapping",
+        current_micro_stage: "frontiers_packaged",
+      },
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      pathExists,
+      isNonEmptyDirectory,
+      fileHasMeaningfulJsonContent,
+      manifestFieldExists: () => true,
+      getExperimentLedgerPath: () => path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"),
+      pickString: () => null,
+      normalizeResearchProgramState: () => ({}),
+      getResearchProgramOnboardingGaps: () => [],
+      asRecord: (value) => (value && typeof value === "object" ? value : null),
+      normalizeGraphPresenceStatus: () => "ready",
+      normalizePaperIngestionState: () => ({}),
+      hasActiveWorkflowOwnedPaperUpload: () => false,
+      summarizeGraphPresenceMissing: () => null,
+      getBrainstormCycleMissingSignals: async () => [],
+      normalizeStage: (value) => (typeof value === "string" ? value : null),
+    }
+  );
+  assert.ok(frontierMissing.some((signal) => /FRONTIER_REPORT\.md/i.test(signal)));
+
+  const missing = await collectIdeaStageMissingSignals(
+    {
+      projectRoot,
+      manifest: {
+        current_stage: "idea",
+        ideation_contract: {},
+        innovation_reflection: { status: "fresh" },
+      },
+      trackRegistry: { tracks: [] },
+      experimentLedger: null,
+    },
+    makeIdeaStageDeps()
+  );
+
+  assert.ok(missing.some((signal) => /IDEA_REPORT\.md/i.test(signal)));
+  assert.ok(missing.some((signal) => /IDEA_AUDIT\.md/i.test(signal)));
 });
 
 test("maybePrepareWorkflowStageContracts rematerializes ideation when file-backed track evidence still needs canonicalization", async (t) => {

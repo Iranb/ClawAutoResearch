@@ -2355,6 +2355,18 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md"));
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_SECTION_BRIEFS.md"));
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_SELF_REVIEW.md"));
+  assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_VISUALIZATION_PLAN.md"));
+  assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_VISUAL_ASSET_INDEX.json"));
+  assert.ok(
+    result.generatedFiles.includes(
+      "academic_writer/paper/tables/survey_taxonomy_overview.tex"
+    )
+  );
+  assert.ok(
+    result.generatedFiles.includes(
+      "academic_writer/paper/tables/survey_benchmark_landscape.tex"
+    )
+  );
   assert.ok(
     result.referenceBundle.sectionBundles.taxonomy.referencePaths.some((entry) =>
       /survey-writing\.md$/.test(entry)
@@ -2367,6 +2379,28 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   );
   assert.match(comparative, /Required Comparison Axes/i);
   assert.match(comparative, /tradeoff/i);
+
+  const visualizationPlan = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "SURVEY_VISUALIZATION_PLAN.md"),
+    "utf8"
+  );
+  assert.match(visualizationPlan, /Table 1 — Family \/ Taxonomy Overview/i);
+  assert.match(visualizationPlan, /Figure 2 — Benchmark \/ Comparison Landscape/i);
+
+  const taxonomyTable = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "tables", "survey_taxonomy_overview.tex"),
+    "utf8"
+  );
+  assert.match(taxonomyTable, /Representative methods/i);
+
+  const assetIndex = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "academic_writer", "SURVEY_VISUAL_ASSET_INDEX.json"),
+      "utf8"
+    )
+  );
+  assert.equal(Array.isArray(assetIndex.tableDrafts), true);
+  assert.equal(Array.isArray(assetIndex.figureSpecs), true);
 });
 
 test("research_workflow get_snapshot restores mirrored authoring artifacts before writer recovery falls back to full rebuild", async (t) => {

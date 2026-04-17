@@ -19,6 +19,26 @@ allowed-tools:
 混合审稿循环：同模型快速反思 + 独立 Reviewer Agent 跨 Agent 审稿。
 这是实验和 claim 层面的内部审稿，不替代成稿后的 `/paperreview-submit` 外部 AI 审稿。当前 workflow 还要求这一阶段产出 durable `review_pressure_packet`，把 reject-first / unsupported-claim / reverse-outline 等 adversarial 审稿压力测试固定下来。
 
+## Workflow Orientation
+
+Treat this skill as the review lane inside the larger workflow, not as a standalone critique macro.
+
+Canonical flow:
+
+```text
+analyze -> review -> write -> submit
+```
+
+Your outputs are consumed in three ways:
+- `pass/ready` lets the project move forward
+- `revise` should create bounded repair work that routes back to Writer
+- `block` is reserved for hard integrity failures or fundamentally invalid packets
+
+Review routing rule:
+- small, bounded manuscript fixes should route back to Writer
+- evidence or logic fixes that require new analysis should route back to Analyzer / Researcher
+- do not collapse all revise cases into a vague "please improve"
+
 ## Research Rigor Constraints
 
 - Enforce **one variable per experiment** in the review logic: if attribution is muddy, call it out explicitly as a scientific weakness.
@@ -173,6 +193,12 @@ Reviewer 先对当前 evidence packet 做一次本地反思：
 - `Theory: RED` 只作为写作提示，不单独触发继续补实验
 
 如果存在 `MAJOR_DISTORTION` 或 `UNVERIFIABLE` 的 headline claim，不得 handoff 到 WRITE。
+
+If verdict is `revise`, think in revision-control terms:
+- what exact artifact(s) must Writer touch
+- what evidence or wording must change
+- what must be re-checked next round
+- whether Cross-Reviewer should re-enter after Writer revises
 
 #### Phase D: Implement Fixes（如未通过）
 

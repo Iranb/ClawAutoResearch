@@ -1,5 +1,7 @@
 import * as path from "node:path";
 import type { ManifestLike, StageSignalsContext } from "./types";
+import { readTextIfExists } from "../workflow-guard-core/fs";
+import { auditFrontierReportText } from "../workflow-intermediate-artifact-audit";
 
 export interface FoundationStageDeps {
   pathExists: (targetPath: string) => Promise<boolean>;
@@ -126,8 +128,14 @@ export async function collectFrontierMappingStageMissingSignals(
   deps: FoundationStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
-  if (!(await deps.pathExists(path.join(ctx.projectRoot, "researcher", "FRONTIER_REPORT.md")))) {
+  const frontierReportPath = path.join(ctx.projectRoot, "researcher", "FRONTIER_REPORT.md");
+  if (!(await deps.pathExists(frontierReportPath))) {
     missing.push("{PROJ}/researcher/FRONTIER_REPORT.md");
+  } else {
+    const audit = auditFrontierReportText(await readTextIfExists(frontierReportPath));
+    if (!audit.ok) {
+      missing.push(...audit.issues);
+    }
   }
 
   const directFrontierFiles = [

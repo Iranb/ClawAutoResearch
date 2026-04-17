@@ -7,6 +7,10 @@ import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
+import {
+  auditRevisionCycleObject,
+  auditTheoryStateObject,
+} from "../workflow-intermediate-artifact-audit";
 
 export interface WritingStageDeps {
   resolveProjectArtifactPath: (
@@ -563,6 +567,13 @@ export async function collectWriteStageMissingSignals(
     );
     if (!theoryStatePath || !(await deps.pathExists(theoryStatePath))) {
       missing.push("{PROJ}/analyzer/THEORY_STATE.json");
+    } else {
+      const theoryAudit = auditTheoryStateObject(
+        await readJsonIfExists<Record<string, unknown>>(theoryStatePath)
+      );
+      if (!theoryAudit.ok) {
+        missing.push(...theoryAudit.issues);
+      }
     }
     const proofPacketDir = deps.resolveProjectArtifactPath(
       ctx.projectRoot,
@@ -763,6 +774,18 @@ export async function collectSubmitStageMissingSignals(
     );
   }
   const theorySupport = deps.normalizeTheorySupportState(ctx.manifest?.theory_state);
+  const revisionCyclePath = deps.resolveProjectArtifactPath(
+    ctx.projectRoot,
+    "academic_writer/PAPER_REVISION_STATE.json"
+  );
+  if (revisionCyclePath && (await deps.pathExists(revisionCyclePath))) {
+    const revisionAudit = auditRevisionCycleObject(
+      await readJsonIfExists<Record<string, unknown>>(revisionCyclePath)
+    );
+    if (!revisionAudit.ok) {
+      missing.push(...revisionAudit.issues);
+    }
+  }
   if (writingContract.proofAppendixRequired) {
     const theoryStatePath = deps.resolveProjectArtifactPath(
       ctx.projectRoot,
@@ -770,6 +793,13 @@ export async function collectSubmitStageMissingSignals(
     );
     if (!theoryStatePath || !(await deps.pathExists(theoryStatePath))) {
       missing.push("{PROJ}/analyzer/THEORY_STATE.json");
+    } else {
+      const theoryAudit = auditTheoryStateObject(
+        await readJsonIfExists<Record<string, unknown>>(theoryStatePath)
+      );
+      if (!theoryAudit.ok) {
+        missing.push(...theoryAudit.issues);
+      }
     }
     const proofPacketDir = deps.resolveProjectArtifactPath(
       ctx.projectRoot,

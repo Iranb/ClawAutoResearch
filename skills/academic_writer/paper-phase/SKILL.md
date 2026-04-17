@@ -21,6 +21,38 @@ allowed-tools:
 
 Full pipeline from analysis results to compiled PDF, with Cross-Reviewer quality gates at each stage.
 
+## Workflow Orientation
+
+Treat this skill as the Writer lane inside the larger workflow, not as an isolated paper macro.
+
+Canonical flow:
+
+```text
+analyze -> review -> write -> submit
+```
+
+For survey projects:
+
+```text
+survey_review -> write -> submit
+```
+
+While you are in `write`, your job is to:
+- consume upstream evidence and story packets
+- produce durable writing artifacts
+- survive revise loops without losing state
+- hand off only after `research_workflow.auto_iterator_tick` confirms the live owner/stage transition
+
+Downstream expectations:
+- `review` may return `revise`, which should trigger another bounded writing pass rather than a full restart
+- `submit` is reviewer-owned; Writer prepares the package but does not pretend to finalize reviewer work
+- citation, comparison, appendix, and cross-review findings all belong to the same revision loop
+
+Revision contract:
+- when review returns `revise`, expect a targeted packet, not a blank-slate rewrite
+- preserve stable sections and change only the implicated artifacts
+- after a bounded repair pass, route back through `research_workflow.auto_iterator_tick`
+
 ## Pipeline
 
 ```
@@ -203,6 +235,12 @@ Recommended: [submit / one more revision pass]
 When WRITE is complete and the project is truly ready to move into SUBMIT, use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `write -> submit`.
 
 Do not hand off if Cross-Reviewer says `NEEDS_REVISION`, Reviewer asks for another writing pass, the user asks for changes, or citation integrity is not yet `verified`.
+
+If review returns `revise`, do not treat that as generic failure:
+- read the revision packet and appendix-response requirements
+- preserve the current manuscript state
+- execute one bounded pass
+- then return control through `auto_iterator_tick`
 
 If the draft and compile outputs are already durable but the workflow is idle:
 

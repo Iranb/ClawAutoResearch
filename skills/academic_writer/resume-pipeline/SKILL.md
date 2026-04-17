@@ -18,6 +18,21 @@ allowed-tools:
 
 Use when paper writing was interrupted and the writer needs to continue from existing outline, section drafts, and review comments.
 
+## Workflow Orientation
+
+This skill is the recovery entrypoint for the Writer lane inside the full workflow.
+
+Before acting, classify the interruption:
+- ordinary paused writing work
+- review-driven revise loop
+- stale handoff / ownership mismatch
+- submit-prep cleanup
+
+Key contract:
+- upstream inputs come from analyzer packets, story packets, review pressure packets, revision packets, and existing drafts
+- downstream consumers are Reviewer, Cross-Reviewer, and submit packaging
+- if the project is in a revise loop, repair only the artifacts named by the current revision packet instead of widening scope or restarting from plan
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** in resumed prose; do not collapse distinct ablations or hypotheses during cleanup.
