@@ -53,6 +53,11 @@ Revision contract:
 - preserve stable sections and change only the implicated artifacts
 - after a bounded repair pass, route back through `research_workflow.auto_iterator_tick`
 
+Checklist rule:
+- Reviewer rounds should follow `skills/reviewer/paper-review-checklist/SKILL.md`
+- Writer revision rounds should follow `skills/academic_writer/paper-revision-checklist/SKILL.md`
+- Treat those checklist passes as required before calling the round stable
+
 ## Pipeline
 
 ```

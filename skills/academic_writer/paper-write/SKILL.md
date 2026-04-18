@@ -83,6 +83,20 @@ Before drafting any section, inspect the workflow snapshot and current writing s
 - Missing helper files such as `PAPER_PLAN.md`, `STORYLINE_SKETCH.md`, or `refs.bib` do not by themselves justify a full-paper rewrite when section packets and prose files are still recoverable.
 - Prefer repairing or extending the smallest missing section set over re-authoring the whole manuscript.
 
+## Multi-Round Revision Checklist
+
+Whenever the current pass is a revision rather than first-draft writing, run the durable checklist in:
+
+- `skills/academic_writer/paper-revision-checklist/SKILL.md`
+
+Use it in order:
+- Round 1: title / abstract / introduction / conclusion alignment
+- Round 2: structure / argument / evidence repair
+- Round 3: consistency / numbers / tables / figures / citations
+- Round 4: local expression cleanup
+
+Do not treat a `P0/P1` review issue as solved if you only rephrase one sentence.
+
 ## Writing Order
 
 Default drafting order when no user template overrides the section flow:

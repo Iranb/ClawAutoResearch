@@ -16,6 +16,8 @@ import {
   normalizeExperimentReviewState,
   serializeExperimentReviewState,
 } from "../workflow-guard-state/experiment-review";
+import { normalizeRevisionControlState } from "../workflow-guard-state/revision-control";
+import { serializeAutoDispatchDiagnosticsState } from "../workflow-guard-state/auto-dispatch-diagnostics";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   deriveIdeaCatalystMicroStage,
@@ -695,6 +697,9 @@ export async function runWorkflowAutoIteratorImpl(
     ...manifest,
     ...stagePreflight.manifest,
   };
+  const revisionControlState = normalizeRevisionControlState(
+    asRecord(manifest.revision_control_state)
+  );
   trackRegistry =
     (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
     trackRegistry;
@@ -864,6 +869,7 @@ export async function runWorkflowAutoIteratorImpl(
   });
 
   let stageAfter = stageEffective;
+  let revisionDrivenRouting = false;
   const experimentSearchStateBeforeAdvance =
     stageEffective === "experiment"
       ? deps.loadExperimentSearchState
@@ -952,6 +958,13 @@ export async function runWorkflowAutoIteratorImpl(
     if (nextStage) {
       stageAfter = nextStage;
     }
+  }
+  if (
+    revisionControlState.status === "active" &&
+    ["write", "review", "submit"].includes(stageAfter ?? "")
+  ) {
+    stageAfter = "write";
+    revisionDrivenRouting = true;
   }
 
   const activeStageSignals =
@@ -1114,17 +1127,28 @@ export async function runWorkflowAutoIteratorImpl(
       ideaCatalystStateForActions.status === "requisition")
       ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA.`
       : null;
-  const ownerAfter =
+  let ownerAfter =
     (experimentReviewCommand ? experimentReviewOwner : null) ??
     experimentDecisionCommand?.ownerOverride ??
     deps.stageOwner(stageAfter);
+  if (revisionDrivenRouting) {
+    ownerAfter = deps.normalizeRole(revisionControlState.currentOwner ?? "academic_writer");
+  }
   const crossOwnerStageTransition =
     Boolean(ownerAfter) &&
     Boolean(ownerBefore) &&
     ownerAfter !== ownerBefore;
-  const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
-  const stageRepairCommand =
+  let dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
+  let stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
+  const revisionControlCommand =
+    revisionDrivenRouting
+      ? `Use ${revisionControlState.activeRevisionPacketPath ?? "reviewer/REVISION_CONTROL_PACKET.md"} as the only revision source of truth, repair the bounded manuscript artifacts, update durable writing state, then rerun research_workflow.auto_iterator_tick.`
+      : null;
+  if (revisionDrivenRouting) {
+    dispatchStageSignals = [];
+    stageRepairCommand = null;
+  }
   const stageReadinessRepairSummary =
     dispatchStageSignals.length > 0
       ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
@@ -1136,16 +1160,21 @@ export async function runWorkflowAutoIteratorImpl(
     null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : prioritizedExperimentCommand ??
+    : revisionControlCommand ??
+      prioritizedExperimentCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : prioritizedExperimentCommand ??
+    : revisionControlCommand ??
+      prioritizedExperimentCommand ??
       stageRepairCommand ??
       deps.formatStageCommand(stageAfter);
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
+    : revisionDrivenRouting
+      ? revisionControlState.pendingReason ??
+        "Revision control still has open sources; keep the workflow on a bounded write repair pass."
     : dispatchStageSignals.length > 0
       ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${dispatchStageSignals.join("; ")}`
       : stageReadinessRepairSummary
@@ -1265,6 +1294,44 @@ export async function runWorkflowAutoIteratorImpl(
   manifest.next_action = nextAction;
   manifest.resume_action = resumeAction;
   manifest.blocking_reason = blockingReason;
+  manifest.auto_dispatch_diagnostics = serializeAutoDispatchDiagnosticsState({
+    status:
+      autoModeEvaluation.effectiveMode === "off" && autoModeEvaluation.riskLevel !== "stable"
+        ? "degraded"
+        : gateEvaluation.blocking
+          ? "blocked"
+          : revisionDrivenRouting || dispatchStageSignals.length > 0
+            ? "waiting"
+            : "ready",
+    lastCheckedAt: now,
+    blockingLayer:
+      autoModeEvaluation.effectiveMode === "off" && autoModeEvaluation.riskLevel !== "stable"
+        ? "risk"
+        : gateEvaluation.blocking
+          ? "runtime"
+          : revisionDrivenRouting
+            ? "hook"
+            : dispatchStageSignals.length > 0
+              ? "signals"
+              : null,
+    blockingReason:
+      autoModeEvaluation.effectiveMode === "off" && autoModeEvaluation.riskLevel !== "stable"
+        ? autoModeEvaluation.riskLevel
+        : gateEvaluation.reason ?? (revisionDrivenRouting ? "revision_control_active" : null),
+    blockingSummary:
+      revisionDrivenRouting
+        ? revisionControlState.pendingReason
+        : blockingReason,
+    stageAfter,
+    ownerAfter,
+    effectiveAutoMode: autoModeEvaluation.effectiveMode,
+    riskFingerprint: autoModeEvaluation.riskFingerprint,
+    activeHookPoint: revisionDrivenRouting ? "before_stage_handoff" : null,
+    aggregateHookVerdict: revisionDrivenRouting ? "revise" : null,
+    runtimeSessionHealth: gateEvaluation.blocking ? "gate_blocked" : null,
+    mailboxStatus: null,
+    nextRepairAction: nextAction,
+  });
   manifest.last_heartbeat_at = now;
   manifest.current_micro_stage = nextMicroStage;
   const rollbackReasonCategory =

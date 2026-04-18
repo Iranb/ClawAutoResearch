@@ -73,6 +73,7 @@
     "./academic_writer/long-text-write",
     "./academic_writer/citation-preflight",
     "./academic_writer/citation-management",
+    "./academic_writer/paper-revision-checklist",
     "./academic_writer/paper-plan",
     "./academic_writer/paper-write",
     "./academic_writer/paper-compile",
@@ -86,6 +87,7 @@
   "reviewer": [
     "./reviewer/citation-integrity-gate",
     "./reviewer/review-phase",
+    "./reviewer/paper-review-checklist",
     "./reviewer/scientific-critical-thinking",
     "./reviewer/scholar-evaluation",
     "./reviewer/peer-review",

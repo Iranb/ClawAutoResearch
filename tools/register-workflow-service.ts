@@ -92,6 +92,7 @@ import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
+import { updateAutoDispatchDiagnostics } from "./workflow-auto-dispatch-diagnostics";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 import {
@@ -4789,6 +4790,75 @@ export function createWorkflowCoordinatorService(
         );
         const paperIngestionWorkerLaunches = paperIngestionWorkerAttempts.filter(
           (entry) => entry.launched || entry.queued
+        );
+        await Promise.all(
+          discussionRefreshedResults.map((entry, index) =>
+            updateAutoDispatchDiagnostics({
+              projectRoot: entry.projectRoot,
+              patch: {
+                status:
+                  autoStageAttempts[index]?.launched
+                    ? "ready"
+                    : beforeStageHandoffHookAttempts[index]?.approved === false ||
+                        artifactHookAttempts[index]?.approved === false
+                      ? "blocked"
+                      : autoStageAttempts[index]?.reason === "session_pool_full" ||
+                          autoStageAttempts[index]?.reason === "dispatch_failed"
+                        ? "degraded"
+                        : entry.result.gateBlocking || (entry.result.missingStageSignals?.length ?? 0) > 0
+                          ? "waiting"
+                          : "ready",
+                blockingLayer:
+                  beforeStageHandoffHookAttempts[index]?.approved === false ||
+                  artifactHookAttempts[index]?.approved === false
+                    ? "hook"
+                    : autoStageAttempts[index]?.reason === "session_pool_full" ||
+                        autoStageAttempts[index]?.reason === "dispatch_failed"
+                      ? "dispatch"
+                      : entry.result.gateBlocking
+                        ? "runtime"
+                        : (entry.result.missingStageSignals?.length ?? 0) > 0
+                          ? "signals"
+                          : null,
+                blockingReason:
+                  autoStageAttempts[index]?.reason ??
+                  beforeStageHandoffHookAttempts[index]?.blockingReason ??
+                  artifactHookAttempts[index]?.blockingReason ??
+                  entry.result.gateReason ??
+                  entry.result.blockingReason,
+                blockingSummary:
+                  autoStageAttempts[index]?.error ??
+                  beforeStageHandoffHookAttempts[index]?.blockingReason ??
+                  artifactHookAttempts[index]?.blockingReason ??
+                  entry.result.blockingReason,
+                stageAfter: entry.result.stageAfter ?? null,
+                ownerAfter: entry.result.ownerAfter ?? null,
+                effectiveAutoMode: entry.result.effectiveAutoMode ?? null,
+                riskFingerprint: entry.result.autoModeRiskFingerprint ?? null,
+                activeHookPoint:
+                  beforeStageHandoffHookAttempts[index]?.approved === false
+                    ? "before_stage_handoff"
+                    : artifactHookAttempts[index]?.approved === false
+                      ? "artifact_materialized"
+                      : null,
+                aggregateHookVerdict:
+                  beforeStageHandoffHookAttempts[index]?.aggregateVerdict ??
+                  artifactHookAttempts[index]?.aggregateVerdict ??
+                  null,
+                runtimeSessionHealth:
+                  autoStageAttempts[index]?.reason === "session_pool_full"
+                    ? "session_pool_full"
+                    : autoStageAttempts[index]?.reason === "dispatch_failed"
+                      ? "dispatch_failed"
+                      : null,
+                mailboxStatus:
+                  autoStageAttempts[index]?.reason === "gate_blocked"
+                    ? "not_dispatched"
+                    : null,
+                nextRepairAction: entry.result.nextAction ?? null,
+              },
+            })
+          )
         );
         await Promise.all(
           discussionRefreshedResults.map(async (entry, index) => {

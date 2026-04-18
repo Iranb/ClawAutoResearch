@@ -2099,6 +2099,13 @@ export type WorkflowSnapshot = {
   reviewSessionRound: number | null;
   reviewSessionVerdict: string | null;
   reviewSessionSummary: string | null;
+  revisionControlStatus: string | null;
+  revisionControlRound: number | null;
+  revisionControlCurrentOwner: string | null;
+  revisionControlNextReviewerRole: string | null;
+  revisionControlOpenSourceCount: number | null;
+  revisionControlPacketPath: string | null;
+  revisionControlPendingReason: string | null;
   reviewRubricSummary: Record<string, number | null>;
   graphGuidedWritingStatus: string | null;
   graphGuidedWritingEvidenceCoverageStatus: string | null;
@@ -2128,6 +2135,17 @@ export type WorkflowSnapshot = {
   externalReviewStatus: string | null;
   externalReviewRecommendation: string | null;
   externalReviewRequiredAction: string | null;
+  autoDispatchDiagnosticsStatus: string | null;
+  autoDispatchBlockingLayer: string | null;
+  autoDispatchBlockingReason: string | null;
+  autoDispatchBlockingSummary: string | null;
+  autoDispatchNextRepairAction: string | null;
+  surveyVisualCompilerStatus: string | null;
+  surveyVisualCompilerRowCount: number | null;
+  surveyVisualCompilerInsertionMapPath: string | null;
+  surveyMethodologyConsistencyStatus: string | null;
+  surveyMethodologyConsistencyPath: string | null;
+  surveyMethodologyConsistencyBlockingIssueCount: number | null;
   recentExperiments: ExperimentMemoryDigest[];
   unreadMailbox: WorkflowMailboxItem[];
   backgroundTasks: string[];
@@ -5907,6 +5925,7 @@ async function getMissingStageSignals(params: {
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
+          readJsonIfExists,
           getCodeStageBundleMissingSignals,
         }
       );
@@ -5937,6 +5956,7 @@ async function getMissingStageSignals(params: {
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
+          readJsonIfExists,
           getCodeStageBundleMissingSignals,
         }
       );
@@ -5966,6 +5986,7 @@ async function getMissingStageSignals(params: {
           normalizeOrchestrationState,
           getOrchestrationStateValidationErrors,
           loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
+          readJsonIfExists,
           getCodeStageBundleMissingSignals,
         }
       );

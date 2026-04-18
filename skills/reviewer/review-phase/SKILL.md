@@ -39,6 +39,20 @@ Review routing rule:
 - evidence or logic fixes that require new analysis should route back to Analyzer / Researcher
 - do not collapse all revise cases into a vague "please improve"
 
+## Multi-Round Checklist
+
+For every substantial review round, run the structured checklist in:
+
+- `skills/reviewer/paper-review-checklist/SKILL.md`
+
+Use it as the durable order of operations:
+- Round 1: core question / contribution / headline alignment
+- Round 2: structure / argument / evidence
+- Round 3: consistency / numbers / citations / terminology
+- Round 4: wording / style / grammar
+
+Do not skip directly to local language fixes if `P0/P1` logic or evidence issues remain open.
+
 ## Research Rigor Constraints
 
 - Enforce **one variable per experiment** in the review logic: if attribution is muddy, call it out explicitly as a scientific weakness.

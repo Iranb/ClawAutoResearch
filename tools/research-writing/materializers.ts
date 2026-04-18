@@ -17,10 +17,12 @@ import { materializePrewriteRejectionSimulation } from "./prewrite-rejection";
 import { materializeWritingReferenceBundle } from "./reference-bundles";
 import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
+import { materializeSurveyVisualCompiler } from "./survey-visual-compiler";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
 import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
 import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis";
+import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
 
@@ -400,6 +402,12 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
   await materializeSurveyAnalysis({
     projectRoot: params.projectRoot,
   });
+  const visualCompiler = await materializeSurveyVisualCompiler({
+    projectRoot: params.projectRoot,
+  });
+  const methodologyConsistency = await materializeSurveyMethodologyConsistency({
+    projectRoot: params.projectRoot,
+  });
 
   return {
     generatedFiles: [
@@ -413,6 +421,8 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
       "academic_writer/paper/tables/survey_benchmark_landscape.tex",
       "academic_writer/paper/figures/survey_taxonomy_map.md",
       "academic_writer/paper/figures/survey_benchmark_comparison_map.md",
+      ...visualCompiler.generatedFiles,
+      methodologyConsistency.path,
       "researcher/SOURCE_TO_CLAIM_INDEX.json",
     ],
   };

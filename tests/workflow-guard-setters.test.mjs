@@ -189,6 +189,7 @@ test("review setters persist review issue counts and review pressure metadata", 
   });
   assert.equal(issueResult.hardBlockersOpen, true);
   assert.equal(issueResult.mediumOrHigherIssuesNeedDisposition, true);
+  assert.equal(issueResult.revisionControl.status, "active");
 
   const pressureResult = await setReviewPressurePacketState({
     projectRoot,
@@ -222,6 +223,7 @@ test("review setters persist review issue counts and review pressure metadata", 
     },
   });
   assert.equal(sessionResult.state.round, 1);
+  assert.equal(sessionResult.revisionControl.status, "active");
 });
 
 test("ingestion setters persist paper ingestion merges and QC state", async (t) => {

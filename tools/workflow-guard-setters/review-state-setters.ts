@@ -18,6 +18,7 @@ import {
   serializeReviewIssueState,
   serializeReviewIssueTrackerState,
 } from "../workflow-guard-state/execution-state";
+import { materializeRevisionControlState } from "../research-writing/revision-control";
 
 type ReviewIssueTrackerState = ReturnType<typeof normalizeReviewIssueTrackerState>;
 type ReviewIssueState = ReturnType<typeof normalizeReviewIssueState>;
@@ -60,6 +61,7 @@ export async function setReviewIssueTrackerState(params: {
   issueManifestResolvedPath: string | null;
   hardBlockersOpen: boolean;
   mediumOrHigherIssuesNeedDisposition: boolean;
+  revisionControl: Awaited<ReturnType<typeof materializeRevisionControlState>>["state"];
 }> {
   const manifest = await readProjectManifest(params.projectRoot);
   const current = await hydrateReviewIssueTrackerState({
@@ -137,10 +139,18 @@ export async function setReviewIssueTrackerState(params: {
   manifest.review_issue_tracker = serializeReviewIssueTrackerState(next);
   await saveProjectManifest(params.projectRoot, manifest);
 
+  const revisionControl = (
+    await materializeRevisionControlState({
+      projectRoot: params.projectRoot,
+      stage: "review",
+    })
+  ).state;
+
   return {
     state: next,
     issueManifestResolvedPath,
     hardBlockersOpen: hasBlockingReviewIssues(next),
     mediumOrHigherIssuesNeedDisposition: hasUnwaivedMediumOrHigherReviewIssues(next),
+    revisionControl,
   };
 }

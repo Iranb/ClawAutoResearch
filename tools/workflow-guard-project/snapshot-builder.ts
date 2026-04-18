@@ -116,10 +116,14 @@ import {
   normalizeGraphGuidedWritingState,
   normalizeExternalReviewState,
 } from "../workflow-guard-state/authoring-review-state";
+import { normalizeRevisionControlState } from "../workflow-guard-state/revision-control";
+import { normalizeAutoDispatchDiagnosticsState } from "../workflow-guard-state/auto-dispatch-diagnostics";
+import { normalizeSurveyVisualCompilerState } from "../workflow-guard-state/survey-visual-compiler";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
 import { summarizeReviewIssuesFromManifest } from "../workflow-guard-prompt-support";
 import { buildDynamicTasksImpl } from "../workflow-guard-guidance/dynamic-tasks";
+import { deriveRevisionControlState } from "../research-writing/revision-control";
 import {
   ROLE_POLICIES,
   STAGE_REQUIREMENTS,
@@ -718,6 +722,22 @@ export async function buildWorkflowSnapshotFromProjectState(
   const reviewSession = normalizeReviewSessionState(
     asRecord(projectState.manifest?.review_session)
   );
+  const cachedRevisionControl = normalizeRevisionControlState(
+    asRecord(projectState.manifest?.revision_control_state)
+  );
+  const derivedRevisionControl = projectState.projectRoot
+    ? (await deriveRevisionControlState({
+        projectRoot: projectState.projectRoot,
+        stage: currentStage,
+      })).state
+    : cachedRevisionControl;
+  const revisionControl =
+    derivedRevisionControl.status === "idle" && cachedRevisionControl.status !== "idle"
+      ? cachedRevisionControl
+      : derivedRevisionControl;
+  const autoDispatchDiagnostics = normalizeAutoDispatchDiagnosticsState(
+    asRecord(projectState.manifest?.auto_dispatch_diagnostics)
+  );
   const graphGuidedWriting = normalizeGraphGuidedWritingState(
     asRecord(projectState.manifest?.graph_guided_writing)
   );
@@ -743,6 +763,11 @@ export async function buildWorkflowSnapshotFromProjectState(
   const externalReview = normalizeExternalReviewState(
     asRecord(projectState.manifest?.external_review_state)
   );
+  const surveyVisualCompiler = normalizeSurveyVisualCompilerState(
+    asRecord(projectState.manifest?.survey_visual_compiler_state)
+  );
+  const surveyMethodologyConsistency =
+    asRecord(projectState.manifest?.survey_methodology_consistency) ?? {};
   const reviewIssueLaneCounts = countReviewIssueLanes(reviewIssueTracker.issues);
   const recommendedOwner =
     normalizeWorkflowRole(orchestrationState.pendingOwnerCandidate) ??
@@ -1459,6 +1484,13 @@ export async function buildWorkflowSnapshotFromProjectState(
     reviewSessionRound: reviewSession.round,
     reviewSessionVerdict: reviewSession.verdict,
     reviewSessionSummary: reviewSession.reviewerSummary,
+    revisionControlStatus: revisionControl.status,
+    revisionControlRound: revisionControl.revisionRound,
+    revisionControlCurrentOwner: revisionControl.currentOwner,
+    revisionControlNextReviewerRole: revisionControl.nextReviewerRole,
+    revisionControlOpenSourceCount: revisionControl.openSources.length,
+    revisionControlPacketPath: revisionControl.activeRevisionPacketPath,
+    revisionControlPendingReason: revisionControl.pendingReason,
     reviewRubricSummary: {
       originality: reviewSession.rubric.originality,
       quality: reviewSession.rubric.quality,
@@ -1496,6 +1528,26 @@ export async function buildWorkflowSnapshotFromProjectState(
     externalReviewStatus: externalReview.status,
     externalReviewRecommendation: externalReview.overallRecommendation,
     externalReviewRequiredAction: externalReview.requiredAction,
+    autoDispatchDiagnosticsStatus: autoDispatchDiagnostics.status,
+    autoDispatchBlockingLayer: autoDispatchDiagnostics.blockingLayer,
+    autoDispatchBlockingReason: autoDispatchDiagnostics.blockingReason,
+    autoDispatchBlockingSummary: autoDispatchDiagnostics.blockingSummary,
+    autoDispatchNextRepairAction: autoDispatchDiagnostics.nextRepairAction,
+    surveyVisualCompilerStatus: surveyVisualCompiler.status,
+    surveyVisualCompilerRowCount: surveyVisualCompiler.rowCount,
+    surveyVisualCompilerInsertionMapPath: surveyVisualCompiler.insertionMapPath,
+    surveyMethodologyConsistencyStatus:
+      typeof surveyMethodologyConsistency.status === "string"
+        ? surveyMethodologyConsistency.status
+        : null,
+    surveyMethodologyConsistencyPath:
+      typeof surveyMethodologyConsistency.path === "string"
+        ? surveyMethodologyConsistency.path
+        : null,
+    surveyMethodologyConsistencyBlockingIssueCount:
+      Array.isArray(surveyMethodologyConsistency.blocking_issues)
+        ? surveyMethodologyConsistency.blocking_issues.length
+        : null,
     recentExperiments,
     unreadMailbox,
     backgroundTasks: buildDynamicTasksImpl(

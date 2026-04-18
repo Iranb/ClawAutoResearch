@@ -12,6 +12,33 @@ allowed-tools:
 
 Cross-Reviewer is intentionally stateless. Resume means reconstructing a single review request from saved artifacts, not recovering hidden memory.
 
+## Workflow Orientation
+
+Treat this skill as the independent critic lane inside the larger workflow, not as a generic one-off reviewer.
+
+Canonical flow:
+
+```text
+analyze -> review -> write -> submit
+```
+
+For survey projects:
+
+```text
+survey_review -> write -> submit
+```
+
+Your role is to:
+- independently stress-test packets, prose, and intermediate artifacts
+- return bounded `revise` signals that can be answered in one repair pass
+- avoid silently widening scope or re-planning the whole workflow
+- assume Writer / Reviewer will consume your output through durable packets, not hidden memory
+
+Revision contract:
+- `revise` means "return a precise repair packet"
+- `block` is for integrity failures or fundamentally broken packets
+- when reviewing intermediate artifacts, judge whether they are substantive enough for the next stage, not merely whether the file exists
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** in your critique: if the packet conflates multiple changes, call that out explicitly.

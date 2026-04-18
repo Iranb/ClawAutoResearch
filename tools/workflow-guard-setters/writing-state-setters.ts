@@ -49,6 +49,7 @@ import {
   isWritingSessionReadyForSubmit,
 } from "../workflow-guard-writing/write-package-eval";
 import { syncAuthoringArtifactRecovery } from "../research-writing/authoring-artifact-recovery";
+import { materializeRevisionControlState } from "../research-writing/revision-control";
 import type { WorkflowGuardPolicy } from "../workflow-guard.js";
 
 type WritingMode = "conference" | "journal" | "survey";
@@ -857,6 +858,7 @@ export async function setReviewSessionState(params: {
   state: ReviewSessionState;
   reviewPacketResolvedPath: string | null;
   latestReviewResolvedPath: string | null;
+  revisionControl: Awaited<ReturnType<typeof materializeRevisionControlState>>["state"];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeReviewSessionState(manifest.review_session);
@@ -958,6 +960,13 @@ export async function setReviewSessionState(params: {
     }
   );
 
+  const revisionControl = (
+    await materializeRevisionControlState({
+      projectRoot: params.projectRoot,
+      stage: next.stageScope,
+    })
+  ).state;
+
   return {
     state: next,
     reviewPacketResolvedPath: resolveProjectArtifactPath(
@@ -968,6 +977,7 @@ export async function setReviewSessionState(params: {
       params.projectRoot,
       next.latestReviewPath
     ),
+    revisionControl,
   };
 }
 
@@ -1077,6 +1087,7 @@ export async function setExternalReviewState(params: {
   externalReviewResolvedPath: string | null;
   reviewResponseResolvedPath: string | null;
   conclusionReady: boolean;
+  revisionControl: Awaited<ReturnType<typeof materializeRevisionControlState>>["state"];
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeExternalReviewState(manifest.external_review_state);
@@ -1161,6 +1172,13 @@ export async function setExternalReviewState(params: {
     ].join("\n")
   );
 
+  const revisionControl = (
+    await materializeRevisionControlState({
+      projectRoot: params.projectRoot,
+      stage: "submit",
+    })
+  ).state;
+
   return {
     state: next,
     submittedPdfResolvedPath: resolveProjectArtifactPath(
@@ -1170,5 +1188,6 @@ export async function setExternalReviewState(params: {
     externalReviewResolvedPath,
     reviewResponseResolvedPath,
     conclusionReady: isExternalReviewConclusionReady(next),
+    revisionControl,
   };
 }

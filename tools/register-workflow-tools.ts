@@ -118,6 +118,7 @@ import { materializePapernexusPacketContracts } from "./papernexus-packets/mater
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import { materializeWritingHookPolicies } from "./research-writing/hook-policies";
+import { materializeRevisionControlState } from "./research-writing/revision-control";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { materializeCitationAudit } from "./research-intel/citation-audit";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
@@ -350,6 +351,8 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_innovation_synthesis_state",
   "materialize_writing_support_artifacts",
   "materialize_writing_hook_policies",
+  "get_revision_control_state",
+  "materialize_revision_control_state",
   "reconcile_authoring_closeout",
   "materialize_cycle_memory",
   "materialize_survey_review_state",
@@ -455,6 +458,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_innovation_synthesis_state: "materializeInnovationSynthesisState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_writing_hook_policies: "materializeWritingHookPolicies",
+  get_revision_control_state: "materializeRevisionControlState",
+  materialize_revision_control_state: "materializeRevisionControlState",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
   materialize_cycle_memory: "materializeCycleMemory",
   materialize_survey_review_state: "materializeSurveyReviewState",
@@ -1702,6 +1707,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_innovation_synthesis_state",
               "materialize_writing_support_artifacts",
               "materialize_writing_hook_policies",
+              "get_revision_control_state",
+              "materialize_revision_control_state",
               "reconcile_authoring_closeout",
               "materialize_cycle_memory",
               "materialize_survey_review_state",
@@ -4296,6 +4303,21 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   readString(payload?.topTierVerdict) ??
                   readString(payload?.top_tier_verdict) ??
                   null,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_revision_control_state":
+            case "materialize_revision_control_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload = asObject(params.revisionControlMaterialization);
+              const result = await materializeRevisionControlState({
+                projectRoot: resolvedProjectRoot,
+                stage:
+                  readString(payload?.basis_stage) ??
+                  readString(payload?.basisStage) ??
+                  readString(params.stage) ??
+                  snapshot.currentStage ??
+                  "review",
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

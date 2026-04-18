@@ -286,6 +286,7 @@ test("writing setter module copies templates and updates review state", async (t
   });
   assert.equal(reviewResult.state.round, 1);
   await fs.access(reviewResult.reviewPacketResolvedPath);
+  assert.equal(reviewResult.revisionControl.status, "idle");
 
   const graphResult = await setGraphGuidedWritingState({
     projectRoot,
@@ -306,4 +307,5 @@ test("writing setter module copies templates and updates review state", async (t
     },
   });
   assert.equal(externalResult.conclusionReady, true);
+  assert.equal(externalResult.revisionControl.status, "idle");
 });

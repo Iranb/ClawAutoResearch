@@ -19,14 +19,22 @@ const INTERMEDIATE_ARTIFACT_HOOK_IDS = new Set([
   "frontier-report-quality-audit",
   "idea-report-quality-audit",
   "idea-audit-quality-audit",
+  "decomposition-packet-quality-audit",
+  "abstraction-packet-quality-audit",
+  "experiment-launch-decision-quality-audit",
+  "experiment-reasonableness-report-quality-audit",
+  "review-packet-quality-audit",
   "theory-state-quality-audit",
   "revision-cycle-quality-audit",
 ]);
 
 const INTERMEDIATE_POLICY_STAGES = new Set([
+  "plan",
   "frontier_mapping",
   "idea",
+  "experiment",
   "analyze",
+  "review",
   "submit",
 ]);
 
@@ -217,6 +225,109 @@ async function buildIntermediateArtifactHookPolicies(params: {
     );
   }
 
+  if (params.stage === "plan") {
+    const decompositionPath = path.join(params.projectRoot, "planner", "DECOMPOSITION_PACKET.json");
+    const abstractionPath = path.join(params.projectRoot, "planner", "ABSTRACTION_PACKET.json");
+    const supportingArtifacts = [
+      "TRACK_REGISTRY.json",
+      "researcher/IDEA_REPORT.md",
+      "researcher/IDEA_AUDIT.md",
+      "orchestrator/PLAN.md",
+    ];
+    if (await pathExists(decompositionPath)) {
+      hooks.push(
+        buildHook({
+          hookId: "decomposition-packet-quality-audit",
+          stage: "plan",
+          order: 90,
+          targetRole: "orchestrator",
+          filePath: "planner/DECOMPOSITION_PACKET.json",
+          supportingArtifacts,
+          appliesWhen: {
+            workflowLines: ["experiment", "survey"],
+            stages: ["plan"],
+          },
+          requirementPrompt: buildPrompt({
+            title: "planner/DECOMPOSITION_PACKET.json before leaving plan",
+            paperMode: params.paperMode,
+            requirements: [
+              "The decomposition packet must contain real subproblems or plan slices rather than an empty shell.",
+              "The packet should preserve enough structure that downstream execution can recover task boundaries without redoing planning.",
+              "If the plan is graph- or idea-driven, the decomposition must reflect that source instead of drifting into a generic task list.",
+            ],
+            supportingArtifacts,
+          }),
+        })
+      );
+    }
+    if (await pathExists(abstractionPath)) {
+      hooks.push(
+        buildHook({
+          hookId: "abstraction-packet-quality-audit",
+          stage: "plan",
+          order: 95,
+          targetRole: "orchestrator",
+          filePath: "planner/ABSTRACTION_PACKET.json",
+          supportingArtifacts,
+          appliesWhen: {
+            workflowLines: ["experiment", "survey"],
+            stages: ["plan"],
+          },
+          requirementPrompt: buildPrompt({
+            title: "planner/ABSTRACTION_PACKET.json before leaving plan",
+            paperMode: params.paperMode,
+            requirements: [
+              "The abstraction packet must record non-trivial reusable patterns, not only a nominal placeholder.",
+              "Patterns should remain traceable to the project idea / frontier rather than generic research advice.",
+              "Do not pass an abstraction packet that exists structurally but gives no useful planning leverage.",
+            ],
+            supportingArtifacts,
+          }),
+        })
+      );
+    }
+  }
+
+  if (params.stage === "experiment") {
+    const launchDecisionPath = path.join(
+      params.projectRoot,
+      "researcher",
+      "EXPERIMENT_LAUNCH_DECISION.json"
+    );
+    if (await pathExists(launchDecisionPath)) {
+      const supportingArtifacts = [
+        "planner/EXPERIMENT_REVIEW_PACKET.json",
+        "planner/EXPERIMENT_PLAN.md",
+        "analyzer/EXPERIMENT_REASONABLENESS_REPORT.md",
+        "cross-reviewer/EXPERIMENT_ATTACK_REPORT.md",
+      ];
+      hooks.push(
+        buildHook({
+          hookId: "experiment-launch-decision-quality-audit",
+          stage: "experiment",
+          order: 130,
+          targetRole: "researcher",
+          filePath: "researcher/EXPERIMENT_LAUNCH_DECISION.json",
+          supportingArtifacts,
+          appliesWhen: {
+            workflowLines: ["experiment"],
+            stages: ["experiment"],
+          },
+          requirementPrompt: buildPrompt({
+            title: "researcher/EXPERIMENT_LAUNCH_DECISION.json before leaving experiment",
+            paperMode: params.paperMode,
+            requirements: [
+              "The launch decision must identify a real packet fingerprint, explicit launch approval state, and non-trivial target track / claim / blocker structure.",
+              "If planner, analyzer, or cross-review raised material objections, the launch decision must acknowledge them explicitly instead of flattening them away.",
+              "Do not pass a decision object that exists only to satisfy a schema while leaving the real launch rationale implicit.",
+            ],
+            supportingArtifacts,
+          }),
+        })
+      );
+    }
+  }
+
   if (params.stage === "analyze") {
     const writingContract = normalizeWritingContractState(params.manifest.writing_contract);
     const proofAppendixRequired = writingContract.proofAppendixRequired === true;
@@ -247,6 +358,77 @@ async function buildIntermediateArtifactHookPolicies(params: {
               "The state should be detailed enough that Writer can distinguish body-safe claims from appendix-only derivations without guessing.",
               "If THEORY_SUPPORT_NOTE.md or the claim-evidence matrix imposes caveats, the structured theory state must preserve them instead of over-cleaning the narrative.",
               "Do not pass a JSON object that satisfies shape checks but still leaves the next role unable to reconstruct the proof plan.",
+            ],
+            supportingArtifacts,
+          }),
+        })
+      );
+    }
+    const reasonablenessReportPath = path.join(
+      params.projectRoot,
+      "analyzer",
+      "EXPERIMENT_REASONABLENESS_REPORT.md"
+    );
+    if (await pathExists(reasonablenessReportPath)) {
+      const supportingArtifacts = [
+        "planner/EXPERIMENT_REVIEW_PACKET.json",
+        "planner/EXPERIMENT_PLAN.md",
+        "researcher/EXPERIMENT_LAUNCH_DECISION.json",
+      ];
+      hooks.push(
+        buildHook({
+          hookId: "experiment-reasonableness-report-quality-audit",
+          stage: "analyze",
+          order: 145,
+          targetRole: "analyzer",
+          filePath: "analyzer/EXPERIMENT_REASONABLENESS_REPORT.md",
+          supportingArtifacts,
+          appliesWhen: {
+            workflowLines: ["experiment"],
+            stages: ["analyze"],
+          },
+          requirementPrompt: buildPrompt({
+            title: "analyzer/EXPERIMENT_REASONABLENESS_REPORT.md before leaving analyze",
+            paperMode: params.paperMode,
+            requirements: [
+              "The report must contain concrete reasonableness judgments, not only ritual review headings.",
+              "It should identify whether evidence, fairness, attribution, or comparability still look fragile.",
+              "If the launch packet is weak, the report must say so explicitly instead of laundering the packet into a pass.",
+            ],
+            supportingArtifacts,
+          }),
+        })
+      );
+    }
+  }
+
+  if (params.stage === "review") {
+    const reviewPacketPath = path.join(params.projectRoot, "reviewer", "REVIEW_PACKET.json");
+    if (await pathExists(reviewPacketPath)) {
+      const supportingArtifacts = [
+        "reviewer/REVIEW_REPORT.md",
+        "academic_writer/paper/main.tex",
+        "academic_writer/PAPER_REVISION_STATE.json",
+      ];
+      hooks.push(
+        buildHook({
+          hookId: "review-packet-quality-audit",
+          stage: "review",
+          order: 170,
+          targetRole: "reviewer",
+          filePath: "reviewer/REVIEW_PACKET.json",
+          supportingArtifacts,
+          appliesWhen: {
+            workflowLines: ["experiment", "survey"],
+            stages: ["review"],
+          },
+          requirementPrompt: buildPrompt({
+            title: "reviewer/REVIEW_PACKET.json before leaving review",
+            paperMode: params.paperMode,
+            requirements: [
+              "The review packet must include a real verdict and bounded action items, not only a status marker.",
+              "If the review asks for revision, the packet should make it obvious which artifacts or claims are implicated.",
+              "Do not pass a packet that cannot actually drive the next revision or sign-off step.",
             ],
             supportingArtifacts,
           }),

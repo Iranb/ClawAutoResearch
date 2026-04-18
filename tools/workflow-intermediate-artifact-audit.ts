@@ -187,3 +187,69 @@ export function auditRevisionCycleObject(value: unknown): IntermediateArtifactAu
     issues,
   };
 }
+
+export function auditExperimentReasonablenessReportText(
+  text: string | null | undefined
+): IntermediateArtifactAudit {
+  return auditMarkdownStructure({
+    text,
+    label: "analyzer/EXPERIMENT_REASONABLENESS_REPORT.md",
+    minimumMeaningfulLines: 2,
+  });
+}
+
+export function auditReviewPacketObject(value: unknown): IntermediateArtifactAudit {
+  const record = asRecord(value) ?? {};
+  const issues: string[] = [];
+  if (!pickString(record, ["status"])) {
+    issues.push("reviewer/REVIEW_PACKET.json is missing status.");
+  }
+  if (!pickString(record, ["verdict"])) {
+    issues.push("reviewer/REVIEW_PACKET.json is missing verdict.");
+  }
+  const actionItems = asStringArray(record.actionItems ?? record.action_items);
+  const blockingArtifacts = asStringArray(
+    record.blockingArtifacts ?? record.blocking_artifacts
+  );
+  if (actionItems.length === 0 && blockingArtifacts.length === 0) {
+    issues.push(
+      "reviewer/REVIEW_PACKET.json is too hollow; record concrete action items or blocking artifacts."
+    );
+  }
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+
+export function auditDecompositionPacketObject(value: unknown): IntermediateArtifactAudit {
+  const record = asRecord(value) ?? {};
+  const issues: string[] = [];
+  const subproblems = Array.isArray(record.subproblems) ? record.subproblems : [];
+  if (subproblems.length === 0) {
+    issues.push("planner/DECOMPOSITION_PACKET.json must contain at least one subproblem.");
+  }
+  if (!pickString(record, ["status"])) {
+    issues.push("planner/DECOMPOSITION_PACKET.json is missing status.");
+  }
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+
+export function auditAbstractionPacketObject(value: unknown): IntermediateArtifactAudit {
+  const record = asRecord(value) ?? {};
+  const issues: string[] = [];
+  const patterns = Array.isArray(record.patterns) ? record.patterns : [];
+  if (patterns.length === 0) {
+    issues.push("planner/ABSTRACTION_PACKET.json must contain at least one pattern.");
+  }
+  if (!pickString(record, ["status"])) {
+    issues.push("planner/ABSTRACTION_PACKET.json is missing status.");
+  }
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}

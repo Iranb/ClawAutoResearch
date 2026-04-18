@@ -189,6 +189,35 @@ export function buildFocusedPromptAssemblyImpl(
       `orchestration=${snapshot.orchestrationStatus ?? "unknown"} -> ${snapshot.orchestrationNextTransitionCandidate ?? "unset"}`
     );
   }
+  if (snapshot.revisionControlStatus && snapshot.revisionControlStatus !== "idle") {
+    layer2Lines.push(
+      `revision_control=${snapshot.revisionControlStatus} owner=${snapshot.revisionControlCurrentOwner ?? "unset"} next_reviewer=${snapshot.revisionControlNextReviewerRole ?? "unset"} open_sources=${snapshot.revisionControlOpenSourceCount ?? 0}`
+    );
+    if (snapshot.revisionControlPendingReason) {
+      layer2Lines.push(`revision_pending_reason=${snapshot.revisionControlPendingReason}`);
+    }
+    if (snapshot.revisionControlPacketPath) {
+      layer2Lines.push(`revision_packet=${snapshot.revisionControlPacketPath}`);
+    }
+  }
+  if (snapshot.autoDispatchDiagnosticsStatus) {
+    layer2Lines.push(
+      `auto_dispatch=${snapshot.autoDispatchDiagnosticsStatus}${snapshot.autoDispatchBlockingLayer ? ` layer=${snapshot.autoDispatchBlockingLayer}` : ""}${snapshot.autoDispatchBlockingReason ? ` reason=${snapshot.autoDispatchBlockingReason}` : ""}`
+    );
+    if (snapshot.autoDispatchNextRepairAction) {
+      layer2Lines.push(`auto_dispatch_repair=${snapshot.autoDispatchNextRepairAction}`);
+    }
+  }
+  if (snapshot.surveyVisualCompilerStatus && snapshot.writingPaperMode === "survey") {
+    layer2Lines.push(
+      `survey_visual_compiler=${snapshot.surveyVisualCompilerStatus} rows=${snapshot.surveyVisualCompilerRowCount ?? 0} insertion_map=${snapshot.surveyVisualCompilerInsertionMapPath ?? "unset"}`
+    );
+  }
+  if (snapshot.surveyMethodologyConsistencyStatus && snapshot.writingPaperMode === "survey") {
+    layer2Lines.push(
+      `survey_methodology_consistency=${snapshot.surveyMethodologyConsistencyStatus} blocking_issues=${snapshot.surveyMethodologyConsistencyBlockingIssueCount ?? 0} path=${snapshot.surveyMethodologyConsistencyPath ?? "unset"}`
+    );
+  }
   if (snapshot.currentStage === "plan" || snapshot.role === "orchestrator") {
     layer2Lines.push(
       "Plan contract rule: PLAN.md, TODOS.md, and PLAN_AUDIT.md are human-readable derivatives. The durable source of truth is PROJECT_MANIFEST.json.research_program, and plan stage is not complete until it records graph-grounded multi-option comparison plus a locked selection."

@@ -44,6 +44,7 @@ const WRITING_HOOK_IDS = new Set([
   "survey-taxonomy-audit",
   "survey-evidence-synthesis-audit",
   "survey-benchmark-landscape-audit",
+  "survey-methodology-consistency-audit",
   "survey-open-problems-audit",
   "survey-conclusion-boundary-audit",
 ]);
@@ -881,6 +882,9 @@ function buildWritingHookPolicies(params: {
       "researcher/GAP_SYNTHESIS.md",
       "researcher/COVERAGE_SUMMARY.md",
       "researcher/REVIEW_PROTOCOL.md",
+      "researcher/INCLUDED_PAPERS.json",
+      "researcher/EXCLUDED_PAPERS.json",
+      "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
     ]);
 
     if (sectionSet.has("abstract")) {
@@ -1057,6 +1061,34 @@ function buildWritingHookPolicies(params: {
         })
       );
     }
+    hooks.push(
+      buildHook({
+        hookId: "survey-methodology-consistency-audit",
+        stage: "review",
+        hookPoint: "before_stage_handoff",
+        order: 310,
+        parallelGroup: "writing-closeout",
+        filePath: "academic_writer/paper/main.tex",
+        blockingMode: "block_stage",
+        auditorRole: "cross-reviewer",
+        requirementPrompt: buildPrompt({
+          title: "survey methodology consistency before review handoff",
+          paperMode: params.paperMode,
+          topTierVerdict: params.topTierVerdict,
+          requirements: [
+            "Counts, date ranges, and protocol wording must stay internally consistent across abstract, introduction, scope/protocol, and the survey methodology support files.",
+            "If the manuscript or protocol still disagrees with INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, or SURVEY_METHODOLOGY_CONSISTENCY.json, request revision instead of waving it through.",
+            'Use "reviewed works" / "papers and preprints" language when the evidence set includes preprints; do not let the manuscript overstate that all entries are formally published papers.',
+          ],
+          supportingArtifacts: surveySectionArtifacts,
+        }),
+        supportingArtifacts: surveySectionArtifacts,
+        appliesWhen: baseAppliesWhen,
+        filters: {
+          fileGlobs: ["academic_writer/paper/main.tex"],
+        },
+      })
+    );
     if (sectionSet.has("open_problems")) {
       hooks.push(
         buildHook({

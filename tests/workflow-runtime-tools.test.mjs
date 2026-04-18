@@ -5874,6 +5874,28 @@ test("research_workflow runtime-state actions persist manifest state and append 
   });
   assert.equal(reviewIssueTrackerSummary.state.openCounts.medium, 2);
 
+  const revisionControlSummary = await executeWorkflowTool(tool, {
+    action: "get_revision_control_state",
+  });
+  assert.equal(revisionControlSummary.state.status, "active");
+  assert.equal(revisionControlSummary.state.openSources.length >= 2, true);
+
+  const materializedRevisionControl = await executeWorkflowTool(tool, {
+    action: "materialize_revision_control_state",
+    revisionControlMaterialization: {
+      basis_stage: "review",
+    },
+  });
+  assert.equal(materializedRevisionControl.state.status, "active");
+  assert.equal(
+    materializedRevisionControl.generatedFiles.includes("reviewer/REVISION_CONTROL_PACKET.json"),
+    true
+  );
+  assert.equal(
+    materializedRevisionControl.generatedFiles.includes("reviewer/REVISION_CONTROL_PACKET.md"),
+    true
+  );
+
   const experimentSearchSummary = await executeWorkflowTool(tool, {
     action: "get_experiment_search",
   });

@@ -10,6 +10,8 @@ import {
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
 import {
+  auditAbstractionPacketObject,
+  auditDecompositionPacketObject,
   auditIdeaAuditText,
   auditIdeaReportText,
 } from "../workflow-intermediate-artifact-audit";
@@ -24,6 +26,7 @@ export interface IdeationStageDeps {
   pathExists: (targetPath: string) => Promise<boolean>;
   fileHasNonWhitespaceContent: (targetPath: string | null) => Promise<boolean>;
   fileHasMeaningfulJsonContent: (targetPath: string | null) => Promise<boolean>;
+  readJsonIfExists: (targetPath: string) => Promise<Record<string, unknown> | null>;
   isNonEmptyDirectory: (targetPath: string) => Promise<boolean>;
   resolveProjectArtifactPath: (
     projectRoot: string,
@@ -331,6 +334,24 @@ export async function collectPlanStageMissingSignals(
   missing.push(
     ...deps.getOrchestrationStateValidationErrors(orchestrationState, "plan")
   );
+  const decompositionPath = path.join(ctx.projectRoot, "planner", "DECOMPOSITION_PACKET.json");
+  if (await deps.pathExists(decompositionPath)) {
+    const audit = auditDecompositionPacketObject(
+      await deps.readJsonIfExists(decompositionPath)
+    );
+    if (!audit.ok) {
+      missing.push(...audit.issues);
+    }
+  }
+  const abstractionPath = path.join(ctx.projectRoot, "planner", "ABSTRACTION_PACKET.json");
+  if (await deps.pathExists(abstractionPath)) {
+    const audit = auditAbstractionPacketObject(
+      await deps.readJsonIfExists(abstractionPath)
+    );
+    if (!audit.ok) {
+      missing.push(...audit.issues);
+    }
+  }
   return missing;
 }
 

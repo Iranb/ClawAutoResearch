@@ -13,6 +13,7 @@ import {
 } from "../tools/workflow-guard-project/snapshot-builder.ts";
 import { materializeWorkflowTaskGraph } from "../tools/workflow-team/task-graph.ts";
 import { materializeWorkflowTeamRound } from "../tools/workflow-team/team-round.ts";
+import { materializeRevisionControlState } from "../tools/research-writing/revision-control.ts";
 
 async function makeWorkspace() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-snapshot-builder-"));
@@ -148,6 +149,148 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.equal(snapshot.researchProgramOnboardingStatus, "ready");
   assert.ok(snapshot.allowedWriteScopes.includes("{PROJ}/PROJECT_MANIFEST.json"));
   assert.ok(snapshot.backgroundTasks.some((task) => task.includes("Continue literature survey")));
+});
+
+test("snapshot builder surfaces revision control, auto diagnostics, and survey visual compiler summaries", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "workflow-revision-snapshot");
+  const sessionKey = "agent:academic_writer:discord:group:revision-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.owner_agent = "academic_writer";
+  manifest.review_session = {
+    status: "completed",
+    round: 2,
+    verdict: "revise",
+    reviewer_summary: "Review still requests bounded fixes.",
+    review_packet_path: "reviewer/REVIEW_PACKET.json",
+    latest_review_path: "reviewer/REVIEW_REPORT.md",
+    blocking_artifacts: ["academic_writer/paper/main.tex"],
+  };
+  manifest.review_issue_tracker = {
+    status: "open",
+    issues: [
+      {
+        issue_id: "issue-1",
+        severity: "high",
+        title: "Revise the main manuscript",
+        target_artifact: "academic_writer/paper/main.tex",
+        fix_artifact_paths: ["academic_writer/paper/sections/results.tex"],
+        opened_by: "reviewer",
+        status: "open",
+      },
+    ],
+    last_review_round: 2,
+  };
+  manifest.revision_control_state = {
+    status: "active",
+    revision_round: 2,
+    current_owner: "academic_writer",
+    next_reviewer_role: "reviewer",
+    active_revision_packet_path: "reviewer/REVISION_CONTROL_PACKET.json",
+    open_sources: [
+      {
+        source_type: "review_session",
+        source_id: "review-round-2",
+        severity: "medium",
+        status: "open",
+      },
+    ],
+    pending_reason: "Review still requests bounded fixes.",
+  };
+  manifest.auto_dispatch_diagnostics = {
+    status: "waiting",
+    blocking_layer: "signals",
+    blocking_reason: "missing_storyline",
+    next_repair_action: "Regenerate the storyline bundle.",
+  };
+  manifest.survey_visual_compiler_state = {
+    status: "ready",
+    row_count: 6,
+    insertion_map_path: "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json",
+  };
+  manifest.survey_methodology_consistency = {
+    status: "blocked",
+    path: "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
+    blocking_issues: ["Survey counts disagree."],
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await fs.mkdir(path.join(projectRoot, "reviewer"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updated_at: new Date().toISOString(),
+        hook_points: {},
+        hooks: {},
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await materializeRevisionControlState({
+    projectRoot,
+    stage: "write",
+  });
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+      role: "academic_writer",
+    },
+    projectRoot,
+    projectId: "workflow-revision-snapshot",
+    messageChannel: "discord",
+    boundByAgent: "academic_writer",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    role: "academic_writer",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+        maxWorkflowInboxMessages: 3,
+      },
+      agentId: "academic_writer",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.revisionControlStatus, "active");
+  assert.equal(snapshot.revisionControlOpenSourceCount, 2);
+  assert.equal(snapshot.autoDispatchDiagnosticsStatus, "waiting");
+  assert.equal(snapshot.autoDispatchBlockingLayer, "signals");
+  assert.equal(snapshot.surveyVisualCompilerStatus, "ready");
+  assert.equal(snapshot.surveyMethodologyConsistencyStatus, "blocked");
 });
 
 test("snapshot builder surfaces evidence contract summaries from manifest state", async (t) => {

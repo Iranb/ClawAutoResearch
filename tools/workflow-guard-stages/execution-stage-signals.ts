@@ -1,9 +1,12 @@
 import * as path from "node:path";
 import type { ManifestLike, StageSignalsContext } from "./types";
 import {
+  auditExperimentReasonablenessReportText,
   auditExperimentLaunchDecisionObject,
+  auditReviewPacketObject,
   auditTheoryStateObject,
 } from "../workflow-intermediate-artifact-audit";
+import { readTextIfExists } from "../workflow-guard-core/fs";
 
 function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -152,6 +155,19 @@ export async function collectExperimentStageMissingSignals(
       );
     }
     return missing;
+  }
+  const launchDecisionPath = path.join(
+    ctx.projectRoot,
+    "researcher",
+    "EXPERIMENT_LAUNCH_DECISION.json"
+  );
+  if (await deps.pathExists(launchDecisionPath)) {
+    const decisionAudit = auditExperimentLaunchDecisionObject(
+      await deps.readJsonIfExists(launchDecisionPath)
+    );
+    if (!decisionAudit.ok) {
+      missing.push(...decisionAudit.issues);
+    }
   }
   if (
     !(await deps.isNonEmptyDirectory(
@@ -312,6 +328,19 @@ export async function collectAnalyzeStageMissingSignals(
       missing.push("{PROJ}/analyzer/proof-packets/");
     }
   }
+  const reasonablenessReportPath = path.join(
+    ctx.projectRoot,
+    "analyzer",
+    "EXPERIMENT_REASONABLENESS_REPORT.md"
+  );
+  if (await deps.pathExists(reasonablenessReportPath)) {
+    const reportAudit = auditExperimentReasonablenessReportText(
+      await readTextIfExists(reasonablenessReportPath)
+    );
+    if (!reportAudit.ok) {
+      missing.push(...reportAudit.issues);
+    }
+  }
 
   const opportunityScorecard = deps.normalizeOpportunityScorecardState(
     ctx.manifest?.opportunity_scorecard
@@ -359,6 +388,15 @@ export async function collectReviewStageMissingSignals(
   deps: ExecutionStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+  const reviewPacketPath = path.join(ctx.projectRoot, "reviewer", "REVIEW_PACKET.json");
+  if (await deps.pathExists(reviewPacketPath)) {
+    const reviewPacketAudit = auditReviewPacketObject(
+      await deps.readJsonIfExists(reviewPacketPath)
+    );
+    if (!reviewPacketAudit.ok) {
+      missing.push(...reviewPacketAudit.issues);
+    }
+  }
   const reviewReport = await deps.pathExists(
     path.join(ctx.projectRoot, "reviewer", "REVIEW_REPORT.md")
   );

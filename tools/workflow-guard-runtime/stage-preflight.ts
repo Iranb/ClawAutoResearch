@@ -36,6 +36,9 @@ import { materializeWritingSupportArtifacts } from "../research-writing/material
 import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
 import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
 import { materializeIntermediateArtifactHookPolicies } from "../workflow-intermediate-artifact-hook-policies";
+import { materializeRevisionControlState } from "../research-writing/revision-control";
+import { materializeSurveyVisualCompiler } from "../research-writing/survey-visual-compiler";
+import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
 import {
   normalizeInnovationSynthesisState,
   normalizeStoryGapSearchRequisitionState,
@@ -118,6 +121,16 @@ type StagePreflightDeps = {
     projectRoot: string;
     stage: string | null;
     paperMode?: "conference" | "journal" | "survey" | null;
+  }) => Promise<unknown>;
+  materializeRevisionControlState?: (params: {
+    projectRoot: string;
+    stage: string | null;
+  }) => Promise<unknown>;
+  materializeSurveyVisualCompiler?: (params: {
+    projectRoot: string;
+  }) => Promise<unknown>;
+  materializeSurveyMethodologyConsistency?: (params: {
+    projectRoot: string;
   }) => Promise<unknown>;
   materializeInnovationSynthesisState?: (params: {
     projectRoot: string;
@@ -1323,6 +1336,50 @@ export async function maybePrepareWorkflowStageContracts(params: {
         paperMode,
       });
     }
+  );
+  await runStep(
+    "revision_control_state",
+    async ({ stage }) => ["write", "review", "submit"].includes(stage ?? ""),
+    async () =>
+      (
+        params.deps.materializeRevisionControlState ?? materializeRevisionControlState
+      )({
+        projectRoot,
+        stage: params.stage,
+      })
+  );
+  await runStep(
+    "survey_visual_compiler",
+    async ({ stage, manifest }) =>
+      ["write", "review", "submit"].includes(stage ?? "") &&
+      normalizeWritingContractState(
+        manifest.writing_contract && typeof manifest.writing_contract === "object"
+          ? manifest.writing_contract
+          : {}
+      ).paperMode === "survey",
+    async () =>
+      (
+        params.deps.materializeSurveyVisualCompiler ?? materializeSurveyVisualCompiler
+      )({
+        projectRoot,
+      })
+  );
+  await runStep(
+    "survey_methodology_consistency",
+    async ({ stage, manifest }) =>
+      ["survey_review", "write", "review", "submit"].includes(stage ?? "") &&
+      normalizeWritingContractState(
+        manifest.writing_contract && typeof manifest.writing_contract === "object"
+          ? manifest.writing_contract
+          : {}
+      ).paperMode === "survey",
+    async () =>
+      (
+        params.deps.materializeSurveyMethodologyConsistency ??
+        materializeSurveyMethodologyConsistency
+      )({
+        projectRoot,
+      })
   );
   await runStep("cycle_memory", shouldRefreshCycleMemory, async () => {
     await materializeCycleMemory({
