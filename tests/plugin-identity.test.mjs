@@ -17,6 +17,7 @@ test("plugin identity is aligned to ClawAutoResearch", () => {
   const manifest = readJson("openclaw.plugin.json");
   const pkg = readJson("package.json");
   const entrySource = readText("index.ts");
+  const runtimeApiSidecar = readText("runtime-api.js");
   const recommended = readText("openclaw.RECOMMENDED.json");
   const installScript = readText("install.sh");
 
@@ -27,6 +28,8 @@ test("plugin identity is aligned to ClawAutoResearch", () => {
   assert.match(pkg.homepage ?? "", /ClawAutoResearch(#readme)?$/);
   assert.match(entrySource, /id:\s*"ClawAutoResearch"/);
   assert.match(entrySource, /name:\s*"ClawAutoResearch"/);
+  assert.match(entrySource, /from "\.\/runtime-api\.js"/);
+  assert.match(runtimeApiSidecar, /export \* from "\.\/runtime-api\.ts"/);
   assert.match(recommended, /"ClawAutoResearch":\s*\{/);
   assert.match(installScript, /PLUGIN_LINK="\$OC_PLUGINS_DIR\/ClawAutoResearch"/);
 });
