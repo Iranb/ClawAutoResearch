@@ -124,6 +124,58 @@ test("workflow background pool serializes concurrent registry writes", async () 
   );
 });
 
+test("workflow background pool preserves concurrent project-scoped runtime session writes", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "workflow-background-pool-project-scope-")
+  );
+  const projectRoot = path.join(workspaceRoot, "demo-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "graph_build",
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      recordBackgroundWorkflowRun({
+        ownerAgent: "researcher",
+        channelKey: "discord:channel:test-room",
+        requesterSessionKey: "agent:researcher:discord:channel:test-room",
+        backgroundSessionKey: `agent:researcher:discord:channel:test-room:subagent:${index}`,
+        runId: `run:${index}`,
+        family: "research",
+        kind: "resume_pipeline",
+        projectId: "demo-project",
+        projectRoot,
+      })
+    )
+  );
+
+  const listed = await listBackgroundWorkflowRuns({
+    ownerAgent: "researcher",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  assert.equal(listed.entries.length, 8);
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.runId).sort(),
+    Array.from({ length: 8 }, (_, index) => `run:${index}`)
+  );
+});
+
 test("workflow background pool tolerates malformed project manifests while reconciling stale papernexus sessions", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "workflow-background-pool-bad-manifest-")

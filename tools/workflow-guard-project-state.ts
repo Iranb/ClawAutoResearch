@@ -32,6 +32,53 @@ type WorkflowGuardPolicyLike = {
 const SURVEY_BOOTSTRAP_PENDING_REASON =
   "Start the survey retrieval rounds and update SURVEY_QUERY_REGISTRY.json before synthesis.";
 
+const SURVEY_BOOTSTRAP_WRITING_CONTRACT_RESET_KEYS = [
+  "templateRequired",
+  "template_required",
+  "templatePath",
+  "template_path",
+  "projectTemplatePath",
+  "project_template_path",
+  "templateName",
+  "template_name",
+  "templateStatus",
+  "template_status",
+  "templateCopyStatus",
+  "template_copy_status",
+  "bodyPageBudget",
+  "body_page_budget",
+  "referencePageBudget",
+  "reference_page_budget",
+  "bodyWordTargetMin",
+  "body_word_target_min",
+  "bodyWordTargetMax",
+  "body_word_target_max",
+  "mainTextProofStyle",
+  "main_text_proof_style",
+  "proofAppendixRequired",
+  "proof_appendix_required",
+  "proofAppendixPath",
+  "proof_appendix_path",
+  "proofAppendixStatus",
+  "proof_appendix_status",
+  "proofChecklist",
+  "proof_checklist",
+  "storylineSource",
+  "storyline_source",
+  "kgStorylineRequired",
+  "kg_storyline_required",
+  "kgStorylineStatus",
+  "kg_storyline_status",
+  "kgStorylinePacketPath",
+  "kg_storyline_packet_path",
+  "requiredSections",
+  "required_sections",
+  "sectionOrder",
+  "section_order",
+  "pendingReason",
+  "pending_reason",
+] as const;
+
 const SURVEY_BOOTSTRAP_RESETTABLE_STAGES = new Set([
   "setup",
   "graph_build",
@@ -53,6 +100,16 @@ function shouldResetToSurveyReviewStage(stage: string | null): boolean {
   return !stage || SURVEY_BOOTSTRAP_RESETTABLE_STAGES.has(stage);
 }
 
+function stripSurveyBootstrapWritingContractPresetFields(
+  contract: Record<string, unknown>
+): Record<string, unknown> {
+  const next = { ...contract };
+  for (const key of SURVEY_BOOTSTRAP_WRITING_CONTRACT_RESET_KEYS) {
+    delete next[key];
+  }
+  return next;
+}
+
 function applySurveyWorkflowBootstrapToManifest(params: {
   manifest: Record<string, unknown>;
   topic: string;
@@ -60,9 +117,15 @@ function applySurveyWorkflowBootstrapToManifest(params: {
 }): Record<string, unknown> {
   const currentStage = normalizeStage(params.manifest.current_stage);
   const currentSurveyReview = normalizeSurveyReviewState(params.manifest.survey_review);
+  const currentWritingContractRecord =
+    asRecord(params.manifest.writing_contract) ?? {};
   const currentWritingContract = normalizeWritingContractState(
-    params.manifest.writing_contract
+    currentWritingContractRecord
   );
+  const nextWritingContractSeed =
+    currentWritingContract.paperMode === "survey"
+      ? currentWritingContractRecord
+      : stripSurveyBootstrapWritingContractPresetFields(currentWritingContractRecord);
   const nextSurveyReview = normalizeSurveyReviewState({
     ...serializeSurveyReviewState(currentSurveyReview),
     topic: currentSurveyReview.topic ?? params.topic,
@@ -79,7 +142,7 @@ function applySurveyWorkflowBootstrapToManifest(params: {
     survey_review: serializeSurveyReviewState(nextSurveyReview),
     writing_contract: serializeWritingContractState(
       normalizeWritingContractState({
-        ...serializeWritingContractState(currentWritingContract),
+        ...nextWritingContractSeed,
         paper_mode: "survey",
       })
     ),

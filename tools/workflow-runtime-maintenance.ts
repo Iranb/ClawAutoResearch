@@ -26,8 +26,8 @@ import {
   type WorkflowRuntimeQueueDispatchPayload,
   type WorkflowRuntimeQueueEntry,
   type WorkflowRuntimeSessionEntry,
-  writeWorkflowRuntimeQueueStore,
-  writeWorkflowRuntimeSessionsStore,
+  updateWorkflowRuntimeQueueStore,
+  updateWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
 import { resumeWorkflowTransition } from "./workflow-session-orchestrator.js";
 import {
@@ -144,33 +144,36 @@ async function updateQueueEntry(
   queueKey: string,
   updater: (entry: WorkflowRuntimeQueueEntry) => WorkflowRuntimeQueueEntry
 ): Promise<WorkflowRuntimeQueueEntry | null> {
-  const store = await readWorkflowRuntimeQueueStore(projectRoot);
-  const index = store.entries.findIndex((entry) => entry.queueKey === queueKey);
-  if (index < 0) {
-    return null;
-  }
-  const nextEntries = [...store.entries];
-  nextEntries[index] = updater(nextEntries[index]);
-  await writeWorkflowRuntimeQueueStore({
+  let updatedEntry: WorkflowRuntimeQueueEntry | null = null;
+  await updateWorkflowRuntimeQueueStore({
     projectRoot,
-    projectId: store.projectId,
-    entries: nextEntries,
+    updater: (store) => {
+      const index = store.entries.findIndex((entry) => entry.queueKey === queueKey);
+      if (index < 0) {
+        return store.entries;
+      }
+      const nextEntries = [...store.entries];
+      nextEntries[index] = updater(nextEntries[index]);
+      updatedEntry = nextEntries[index];
+      return nextEntries;
+    },
   });
-  return nextEntries[index];
+  return updatedEntry;
 }
 
 async function updateSessions(
   projectRoot: string,
   updater: (entry: WorkflowRuntimeSessionEntry) => WorkflowRuntimeSessionEntry
 ): Promise<WorkflowRuntimeSessionEntry[]> {
-  const store = await readWorkflowRuntimeSessionsStore(projectRoot);
-  const nextEntries = store.entries.map(updater);
-  await writeWorkflowRuntimeSessionsStore({
+  let nextEntriesSnapshot: WorkflowRuntimeSessionEntry[] = [];
+  await updateWorkflowRuntimeSessionsStore({
     projectRoot,
-    projectId: store.projectId,
-    entries: nextEntries,
+    updater: (store) => {
+      nextEntriesSnapshot = store.entries.map(updater);
+      return nextEntriesSnapshot;
+    },
   });
-  return nextEntries;
+  return nextEntriesSnapshot;
 }
 
 async function markQueueFailed(params: {

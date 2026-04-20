@@ -11,9 +11,13 @@ import {
   listWorkflowRuntimeProjectRoots,
   migrateWorkflowRuntimeState,
   readWorkflowRuntimeSessionsStore,
+  updateWorkflowRuntimeSessionsStore,
   writeWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
-import { writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
+import {
+  withAdvisoryLock,
+  writeJsonAtomicEnsured,
+} from "./workflow-guard-core/fs";
 import type {
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state.js";
@@ -127,6 +131,10 @@ function getBackgroundRunRegistryPath(): string {
   throw new Error(
     "A project-scoped background run registry path is required; refusing ephemeral /tmp fallback. Pass projectRoot/projectsRoot or set OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH for tests."
   );
+}
+
+function getBackgroundRunRegistryLockPath(): string {
+  return `${getBackgroundRunRegistryPath()}.lock`;
 }
 
 function resolveBackgroundRuntimeScope(
@@ -601,16 +609,36 @@ function normalizeStageLike(value: unknown): string | null {
 async function upsertBackgroundRunRegistryEntry(
   entry: BackgroundRunRegistryEntry
 ): Promise<void> {
+  const persistedEntry = toPersistedSessionEntry(entry);
+  if (readString(entry.projectRoot)) {
+    await updateWorkflowRuntimeSessionsStore({
+      projectRoot: String(entry.projectRoot),
+      projectId: entry.projectId,
+      updater: (store) => {
+        const nextEntries = store.entries.filter(
+          (existing) => existing.sessionKey !== persistedEntry.sessionKey
+        );
+        nextEntries.push(persistedEntry);
+        return nextEntries;
+      },
+    });
+    return;
+  }
   const targetScope = {
     projectId: entry.projectId,
     projectRoot: entry.projectRoot,
   };
-  const current = await readBackgroundRunRegistry(targetScope);
-  const next = current.filter(
-    (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
-  );
-  next.push(entry);
-  await writeBackgroundRunRegistry(next, targetScope);
+  await withAdvisoryLock({
+    lockPath: getBackgroundRunRegistryLockPath(),
+    task: async () => {
+      const current = await readBackgroundRunRegistry(targetScope);
+      const next = current.filter(
+        (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
+      );
+      next.push(entry);
+      await writeBackgroundRunRegistry(next, targetScope);
+    },
+  });
 }
 
 export async function getBackgroundWorkflowRunByQueueKey(params: {

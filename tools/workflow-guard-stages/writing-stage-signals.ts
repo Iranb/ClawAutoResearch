@@ -7,6 +7,7 @@ import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
+import { normalizeSurveyVisualCompilerState } from "../workflow-guard-state/survey-visual-compiler";
 import {
   auditRevisionCycleObject,
   auditTheoryStateObject,
@@ -229,6 +230,36 @@ function appendFigureTableBudgetSignals(params: {
     params.missing.push(
       `academic_writer table registry has unresolved table placeholders (current ${params.budget.unresolvedTablePlaceholders})`
     );
+  }
+}
+
+async function appendSurveyVisualizationSignals(params: {
+  missing: string[];
+  projectRoot: string;
+  manifest: Record<string, unknown> | null;
+  deps: Pick<WritingStageDeps, "resolveProjectArtifactPath" | "pathExists" | "normalizeStage">;
+  phase: "write" | "submit";
+}) {
+  const surveyVisualCompiler = normalizeSurveyVisualCompilerState(
+    params.manifest?.survey_visual_compiler_state
+  );
+  if (params.deps.normalizeStage(surveyVisualCompiler.status) !== "ready") {
+    params.missing.push(
+      `PROJECT_MANIFEST.json.survey_visual_compiler_state.status must be ready before ${params.phase.toUpperCase()} handoff (current: ${surveyVisualCompiler.status})`
+    );
+  }
+  for (const artifactPath of [
+    surveyVisualCompiler.taxonomyTablePath,
+    surveyVisualCompiler.benchmarkTablePath,
+    surveyVisualCompiler.insertionMapPath,
+  ]) {
+    const resolvedPath = params.deps.resolveProjectArtifactPath(
+      params.projectRoot,
+      artifactPath
+    );
+    if (!resolvedPath || !(await params.deps.pathExists(resolvedPath))) {
+      params.missing.push(`{PROJ}/${artifactPath}`);
+    }
   }
 }
 
@@ -542,14 +573,16 @@ export async function collectWriteStageMissingSignals(
       `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
     );
   }
-  appendFigureTableBudgetSignals({
-    missing,
-    budget: await readFigureTableBudget({
-      projectRoot: ctx.projectRoot,
-      deps,
-    }),
-    phase: "write",
-  });
+  if (!surveyWriteMode) {
+    appendFigureTableBudgetSignals({
+      missing,
+      budget: await readFigureTableBudget({
+        projectRoot: ctx.projectRoot,
+        deps,
+      }),
+      phase: "write",
+    });
+  }
   const citationCollection = deps.normalizeCitationCollectionState(
     ctx.manifest?.citation_collection
   );
@@ -631,6 +664,15 @@ export async function collectWriteStageMissingSignals(
     phase: "write",
     deps,
   });
+  if (surveyWriteMode) {
+    await appendSurveyVisualizationSignals({
+      missing,
+      projectRoot: ctx.projectRoot,
+      manifest: ctx.manifest,
+      deps,
+      phase: "write",
+    });
+  }
   if (deps.normalizeStage(innovationSynthesis.status) === "needs_search") {
     missing.push(
       `innovation_synthesis requires supplemental search before WRITE handoff (search_gap_count=${innovationSynthesis.searchGapCount ?? 0}, search_status=${storyGapSearch.status ?? "missing"})`
@@ -660,6 +702,8 @@ export async function collectSubmitStageMissingSignals(
 ): Promise<string[]> {
   const missing: string[] = [];
   const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
+  const surveyWriteMode =
+    writingContract.paperMode === "survey" || writingContract.paper_mode === "survey";
   const innovationSynthesis = deps.normalizeInnovationSynthesisState(
     ctx.manifest?.innovation_synthesis_state
   );
@@ -769,14 +813,25 @@ export async function collectSubmitStageMissingSignals(
       `PROJECT_MANIFEST.json.figure_qc.selection_status = pass (current: ${figureQc.selectionStatus})`
     );
   }
-  appendFigureTableBudgetSignals({
-    missing,
-    budget: await readFigureTableBudget({
+  if (!surveyWriteMode) {
+    appendFigureTableBudgetSignals({
+      missing,
+      budget: await readFigureTableBudget({
+        projectRoot: ctx.projectRoot,
+        deps,
+      }),
+      phase: "submit",
+    });
+  }
+  if (surveyWriteMode) {
+    await appendSurveyVisualizationSignals({
+      missing,
       projectRoot: ctx.projectRoot,
+      manifest: ctx.manifest,
       deps,
-    }),
-    phase: "submit",
-  });
+      phase: "submit",
+    });
+  }
   const citationCollection = deps.normalizeCitationCollectionState(
     ctx.manifest?.citation_collection
   );

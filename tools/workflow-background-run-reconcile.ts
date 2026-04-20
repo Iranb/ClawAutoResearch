@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   appendWorkflowRuntimeEvent,
   readWorkflowRuntimeQueueStore,
-  writeWorkflowRuntimeQueueStore,
+  updateWorkflowRuntimeQueueStore,
   type WorkflowRuntimeQueueEntryStatus,
 } from "./workflow-runtime-state.js";
 import {
@@ -145,40 +145,42 @@ async function reconcileQueueTerminalState(params: {
   if (!params.entry.projectRoot || !params.entry.queueKey) {
     return false;
   }
-  const queueStore = await readWorkflowRuntimeQueueStore(params.entry.projectRoot);
-  const index = queueStore.entries.findIndex(
-    (entry) => entry.queueKey === params.entry.queueKey
-  );
-  if (index < 0) {
-    return false;
-  }
-  const current = queueStore.entries[index];
   const queueStatus: WorkflowRuntimeQueueEntryStatus =
     params.terminalStatus === "completed"
       ? "completed"
       : params.terminalStatus === "failed"
         ? "failed"
         : "needs_repair";
-  const next = {
-    ...current,
-    status: queueStatus,
-    lastAttemptedAt: params.finishedAt,
-    lastError:
-      params.terminalStatus === "completed"
-        ? null
-        : params.error ?? current.lastError,
-  };
-  if (JSON.stringify(next) === JSON.stringify(current)) {
-    return false;
-  }
-  const nextEntries = [...queueStore.entries];
-  nextEntries[index] = next;
-  await writeWorkflowRuntimeQueueStore({
+  let changed = false;
+  await updateWorkflowRuntimeQueueStore({
     projectRoot: params.entry.projectRoot,
-    projectId: queueStore.projectId,
-    entries: nextEntries,
+    updater: (store) => {
+      const index = store.entries.findIndex(
+        (entry) => entry.queueKey === params.entry.queueKey
+      );
+      if (index < 0) {
+        return store.entries;
+      }
+      const current = store.entries[index];
+      const next = {
+        ...current,
+        status: queueStatus,
+        lastAttemptedAt: params.finishedAt,
+        lastError:
+          params.terminalStatus === "completed"
+            ? null
+            : params.error ?? current.lastError,
+      };
+      if (JSON.stringify(next) === JSON.stringify(current)) {
+        return store.entries;
+      }
+      changed = true;
+      const nextEntries = [...store.entries];
+      nextEntries[index] = next;
+      return nextEntries;
+    },
   });
-  return true;
+  return changed;
 }
 
 function deriveTerminalStatusFromQueueStatus(

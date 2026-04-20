@@ -279,6 +279,17 @@ test("ensureWorkflowProjectRoot bootstraps survey projects onto the survey_revie
   assert.equal(manifest.survey_review.topic, "Graph reasoning survey");
   assert.equal(manifest.survey_review.status, "searching");
   assert.equal(manifest.writing_contract.paper_mode, "survey");
+  assert.equal(manifest.writing_contract.proof_appendix_required, false);
+  assert.deepEqual(manifest.writing_contract.required_sections, [
+    "abstract",
+    "introduction",
+    "scope_and_protocol",
+    "taxonomy",
+    "evidence_synthesis",
+    "benchmark_landscape",
+    "open_problems",
+    "conclusion",
+  ]);
   assert.match(manifest.next_action, /^\/survey-pipeline\b/);
 });
 
