@@ -1725,6 +1725,36 @@ test("auto iterator enforces research program semantics, experiment-search readi
       plot_pack_path: "researcher/plot_pack.json",
     },
   });
+  await writeJson(path.join(projectRoot, "researcher", "EXECUTION_PROOF.json"), {
+    schema_version: 1,
+    status: "ready",
+    path: "researcher/EXECUTION_PROOF.json",
+    receipt_count: 1,
+    ledger_matched_receipt_count: 1,
+    lineage_matched_receipt_count: 1,
+    candidate_commit: "cand-123",
+    expected_stage_run_id: "stage-run-exp-1",
+    primary_receipt_experiment_id: "exp-1",
+    primary_receipt_run_id: "run-exp-1",
+    primary_receipt_stage_run_id: "stage-run-exp-1",
+    primary_receipt_git_commit: "cand-123",
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    ...(JSON.parse(await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8"))),
+    execution_proof: {
+      status: "ready",
+      path: "researcher/EXECUTION_PROOF.json",
+      receipt_count: 1,
+      ledger_matched_receipt_count: 1,
+      lineage_matched_receipt_count: 1,
+      candidate_commit: "cand-123",
+      expected_stage_run_id: "stage-run-exp-1",
+      primary_receipt_experiment_id: "exp-1",
+      primary_receipt_run_id: "run-exp-1",
+      primary_receipt_stage_run_id: "stage-run-exp-1",
+      primary_receipt_git_commit: "cand-123",
+    },
+  });
 
   result = await runWorkflowAutoIterator({
     projectRoot,
@@ -1732,7 +1762,8 @@ test("auto iterator enforces research program semantics, experiment-search readi
     mode: "phase-3-experiment-gate",
     queueMailbox: false,
   });
-  assert.equal(result.stageAfter, "analyze");
+  assert.equal(result.stageAfter, "experiment");
+  assert.match(result.nextAction ?? "", /monitor-experiment/i);
 
   await seedWriteProject(projectRoot);
   result = await runWorkflowAutoIterator({
@@ -1741,7 +1772,7 @@ test("auto iterator enforces research program semantics, experiment-search readi
     mode: "phase-3-write-gate",
     queueMailbox: false,
   });
-  assert.equal(result.stageAfter, "review");
+  assert.equal(result.stageAfter, "write");
   assert.ok(
     result.missingStageSignals.some((signal) => /citation|topic_relevance|count/i.test(signal))
   );

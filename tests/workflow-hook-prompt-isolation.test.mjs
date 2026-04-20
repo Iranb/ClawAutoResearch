@@ -134,11 +134,18 @@ test("before_prompt_build still injects Workflow Guard into workflow agents with
     injectWorkflowContext: true,
   });
   const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  process.env.OPENCLAW_PROJECT = workspaceDir;
   await writeJson(path.join(workspaceDir, "PROJECT_MANIFEST.json"), {
     project_id: "demo-project",
     current_stage: "idea",
@@ -176,11 +183,18 @@ test("before_prompt_build suppresses duplicate heartbeat guard injection for unc
     heartbeatBackgroundChecks: true,
   });
   const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  process.env.OPENCLAW_PROJECT = workspaceDir;
   await writeJson(path.join(workspaceDir, "PROJECT_MANIFEST.json"), {
     project_id: "demo-project",
     current_stage: "review",
@@ -428,11 +442,18 @@ test("before_prompt_build does not materialize stage contracts while reading wor
     injectWorkflowContext: true,
   });
   const beforePromptBuild = harness.getHandler("before_prompt_build");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
+  process.env.OPENCLAW_PROJECT = workspaceDir;
   await writeJson(path.join(workspaceDir, "PROJECT_MANIFEST.json"), {
     project_id: "demo-project",
     current_stage: "idea",
