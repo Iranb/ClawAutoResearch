@@ -208,6 +208,11 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   );
   assert.ok(
     !writeGate.missingStageSignals.some((signal) =>
+      /framework figure|experiment\/result tables/i.test(signal),
+    ),
+  );
+  assert.ok(
+    !writeGate.missingStageSignals.some((signal) =>
       /paper_story_state|idea fragments|review_pressure_packet/i.test(signal),
     ),
   );

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {
+  withAdvisoryLock,
+  writeJsonAtomicEnsured,
+} from "./workflow-guard-core/fs";
+
 export const WORKFLOW_RUNTIME_SCHEMA_VERSION = 1;
 export const WORKFLOW_RUNTIME_FRAMEWORK = "sessions_spawn_v1";
 
@@ -289,8 +294,21 @@ async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeJsonAtomicEnsured(filePath, value);
+}
+
+function getRuntimeStoreLockPath(filePath: string): string {
+  return `${filePath}.lock`;
+}
+
+async function withRuntimeStoreLock<T>(
+  filePath: string,
+  task: () => Promise<T>
+): Promise<T> {
+  return withAdvisoryLock({
+    lockPath: getRuntimeStoreLockPath(filePath),
+    task,
+  });
 }
 
 function normalizeCompatibilityMode(
@@ -400,9 +418,19 @@ async function readManifest(projectRoot: string): Promise<ManifestLike> {
   return (await readJsonIfExists<ManifestLike>(getManifestPath(projectRoot))) ?? {};
 }
 
-async function saveManifest(projectRoot: string, manifest: ManifestLike): Promise<void> {
-  manifest.updated_at = nowIso();
-  await writeJson(getManifestPath(projectRoot), manifest);
+async function saveManifestAudit(
+  projectRoot: string,
+  audit: Record<string, unknown>
+): Promise<void> {
+  const manifestPath = getManifestPath(projectRoot);
+  await withRuntimeStoreLock(manifestPath, async () => {
+    const current = await readManifest(projectRoot);
+    await writeJson(manifestPath, {
+      ...current,
+      audit,
+      updated_at: nowIso(),
+    });
+  });
 }
 
 function normalizeManifestAudit(
@@ -904,7 +932,7 @@ export async function migrateWorkflowRuntimeState(params: {
     compatibilityMode,
     params.reason ?? null
   );
-  await saveManifest(projectRoot, manifest);
+  await saveManifestAudit(projectRoot, manifest.audit);
 
   const createdFiles: string[] = [];
   const fileSpecs: Array<{
@@ -1053,8 +1081,38 @@ export async function writeWorkflowRuntimeQueueStore(params: {
     projectRoot: context.projectRoot,
     entries: params.entries,
   };
-  await writeJson(getWorkflowRuntimeQueuePath(context.projectRoot), store);
+  const targetPath = getWorkflowRuntimeQueuePath(context.projectRoot);
+  await withRuntimeStoreLock(targetPath, async () => {
+    await writeJson(targetPath, store);
+  });
   return store;
+}
+
+export async function updateWorkflowRuntimeQueueStore(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  compatibilityMode?: WorkflowRuntimeCompatibilityMode;
+  updater: (
+    store: WorkflowRuntimeQueueStore
+  ) => Promise<WorkflowRuntimeQueueEntry[]> | WorkflowRuntimeQueueEntry[];
+}): Promise<WorkflowRuntimeQueueStore> {
+  const context = await getProjectRuntimeContext(params);
+  const targetPath = getWorkflowRuntimeQueuePath(context.projectRoot);
+  return withRuntimeStoreLock(targetPath, async () => {
+    const current = await readWorkflowRuntimeQueueStore(context.projectRoot);
+    const nextEntries = await params.updater(current);
+    const store: WorkflowRuntimeQueueStore = {
+      ...buildStoreMeta({
+        compatibilityMode: context.compatibilityMode,
+        migration: context.migration,
+      }),
+      projectId: context.projectId,
+      projectRoot: context.projectRoot,
+      entries: nextEntries,
+    };
+    await writeJson(targetPath, store);
+    return store;
+  });
 }
 
 export async function readWorkflowRuntimeSessionsStore(
@@ -1105,8 +1163,38 @@ export async function writeWorkflowRuntimeSessionsStore(params: {
     projectRoot: context.projectRoot,
     entries: params.entries,
   };
-  await writeJson(getWorkflowRuntimeSessionsPath(context.projectRoot), store);
+  const targetPath = getWorkflowRuntimeSessionsPath(context.projectRoot);
+  await withRuntimeStoreLock(targetPath, async () => {
+    await writeJson(targetPath, store);
+  });
   return store;
+}
+
+export async function updateWorkflowRuntimeSessionsStore(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  compatibilityMode?: WorkflowRuntimeCompatibilityMode;
+  updater: (
+    store: WorkflowRuntimeSessionsStore
+  ) => Promise<WorkflowRuntimeSessionEntry[]> | WorkflowRuntimeSessionEntry[];
+}): Promise<WorkflowRuntimeSessionsStore> {
+  const context = await getProjectRuntimeContext(params);
+  const targetPath = getWorkflowRuntimeSessionsPath(context.projectRoot);
+  return withRuntimeStoreLock(targetPath, async () => {
+    const current = await readWorkflowRuntimeSessionsStore(context.projectRoot);
+    const nextEntries = await params.updater(current);
+    const store: WorkflowRuntimeSessionsStore = {
+      ...buildStoreMeta({
+        compatibilityMode: context.compatibilityMode,
+        migration: context.migration,
+      }),
+      projectId: context.projectId,
+      projectRoot: context.projectRoot,
+      entries: nextEntries,
+    };
+    await writeJson(targetPath, store);
+    return store;
+  });
 }
 
 export async function readWorkflowAnnounceOutboxStore(

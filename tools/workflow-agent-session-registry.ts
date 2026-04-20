@@ -2,7 +2,8 @@ import path from "node:path";
 
 import {
   readJsonIfExists,
-  writeJsonEnsured,
+  withAdvisoryLock,
+  writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
 
 export type WorkflowAgentSessionRegistryEntry = {
@@ -37,6 +38,10 @@ function getRegistryPath(projectRoot: string) {
   return path.join(path.resolve(projectRoot), REGISTRY_PATH);
 }
 
+function getRegistryLockPath(projectRoot: string) {
+  return `${getRegistryPath(projectRoot)}.lock`;
+}
+
 export async function readWorkflowAgentSessionRegistry(
   projectRoot: string
 ): Promise<WorkflowAgentSessionRegistryStore> {
@@ -67,34 +72,41 @@ export async function upsertWorkflowAgentSessionRegistryEntry(params: {
   if (!role || !sessionKey) {
     return await readWorkflowAgentSessionRegistry(projectRoot);
   }
-  const store = await readWorkflowAgentSessionRegistry(projectRoot);
-  const entry: WorkflowAgentSessionRegistryEntry = {
-    role,
-    sessionKey,
-    sessionId: readString(params.sessionId),
-    projectId: readString(params.projectId),
-    projectRoot,
-    currentStage: readString(params.currentStage),
-    status: params.status ?? "active",
-    source: params.source ?? "workflow_tool",
-    updatedAt: nowIso(),
-  };
-  const nextEntries = store.entries.filter(
-    (candidate) =>
-      !(
-        candidate.role === entry.role &&
-        (candidate.sessionKey === entry.sessionKey ||
-          (candidate.sessionId && entry.sessionId && candidate.sessionId === entry.sessionId))
-      )
-  );
-  nextEntries.unshift(entry);
-  const next: WorkflowAgentSessionRegistryStore = {
-    schemaVersion: 1,
-    updatedAt: entry.updatedAt,
-    entries: nextEntries.slice(0, 64),
-  };
-  await writeJsonEnsured(getRegistryPath(projectRoot), next);
-  return next;
+  return withAdvisoryLock({
+    lockPath: getRegistryLockPath(projectRoot),
+    task: async () => {
+      const store = await readWorkflowAgentSessionRegistry(projectRoot);
+      const entry: WorkflowAgentSessionRegistryEntry = {
+        role,
+        sessionKey,
+        sessionId: readString(params.sessionId),
+        projectId: readString(params.projectId),
+        projectRoot,
+        currentStage: readString(params.currentStage),
+        status: params.status ?? "active",
+        source: params.source ?? "workflow_tool",
+        updatedAt: nowIso(),
+      };
+      const nextEntries = store.entries.filter(
+        (candidate) =>
+          !(
+            candidate.role === entry.role &&
+            (candidate.sessionKey === entry.sessionKey ||
+              (candidate.sessionId &&
+                entry.sessionId &&
+                candidate.sessionId === entry.sessionId))
+          )
+      );
+      nextEntries.unshift(entry);
+      const next: WorkflowAgentSessionRegistryStore = {
+        schemaVersion: 1,
+        updatedAt: entry.updatedAt,
+        entries: nextEntries.slice(0, 64),
+      };
+      await writeJsonAtomicEnsured(getRegistryPath(projectRoot), next);
+      return next;
+    },
+  });
 }
 
 export async function getPreferredWorkflowAgentSession(params: {

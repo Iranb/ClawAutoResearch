@@ -11,6 +11,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 
 /**
  * 检查路径是否存在。
@@ -143,7 +144,7 @@ export async function writeJsonAtomicEnsured(
   value: unknown
 ): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
   await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await fs.rename(tempPath, targetPath);
 }

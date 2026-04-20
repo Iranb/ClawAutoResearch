@@ -18,6 +18,61 @@ const SURVEY_WORKFLOW_RECOVERY_STAGES = new Set([
   "review",
 ]);
 
+const SURVEY_WRITING_CONTRACT_RESET_KEYS = [
+  "templateRequired",
+  "template_required",
+  "templatePath",
+  "template_path",
+  "projectTemplatePath",
+  "project_template_path",
+  "templateName",
+  "template_name",
+  "templateStatus",
+  "template_status",
+  "templateCopyStatus",
+  "template_copy_status",
+  "bodyPageBudget",
+  "body_page_budget",
+  "referencePageBudget",
+  "reference_page_budget",
+  "bodyWordTargetMin",
+  "body_word_target_min",
+  "bodyWordTargetMax",
+  "body_word_target_max",
+  "mainTextProofStyle",
+  "main_text_proof_style",
+  "proofAppendixRequired",
+  "proof_appendix_required",
+  "proofAppendixPath",
+  "proof_appendix_path",
+  "proofAppendixStatus",
+  "proof_appendix_status",
+  "proofChecklist",
+  "proof_checklist",
+  "storylineSource",
+  "storyline_source",
+  "kgStorylineRequired",
+  "kg_storyline_required",
+  "kgStorylineStatus",
+  "kg_storyline_status",
+  "kgStorylinePacketPath",
+  "kg_storyline_packet_path",
+  "requiredSections",
+  "required_sections",
+  "sectionOrder",
+  "section_order",
+  "pendingReason",
+  "pending_reason",
+];
+
+function stripSurveyWritingContractPresetFields(contract) {
+  const next = { ...(contract ?? {}) };
+  for (const key of SURVEY_WRITING_CONTRACT_RESET_KEYS) {
+    delete next[key];
+  }
+  return next;
+}
+
 function inferSurveyTopic(manifest) {
   const record = manifest ?? {};
   const surveyReview =
@@ -107,7 +162,11 @@ export function ensureSurveyWorkflowIdentity(manifest) {
   const record = { ...(manifest ?? {}) };
   const now = new Date().toISOString();
   const currentSurveyReview = normalizeSurveyReviewState(record.survey_review);
-  const currentWritingContract = normalizeWritingContractState(record.writing_contract);
+  const currentWritingContractRecord =
+    record.writing_contract && typeof record.writing_contract === "object"
+      ? record.writing_contract
+      : {};
+  const currentWritingContract = normalizeWritingContractState(currentWritingContractRecord);
   const topic = currentSurveyReview.topic ?? inferSurveyTopic(record);
   const nextSurveyReview = {
     ...(record.survey_review && typeof record.survey_review === "object"
@@ -121,9 +180,9 @@ export function ensureSurveyWorkflowIdentity(manifest) {
   };
   const nextWritingContract = serializeWritingContractState(
     normalizeWritingContractState({
-      ...(record.writing_contract && typeof record.writing_contract === "object"
-        ? record.writing_contract
-        : {}),
+      ...(currentWritingContract.paperMode === "survey"
+        ? currentWritingContractRecord
+        : stripSurveyWritingContractPresetFields(currentWritingContractRecord)),
       paper_mode: "survey",
     })
   );
