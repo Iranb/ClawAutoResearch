@@ -12,6 +12,7 @@ import {
 } from "../workflow-guard-project-state";
 import { readMailbox } from "../workflow-guard-collaboration";
 import { loadExperimentLedgerIfExists } from "../workflow-guard-experiment-history";
+import { readWorkflowRuntimeQueueStore } from "../workflow-runtime-state.js";
 import {
   resolveProjectContext as resolveChannelProjectContext,
   type ChannelProjectBindingContext,
@@ -32,6 +33,7 @@ export type WorkflowProjectState = {
   mailbox: Awaited<ReturnType<typeof readMailbox>> | null;
   experimentLedger: Awaited<ReturnType<typeof loadExperimentLedgerIfExists>> | null;
   autoIteratorAudit: Record<string, unknown> | null;
+  runtimeQueue: Awaited<ReturnType<typeof readWorkflowRuntimeQueueStore>> | null;
 };
 
 export type WorkflowProjectContextOptions = ChannelProjectBindingContext & {
@@ -131,10 +133,11 @@ export async function loadWorkflowProjectState(
       mailbox: null,
       experimentLedger: null,
       autoIteratorAudit: null,
+      runtimeQueue: null,
     };
   }
 
-  const [manifest, trackRegistry, mailbox, experimentLedger, autoIteratorAudit] = await Promise.all([
+  const [manifest, trackRegistry, mailbox, experimentLedger, autoIteratorAudit, runtimeQueue] = await Promise.all([
     readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "PROJECT_MANIFEST.json")),
     readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "TRACK_REGISTRY.json")),
     readMailbox({
@@ -148,6 +151,7 @@ export async function loadWorkflowProjectState(
     readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, ".openclaw-research", "auto-iterator-state.json")
     ),
+    readWorkflowRuntimeQueueStore(projectRoot).catch(() => null),
   ]);
 
   return {
@@ -162,5 +166,6 @@ export async function loadWorkflowProjectState(
     mailbox,
     experimentLedger,
     autoIteratorAudit,
+    runtimeQueue,
   };
 }

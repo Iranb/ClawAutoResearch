@@ -831,6 +831,24 @@ export async function buildWorkflowSnapshotFromProjectState(
     });
   const experimentNeedsMonitorPass =
     experimentActiveRunCount > 0 || experimentFinishedUnreconciledCount > 0;
+  const runtimeQueueEntries = Array.isArray(projectState.runtimeQueue?.entries)
+    ? projectState.runtimeQueue.entries
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const backgroundQueueEntries = runtimeQueueEntries.filter((entry) => {
+    const entryType = asString(entry.entryType ?? entry.entry_type);
+    const projectRoot = asString(entry.projectRoot ?? entry.project_root);
+    return (
+      entryType === "background_run" &&
+      (!projectState.projectRoot || !projectRoot || projectRoot === projectState.projectRoot)
+    );
+  });
+  const backgroundQueueDegradedEntries = backgroundQueueEntries.filter(
+    (entry) => normalizeStage(entry.status) === "degraded"
+  );
+  const prioritizedBackgroundQueueEntry =
+    backgroundQueueDegradedEntries[0] ?? backgroundQueueEntries[0] ?? null;
   const experimentSyncRequired =
     experimentLedgerSummary?.papernexusSyncRequired === true ||
     experimentMemory?.papernexus_sync_required === true;
@@ -1076,6 +1094,27 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentNeedsMonitorPass,
     experimentMonitorRecommendedCommand: experimentNeedsMonitorPass
       ? "/monitor-experiment"
+      : null,
+    backgroundQueueEntryCount: backgroundQueueEntries.length,
+    backgroundQueueDegradedCount: backgroundQueueDegradedEntries.length,
+    backgroundQueueTopKind: prioritizedBackgroundQueueEntry
+      ? asString(
+          prioritizedBackgroundQueueEntry.kind ??
+            prioritizedBackgroundQueueEntry.entryType ??
+            prioritizedBackgroundQueueEntry.entry_type
+        )
+      : null,
+    backgroundQueueTopStatus: prioritizedBackgroundQueueEntry
+      ? normalizeStage(prioritizedBackgroundQueueEntry.status)
+      : null,
+    backgroundQueueTopSummary: prioritizedBackgroundQueueEntry
+      ? asString(prioritizedBackgroundQueueEntry.summary)
+      : null,
+    backgroundQueueTopError: prioritizedBackgroundQueueEntry
+      ? asString(
+          prioritizedBackgroundQueueEntry.lastError ??
+            prioritizedBackgroundQueueEntry.last_error
+        )
       : null,
     experimentGpuMonitorStatus: experimentGpuMonitor.state.status,
     experimentGpuMonitorCheckedAt: experimentGpuMonitor.state.checkedAt,

@@ -2243,6 +2243,14 @@ test("workflow-status command returns a readable workflow summary", async () => 
         experimentFinishedUnreconciledCount: 1,
         experimentNeedsMonitorPass: true,
         experimentMonitorRecommendedCommand: "/monitor-experiment",
+        backgroundQueueEntryCount: 1,
+        backgroundQueueDegradedCount: 1,
+        backgroundQueueTopKind: "survey_review",
+        backgroundQueueTopStatus: "degraded",
+        backgroundQueueTopSummary:
+          "Queued background workflow for survey-generalized-category-discovery-v3.",
+        backgroundQueueTopError:
+          "Plugin runtime subagent methods are only available during a gateway request.",
         experimentGpuMonitorStatus: "fresh",
         experimentGpuMonitorCheckedAt: "2026-04-11T12:00:00.000Z",
         experimentGpuMonitorServerCount: 1,
@@ -2455,6 +2463,14 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(
     result.text ?? "",
     /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/
+  );
+  assert.match(
+    result.text ?? "",
+    /Background queue: entries=1, degraded=1, next_kind=survey_review, next_status=degraded/
+  );
+  assert.match(
+    result.text ?? "",
+    /Background queue detail: summary=Queued background workflow for survey-generalized-category-discovery-v3\., error=Plugin runtime subagent methods are only available during a gateway request\./
   );
   assert.match(
     result.text ?? "",

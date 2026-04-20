@@ -260,6 +260,41 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     "utf8"
   );
   await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-queue.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        projectId: "workflow-revision-snapshot",
+        projectRoot,
+        entries: [
+          {
+            queueId: "queue-1",
+            queueKey: "background-run:survey-review",
+            source: "start_background_run",
+            entryType: "background_run",
+            ownerAgent: "researcher",
+            channelKey: "discord:channel:paper-lab",
+            requesterSessionKey: "agent:researcher:discord:channel:paper-lab",
+            family: "research",
+            kind: "survey_review",
+            projectId: "workflow-revision-snapshot",
+            projectRoot,
+            queuedAt: "2026-04-20T01:48:57.511Z",
+            attemptCount: 1,
+            summary:
+              "Queued background workflow for survey-generalized-category-discovery-v3.",
+            status: "degraded",
+            lastError:
+              "Plugin runtime subagent methods are only available during a gateway request.",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
     path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH_GIT_REVIEW_STATE.json"),
     `${JSON.stringify(
       {
@@ -346,6 +381,18 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
   assert.equal(
     snapshot.experimentSearchPromotionEvidenceSummary,
     "Primary metric beat the incumbent under the approved promotion rule."
+  );
+  assert.equal(snapshot.backgroundQueueEntryCount, 1);
+  assert.equal(snapshot.backgroundQueueDegradedCount, 1);
+  assert.equal(snapshot.backgroundQueueTopKind, "survey_review");
+  assert.equal(snapshot.backgroundQueueTopStatus, "degraded");
+  assert.equal(
+    snapshot.backgroundQueueTopSummary,
+    "Queued background workflow for survey-generalized-category-discovery-v3."
+  );
+  assert.equal(
+    snapshot.backgroundQueueTopError,
+    "Plugin runtime subagent methods are only available during a gateway request."
   );
   assert.equal(snapshot.autoDispatchDiagnosticsStatus, "waiting");
   assert.equal(snapshot.autoDispatchBlockingLayer, "signals");

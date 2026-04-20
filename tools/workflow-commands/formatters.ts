@@ -387,11 +387,22 @@ export function formatWorkflowStatusText(params: {
     snapshot.currentStage === "experiment" ||
     (snapshot.experimentActiveRunCount ?? 0) > 0 ||
     (snapshot.experimentTerminalRunCount ?? 0) > 0 ||
-    (snapshot.experimentFinishedUnreconciledCount ?? 0) > 0
+    (snapshot.experimentFinishedUnreconciledCount ?? 0) > 0 ||
+    (snapshot.backgroundQueueEntryCount ?? 0) > 0
   ) {
     lines.push(
       `Experiment monitor: active_runs=${snapshot.experimentActiveRunCount ?? 0}, terminal_runs=${snapshot.experimentTerminalRunCount ?? 0}, finished_unreconciled=${snapshot.experimentFinishedUnreconciledCount ?? 0}, needs_monitor_pass=${snapshot.experimentNeedsMonitorPass ? "true" : "false"}, next=${snapshot.experimentMonitorRecommendedCommand ?? "none"}`
     );
+    if ((snapshot.backgroundQueueEntryCount ?? 0) > 0) {
+      lines.push(
+        `Background queue: entries=${snapshot.backgroundQueueEntryCount ?? 0}, degraded=${snapshot.backgroundQueueDegradedCount ?? 0}, next_kind=${snapshot.backgroundQueueTopKind ?? "unset"}, next_status=${snapshot.backgroundQueueTopStatus ?? "unset"}`
+      );
+      if (snapshot.backgroundQueueTopSummary || snapshot.backgroundQueueTopError) {
+        lines.push(
+          `Background queue detail: summary=${snapshot.backgroundQueueTopSummary ?? "unset"}, error=${snapshot.backgroundQueueTopError ?? "none"}`
+        );
+      }
+    }
     if (
       snapshot.experimentGpuMonitorStatus &&
       snapshot.experimentGpuMonitorStatus !== "missing"

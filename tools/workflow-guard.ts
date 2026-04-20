@@ -394,6 +394,7 @@ import {
   deriveEffectiveWorkflowAutoIteratorAudit,
   normalizeWorkflowAutoIteratorAudit,
 } from "./workflow-runtime-health.js";
+import type { WorkflowRuntimeQueueStore } from "./workflow-runtime-state.js";
 import {
   buildExperimentLedgerSummary as buildExperimentLedgerSummaryImpl,
   buildExperimentMemoryDigest as buildExperimentMemoryDigestImpl,
@@ -683,6 +684,7 @@ type ProjectState = {
   mailbox: WorkflowMailboxStore | null;
   experimentLedger: ExperimentLedger | null;
   autoIteratorAudit: Record<string, unknown> | null;
+  runtimeQueue: WorkflowRuntimeQueueStore | null;
 };
 
 type ExperimentPapernexusSync = {
@@ -1760,6 +1762,12 @@ export type WorkflowSnapshot = {
   experimentFinishedUnreconciledCount: number | null;
   experimentNeedsMonitorPass: boolean;
   experimentMonitorRecommendedCommand: string | null;
+  backgroundQueueEntryCount: number | null;
+  backgroundQueueDegradedCount: number | null;
+  backgroundQueueTopKind: string | null;
+  backgroundQueueTopStatus: string | null;
+  backgroundQueueTopSummary: string | null;
+  backgroundQueueTopError: string | null;
   experimentGpuMonitorStatus: string | null;
   experimentGpuMonitorCheckedAt: string | null;
   experimentGpuMonitorServerCount: number | null;
