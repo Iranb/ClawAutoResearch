@@ -14,7 +14,7 @@ import {
   type RevisionControlState,
 } from "../workflow-guard-state/revision-control";
 import { normalizeParagraphLogicAuditState } from "../workflow-guard-state/paragraph-logic-audit";
-import { readWorkflowHooksStateStore } from "../workflow-hooks/state";
+import { readWorkflowHooksStateStore } from "../workflow-hooks/state.js";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import {
   hydrateReviewIssueTrackerState,
