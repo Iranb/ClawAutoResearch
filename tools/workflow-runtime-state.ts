@@ -927,12 +927,13 @@ export async function migrateWorkflowRuntimeState(params: {
     reason: params.reason,
     notes: params.notes,
   });
-  manifest.audit = normalizeManifestAudit(
+  const audit = normalizeManifestAudit(
     manifest.audit,
     compatibilityMode,
     params.reason ?? null
   );
-  await saveManifestAudit(projectRoot, manifest.audit);
+  manifest.audit = audit;
+  await saveManifestAudit(projectRoot, audit);
 
   const createdFiles: string[] = [];
   const fileSpecs: Array<{
