@@ -7,6 +7,12 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 async function findFilesByName(rootDir: string, fileName: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
   const results: string[] = [];
@@ -26,12 +32,18 @@ export type ExecutionProofReceipt = {
   remoteRunPath: string;
   resultSummaryPath: string | null;
   terminalPath: string | null;
+  remoteRunId: string | null;
+  remoteRunStageRunId: string | null;
+  remoteRunCommit: string | null;
+  ledgerRunId: string | null;
+  manifestCandidateCommit: string | null;
   hasResultMetrics: boolean;
   hasResultPaths: boolean;
   ledgerMatched: boolean;
   manifestCommitMatched: boolean;
   searchCommitMatched: boolean;
   stageRunMatched: boolean;
+  runIdMatched: boolean;
 };
 
 export async function collectExecutionProofReceipts(params: {
@@ -43,6 +55,8 @@ export async function collectExecutionProofReceipts(params: {
   receiptCount: number;
   receipts: ExecutionProofReceipt[];
   missingReasons: string[];
+  expectedCandidateCommit: string | null;
+  expectedStageRunId: string | null;
 }> {
   const ledgerExperiments = Array.isArray(params.experimentLedger?.experiments)
     ? (params.experimentLedger?.experiments as Record<string, unknown>[])
@@ -96,6 +110,10 @@ export async function collectExecutionProofReceipts(params: {
     const terminal =
       (await readJsonIfExists<Record<string, unknown>>(terminalPath)) ?? null;
     const ledgerEntry = ledgerByExperimentId.get(experimentId) ?? null;
+    const ledgerMetadata = asRecord(ledgerEntry?.metadata) ?? {};
+    const ledgerExecution = asRecord(
+      ledgerMetadata.execution ?? ledgerMetadata.execution_proof
+    ) ?? {};
     const resultPaths = Array.isArray(resultSummary?.result_paths)
       ? resultSummary?.result_paths
       : Array.isArray(resultSummary?.resultPaths)
@@ -124,6 +142,15 @@ export async function collectExecutionProofReceipts(params: {
       readString(remoteRun.gitCommit) ??
       readString(remoteRun.candidate_commit) ??
       readString(remoteRun.candidateCommit);
+    const remoteRunId =
+      readString(remoteRun.run_id) ?? readString(remoteRun.runId);
+    const resultSummaryRunId =
+      readString(resultSummary?.run_id) ?? readString(resultSummary?.runId);
+    const ledgerRunId =
+      readString(ledgerExecution.run_id) ??
+      readString(ledgerExecution.runId) ??
+      readString(ledgerMetadata.run_id) ??
+      readString(ledgerMetadata.runId);
     const remoteRunStageRunId =
       readString(remoteRun.stage_run_id) ?? readString(remoteRun.stageRunId);
     const resultSummaryStageRunId =
@@ -141,6 +168,15 @@ export async function collectExecutionProofReceipts(params: {
       (!remoteRunStageRunId && !resultSummaryStageRunId) ||
       expectedStageRunId === remoteRunStageRunId ||
       expectedStageRunId === resultSummaryStageRunId;
+    const runIdMatched =
+      (!ledgerRunId && !remoteRunId && !resultSummaryRunId) ||
+      (!ledgerRunId &&
+        ((!remoteRunId && !!resultSummaryRunId) ||
+          (!!remoteRunId && !resultSummaryRunId) ||
+          remoteRunId === resultSummaryRunId)) ||
+      (!!ledgerRunId &&
+        (!remoteRunId || ledgerRunId === remoteRunId) &&
+        (!resultSummaryRunId || ledgerRunId === resultSummaryRunId));
 
     if (
       (resultSummary || terminal) &&
@@ -151,12 +187,18 @@ export async function collectExecutionProofReceipts(params: {
         remoteRunPath: path.relative(params.projectRoot, remoteRunPath),
         resultSummaryPath: resultSummary ? path.relative(params.projectRoot, resultSummaryPath) : null,
         terminalPath: terminal ? path.relative(params.projectRoot, terminalPath) : null,
+        remoteRunId,
+        remoteRunStageRunId,
+        remoteRunCommit,
+        ledgerRunId,
+        manifestCandidateCommit,
         hasResultMetrics,
         hasResultPaths: resultPaths.length > 0 || hasLedgerResultPaths,
         ledgerMatched: Boolean(ledgerEntry),
         manifestCommitMatched,
         searchCommitMatched,
         stageRunMatched,
+        runIdMatched,
       });
     }
   }
@@ -176,11 +218,15 @@ export async function collectExecutionProofReceipts(params: {
   if (
     receipts.length > 0 &&
     receipts.every(
-      (entry) => !entry.manifestCommitMatched || !entry.searchCommitMatched || !entry.stageRunMatched
+      (entry) =>
+        !entry.manifestCommitMatched ||
+        !entry.searchCommitMatched ||
+        !entry.stageRunMatched ||
+        !entry.runIdMatched
     )
   ) {
     missingReasons.push(
-      "Execution receipts exist, but their commit lineage or stage_run_id does not match the current candidate/search state."
+      "Execution receipts exist, but their commit lineage, stage_run_id, or run_id does not match the current candidate/search state."
     );
   }
   if (receipts.length > 0 && receipts.every((entry) => !entry.ledgerMatched)) {
@@ -197,10 +243,13 @@ export async function collectExecutionProofReceipts(params: {
           entry.ledgerMatched &&
           entry.manifestCommitMatched &&
           entry.searchCommitMatched &&
-          entry.stageRunMatched
+          entry.stageRunMatched &&
+          entry.runIdMatched
       ),
     receiptCount: receipts.length,
     receipts,
     missingReasons,
+    expectedCandidateCommit,
+    expectedStageRunId,
   };
 }

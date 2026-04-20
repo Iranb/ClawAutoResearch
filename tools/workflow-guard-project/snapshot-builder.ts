@@ -21,6 +21,7 @@ import { evaluateExperimentSearchDecision } from "../workflow-experiment-decisio
 import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
+import { loadExperimentSearchReviewState } from "../workflow-auto-experiment-search-review.js";
 import {
   loadTrackInnovationEvidence,
 } from "../workflow-derived-state/track-evidence.js";
@@ -566,6 +567,12 @@ export async function buildWorkflowSnapshotFromProjectState(
   );
   const experimentReview = projectState.projectRoot
     ? await loadExperimentReviewState({
+        projectRoot: projectState.projectRoot,
+        manifest: projectState.manifest,
+      })
+    : undefined;
+  const experimentSearchReview = projectState.projectRoot
+    ? await loadExperimentSearchReviewState({
         projectRoot: projectState.projectRoot,
         manifest: projectState.manifest,
       })
@@ -1355,6 +1362,10 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentSearchCandidateBaseCommit: experimentSearch.candidateBaseCommit,
     experimentSearchCandidateHeadCommit: experimentSearch.candidateHeadCommit,
     experimentSearchLastGitOpResult: experimentSearch.lastGitOpResult,
+    experimentSearchPromotionBasisSignals:
+      experimentSearchReview?.promotionBasisSignals ?? [],
+    experimentSearchPromotionEvidenceSummary:
+      experimentSearchReview?.promotionEvidenceSummary ?? null,
     experimentSearchMultiSeedStatus: experimentSearch.multiSeedStatus,
     experimentSearchBaselineFairnessStatus:
       experimentSearch.baselineFairnessStatus,
@@ -1518,6 +1529,16 @@ export async function buildWorkflowSnapshotFromProjectState(
     executionProofReceiptCount: executionProof.receiptCount,
     executionProofLineageMatchedReceiptCount:
       executionProof.lineageMatchedReceiptCount,
+    executionProofCandidateCommit: executionProof.candidateCommit,
+    executionProofExpectedStageRunId: executionProof.expectedStageRunId,
+    executionProofPrimaryReceiptExperimentId:
+      executionProof.primaryReceiptExperimentId,
+    executionProofPrimaryReceiptRunId: executionProof.primaryReceiptRunId,
+    executionProofPrimaryReceiptStageRunId:
+      executionProof.primaryReceiptStageRunId,
+    executionProofPrimaryReceiptGitCommit:
+      executionProof.primaryReceiptGitCommit,
+    executionProofPrimaryReceiptPath: executionProof.primaryReceiptPath,
     executionProofPendingReason: executionProof.pendingReason,
     reviewRubricSummary: {
       originality: reviewSession.rubric.originality,

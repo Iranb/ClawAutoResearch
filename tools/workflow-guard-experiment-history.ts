@@ -79,6 +79,9 @@ type ExperimentMemoryDigestLike = {
   keyMetric: string | null;
   papernexusSyncStatus: string | null;
   failureSignature: string | null;
+  executionRunId: string | null;
+  executionStageRunId: string | null;
+  executionCandidateCommit: string | null;
 };
 
 export function getExperimentLedgerPath(projectRoot: string): string {
@@ -546,7 +549,10 @@ export function buildExperimentMemoryDigest(
       getExperimentSortTimestamp(right).localeCompare(getExperimentSortTimestamp(left))
     )
     .slice(0, limit)
-    .map((entry) => ({
+    .map((entry) => {
+      const metadata = asRecord(entry.metadata) ?? {};
+      const execution = asRecord(metadata.execution) ?? {};
+      return {
       experimentId: entry.experimentId,
       name: entry.name,
       trackId: entry.trackId,
@@ -557,5 +563,16 @@ export function buildExperimentMemoryDigest(
       keyMetric: metricToText(entry.keyMetric),
       papernexusSyncStatus: entry.papernexusSync.status,
       failureSignature: entry.failureSignature,
-    }));
+      executionRunId:
+        asString(execution.run_id) ?? asString(execution.runId) ?? null,
+      executionStageRunId:
+        asString(execution.stage_run_id) ?? asString(execution.stageRunId) ?? null,
+      executionCandidateCommit:
+        asString(execution.candidate_commit) ??
+        asString(execution.candidateCommit) ??
+        asString(execution.git_commit) ??
+        asString(execution.gitCommit) ??
+        null,
+      };
+    });
 }

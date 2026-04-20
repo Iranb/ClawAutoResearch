@@ -2254,6 +2254,12 @@ test("workflow-status command returns a readable workflow summary", async () => 
         experimentSearchCurrentMainStage: "creative_research",
         experimentSearchCurrentSubstage: "branch_expansion",
         experimentSearchBestNodeId: "node-7",
+        experimentSearchPromotionBasisSignals: [
+          "primary_metric_win",
+          "promotion_rule_satisfied",
+        ],
+        experimentSearchPromotionEvidenceSummary:
+          "Primary metric beat the incumbent under the approved promotion rule.",
         experimentSearchMultiSeedStatus: "running",
         experimentSearchPlotPackStatus: "pending",
         paperStoryStatus: "ready",
@@ -2349,6 +2355,14 @@ test("workflow-status command returns a readable workflow summary", async () => 
         executionProofPath: "researcher/EXECUTION_PROOF.json",
         executionProofReceiptCount: 1,
         executionProofLineageMatchedReceiptCount: 0,
+        executionProofCandidateCommit: "cand-789",
+        executionProofExpectedStageRunId: "stage-run-exp-7",
+        executionProofPrimaryReceiptExperimentId: "exp-7",
+        executionProofPrimaryReceiptRunId: "run-exp-6",
+        executionProofPrimaryReceiptStageRunId: "stage-run-exp-6",
+        executionProofPrimaryReceiptGitCommit: "old-commit",
+        executionProofPrimaryReceiptPath:
+          "coder/experiments/track-main/exp-7__coverage/REMOTE_RUN.json",
         executionProofPendingReason:
           "Execution receipts exist, but their commit lineage or stage_run_id does not match the current candidate/search state.",
         autoDispatchDiagnosticsStatus: "waiting",
@@ -2410,6 +2424,10 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Revision control: status=active/i);
   assert.match(result.text ?? "", /Paragraph logic audit: status=blocked, blocking_issues=3, section_transition_issues=2/i);
   assert.match(result.text ?? "", /Execution proof: status=blocked, receipts=1, lineage_matched=0, path=researcher\/EXECUTION_PROOF\.json/i);
+  assert.match(
+    result.text ?? "",
+    /Execution lineage: candidate_commit=cand-789, expected_stage_run_id=stage-run-exp-7, receipt_experiment=exp-7, receipt_run_id=run-exp-6, receipt_stage_run_id=stage-run-exp-6, receipt_git_commit=old-commit, receipt_path=coder\/experiments\/track-main\/exp-7__coverage\/REMOTE_RUN\.json/i
+  );
   assert.match(result.text ?? "", /Auto dispatch diagnostics: status=waiting/i);
   assert.match(result.text ?? "", /Auto gate modes: current_stage=panel_gate, review_to_write=panel_gate, write_to_submit=panel_gate, submit_to_done=manual_gate/i);
   assert.match(result.text ?? "", /Ideation contract: status=ready, track=track-idea-1, direction=dir-2, idea_tree=researcher\/ideation\/IDEA_TREE\.md, proposal=researcher\/ideation\/RESEARCH_PROPOSAL\.md, ranking=researcher\/ideation\/RANKING_HISTORY\.json, scoreboard=researcher\/ideation\/TOURNAMENT_SCOREBOARD\.json, top3=researcher\/ideation\/TOP3_DIRECTION_SUMMARY\.md, graph_packet=researcher\/ideation\/GRAPH_IDEATION_PACKET\.json/);
@@ -2437,6 +2455,10 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(
     result.text ?? "",
     /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/
+  );
+  assert.match(
+    result.text ?? "",
+    /Experiment promotion evidence: basis=primary_metric_win, promotion_rule_satisfied, summary=Primary metric beat the incumbent under the approved promotion rule\./
   );
   assert.match(result.text ?? "", /Paper story: status=ready, track=track-idea-1, story_spine=academic_writer\/story\/STORY_SPINE\.md, claim_map=academic_writer\/story\/CLAIM_TO_EXPERIMENT_MAP\.md, fallback=academic_writer\/story\/FALLBACK_NARRATIVE\.md/);
   assert.match(result.text ?? "", /Survey visual compiler: status=ready/i);

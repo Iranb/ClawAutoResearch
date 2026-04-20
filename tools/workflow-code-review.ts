@@ -116,6 +116,18 @@ export type CodeReviewPacket = {
     path: string;
     exists: boolean;
   }>;
+  executionProof: {
+    status: string | null;
+    receiptCount: number;
+    lineageMatchedReceiptCount: number;
+    candidateCommit: string | null;
+    expectedStageRunId: string | null;
+    receiptExperimentId: string | null;
+    receiptRunId: string | null;
+    receiptStageRunId: string | null;
+    receiptGitCommit: string | null;
+    pendingReason: string | null;
+  } | null;
   summary: string[];
 };
 
@@ -419,6 +431,57 @@ async function collectBundleChecks(projectRoot: string) {
   return bundles;
 }
 
+async function collectExecutionProofSummary(projectRoot: string) {
+  const proofRecord = asRecord(
+    await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "researcher", "EXECUTION_PROOF.json")
+    )
+  );
+  if (Object.keys(proofRecord).length === 0) {
+    return null;
+  }
+  return {
+    status: readString(proofRecord.status),
+    receiptCount: Math.max(
+      0,
+      Math.floor(readNumber(proofRecord.receipt_count ?? proofRecord.receiptCount) ?? 0)
+    ),
+    lineageMatchedReceiptCount: Math.max(
+      0,
+      Math.floor(
+        readNumber(
+          proofRecord.lineage_matched_receipt_count ??
+            proofRecord.lineageMatchedReceiptCount
+        ) ?? 0
+      )
+    ),
+    candidateCommit: readString(
+      proofRecord.candidate_commit ?? proofRecord.candidateCommit
+    ),
+    expectedStageRunId: readString(
+      proofRecord.expected_stage_run_id ?? proofRecord.expectedStageRunId
+    ),
+    receiptExperimentId: readString(
+      proofRecord.primary_receipt_experiment_id ??
+        proofRecord.primaryReceiptExperimentId
+    ),
+    receiptRunId: readString(
+      proofRecord.primary_receipt_run_id ?? proofRecord.primaryReceiptRunId
+    ),
+    receiptStageRunId: readString(
+      proofRecord.primary_receipt_stage_run_id ??
+        proofRecord.primaryReceiptStageRunId
+    ),
+    receiptGitCommit: readString(
+      proofRecord.primary_receipt_git_commit ??
+        proofRecord.primaryReceiptGitCommit
+    ),
+    pendingReason: readString(
+      proofRecord.pending_reason ?? proofRecord.pendingReason
+    ),
+  };
+}
+
 export function getCodeReviewStorePath(projectRoot: string): string {
   return path.join(projectRoot, ".openclaw-research", "code-review-state.json");
 }
@@ -528,6 +591,7 @@ export function buildCodeReviewFingerprint(packet: CodeReviewPacket): string {
     artifactChecks: [...packet.artifactChecks].sort((left, right) =>
       left.path.localeCompare(right.path)
     ),
+    executionProof: packet.executionProof,
   };
   return createHash("sha1")
     .update(JSON.stringify(normalizedPacket))
@@ -563,6 +627,7 @@ export async function materializeCodeReviewPacket(params: {
       requiredControls: collectStrings(entry.required_controls ?? entry.requiredControls),
     }));
   const bundleChecks = await collectBundleChecks(params.projectRoot);
+  const executionProof = await collectExecutionProofSummary(params.projectRoot);
   const artifactChecks = await Promise.all(
     DEFAULT_PACKET_ARTIFACTS.map(async (relativePath) => ({
       path: relativePath,
@@ -574,6 +639,9 @@ export async function materializeCodeReviewPacket(params: {
     `Project root: ${params.projectRoot}`,
     `Active tracks: ${activeTracks.map((track) => track.trackId).join(", ") || "none"}`,
     `Bundle count: ${bundleChecks.length}`,
+    executionProof
+      ? `Execution proof: status=${executionProof.status ?? "unset"}, receipts=${executionProof.receiptCount}, lineage_matched=${executionProof.lineageMatchedReceiptCount}, candidate_commit=${executionProof.candidateCommit ?? "unset"}, run_id=${executionProof.receiptRunId ?? "unset"}, stage_run_id=${executionProof.receiptStageRunId ?? "unset"}, git_commit=${executionProof.receiptGitCommit ?? "unset"}`
+      : "Execution proof: unavailable",
     "Review checklist: code must stay baseline-grounded, target the declared primary metric, preserve baseline training/eval unless deviations are documented, and validate each innovation point step-by-step.",
   ];
 
@@ -587,6 +655,7 @@ export async function materializeCodeReviewPacket(params: {
     activeTracks,
     bundleChecks,
     artifactChecks,
+    executionProof,
     summary,
   };
 
@@ -612,6 +681,17 @@ export async function materializeCodeReviewPacket(params: {
     "",
     "## Summary",
     ...summary.map((line) => `- ${line}`),
+    "",
+    "## Execution Proof",
+    ...(executionProof
+      ? [
+          `- status=${executionProof.status ?? "unset"}, receipts=${executionProof.receiptCount}, lineage_matched=${executionProof.lineageMatchedReceiptCount}, candidate_commit=${executionProof.candidateCommit ?? "unset"}, expected_stage_run_id=${executionProof.expectedStageRunId ?? "unset"}`,
+          `- receipt_experiment=${executionProof.receiptExperimentId ?? "unset"}, receipt_run_id=${executionProof.receiptRunId ?? "unset"}, receipt_stage_run_id=${executionProof.receiptStageRunId ?? "unset"}, receipt_git_commit=${executionProof.receiptGitCommit ?? "unset"}`,
+          ...(executionProof.pendingReason
+            ? [`- pending_reason=${executionProof.pendingReason}`]
+            : []),
+        ]
+      : ["- unavailable"]),
     "",
     "## Active Tracks",
     ...activeTracks.map(

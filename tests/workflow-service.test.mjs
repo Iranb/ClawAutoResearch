@@ -3859,6 +3859,20 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
     "# audit\n",
     "utf8"
   );
+  await writeJson(path.join(projectRoot, "researcher", "EXECUTION_PROOF.json"), {
+    schema_version: 1,
+    status: "blocked",
+    receipt_count: 1,
+    lineage_matched_receipt_count: 0,
+    candidate_commit: "cand-789",
+    expected_stage_run_id: "stage-run-exp-7",
+    primary_receipt_experiment_id: "exp-1",
+    primary_receipt_run_id: "run-exp-6",
+    primary_receipt_stage_run_id: "stage-run-exp-6",
+    primary_receipt_git_commit: "old-commit",
+    pending_reason:
+      "Execution receipts exist, but their commit lineage, stage_run_id, or run_id does not match the current candidate/search state.",
+  });
 
   const policy = {
     autoMode: "aggressive",
@@ -3927,6 +3941,15 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   );
 
   const startedStore = await readCodeReviewStore(projectRoot);
+  const codeReviewPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "reviewer", "code-review", "CODE_REVIEW_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(codeReviewPacket.executionProof.status, "blocked");
+  assert.equal(codeReviewPacket.executionProof.candidateCommit, "cand-789");
+  assert.equal(codeReviewPacket.executionProof.receiptRunId, "run-exp-6");
   for (const attempt of startedStore.currentRound?.attempts ?? []) {
     await recordWorkflowAnnounceEvent({
       projectRoot,

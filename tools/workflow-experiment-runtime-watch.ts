@@ -69,6 +69,21 @@ function buildResultSummary(params: {
     status:
       normalizeStatus(params.signal.status) ??
       normalizeStatus(params.remoteRun.status),
+    run_id:
+      readString(params.signal.runId) ??
+      readString(params.signal.run_id) ??
+      readString(params.remoteRun.run_id) ??
+      readString(params.remoteRun.runId),
+    stage_run_id:
+      readString(params.signal.stageRunId) ??
+      readString(params.signal.stage_run_id) ??
+      readString(params.remoteRun.stage_run_id) ??
+      readString(params.remoteRun.stageRunId),
+    git_commit:
+      readString(params.signal.gitCommit) ??
+      readString(params.signal.git_commit) ??
+      readString(params.remoteRun.git_commit) ??
+      readString(params.remoteRun.gitCommit),
     key_metric: params.signal.keyMetric ?? params.signal.key_metric ?? null,
     metrics: typeof params.signal.metrics === "object" ? params.signal.metrics : null,
     result_paths: Array.isArray(params.signal.resultPaths)
@@ -105,6 +120,24 @@ export async function recordExperimentRuntimeSignal(params: {
 
   const nextRemoteRun: Record<string, unknown> = {
     ...currentRemoteRun,
+    run_id:
+      readString(signal.runId) ??
+      readString(signal.run_id) ??
+      currentRemoteRun.run_id ??
+      currentRemoteRun.runId ??
+      null,
+    stage_run_id:
+      readString(signal.stageRunId) ??
+      readString(signal.stage_run_id) ??
+      currentRemoteRun.stage_run_id ??
+      currentRemoteRun.stageRunId ??
+      null,
+    git_commit:
+      readString(signal.gitCommit) ??
+      readString(signal.git_commit) ??
+      currentRemoteRun.git_commit ??
+      currentRemoteRun.gitCommit ??
+      null,
     status,
     updated_at: now,
     updatedAt: now,

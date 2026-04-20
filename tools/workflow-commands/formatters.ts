@@ -286,6 +286,16 @@ export function formatWorkflowStatusText(params: {
     ...(snapshot.executionProofStatus
       ? [
           `Execution proof: status=${snapshot.executionProofStatus}, receipts=${snapshot.executionProofReceiptCount ?? 0}, lineage_matched=${snapshot.executionProofLineageMatchedReceiptCount ?? 0}, path=${snapshot.executionProofPath ?? "unset"}`,
+          ...((snapshot.executionProofCandidateCommit ||
+            snapshot.executionProofExpectedStageRunId ||
+            snapshot.executionProofPrimaryReceiptExperimentId ||
+            snapshot.executionProofPrimaryReceiptRunId ||
+            snapshot.executionProofPrimaryReceiptStageRunId ||
+            snapshot.executionProofPrimaryReceiptGitCommit)
+            ? [
+                `Execution lineage: candidate_commit=${snapshot.executionProofCandidateCommit ?? "unset"}, expected_stage_run_id=${snapshot.executionProofExpectedStageRunId ?? "unset"}, receipt_experiment=${snapshot.executionProofPrimaryReceiptExperimentId ?? "unset"}, receipt_run_id=${snapshot.executionProofPrimaryReceiptRunId ?? "unset"}, receipt_stage_run_id=${snapshot.executionProofPrimaryReceiptStageRunId ?? "unset"}, receipt_git_commit=${snapshot.executionProofPrimaryReceiptGitCommit ?? "unset"}, receipt_path=${snapshot.executionProofPrimaryReceiptPath ?? "unset"}`,
+              ]
+            : []),
           ...(snapshot.executionProofPendingReason
             ? [`Execution proof pending reason: ${snapshot.executionProofPendingReason}`]
             : []),
@@ -401,6 +411,14 @@ export function formatWorkflowStatusText(params: {
     lines.push(
       `Experiment search decision: decision=${snapshot.experimentSearchDecision ?? "unset"}, validation_stage=${snapshot.experimentSearchValidationStage ?? "unset"}, fairness=${snapshot.experimentSearchBaselineFairnessStatus ?? "unset"}, impl_confidence=${snapshot.experimentSearchImplementationConfidence ?? "unset"}, ablation=${snapshot.experimentSearchAblationStatus ?? "unset"}, innovation=${snapshot.experimentSearchInnovationStatus ?? "unset"}, exhaustion=${snapshot.experimentSearchSearchExhaustionStatus ?? "unset"}, evidence=${snapshot.experimentSearchEvidenceCleanlinessStatus ?? "unset"}, confidence=${snapshot.experimentSearchDecisionConfidence ?? "unset"}`
     );
+    if (
+      (snapshot.experimentSearchPromotionBasisSignals?.length ?? 0) > 0 ||
+      snapshot.experimentSearchPromotionEvidenceSummary
+    ) {
+      lines.push(
+        `Experiment promotion evidence: basis=${(snapshot.experimentSearchPromotionBasisSignals ?? []).join(", ") || "none"}, summary=${snapshot.experimentSearchPromotionEvidenceSummary ?? "unset"}`
+      );
+    }
     lines.push(
       `Experiment outer loop: dataset_coverage=${snapshot.experimentSearchBaselineDatasetCoverageStatus ?? "unset"}, missing_datasets=${(snapshot.experimentSearchBaselineDatasetCoverageMissing ?? []).join(", ") || "none"}, innovation_deviation=${snapshot.experimentSearchInnovationDeviationStatus ?? "unset"}, deviation_score=${snapshot.experimentSearchInnovationDeviationScore ?? "unset"}`
     );

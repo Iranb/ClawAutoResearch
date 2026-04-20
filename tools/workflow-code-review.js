@@ -137,6 +137,40 @@ function listRecordText(value) {
         return [preferred, ...covers].filter((item) => Boolean(item));
     });
 }
+function listImplementationProofText(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.flatMap((entry) => {
+        if (typeof entry === "string" && entry.trim()) {
+            return [entry.trim()];
+        }
+        const record = asRecord(entry);
+        if (Object.keys(record).length === 0) {
+            return [];
+        }
+        const primary = readString(record.id) ??
+            readString(record.point_id) ??
+            readString(record.pointId) ??
+            readString(record.symbol) ??
+            readString(record.path) ??
+            readString(record.file) ??
+            readString(record.hook) ??
+            readString(record.entry_point) ??
+            readString(record.entryPoint) ??
+            readString(record.objective) ??
+            readString(record.summary) ??
+            null;
+        const covers = collectStrings(record.covers ??
+            record.cover ??
+            record.innovation_point ??
+            record.innovationPoint ??
+            record.innovation_point_id ??
+            record.innovationPointId ??
+            record.targets);
+        return [primary, ...covers].filter((item) => Boolean(item));
+    });
+}
 async function collectBundleChecks(projectRoot) {
     const root = path.join(projectRoot, "coder", "experiments");
     const bundles = [];
@@ -160,6 +194,7 @@ async function collectBundleChecks(projectRoot) {
         const hasManifest = entries.some((entry) => entry.isFile() && entry.name === "EXPERIMENT_MANIFEST.json");
         if (hasManifest) {
             const record = asRecord(await readJsonIfExists(manifestPath));
+            const implementationProof = asRecord(record.implementation_proof ?? record.implementationProof);
             bundles.push({
                 dir: path.relative(projectRoot, current) || current,
                 trackId: readString(record.track_id ?? record.trackId),
@@ -186,6 +221,13 @@ async function collectBundleChecks(projectRoot) {
                 innovationPoints: listRecordText(record.innovation_points ?? record.innovationPoints),
                 validationSteps: listRecordText(record.validation_steps ?? record.validationSteps),
                 ablationPlan: listRecordText(record.ablation_plan ?? record.ablationPlan),
+                implementationChangedFiles: collectStrings(implementationProof.changed_files ?? implementationProof.changedFiles),
+                implementationIntegrationPoints: listImplementationProofText(implementationProof.integration_points ?? implementationProof.integrationPoints),
+                implementationActivationSignals: listImplementationProofText(implementationProof.activation_signals ?? implementationProof.activationSignals),
+                implementationExecutionCommand: readString(implementationProof.execution_command ??
+                    implementationProof.executionCommand ??
+                    implementationProof.run_command ??
+                    implementationProof.runCommand) ?? null,
             });
         }
         for (const entry of entries) {
@@ -195,6 +237,28 @@ async function collectBundleChecks(projectRoot) {
         }
     }
     return bundles;
+}
+async function collectExecutionProofSummary(projectRoot) {
+    const proofRecord = asRecord(await readJsonIfExists(path.join(projectRoot, "researcher", "EXECUTION_PROOF.json")));
+    if (Object.keys(proofRecord).length === 0) {
+        return null;
+    }
+    return {
+        status: readString(proofRecord.status),
+        receiptCount: Math.max(0, Math.floor(readNumber(proofRecord.receipt_count ?? proofRecord.receiptCount) ?? 0)),
+        lineageMatchedReceiptCount: Math.max(0, Math.floor(readNumber(proofRecord.lineage_matched_receipt_count ??
+            proofRecord.lineageMatchedReceiptCount) ?? 0)),
+        candidateCommit: readString(proofRecord.candidate_commit ?? proofRecord.candidateCommit),
+        expectedStageRunId: readString(proofRecord.expected_stage_run_id ?? proofRecord.expectedStageRunId),
+        receiptExperimentId: readString(proofRecord.primary_receipt_experiment_id ??
+            proofRecord.primaryReceiptExperimentId),
+        receiptRunId: readString(proofRecord.primary_receipt_run_id ?? proofRecord.primaryReceiptRunId),
+        receiptStageRunId: readString(proofRecord.primary_receipt_stage_run_id ??
+            proofRecord.primaryReceiptStageRunId),
+        receiptGitCommit: readString(proofRecord.primary_receipt_git_commit ??
+            proofRecord.primaryReceiptGitCommit),
+        pendingReason: readString(proofRecord.pending_reason ?? proofRecord.pendingReason),
+    };
 }
 export function getCodeReviewStorePath(projectRoot) {
     return path.join(projectRoot, ".openclaw-research", "code-review-state.json");
@@ -281,6 +345,7 @@ export function buildCodeReviewFingerprint(packet) {
         activeTracks: [...packet.activeTracks].sort((left, right) => left.trackId.localeCompare(right.trackId)),
         bundleChecks: [...packet.bundleChecks].sort((left, right) => left.dir.localeCompare(right.dir)),
         artifactChecks: [...packet.artifactChecks].sort((left, right) => left.path.localeCompare(right.path)),
+        executionProof: packet.executionProof,
     };
     return createHash("sha1")
         .update(JSON.stringify(normalizedPacket))
@@ -309,10 +374,14 @@ export async function materializeCodeReviewPacket(params) {
         path: relativePath,
         exists: await pathExists(path.join(params.projectRoot, relativePath)),
     })));
+    const executionProof = await collectExecutionProofSummary(params.projectRoot);
     const summary = [
         `Project root: ${params.projectRoot}`,
         `Active tracks: ${activeTracks.map((track) => track.trackId).join(", ") || "none"}`,
         `Bundle count: ${bundleChecks.length}`,
+        executionProof
+            ? `Execution proof: status=${executionProof.status ?? "unset"}, receipts=${executionProof.receiptCount}, lineage_matched=${executionProof.lineageMatchedReceiptCount}, candidate_commit=${executionProof.candidateCommit ?? "unset"}, run_id=${executionProof.receiptRunId ?? "unset"}, stage_run_id=${executionProof.receiptStageRunId ?? "unset"}, git_commit=${executionProof.receiptGitCommit ?? "unset"}`
+            : "Execution proof: unavailable",
         "Review checklist: code must stay baseline-grounded, target the declared primary metric, preserve baseline training/eval unless deviations are documented, and validate each innovation point step-by-step.",
     ];
     const packet = {
@@ -324,6 +393,7 @@ export async function materializeCodeReviewPacket(params) {
         activeTracks,
         bundleChecks,
         artifactChecks,
+        executionProof,
         summary,
     };
     const packetDir = getCodeReviewPacketDir(params.projectRoot);
@@ -342,16 +412,26 @@ export async function materializeCodeReviewPacket(params) {
         "- confirm each code bundle still implements the active innovation track rather than drifting away from it",
         "- confirm the implementation is baseline-grounded and aims at the declared primary baseline metric",
         "- confirm validation_steps and ablation_plan can incrementally verify each innovation point",
+        "- confirm implementation_proof shows where each innovation point is actually wired into code and how execution will prove it was activated",
         "- confirm the bundle remains executable and preserves baseline training/eval protocol unless explicit deviations are documented",
         "",
         "## Summary",
         ...summary.map((line) => `- ${line}`),
         "",
+        "## Execution Proof",
+        ...(executionProof
+            ? [
+                `- status=${executionProof.status ?? "unset"}, receipts=${executionProof.receiptCount}, lineage_matched=${executionProof.lineageMatchedReceiptCount}, candidate_commit=${executionProof.candidateCommit ?? "unset"}, expected_stage_run_id=${executionProof.expectedStageRunId ?? "unset"}`,
+                `- receipt_experiment=${executionProof.receiptExperimentId ?? "unset"}, receipt_run_id=${executionProof.receiptRunId ?? "unset"}, receipt_stage_run_id=${executionProof.receiptStageRunId ?? "unset"}, receipt_git_commit=${executionProof.receiptGitCommit ?? "unset"}`,
+                ...(executionProof.pendingReason ? [`- pending_reason=${executionProof.pendingReason}`] : []),
+            ]
+            : ["- unavailable"]),
+        "",
         "## Active Tracks",
         ...activeTracks.map((track) => `- ${track.trackId}: hypothesis=${track.hypothesis ?? "unset"}, novelty_basis=${track.noveltyBasis ?? "unset"}, main_metric=${track.mainMetric ?? "unset"}`),
         "",
         "## Bundles",
-        ...bundleChecks.map((bundle) => `- ${bundle.dir}: track=${bundle.trackId ?? "unset"}, metric=${bundle.primaryBaselineMetric ?? "unset"}, target=${bundle.targetImprovement ?? "unset"}, innovation_points=${bundle.innovationPoints.join("; ") || "none"}, validation_steps=${bundle.validationSteps.join("; ") || "none"}, ablation_plan=${bundle.ablationPlan.join("; ") || "none"}`),
+        ...bundleChecks.map((bundle) => `- ${bundle.dir}: track=${bundle.trackId ?? "unset"}, metric=${bundle.primaryBaselineMetric ?? "unset"}, target=${bundle.targetImprovement ?? "unset"}, innovation_points=${bundle.innovationPoints.join("; ") || "none"}, validation_steps=${bundle.validationSteps.join("; ") || "none"}, ablation_plan=${bundle.ablationPlan.join("; ") || "none"}, implementation_changed_files=${bundle.implementationChangedFiles.join("; ") || "none"}, integration_points=${bundle.implementationIntegrationPoints.join("; ") || "none"}, activation_signals=${bundle.implementationActivationSignals.join("; ") || "none"}, execution_command=${bundle.implementationExecutionCommand ?? "unset"}`),
         "",
         "## Artifact Checks",
         ...artifactChecks.map((artifact) => `- ${artifact.path}: ${artifact.exists ? "present" : "missing"}`),

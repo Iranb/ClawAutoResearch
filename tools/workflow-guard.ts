@@ -750,6 +750,9 @@ type ExperimentMemoryDigest = {
   keyMetric: string | null;
   papernexusSyncStatus: string | null;
   failureSignature: string | null;
+  executionRunId: string | null;
+  executionStageRunId: string | null;
+  executionCandidateCommit: string | null;
 };
 
 type IdleResearchState = {
@@ -1982,6 +1985,8 @@ export type WorkflowSnapshot = {
   experimentSearchCandidateBaseCommit: string | null;
   experimentSearchCandidateHeadCommit: string | null;
   experimentSearchLastGitOpResult: string | null;
+  experimentSearchPromotionBasisSignals: string[];
+  experimentSearchPromotionEvidenceSummary: string | null;
   experimentSearchMultiSeedStatus: string | null;
   experimentSearchBaselineFairnessStatus: string | null;
   experimentSearchImplementationConfidence: string | null;
@@ -2120,6 +2125,13 @@ export type WorkflowSnapshot = {
   executionProofPath: string | null;
   executionProofReceiptCount: number | null;
   executionProofLineageMatchedReceiptCount: number | null;
+  executionProofCandidateCommit: string | null;
+  executionProofExpectedStageRunId: string | null;
+  executionProofPrimaryReceiptExperimentId: string | null;
+  executionProofPrimaryReceiptRunId: string | null;
+  executionProofPrimaryReceiptStageRunId: string | null;
+  executionProofPrimaryReceiptGitCommit: string | null;
+  executionProofPrimaryReceiptPath: string | null;
   executionProofPendingReason: string | null;
   reviewRubricSummary: Record<string, number | null>;
   graphGuidedWritingStatus: string | null;
@@ -5143,11 +5155,11 @@ type ExperimentBundleSummary = {
   manifest: Record<string, unknown> | null;
 };
 
-async function findExperimentBundleManifest(params: {
+async function findExperimentBundle(params: {
   projectRoot: string;
   experimentId: string | null;
   trackId?: string | null;
-}): Promise<Record<string, unknown> | null> {
+}): Promise<{ record: Record<string, unknown>; dir: string } | null> {
   if (!params.experimentId) {
     return null;
   }
@@ -5163,15 +5175,21 @@ async function findExperimentBundleManifest(params: {
       manifestExperimentId === params.experimentId &&
       (!params.trackId || manifestTrackId === params.trackId)
     ) {
-      return record;
+      return {
+        record,
+        dir: bundle.dir,
+      };
     }
   }
   return null;
 }
 
-function buildExperimentMetadataFromBundleManifest(
-  record: Record<string, unknown> | null
-): Record<string, unknown> | null {
+async function buildExperimentMetadataFromBundleManifest(params: {
+  projectRoot: string;
+  record: Record<string, unknown> | null;
+  bundleDir: string | null;
+}): Promise<Record<string, unknown> | null> {
+  const record = params.record;
   if (!record) {
     return null;
   }
@@ -5199,6 +5217,72 @@ function buildExperimentMetadataFromBundleManifest(
   }
   if (innovationPoints.length > 0) {
     metadata.innovation_points = innovationPoints;
+  }
+  const gitRecord =
+    asRecord(record.git) ??
+    asRecord(record.search_git) ??
+    asRecord(record.searchGit) ??
+    {};
+  const remoteRunPath = params.bundleDir
+    ? path.join(params.bundleDir, "REMOTE_RUN.json")
+    : null;
+  const resultSummaryPath = params.bundleDir
+    ? path.join(params.bundleDir, "RESULT_SUMMARY.json")
+    : null;
+  const terminalPath = params.bundleDir
+    ? path.join(params.bundleDir, "RUN_TERMINAL.json")
+    : null;
+  const remoteRun =
+    remoteRunPath && (await pathExists(remoteRunPath))
+      ? await readJsonIfExists<Record<string, unknown>>(remoteRunPath)
+      : null;
+  const resultSummary =
+    resultSummaryPath && (await pathExists(resultSummaryPath))
+      ? await readJsonIfExists<Record<string, unknown>>(resultSummaryPath)
+      : null;
+  const terminalSummary =
+    terminalPath && (await pathExists(terminalPath))
+      ? await readJsonIfExists<Record<string, unknown>>(terminalPath)
+      : null;
+  const execution: Record<string, unknown> = {};
+  const candidateBranch =
+    pickString(gitRecord, ["last_candidate_branch", "lastCandidateBranch", "candidate_branch", "candidateBranch"]) ??
+    null;
+  const candidateCommit =
+    pickString(gitRecord, ["last_candidate_commit", "lastCandidateCommit", "candidate_commit", "candidateCommit"]) ??
+    null;
+  const baseCommit =
+    pickString(gitRecord, ["base_commit", "baseCommit"]) ?? null;
+  const runId =
+    pickString(remoteRun ?? {}, ["run_id", "runId"]) ??
+    pickString(resultSummary ?? {}, ["run_id", "runId"]) ??
+    null;
+  const stageRunId =
+    pickString(remoteRun ?? {}, ["stage_run_id", "stageRunId"]) ??
+    pickString(resultSummary ?? {}, ["stage_run_id", "stageRunId"]) ??
+    null;
+  const gitCommit =
+    pickString(remoteRun ?? {}, ["git_commit", "gitCommit"]) ??
+    pickString(resultSummary ?? {}, ["git_commit", "gitCommit"]) ??
+    candidateCommit ??
+    null;
+  if (candidateBranch) execution.candidate_branch = candidateBranch;
+  if (candidateCommit) execution.candidate_commit = candidateCommit;
+  if (baseCommit) execution.base_commit = baseCommit;
+  if (runId) execution.run_id = runId;
+  if (stageRunId) execution.stage_run_id = stageRunId;
+  if (gitCommit) execution.git_commit = gitCommit;
+  if (remoteRunPath && remoteRun) {
+    execution.remote_run_path = path.relative(params.projectRoot, remoteRunPath);
+  }
+  if (resultSummaryPath && resultSummary) {
+    execution.result_summary_path = path.relative(params.projectRoot, resultSummaryPath);
+  }
+  if (terminalPath && terminalSummary) {
+    execution.terminal_path = path.relative(params.projectRoot, terminalPath);
+  }
+  if (Object.keys(execution).length > 0) {
+    metadata.execution = execution;
   }
   return Object.keys(metadata).length > 0 ? metadata : null;
 }
@@ -9478,14 +9562,23 @@ export async function upsertExperimentLedgerEntry(params: {
     asStringArray(currentMetadata.datasets).length > 0 ||
     asStringArray(currentMetadata.dataset_names).length > 0 ||
     asStringArray(currentMetadata.validation_datasets).length > 0;
+  const hasExecutionMetadata =
+    asRecord(currentMetadata.execution)?.run_id != null ||
+    asRecord(currentMetadata.execution)?.git_commit != null ||
+    asRecord(currentMetadata.execution)?.candidate_commit != null ||
+    asRecord(currentMetadata.execution)?.remote_run_path != null;
   let enrichedExperiment = params.experiment;
-  if (!hasDatasetMetadata && experimentId) {
-    const bundleManifest = await findExperimentBundleManifest({
+  if ((!hasDatasetMetadata || !hasExecutionMetadata) && experimentId) {
+    const bundle = await findExperimentBundle({
       projectRoot: params.projectRoot,
       experimentId,
       trackId,
     });
-    const derivedMetadata = buildExperimentMetadataFromBundleManifest(bundleManifest);
+    const derivedMetadata = await buildExperimentMetadataFromBundleManifest({
+      projectRoot: params.projectRoot,
+      record: bundle?.record ?? null,
+      bundleDir: bundle?.dir ?? null,
+    });
     if (derivedMetadata) {
       enrichedExperiment = {
         ...params.experiment,

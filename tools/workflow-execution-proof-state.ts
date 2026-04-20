@@ -28,6 +28,18 @@ export async function materializeExecutionProofState(params: {
     experimentLedger: ledger,
     manifest,
   });
+  const primaryReceipt =
+    proof.receipts.find(
+      (entry) =>
+        entry.ledgerMatched &&
+        entry.manifestCommitMatched &&
+        entry.searchCommitMatched &&
+        entry.stageRunMatched &&
+        entry.runIdMatched
+    ) ??
+    proof.receipts.find((entry) => entry.ledgerMatched) ??
+    proof.receipts[0] ??
+    null;
   const lastUpdatedAt = new Date().toISOString();
   const state: ExecutionProofState = {
     status:
@@ -41,8 +53,24 @@ export async function materializeExecutionProofState(params: {
     ledgerMatchedReceiptCount: proof.receipts.filter((entry) => entry.ledgerMatched).length,
     lineageMatchedReceiptCount: proof.receipts.filter(
       (entry) =>
-        entry.manifestCommitMatched && entry.searchCommitMatched && entry.stageRunMatched
+        entry.manifestCommitMatched &&
+        entry.searchCommitMatched &&
+        entry.stageRunMatched &&
+        entry.runIdMatched
     ).length,
+    candidateCommit: proof.expectedCandidateCommit,
+    expectedStageRunId: proof.expectedStageRunId,
+    primaryReceiptExperimentId: primaryReceipt?.experimentId ?? null,
+    primaryReceiptRunId:
+      primaryReceipt?.remoteRunId ??
+      primaryReceipt?.ledgerRunId ??
+      null,
+    primaryReceiptStageRunId: primaryReceipt?.remoteRunStageRunId ?? null,
+    primaryReceiptGitCommit:
+      primaryReceipt?.remoteRunCommit ??
+      primaryReceipt?.manifestCandidateCommit ??
+      null,
+    primaryReceiptPath: primaryReceipt?.remoteRunPath ?? null,
     pendingReason: proof.missingReasons.join(" ") || null,
     lastUpdatedAt,
   };

@@ -1372,6 +1372,9 @@ test("research_workflow record_experiment_runtime_signal writes watcher artifact
     projectRoot,
     experimentRuntimeSignal: {
       experiment_id: "exp-1",
+      run_id: "run-proof-1",
+      stage_run_id: "stage-run-proof-1",
+      git_commit: "abc123",
       remote_run_path: "coder/demo-exp/REMOTE_RUN.json",
       status: "completed",
       result_paths: ["researcher/artifacts/results/results.json"],
@@ -1383,6 +1386,18 @@ test("research_workflow record_experiment_runtime_signal writes watcher artifact
   assert.equal(runtimeSignal.status, "completed");
   await fs.access(path.join(runDir, "RUN_TERMINAL.json"));
   await fs.access(path.join(runDir, "RESULT_SUMMARY.json"));
+  const remoteRun = JSON.parse(
+    await fs.readFile(path.join(runDir, "REMOTE_RUN.json"), "utf8")
+  );
+  assert.equal(remoteRun.run_id, "run-proof-1");
+  assert.equal(remoteRun.stage_run_id, "stage-run-proof-1");
+  assert.equal(remoteRun.git_commit, "abc123");
+  const resultSummary = JSON.parse(
+    await fs.readFile(path.join(runDir, "RESULT_SUMMARY.json"), "utf8")
+  );
+  assert.equal(resultSummary.run_id, "run-proof-1");
+  assert.equal(resultSummary.stage_run_id, "stage-run-proof-1");
+  assert.equal(resultSummary.git_commit, "abc123");
 
   const decision = await executeWorkflowTool(tool, {
     action: "evaluate_experiment_search_decision",
@@ -4425,8 +4440,35 @@ test("research_workflow upsert_experiment enriches ledger metadata from EXPERIME
       dataset_path: "/data/datasets/CUB-200",
       baseline_reference: "ProtoGCD",
       innovation_points: ["graph grounded routing"],
+      git: {
+        base_commit: "base-123",
+        last_candidate_branch: "candidate/track-main/exp-7",
+        last_candidate_commit: "cand-789",
+      },
     }
   );
+  const runDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "track-main",
+    "exp-7__coverage"
+  );
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-7",
+    run_id: "run-exp-7",
+    git_commit: "cand-789",
+    stage_run_id: "stage-run-exp-7",
+    status: "completed",
+  });
+  await writeJson(path.join(runDir, "RESULT_SUMMARY.json"), {
+    experiment_id: "exp-7",
+    run_id: "run-exp-7",
+    git_commit: "cand-789",
+    stage_run_id: "stage-run-exp-7",
+    metrics: { acc: 0.77 },
+    result_paths: ["researcher/artifacts/results/exp-7.json"],
+  });
 
   const result = await executeWorkflowTool(tool, {
     action: "upsert_experiment",
@@ -4443,6 +4485,16 @@ test("research_workflow upsert_experiment enriches ledger metadata from EXPERIME
   assert.equal(result.entry.metadata.dataset_names[0], "CUB-200");
   assert.equal(result.entry.metadata.validation_datasets[0], "CUB-200");
   assert.equal(result.entry.metadata.baseline_reference, "ProtoGCD");
+  assert.equal(result.entry.metadata.execution.base_commit, "base-123");
+  assert.equal(result.entry.metadata.execution.candidate_branch, "candidate/track-main/exp-7");
+  assert.equal(result.entry.metadata.execution.candidate_commit, "cand-789");
+  assert.equal(result.entry.metadata.execution.run_id, "run-exp-7");
+  assert.equal(result.entry.metadata.execution.stage_run_id, "stage-run-exp-7");
+  assert.equal(result.entry.metadata.execution.git_commit, "cand-789");
+  assert.equal(
+    result.entry.metadata.execution.remote_run_path,
+    "coder/experiments/track-main/exp-7__coverage/REMOTE_RUN.json"
+  );
 
   const ledger = JSON.parse(
     await fs.readFile(
@@ -4452,6 +4504,7 @@ test("research_workflow upsert_experiment enriches ledger metadata from EXPERIME
   );
   const entry = ledger.experiments.find((item) => item.experiment_id === "exp-7");
   assert.equal(entry.metadata.datasets[0], "/data/datasets/CUB-200");
+  assert.equal(entry.metadata.execution.run_id, "run-exp-7");
 });
 
 test("research_workflow run_citation_calibration updates citation integrity from calibrated refs", async (t) => {

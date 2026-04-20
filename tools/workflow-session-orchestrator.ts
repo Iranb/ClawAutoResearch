@@ -11,6 +11,8 @@ import {
   writeWorkflowBroadcastOutboxStore,
   writeWorkflowRuntimeQueueStore,
   writeWorkflowRuntimeSessionsStore,
+  updateWorkflowRuntimeQueueStore,
+  updateWorkflowRuntimeSessionsStore,
 } from "./workflow-runtime-state.js";
 import { deriveWorkflowSubagentImmediateParentSessionKey } from "./workflow-subagent-sessions";
 import type {
@@ -457,42 +459,41 @@ async function executePersistedWorkflowTransition(params: {
 async function upsertTransitionEntry(
   entry: WorkflowRuntimeQueueEntry
 ): Promise<{ entry: WorkflowRuntimeQueueEntry; created: boolean }> {
-  const store = await readWorkflowRuntimeQueueStore(entry.projectRoot ?? "");
-  const existingIndex = store.entries.findIndex(
-    (candidate) => candidate.queueKey === entry.queueKey
-  );
-  if (existingIndex >= 0) {
-    const nextEntries = [...store.entries];
-    nextEntries[existingIndex] = {
-      ...nextEntries[existingIndex],
-      ...entry,
-      transitionId: nextEntries[existingIndex].transitionId,
-      queueId: nextEntries[existingIndex].queueId,
-      queuedAt: nextEntries[existingIndex].queuedAt,
-    };
-    await writeWorkflowRuntimeQueueStore({
-      projectRoot: entry.projectRoot ?? "",
-      projectId: entry.projectId,
-      entries: nextEntries,
-    });
-    return {
-      entry: nextEntries[existingIndex],
-      created: false,
-    };
-  }
-  const nextEntry = {
-    ...entry,
-    transitionId: entry.transitionId || randomUUID(),
-    queueId: entry.queueId || entry.transitionId || randomUUID(),
-  };
-  await writeWorkflowRuntimeQueueStore({
+  let persistedEntry: WorkflowRuntimeQueueEntry | null = null;
+  let created = false;
+  await updateWorkflowRuntimeQueueStore({
     projectRoot: entry.projectRoot ?? "",
     projectId: entry.projectId,
-    entries: [...store.entries, nextEntry],
+    updater: (store) => {
+      const existingIndex = store.entries.findIndex(
+        (candidate) => candidate.queueKey === entry.queueKey
+      );
+      if (existingIndex >= 0) {
+        const nextEntries = [...store.entries];
+        nextEntries[existingIndex] = {
+          ...nextEntries[existingIndex],
+          ...entry,
+          transitionId: nextEntries[existingIndex].transitionId,
+          queueId: nextEntries[existingIndex].queueId,
+          queuedAt: nextEntries[existingIndex].queuedAt,
+        };
+        persistedEntry = nextEntries[existingIndex];
+        created = false;
+        return nextEntries;
+      }
+      const nextEntry = {
+        ...entry,
+        transitionId: entry.transitionId || randomUUID(),
+        queueId: entry.queueId || entry.transitionId || randomUUID(),
+      };
+      persistedEntry = nextEntry;
+      created = true;
+      return [...store.entries, nextEntry];
+    },
   });
   return {
-    entry: nextEntry,
-    created: true,
+    entry: persistedEntry ?? entry,
+    created,
   };
 }
 
@@ -501,22 +502,26 @@ async function patchTransitionEntry(params: {
   queueKey: string;
   patch: Partial<WorkflowRuntimeQueueEntry>;
 }): Promise<WorkflowRuntimeQueueEntry | null> {
-  const store = await readWorkflowRuntimeQueueStore(params.projectRoot);
-  const index = store.entries.findIndex((entry) => entry.queueKey === params.queueKey);
-  if (index < 0) {
-    return null;
-  }
-  const nextEntries = [...store.entries];
-  nextEntries[index] = {
-    ...nextEntries[index],
-    ...params.patch,
-  };
-  await writeWorkflowRuntimeQueueStore({
+  let patchedEntry: WorkflowRuntimeQueueEntry | null = null;
+  await updateWorkflowRuntimeQueueStore({
     projectRoot: params.projectRoot,
-    projectId: store.projectId,
-    entries: nextEntries,
+    updater: (store) => {
+      const index = store.entries.findIndex(
+        (entry) => entry.queueKey === params.queueKey
+      );
+      if (index < 0) {
+        return store.entries;
+      }
+      const nextEntries = [...store.entries];
+      nextEntries[index] = {
+        ...nextEntries[index],
+        ...params.patch,
+      };
+      patchedEntry = nextEntries[index];
+      return nextEntries;
+    },
   });
-  return nextEntries[index];
+  return patchedEntry;
 }
 
 export async function createWorkflowTransitionIntent(
@@ -614,10 +619,6 @@ export async function recordWorkflowRuntimeSession(
     compatibilityMode: "sessions_spawn_runtime",
     reason: "record_runtime_session",
   });
-  const store = await readWorkflowRuntimeSessionsStore(projectRoot);
-  const existingIndex = store.entries.findIndex(
-    (entry) => entry.sessionKey === params.sessionKey
-  );
   const entry: WorkflowRuntimeSessionEntry = {
     sessionKey: params.sessionKey,
     sessionId: readString(params.sessionId),
@@ -647,24 +648,35 @@ export async function recordWorkflowRuntimeSession(
     lastFinishedAt: readString(params.lastFinishedAt),
     lastError: readString(params.lastError),
   };
-  const nextEntries = [...store.entries];
-  if (existingIndex >= 0) {
-    nextEntries[existingIndex] = {
-      ...nextEntries[existingIndex],
-      ...entry,
-      startedAt: nextEntries[existingIndex].startedAt,
-    };
-  } else {
-    nextEntries.push(entry);
-  }
-  await writeWorkflowRuntimeSessionsStore({
+  let persistedEntry: WorkflowRuntimeSessionEntry | null = null;
+  let created = false;
+  await updateWorkflowRuntimeSessionsStore({
     projectRoot,
     projectId,
-    entries: nextEntries,
+    updater: (store) => {
+      const existingIndex = store.entries.findIndex(
+        (candidate) => candidate.sessionKey === params.sessionKey
+      );
+      const nextEntries = [...store.entries];
+      if (existingIndex >= 0) {
+        nextEntries[existingIndex] = {
+          ...nextEntries[existingIndex],
+          ...entry,
+          startedAt: nextEntries[existingIndex].startedAt,
+        };
+        persistedEntry = nextEntries[existingIndex];
+        created = false;
+      } else {
+        nextEntries.push(entry);
+        persistedEntry = entry;
+        created = true;
+      }
+      return nextEntries;
+    },
   });
   return {
-    entry: existingIndex >= 0 ? nextEntries[existingIndex] : entry,
-    created: existingIndex < 0,
+    entry: persistedEntry ?? entry,
+    created,
   };
 }
 

@@ -4639,7 +4639,7 @@ test("auto iterator keeps analyze blocked when execution proof lineage mismatche
   assert.equal(result.stageAfter, "experiment");
   assert.ok(
     result.missingStageSignals.some((signal) =>
-      /commit lineage or stage_run_id does not match/i.test(signal)
+      /commit lineage, stage_run_id, or run_id does not match/i.test(signal)
     )
   );
 });

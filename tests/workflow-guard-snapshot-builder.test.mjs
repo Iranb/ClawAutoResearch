@@ -223,6 +223,13 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     path: "researcher/EXECUTION_PROOF.json",
     receipt_count: 1,
     lineage_matched_receipt_count: 0,
+    candidate_commit: "cand-789",
+    expected_stage_run_id: "stage-run-exp-7",
+    primary_receipt_experiment_id: "exp-7",
+    primary_receipt_run_id: "run-exp-7",
+    primary_receipt_stage_run_id: "stage-run-exp-6",
+    primary_receipt_git_commit: "old-commit",
+    primary_receipt_path: "coder/experiments/track-main/exp-7__coverage/REMOTE_RUN.json",
     pending_reason: "Execution receipts exist, but their commit lineage or stage_run_id does not match the current candidate/search state.",
   };
   manifest.survey_visual_compiler_state = {
@@ -246,6 +253,20 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
         updated_at: new Date().toISOString(),
         hook_points: {},
         hooks: {},
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH_GIT_REVIEW_STATE.json"),
+    `${JSON.stringify(
+      {
+        status: "ready",
+        promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+        promotion_evidence_summary:
+          "Primary metric beat the incumbent under the approved promotion rule.",
       },
       null,
       2
@@ -308,6 +329,24 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
   assert.equal(snapshot.executionProofStatus, "blocked");
   assert.equal(snapshot.executionProofReceiptCount, 1);
   assert.equal(snapshot.executionProofLineageMatchedReceiptCount, 0);
+  assert.equal(snapshot.executionProofCandidateCommit, "cand-789");
+  assert.equal(snapshot.executionProofExpectedStageRunId, "stage-run-exp-7");
+  assert.equal(snapshot.executionProofPrimaryReceiptExperimentId, "exp-7");
+  assert.equal(snapshot.executionProofPrimaryReceiptRunId, "run-exp-7");
+  assert.equal(snapshot.executionProofPrimaryReceiptStageRunId, "stage-run-exp-6");
+  assert.equal(snapshot.executionProofPrimaryReceiptGitCommit, "old-commit");
+  assert.equal(
+    snapshot.executionProofPrimaryReceiptPath,
+    "coder/experiments/track-main/exp-7__coverage/REMOTE_RUN.json"
+  );
+  assert.deepEqual(snapshot.experimentSearchPromotionBasisSignals, [
+    "primary_metric_win",
+    "promotion_rule_satisfied",
+  ]);
+  assert.equal(
+    snapshot.experimentSearchPromotionEvidenceSummary,
+    "Primary metric beat the incumbent under the approved promotion rule."
+  );
   assert.equal(snapshot.autoDispatchDiagnosticsStatus, "waiting");
   assert.equal(snapshot.autoDispatchBlockingLayer, "signals");
   assert.equal(snapshot.autoGateReviewToWriteMode, "panel_gate");
