@@ -56,8 +56,35 @@ vitepress build docs
 - 文档相关路径发生变化
 - 手动执行 workflow_dispatch
 
-## 5. 维护时要注意什么
+## 5. 第一次启用 GitHub Pages 的最短步骤
+
+如果仓库还没真正对外发布 Pages，按这个顺序做：
+
+1. 把文档改动合并到 `main`
+2. 进入 GitHub 仓库 `Settings -> Pages`
+3. 在 `Build and deployment` 里选择 `GitHub Actions`
+4. 确认仓库里已经存在 `.github/workflows/deploy-docs.yml`
+5. 手动运行一次 `Deploy Docs` workflow，或直接向 `main` 推送文档改动
+6. 等待 workflow 完成后，访问 GitHub Pages 返回的站点 URL
+
+> [!TIP]
+> 如果是项目站而不是用户站，最终 URL 通常是：
+>
+> `https://<user>.github.io/<repo>/`
+
+## 6. 发布前检查清单
+
+部署前至少确认这几件事：
+
+- `npm run docs:build` 本地通过
+- 新增页面已经被 nav / sidebar 或入口页接住
+- 站内链接尽量使用相对链接，避免仓库子路径部署时跳到根路径
+- 静态资源放在 `docs/public/`
+- 文档里不要把“给用户看的教程”和“给维护者看的架构细节”混在同一入口里
+
+## 7. 维护时要注意什么
 
 - 如果调整了 nav / sidebar / docs 路径，记得重新跑 `npm run docs:build`。
 - 如果修改了仓库名或希望部署到自定义子路径，要同步更新 `base` 推导或设置 `DOCS_BASE`。
 - 如果你引入新的静态资源，确认它们在 `docs/public/` 或 VitePress 可处理路径下。
+- 如果首页里用了原生 HTML 链接，优先写相对路径，不要写 `href=\"/...\"` 这种站点根路径链接。

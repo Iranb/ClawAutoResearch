@@ -32,6 +32,8 @@ Researcher、Orchestrator、Coder、Analyzer、Academic Writer、Reviewer、Cros
 
 ## 推荐深入阅读
 
+- [系统特性与 Workflow 流程总览](./system-workflows.md)
+- [Workflow 向 Discord 汇报的节点](./discord-reporting.md)
 - [Workflow 控制平面](./workflow-control-plane.md)
 - [Broad Paper Search](./broad-paper-search.md)
 - [Workflow Hooks](./workflow-hooks.md)

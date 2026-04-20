@@ -5,44 +5,41 @@ title: ClawAutoResearch Docs
 hero:
   name: ClawAutoResearch Docs
   text: OpenClaw 自动科研控制平面
-  tagline: 用 VitePress 重建后的统一文档站。这里完整解释系统的工作流状态机、PaperNexus 图谱链路、workflow-guard 控制层、Agent/Skill 边界、durable state contracts 与 GitHub Pages 部署方式。
+  tagline: "文档站现在分成两条线: 用户文档负责快速上手，技术文档负责解释控制平面、运行时与状态合同。"
   actions:
     - theme: brand
-      text: 从快速开始进入
-      link: /get-started/
+      text: 先看安装指南
+      link: /user-guide/installation
     - theme: alt
-      text: 阅读工作流控制平面
-      link: /architecture/workflow-control-plane
+      text: 再看使用指南
+      link: /user-guide/usage
     - theme: alt
-      text: 查看运行时接口
-      link: /reference/commands-and-tools
+      text: 进入技术文档
+      link: /technical/
 features:
-  - title: Overview / 系统总览
-    details: 先理解系统边界、核心对象和为什么它不是“几个 prompt 叠在一起”。
-    link: /architecture/
-  - title: Get Started / 快速开始
-    details: 从安装、启用、项目初始化、graph build 到恢复现场的最短路径。
-    link: /get-started/
-  - title: Workflow / 工作流控制平面
-    details: 实验论文主线与综述主线、owner gate、auto_iterator_tick、回退与 repair 逻辑。
-    link: /architecture/workflow-control-plane
-  - title: Workflow Hooks / 节点级审核
-    details: 关键产出节点、handoff 节点、task closeout 的 durable hook、file audit、revision dispatch 与 hook state。
-    link: /architecture/workflow-hooks
-  - title: Graph & Memory / 图谱与记忆
-    details: PaperNexus、shared corpus、graph presence、实验账本与 innovation reflection。
-    link: /architecture/graph-memory
-  - title: Agents & Skills / 角色与技能
-    details: 角色职责、目录边界、workflow mailbox 和 skills 如何配合 workflow guard。
-    link: /architecture/agents-and-skills
-  - title: Runtime & Reference / 运行时参考
-    details: slash commands、research_workflow、research_memory、状态合同与模块地图。
-    link: /reference/
+  - title: 用户文档 / User Guide
+    details: 给第一次使用系统的人。现在明确拆成“安装”和“使用”两条入口，不先讲底层实现。
+    link: /user-guide/
+  - title: 安装指南 / Installation
+    details: 只讲怎么把插件和文档站装好，并确认 workflow 环境真的可用。
+    link: /user-guide/installation
+  - title: 使用指南 / Usage
+    details: 只讲安装完成后怎么启动实验项目或综述项目、怎么查状态、怎么恢复。
+    link: /user-guide/usage
+  - title: 技术文档 / Technical Docs
+    details: 给维护者和扩展开发者。集中解释 workflow control plane、runtime queue、状态合同和模块边界。
+    link: /technical/
+  - title: GitHub Pages
+    details: 文档站已按子路径部署兼容方式组织，适合直接接上 GitHub Pages。
+    link: /operations/github-pages
 ---
 
 # ClawAutoResearch Docs Portal
 
-这套文档站现在是 `openclaw-research` 的权威介绍入口。它用 `VitePress` 取代了原来分散在 `DOC/` 和 `docs/` 里的多份静态说明，把系统真实存在的功能和设计重新按主题组织起来。
+这套文档站现在是 `openclaw-research` 的权威介绍入口。它用 `VitePress` 取代了原来分散在 `DOC/` 和 `docs/` 里的多份静态说明，并且把内容明确分成两类：
+
+- 用户文档：面向“我要先把系统用起来”的人
+- 技术文档：面向“我要理解和修改系统内部机制”的人
 
 ## 这套系统是什么
 
@@ -59,20 +56,20 @@ features:
 
 <div class="portal-grid">
   <div class="portal-card">
-    <h3>读者 1：第一次接触这个系统</h3>
-    <p>先读 <a href="/get-started/">快速开始</a>，再看 <a href="/architecture/workflow-control-plane">工作流控制平面</a>。这样最容易建立整体心智模型。</p>
+    <h3>用户入口：第一次接触这个系统</h3>
+    <p>先读 <a href="./user-guide/installation">安装指南</a>，再继续看 <a href="./user-guide/usage">使用指南</a>。</p>
   </div>
   <div class="portal-card">
-    <h3>读者 2：要修系统的人</h3>
-    <p>重点读 <a href="/reference/module-map">Module Map</a>、<a href="/reference/state-contracts">State Contracts</a>、<a href="/architecture/workflow-hooks">Workflow Hooks</a> 和 <a href="/operations/testing-and-debugging">测试与调试</a>。</p>
+    <h3>技术入口：要修系统的人</h3>
+    <p>从 <a href="./technical/">技术文档</a> 进入，再读 <a href="./reference/module-map">Module Map</a>、<a href="./reference/state-contracts">State Contracts</a> 和 <a href="./operations/testing-and-debugging">测试与调试</a>。</p>
   </div>
   <div class="portal-card">
-    <h3>读者 3：要跑科研项目的人</h3>
-    <p>重点读 <a href="/get-started/project-lifecycle">项目生命周期</a>、<a href="/architecture/graph-memory">Graph 与 Memory</a> 和 <a href="/reference/commands-and-tools">Commands 与 Tools</a>。</p>
+    <h3>项目操作者：要跑科研项目的人</h3>
+    <p>重点读 <a href="./user-guide/usage">使用指南</a> 和 <a href="./get-started/project-lifecycle">项目生命周期</a>。</p>
   </div>
   <div class="portal-card">
-    <h3>读者 4：要部署公开文档的人</h3>
-    <p>直接看 <a href="/operations/github-pages">GitHub Pages 部署</a>，文档站兼容仓库子路径部署。</p>
+    <h3>部署者：要发布文档站的人</h3>
+    <p>直接看 <a href="./operations/github-pages">GitHub Pages 部署</a>，文档站兼容仓库子路径部署。</p>
   </div>
 </div>
 
@@ -95,12 +92,21 @@ features:
 - `PaperNexus`：共享图谱和文献知识底座，影响 graph build、frontier mapping、novelty check、innovation reflection、citation grounding。
 - `PROJECT_MANIFEST.json`：项目级控制平面文件，串起当前阶段、owner、blocking reason、contracts 和 runtime summary。
 
+## 文档分层
+
+| 类型 | 面向谁 | 从哪里进入 |
+| --- | --- | --- |
+| 用户文档 | 第一次使用系统的人 | [安装指南](./user-guide/installation.md) / [使用指南](./user-guide/usage.md) |
+| 技术文档 | 维护者、调试者、扩展开发者 | [技术文档](./technical/index.md) |
+
 ## 新文档站与旧文档的关系
 
 现在的结构是：
 
 - `docs/`：唯一权威文档根，也是 VitePress 站点源目录。
-- `docs/superpowers/`：保留内部设计历史、specs 和 implementation plans。
+- `docs/user-guide/`：用户教程与使用入口。
+- `docs/technical/`：技术入口页。
+- 内部设计历史与私有计划：不再进入公开 docs 站点。
 - `DOC/`：保留兼容入口与历史说明，提醒读者迁移到新 portal。
 
 如果你是从旧链接进来的，不需要担心跳不到内容。兼容入口会继续保留，但主导航、细化介绍和后续更新都应该集中在这里。

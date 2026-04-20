@@ -116,3 +116,40 @@ body {
 .portal-card p {
   margin: 0;
 }
+
+.vp-mermaid {
+  margin: 1.25rem 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 18px;
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(245, 239, 228, 0.92));
+  overflow-x: auto;
+}
+
+.dark .vp-mermaid {
+  background: linear-gradient(180deg, rgba(36, 42, 40, 0.92), rgba(25, 29, 27, 0.98));
+}
+
+.vp-mermaid__diagram {
+  min-width: fit-content;
+}
+
+.vp-mermaid__diagram svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.vp-mermaid__loading,
+.vp-mermaid__error {
+  color: var(--vp-c-text-2);
+}
+
+.vp-mermaid__error pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: var(--vp-c-bg-soft);
+  overflow-x: auto;
+}

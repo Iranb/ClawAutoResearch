@@ -285,6 +285,6 @@ owner 技能现在都允许一条安全恢复路径：
 
 ## 相关页面
 
-- [Workflow 控制平面](/architecture/workflow-control-plane)
-- [Writing 与 Review](/architecture/writing-and-review)
-- [Commands 与 Tools](/reference/commands-and-tools)
+- [Workflow 控制平面](./workflow-control-plane.md)
+- [Writing 与 Review](./writing-and-review.md)
+- [Commands 与 Tools](../reference/commands-and-tools.md)

@@ -2,7 +2,7 @@
 
 日期：2026-04-15
 
-目标：对照 [2026-04-15-top-tier-module-backlog.zh-CN.md](/Users/iranb/Library/Mobile%20Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/docs/reference/2026-04-15-top-tier-module-backlog.zh-CN.md)，判断当前仓库：
+目标：对照 [2026-04-15-top-tier-module-backlog.zh-CN.md](./2026-04-15-top-tier-module-backlog.zh-CN.md)，判断当前仓库：
 
 - 哪些模块可以复用
 - 哪些模块必须重构
@@ -35,7 +35,7 @@
 
 路径：
 
-- [tools/survey-review-diagnostics.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/survey-review-diagnostics.ts:1)
+- `tools/survey-review-diagnostics.ts:1`
 
 为什么可复用：
 
@@ -64,7 +64,7 @@
 
 路径：
 
-- [tools/workflow-guard-writing/write-package-eval.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-writing/write-package-eval.ts:1)
+- `tools/workflow-guard-writing/write-package-eval.ts:1`
 
 为什么可复用：
 
@@ -85,7 +85,7 @@
 
 路径：
 
-- [tools/paper-source-index.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/paper-source-index.ts:1)
+- `tools/paper-source-index.ts:1`
 
 为什么可复用：
 
@@ -107,7 +107,7 @@
 
 路径：
 
-- [tools/workflow-guard-recorders/state-recorders.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-recorders/state-recorders.ts:1)
+- `tools/workflow-guard-recorders/state-recorders.ts:1`
 
 为什么可复用：
 
@@ -128,8 +128,8 @@
 
 路径：
 
-- [tests/survey-review-materializer.test.mjs](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/survey-review-materializer.test.mjs:1)
-- [tests/workflow-guard-writing-eval.test.mjs](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-guard-writing-eval.test.mjs:1)
+- `tests/survey-review-materializer.test.mjs:1`
+- `tests/workflow-guard-writing-eval.test.mjs:1`
 
 为什么必须保留：
 
@@ -146,7 +146,7 @@
 
 路径：
 
-- [tools/workflow-guard.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts:1)
+- `tools/workflow-guard.ts:1`
 
 现状判断：
 
@@ -176,7 +176,7 @@
 
 路径：
 
-- [tools/workflow-guard-materializers/paper-story-materializer.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-materializers/paper-story-materializer.ts:1)
+- `tools/workflow-guard-materializers/paper-story-materializer.ts:1`
 
 为什么值得保留行为：
 
@@ -201,7 +201,7 @@
 
 路径：
 
-- [tools/workflow-guard-materializers/review-pressure-materializer.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-materializers/review-pressure-materializer.ts:1)
+- `tools/workflow-guard-materializers/review-pressure-materializer.ts:1`
 
 为什么值得保留行为：
 
@@ -222,7 +222,7 @@
 
 路径：
 
-- [tools/workflow-guard-writing/paper-quality-eval.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-writing/paper-quality-eval.ts:1)
+- `tools/workflow-guard-writing/paper-quality-eval.ts:1`
 
 为什么保行为：
 
@@ -242,7 +242,7 @@
 
 路径：
 
-- [tools/workflow-guard-recorders/state-recorders.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-recorders/state-recorders.ts:1)
+- `tools/workflow-guard-recorders/state-recorders.ts:1`
 
 为什么保行为：
 
@@ -262,8 +262,8 @@
 
 路径示例：
 
-- [tools/workflow-guard-state/writing-contract.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/writing-contract.ts:1)
-- [tools/workflow-guard-state/experiment-search-spec.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/experiment-search-spec.ts:1)
+- `tools/workflow-guard-state/writing-contract.ts:1`
+- `tools/workflow-guard-state/experiment-search-spec.ts:1`
 
 为什么保留：
 
@@ -292,7 +292,7 @@
 
 路径：
 
-- [tools/workflow-evidence/benchmark-registry.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/benchmark-registry.ts:1)
+- `tools/workflow-evidence/benchmark-registry.ts:1`
 
 当前状态：
 
@@ -310,7 +310,7 @@
 
 路径：
 
-- [tools/workflow-evidence/statistics.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/statistics.ts:1)
+- `tools/workflow-evidence/statistics.ts:1`
 
 当前状态：
 
@@ -327,7 +327,7 @@
 
 路径：
 
-- [tools/workflow-evidence/opportunity-model.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/opportunity-model.ts:1)
+- `tools/workflow-evidence/opportunity-model.ts:1`
 
 当前状态：
 
@@ -344,7 +344,7 @@
 
 路径：
 
-- [tools/workflow-evidence/mechanism-packet.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/mechanism-packet.ts:1)
+- `tools/workflow-evidence/mechanism-packet.ts:1`
 
 当前状态：
 
@@ -358,7 +358,7 @@
 
 路径：
 
-- [tools/workflow-evidence/protocol-lock.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/protocol-lock.ts:1)
+- `tools/workflow-evidence/protocol-lock.ts:1`
 
 当前状态：
 
@@ -387,9 +387,9 @@
 
 证据：
 
-- [tools/workflow-guard.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard.ts:91)
-- [tools/workflow-guard-stages/execution-stage-signals.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/execution-stage-signals.ts:202)
-- [tools/workflow-guard-stages/writing-stage-signals.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-stages/writing-stage-signals.ts:140)
+- `tools/workflow-guard.ts:91`
+- `tools/workflow-guard-stages/execution-stage-signals.ts:202`
+- `tools/workflow-guard-stages/writing-stage-signals.ts:140`
 
 为什么要保：
 
@@ -412,8 +412,8 @@
 
 证据：
 
-- [tests/workflow-evidence-kernel.test.mjs](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/workflow-evidence-kernel.test.mjs:1)
-- [tools/workflow-team/stage-profiles.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-team/stage-profiles.ts:92)
+- `tests/workflow-evidence-kernel.test.mjs:1`
+- `tools/workflow-team/stage-profiles.ts:92`
 
 为什么要保：
 
@@ -424,8 +424,8 @@
 
 证据：
 
-- [tools/workflow-guard-state/writing-contract.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-guard-state/writing-contract.ts:13)
-- [tests/survey-review-materializer.test.mjs](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tests/survey-review-materializer.test.mjs:1)
+- `tools/workflow-guard-state/writing-contract.ts:13`
+- `tests/survey-review-materializer.test.mjs:1`
 
 为什么要保：
 
@@ -467,7 +467,7 @@
 
 现在 `workflow-evidence/contracts.ts` 是值得保留的，因为它已经把 evidence state 统一命名出来了：
 
-- [tools/workflow-evidence/contracts.ts](/Users/iranb/Library/Mobile Documents/com~apple~CloudDocs/OpenClawThings/openclaw-research/tools/workflow-evidence/contracts.ts:1)
+- `tools/workflow-evidence/contracts.ts:1`
 
 但它对应的 materializer 基本还是：
 

@@ -116,10 +116,10 @@ node scripts/run_gateway_chat_send_live_test.mjs --message "/show-commands"
 如果要模拟更接近 Discord channel 的命令上下文，可以加：
 
 ```bash
---session-key 'agent:researcher:discord:channel:<channel-id>'
+--session-key '<workflow-channel-session>'
 --originating-channel discord
---originating-to 'discord:channel:<channel-id>'
---originating-account-id researcher
+--originating-to '<workflow-channel>'
+--originating-account-id '<workflow-operator>'
 ```
 
 ### 6.2 已记录的真实结果（2026-04-12）
@@ -147,10 +147,10 @@ node scripts/run_gateway_chat_send_live_test.mjs --message "/show-commands"
 ```bash
 node scripts/run_gateway_chat_send_live_test.mjs \
   --message '/auto-research "Generalized Category Discovery"' \
-  --session-key 'agent:researcher:discord:channel:<channel-id>' \
+  --session-key '<workflow-channel-session>' \
   --originating-channel discord \
-  --originating-to 'discord:channel:<channel-id>' \
-  --originating-account-id researcher
+  --originating-to '<workflow-channel>' \
+  --originating-account-id '<workflow-operator>'
 ```
 
 真实结果：
@@ -227,19 +227,15 @@ node scripts/run_gateway_chat_send_live_test.mjs \
 
 原因是 OpenClaw 官方对 Discord native slash command 的核心语义是：
 
-- slash 命令本身运行在独立 command session
-  - `agent:<agentId>:discord:slash:<userId>`
-- 真正要操作的会话通过 `CommandTargetSessionKey` 指向目标频道会话
-  - `agent:<agentId>:discord:channel:<channelId>`
+- slash 命令本身运行在独立的 command session
+- 真正要操作的 workflow 会话通过 target session 字段指向目标频道/线程会话
 
 也就是说，对 workflow commands 来说，最关键的不是 webhook body，而是：
 
-- `SessionKey`
-- `CommandTargetSessionKey`
-- `CommandAuthorized`
-- `From`
-- `To`
-- `OriginatingTo`
+- command session
+- target workflow session
+- authorization flag
+- source / destination conversation context
 
 ### 7.1 推荐脚本
 
@@ -249,17 +245,15 @@ node scripts/run_gateway_chat_send_live_test.mjs \
 node scripts/run_discord_native_slash_replay_test.mjs \
   --command auto-research \
   --args '"Generalized Category Discovery"' \
-  --projects-root "/tmp/openclaw-native-slash-tests"
+  --projects-root "<temp-projects-root>"
 ```
 
 这个脚本会构造与 OpenClaw 官方 Discord native slash 测试一致的上下文：
 
-- `SessionKey = agent:researcher:discord:slash:<user-id>`
-- `CommandTargetSessionKey = agent:researcher:discord:channel:<channel-id>`
-- `CommandAuthorized = true`
-- `From = discord:channel:<channel-id>`
-- `To = slash:<user-id>`
-- `OriginatingTo = channel:<channel-id>`
+- 一个 command session
+- 一个 target workflow session
+- 授权过的 slash command 上下文
+- 与目标频道/线程一致的来源信息
 
 然后直接走 plugin command dispatch，而不是绕回普通 chat turn。
 
@@ -269,7 +263,7 @@ node scripts/run_discord_native_slash_replay_test.mjs \
 node scripts/run_discord_native_slash_replay_test.mjs \
   --command auto-research \
   --args '"Generalized Category Discovery"' \
-  --projects-root "/tmp/openclaw-native-slash-tests" \
+  --projects-root "<temp-projects-root>" \
   --channel-id gcd-research-lab \
   --user-id owner
 ```
@@ -287,7 +281,7 @@ node scripts/run_discord_native_slash_replay_test.mjs \
 node scripts/run_discord_native_slash_replay_test.mjs \
   --command auto-review \
   --args '"Generalized Category Discovery"' \
-  --projects-root "/tmp/openclaw-native-slash-tests" \
+  --projects-root "<temp-projects-root>" \
   --channel-id gcd-survey-lab \
   --user-id owner
 ```

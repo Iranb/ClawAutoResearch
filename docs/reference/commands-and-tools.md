@@ -158,7 +158,7 @@
 现有项目批量迁移到最新 workflow/runtime 结构时，推荐直接运行：
 
 ```bash
-node scripts/migrate_latest_workflow_projects.mjs --projects-root "/workspace/AutoResearchProjects"
+node scripts/migrate_latest_workflow_projects.mjs --projects-root "<projects-root>"
 ```
 
 它会批量 backfill 项目骨架、runtime state、survey identity，以及 experiment decision 持久化字段。

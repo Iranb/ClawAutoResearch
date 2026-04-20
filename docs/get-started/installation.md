@@ -15,7 +15,7 @@
 ## 2. 推荐命令
 
 ```bash
-cd "/workspace/openclaw-research"
+cd "<repo-root>"
 bash install.sh --dry-run
 bash install.sh
 ```

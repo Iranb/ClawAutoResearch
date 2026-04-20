@@ -124,7 +124,7 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 如果你手上已经有一批旧项目，需要补齐最新 runtime state、survey identity 和 experiment decision 字段，可以直接运行：
 
 ```bash
-node scripts/migrate_latest_workflow_projects.mjs --projects-root "/workspace/AutoResearchProjects"
+node scripts/migrate_latest_workflow_projects.mjs --projects-root "<projects-root>"
 ```
 
 这个迁移是 backfill-first：

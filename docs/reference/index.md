@@ -11,7 +11,7 @@
 
 如果你正在看新的 conference / journal 广覆盖论文搜索实现，建议先读：
 
-- [Broad Paper Search 设计详解](/architecture/broad-paper-search)
+- [Broad Paper Search 设计详解](../architecture/broad-paper-search.md)
 
 如果你在修 bug，通常先看 commands/tools，再看 state contracts，最后看 module map。
 
