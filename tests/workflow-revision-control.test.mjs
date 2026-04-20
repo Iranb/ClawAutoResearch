@@ -169,3 +169,37 @@ test("materializeRevisionControlState includes blocked paragraph logic audit as 
   );
   assert.equal(result.state.nextReviewerRole, "cross-reviewer");
 });
+
+test("materializeRevisionControlState ignores external reviews that only require human decision", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-human-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "submit",
+    external_review_state: {
+      status: "received",
+      provider: "paperreview.ai",
+      external_review_path: "reviewer/external_review.md",
+      review_response_path: "reviewer/rebuttal.md",
+      overall_recommendation: "minor_revision",
+      required_action: "human_decision",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: new Date().toISOString(),
+    hook_points: {},
+    hooks: {},
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "submit",
+  });
+
+  assert.equal(result.state.status, "idle");
+  assert.equal(result.state.openSources.length, 0);
+});

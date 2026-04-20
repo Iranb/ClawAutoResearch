@@ -308,6 +308,58 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     )}\n`,
     "utf8"
   );
+  await fs.mkdir(
+    path.join(projectRoot, ".openclaw-research", "panel-discussions"),
+    { recursive: true }
+  );
+  await fs.writeFile(
+    path.join(
+      projectRoot,
+      ".openclaw-research",
+      "panel-discussions",
+      "survey-brief-refinement.json"
+    ),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-20T08:44:13.731Z",
+        roundsStartedByFingerprint: {
+          "survey-brief-fingerprint": 1,
+        },
+        currentRound: {
+          discussionId: "survey-brief-refinement",
+          topic: "Refine the survey brief for the current topic",
+          stage: "survey_review",
+          roundId: "survey-brief-round-1",
+          packetPath:
+            "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.md",
+          packetJsonPath:
+            "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.json",
+          packetFingerprint: "survey-brief-fingerprint",
+          status: "reviewing",
+          participants: ["researcher", "analyzer", "reviewer"],
+          maxRounds: 2,
+          launchedAt: "2026-04-20T08:44:13.731Z",
+          updatedAt: "2026-04-20T08:44:13.731Z",
+          attempts: [],
+          aggregate: {
+            status: "needs_changes",
+            quorum: 2,
+            reviewCount: 1,
+            averageConfidence: 8.1,
+            decisionCounts: { needs_changes: 1 },
+            recommendedOwner: "researcher",
+            actionItems: ["stabilize taxonomy labels"],
+            blockers: [],
+            summary: "One refinement pass is still needed.",
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
   await materializeRevisionControlState({
     projectRoot,
     stage: "write",
@@ -381,6 +433,17 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
   assert.equal(
     snapshot.experimentSearchPromotionEvidenceSummary,
     "Primary metric beat the incumbent under the approved promotion rule."
+  );
+  assert.equal(snapshot.surveyBriefRefinementStatus, "reviewing");
+  assert.equal(snapshot.surveyBriefRefinementReviewCount, 1);
+  assert.equal(snapshot.surveyBriefRefinementRoundId, "survey-brief-round-1");
+  assert.equal(
+    snapshot.surveyBriefRefinementPacketPath,
+    "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.md"
+  );
+  assert.equal(
+    snapshot.surveyBriefRefinementSummary,
+    "One refinement pass is still needed."
   );
   assert.equal(snapshot.backgroundQueueEntryCount, 1);
   assert.equal(snapshot.backgroundQueueDegradedCount, 1);

@@ -2,11 +2,13 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   asRecord,
+  pickString,
 } from "../workflow-guard-core/coercion";
 import {
   readJsonIfExists,
   readTextIfExists,
   writeJsonEnsured,
+  writeTextEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
@@ -16,6 +18,7 @@ import {
   type SurveyReviewState,
 } from "../workflow-guard-state/survey-review";
 import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.js";
+import { materializeWorkflowPanelDiscussionState } from "../workflow-panel-discussion";
 
 function countPaperEntries(value: unknown): number {
   if (Array.isArray(value)) {
@@ -92,9 +95,326 @@ function countPendingPlannedRounds(value: unknown): number {
   }).length;
 }
 
-async function hasNonWhitespaceContent(filePath: string | null): Promise<boolean> {
-  const text = await readTextIfExists(filePath);
+function hasNonWhitespaceContent(text: string | null | undefined): boolean {
   return Boolean(text && text.trim().length > 0);
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
+function collectMarkdownSignalLines(rawText: string | null | undefined, limit = 8): string[] {
+  if (!rawText) {
+    return [];
+  }
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !line.startsWith("#") &&
+        !/^[-*_]{3,}$/.test(line)
+    )
+    .map((line) => line.replace(/^[-*]\s+/, ""))
+    .filter((line) => line.length > 0);
+  return uniqueStrings(lines).slice(0, limit);
+}
+
+function extractSectionListItems(text: string, headingKeywords: string[]): string[] {
+  const lines = (text ?? "").split(/\r?\n/);
+  const items: string[] = [];
+  let capture = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^#{1,6}\s+/.test(trimmed)) {
+      const heading = trimmed.replace(/^#{1,6}\s+/, "").toLowerCase();
+      capture = headingKeywords.some((keyword) => heading.includes(keyword));
+      continue;
+    }
+    if (!capture) {
+      continue;
+    }
+    if (/^[-*+]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+      items.push(trimmed.replace(/^[-*+]\s+/, "").replace(/^\d+\.\s+/, "").trim());
+      continue;
+    }
+    if (trimmed === "") {
+      continue;
+    }
+    if (items.length === 0) {
+      items.push(trimmed);
+    }
+  }
+  return items.filter(Boolean);
+}
+
+function normalizeHeadingLabel(rawHeading: string): string | null {
+  const normalized = rawHeading
+    .replace(/^\d+(?:\.\d+)*\s*/, "")
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+  if (
+    /^(introduction|scope|topic|review protocol|coverage summary|literature review|open problems?|conclusion)$/i.test(
+      normalized
+    )
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function extractFamilyHeadingsFromLiteratureReview(rawText: string | null | undefined): string[] {
+  if (!rawText) {
+    return [];
+  }
+  const headings = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^#{2,6}\s+/.test(line))
+    .map((line) => line.replace(/^#{2,6}\s+/, ""))
+    .map((line) => normalizeHeadingLabel(line))
+    .filter((line): line is string => Boolean(line))
+    .filter(
+      (line) =>
+        /(approach|method|learning|model|prompt|prototype|contrastive|debias|context|fine-grained|representation|forgetting|taxonomy|family)/i.test(
+          line
+        )
+    );
+  return uniqueStrings(headings).slice(0, 6);
+}
+
+function extractFamiliesFromSotaMatrix(rawText: string | null | undefined): string[] {
+  if (!rawText) {
+    return [];
+  }
+  const tableLines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("|") && line.endsWith("|"));
+  if (tableLines.length < 3) {
+    return [];
+  }
+  const rows = tableLines.map((line) =>
+    line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim())
+  );
+  const header = rows[0] ?? [];
+  const familyIndex = header.findIndex((cell) => /\bfamily\b/i.test(cell));
+  if (familyIndex < 0) {
+    return [];
+  }
+  const familyRows = rows
+    .slice(2)
+    .map((row) => row[familyIndex] ?? "")
+    .map((cell) => cell.replace(/^\*\*|\*\*$/g, "").trim())
+    .filter(Boolean)
+    .map((cell) => normalizeHeadingLabel(cell))
+    .filter((cell): cell is string => Boolean(cell));
+  return uniqueStrings(familyRows).slice(0, 8);
+}
+
+function buildSurveyBriefMarkdown(params: {
+  topic: string | null;
+  candidatePaperCount: number;
+  includedPaperCount: number;
+  excludedPaperCount: number;
+  queryRoundCount: number;
+  families: string[];
+  coverageLines: string[];
+  benchmarkLines: string[];
+  gapLines: string[];
+}): string {
+  const nextSweepLines: string[] = [];
+  if (params.queryRoundCount < 4) {
+    nextSweepLines.push(
+      "Expand retrieval with at least one bounded citation-expansion round seeded from the strongest included papers."
+    );
+  }
+  if (params.families.length < 2) {
+    nextSweepLines.push(
+      "Stabilize the taxonomy into at least two method families before handing off to WRITE."
+    );
+  }
+  if (params.gapLines.length === 0) {
+    nextSweepLines.push(
+      "Record explicit open problems and limitations so the survey brief closes the loop from evidence to future work."
+    );
+  }
+  const scopeLines = uniqueStrings([
+    `Candidate papers: ${params.candidatePaperCount}`,
+    `Included papers: ${params.includedPaperCount}`,
+    `Excluded or background papers: ${params.excludedPaperCount}`,
+    `Retrieval rounds completed: ${params.queryRoundCount}`,
+    ...params.coverageLines,
+  ]).slice(0, 8);
+  const benchmarkLines =
+    params.benchmarkLines.length > 0
+      ? params.benchmarkLines
+      : [
+          "Benchmark / dataset / metric alignment must stay explicit and avoid collapsing incomparable settings.",
+        ];
+  const familyLines =
+    params.families.length > 0
+      ? params.families
+      : [
+          "Derive method families from the SoTA matrix and literature review before writing the taxonomy section.",
+        ];
+  const gapLines =
+    params.gapLines.length > 0
+      ? params.gapLines
+      : ["Carry unresolved limitations from GAP_SYNTHESIS.md into the brief before write handoff."];
+  return [
+    "# Survey Brief",
+    "",
+    `Topic: ${params.topic ?? "unset"}`,
+    "",
+    "## Scope & Coverage",
+    ...scopeLines.map((line) => `- ${line}`),
+    "",
+    "## Themes",
+    ...familyLines.map((line) => `- ${line}`),
+    "",
+    "## Benchmark Landscape",
+    ...benchmarkLines.map((line) => `- ${line}`),
+    "",
+    "## Open Problems",
+    ...gapLines.map((line) => `- ${line}`),
+    "",
+    "## Recommended Next Sweep",
+    ...uniqueStrings(nextSweepLines).map((line) => `- ${line}`),
+    "",
+  ].join("\n");
+}
+
+function upsertMarkdownSection(params: {
+  source: string;
+  heading: string;
+  bodyLines: string[];
+}): string {
+  const sectionBlock = [
+    `## ${params.heading}`,
+    ...params.bodyLines.map((line) => `- ${line}`),
+  ].join("\n");
+  const pattern = new RegExp(
+    `(^|\\n)##\\s+${params.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\n[\\s\\S]*?(?=\\n##\\s+|$)`,
+    "i"
+  );
+  if (pattern.test(params.source)) {
+    return params.source.replace(pattern, `${RegExp.$1}${sectionBlock}\n`);
+  }
+  return `${params.source.trim()}\n\n${sectionBlock}\n`;
+}
+
+function refineSurveyBriefMarkdown(params: {
+  source: string;
+  families: string[];
+  benchmarkLines: string[];
+  gapLines: string[];
+  queryRoundCount: number;
+}): string {
+  let next = params.source.trim();
+  const existingThemes = extractSectionListItems(next, [
+    "theme",
+    "taxonomy",
+    "family",
+    "cluster",
+  ]);
+  if (existingThemes.length < 2 && params.families.length > 0) {
+    next = upsertMarkdownSection({
+      source: next,
+      heading: "Themes",
+      bodyLines: params.families,
+    });
+  }
+  const existingOpenProblems = extractSectionListItems(next, [
+    "open problem",
+    "limitation",
+    "challenge",
+    "future",
+  ]);
+  if (existingOpenProblems.length < 2 && params.gapLines.length > 0) {
+    next = upsertMarkdownSection({
+      source: next,
+      heading: "Open Problems",
+      bodyLines: params.gapLines,
+    });
+  }
+  if (params.benchmarkLines.length > 0 && !/##\s+Benchmark Landscape/i.test(next)) {
+    next = upsertMarkdownSection({
+      source: next,
+      heading: "Benchmark Landscape",
+      bodyLines: params.benchmarkLines,
+    });
+  }
+  if (!/##\s+Recommended Next Sweep/i.test(next)) {
+    const nextSweepLines = [
+      params.queryRoundCount < 4
+        ? "Expand retrieval with at least one bounded citation-expansion round seeded from the strongest included papers."
+        : "Keep any further retrieval bounded to concrete blind spots rather than another broad sweep.",
+    ];
+    next = upsertMarkdownSection({
+      source: next,
+      heading: "Recommended Next Sweep",
+      bodyLines: nextSweepLines,
+    });
+  }
+  return `${next.trim()}\n`;
+}
+
+function buildSurveyBriefRefinementDiscussionPolicy(params: {
+  topic: string | null;
+  diagnosticsPath: string;
+  surveyBriefPath: string | null;
+  literatureReviewPath: string | null;
+  sotaMatrixPath: string | null;
+  gapSynthesisPath: string | null;
+  blockingIssues: string[];
+}): Record<string, unknown> {
+  return {
+    discussionId: "survey-brief-refinement",
+    topic: `Refine the survey brief for ${params.topic ?? "the current survey topic"}`,
+    stage: "survey_review",
+    participants: ["researcher", "analyzer", "reviewer"],
+    maxRounds: 2,
+    quorum: 2,
+    resolvedDecisions: ["resolved", "pass", "approved"],
+    blockedDecisions: ["blocked", "rollback", "rejected"],
+    packetArtifacts: uniqueStrings([
+      params.diagnosticsPath,
+      params.surveyBriefPath,
+      params.literatureReviewPath,
+      params.sotaMatrixPath,
+      params.gapSynthesisPath,
+    ]),
+    promptInstructions:
+      "Review the auto-generated survey brief as a bounded synthesis artifact. Focus on whether the taxonomy is stable, whether the benchmark landscape is explicit, and whether unresolved gaps/limitations are carried into the brief without overclaiming consensus.",
+    summary: uniqueStrings([
+      `Topic: ${params.topic ?? "unset"}`,
+      ...params.blockingIssues.slice(0, 5),
+    ]),
+    context: {
+      artifact: params.surveyBriefPath,
+      diagnostics: params.diagnosticsPath,
+      blockingIssues: params.blockingIssues,
+    },
+  };
 }
 
 export async function materializeSurveyReviewStateImpl(params: {
@@ -121,13 +441,13 @@ export async function materializeSurveyReviewStateImpl(params: {
     queryRegistry,
     includedJson,
     excludedJson,
-    literatureExists,
-    literatureReviewExists,
-    protocolExists,
-    sotaExists,
-    gapExists,
-    coverageExists,
-    surveyBriefExists,
+    literatureText,
+    literatureReviewText,
+    reviewProtocolText,
+    sotaMatrixText,
+    gapSynthesisText,
+    coverageSummaryText,
+    surveyBriefTextRaw,
   ] = await Promise.all([
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, merged.queryRegistryPath) ?? ""
@@ -138,28 +458,34 @@ export async function materializeSurveyReviewStateImpl(params: {
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, merged.excludedPapersPath) ?? ""
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.literaturePath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.literatureReviewPath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.reviewProtocolPath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.sotaMatrixPath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.gapSynthesisPath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.coverageSummaryPath)
     ),
-    hasNonWhitespaceContent(
+    readTextIfExists(
       resolveProjectArtifactPath(projectRoot, merged.surveyBriefPath)
     ),
   ]);
+  const literatureExists = hasNonWhitespaceContent(literatureText);
+  const literatureReviewExists = hasNonWhitespaceContent(literatureReviewText);
+  const protocolExists = hasNonWhitespaceContent(reviewProtocolText);
+  const sotaExists = hasNonWhitespaceContent(sotaMatrixText);
+  const gapExists = hasNonWhitespaceContent(gapSynthesisText);
+  const coverageExists = hasNonWhitespaceContent(coverageSummaryText);
 
   const queryRoundCount = countQueryRounds(queryRegistry);
   const pendingPlannedRounds = countPendingPlannedRounds(queryRegistry);
@@ -192,6 +518,75 @@ export async function materializeSurveyReviewStateImpl(params: {
                 includedPaperCount + excludedPaperCount,
                 merged.candidatePaperCount ?? 0
               );
+  const synthesizedFamilies = uniqueStrings([
+    ...extractSectionListItems(literatureReviewText ?? "", [
+      "taxonomy",
+      "theme",
+      "family",
+      "cluster",
+    ]),
+    ...extractFamiliesFromSotaMatrix(sotaMatrixText),
+    ...extractFamilyHeadingsFromLiteratureReview(literatureReviewText),
+  ]).slice(0, 6);
+  const benchmarkLines = uniqueStrings([
+    ...collectMarkdownSignalLines(reviewProtocolText, 4).filter((line) =>
+      /\bdataset\b|\bbenchmark\b|\bmetric\b|\baccuracy\b|\bf1\b|\bh-score\b|\bauc\b|\bmap\b/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(sotaMatrixText, 6).filter((line) =>
+      /\bdataset\b|\bbenchmark\b|\bmetric\b|\baccuracy\b|\bf1\b|\bh-score\b|\bauc\b|\bmap\b/i.test(
+        line
+      )
+    ),
+  ]).slice(0, 6);
+  const gapLines = collectMarkdownSignalLines(gapSynthesisText, 6);
+  const coverageLines = collectMarkdownSignalLines(coverageSummaryText, 5);
+  let surveyBriefText = surveyBriefTextRaw;
+  const surveyBriefExists = hasNonWhitespaceContent(surveyBriefText);
+  const surveyBriefResolvedPath = resolveProjectArtifactPath(
+    projectRoot,
+    merged.surveyBriefPath
+  );
+  if (
+    !surveyBriefExists &&
+    literatureReviewExists &&
+    gapExists &&
+    coverageExists &&
+    (sotaExists || includedPaperCount > 0 || queryRoundCount > 0)
+  ) {
+    surveyBriefText = buildSurveyBriefMarkdown({
+      topic: merged.topic,
+      candidatePaperCount,
+      includedPaperCount,
+      excludedPaperCount,
+      queryRoundCount,
+      families: synthesizedFamilies,
+      coverageLines,
+      benchmarkLines,
+      gapLines,
+    });
+    if (!surveyBriefResolvedPath) {
+      throw new Error("Unable to resolve survey brief path.");
+    }
+    await writeTextEnsured(surveyBriefResolvedPath, surveyBriefText);
+  } else if (surveyBriefExists && surveyBriefText) {
+    const refinedBrief = refineSurveyBriefMarkdown({
+      source: surveyBriefText,
+      families: synthesizedFamilies,
+      benchmarkLines,
+      gapLines,
+      queryRoundCount,
+    });
+    if (refinedBrief.trim() !== surveyBriefText.trim()) {
+      if (!surveyBriefResolvedPath) {
+        throw new Error("Unable to resolve survey brief path.");
+      }
+      surveyBriefText = refinedBrief;
+      await writeTextEnsured(surveyBriefResolvedPath, surveyBriefText);
+    }
+  }
+  const surveyBriefReady = hasNonWhitespaceContent(surveyBriefText);
   const diagnostics = await materializeSurveyReviewDiagnostics({
     projectRoot,
     state: {
@@ -207,22 +602,54 @@ export async function materializeSurveyReviewStateImpl(params: {
   let currentPhase = merged.currentPhase;
   let pendingReason = merged.pendingReason;
 
-  if (surveyBriefExists && diagnostics.ready) {
+  if (surveyBriefReady && diagnostics.ready) {
     status = "completed";
     currentPhase = "complete";
     pendingReason = null;
   } else if (
     queryRoundCount > 0 &&
-    (diagnostics.coverage.status !== "ready" || pendingPlannedRounds > 0)
+    pendingPlannedRounds > 0
   ) {
     status = "searching";
     currentPhase = "retrieval";
     pendingReason =
-      pendingPlannedRounds > 0
-        ? `Continue retrieval before synthesis; ${pendingPlannedRounds} planned survey search rounds are still pending.`
-        : diagnostics.coverage.blockers[0] ??
-          diagnostics.coverage.summary ??
-          "Continue retrieval until survey coverage is ready.";
+      `Continue retrieval before synthesis; ${pendingPlannedRounds} planned survey search rounds are still pending.`;
+  } else if (!surveyBriefReady && (literatureReviewExists || sotaExists || gapExists)) {
+    status = "synthesizing";
+    currentPhase = "brief_synthesis";
+    pendingReason =
+      diagnostics.blockingIssues[0] ??
+      "Generate the survey brief from the current literature review, SoTA matrix, and gap synthesis packet.";
+  } else if (
+    surveyBriefReady &&
+    diagnostics.taxonomyStability.status !== "stable"
+  ) {
+    status = "synthesizing";
+    currentPhase = "taxonomy_refinement";
+    pendingReason =
+      diagnostics.taxonomyStability.blockers[0] ??
+      diagnostics.taxonomyStability.summary ??
+      "Refine the taxonomy until the survey brief expresses stable method families.";
+  } else if (
+    surveyBriefReady &&
+    diagnostics.gapClosure.status !== "closed"
+  ) {
+    status = "synthesizing";
+    currentPhase = "gap_closure";
+    pendingReason =
+      diagnostics.gapClosure.blockers[0] ??
+      diagnostics.gapClosure.summary ??
+      "Carry the main unresolved gaps and limitations into the survey brief.";
+  } else if (
+    queryRoundCount > 0 &&
+    diagnostics.coverage.status !== "ready"
+  ) {
+    status = "searching";
+    currentPhase = "retrieval";
+    pendingReason =
+      diagnostics.coverage.blockers[0] ??
+      diagnostics.coverage.summary ??
+      "Continue retrieval until survey coverage is ready.";
   } else if (literatureReviewExists || sotaExists || gapExists) {
     status = "synthesizing";
     currentPhase = "synthesis";
@@ -255,7 +682,8 @@ export async function materializeSurveyReviewStateImpl(params: {
     included_paper_count: includedPaperCount,
     excluded_paper_count: excludedPaperCount,
     graph_grounded_brief_ready:
-      surveyBriefExists || (coverageExists && literatureReviewExists && gapExists),
+      surveyBriefReady ||
+      (coverageExists && literatureReviewExists && gapExists),
     diagnostics_path: diagnostics.diagnosticsPath,
     gate_ready: diagnostics.ready,
     gate_blocking_issues: diagnostics.blockingIssues,
@@ -285,7 +713,7 @@ export async function materializeSurveyReviewStateImpl(params: {
   manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
   manifest.owner_agent = "researcher";
   const outlinePath = path.join(projectRoot, "researcher", "SURVEY_OUTLINE.md");
-  if (!(await hasNonWhitespaceContent(outlinePath))) {
+  if (!hasNonWhitespaceContent(await readTextIfExists(outlinePath))) {
     await writeJsonEnsured(
       path.join(projectRoot, "researcher", "SURVEY_OUTLINE.packet.json"),
       {
@@ -315,10 +743,38 @@ export async function materializeSurveyReviewStateImpl(params: {
       "utf8"
     );
   }
+  const generatedFiles = uniqueStrings([
+    diagnostics.diagnosticsPath,
+    "researcher/SURVEY_OUTLINE.md",
+    !surveyBriefExists && surveyBriefReady ? merged.surveyBriefPath : null,
+  ]);
+  if (
+    surveyBriefReady &&
+    !diagnostics.ready &&
+    diagnostics.blockingIssues.length > 0
+  ) {
+    const panel = await materializeWorkflowPanelDiscussionState({
+      projectRoot,
+      projectId: pickString(manifest, ["project_id", "projectId"]),
+      policyLike: buildSurveyBriefRefinementDiscussionPolicy({
+        topic: next.topic,
+        diagnosticsPath: diagnostics.diagnosticsPath,
+        surveyBriefPath: next.surveyBriefPath,
+        literatureReviewPath: next.literatureReviewPath,
+        sotaMatrixPath: next.sotaMatrixPath,
+        gapSynthesisPath: next.gapSynthesisPath,
+        blockingIssues: diagnostics.blockingIssues,
+      }),
+    });
+    generatedFiles.push(
+      path.relative(projectRoot, panel.packetPath),
+      path.relative(projectRoot, panel.packetJsonPath)
+    );
+  }
   await writeJsonEnsured(manifestPath, manifest);
 
   return {
     state: getSurveyReviewStateSummary(manifest).state,
-    generatedFiles: [diagnostics.diagnosticsPath, "researcher/SURVEY_OUTLINE.md"],
+    generatedFiles,
   };
 }

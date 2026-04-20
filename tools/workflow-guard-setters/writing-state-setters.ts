@@ -804,6 +804,9 @@ export async function setWritingSessionState(params: {
     writingContract,
   });
   next.processStatus = writingProcess.processStatus;
+  if (!explicitStatus) {
+    next.status = writingProcess.processStatus;
+  }
   next.outlineReady = !["missing", "bootstrapping"].includes(
     writingProcess.processStatus
   );

@@ -678,9 +678,36 @@ async function seedProjectReadyForCode(projectRoot) {
   await fs.mkdir(path.join(projectRoot, "graph", "subgraphs"), { recursive: true });
   await writeText(path.join(projectRoot, "graph", "subgraphs", "cluster.md"));
 
-  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
-  await writeText(path.join(projectRoot, "researcher", "IDEA_REPORT.md"));
-  await writeText(path.join(projectRoot, "researcher", "IDEA_AUDIT.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    [
+      "# Frontier Report",
+      "",
+      "- Limitation frontier: current support routing still loses evidence under long-context drift.",
+      "- Contradiction frontier: reviewer-facing claims and evidence order diverge under late-stage edits.",
+      "- Transfer frontier: frontier packets can seed a graph-grounded ideation loop.",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "IDEA_REPORT.md"),
+    [
+      "# Idea Report",
+      "",
+      "- Core direction: graph-grounded support routing for scientific writing.",
+      "- Novelty claim: couples frontier packets with section drafting to preserve support precision.",
+      "- Validation sketch: compare support precision and unsupported-claim rate against baseline-a.",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "IDEA_AUDIT.md"),
+    [
+      "# Idea Audit",
+      "",
+      "- Strength: novelty is anchored to explicit frontier packets and graph evidence.",
+      "- Risk: benchmark scope and ablation coverage must stay bounded.",
+      "- Next gate: advance to plan once ideation contract and brainstorm packet align.",
+    ].join("\n")
+  );
   await writeText(path.join(projectRoot, "researcher", "INNOVATION_REFLECTION.md"));
 
   await writeText(path.join(projectRoot, "orchestrator", "PLAN.md"));
@@ -939,6 +966,8 @@ async function seedProjectReadyForSubmit(projectRoot) {
   const { now, trackId } = await seedProjectReadyForCode(projectRoot);
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const experimentId = "exp-1";
+  const stageRunId = "stage-run-submit-ready";
+  const candidateCommit = "commit-submit-ready";
   await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
   await writeText(
     path.join(projectRoot, "researcher", "artifacts", "results", "metrics.json"),
@@ -978,7 +1007,42 @@ async function seedProjectReadyForSubmit(projectRoot) {
     buildAlignedExperimentManifest(trackId, {
       experiment_id: experimentId,
       status: "completed",
+      git: {
+        last_candidate_commit: candidateCommit,
+      },
     })
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      `${experimentId}__baseline`,
+      "REMOTE_RUN.json"
+    ),
+    {
+      experiment_id: experimentId,
+      status: "completed",
+      git_commit: candidateCommit,
+      stage_run_id: stageRunId,
+    }
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      `${experimentId}__baseline`,
+      "RESULT_SUMMARY.json"
+    ),
+    {
+      experiment_id: experimentId,
+      metrics: { acc: 0.9 },
+      result_paths: ["researcher/artifacts/results/metrics.json"],
+      stage_run_id: stageRunId,
+    }
   );
 
   for (const fileName of [
@@ -1030,11 +1094,62 @@ async function seedProjectReadyForSubmit(projectRoot) {
 
   await writeText(path.join(projectRoot, "academic_writer", "PAPER_PLAN.md"));
   await writeText(path.join(projectRoot, "academic_writer", "STORYLINE_SKETCH.md"));
+  await writeText(path.join(projectRoot, "academic_writer", "INNOVATION_SYNTHESIS_MEMO.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "INTEGRATED_CONTRIBUTION_STATEMENT.md")
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "RESULTS_QUESTION_ORDER.md"));
+  await writeText(path.join(projectRoot, "academic_writer", "TITLE_CANDIDATES.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "ABSTRACT_5_SENTENCE_WORKBENCH.md")
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "INTRO_5_PARAGRAPH_WORKBENCH.md")
+  );
+  await writeJson(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.json"), {
+    status: "ready",
+    blocking_issue_count: 0,
+  });
+  await writeText(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_REVERSE_OUTLINE.md")
+  );
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "main.tex"),
     buildCompliantFigureTableLatex()
   );
   await writeText(path.join(projectRoot, "academic_writer", "THEORY_APPENDIX_PLAN.md"));
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "abstract.tex"),
+    [
+      "\\begin{abstract}",
+      "We study graph-grounded support routing for scientific writing and show that the approach improves support precision without sacrificing manuscript coverage.",
+      "\\end{abstract}",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "results.tex"),
+    [
+      "\\section{Results}",
+      "",
+      "Our evaluation shows that graph-grounded support routing improves support precision on the demo benchmark while keeping the evidence path explicit for each headline claim.",
+      "",
+      "Therefore, the main result is not only a higher score but also a cleaner claim-to-evidence mapping that survives reviewer scrutiny during late-stage drafting.",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "discussion.tex"),
+    [
+      "\\section{Discussion}",
+      "",
+      "The central implication is that grounded routing changes the writing workflow by making unsupported claims easier to detect before submission.",
+      "",
+      "However, the current study still depends on bounded benchmark coverage, so the next revision should keep the scope explicit while extending the evidence packet with harder reviewer-facing cases.",
+      "",
+    ].join("\n")
+  );
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "sections", "appendix_theory.tex")
   );
@@ -1114,6 +1229,9 @@ async function seedProjectReadyForSubmit(projectRoot) {
       last_ledger_update_at: now,
       papernexus_sync_required: false,
       papernexus_sync_status: "synced",
+    },
+    orchestration_state: {
+      stage_run_id: stageRunId,
     },
     innovation_reflection: {
       required_after_experiments: true,
@@ -1202,6 +1320,44 @@ async function seedProjectReadyForSubmit(projectRoot) {
       verdict: "ready",
       reviewer_summary: "Review loop complete.",
     },
+    innovation_synthesis_state: {
+      status: "ready",
+      synthesis_memo_path: "academic_writer/INNOVATION_SYNTHESIS_MEMO.md",
+      integrated_contribution_statement_path:
+        "academic_writer/INTEGRATED_CONTRIBUTION_STATEMENT.md",
+    },
+    results_storyline: {
+      status: "ready",
+      results_question_order_path: "academic_writer/RESULTS_QUESTION_ORDER.md",
+    },
+    title_abstract_intro_workbench: {
+      status: "ready",
+      title_candidates_path: "academic_writer/TITLE_CANDIDATES.md",
+      abstract_workbench_path: "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
+      intro_workbench_path: "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
+    },
+    paragraph_logic_audit: {
+      status: "ready",
+      audit_json_path: "academic_writer/PARAGRAPH_LOGIC_AUDIT.json",
+      audit_report_path: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+      reverse_outline_path: "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+      blocking_issue_count: 0,
+    },
+    paper_qc: {
+      status: "ready",
+      compile_status: "pass",
+      page_budget_status: "pass",
+      invalid_figure_ref_status: "pass",
+      latest_report_path: "academic_writer/PAPER_QC.md",
+    },
+    figure_qc: {
+      status: "ready",
+      duplicate_figure_status: "pass",
+      caption_alignment_status: "pass",
+      text_alignment_status: "pass",
+      selection_status: "pass",
+      figure_review_path: "reviewer/SURFACE_REVIEW.json",
+    },
     graph_guided_writing: {
       enabled: true,
       status: "ready",
@@ -1256,8 +1412,12 @@ async function seedProjectReadyForSubmit(projectRoot) {
       external_review_path: "reviewer/external_review_2026-03-22.md",
       review_response_path: "reviewer/rebuttal_2026-03-22.md",
       overall_recommendation: "minor_revision",
-      required_action: "human_decision",
+      required_action: "none",
       last_updated_at: now,
+    },
+    experiment_search: {
+      status: "ready_for_analysis",
+      candidate_head_commit: candidateCommit,
     },
   });
   await seedReadyIdeationContract(projectRoot, { trackId });
@@ -4537,6 +4697,14 @@ test("auto iterator keeps analyze blocked when no execution proof receipts exist
   await fs.mkdir(path.join(projectRoot, "researcher", "artifacts", "results"), {
     recursive: true,
   });
+  await fs.rm(
+    path.join(projectRoot, "coder", "experiments", "track-1", "exp-1__baseline", "REMOTE_RUN.json"),
+    { force: true }
+  );
+  await fs.rm(
+    path.join(projectRoot, "coder", "experiments", "track-1", "exp-1__baseline", "RESULT_SUMMARY.json"),
+    { force: true }
+  );
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -4812,7 +4980,6 @@ test("auto iterator caps backward regression depth before falling all the way to
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "write");
   assert.equal(result.stageEffective, "experiment");
   assert.equal(result.stageAfter, "experiment");
@@ -5224,7 +5391,16 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
 
-  await writeText(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"));
+  await writeText(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    [
+      "# Frontier Report",
+      "",
+      "- Limitation frontier: current graph grounding still misses long-context support drift.",
+      "- Contradiction frontier: evidence ordering and claim ordering still diverge under revision pressure.",
+      "- Transfer frontier: frontier packets can seed a stable ideation loop.",
+    ].join("\n")
+  );
   for (const fileName of [
     "LIMITATION_FRONTIER.md",
     "CONTRADICTION_FRONTIER.md",
@@ -6526,7 +6702,6 @@ test("auto iterator auto-materializes the paper story contract before write-stag
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "write");
   const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(repairedManifest.paper_story_state.status, "ready");

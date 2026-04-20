@@ -105,11 +105,6 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
     path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
     "# Coverage Summary\n\n- Search coverage spans core venues.\n- Scope and blind spots are recorded.\n- Recent coverage is acceptable.\n"
   );
-  await writeText(
-    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
-    "# Survey Brief\n\n## Themes\n- Retrieval-augmented systems\n- Structure-aware planners\n\n## Open Problems\n- Benchmark coverage remains fragmented.\n"
-  );
-
   const result = await materializeSurveyReviewState({
     projectRoot,
     trigger: "test",
@@ -128,6 +123,15 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
   assert.equal(result.state.representativeMethodsStatus, "ready");
   assert.equal(result.state.benchmarkAlignmentStatus, "aligned");
   assert.equal(result.state.gapClosureStatus, "closed");
+  assert.equal(result.generatedFiles.includes(DEFAULT_SURVEY_BRIEF_PATH), true);
+  const brief = await fs.readFile(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "utf8"
+  );
+  assert.match(brief, /^# Survey Brief/m);
+  assert.match(brief, /## Themes/m);
+  assert.match(brief, /Retrieval-augmented systems/i);
+  assert.match(brief, /## Open Problems/m);
 });
 
 test("completed survey artifacts can seed survey-mode paper story and writing contract", async (t) => {
@@ -413,11 +417,6 @@ test("materializeSurveyReviewState keeps survey review in retrieval when retriev
       "",
     ].join("\n")
   );
-  await writeText(
-    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
-    "# Survey Brief\n\n## Themes\n- Speech omni\n- End-to-end omni\n"
-  );
-
   const result = await materializeSurveyReviewState({
     projectRoot,
     trigger: "test-retrieval-rounds",
@@ -429,6 +428,159 @@ test("materializeSurveyReviewState keeps survey review in retrieval when retriev
   assert.equal(result.state.currentPhase, "retrieval");
   assert.match(result.state.pendingReason ?? "", /planned survey search rounds are still pending/i);
   assert.equal(result.state.coverageStatus, "partial");
+  assert.equal(result.generatedFiles.includes(DEFAULT_SURVEY_BRIEF_PATH), true);
+  assert.equal(
+    result.generatedFiles.includes(
+      "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.json"
+    ),
+    true
+  );
+  const brief = await fs.readFile(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "utf8"
+  );
+  assert.match(brief, /^# Survey Brief/m);
+  assert.match(brief, /## Themes/m);
+  assert.match(brief, /Speech omni/i);
+  assert.match(brief, /## Recommended Next Sweep/m);
+});
+
+test("materializeSurveyReviewState moves into taxonomy_refinement once a brief exists but themes are still weak", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [{ query: "gcd survey", provider: "papers-cool" }, { query: "gcd benchmark", provider: "pasa-paper-search" }],
+    candidate_paper_count: 26,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH),
+    "# Review Protocol\n\n- Dataset coverage is explicit.\n- Metric coverage is explicit.\n"
+  );
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 15 }, (_unused, index) => ({
+      canonical_id: `arxiv:2502.700${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 11 }, (_unused, index) => ({
+      canonical_id: `arxiv:2402.700${index}`,
+    })),
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\nA broad review exists, but the taxonomy prose is still weak and does not yet separate method families clearly.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Other GCD Methods | baseline | SurveyBench | Accuracy |",
+      "| B | Other GCD Methods | efficient | GraphArena | F1 |",
+      "| C | Other GCD Methods | robust | TaskGraph | mAP |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- Better benchmark alignment\n- Stronger comparative analysis across method families\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Search coverage is summarized.\n- Scope boundaries are explicit.\n- Blind spots remain.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Survey methods\n\n## Open Problems\n- Better benchmark alignment\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-taxonomy-refinement",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.status, "synthesizing");
+  assert.equal(result.state.currentPhase, "taxonomy_refinement");
+  assert.equal(result.state.taxonomyStabilityStatus, "unstable");
+  assert.match(result.state.pendingReason ?? "", /taxonomy\/theme section/i);
+});
+
+test("materializeSurveyReviewState accepts screened-breadth coverage for niche surveys with many screened candidates", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [
+      { query: "gcd survey", provider: "zotero" },
+      { query: "gcd ncd osr owr", provider: "openalex" },
+      { query: "gcd citation expansion", provider: "citation-expansion" },
+    ],
+    candidate_paper_count: 74,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_PATH), "# Literature\n");
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH),
+    "# Review Protocol\n\n- Benchmark / dataset / metric alignment is explicit.\n"
+  );
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 23 }, (_unused, index) => ({
+      canonical_id: `arxiv:2503.800${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 51 }, (_unused, index) => ({
+      canonical_id: `arxiv:2403.800${index}`,
+    })),
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Foundational / Baseline\n- Prompt-Based Learning\n- Prototype Learning\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Foundational / Baseline | task formulation | SurveyBench | Accuracy |",
+      "| B | Prompt-Based Learning | efficient | GraphArena | F1 |",
+      "| C | Prototype Learning | robust | TaskGraph | mAP |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- More breadth on adjacent tasks\n- More fair benchmark comparisons across settings\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    [
+      "# Coverage Summary",
+      "",
+      "- Search coverage spans core venues and adjacent task aliases.",
+      "- Scope boundaries and blind spots are explicit.",
+      "- Coverage includes a large screened candidate pool with durable exclusions.",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Foundational / Baseline\n- Prompt-Based Learning\n- Prototype Learning\n\n## Open Problems\n- More fair benchmark comparisons across settings\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-screened-breadth",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.coverageStatus, "ready");
 });
 
 test("materializeSurveyReviewState uses the representative-method and benchmark tables instead of the first protocol table", async (t) => {

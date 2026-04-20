@@ -165,3 +165,86 @@ test("writing support artifacts now include venue routing and auto-materialized 
   assert.match(rebuttal, /Champion Strategy/i);
   assert.match(rebuttal, /weak_reject|revise_and_rebut|novelty/i);
 });
+
+test("survey writing support scaffolds missing section packets and drafts", async (t) => {
+  const { projectsRoot, projectRoot } = await makeProjectRoot();
+  t.after(() => fs.rm(projectsRoot, { recursive: true, force: true }));
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "survey",
+    required_sections: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+  };
+  manifest.survey_review = {
+    status: "completed",
+    topic: "Generalized Category Discovery v3",
+    survey_brief_path: "researcher/SURVEY_BRIEF.md",
+    literature_review_path: "researcher/LITERATURE_REVIEW.md",
+    sota_matrix_path: "researcher/SOTA_MATRIX.md",
+    gap_synthesis_path: "researcher/GAP_SYNTHESIS.md",
+    coverage_summary_path: "researcher/COVERAGE_SUMMARY.md",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeText(
+    path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"),
+    "# Survey Brief\n- Topic: GCD\n- Benchmark caution: ImageNet-100 settings remain incomparable across backbones.\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "LITERATURE_REVIEW.md"),
+    "# Literature Review\n\n## Prompt-Based Learning\n- Prompt methods adapt frozen backbones.\n\n## Prototype Learning\n- Prototype methods stabilize known/novel separation.\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "SOTA_MATRIX.md"),
+    "| Family | Representative | Benchmark | Metric |\n| --- | --- | --- | --- |\n| Prompt-Based Learning | SPTNet | ImageNet-100 | accuracy |\n| Prototype Learning | ProtoGCD | CIFAR100 | NMI |\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"),
+    "# Gap Synthesis\n- Benchmark comparability is still weak.\n- Open-world deployment remains under-evaluated.\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"),
+    "# Coverage Summary\n- Included papers cover prompt, prototype, and debiasing families.\n- Blind spot: embodied and multimodal variants.\n"
+  );
+
+  const result = await materializeWritingSupportArtifacts({
+    projectRoot,
+    stage: "write",
+    paperStoryState: buildPaperStoryState(),
+    reviewPressureState: buildReviewPressureState(),
+  });
+
+  for (const relativePath of [
+    "academic_writer/section_packets/evidence_synthesis.md",
+    "academic_writer/section_packets/benchmark_landscape.md",
+    "academic_writer/section_packets/open_problems.md",
+    "academic_writer/section_packets/conclusion.md",
+    "academic_writer/paper/sections/evidence_synthesis.tex",
+    "academic_writer/paper/sections/benchmark_landscape.tex",
+    "academic_writer/paper/sections/open_problems.tex",
+    "academic_writer/paper/sections/conclusion.tex",
+  ]) {
+    assert.ok(result.generatedFiles.includes(relativePath), `${relativePath} should be generated`);
+    await fs.access(path.join(projectRoot, relativePath));
+  }
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.writing_session.status, "drafting");
+  assert.equal(updatedManifest.writing_session.process_status, "drafting");
+  assert.equal(updatedManifest.writing_session.drafted_sections.length, 8);
+  assert.equal(
+    updatedManifest.writing_session.section_packets.evidence_synthesis.status,
+    "drafting"
+  );
+});

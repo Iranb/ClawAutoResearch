@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  materializePaperStoryState,
   materializeSurveyReviewState,
   runWorkflowAutoIterator,
 } from "../tools/workflow-guard.ts";
@@ -129,13 +128,6 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   });
   assert.equal(surveyState.state.status, "completed");
 
-  const storyState = await materializePaperStoryState({
-    projectRoot,
-    trigger: "test",
-    agentId: "researcher",
-  });
-  assert.equal(storyState.state.status, "ready");
-
   const transition = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
@@ -172,6 +164,29 @@ test("end-to-end survey paper line advances survey review into survey-mode write
     "conclusion",
   ]);
   assert.equal(manifestAfterTransition.writing_contract.proof_appendix_required, false);
+  assert.equal(manifestAfterTransition.paper_story_state.status, "ready");
+  await fs.access(
+    path.join(projectRoot, manifestAfterTransition.paper_story_state.story_spine_path),
+  );
+  for (const relativePath of [
+    "academic_writer/paper/sections/evidence_synthesis.tex",
+    "academic_writer/paper/sections/benchmark_landscape.tex",
+    "academic_writer/paper/sections/open_problems.tex",
+    "academic_writer/paper/sections/conclusion.tex",
+    "academic_writer/section_packets/evidence_synthesis.md",
+    "academic_writer/section_packets/benchmark_landscape.md",
+    "academic_writer/section_packets/open_problems.md",
+    "academic_writer/section_packets/conclusion.md",
+  ]) {
+    await fs.access(path.join(projectRoot, relativePath));
+  }
+  assert.ok(
+    !transition.missingStageSignals.some((signal) =>
+      /writing process is not bootstrapped yet|paper_story_state|results_storyline|title_abstract_intro_workbench|survey_visual_compiler_state/i.test(
+        signal,
+      ),
+    ),
+  );
 
   manifestAfterTransition.current_stage = "write";
   manifestAfterTransition.current_micro_stage = "writing_requested";
@@ -197,8 +212,8 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   assert.equal(writeGate.stageBefore, "write");
   assert.equal(writeGate.stageAfter, "write");
   assert.ok(
-    writeGate.missingStageSignals.some((signal) =>
-      /writing process is not bootstrapped yet|writing process is /i.test(signal),
+    !writeGate.missingStageSignals.some((signal) =>
+      /writing process is not bootstrapped yet|writing process is outline_ready/i.test(signal),
     ),
   );
   assert.ok(

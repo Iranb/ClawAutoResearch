@@ -567,6 +567,7 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/clear-project-binding/);
   assert.match(result.text, /\/handoff-status/);
   assert.match(result.text, /\/idea-catalyst-search/);
+  assert.match(result.text, /\/broad-paper-search/);
   assert.match(result.text, /\/citation-calibrate/);
   assert.match(result.text, /\/papernexus-stage-remote/);
   assert.match(result.text, /\/authoring-closeout/);
@@ -2238,6 +2239,12 @@ test("workflow-status command returns a readable workflow summary", async () => 
         surveyReviewGraphGroundedBriefReady: true,
         surveyReviewSurveyBriefPath: "researcher/SURVEY_BRIEF.md",
         surveyReviewPendingReason: null,
+        surveyBriefRefinementStatus: "reviewing",
+        surveyBriefRefinementReviewCount: 1,
+        surveyBriefRefinementRoundId: "survey-brief-round-1",
+        surveyBriefRefinementPacketPath:
+          "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.md",
+        surveyBriefRefinementSummary: "One refinement pass is still needed.",
         experimentActiveRunCount: 1,
         experimentTerminalRunCount: 2,
         experimentFinishedUnreconciledCount: 1,
@@ -2471,6 +2478,10 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(
     result.text ?? "",
     /Background queue detail: summary=Queued background workflow for survey-generalized-category-discovery-v3\., error=Plugin runtime subagent methods are only available during a gateway request\./
+  );
+  assert.match(
+    result.text ?? "",
+    /Survey brief refinement: status=reviewing, reviews=1, packet=reviewer\/panel-discussions\/survey-brief-refinement\/PANEL_DISCUSSION_PACKET\.md, summary=One refinement pass is still needed\./
   );
   assert.match(
     result.text ?? "",

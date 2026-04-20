@@ -22,6 +22,7 @@ import {
   loadExperimentReviewState,
 } from "../workflow-auto-experiment-review";
 import { loadExperimentSearchReviewState } from "../workflow-auto-experiment-search-review.js";
+import { readWorkflowPanelDiscussionStore } from "../workflow-panel-discussion";
 import {
   loadTrackInnovationEvidence,
 } from "../workflow-derived-state/track-evidence.js";
@@ -549,6 +550,14 @@ export async function buildWorkflowSnapshotFromProjectState(
   const surveyReview = normalizeSurveyReviewState(
     asRecord(projectState.manifest?.survey_review)
   );
+  const surveyBriefRefinementStore = projectState.projectRoot
+    ? await readWorkflowPanelDiscussionStore(
+        projectState.projectRoot,
+        "survey-brief-refinement"
+      )
+    : null;
+  const surveyBriefRefinementRound =
+    surveyBriefRefinementStore?.currentRound ?? null;
   const ideationContract = normalizeIdeationContractState(
     asRecord(projectState.manifest?.ideation_contract)
   );
@@ -1170,6 +1179,14 @@ export async function buildWorkflowSnapshotFromProjectState(
     surveyReviewSurveyBriefPath: surveyReview.surveyBriefPath,
     surveyReviewGateBlockingIssueCount: surveyReview.gateBlockingIssues.length,
     surveyReviewPendingReason: surveyReview.pendingReason,
+    surveyBriefRefinementStatus: surveyBriefRefinementRound?.status ?? null,
+    surveyBriefRefinementReviewCount:
+      surveyBriefRefinementRound?.aggregate?.reviewCount ??
+      (surveyBriefRefinementRound?.attempts?.filter((attempt) => attempt.result != null).length ?? null),
+    surveyBriefRefinementRoundId: surveyBriefRefinementRound?.roundId ?? null,
+    surveyBriefRefinementPacketPath: surveyBriefRefinementRound?.packetPath ?? null,
+    surveyBriefRefinementSummary:
+      surveyBriefRefinementRound?.aggregate?.summary ?? null,
     ideationContractStatus: ideationContract.status,
     ideationContractSelectedDirectionId: ideationContract.selectedDirectionId,
     ideationContractSelectedTrackId: ideationContract.selectedTrackId,
