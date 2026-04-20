@@ -65,6 +65,17 @@ export function buildWritingGuidance(
         "Run a reverse-outline and paragraph-bridge audit before finalizing the current section; keep WRITING_SIGNALS.md visible."
       );
     }
+    if (
+      params.paragraphLogicAuditStatus === "blocked" &&
+      (params.paragraphLogicAuditBlockingIssueCount ?? 0) > 0
+    ) {
+      append.push(
+        `Cross-paragraph logic audit is blocked (${params.paragraphLogicAuditBlockingIssueCount ?? 0} issue(s)); repair the weakest paragraph handoffs first using ${params.paragraphLogicAuditReportPath ?? "academic_writer/PARAGRAPH_LOGIC_AUDIT.md"}.`
+      );
+      if (params.paragraphLogicAuditNextRepairAction) {
+        append.push(params.paragraphLogicAuditNextRepairAction);
+      }
+    }
     if (paperStory && deps.asString(paperStory.status) === "ready") {
       prepend.push(
         `Use the story-first packet before drafting: ${deps.asString(paperStory.story_spine_path) ?? "academic_writer/story/STORY_SPINE.md"}, ${deps.asString(paperStory.claim_to_experiment_map_path) ?? "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md"}, ${deps.asString(paperStory.fallback_narrative_path) ?? "academic_writer/story/FALLBACK_NARRATIVE.md"}, ${deps.asString(paperStory.prewrite_rejection_simulation_path) ?? "academic_writer/PREWRITE_REJECTION_SIMULATION.md"}, ${deps.asString(paperStory.contribution_to_story_bridge_path) ?? "academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md"}, and ${deps.asString(paperStory.figure_anchor_plan_path) ?? "academic_writer/FIGURE_ANCHOR_PLAN.md"}.`
@@ -106,6 +117,9 @@ export function buildWritingGuidance(
     if (params.writingContract.paperMode === "survey") {
       append.push(
         "Survey visualization rule: use academic_writer/SURVEY_VISUALIZATION_PLAN.md to plan taxonomy figures and multi-table comparison layouts before treating the draft as structurally complete."
+      );
+      append.push(
+        "Survey methodology rule: keep counts, year ranges, inclusion/exclusion logic, and publication-vs-preprint wording aligned across REVIEW_PROTOCOL.md, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, the abstract, and scope/protocol prose."
       );
     }
   }

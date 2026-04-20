@@ -218,6 +218,9 @@ import {
   normalizeTitleAbstractIntroWorkbenchState,
 } from "./workflow-guard-state/title-abstract-intro-workbench";
 import {
+  normalizeParagraphLogicAuditState,
+} from "./workflow-guard-state/paragraph-logic-audit";
+import {
   getSurveyReviewStateSummary as getSurveyReviewStateSummaryFromModule,
   normalizeSurveyReviewState,
 } from "./workflow-guard-state/survey-review";
@@ -2106,6 +2109,18 @@ export type WorkflowSnapshot = {
   revisionControlOpenSourceCount: number | null;
   revisionControlPacketPath: string | null;
   revisionControlPendingReason: string | null;
+  paragraphLogicAuditStatus: string | null;
+  paragraphLogicAuditReportPath: string | null;
+  paragraphLogicAuditReverseOutlinePath: string | null;
+  paragraphLogicAuditBlockingIssueCount: number | null;
+  paragraphLogicAuditSectionTransitionIssueCount: number | null;
+  paragraphLogicAuditWeakestSections: string[];
+  paragraphLogicAuditNextRepairAction: string | null;
+  executionProofStatus: string | null;
+  executionProofPath: string | null;
+  executionProofReceiptCount: number | null;
+  executionProofLineageMatchedReceiptCount: number | null;
+  executionProofPendingReason: string | null;
   reviewRubricSummary: Record<string, number | null>;
   graphGuidedWritingStatus: string | null;
   graphGuidedWritingEvidenceCoverageStatus: string | null;
@@ -2140,6 +2155,10 @@ export type WorkflowSnapshot = {
   autoDispatchBlockingReason: string | null;
   autoDispatchBlockingSummary: string | null;
   autoDispatchNextRepairAction: string | null;
+  autoGateReviewToWriteMode: string | null;
+  autoGateWriteToSubmitMode: string | null;
+  autoGateSubmitToDoneMode: string | null;
+  autoGateCurrentStageMode: string | null;
   surveyVisualCompilerStatus: string | null;
   surveyVisualCompilerRowCount: number | null;
   surveyVisualCompilerInsertionMapPath: string | null;
@@ -5287,6 +5306,50 @@ function listStructuredAlignmentStrings(value: unknown): string[] {
   });
 }
 
+function listImplementationProofStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [entry.trim()];
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const primary =
+      pickString(record, [
+        "id",
+        "point_id",
+        "step_id",
+        "hook",
+        "symbol",
+        "path",
+        "file",
+        "entry_point",
+        "objective",
+        "summary",
+      ]) ?? null;
+    const coversSource =
+      record.covers ??
+      record.cover ??
+      record.innovation_point ??
+      record.innovationPoint ??
+      record.innovation_point_id ??
+      record.innovationPointId ??
+      record.targets;
+    const covers = Array.isArray(coversSource)
+      ? coversSource.flatMap((item) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : typeof coversSource === "string" && coversSource.trim()
+        ? [coversSource.trim()]
+        : [];
+    return [primary, ...covers].filter((item): item is string => Boolean(item));
+  });
+}
+
 async function getCodeStageBundleMissingSignals(params: {
   projectRoot: string;
   manifest: ManifestLike | null;
@@ -5411,6 +5474,49 @@ async function getCodeStageBundleMissingSignals(params: {
       missing.push(`${relativeDir} missing ablation_plan in EXPERIMENT_MANIFEST.json`);
     }
 
+    const implementationProof =
+      asRecord(record.implementation_proof ?? record.implementationProof) ?? {};
+    const rawChangedFiles =
+      implementationProof.changed_files ?? implementationProof.changedFiles;
+    const implementationChangedFiles = Array.isArray(rawChangedFiles)
+      ? rawChangedFiles.flatMap((item: unknown) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : [];
+    if (implementationChangedFiles.length === 0) {
+      missing.push(
+        `${relativeDir} missing implementation_proof.changed_files in EXPERIMENT_MANIFEST.json`
+      );
+    }
+    const integrationPoints = listImplementationProofStrings(
+      implementationProof?.integration_points ?? implementationProof?.integrationPoints
+    );
+    if (integrationPoints.length === 0) {
+      missing.push(
+        `${relativeDir} missing implementation_proof.integration_points in EXPERIMENT_MANIFEST.json`
+      );
+    }
+    const activationSignals = listImplementationProofStrings(
+      implementationProof?.activation_signals ?? implementationProof?.activationSignals
+    );
+    if (activationSignals.length === 0) {
+      missing.push(
+        `${relativeDir} missing implementation_proof.activation_signals in EXPERIMENT_MANIFEST.json`
+      );
+    }
+    const executionCommand =
+      pickString(implementationProof, [
+        "execution_command",
+        "executionCommand",
+        "run_command",
+        "runCommand",
+      ]) ?? null;
+    if (!executionCommand) {
+      missing.push(
+        `${relativeDir} missing implementation_proof.execution_command in EXPERIMENT_MANIFEST.json`
+      );
+    }
+
     const validationCoverageText = normalizeAlignmentText(
       [...validationSteps, ...ablationPlan].join(" ")
     );
@@ -5422,6 +5528,20 @@ async function getCodeStageBundleMissingSignals(params: {
       if (!validationCoverageText?.includes(normalizedPoint)) {
         missing.push(
           `${relativeDir} must cover innovation point "${innovationPoint}" inside validation_steps or ablation_plan`
+        );
+      }
+    }
+    const implementationCoverageText = normalizeAlignmentText(
+      [...integrationPoints, ...implementationChangedFiles, executionCommand ?? ""].join(" ")
+    );
+    for (const innovationPoint of innovationPoints) {
+      const normalizedPoint = normalizeAlignmentText(innovationPoint);
+      if (!normalizedPoint) {
+        continue;
+      }
+      if (!implementationCoverageText?.includes(normalizedPoint)) {
+        missing.push(
+          `${relativeDir} must map innovation point "${innovationPoint}" into implementation_proof.integration_points or changed_files`
         );
       }
     }
@@ -6091,6 +6211,7 @@ async function getMissingStageSignals(params: {
           normalizeCitationIntegrityState,
           normalizeResultsStorylineState,
           normalizeTitleAbstractIntroWorkbenchState,
+          normalizeParagraphLogicAuditState,
 	          fileHasNonWhitespaceContent,
 	          DEFAULT_FIGURE_REVIEW_PATH,
 	          DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH,
@@ -6136,6 +6257,7 @@ async function getMissingStageSignals(params: {
           normalizeResultsStorylineState,
           normalizeStoryGapSearchRequisitionState,
           normalizeTitleAbstractIntroWorkbenchState,
+          normalizeParagraphLogicAuditState,
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
@@ -6186,6 +6308,7 @@ async function getMissingStageSignals(params: {
           normalizeResultsStorylineState,
           normalizeStoryGapSearchRequisitionState,
           normalizeTitleAbstractIntroWorkbenchState,
+          normalizeParagraphLogicAuditState,
           normalizeExternalReviewState,
           isExternalReviewConclusionReady,
           hasPrefixedFile,
@@ -6232,6 +6355,10 @@ function buildDynamicTasks(params: {
   writingTemplatePath: string | null;
   writingTemplateStatus: string;
   paragraphLogicStatus: string;
+  paragraphLogicAuditStatus: string | null;
+  paragraphLogicAuditBlockingIssueCount: number | null;
+  paragraphLogicAuditNextRepairAction: string | null;
+  paragraphLogicAuditReportPath: string | null;
   writingContractPendingReason: string | null;
   citationIntegrity: CitationIntegrityState;
   citationReportPath: string | null;

@@ -119,6 +119,12 @@ import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import { materializeWritingHookPolicies } from "./research-writing/hook-policies";
 import { materializeRevisionControlState } from "./research-writing/revision-control";
+import { materializeParagraphLogicAudit } from "./research-writing/paragraph-logic-audit";
+import {
+  materializeWorkflowPanelDiscussionState,
+  readWorkflowPanelDiscussionStore,
+} from "./workflow-panel-discussion";
+import { materializeExecutionProofState } from "./workflow-execution-proof-state";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { materializeCitationAudit } from "./research-intel/citation-audit";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
@@ -351,6 +357,12 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_innovation_synthesis_state",
   "materialize_writing_support_artifacts",
   "materialize_writing_hook_policies",
+  "get_panel_discussion_state",
+  "materialize_panel_discussion_state",
+  "get_execution_proof_state",
+  "materialize_execution_proof_state",
+  "get_paragraph_logic_audit_state",
+  "materialize_paragraph_logic_audit_state",
   "get_revision_control_state",
   "materialize_revision_control_state",
   "reconcile_authoring_closeout",
@@ -458,6 +470,12 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_innovation_synthesis_state: "materializeInnovationSynthesisState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_writing_hook_policies: "materializeWritingHookPolicies",
+  get_panel_discussion_state: "readWorkflowPanelDiscussionStore",
+  materialize_panel_discussion_state: "materializeWorkflowPanelDiscussionState",
+  get_execution_proof_state: "materializeExecutionProofState",
+  materialize_execution_proof_state: "materializeExecutionProofState",
+  get_paragraph_logic_audit_state: "materializeParagraphLogicAudit",
+  materialize_paragraph_logic_audit_state: "materializeParagraphLogicAudit",
   get_revision_control_state: "materializeRevisionControlState",
   materialize_revision_control_state: "materializeRevisionControlState",
   reconcile_authoring_closeout: "reconcileAuthoringCloseout",
@@ -1707,6 +1725,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_innovation_synthesis_state",
               "materialize_writing_support_artifacts",
               "materialize_writing_hook_policies",
+              "get_panel_discussion_state",
+              "materialize_panel_discussion_state",
+              "get_execution_proof_state",
+              "materialize_execution_proof_state",
+              "get_paragraph_logic_audit_state",
+              "materialize_paragraph_logic_audit_state",
               "get_revision_control_state",
               "materialize_revision_control_state",
               "reconcile_authoring_closeout",
@@ -4306,6 +4330,39 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "get_panel_discussion_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.panelDiscussionQuery) ??
+                asObject(params.panelDiscussion) ??
+                {};
+              const discussionId =
+                readString(payload.discussionId) ??
+                readString(payload.discussion_id) ??
+                readString(params.discussionId) ??
+                readString(params.discussion_id);
+              if (!discussionId) {
+                throw new Error("panel discussion query requires discussionId");
+              }
+              const store = await readWorkflowPanelDiscussionStore(
+                resolvedProjectRoot,
+                discussionId
+              );
+              return textResponse(JSON.stringify(store, null, 2));
+            }
+            case "materialize_panel_discussion_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.panelDiscussionMaterialization) ??
+                asObject(params.panelDiscussion) ??
+                {};
+              const result = await materializeWorkflowPanelDiscussionState({
+                projectRoot: resolvedProjectRoot,
+                projectId: snapshot.projectId ?? null,
+                policyLike: payload,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "get_revision_control_state":
             case "materialize_revision_control_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
@@ -4318,6 +4375,22 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   readString(params.stage) ??
                   snapshot.currentStage ??
                   "review",
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_execution_proof_state":
+            case "materialize_execution_proof_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeExecutionProofState({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "get_paragraph_logic_audit_state":
+            case "materialize_paragraph_logic_audit_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeParagraphLogicAudit({
+                projectRoot: resolvedProjectRoot,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

@@ -2,6 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { DispatchableWorkflowRole } from "./agent-task-dispatch";
+import {
+  aggregateWorkflowPanelDiscussionRound,
+  buildWorkflowPanelDiscussionPrompt,
+  createWorkflowPanelDiscussionRound,
+  parseWorkflowPanelDiscussionResult,
+  type WorkflowPanelDiscussionAttempt,
+  type WorkflowPanelDiscussionResult,
+} from "./workflow-panel-discussion";
 
 export type AutoModeDiscussionReviewerRole =
   | "researcher"
@@ -516,64 +524,63 @@ export function buildAutoModeDiscussionPrompt(params: {
   packetPath: string;
   packetJsonPath: string;
 }): string {
-  return [
-    `Auto risk discussion request for ${params.reviewerRole}.`,
-    `Project ID: ${params.projectId ?? path.basename(params.projectRoot)}`,
-    `Project root: ${params.projectRoot}`,
-    `Current stage: ${params.stage ?? "unknown"}`,
-    `Risk level: ${params.riskLevel}`,
-    `Read this discussion packet first: ${params.packetPath}`,
-    `Structured packet JSON: ${params.packetJsonPath}`,
-    "Focus on whether the project can stay in the current auto mode after one more bounded remediation cycle.",
-    "Review only the packet and the referenced artifacts.",
-    "Return ONLY valid JSON with this schema:",
-    `{
-  "riskAssessment": "resolved | needs_changes | blocked",
-  "confidence": 0-10,
-  "recommendedOwner": "researcher | orchestrator | coder | analyzer | academic_writer | reviewer | cross-reviewer | null",
-  "actionItems": ["..."],
-  "blockers": ["..."],
-  "summary": "one concise paragraph"
-}`,
-  ].join("\n");
+  return buildWorkflowPanelDiscussionPrompt({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    reviewerRole: params.reviewerRole,
+    packetPath: params.packetPath,
+    packetJsonPath: params.packetJsonPath,
+    policy: {
+      discussionId: "auto-mode-discussion",
+      topic: "Decide whether the current auto mode can continue after one bounded remediation pass",
+      stage: params.stage,
+      participants: defaultAutoModeDiscussionPanel(),
+      maxRounds: 2,
+      quorum: defaultAutoModeDiscussionPanel().length,
+      resolvedDecisions: ["resolved"],
+      blockedDecisions: ["blocked"],
+      packetArtifacts: [],
+      promptInstructions:
+        `Focus on whether the project can stay in the current auto mode after one more bounded remediation cycle. Current risk level: ${params.riskLevel}. Review only the packet and the referenced artifacts.`,
+      summary: [],
+      context: {},
+    },
+  });
 }
 
 export function parseAutoModeDiscussionResult(
   text: string,
   reviewerRole: AutoModeDiscussionReviewerRole
 ): AutoModeDiscussionResult {
-  const now = new Date().toISOString();
+  let normalizedText = text;
   try {
     const jsonText = extractJsonObject(text) ?? text;
     const record = asRecord(JSON.parse(jsonText));
-    return {
-      reviewerRole,
-      riskAssessment: normalizeAssessment(record.riskAssessment),
-      confidence: clampConfidence(record.confidence),
-      recommendedOwner: normalizeOwner(record.recommendedOwner),
-      actionItems: uniqueStrings(collectStrings(record.actionItems)),
-      blockers: uniqueStrings(collectStrings(record.blockers)),
-      summary: readString(record.summary),
-      createdAt: now,
-      runId: readString(record.runId),
-      rawText: text,
-    };
-  } catch (error) {
-    return {
-      reviewerRole,
-      riskAssessment: "blocked",
-      confidence: 0,
-      recommendedOwner: "researcher",
-      actionItems: [],
-      blockers: [
-        `Failed to parse structured risk discussion JSON: ${error instanceof Error ? error.message : String(error)}`,
-      ],
-      summary: "Reviewer did not return valid structured JSON.",
-      createdAt: now,
-      runId: null,
-      rawText: text,
-    };
+    if (
+      readString(record.decision) == null &&
+      readString(record.riskAssessment) != null
+    ) {
+      normalizedText = JSON.stringify({
+        ...record,
+        decision: readString(record.riskAssessment),
+      });
+    }
+  } catch {
+    // Fall back to the generic parser on the original text.
   }
+  const parsed = parseWorkflowPanelDiscussionResult(normalizedText, reviewerRole);
+  return {
+    reviewerRole,
+    riskAssessment: normalizeAssessment(parsed.decision),
+    confidence: parsed.confidence,
+    recommendedOwner: parsed.recommendedOwner,
+    actionItems: parsed.actionItems,
+    blockers: parsed.blockers,
+    summary: parsed.summary,
+    createdAt: parsed.createdAt,
+    runId: parsed.runId,
+    rawText: parsed.rawText,
+  };
 }
 
 function mostCommonOwner(
@@ -593,43 +600,69 @@ export function aggregateAutoModeDiscussionRound(
   round: AutoModeDiscussionRound,
   quorum: number
 ): AutoModeDiscussionAggregate {
-  const completed = round.attempts
-    .map((attempt) => attempt.result)
-    .filter((result): result is AutoModeDiscussionResult => Boolean(result));
-  const reviewCount = completed.length;
-  const totalConfidence = completed.reduce((sum, result) => sum + result.confidence, 0);
-  const averageConfidence = reviewCount > 0 ? totalConfidence / reviewCount : null;
-  const assessmentCounts = completed.reduce<Record<string, number>>((acc, result) => {
-    acc[result.riskAssessment] = (acc[result.riskAssessment] ?? 0) + 1;
-    return acc;
-  }, {});
-  const blockers = uniqueStrings(completed.flatMap((result) => result.blockers));
-  const actionItems = uniqueStrings(completed.flatMap((result) => result.actionItems));
-  const recommendedOwner =
-    mostCommonOwner(completed.map((result) => result.recommendedOwner)) ?? "researcher";
-  const resolvedCount = assessmentCounts.resolved ?? 0;
-  const blockedCount = assessmentCounts.blocked ?? 0;
-  const status: AutoModeDiscussionAggregate["status"] =
-    resolvedCount >= Math.max(1, quorum) && blockedCount === 0
-      ? "resolved"
-      : blockedCount > 0 && reviewCount >= Math.max(1, quorum)
-        ? "blocked"
-        : reviewCount >= PANEL_ROLES.length || reviewCount >= Math.max(1, quorum)
-          ? "needs_changes"
-          : "reviewing";
-  const aggregate: AutoModeDiscussionAggregate = {
-    status,
-    quorum: Math.max(1, quorum),
-    reviewCount,
-    averageConfidence,
-    assessmentCounts,
-    recommendedOwner,
-    actionItems,
-    blockers,
-    summary: "",
+  const genericRound = {
+    discussionId: "auto-mode-discussion",
+    topic: "Auto mode risk discussion",
+    stage: round.stage,
+    roundId: round.roundId,
+    packetPath: round.packetPath,
+    packetJsonPath: round.packetJsonPath,
+    packetFingerprint: round.packetFingerprint,
+    status: round.status,
+    participants: defaultAutoModeDiscussionPanel(),
+    maxRounds: 2,
+    launchedAt: round.launchedAt,
+    updatedAt: round.updatedAt,
+    attempts: round.attempts.map(
+      (attempt) =>
+        ({
+          ...attempt,
+          result: attempt.result
+            ? ({
+                reviewerRole: attempt.result.reviewerRole,
+                decision: attempt.result.riskAssessment,
+                confidence: attempt.result.confidence,
+                recommendedOwner: attempt.result.recommendedOwner,
+                actionItems: attempt.result.actionItems,
+                blockers: attempt.result.blockers,
+                summary: attempt.result.summary,
+                createdAt: attempt.result.createdAt,
+                runId: attempt.result.runId,
+                rawText: attempt.result.rawText,
+              } satisfies WorkflowPanelDiscussionResult)
+            : null,
+        } satisfies WorkflowPanelDiscussionAttempt)
+    ),
+    aggregate: null,
   };
-  aggregate.summary = summarizeAggregate(aggregate);
-  return aggregate;
+  const aggregate = aggregateWorkflowPanelDiscussionRound({
+    round: genericRound,
+    policy: {
+      discussionId: "auto-mode-discussion",
+      topic: "Auto mode risk discussion",
+      stage: round.stage,
+      participants: defaultAutoModeDiscussionPanel(),
+      maxRounds: 2,
+      quorum,
+      resolvedDecisions: ["resolved"],
+      blockedDecisions: ["blocked"],
+      packetArtifacts: [],
+      promptInstructions: null,
+      summary: [],
+      context: {},
+    },
+  });
+  return {
+    status: aggregate.status,
+    quorum: aggregate.quorum,
+    reviewCount: aggregate.reviewCount,
+    averageConfidence: aggregate.averageConfidence,
+    assessmentCounts: aggregate.decisionCounts,
+    recommendedOwner: aggregate.recommendedOwner,
+    actionItems: aggregate.actionItems,
+    blockers: aggregate.blockers,
+    summary: aggregate.summary,
+  };
 }
 
 export function createAutoModeDiscussionRound(params: {
@@ -640,17 +673,55 @@ export function createAutoModeDiscussionRound(params: {
   packetFingerprint: string;
   attempts: AutoModeDiscussionAttempt[];
 }): AutoModeDiscussionRound {
-  const now = new Date().toISOString();
-  return {
-    stage: params.stage,
-    riskLevel: params.riskLevel,
-    roundId: randomUUID(),
+  const round = createWorkflowPanelDiscussionRound({
+    policy: {
+      discussionId: "auto-mode-discussion",
+      topic: "Auto mode risk discussion",
+      stage: params.stage,
+      participants: defaultAutoModeDiscussionPanel(),
+      maxRounds: 2,
+      quorum: defaultAutoModeDiscussionPanel().length,
+      resolvedDecisions: ["resolved"],
+      blockedDecisions: ["blocked"],
+      packetArtifacts: [],
+      promptInstructions: null,
+      summary: [],
+      context: {},
+    },
     packetPath: params.packetPath,
     packetJsonPath: params.packetJsonPath,
     packetFingerprint: params.packetFingerprint,
-    status: "reviewing",
-    launchedAt: now,
-    updatedAt: now,
+    attempts: params.attempts.map(
+      (attempt) =>
+        ({
+          ...attempt,
+          result: attempt.result
+            ? ({
+                reviewerRole: attempt.result.reviewerRole,
+                decision: attempt.result.riskAssessment,
+                confidence: attempt.result.confidence,
+                recommendedOwner: attempt.result.recommendedOwner,
+                actionItems: attempt.result.actionItems,
+                blockers: attempt.result.blockers,
+                summary: attempt.result.summary,
+                createdAt: attempt.result.createdAt,
+                runId: attempt.result.runId,
+                rawText: attempt.result.rawText,
+              } satisfies WorkflowPanelDiscussionResult)
+            : null,
+        } satisfies WorkflowPanelDiscussionAttempt)
+    ),
+  });
+  return {
+    stage: round.stage,
+    riskLevel: params.riskLevel,
+    roundId: round.roundId,
+    packetPath: round.packetPath,
+    packetJsonPath: round.packetJsonPath,
+    packetFingerprint: round.packetFingerprint,
+    status: round.status,
+    launchedAt: round.launchedAt,
+    updatedAt: round.updatedAt,
     attempts: params.attempts,
     aggregate: null,
   };

@@ -27,6 +27,7 @@ const WRITING_HOOK_IDS = new Set([
   "innovation-synthesis-audit",
   "results-storyline-audit",
   "title-abstract-intro-alignment-audit",
+  "paragraph-logic-flow-audit",
   "citation-topicality-audit",
   "method-comparison-coverage-audit",
   "reviewer-issues-appendix-audit",
@@ -274,6 +275,13 @@ function buildWritingHookPolicies(params: {
     "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
     "academic_writer/paper/main.tex",
   ]);
+  const paragraphLogicArtifacts = uniqueStrings([
+    ...titleAbstractIntroArtifacts,
+    "academic_writer/PARAGRAPH_LOGIC_AUDIT.json",
+    "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+    "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+    "academic_writer/WRITING_SIGNALS.md",
+  ]);
   const citationAuditArtifacts = uniqueStrings([
     "academic_writer/paper/refs.bib",
     "reviewer/CITATION_VERIFICATION.md",
@@ -515,6 +523,45 @@ function buildWritingHookPolicies(params: {
           "academic_writer/ABSTRACT_5_SENTENCE_WORKBENCH.md",
           "academic_writer/INTRO_5_PARAGRAPH_WORKBENCH.md",
           "academic_writer/paper/main.tex",
+        ],
+      },
+    }),
+    buildHook({
+      hookId: "paragraph-logic-flow-audit",
+      stage: "review",
+      hookPoint: "before_stage_handoff",
+      order: 292,
+      parallelGroup: "writing-closeout",
+      filePath: "academic_writer/paper/main.tex",
+      auditorRole: "cross-reviewer",
+      blockingMode: "block_stage",
+      requirementPrompt: buildPrompt({
+        title:
+          "cross-paragraph logic and section-to-section handoffs before the review stage hands the manuscript forward",
+        paperMode: params.paperMode,
+        topTierVerdict: params.topTierVerdict,
+        requirements: surveyMode
+          ? [
+              "The manuscript must read as one teaching sequence: scope -> taxonomy -> evidence synthesis -> benchmark landscape -> open problems, not as a stack of locally correct paragraphs.",
+              "Adjacent paragraphs must hand off naturally: if the topic shifts, the prose or reverse outline should make the shift feel necessary rather than abrupt.",
+              "academic_writer/PARAGRAPH_LOGIC_AUDIT.md and PARAGRAPH_LOGIC_REVERSE_OUTLINE.md must show no unresolved blocking paragraph-pair breaks before pass.",
+            ]
+          : [
+              "The manuscript must read as one argument rather than a sequence of locally correct but disconnected paragraphs.",
+              "Adjacent paragraphs and section boundaries must hand off naturally: problem -> gap -> method -> evidence -> limitation should feel causally linked, not merely adjacent.",
+              "academic_writer/PARAGRAPH_LOGIC_AUDIT.md and PARAGRAPH_LOGIC_REVERSE_OUTLINE.md must show no unresolved blocking paragraph-pair breaks before pass.",
+            ],
+        supportingArtifacts: paragraphLogicArtifacts,
+      }),
+      supportingArtifacts: paragraphLogicArtifacts,
+      appliesWhen: baseAppliesWhen,
+      filters: {
+        fileGlobs: [
+          "academic_writer/paper/main.tex",
+          "academic_writer/PARAGRAPH_LOGIC_AUDIT.json",
+          "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+          "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+          "academic_writer/WRITING_SIGNALS.md",
         ],
       },
     }),

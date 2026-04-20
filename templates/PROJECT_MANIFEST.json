@@ -433,6 +433,21 @@
     "template_mapping_path": null,
     "pending_reason": null
   },
+  "paragraph_logic_audit": {
+    "status": "missing",
+    "audit_json_path": "academic_writer/PARAGRAPH_LOGIC_AUDIT.json",
+    "audit_report_path": "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+    "reverse_outline_path": "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+    "audited_section_count": 0,
+    "multi_paragraph_section_count": 0,
+    "audited_paragraph_count": 0,
+    "blocking_issue_count": 0,
+    "advisory_issue_count": 0,
+    "weakest_sections": [],
+    "next_repair_action": null,
+    "pending_reason": null,
+    "last_updated_at": null
+  },
   "write_package": {
     "status": "missing",
     "assembly_status": null,

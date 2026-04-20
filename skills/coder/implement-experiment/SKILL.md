@@ -299,6 +299,10 @@ Every bundle must include `EXPERIMENT_MANIFEST.json` with:
 - `innovation_points`
 - `validation_steps`
 - `ablation_plan`
+- `implementation_proof.changed_files`
+- `implementation_proof.integration_points`
+- `implementation_proof.activation_signals`
+- `implementation_proof.execution_command`
 - `claim_ids_supported`
 - `proposal_basis`
 - `allowed_deviations`
@@ -310,6 +314,13 @@ Every bundle must include `EXPERIMENT_MANIFEST.json` with:
 - `git.last_candidate_branch`
 - `git.last_candidate_commit`
 - `git.promotion_reason`
+
+`implementation_proof` must explain, concretely and durably:
+
+- which files changed for this method
+- where each claimed innovation point is actually wired into the code path
+- what runtime signal or artifact would prove the code path was activated
+- which execution command should exercise that implementation
 
 Update `{PROJ}/coder/EXPERIMENT_INDEX.md` so Coder can later recover:
 

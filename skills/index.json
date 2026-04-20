@@ -101,6 +101,7 @@
   ],
   "cross-reviewer": [
     "./cross-reviewer/experiment-attack",
+    "./cross-reviewer/review-phase",
     "./cross-reviewer/resume-pipeline",
     "./shared/workflow-handoff-signal"
   ]

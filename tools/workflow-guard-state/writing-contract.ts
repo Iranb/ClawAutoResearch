@@ -1,3 +1,22 @@
+/**
+ * 写作合约（Writing Contract）状态定义。
+ *
+ * 写作合约定义论文的写作约束——论文模式（conference/journal/survey）、
+ * 模板配置、页数/字数预算、章节顺序、段落逻辑检查清单、故事线检查清单、
+ * 证明风格（lemma_result_only）、理论附录要求等。
+ *
+ * 为什么需要写作合约？因为学术写作有严格约束——
+ * - 会议论文有严格页数限制（如 9 页正文 + 2 页参考文献）
+ * - 段落必须有清晰的逻辑结构（一段一意、首句点题、尾句衔接）
+ * - 每个论点必须映射到证据链
+ * - 理论推导必须放在附录，正文只保留定理陈述
+ *
+ * DEFAULT_WRITING_SECTION_ORDER: 实验论文标准章节（abstract → introduction → related_work → method → experiments → conclusion）
+ * DEFAULT_SURVEY_WRITING_SECTION_ORDER: 综述论文标准章节（abstract → introduction → scope_and_protocol → taxonomy → evidence_synthesis → benchmark_landscape → open_problems → conclusion）
+ *
+ * evaluateWritingContractState 评估合约的当前状态——
+ * 模板是否存在、是否已应用、是否有待解决的问题。
+ */
 import * as path from "node:path";
 import {
   asRecord,
@@ -57,6 +76,12 @@ export const DEFAULT_PROOF_CHECKLIST = [
 export const DEFAULT_KG_STORYLINE_PACKET_PATH =
   "academic_writer/KG_STORYLINE_PACKET.md";
 
+/**
+ * 解析写作模式。
+ *
+ * 兼容多种输入格式（"conf"/"conference_9p_2refs" → "conference"）。
+ * 论文模式决定了章节顺序、页数预算、理论附录要求等。
+ */
 export function normalizeWritingMode(value: unknown): WritingMode | null {
   const normalized = normalizeStage(value);
   if (!normalized) {
@@ -84,6 +109,11 @@ export function normalizeWritingMode(value: unknown): WritingMode | null {
   return null;
 }
 
+/**
+ * 解析写作模板路径。
+ *
+ * 支持绝对路径和相对路径（相对于项目根目录）。
+ */
 export function resolveWritingTemplatePath(
   projectRoot: string | null,
   templatePath: string | null
@@ -100,6 +130,14 @@ export function resolveWritingTemplatePath(
   return path.normalize(path.join(projectRoot, templatePath));
 }
 
+/**
+ * 解析写作合约完整状态。
+ *
+ * 从 unknown JSON 安全转换。所有检查清单（proofChecklist、storylineChecklist、
+ * paragraphLogicChecklist）和章节顺序（requiredSections、sectionOrder）
+ * 如果为空则使用默认值。proofAppendixRequired 根据论文模式自动决定
+ * （survey 不需要，其他需要）。
+ */
 export function normalizeWritingContractState(value: unknown): WritingContractState {
   const record = asRecord(value) ?? {};
   const paperMode = normalizeWritingMode(record.paperMode ?? record.paper_mode);
@@ -207,6 +245,9 @@ export function normalizeWritingContractState(value: unknown): WritingContractSt
   };
 }
 
+/**
+ * 序列化写作合约状态。
+ */
 export function serializeWritingContractState(
   state: WritingContractState
 ): Record<string, unknown> {
@@ -246,6 +287,19 @@ export function serializeWritingContractState(
   };
 }
 
+/**
+ * 评估写作合约状态。
+ *
+ * 检查模板是否存在、是否已应用、是否有待解决的问题。
+ * 决策逻辑：
+ * 1. 不需要模板 → optional
+ * 2. 需要但未配置 → missing（阻塞）
+ * 3. 已配置但文件不存在 → missing（阻塞）
+ * 4. 已应用 → applied
+ * 5. 已配置但未应用 → configured
+ *
+ * 优先使用项目级模板（projectTemplatePath），其次使用全局模板（templatePath）。
+ */
 export async function evaluateWritingContractState(params: {
   projectRoot: string | null;
   state: WritingContractState;

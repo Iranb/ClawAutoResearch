@@ -1,3 +1,29 @@
+/**
+ * 论文摄入（Paper Ingestion）状态管理。
+ *
+ * 处理论文从外部来源导入到知识图谱的全流程——
+ * 队列管理、批量处理、远程任务跟踪、失败重试、图同步。
+ *
+ * 核心概念：
+ * - PaperNexus: 论文知识图谱系统
+ * - QueuedRequest: 待处理的论文导入请求
+ * - BatchRun/BatchItem: 批量导入（用于大规模论文导入）
+ * - PaperOperation: 单个论文的操作（import 或 graph 阶段）
+ * - CompletedPaper: 成功导入的论文记录
+ * - FailedPaper: 失败的论文（可重试 vs 不可重试）
+ *
+ * 为什么有这么多 merge 函数？因为论文导入是异步的——
+ * 不同来源的状态更新可能交错到达，需要安全合并（patch 覆盖 current，
+ * 但不丢失 current 中 patch 没有的字段）。
+ *
+ * derivePaperIngestionWorkflowDecision 是核心决策函数——
+ * 判断论文摄入是否在运行、是否需要等待、是否需要修复。
+ * 这决定了工作流是否可以进入下一阶段（frontier_mapping）。
+ *
+ * syncExperimentOutcomesToGraph 将实验结果写回知识图谱——
+ * 为每个完成的实验创建 Finding 节点，并连接到对应的 Hypothesis 节点。
+ * 这是"实验驱动知识图谱更新"的关键环节。
+ */
 import { randomUUID } from "node:crypto";
 import {
   asRecord,
@@ -21,6 +47,12 @@ import type {
 } from "../workflow-guard.js";
 import type { PaperIngestionValidationStatus } from "../paper-ingestion-validation";
 
+/**
+ * 解析论文摄入运行时状态。
+ *
+ * 将未知值标准化为允许的运行时状态之一。
+ * 未知状态默认为 "idle"。
+ */
 export function normalizePaperIngestionRuntimeStatus(value: unknown): string {
   const normalized = normalizeStage(value);
   switch (normalized) {
@@ -349,6 +381,14 @@ function normalizePaperIngestionValidationStatus(
   }
 }
 
+/**
+ * 解析论文摄入完整状态。
+ *
+ * 从 unknown JSON 安全转换。包含所有子组件的 normalize：
+ * completedPapers、paperOperations、activeBatches、batchItems、
+ * queuedRequests、failedPapers、retryPolicy 等。
+ * lastBatchManifestPath 自动从最新的 activeBatch 或 batchItem 推断。
+ */
 export function normalizePaperIngestionState(value: unknown): PaperIngestionState {
   const record = asRecord(value) ?? {};
   const importTaskIdsRaw = record.import_task_ids ?? record.importTaskIds;
@@ -423,6 +463,11 @@ export function normalizePaperIngestionState(value: unknown): PaperIngestionStat
   };
 }
 
+/**
+ * 序列化论文摄入状态。
+ *
+ * 将 camelCase 内部表示转为 snake_case JSON。
+ */
 export function serializePaperIngestionState(
   value: PaperIngestionState
 ): Record<string, unknown> {
@@ -461,6 +506,13 @@ export function serializePaperIngestionState(
   };
 }
 
+/**
+ * 检查是否有活跃的论文上传任务。
+ *
+ * 用于工作流守卫——如果论文摄入还在运行，工作流不能进入下一阶段。
+ * 决策优先：先调用 derivePaperIngestionWorkflowDecision，
+ * 如果 action 是 "wait" 说明有活跃任务。
+ */
 export function hasActiveWorkflowOwnedPaperUpload(
   state: PaperIngestionState,
   options?: {
@@ -541,6 +593,17 @@ function isDormantQueuedRequest(request: PaperIngestionQueuedRequest): boolean {
   );
 }
 
+/**
+ * 推导论文摄入工作流决策。
+ *
+ * 核心决策逻辑——判断论文摄入的当前状态应该采取什么行动：
+ * - "wait": 有活跃任务（运行中/排队中），等待完成
+ * - "continue": 图就绪或无活跃任务，可以继续
+ * - "repair": 有失败需要修复，先修复再继续
+ *
+ * 决策优先级：活跃任务 > 排队任务 > 终端失败 > 继续。
+ * dormantQueuedRequest 是从未启动的请求——如果图已就绪可以忽略。
+ */
 export function derivePaperIngestionWorkflowDecision(params: {
   state: PaperIngestionState;
   graphPresenceStatus?: unknown;
@@ -701,6 +764,13 @@ export function derivePaperIngestionWorkflowDecision(params: {
   };
 }
 
+/**
+ * 推导 graph_build 阶段的微阶段。
+ *
+ * 基于论文摄入决策——
+ * uploading（上传中）> needs_repair（需修复）> verifying（验证中）> brainstorm_refresh（就绪）。
+ * 这决定了 graph_build 阶段的内部进度展示。
+ */
 export function deriveGraphBuildMicroStage(params: {
   paperIngestionState: PaperIngestionState;
   graphPresenceStatus: string | null;
@@ -1135,6 +1205,12 @@ function serializePaperIngestionBatchItem(
   };
 }
 
+/**
+ * 解析队列请求。
+ *
+ * 从 unknown JSON 安全转换。requestId 如果未提供则自动生成（randomUUID）。
+ * 至少需要一个有意义的字段（wrapper/commandText/manifestPath/summary 等）才返回有效请求。
+ */
 export function normalizePaperIngestionQueuedRequest(
   value: unknown
 ): PaperIngestionQueuedRequest | null {
@@ -1246,6 +1322,9 @@ function normalizePaperIngestionQueuedRequests(
   return entries;
 }
 
+/**
+ * 序列化队列请求。
+ */
 export function serializePaperIngestionQueuedRequest(
   value: PaperIngestionQueuedRequest
 ): Record<string, unknown> {
@@ -1329,6 +1408,12 @@ function mergePaperIngestionQueuedRequestValues(
   };
 }
 
+/**
+ * 合并两个队列请求列表。
+ *
+ * 按 requestId 匹配——新请求覆盖旧请求的对应字段。
+ * 用于增量更新状态（比如从外部系统收到新的进度更新时）。
+ */
 export function mergePaperIngestionQueuedRequests(params: {
   current: PaperIngestionQueuedRequest[];
   patch: unknown;
@@ -1449,6 +1534,11 @@ function isPaperIngestionBatchTerminal(
   return value === "completed" || value === "timed_out" || value === "failed";
 }
 
+/**
+ * 合并批量运行列表。
+ *
+ * 按 manifestPath 匹配——合并后返回新变为终端状态的批量运行。
+ */
 export function mergePaperIngestionBatchRuns(params: {
   current: PaperIngestionBatchRun[];
   patch: unknown;
@@ -1490,6 +1580,9 @@ export function mergePaperIngestionBatchRuns(params: {
   };
 }
 
+/**
+ * 合并批量项目列表。
+ */
 export function mergePaperIngestionBatchItems(params: {
   current: PaperIngestionBatchItem[];
   patch: unknown;
@@ -1522,6 +1615,9 @@ export function mergePaperIngestionBatchItems(params: {
   };
 }
 
+/**
+ * 合并论文操作列表。
+ */
 export function mergePaperIngestionOperations(params: {
   current: PaperIngestionPaperOperation[];
   patch: unknown;
@@ -1566,6 +1662,9 @@ export function mergePaperIngestionOperations(params: {
   };
 }
 
+/**
+ * 合并已完成论文列表。
+ */
 export function mergeCompletedPaperEntries(params: {
   current: PaperIngestionCompletedPaper[];
   patch: unknown;
@@ -1712,6 +1811,18 @@ function recalculateExperimentLedgerSyncSummary(
   ledger.summary = summary;
 }
 
+/**
+ * 将实验结果同步到知识图谱。
+ *
+ * 为核心决策函数。为每个已完成的实验（completed/failed）：
+ * 1. 创建 Finding 节点（包含 experimentId、hypothesisRef、resultSummary）
+ * 2. 创建关系边（SUPPORTED_BY 或 FALSIFIED_BY，连接 Hypothesis → Finding）
+ * 3. 记录同步结果到实验 ledger
+ *
+ * 为什么需要这个？因为实验结果的最终价值在于更新领域知识图谱——
+ * 支持的假设增强信心，证伪的假设标记风险。
+ * 这是"实验驱动知识发现"的闭环。
+ */
 export async function syncExperimentOutcomesToGraph(params: {
   projectRoot: string;
   ledger: ExperimentLedgerLike;

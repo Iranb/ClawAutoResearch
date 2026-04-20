@@ -286,3 +286,21 @@ test("plugin schema exposes autoGate.thresholds.code_to_experiment", async () =>
       ?.code_to_experiment
   );
 });
+
+test("plugin schema exposes autoGate.gateModes.review_to_write", async () => {
+  const pluginJson = JSON.parse(
+    await fs.readFile(path.join(process.cwd(), "openclaw.plugin.json"), "utf8")
+  );
+
+  assert.ok(
+    pluginJson?.configSchema?.properties?.autoGate?.properties?.gateModes?.properties
+      ?.review_to_write
+  );
+});
+
+test("default auto gate config keeps submit_to_done manual while earlier gates use panel mode", () => {
+  const config = defaultAutoGateConfig();
+  assert.equal(config.gateModes.review_to_write, "panel_gate");
+  assert.equal(config.gateModes.write_to_submit, "panel_gate");
+  assert.equal(config.gateModes.submit_to_done, "manual_gate");
+});

@@ -1,6 +1,26 @@
+/**
+ * 安全的文件系统操作原语。
+ *
+ * 工作流系统在多个进程/Agent 并发读写状态文件。
+ * 没有原子写入和锁，两个 Agent 同时写 manifest 会导致一个覆盖另一个的更新（lost update）。
+ *
+ * 核心原则：
+ * - "文件不存在不是错误"——返回 null 而非抛异常
+ * - 关键文件使用原子写入（防止进程崩溃导致半写文件）
+ * - 基于 mkdir 的 Advisory Lock（POSIX 原子性，无外部依赖）
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+/**
+ * 检查路径是否存在。
+ *
+ * 使用 fs.access 而非 fs.stat，更轻量且不抛异常。
+ * 在热路径中频繁使用（每次检查阶段就绪性都要检查 10+ 个文件）。
+ *
+ * @param targetPath 目标路径
+ * @returns 路径是否存在
+ */
 export async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await fs.access(targetPath);
@@ -10,6 +30,15 @@ export async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * 检查目录是否包含条目。
+ *
+ * 用于验证 sources/ 和 corpus/ 目录是否有内容。
+ * 空目录意味着知识图谱构建的前置条件不满足。
+ *
+ * @param targetPath 目标目录
+ * @returns 目录是否非空
+ */
 export async function isNonEmptyDirectory(targetPath: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(targetPath);
@@ -19,6 +48,16 @@ export async function isNonEmptyDirectory(targetPath: string): Promise<boolean> 
   }
 }
 
+/**
+ * 安全读取 JSON 文件。
+ *
+ * 核心原则：文件不存在或格式错误不是错误，返回 null。
+ * 状态文件可能在项目初始化时不存在，Agent 首次运行时某些产物还不存在。
+ * 返回 null 让调用方可以优雅地处理缺失状态，而不是让整个工作流崩溃。
+ *
+ * @param targetPath JSON 文件路径（null 时直接返回 null）
+ * @returns 解析后的 JSON 对象，或 null
+ */
 export async function readJsonIfExists<T>(targetPath: string | null): Promise<T | null> {
   if (!targetPath) {
     return null;
@@ -31,6 +70,15 @@ export async function readJsonIfExists<T>(targetPath: string | null): Promise<T 
   }
 }
 
+/**
+ * 安全读取文本文件。
+ *
+ * 与 readJsonIfExists 同理——文件不存在返回 null。
+ * 用于读取 Markdown 文件、日志、配置文本等。
+ *
+ * @param targetPath 文本文件路径（null 时直接返回 null）
+ * @returns 文件内容，或 null
+ */
 export async function readTextIfExists(targetPath: string | null): Promise<string | null> {
   if (!targetPath) {
     return null;
@@ -42,11 +90,30 @@ export async function readTextIfExists(targetPath: string | null): Promise<strin
   }
 }
 
+/**
+ * 写入 JSON 文件。
+ *
+ * 自动创建父目录（recursive: true，避免 TOCTOU 竞争条件），
+ * 使用 2 空格缩进和尾换行（方便 git diff 和人工审查）。
+ *
+ * 用于普通状态文件。关键状态文件（如 manifest）应使用 writeJsonAtomicEnsured。
+ *
+ * @param targetPath 目标路径
+ * @param value 要序列化的 JSON 值
+ */
 export async function writeJsonEnsured(targetPath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+/**
+ * 写入文本文件。
+ *
+ * 自动创建父目录。用于写入 Markdown 报告、日志等。
+ *
+ * @param targetPath 目标路径
+ * @param value 要写入的文本
+ */
 export async function writeTextEnsured(targetPath: string, value: string): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, value, "utf8");
@@ -56,6 +123,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * 原子写入 JSON 文件。
+ *
+ * 防止进程崩溃导致半写文件。如果进程在写入中间崩溃，
+ * 文件会被截断（只写了一半的 JSON），下次读取时 JSON.parse 会失败。
+ *
+ * 通过两步操作解决：
+ * 1. 写入临时文件（写坏了只影响临时文件）
+ * 2. fs.rename() 是原子操作——要么完成要么不完成
+ *
+ * 用于 manifest 等关键状态文件。
+ *
+ * @param targetPath 目标路径
+ * @param value 要序列化的 JSON 值
+ */
 export async function writeJsonAtomicEnsured(
   targetPath: string,
   value: unknown
@@ -66,6 +148,24 @@ export async function writeJsonAtomicEnsured(
   await fs.rename(tempPath, targetPath);
 }
 
+/**
+ * 基于目录的 Advisory Lock（建议锁）。
+ *
+ * 为什么用 mkdir 而不是文件锁？因为 mkdir 在 POSIX 系统上是原子的——
+ * 两个进程同时 mkdir 同一个目录，只有一个会成功（返回 EEXIST）。
+ * 这比基于文件的锁更简单、不需要外部依赖。
+ *
+ * 为什么不使用 flock？因为 flock 在某些文件系统（如 NFS）上不可靠。
+ *
+ * 注意：这是进程间锁，不是分布式锁。假设所有进程在同一台机器上。
+ *
+ * @param params.lockPath 锁目录路径
+ * @param params.task 要执行的任务函数
+ * @param params.timeoutMs 超时时间（默认 5000ms）
+ * @param params.retryMs 重试间隔（默认 50ms）
+ * @returns 任务的返回值
+ * @throws 超时后抛出异常
+ */
 export async function withAdvisoryLock<T>(params: {
   lockPath: string;
   task: () => Promise<T>;

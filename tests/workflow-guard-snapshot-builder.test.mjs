@@ -210,6 +210,21 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     blocking_reason: "missing_storyline",
     next_repair_action: "Regenerate the storyline bundle.",
   };
+  manifest.paragraph_logic_audit = {
+    status: "blocked",
+    audit_report_path: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+    reverse_outline_path: "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+    blocking_issue_count: 3,
+    weakest_sections: ["introduction", "discussion"],
+    next_repair_action: "Rewrite the introduction handoff before the next review pass.",
+  };
+  manifest.execution_proof = {
+    status: "blocked",
+    path: "researcher/EXECUTION_PROOF.json",
+    receipt_count: 1,
+    lineage_matched_receipt_count: 0,
+    pending_reason: "Execution receipts exist, but their commit lineage or stage_run_id does not match the current candidate/search state.",
+  };
   manifest.survey_visual_compiler_state = {
     status: "ready",
     row_count: 6,
@@ -286,9 +301,18 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
   );
 
   assert.equal(snapshot.revisionControlStatus, "active");
-  assert.equal(snapshot.revisionControlOpenSourceCount, 2);
+  assert.equal(snapshot.revisionControlOpenSourceCount, 3);
+  assert.equal(snapshot.paragraphLogicAuditStatus, "blocked");
+  assert.equal(snapshot.paragraphLogicAuditBlockingIssueCount, 3);
+  assert.equal(snapshot.paragraphLogicAuditSectionTransitionIssueCount, 0);
+  assert.equal(snapshot.executionProofStatus, "blocked");
+  assert.equal(snapshot.executionProofReceiptCount, 1);
+  assert.equal(snapshot.executionProofLineageMatchedReceiptCount, 0);
   assert.equal(snapshot.autoDispatchDiagnosticsStatus, "waiting");
   assert.equal(snapshot.autoDispatchBlockingLayer, "signals");
+  assert.equal(snapshot.autoGateReviewToWriteMode, "panel_gate");
+  assert.equal(snapshot.autoGateWriteToSubmitMode, "panel_gate");
+  assert.equal(snapshot.autoGateSubmitToDoneMode, "manual_gate");
   assert.equal(snapshot.surveyVisualCompilerStatus, "ready");
   assert.equal(snapshot.surveyMethodologyConsistencyStatus, "blocked");
 });

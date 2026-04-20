@@ -81,6 +81,10 @@ export type BuildDynamicTasksParams = {
   writingTemplatePath: string | null;
   writingTemplateStatus: string;
   paragraphLogicStatus: string;
+  paragraphLogicAuditStatus: string | null;
+  paragraphLogicAuditBlockingIssueCount: number | null;
+  paragraphLogicAuditNextRepairAction: string | null;
+  paragraphLogicAuditReportPath: string | null;
   writingContractPendingReason: string | null;
   citationIntegrity: CitationIntegrityState;
   citationReportPath: string | null;

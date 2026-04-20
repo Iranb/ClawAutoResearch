@@ -7,6 +7,7 @@ import {
   auditTheoryStateObject,
 } from "../workflow-intermediate-artifact-audit";
 import { readTextIfExists } from "../workflow-guard-core/fs";
+import { collectExecutionProofReceipts } from "../workflow-execution-proof";
 
 function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -70,6 +71,7 @@ export interface ExecutionStageDeps {
   normalizeCitationIntegrityState?: (value: unknown) => any;
   normalizeResultsStorylineState: (value: unknown) => any;
   normalizeTitleAbstractIntroWorkbenchState: (value: unknown) => any;
+  normalizeParagraphLogicAuditState?: (value: unknown) => any;
   fileHasNonWhitespaceContent: (targetPath: string | null) => Promise<boolean>;
   DEFAULT_FIGURE_REVIEW_PATH: string;
   DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH: string;
@@ -211,6 +213,22 @@ export async function collectExperimentStageMissingSignals(
   ) {
     missing.push(
       `PROJECT_MANIFEST.json.experiment_search.implementation_confidence must be trusted/ready before analysis (current: ${experimentSearch.implementationConfidence})`
+    );
+  }
+  const executionProof = await collectExecutionProofReceipts({
+    projectRoot: ctx.projectRoot,
+    experimentLedger: ctx.experimentLedger,
+    manifest: ctx.manifest,
+  });
+  if (
+    (experimentSearch.status === "ready_for_analysis" ||
+      ["ready", "trusted"].includes(
+        deps.normalizeStage(experimentSearch.implementationConfidence) ?? ""
+      )) &&
+    !executionProof.ready
+  ) {
+    missing.push(
+      `Execution proof is missing before ANALYZE: ${executionProof.missingReasons.join(" ")}`
     );
   }
   if (
@@ -443,6 +461,9 @@ export async function collectReviewStageMissingSignals(
   const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
     ctx.manifest?.title_abstract_intro_workbench
   );
+  const paragraphLogicAudit = deps.normalizeParagraphLogicAuditState
+    ? deps.normalizeParagraphLogicAuditState(ctx.manifest?.paragraph_logic_audit)
+    : { status: "missing" };
   missing.push(...deps.getReviewPressurePacketValidationErrors(reviewPressurePacket));
   for (const relativePath of [
     reviewPressurePacket.rejectFirstReviewPath,
@@ -465,6 +486,11 @@ export async function collectReviewStageMissingSignals(
   if (deps.normalizeStage(titleAbstractIntroWorkbench.status) !== "ready") {
     missing.push(
       `PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must be ready before REVIEW closeout (current: ${titleAbstractIntroWorkbench.status})`
+    );
+  }
+  if (deps.normalizeStage(paragraphLogicAudit.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.paragraph_logic_audit.status must be ready before REVIEW closeout (current: ${paragraphLogicAudit.status})`
     );
   }
   const citationIntegrity = deps.normalizeCitationIntegrityState

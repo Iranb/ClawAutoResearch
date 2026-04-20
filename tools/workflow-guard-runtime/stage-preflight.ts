@@ -39,6 +39,7 @@ import { materializeIntermediateArtifactHookPolicies } from "../workflow-interme
 import { materializeRevisionControlState } from "../research-writing/revision-control";
 import { materializeSurveyVisualCompiler } from "../research-writing/survey-visual-compiler";
 import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
+import { materializeExecutionProofState } from "../workflow-execution-proof-state";
 import {
   normalizeInnovationSynthesisState,
   normalizeStoryGapSearchRequisitionState,
@@ -125,6 +126,9 @@ type StagePreflightDeps = {
   materializeRevisionControlState?: (params: {
     projectRoot: string;
     stage: string | null;
+  }) => Promise<unknown>;
+  materializeExecutionProofState?: (params: {
+    projectRoot: string;
   }) => Promise<unknown>;
   materializeSurveyVisualCompiler?: (params: {
     projectRoot: string;
@@ -1346,6 +1350,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
       )({
         projectRoot,
         stage: params.stage,
+      })
+  );
+  await runStep(
+    "execution_proof_state",
+    async ({ stage }) => ["experiment", "analyze", "review", "write", "submit"].includes(stage ?? ""),
+    async () =>
+      (
+        params.deps.materializeExecutionProofState ?? materializeExecutionProofState
+      )({
+        projectRoot,
       })
   );
   await runStep(

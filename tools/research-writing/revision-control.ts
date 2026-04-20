@@ -13,6 +13,7 @@ import {
   type RevisionControlSource,
   type RevisionControlState,
 } from "../workflow-guard-state/revision-control";
+import { normalizeParagraphLogicAuditState } from "../workflow-guard-state/paragraph-logic-audit";
 import { readWorkflowHooksStateStore } from "../workflow-hooks/state";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import {
@@ -146,6 +147,31 @@ function buildExternalReviewSource(
         externalReview.reviewResponsePath,
       ]),
       reviewerRole: "reviewer",
+    },
+  ];
+}
+
+function buildParagraphLogicAuditSource(
+  paragraphLogicAudit: ReturnType<typeof normalizeParagraphLogicAuditState>
+): RevisionControlSource[] {
+  if (paragraphLogicAudit.status !== "blocked") {
+    return [];
+  }
+  return [
+    {
+      sourceType: "paragraph_logic_audit",
+      sourceId: "paragraph-logic-audit",
+      severity: "medium",
+      status: "open",
+      summary:
+        paragraphLogicAudit.pendingReason ??
+        `Paragraph logic audit still has ${paragraphLogicAudit.blockingIssueCount} blocking issue(s).`,
+      artifactPaths: uniqueStrings([
+        paragraphLogicAudit.auditJsonPath,
+        paragraphLogicAudit.auditReportPath,
+        paragraphLogicAudit.reverseOutlinePath,
+      ]),
+      reviewerRole: "cross-reviewer",
     },
   ];
 }
@@ -296,6 +322,9 @@ export async function deriveRevisionControlState(params: {
     value: manifest.review_issue_tracker,
   });
   const externalReview = normalizeExternalReviewState(manifest.external_review_state);
+  const paragraphLogicAudit = normalizeParagraphLogicAuditState(
+    manifest.paragraph_logic_audit
+  );
   const hookStore = await readWorkflowHooksStateStore(params.projectRoot);
   const paperStory = normalizePaperStoryState(manifest.paper_story_state);
 
@@ -305,6 +334,7 @@ export async function deriveRevisionControlState(params: {
     ...buildReviewSessionSource(reviewSession),
     ...buildIssueTrackerSources(issueTracker),
     ...buildExternalReviewSource(externalReview),
+    ...buildParagraphLogicAuditSource(paragraphLogicAudit),
   ];
 
   const sourceStage =

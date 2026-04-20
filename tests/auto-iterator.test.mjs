@@ -896,6 +896,38 @@ function buildAlignedExperimentManifest(trackId, overrides = {}) {
         covers: ["Frontier-packet-conditioned section drafting"],
       },
     ],
+    implementation_proof: {
+      changed_files: ["train.py", "frequency_debiasing.py", "configs/proposed.yaml"],
+      integration_points: [
+        {
+          point_id: "routing-hook",
+          path: "train.py",
+          symbol: "build_graph_grounded_router",
+          covers: ["Graph-grounded support routing"],
+          summary: "Wire the graph-grounded support router into the training forward path.",
+        },
+        {
+          point_id: "packet-conditioning",
+          path: "train.py",
+          symbol: "apply_frontier_packet_conditioning",
+          covers: ["Frontier-packet-conditioned section drafting"],
+          summary: "Inject frontier packet conditioning into the drafting module path.",
+        },
+      ],
+      activation_signals: [
+        {
+          point_id: "routing-activated",
+          summary: "Training logs report graph-grounded router enabled.",
+          covers: ["Graph-grounded support routing"],
+        },
+        {
+          point_id: "packet-activated",
+          summary: "Dry-run or training logs report frontier packet conditioning enabled.",
+          covers: ["Frontier-packet-conditioned section drafting"],
+        },
+      ],
+      execution_command: "uv run python train.py --config configs/proposed.yaml --seed 42",
+    },
     name: "baseline",
     entry_point: "train.py",
     status: "draft",
@@ -4453,6 +4485,165 @@ test("auto iterator keeps top-tier analyze stage blocked until mechanism and ven
   );
 });
 
+test("auto iterator keeps analyze blocked when no execution proof receipts exist", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    ablation_status: "ready",
+  };
+  manifest.experiment_memory = {
+    last_ledger_update_at: "2026-04-20T00:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "demo-project",
+    updated_at: "2026-04-20T00:00:00.000Z",
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "completed",
+      },
+    ],
+  });
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"), "# registry\n");
+  await fs.mkdir(path.join(projectRoot, "researcher", "artifacts", "results"), {
+    recursive: true,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /Execution proof is missing before ANALYZE/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps analyze blocked when execution proof lineage mismatches the current candidate", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.orchestration_state = {
+    stage_run_id: "stage-run-new",
+  };
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    ablation_status: "ready",
+    candidate_head_commit: "new-commit",
+  };
+  manifest.experiment_memory = {
+    last_ledger_update_at: "2026-04-20T00:00:00.000Z",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "demo-project",
+    updated_at: "2026-04-20T00:00:00.000Z",
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "completed",
+        result_paths: ["researcher/artifacts/results/results.json"],
+      },
+    ],
+  });
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"), "# registry\n");
+  await fs.mkdir(path.join(projectRoot, "researcher", "artifacts", "results"), {
+    recursive: true,
+  });
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-1",
+    status: "completed",
+    git_commit: "old-commit",
+    stage_run_id: "stage-run-old",
+  });
+  await writeJson(path.join(runDir, "RESULT_SUMMARY.json"), {
+    experiment_id: "exp-1",
+    metrics: { h_score: 0.55 },
+    result_paths: ["researcher/artifacts/results/results.json"],
+    stage_run_id: "stage-run-old",
+  });
+  await writeJson(path.join(runDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-1",
+    git: {
+      last_candidate_commit: "new-commit",
+    },
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /commit lineage or stage_run_id does not match/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator regresses frontier_mapping back to graph_build when graph misses canonical papers", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -5604,6 +5795,65 @@ test("auto iterator keeps code stage blocked when the experiment bundle does not
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /baseline_reference|primary_baseline_metric|validation_steps|ablation_plan/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps code stage blocked when the experiment bundle does not declare implementation proof", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  const manifest = buildAlignedExperimentManifest(trackId);
+  delete manifest.implementation_proof;
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    manifest
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageAfter, "code");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /implementation_proof\.changed_files|implementation_proof\.integration_points|implementation_proof\.activation_signals|implementation_proof\.execution_command/i.test(
+        signal
+      )
     )
   );
 });

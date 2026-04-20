@@ -33,6 +33,8 @@ export type WorkflowAutoGateThreshold = {
   minSingle: number;
 };
 
+export type WorkflowAutoGateMode = "manual_gate" | "panel_gate";
+
 export type WorkflowAutoGateConfig = {
   enabled: boolean;
   allowAutonomousDone: boolean;
@@ -41,6 +43,11 @@ export type WorkflowAutoGateConfig = {
   reviewTimeoutMinutes: number;
   experimentMonitorCooldownMs: number;
   quorum: number;
+  gateModes: {
+    review_to_write: WorkflowAutoGateMode;
+    write_to_submit: WorkflowAutoGateMode;
+    submit_to_done: WorkflowAutoGateMode;
+  };
   thresholds: {
     code_to_experiment: WorkflowAutoGateThreshold;
     review_to_write: WorkflowAutoGateThreshold;
@@ -64,6 +71,11 @@ export const DEFAULT_WORKFLOW_AUTO_GATE: WorkflowAutoGateConfig = {
   reviewTimeoutMinutes: 20,
   experimentMonitorCooldownMs: 5 * 60 * 1000,
   quorum: 2,
+  gateModes: {
+    review_to_write: "panel_gate",
+    write_to_submit: "panel_gate",
+    submit_to_done: "manual_gate",
+  },
   thresholds: {
     code_to_experiment: {
       avg: 8.0,
@@ -89,6 +101,14 @@ function clampScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.min(10, value));
+}
+
+function normalizeGateMode(value: unknown, fallback: WorkflowAutoGateMode): WorkflowAutoGateMode {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "manual_gate" || normalized === "panel_gate") {
+    return normalized;
+  }
+  return fallback;
 }
 
 function normalizeThreshold(
@@ -126,6 +146,12 @@ export function normalizeWorkflowAutoGateConfig(value: unknown): WorkflowAutoGat
     !Array.isArray(record.thresholds)
       ? (record.thresholds as Record<string, unknown>)
       : {};
+  const gateModeRecord =
+    record.gateModes &&
+    typeof record.gateModes === "object" &&
+    !Array.isArray(record.gateModes)
+      ? (record.gateModes as Record<string, unknown>)
+      : {};
   return {
     enabled:
       typeof record.enabled === "boolean"
@@ -158,6 +184,20 @@ export function normalizeWorkflowAutoGateConfig(value: unknown): WorkflowAutoGat
       typeof record.quorum === "number" && Number.isFinite(record.quorum)
         ? Math.max(1, Math.floor(record.quorum))
         : DEFAULT_WORKFLOW_AUTO_GATE.quorum,
+    gateModes: {
+      review_to_write: normalizeGateMode(
+        gateModeRecord.review_to_write,
+        DEFAULT_WORKFLOW_AUTO_GATE.gateModes.review_to_write
+      ),
+      write_to_submit: normalizeGateMode(
+        gateModeRecord.write_to_submit,
+        DEFAULT_WORKFLOW_AUTO_GATE.gateModes.write_to_submit
+      ),
+      submit_to_done: normalizeGateMode(
+        gateModeRecord.submit_to_done,
+        DEFAULT_WORKFLOW_AUTO_GATE.gateModes.submit_to_done
+      ),
+    },
     thresholds: {
       code_to_experiment: normalizeThreshold(
         thresholdRecord.code_to_experiment,
@@ -177,6 +217,29 @@ export function normalizeWorkflowAutoGateConfig(value: unknown): WorkflowAutoGat
       ),
     },
   };
+}
+
+export function resolveWorkflowAutoGateStageKey(
+  stage: string | null
+): "review_to_write" | "write_to_submit" | "submit_to_done" | null {
+  if (stage === "review") {
+    return "review_to_write";
+  }
+  if (stage === "write") {
+    return "write_to_submit";
+  }
+  if (stage === "submit") {
+    return "submit_to_done";
+  }
+  return null;
+}
+
+export function resolveWorkflowAutoGateModeForStage(params: {
+  stage: string | null;
+  config: WorkflowAutoGateConfig;
+}): WorkflowAutoGateMode | null {
+  const key = resolveWorkflowAutoGateStageKey(params.stage);
+  return key ? params.config.gateModes[key] : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

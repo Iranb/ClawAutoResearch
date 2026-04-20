@@ -17,6 +17,7 @@ import { materializePrewriteRejectionSimulation } from "./prewrite-rejection";
 import { materializeWritingReferenceBundle } from "./reference-bundles";
 import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
+import { materializeParagraphLogicAudit } from "./paragraph-logic-audit";
 import { materializeSurveyVisualCompiler } from "./survey-visual-compiler";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
@@ -516,6 +517,9 @@ export async function materializeWritingSupportArtifacts(params: {
   const figureTableRegistry = await materializeFigureTableRegistry({
     projectRoot: params.projectRoot,
   });
+  const paragraphLogicAudit = await materializeParagraphLogicAudit({
+    projectRoot: params.projectRoot,
+  });
 
   let fallbackActivation = null;
   let revisionCycle = null;
@@ -547,6 +551,9 @@ export async function materializeWritingSupportArtifacts(params: {
     figureTableRegistry.figureRegistryPath,
     figureTableRegistry.tableRegistryPath,
     figureTableRegistry.alignmentPath,
+    paragraphLogicAudit.auditJsonPath,
+    paragraphLogicAudit.auditReportPath,
+    paragraphLogicAudit.reverseOutlinePath,
     fallbackActivation?.path,
     revisionCycle?.path,
     rebuttalResponse?.path,
@@ -578,6 +585,7 @@ export async function materializeWritingSupportArtifacts(params: {
     contributionToStoryBridge: { path: storyBridge.path },
     figureAnchorPlan: { path: figureAnchor.path },
     figureTableRegistry,
+    paragraphLogicAudit: paragraphLogicAudit.state,
     venueRoutingPlan: { path: venueRouting.path, recommendedVenue: venueRouting.recommendedVenue },
     fallbackActivation: fallbackActivation?.activation ?? null,
     revisionCycle: revisionCycle?.state ?? null,

@@ -3,6 +3,14 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { WorkflowAutoGateConfig, WorkflowAutoMode } from "./workflow-auto-mode.js";
+import {
+  aggregateWorkflowPanelDiscussionRound,
+  buildWorkflowPanelDiscussionPrompt,
+  createWorkflowPanelDiscussionRound,
+  parseWorkflowPanelDiscussionResult,
+  type WorkflowPanelDiscussionAttempt,
+  type WorkflowPanelDiscussionResult,
+} from "./workflow-panel-discussion";
 
 export type CodeReviewReviewerRole = "researcher" | "orchestrator" | "reviewer";
 
@@ -99,6 +107,10 @@ export type CodeReviewPacket = {
     innovationPoints: string[];
     validationSteps: string[];
     ablationPlan: string[];
+    implementationChangedFiles: string[];
+    implementationIntegrationPoints: string[];
+    implementationActivationSignals: string[];
+    implementationExecutionCommand: string | null;
   }>;
   artifactChecks: Array<{
     path: string;
@@ -264,6 +276,44 @@ function listRecordText(value: unknown): string[] {
   });
 }
 
+function listImplementationProofText(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [entry.trim()];
+    }
+    const record = asRecord(entry);
+    if (Object.keys(record).length === 0) {
+      return [];
+    }
+    const primary =
+      readString(record.id) ??
+      readString(record.point_id) ??
+      readString(record.pointId) ??
+      readString(record.symbol) ??
+      readString(record.path) ??
+      readString(record.file) ??
+      readString(record.hook) ??
+      readString(record.entry_point) ??
+      readString(record.entryPoint) ??
+      readString(record.objective) ??
+      readString(record.summary) ??
+      null;
+    const covers = collectStrings(
+      record.covers ??
+        record.cover ??
+        record.innovation_point ??
+        record.innovationPoint ??
+        record.innovation_point_id ??
+        record.innovationPointId ??
+        record.targets
+    );
+    return [primary, ...covers].filter((item): item is string => Boolean(item));
+  });
+}
+
 async function collectBundleChecks(projectRoot: string) {
   const root = path.join(projectRoot, "coder", "experiments");
   const bundles: CodeReviewPacket["bundleChecks"] = [];
@@ -291,6 +341,9 @@ async function collectBundleChecks(projectRoot: string) {
     if (hasManifest) {
       const record = asRecord(
         await readJsonIfExists<Record<string, unknown>>(manifestPath)
+      );
+      const implementationProof = asRecord(
+        record.implementation_proof ?? record.implementationProof
       );
       bundles.push({
         dir: path.relative(projectRoot, current) || current,
@@ -337,6 +390,22 @@ async function collectBundleChecks(projectRoot: string) {
           record.validation_steps ?? record.validationSteps
         ),
         ablationPlan: listRecordText(record.ablation_plan ?? record.ablationPlan),
+        implementationChangedFiles: collectStrings(
+          implementationProof.changed_files ?? implementationProof.changedFiles
+        ),
+        implementationIntegrationPoints: listImplementationProofText(
+          implementationProof.integration_points ?? implementationProof.integrationPoints
+        ),
+        implementationActivationSignals: listImplementationProofText(
+          implementationProof.activation_signals ?? implementationProof.activationSignals
+        ),
+        implementationExecutionCommand:
+          readString(
+            implementationProof.execution_command ??
+              implementationProof.executionCommand ??
+              implementationProof.run_command ??
+              implementationProof.runCommand
+          ) ?? null,
       });
     }
 
@@ -538,6 +607,7 @@ export async function materializeCodeReviewPacket(params: {
     "- confirm each code bundle still implements the active innovation track rather than drifting away from it",
     "- confirm the implementation is baseline-grounded and aims at the declared primary baseline metric",
     "- confirm validation_steps and ablation_plan can incrementally verify each innovation point",
+    "- confirm implementation_proof shows where each innovation point is actually wired into code and how execution will prove it was activated",
     "- confirm the bundle remains executable and preserves baseline training/eval protocol unless explicit deviations are documented",
     "",
     "## Summary",
@@ -552,7 +622,7 @@ export async function materializeCodeReviewPacket(params: {
     "## Bundles",
     ...bundleChecks.map(
       (bundle) =>
-        `- ${bundle.dir}: track=${bundle.trackId ?? "unset"}, metric=${bundle.primaryBaselineMetric ?? "unset"}, target=${bundle.targetImprovement ?? "unset"}, innovation_points=${bundle.innovationPoints.join("; ") || "none"}, validation_steps=${bundle.validationSteps.join("; ") || "none"}, ablation_plan=${bundle.ablationPlan.join("; ") || "none"}`
+        `- ${bundle.dir}: track=${bundle.trackId ?? "unset"}, metric=${bundle.primaryBaselineMetric ?? "unset"}, target=${bundle.targetImprovement ?? "unset"}, innovation_points=${bundle.innovationPoints.join("; ") || "none"}, validation_steps=${bundle.validationSteps.join("; ") || "none"}, ablation_plan=${bundle.ablationPlan.join("; ") || "none"}, implementation_changed_files=${bundle.implementationChangedFiles.join("; ") || "none"}, integration_points=${bundle.implementationIntegrationPoints.join("; ") || "none"}, activation_signals=${bundle.implementationActivationSignals.join("; ") || "none"}, execution_command=${bundle.implementationExecutionCommand ?? "unset"}`
     ),
     "",
     "## Artifact Checks",
@@ -591,43 +661,49 @@ export function buildCodeReviewPrompt(params: {
         ? "Focus on validation structure: do validation_steps and ablation_plan incrementally verify each innovation point and keep one variable per experiment?"
         : "Focus on scientific execution quality: can this bundle execute safely, preserve baseline training/eval protocol, and measure the declared primary metric faithfully?";
 
-  return [
-    `Code innovation review request for ${params.reviewerRole}.`,
-    `Project: ${params.projectId ?? "unknown"} (${params.projectRoot})`,
-    `Packet: ${params.packetPath}`,
-    `Packet JSON: ${params.packetJsonPath}`,
-    "",
-    focus,
-    "",
-    "Return JSON only:",
-    "```json",
-    JSON.stringify(
-      {
-        verdict: "pass | revise | rollback | block",
-        overallScore: 0,
-        dimensionScores: {
-          innovation_alignment: 0,
-          baseline_fidelity: 0,
-          validation_plan: 0,
-          execution_readiness: 0,
-        },
-        criticalBlockers: [],
-        majorIssues: [],
-        suggestedRollbackStage: null,
-        reviewedArtifacts: [],
-        summary: "short justification",
-      },
-      null,
-      2
-    ),
-    "```",
-  ].join("\n");
+  return buildWorkflowPanelDiscussionPrompt({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    reviewerRole: params.reviewerRole,
+    packetPath: params.packetPath,
+    packetJsonPath: params.packetJsonPath,
+    policy: {
+      discussionId: "code-review",
+      topic: "Validate whether the implementation is ready to advance from code to experiment",
+      stage: "code",
+      participants: defaultCodeReviewPanel(),
+      maxRounds: 2,
+      quorum: defaultCodeReviewPanel().length,
+      resolvedDecisions: ["pass", "approved"],
+      blockedDecisions: ["block", "rollback", "rejected"],
+      packetArtifacts: [],
+      promptInstructions:
+        `${focus}\nAlso score innovation alignment, baseline fidelity, validation plan, and execution readiness in the JSON response.`,
+      summary: [],
+      context: {},
+    },
+  });
 }
 
 export function parseCodeReviewResult(
   rawText: string,
   reviewerRole: CodeReviewReviewerRole
 ): CodeReviewResult {
+  let normalizedText = rawText;
+  try {
+    const jsonSource = extractJsonObject(rawText);
+    if (jsonSource) {
+      const parsedRecord = asRecord(JSON.parse(jsonSource));
+      if (readString(parsedRecord.decision) == null && readString(parsedRecord.verdict) != null) {
+        normalizedText = JSON.stringify({
+          ...parsedRecord,
+          decision: readString(parsedRecord.verdict),
+        });
+      }
+    }
+  } catch {
+    // fall back to the legacy parser on raw text
+  }
   const fallback = {
     reviewerRole,
     verdict: "block" as const,
@@ -642,7 +718,7 @@ export function parseCodeReviewResult(
     runId: null,
     rawText,
   };
-  const jsonSource = extractJsonObject(rawText);
+  const jsonSource = extractJsonObject(normalizedText);
   if (!jsonSource) {
     return {
       ...fallback,
@@ -652,19 +728,20 @@ export function parseCodeReviewResult(
   }
   try {
     const parsed = asRecord(JSON.parse(jsonSource));
+    const generic = parseWorkflowPanelDiscussionResult(normalizedText, reviewerRole);
     return {
       reviewerRole,
-      verdict: normalizeVerdict(parsed.verdict),
+      verdict: normalizeVerdict(parsed.verdict ?? generic.decision),
       overallScore: clampScore(parsed.overallScore),
       dimensionScores: normalizeDimensionScores(parsed.dimensionScores),
-      criticalBlockers: collectStrings(parsed.criticalBlockers),
-      majorIssues: collectStrings(parsed.majorIssues),
+      criticalBlockers: collectStrings(parsed.criticalBlockers ?? generic.blockers),
+      majorIssues: collectStrings(parsed.majorIssues ?? generic.actionItems),
       suggestedRollbackStage: readString(parsed.suggestedRollbackStage),
       reviewedArtifacts: collectStrings(parsed.reviewedArtifacts),
-      summary: readString(parsed.summary),
-      createdAt: new Date().toISOString(),
-      runId: readString(parsed.runId),
-      rawText,
+      summary: readString(parsed.summary) ?? generic.summary,
+      createdAt: generic.createdAt,
+      runId: readString(parsed.runId) ?? generic.runId,
+      rawText: generic.rawText,
     };
   } catch (error) {
     return {
@@ -752,17 +829,55 @@ export function createCodeReviewRound(params: {
   packetFingerprint: string;
   attempts: CodeReviewAttempt[];
 }): CodeReviewRound {
-  const now = new Date().toISOString();
-  return {
-    gateId: "CODE-REVIEW",
-    stage: params.stage,
-    roundId: randomUUID(),
+  const round = createWorkflowPanelDiscussionRound({
+    policy: {
+      discussionId: "code-review",
+      topic: "Validate code-to-experiment readiness",
+      stage: params.stage,
+      participants: defaultCodeReviewPanel(),
+      maxRounds: 2,
+      quorum: defaultCodeReviewPanel().length,
+      resolvedDecisions: ["pass", "approved"],
+      blockedDecisions: ["block", "rollback", "rejected"],
+      packetArtifacts: [],
+      promptInstructions: null,
+      summary: [],
+      context: {},
+    },
     packetPath: params.packetPath,
     packetJsonPath: params.packetJsonPath,
     packetFingerprint: params.packetFingerprint,
+    attempts: params.attempts.map(
+      (attempt) =>
+        ({
+          ...attempt,
+          result: attempt.result
+            ? ({
+                reviewerRole: attempt.result.reviewerRole,
+                decision: attempt.result.verdict,
+                confidence: attempt.result.overallScore,
+                recommendedOwner: null,
+                actionItems: attempt.result.majorIssues,
+                blockers: attempt.result.criticalBlockers,
+                summary: attempt.result.summary,
+                createdAt: attempt.result.createdAt,
+                runId: attempt.result.runId,
+                rawText: attempt.result.rawText,
+              } satisfies WorkflowPanelDiscussionResult)
+            : null,
+        } satisfies WorkflowPanelDiscussionAttempt)
+    ),
+  });
+  return {
+    gateId: "CODE-REVIEW",
+    stage: "code",
+    roundId: round.roundId,
+    packetPath: round.packetPath,
+    packetJsonPath: round.packetJsonPath,
+    packetFingerprint: round.packetFingerprint,
     status: "reviewing",
-    launchedAt: now,
-    updatedAt: now,
+    launchedAt: round.launchedAt,
+    updatedAt: round.updatedAt,
     attempts: params.attempts,
     aggregate: null,
   };

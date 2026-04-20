@@ -371,6 +371,9 @@ test("write stage only requires storyline and title/abstract/intro workbench to 
   manifest.title_abstract_intro_workbench = {
     status: "draft",
   };
+  manifest.paragraph_logic_audit = {
+    status: "pending",
+  };
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
 
   const tool = createResearchWorkflowTool({
@@ -389,6 +392,12 @@ test("write stage only requires storyline and title/abstract/intro workbench to 
   assert.equal(
     snapshot.missingStageSignals.some((signal) =>
       /title_abstract_intro_workbench\.status must not be missing/i.test(signal)
+    ),
+    false
+  );
+  assert.equal(
+    snapshot.missingStageSignals.some((signal) =>
+      /paragraph_logic_audit\.status must not be missing/i.test(signal)
     ),
     false
   );
@@ -415,6 +424,9 @@ test("review stage requires storyline and title/abstract/intro workbench to be r
   manifest.title_abstract_intro_workbench = {
     status: "draft",
   };
+  manifest.paragraph_logic_audit = {
+    status: "blocked",
+  };
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
 
   const tool = createResearchWorkflowTool({
@@ -435,6 +447,12 @@ test("review stage requires storyline and title/abstract/intro workbench to be r
       /title_abstract_intro_workbench\.status must be ready before REVIEW closeout/i.test(
         signal
       )
+    ),
+    true
+  );
+  assert.equal(
+    snapshot.missingStageSignals.some((signal) =>
+      /paragraph_logic_audit\.status must be ready before REVIEW closeout/i.test(signal)
     ),
     true
   );
@@ -461,6 +479,9 @@ test("submit stage requires storyline and title/abstract/intro workbench to be r
   manifest.title_abstract_intro_workbench = {
     status: "draft",
   };
+  manifest.paragraph_logic_audit = {
+    status: "blocked",
+  };
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
 
   const tool = createResearchWorkflowTool({
@@ -479,6 +500,12 @@ test("submit stage requires storyline and title/abstract/intro workbench to be r
   assert.equal(
     snapshot.missingStageSignals.some((signal) =>
       /title_abstract_intro_workbench\.status must be ready before SUBMIT/i.test(signal)
+    ),
+    true
+  );
+  assert.equal(
+    snapshot.missingStageSignals.some((signal) =>
+      /paragraph_logic_audit\.status must be ready before SUBMIT/i.test(signal)
     ),
     true
   );

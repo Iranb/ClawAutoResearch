@@ -2227,6 +2227,17 @@ test("workflow-status command returns a readable workflow summary", async () => 
         teamRoundLastCompletedTaskId: "experiment.aggregate_statistics",
         experimentSyncRequired: false,
         experimentPapernexusSyncStatus: null,
+        surveyReviewStatus: "completed",
+        surveyReviewCurrentPhase: "complete",
+        surveyReviewTopic: "Generalized category discovery survey",
+        surveyReviewMode: "survey",
+        surveyReviewCandidatePaperCount: 51,
+        surveyReviewIncludedPaperCount: 31,
+        surveyReviewExcludedPaperCount: 15,
+        surveyReviewQueryRoundCount: 8,
+        surveyReviewGraphGroundedBriefReady: true,
+        surveyReviewSurveyBriefPath: "researcher/SURVEY_BRIEF.md",
+        surveyReviewPendingReason: null,
         experimentActiveRunCount: 1,
         experimentTerminalRunCount: 2,
         experimentFinishedUnreconciledCount: 1,
@@ -2318,6 +2329,43 @@ test("workflow-status command returns a readable workflow summary", async () => 
         reviewIssueHighCount: 1,
         reviewIssueMediumCount: 2,
         reviewIssueLowCount: 1,
+        revisionControlStatus: "active",
+        revisionControlRound: 2,
+        revisionControlCurrentOwner: "academic_writer",
+        revisionControlNextReviewerRole: "reviewer",
+        revisionControlOpenSourceCount: 2,
+        revisionControlPacketPath: "reviewer/REVISION_CONTROL_PACKET.json",
+        revisionControlPendingReason: "Review still requests bounded fixes.",
+        paragraphLogicAuditStatus: "blocked",
+        paragraphLogicAuditReportPath: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+        paragraphLogicAuditReverseOutlinePath:
+          "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+        paragraphLogicAuditBlockingIssueCount: 3,
+        paragraphLogicAuditSectionTransitionIssueCount: 2,
+        paragraphLogicAuditWeakestSections: ["introduction", "discussion"],
+        paragraphLogicAuditNextRepairAction:
+          "Rewrite the introduction handoff before the next review pass.",
+        executionProofStatus: "blocked",
+        executionProofPath: "researcher/EXECUTION_PROOF.json",
+        executionProofReceiptCount: 1,
+        executionProofLineageMatchedReceiptCount: 0,
+        executionProofPendingReason:
+          "Execution receipts exist, but their commit lineage or stage_run_id does not match the current candidate/search state.",
+        autoDispatchDiagnosticsStatus: "waiting",
+        autoDispatchBlockingLayer: "signals",
+        autoDispatchBlockingReason: "graph_presence_missing",
+        autoDispatchBlockingSummary: "Graph refresh and revision work are still pending.",
+        autoDispatchNextRepairAction: "Regenerate the graph packet and rerun auto_iterator_tick.",
+        autoGateReviewToWriteMode: "panel_gate",
+        autoGateWriteToSubmitMode: "panel_gate",
+        autoGateSubmitToDoneMode: "manual_gate",
+        autoGateCurrentStageMode: "panel_gate",
+        surveyVisualCompilerStatus: "ready",
+        surveyVisualCompilerRowCount: 4,
+        surveyVisualCompilerInsertionMapPath: "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json",
+        surveyMethodologyConsistencyStatus: "blocked",
+        surveyMethodologyConsistencyPath: "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
+        surveyMethodologyConsistencyBlockingIssueCount: 2,
         externalReviewStatus: "received",
         externalReviewRecommendation: "minor_revision",
         externalReviewRequiredAction: "rollback_write",
@@ -2359,6 +2407,11 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Graph refresh: required \(new core papers found\)/);
   assert.match(result.text ?? "", /PaperNexus ingestion: status=waiting_graph, import_tasks=3, completed_papers=11, active_ops=2, timed_out=1, failed=0, batches=1, active_batches=1, batch_pending_items=9, batch_synced_items=4, batch_failed_items=1, queued_requests=0, running_requests=0, reconcile_required=true/);
   assert.match(result.text ?? "", /PaperNexus batch manifest: \/tmp\/demo\/batch-import\.json/);
+  assert.match(result.text ?? "", /Revision control: status=active/i);
+  assert.match(result.text ?? "", /Paragraph logic audit: status=blocked, blocking_issues=3, section_transition_issues=2/i);
+  assert.match(result.text ?? "", /Execution proof: status=blocked, receipts=1, lineage_matched=0, path=researcher\/EXECUTION_PROOF\.json/i);
+  assert.match(result.text ?? "", /Auto dispatch diagnostics: status=waiting/i);
+  assert.match(result.text ?? "", /Auto gate modes: current_stage=panel_gate, review_to_write=panel_gate, write_to_submit=panel_gate, submit_to_done=manual_gate/i);
   assert.match(result.text ?? "", /Ideation contract: status=ready, track=track-idea-1, direction=dir-2, idea_tree=researcher\/ideation\/IDEA_TREE\.md, proposal=researcher\/ideation\/RESEARCH_PROPOSAL\.md, ranking=researcher\/ideation\/RANKING_HISTORY\.json, scoreboard=researcher\/ideation\/TOURNAMENT_SCOREBOARD\.json, top3=researcher\/ideation\/TOP3_DIRECTION_SUMMARY\.md, graph_packet=researcher\/ideation\/GRAPH_IDEATION_PACKET\.json/);
   assert.match(result.text ?? "", /IDEA-CATALYST: status=ready, mode=graph-first, micro_stage=judging, target_domain=Computer Science, source_domains=2, bridges=5, top_fragment=frag-1/);
   assert.match(result.text ?? "", /IDEA-CATALYST requisition: required=true, cycle=req-computer-science-2-2, retry_budget=1, saturated=false, reason=Cross-domain bridge evidence is still insufficient for unresolved catalyst questions\./);
@@ -2386,6 +2439,8 @@ test("workflow-status command returns a readable workflow summary", async () => 
     /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/
   );
   assert.match(result.text ?? "", /Paper story: status=ready, track=track-idea-1, story_spine=academic_writer\/story\/STORY_SPINE\.md, claim_map=academic_writer\/story\/CLAIM_TO_EXPERIMENT_MAP\.md, fallback=academic_writer\/story\/FALLBACK_NARRATIVE\.md/);
+  assert.match(result.text ?? "", /Survey visual compiler: status=ready/i);
+  assert.match(result.text ?? "", /Survey methodology consistency: status=blocked/i);
   assert.match(result.text ?? "", /Paper story support: status=partial, supported=2, partial=1, unsupported=1/);
   assert.match(result.text ?? "", /Auto mode: configured=aggressive, effective=conservative, risk=caution/);
   assert.match(result.text ?? "", /Auto mitigation: status=needs_changes, rounds=1\/2, remaining=1, fingerprint=risk-1/);

@@ -868,6 +868,11 @@ export function formatWorkflowSnapshotForPromptImpl(
   lines.push(
     `Writing contract: mode=${snapshot.writingPaperMode ?? "legacy"}, template_required=${snapshot.writingTemplateRequired ? "true" : "false"}, template_status=${snapshot.writingTemplateStatus ?? "unknown"}, paragraph_logic=${snapshot.paragraphLogicStatus ?? "unknown"}, kg_storyline=${snapshot.kgStorylineStatus ?? "unknown"}`
   );
+  if (snapshot.paragraphLogicAuditStatus) {
+    lines.push(
+      `Paragraph logic audit: status=${snapshot.paragraphLogicAuditStatus}, blocking_issues=${snapshot.paragraphLogicAuditBlockingIssueCount ?? 0}, section_transition_issues=${snapshot.paragraphLogicAuditSectionTransitionIssueCount ?? 0}, weakest_sections=${(snapshot.paragraphLogicAuditWeakestSections ?? []).join(", ") || "none"}, report=${snapshot.paragraphLogicAuditReportPath ?? "unset"}`
+    );
+  }
   if (snapshot.writingBodyPageBudget || snapshot.writingReferencePageBudget) {
     lines.push(
       `Writing budget: body_pages=${snapshot.writingBodyPageBudget ?? "unset"}, ref_pages=${snapshot.writingReferencePageBudget ?? "unset"}, body_words=${snapshot.writingBodyWordTargetMin ?? "unset"}-${snapshot.writingBodyWordTargetMax ?? "unset"}, core_ideas<=${snapshot.writingMaxCoreIdeas ?? "unset"}, headline_claims<=${snapshot.writingMaxHeadlineClaims ?? "unset"}`
@@ -1161,6 +1166,9 @@ export function formatWorkflowSnapshotForPromptImpl(
     );
     lines.push(
       "Paragraph audit rule: reverse-outline each section, keep WRITING_SIGNALS.md current, and update paragraph_logic_status after every local coherence pass."
+    );
+    lines.push(
+      "Cross-paragraph logic rule: use academic_writer/PARAGRAPH_LOGIC_AUDIT.md and academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md to repair adjacent paragraph handoffs, not just sentence-level clarity. If the audit marks blocking issues, fix the weakest section before broadening new prose."
     );
     lines.push(
       "Citation integrity rule: citations must come from real sources of truth (DBLP/CrossRef/DataCite/Semantic Scholar or equivalent). Do not invent BibTeX, and do not finalize submission until the citation integrity gate is verified."

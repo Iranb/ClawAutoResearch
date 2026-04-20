@@ -74,6 +74,7 @@ export interface WritingStageDeps {
   normalizeTitleAbstractIntroWorkbenchState: (
     value: unknown
   ) => TitleAbstractIntroWorkbenchState;
+  normalizeParagraphLogicAuditState: (value: unknown) => any;
   isExternalReviewConclusionReady: (state: any) => boolean;
   hasPrefixedFile: (dir: string, prefix: string) => Promise<boolean>;
   findAnyPdfInDir: (dir: string) => Promise<string | null>;
@@ -345,6 +346,9 @@ export async function collectWriteStageMissingSignals(
   );
   const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
     ctx.manifest?.title_abstract_intro_workbench
+  );
+  const paragraphLogicAudit = deps.normalizeParagraphLogicAuditState(
+    ctx.manifest?.paragraph_logic_audit
   );
   const paperStoryState = deps.normalizePaperStoryState(ctx.manifest?.paper_story_state);
   if (!surveyWriteMode) {
@@ -642,6 +646,11 @@ export async function collectWriteStageMissingSignals(
       "PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must not be missing during WRITE; materialize title / abstract / intro workbench artifacts before handoff."
     );
   }
+  if (deps.normalizeStage(paragraphLogicAudit.status) === "missing") {
+    missing.push(
+      "PROJECT_MANIFEST.json.paragraph_logic_audit.status must not be missing during WRITE; materialize PARAGRAPH_LOGIC_AUDIT before handoff."
+    );
+  }
   return missing;
 }
 
@@ -659,6 +668,9 @@ export async function collectSubmitStageMissingSignals(
   );
   const titleAbstractIntroWorkbench = deps.normalizeTitleAbstractIntroWorkbenchState(
     ctx.manifest?.title_abstract_intro_workbench
+  );
+  const paragraphLogicAudit = deps.normalizeParagraphLogicAuditState(
+    ctx.manifest?.paragraph_logic_audit
   );
   const writingSession = deps.normalizeWritingSessionState(ctx.manifest?.writing_session);
   const writingProcess = deps.evaluateWritingProcessReadiness({
@@ -683,6 +695,11 @@ export async function collectSubmitStageMissingSignals(
   if (deps.normalizeStage(titleAbstractIntroWorkbench.status) !== "ready") {
     missing.push(
       `PROJECT_MANIFEST.json.title_abstract_intro_workbench.status must be ready before SUBMIT (current: ${titleAbstractIntroWorkbench.status})`
+    );
+  }
+  if (deps.normalizeStage(paragraphLogicAudit.status) !== "ready") {
+    missing.push(
+      `PROJECT_MANIFEST.json.paragraph_logic_audit.status must be ready before SUBMIT (current: ${paragraphLogicAudit.status})`
     );
   }
   missing.push(

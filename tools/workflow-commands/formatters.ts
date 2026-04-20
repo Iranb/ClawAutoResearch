@@ -267,6 +267,49 @@ export function formatWorkflowStatusText(params: {
     `State revision: ${snapshot.stateRevision ?? "unknown"}${snapshot.stateUpdatedAt ? `, updated=${snapshot.stateUpdatedAt}` : ""}`,
     ...(runtimeAuditLine ? [runtimeAuditLine] : []),
     ...(derivedEvidenceLine ? [derivedEvidenceLine] : []),
+    ...(snapshot.revisionControlStatus && snapshot.revisionControlStatus !== "idle"
+      ? [
+          `Revision control: status=${snapshot.revisionControlStatus}, round=${snapshot.revisionControlRound ?? 0}, owner=${snapshot.revisionControlCurrentOwner ?? "unset"}, next_reviewer=${snapshot.revisionControlNextReviewerRole ?? "unset"}, open_sources=${snapshot.revisionControlOpenSourceCount ?? 0}, packet=${snapshot.revisionControlPacketPath ?? "unset"}`,
+          ...(snapshot.revisionControlPendingReason
+            ? [`Revision control pending reason: ${snapshot.revisionControlPendingReason}`]
+            : []),
+        ]
+      : []),
+    ...(snapshot.paragraphLogicAuditStatus
+      ? [
+          `Paragraph logic audit: status=${snapshot.paragraphLogicAuditStatus}, blocking_issues=${snapshot.paragraphLogicAuditBlockingIssueCount ?? 0}, section_transition_issues=${snapshot.paragraphLogicAuditSectionTransitionIssueCount ?? 0}, weakest_sections=${(snapshot.paragraphLogicAuditWeakestSections ?? []).join(",") || "none"}, report=${snapshot.paragraphLogicAuditReportPath ?? "unset"}`,
+          ...(snapshot.paragraphLogicAuditNextRepairAction
+            ? [`Paragraph logic next repair: ${snapshot.paragraphLogicAuditNextRepairAction}`]
+            : []),
+        ]
+      : []),
+    ...(snapshot.executionProofStatus
+      ? [
+          `Execution proof: status=${snapshot.executionProofStatus}, receipts=${snapshot.executionProofReceiptCount ?? 0}, lineage_matched=${snapshot.executionProofLineageMatchedReceiptCount ?? 0}, path=${snapshot.executionProofPath ?? "unset"}`,
+          ...(snapshot.executionProofPendingReason
+            ? [`Execution proof pending reason: ${snapshot.executionProofPendingReason}`]
+            : []),
+        ]
+      : []),
+    ...(snapshot.autoDispatchDiagnosticsStatus
+      ? [
+          `Auto dispatch diagnostics: status=${snapshot.autoDispatchDiagnosticsStatus}, layer=${snapshot.autoDispatchBlockingLayer ?? "unset"}, reason=${snapshot.autoDispatchBlockingReason ?? "none"}`,
+          ...(snapshot.autoDispatchBlockingSummary
+            ? [`Auto dispatch detail: ${snapshot.autoDispatchBlockingSummary}`]
+            : []),
+          ...(snapshot.autoDispatchNextRepairAction
+            ? [`Auto dispatch next repair: ${snapshot.autoDispatchNextRepairAction}`]
+            : []),
+        ]
+      : []),
+    ...(snapshot.autoGateCurrentStageMode ||
+    snapshot.autoGateReviewToWriteMode ||
+    snapshot.autoGateWriteToSubmitMode ||
+    snapshot.autoGateSubmitToDoneMode
+      ? [
+          `Auto gate modes: current_stage=${snapshot.autoGateCurrentStageMode ?? "unset"}, review_to_write=${snapshot.autoGateReviewToWriteMode ?? "unset"}, write_to_submit=${snapshot.autoGateWriteToSubmitMode ?? "unset"}, submit_to_done=${snapshot.autoGateSubmitToDoneMode ?? "unset"}`,
+        ]
+      : []),
     `Mailbox: ${unreadMailboxCount} unread`,
     `Idle research: enabled=${snapshot.idleResearchEnabled ? "true" : "false"}, due=${snapshot.idleResearchDue ? "true" : "false"}, topic=${snapshot.idleResearchTopic ?? "unset"}`,
     `Graph refresh: ${snapshot.graphRefreshRequired ? `required (${snapshot.graphRefreshReason ?? "pending"})` : "not required"}`,
@@ -294,6 +337,16 @@ export function formatWorkflowStatusText(params: {
       ? [
           `Survey review: status=${snapshot.surveyReviewStatus}, phase=${snapshot.surveyReviewCurrentPhase ?? "unset"}, topic=${snapshot.surveyReviewTopic ?? "unset"}, mode=${snapshot.surveyReviewMode ?? "unset"}, candidates=${snapshot.surveyReviewCandidatePaperCount ?? 0}, included=${snapshot.surveyReviewIncludedPaperCount ?? 0}, excluded=${snapshot.surveyReviewExcludedPaperCount ?? 0}, query_rounds=${snapshot.surveyReviewQueryRoundCount ?? 0}`,
           `Survey synthesis: graph_grounded_brief=${snapshot.surveyReviewGraphGroundedBriefReady ? "true" : "false"}, survey_brief=${snapshot.surveyReviewSurveyBriefPath ?? "unset"}, pending_reason=${snapshot.surveyReviewPendingReason ?? "none"}`,
+          ...(snapshot.surveyVisualCompilerStatus
+            ? [
+                `Survey visual compiler: status=${snapshot.surveyVisualCompilerStatus}, rows=${snapshot.surveyVisualCompilerRowCount ?? 0}, insertion_map=${snapshot.surveyVisualCompilerInsertionMapPath ?? "unset"}`,
+              ]
+            : []),
+          ...(snapshot.surveyMethodologyConsistencyStatus
+            ? [
+                `Survey methodology consistency: status=${snapshot.surveyMethodologyConsistencyStatus}, path=${snapshot.surveyMethodologyConsistencyPath ?? "unset"}, blocking_issues=${snapshot.surveyMethodologyConsistencyBlockingIssueCount ?? 0}`,
+              ]
+            : []),
         ]
       : []),
     ...(snapshot.ideationContractStatus

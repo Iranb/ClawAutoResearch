@@ -2255,6 +2255,9 @@ test("research_workflow materialize_writing_support_artifacts scaffolds durable 
   assert.match(result.writingSession.processStatus, /outline_ready|bootstrapping/);
   assert.ok(Array.isArray(result.generatedFiles));
   assert.ok(result.generatedFiles.some((entry) => /WRITING_REFERENCE_BUNDLE\.json$/.test(entry)));
+  assert.ok(result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.json"));
+  assert.ok(result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.md"));
+  assert.ok(result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md"));
 });
 
 test("research_workflow materialize_writing_support_artifacts adds survey-specific comparison and self-review packets", async (t) => {
@@ -2401,6 +2404,60 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   );
   assert.equal(Array.isArray(assetIndex.tableDrafts), true);
   assert.equal(Array.isArray(assetIndex.figureSpecs), true);
+});
+
+test("research_workflow materialize_paragraph_logic_audit_state captures cross-paragraph breaks", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "paragraph-logic-demo",
+    current_stage: "write",
+    owner_agent: "academic_writer",
+    writing_contract: {
+      paper_mode: "conference",
+      section_order: ["introduction"],
+    },
+  });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "sections", "introduction.tex"),
+    [
+      "Generalized category discovery remains hard because pseudo-label noise distorts class boundaries. This motivates a writing pipeline that keeps the argument focused on confirmation-bias control.",
+      "",
+      "ImageNet servers often need thermal maintenance logs during summer deployment windows. Engineers monitor fan failures and rack temperatures for infrastructure planning.",
+    ].join("\n")
+  );
+
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_paragraph_logic_audit_state",
+  });
+
+  assert.equal(result.state.status, "blocked");
+  assert.equal(result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.json"), true);
+  assert.equal(result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.md"), true);
+  assert.equal(
+    result.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md"),
+    true
+  );
+  assert.equal(result.blockingIssues.length > 0, true);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paragraph_logic_audit.status, "blocked");
+  assert.equal(manifest.writing_contract.paragraph_logic_status, "red");
 });
 
 test("research_workflow get_snapshot restores mirrored authoring artifacts before writer recovery falls back to full rebuild", async (t) => {
@@ -3546,6 +3603,29 @@ test("research_workflow capture_diagnostic_bundle materializes a bounded diagnos
     current_stage: "graph_build",
     owner_agent: "researcher",
     blocking_reason: "Waiting for graph presence",
+    revision_control_state: {
+      status: "active",
+      revision_round: 2,
+      current_owner: "academic_writer",
+      next_reviewer_role: "reviewer",
+      active_revision_packet_path: "reviewer/REVISION_CONTROL_PACKET.json",
+      open_sources: [{ source_type: "review_session", source_id: "round-2", severity: "medium", status: "open" }],
+    },
+    auto_dispatch_diagnostics: {
+      status: "waiting",
+      blocking_layer: "signals",
+      blocking_reason: "graph_presence_missing",
+    },
+    survey_visual_compiler_state: {
+      status: "ready",
+      row_count: 4,
+      insertion_map_path: "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json",
+    },
+    survey_methodology_consistency: {
+      status: "blocked",
+      path: "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
+      blocking_issues: ["paper counts disagree"],
+    },
   });
   await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
     status: "missing_sources",
@@ -3578,6 +3658,10 @@ test("research_workflow capture_diagnostic_bundle materializes a bounded diagnos
   );
   assert.match(summaryText, /Workflow Diagnostic Bundle/);
   assert.match(summaryText, /blocking_reason: Waiting for graph presence/);
+  assert.match(summaryText, /revision_control: active/);
+  assert.match(summaryText, /auto_dispatch_diagnostics: waiting/);
+  assert.match(summaryText, /survey_visual_compiler: ready/);
+  assert.match(summaryText, /survey_methodology_consistency: blocked/);
 });
 
 test("research_workflow auto_iterator_tick follows the bound channel project even when workspaceDir points at another project", async (t) => {
@@ -5895,6 +5979,43 @@ test("research_workflow runtime-state actions persist manifest state and append 
     materializedRevisionControl.generatedFiles.includes("reviewer/REVISION_CONTROL_PACKET.md"),
     true
   );
+
+  const panelDiscussion = await executeWorkflowTool(tool, {
+    action: "materialize_panel_discussion_state",
+    panelDiscussionMaterialization: {
+      discussionId: "paper-logic-panel",
+      topic: "Check whether the revise packet is sufficient for the next review pass",
+      stage: "review",
+      participants: ["reviewer", "cross-reviewer", "analyzer"],
+      maxRounds: 3,
+      quorum: 2,
+      summary: [
+        "focus on paragraph handoffs and argument coherence",
+        "verify the revise packet is bounded",
+      ],
+      context: {
+        artifact: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+      },
+    },
+  });
+  assert.equal(panelDiscussion.policy.discussionId, "paper-logic-panel");
+  assert.equal(panelDiscussion.currentRound.participants.length, 3);
+  assert.equal(panelDiscussion.currentRound.maxRounds, 3);
+  assert.equal(panelDiscussion.createdRound, true);
+
+  const panelDiscussionStore = await executeWorkflowTool(tool, {
+    action: "get_panel_discussion_state",
+    panelDiscussionQuery: {
+      discussionId: "paper-logic-panel",
+    },
+  });
+  assert.equal(panelDiscussionStore.currentRound.discussionId, "paper-logic-panel");
+
+  const executionProof = await executeWorkflowTool(tool, {
+    action: "materialize_execution_proof_state",
+  });
+  assert.ok(Array.isArray(executionProof.generatedFiles));
+  assert.ok(executionProof.generatedFiles.includes("researcher/EXECUTION_PROOF.json"));
 
   const experimentSearchSummary = await executeWorkflowTool(tool, {
     action: "get_experiment_search",

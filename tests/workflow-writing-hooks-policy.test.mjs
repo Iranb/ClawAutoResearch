@@ -242,6 +242,7 @@ test("materializeWritingHookPolicies preserves non-writing hooks and is idempote
   assert.ok(first.generatedHookIds.includes("innovation-synthesis-audit"));
   assert.ok(first.generatedHookIds.includes("results-storyline-audit"));
   assert.ok(first.generatedHookIds.includes("title-abstract-intro-alignment-audit"));
+  assert.ok(first.generatedHookIds.includes("paragraph-logic-flow-audit"));
   assert.ok(first.generatedHookIds.includes("citation-topicality-audit"));
   assert.ok(first.generatedHookIds.includes("method-comparison-coverage-audit"));
   assert.ok(first.generatedHookIds.includes("reviewer-issues-appendix-audit"));
@@ -268,6 +269,13 @@ test("materializeWritingHookPolicies preserves non-writing hooks and is idempote
   assert.equal(abstractHook?.enabled, true);
   assert.equal(abstractHook?.hookPoint, "before_task_complete");
   assert.deepEqual(abstractHook?.filters?.taskIds, ["write.section.abstract"]);
+
+  const paragraphHook = first.policy.auditHooks.find(
+    (entry) => entry.hookId === "paragraph-logic-flow-audit"
+  );
+  assert.equal(paragraphHook?.hookPoint, "before_stage_handoff");
+  assert.equal(paragraphHook?.auditorRole, "cross-reviewer");
+  assert.ok(paragraphHook?.supportingArtifacts.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.md"));
 
   const second = await materializeWritingHookPolicies({
     projectRoot,
@@ -312,6 +320,7 @@ test("maybePrepareWorkflowStageContracts materializes writing hook policies afte
   assert.ok(hookIds.includes("innovation-synthesis-audit"));
   assert.ok(hookIds.includes("results-storyline-audit"));
   assert.ok(hookIds.includes("title-abstract-intro-alignment-audit"));
+  assert.ok(hookIds.includes("paragraph-logic-flow-audit"));
 });
 
 test("research_workflow materialize_writing_hook_policies writes the writing-owned hook catalog", async (t) => {
@@ -345,6 +354,7 @@ test("research_workflow materialize_writing_hook_policies writes the writing-own
   assert.ok(result.enabledHookIds.includes("innovation-synthesis-audit"));
   assert.ok(result.enabledHookIds.includes("results-storyline-audit"));
   assert.ok(result.enabledHookIds.includes("title-abstract-intro-alignment-audit"));
+  assert.ok(result.enabledHookIds.includes("paragraph-logic-flow-audit"));
   assert.ok(result.enabledHookIds.includes("citation-topicality-audit"));
   assert.ok(result.enabledHookIds.includes("method-comparison-coverage-audit"));
   assert.ok(result.enabledHookIds.includes("reviewer-issues-appendix-audit"));

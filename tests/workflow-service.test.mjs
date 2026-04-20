@@ -39,6 +39,7 @@ import {
   maybeAdvanceAutoCodeReviewForProject,
   listWorkflowCoordinatorProjects,
   maybeAdvanceAutoModeDiscussionForProject,
+  maybeAdvanceWorkflowPanelDiscussionForProject,
   maybeAdvanceAutoGateReviewForProject,
   maybeDispatchAutoModeMitigationForProject,
   maybeLaunchAutoStageForProject,
@@ -2422,6 +2423,122 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   assert.equal(replayedResearcherAttempt?.runId, queuedResearcherAttempt?.runId);
 });
 
+test("maybeAdvanceWorkflowPanelDiscussionForProject creates and resolves a reusable discussion round", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "review");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "review",
+  });
+
+  const start = await maybeAdvanceWorkflowPanelDiscussionForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `panel-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    panelDiscussionPolicy: {
+      discussionId: "write-logic-review",
+      topic: "Decide whether the revise packet is sufficiently bounded",
+      stage: "review",
+      participants: ["reviewer", "cross-reviewer"],
+      maxRounds: 2,
+      quorum: 2,
+      summary: ["focus on paragraph logic and revise packet specificity"],
+      context: {
+        artifact: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+      },
+    },
+  });
+
+  assert.equal(start.launched, true);
+  assert.equal(start.reason, "started");
+  assert.equal(runtimeCalls.length, 2);
+
+  const updated = await maybeAdvanceWorkflowPanelDiscussionForProject({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not relaunch a new panel discussion round");
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    decision: "resolved",
+                    confidence: 8.6,
+                    recommendedOwner: "academic_writer",
+                    actionItems: ["perform one final bounded rewrite"],
+                    blockers: [],
+                    summary: "The revise packet is now sufficiently bounded.",
+                  }),
+                },
+              ],
+            },
+          ],
+        };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    panelDiscussionPolicy: {
+      discussionId: "write-logic-review",
+      topic: "Decide whether the revise packet is sufficiently bounded",
+      stage: "review",
+      participants: ["reviewer", "cross-reviewer"],
+      maxRounds: 2,
+      quorum: 2,
+      summary: ["focus on paragraph logic and revise packet specificity"],
+      context: {
+        artifact: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+      },
+    },
+  });
+
+  assert.equal(updated.resolved, true);
+  assert.equal(updated.reviewCount, 2);
+  assert.equal(updated.recommendedOwner, "academic_writer");
+});
+
 test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to the chosen owner", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -3462,6 +3579,172 @@ test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data b
   assert.equal(approvedStore.currentRound, null);
 });
 
+test("maybeAdvanceAutoGateReviewForProject routes review-stage panel gates through reusable panel discussion", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "review");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "review",
+    citation_integrity: {
+      verification_status: "verified",
+      bibliography_page_count: 1,
+      all_citations_real: true,
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf", "utf8");
+
+  const start = await maybeAdvanceAutoGateReviewForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `gate-run-${runtimeCalls.length}` };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    verdict: "pass",
+                    overallScore: 9,
+                    dimensionScores: {
+                      quality: 9,
+                      evidence: 9,
+                      clarity: 9,
+                      citation: 9,
+                      publishability: 9,
+                    },
+                    criticalBlockers: [],
+                    majorIssues: [],
+                    suggestedRollbackStage: null,
+                    reviewedArtifacts: ["academic_writer/paper/main.pdf"],
+                    summary: "Approved by review panel.",
+                  }),
+                },
+              ],
+            },
+          ],
+        };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+        gateModes: {
+          review_to_write: "panel_gate",
+          write_to_submit: "panel_gate",
+          submit_to_done: "manual_gate",
+        },
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      stageAfter: "review",
+      recommendedActions: [],
+    },
+  });
+
+  assert.equal(start.reason, "started");
+  assert.equal(runtimeCalls.length, 3);
+
+  const updated = await maybeAdvanceAutoGateReviewForProject({
+    runtimeSubagent: {
+      async run() {
+        throw new Error("should not relaunch a new gate panel round");
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    verdict: "pass",
+                    overallScore: 9,
+                    dimensionScores: {
+                      quality: 9,
+                      evidence: 9,
+                      clarity: 9,
+                      citation: 9,
+                      publishability: 9,
+                    },
+                    criticalBlockers: [],
+                    majorIssues: [],
+                    suggestedRollbackStage: null,
+                    reviewedArtifacts: ["academic_writer/paper/main.pdf"],
+                    summary: "Approved by review panel.",
+                  }),
+                },
+              ],
+            },
+          ],
+        };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+        gateModes: {
+          review_to_write: "panel_gate",
+          write_to_submit: "panel_gate",
+          submit_to_done: "manual_gate",
+        },
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      stageAfter: "review",
+      recommendedActions: [],
+    },
+  });
+
+  assert.equal(updated.approved, true);
+  const gateStore = await readGateReviewStore(projectRoot);
+  assert.equal(gateStore.currentRound?.gateId, "GATE-REVIEW-TO-WRITE");
+  assert.equal(gateStore.currentRound?.aggregate?.reviewCount, 3);
+});
+
 test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovation review round", async (t) => {
   const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
   const runtimeCalls = [];
@@ -3547,6 +3830,26 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
           covers: ["Graph-grounded support routing"],
         },
       ],
+      implementation_proof: {
+        changed_files: ["train.py", "configs/proposed.yaml"],
+        integration_points: [
+          {
+            point_id: "routing-hook",
+            path: "train.py",
+            symbol: "graph_router_forward",
+            covers: ["Graph-grounded support routing"],
+            summary: "Wire graph-grounded routing into the main forward path.",
+          },
+        ],
+        activation_signals: [
+          {
+            point_id: "routing-log",
+            summary: "Logs report graph routing enabled.",
+            covers: ["Graph-grounded support routing"],
+          },
+        ],
+        execution_command: "uv run python train.py --config configs/proposed.yaml --seed 42",
+      },
     }
   );
   await fs.writeFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "# plan\n", "utf8");

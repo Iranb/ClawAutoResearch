@@ -1,3 +1,17 @@
+/**
+ * 实验搜索规范（Spec）类型定义。
+ *
+ * 定义实验搜索的配置规范——git 策略、比较策略、预算、内环/外环策略、
+ * 指标合约、基线公平性等。
+ *
+ * 为什么这么多策略对象？因为实验搜索借鉴了超参数优化的概念——
+ * - innerLoop: 快速迭代，每次只改一个变量，类似 coordinate descent
+ * - outerLoop: 宏观策略，决定搜索方向，类似 Bayesian optimization 的 acquisition function
+ * - gitStrategy: 用 git branch 隔离候选实验，类似 MLflow 的 run tracking
+ * - baselineFairnessContract: 确保基线和候选在相同数据集/指标/评估器下比较
+ *
+ * 这种分离使得搜索策略可以独立配置——不同的 track 可以有不同的搜索策略。
+ */
 import * as path from "node:path";
 import {
   asRecord,
@@ -10,6 +24,14 @@ import {
 export const DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH =
   "planner/EXPERIMENT_SEARCH_SPEC.json";
 
+/**
+ * git 策略配置。
+ *
+ * 定义如何用 git branch 隔离候选实验——
+ * incumbentBranch 是当前最优实验的分支，candidateBranchPrefix 是候选分支前缀。
+ * requireCleanCandidateHistory 确保候选分支没有无关提交，
+ * discardUnpromotedCandidates 在搜索结束后清理未晋升的候选。
+ */
 export type ExperimentSearchGitStrategyLike = {
   incumbentBranch: string | null;
   candidateBranchPrefix: string | null;
@@ -18,12 +40,24 @@ export type ExperimentSearchGitStrategyLike = {
   discardUnpromotedCandidates: boolean;
 };
 
+/**
+ * 比较策略。
+ *
+ * 定义候选实验与谁比较、晋升规则、什么信号阻止晋升。
+ * promotionRule 决定何时将候选晋升为新的 incumbent。
+ */
 export type ExperimentSearchComparisonPolicyLike = {
   compareAgainst: string | null;
   promotionRule: string | null;
   nonPromotionSignals: string[];
 };
 
+/**
+ * 搜索预算。
+ *
+ * 限制搜索资源的各项指标——最大运行次数、GPU 小时、
+ * 无改进耐心（类似 early stopping）、基线欠表现耐心、单次试验时间预算。
+ */
 export type ExperimentSearchBudgetLike = {
   maxRuns: number | null;
   maxGpuHours: number | null;
@@ -32,6 +66,13 @@ export type ExperimentSearchBudgetLike = {
   trialTimeBudgetMinutes: number | null;
 };
 
+/**
+ * 内环策略。
+ *
+ * 内环是实验搜索的快速迭代层——每次只改一个变量，快速评估效果。
+ * mode 决定迭代模式（如 karpathy_fast_keep_discard），
+ * requireOneChangeSignature 确保每次试验只改变一个因素（控制变量法）。
+ */
 export type ExperimentSearchInnerLoopPolicyLike = {
   mode: string | null;
   trialTimeBudgetMinutes: number | null;
@@ -40,16 +81,33 @@ export type ExperimentSearchInnerLoopPolicyLike = {
   keepDiscardRule: string | null;
 };
 
+/**
+ * 外环策略。
+ *
+ * 外环是宏观搜索策略——决定是否要求基线数据集覆盖、
+ * 创新偏差容忍度（wide/narrow/strict）。
+ */
 export type ExperimentSearchOuterLoopPolicyLike = {
   requireBaselineDatasetCoverageForEffectiveCandidates: boolean;
   innovationDeviationTolerance: string | null;
 };
 
+/**
+ * 图记忆基础配置。
+ *
+ * 定义知识图谱记忆的数据包路径和同步状态路径。
+ */
 export type ExperimentSearchGraphMemoryBasisLike = {
   packetPath: string | null;
   syncStatusPath: string | null;
 };
 
+/**
+ * 指标合约。
+ *
+ * 定义主要评估指标——指标名称、优化方向（higher_is_better / lower_is_better）、
+ * 最小改进阈值、主要证据文件列表。
+ */
 export type ExperimentSearchMetricContractLike = {
   metricName: string | null;
   direction: string | null;
@@ -57,6 +115,12 @@ export type ExperimentSearchMetricContractLike = {
   primaryEvidence: string[];
 };
 
+/**
+ * 基线公平性合约。
+ *
+ * 确保基线和候选实验在公平条件下比较——锁定数据集、指标协议、评估器。
+ * 防止"不公平比较"——比如候选用了更多数据或不同的评估方式。
+ */
 export type ExperimentSearchBaselineFairnessContractLike = {
   requireBaselineParity: boolean;
   lockedDatasetProtocol: boolean;
@@ -64,6 +128,12 @@ export type ExperimentSearchBaselineFairnessContractLike = {
   lockedEvaluationHarness: boolean;
 };
 
+/**
+ * 验证步骤。
+ *
+ * 定义实验搜索过程中必须完成的验证步骤——
+ * stepId 标识、kind 类型、是否必需、完成信号。
+ */
 export type ExperimentSearchValidationStepLike = {
   stepId: string | null;
   kind: string | null;
@@ -71,6 +141,16 @@ export type ExperimentSearchValidationStepLike = {
   completionSignal: string | null;
 };
 
+/**
+ * 实验搜索规范。
+ *
+ * 实验搜索的完整配置——搜索会话 ID、git 策略、冻结合约、
+ * 搜索包、比较策略、预算、内环/外环策略、图记忆、
+ * 指标合约、公平性合约、验证步骤、搜索阶梯。
+ *
+ * frozenContract 定义搜索过程中不可更改的合约（防止搜索中途改规则），
+ * searchLadder 定义搜索的阶梯（从简单到复杂的实验序列）。
+ */
 export type ExperimentSearchSpecLike = {
   searchSessionId: string | null;
   projectId: string | null;
@@ -93,6 +173,13 @@ export type ExperimentSearchSpecLike = {
   searchLadder: string[];
 };
 
+/**
+ * 解析实验搜索规范。
+ *
+ * 从 unknown JSON 安全转换为强类型 Spec。
+ * 内环策略默认值为 "karpathy_fast_keep_discard"（参考 Karpathy 的快速迭代方法），
+ * trialTimeBudgetMinutes 默认 5 分钟（快速反馈循环）。
+ */
 export function normalizeExperimentSearchSpec(
   value: unknown
 ): ExperimentSearchSpecLike {
@@ -337,6 +424,12 @@ export function normalizeExperimentSearchSpec(
   };
 }
 
+/**
+ * 解析实验搜索规范文件路径。
+ *
+ * 优先级：显式指定路径 > manifest 中配置 > 默认路径。
+ * 支持绝对路径和相对路径（相对于项目根目录）。
+ */
 export function resolveExperimentSearchSpecPath(params: {
   projectRoot: string;
   manifest?: Record<string, unknown> | null;

@@ -9,6 +9,7 @@ import {
   runWorkflowAutoIterator,
   setOrchestrationState,
 } from "../tools/workflow-guard.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -45,6 +46,8 @@ test("survey project id recovers frontier_mapping into survey_review instead of 
     projectRoot,
     mode: "test",
     queueMailbox: false,
+    requesterSessionKey: "agent:researcher:discord:channel:1493115797856452619",
+    sessionBindingKey: "binding:discord:researcher:channel:1493115797856452619",
   });
   const manifest = await readManifest(projectRoot);
 
@@ -150,6 +153,8 @@ test("completed survey_review advances to survey-mode write without code or expe
     projectRoot,
     mode: "test",
     queueMailbox: false,
+    requesterSessionKey: "agent:researcher:discord:channel:1493115797856452619",
+    sessionBindingKey: "binding:discord:researcher:channel:1493115797856452619",
   });
   const manifest = await readManifest(projectRoot);
 
@@ -167,6 +172,16 @@ test("completed survey_review advances to survey-mode write without code or expe
     "write"
   );
   assert.equal(manifest.orchestration_state.handoff_phase, "prepared");
+  const handoffStore = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(handoffStore.intents.length, 1);
+  assert.equal(
+    handoffStore.intents[0].fromSessionKey,
+    "agent:researcher:discord:channel:1493115797856452619"
+  );
+  assert.equal(
+    handoffStore.intents[0].sessionBindingKey,
+    "binding:discord:researcher:channel:1493115797856452619"
+  );
   assert.ok(
     !result.recommendedActions.some(
       (action) => action.owner === "coder" || action.stage === "code" || action.stage === "experiment"

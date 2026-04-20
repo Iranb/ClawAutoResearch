@@ -1,3 +1,23 @@
+/**
+ * 创意合约（Ideation Contract）状态定义。
+ *
+ * 创意合约是创意生成流程的完整契约——定义创意的基础（basis）、
+ * 图索引（graph indices）、所有产出物路径（idea tree、novelty tree、
+ * challenge insight tree、candidate pool、ranking history、tournament scoreboard 等）。
+ *
+ * GraphBasisPaths 定义创意生成依赖的图谱数据——
+ * papernexus status、frontier report、anchor index、各种 frontier（limitation、
+ * contradiction、transfer、composition）。这些是创意的"知识原料"。
+ *
+ * GraphIndicesState 定义图谱索引——novelty candidate clusters、challenge clusters、
+ * transfer bridges 等。这是从知识图谱中提取的结构化信息。
+ *
+ * IdeationContractState 是完整合约——包含长期目标、问题范围、所有产出物路径、
+ * 选中的方向/轨道。
+ *
+ * 为什么默认路径这么多？因为创意系统是一个成熟流程——
+ * 每一步都有标准产出物，不需要手动配置。
+ */
 import {
   asRecord,
   asStringArray,
@@ -46,6 +66,11 @@ const DEFAULT_IDEATION_TOP3_SUMMARY_PATH =
 const DEFAULT_IDEATION_RESEARCH_PROPOSAL_PATH =
   `${DEFAULT_IDEATION_DIR}/RESEARCH_PROPOSAL.md`;
 
+/**
+ * 解析创意图谱基础路径。
+ *
+ * 所有路径都有默认值——这些是知识图谱的标准产出文件。
+ */
 export function normalizeIdeationGraphBasisPaths(
   value: unknown
 ): IdeationGraphBasisPaths {
@@ -89,6 +114,9 @@ export function normalizeIdeationGraphBasisPaths(
   };
 }
 
+/**
+ * 序列化创意图谱基础路径。
+ */
 export function serializeIdeationGraphBasisPaths(
   value: IdeationGraphBasisPaths
 ): Record<string, unknown> {
@@ -107,6 +135,12 @@ export function serializeIdeationGraphBasisPaths(
   };
 }
 
+/**
+ * 解析创意图谱索引状态。
+ *
+ * 记录图谱中各类聚类和桥接信息——novelty candidates、challenges、
+ * insights、transfer bridges、source domains 等。
+ */
 export function normalizeIdeationGraphIndicesState(
   value: unknown
 ): IdeationGraphIndicesState {
@@ -143,6 +177,9 @@ export function normalizeIdeationGraphIndicesState(
   };
 }
 
+/**
+ * 序列化创意图谱索引状态。
+ */
 export function serializeIdeationGraphIndicesState(
   value: IdeationGraphIndicesState
 ): Record<string, unknown> {
@@ -161,6 +198,13 @@ export function serializeIdeationGraphIndicesState(
   };
 }
 
+/**
+ * 解析创意合约完整状态。
+ *
+ * 从 unknown JSON 安全转换。包含合约版本、长期目标、问题范围、
+ * 图谱基础、图谱索引、所有产出物路径（默认值已配置）、选中方向/轨道。
+ * contractVersion 默认为 1（最小有效版本）。
+ */
 export function normalizeIdeationContractState(value: unknown): IdeationContractState {
   const record = asRecord(value) ?? {};
   return {
@@ -236,6 +280,9 @@ export function normalizeIdeationContractState(value: unknown): IdeationContract
   };
 }
 
+/**
+ * 序列化创意合约状态。
+ */
 export function serializeIdeationContractState(
   value: IdeationContractState
 ): Record<string, unknown> {

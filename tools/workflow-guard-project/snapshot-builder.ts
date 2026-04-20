@@ -78,6 +78,7 @@ import {
   normalizeBrainstormCycleState,
   normalizeInnovationReflectionState,
 } from "../workflow-guard-state/research-loop-state";
+import { DEFAULT_WORKFLOW_AUTO_GATE, resolveWorkflowAutoGateModeForStage } from "../workflow-auto-mode";
 import { normalizeIdeationContractState } from "../workflow-guard-state/ideation-contract";
 import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
@@ -118,6 +119,8 @@ import {
 } from "../workflow-guard-state/authoring-review-state";
 import { normalizeRevisionControlState } from "../workflow-guard-state/revision-control";
 import { normalizeAutoDispatchDiagnosticsState } from "../workflow-guard-state/auto-dispatch-diagnostics";
+import { normalizeParagraphLogicAuditState } from "../workflow-guard-state/paragraph-logic-audit";
+import { normalizeExecutionProofState } from "../workflow-guard-state/execution-proof";
 import { normalizeSurveyVisualCompilerState } from "../workflow-guard-state/survey-visual-compiler";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { normalizeReviewPressurePacketState } from "../workflow-guard-state/review-pressure";
@@ -738,6 +741,12 @@ export async function buildWorkflowSnapshotFromProjectState(
   const autoDispatchDiagnostics = normalizeAutoDispatchDiagnosticsState(
     asRecord(projectState.manifest?.auto_dispatch_diagnostics)
   );
+  const paragraphLogicAudit = normalizeParagraphLogicAuditState(
+    asRecord(projectState.manifest?.paragraph_logic_audit)
+  );
+  const executionProof = normalizeExecutionProofState(
+    asRecord(projectState.manifest?.execution_proof)
+  );
   const graphGuidedWriting = normalizeGraphGuidedWritingState(
     asRecord(projectState.manifest?.graph_guided_writing)
   );
@@ -768,6 +777,11 @@ export async function buildWorkflowSnapshotFromProjectState(
   );
   const surveyMethodologyConsistency =
     asRecord(projectState.manifest?.survey_methodology_consistency) ?? {};
+  const autoGate = policy.autoGate ?? DEFAULT_WORKFLOW_AUTO_GATE;
+  const currentStageGateMode = resolveWorkflowAutoGateModeForStage({
+    stage: currentStage,
+    config: autoGate,
+  });
   const reviewIssueLaneCounts = countReviewIssueLanes(reviewIssueTracker.issues);
   const recommendedOwner =
     normalizeWorkflowRole(orchestrationState.pendingOwnerCandidate) ??
@@ -1491,6 +1505,20 @@ export async function buildWorkflowSnapshotFromProjectState(
     revisionControlOpenSourceCount: revisionControl.openSources.length,
     revisionControlPacketPath: revisionControl.activeRevisionPacketPath,
     revisionControlPendingReason: revisionControl.pendingReason,
+    paragraphLogicAuditStatus: paragraphLogicAudit.status,
+    paragraphLogicAuditReportPath: paragraphLogicAudit.auditReportPath,
+    paragraphLogicAuditReverseOutlinePath: paragraphLogicAudit.reverseOutlinePath,
+    paragraphLogicAuditBlockingIssueCount: paragraphLogicAudit.blockingIssueCount,
+    paragraphLogicAuditSectionTransitionIssueCount:
+      paragraphLogicAudit.sectionTransitionAdvisoryIssueCount,
+    paragraphLogicAuditWeakestSections: paragraphLogicAudit.weakestSections,
+    paragraphLogicAuditNextRepairAction: paragraphLogicAudit.nextRepairAction,
+    executionProofStatus: executionProof.status,
+    executionProofPath: executionProof.path,
+    executionProofReceiptCount: executionProof.receiptCount,
+    executionProofLineageMatchedReceiptCount:
+      executionProof.lineageMatchedReceiptCount,
+    executionProofPendingReason: executionProof.pendingReason,
     reviewRubricSummary: {
       originality: reviewSession.rubric.originality,
       quality: reviewSession.rubric.quality,
@@ -1533,6 +1561,10 @@ export async function buildWorkflowSnapshotFromProjectState(
     autoDispatchBlockingReason: autoDispatchDiagnostics.blockingReason,
     autoDispatchBlockingSummary: autoDispatchDiagnostics.blockingSummary,
     autoDispatchNextRepairAction: autoDispatchDiagnostics.nextRepairAction,
+    autoGateReviewToWriteMode: autoGate.gateModes.review_to_write,
+    autoGateWriteToSubmitMode: autoGate.gateModes.write_to_submit,
+    autoGateSubmitToDoneMode: autoGate.gateModes.submit_to_done,
+    autoGateCurrentStageMode: currentStageGateMode,
     surveyVisualCompilerStatus: surveyVisualCompiler.status,
     surveyVisualCompilerRowCount: surveyVisualCompiler.rowCount,
     surveyVisualCompilerInsertionMapPath: surveyVisualCompiler.insertionMapPath,
@@ -1574,6 +1606,10 @@ export async function buildWorkflowSnapshotFromProjectState(
         writingTemplatePath: writingContractEval.templateResolvedPath,
         writingTemplateStatus: writingContractEval.templateStatus,
         paragraphLogicStatus: writingContract.paragraphLogicStatus,
+        paragraphLogicAuditStatus: paragraphLogicAudit.status,
+        paragraphLogicAuditBlockingIssueCount: paragraphLogicAudit.blockingIssueCount,
+        paragraphLogicAuditNextRepairAction: paragraphLogicAudit.nextRepairAction,
+        paragraphLogicAuditReportPath: paragraphLogicAudit.auditReportPath,
         writingContractPendingReason:
           writingContractEval.pendingReason ?? writingContract.pendingReason,
         citationIntegrity,

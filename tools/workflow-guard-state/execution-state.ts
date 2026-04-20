@@ -1,3 +1,25 @@
+/**
+ * 执行状态类型定义。
+ *
+ * 定义工作流执行过程中各子系统的状态结构及其 normalize/serialize 函数。
+ * 这些状态从 JSON 文件读取（unknown），通过 normalize 转为安全类型，
+ * 写回时通过 serialize 转为 snake_case 键名（与存储格式一致）。
+ *
+ * 包含 8 种子状态：
+ * - ExperimentSearch: 实验搜索（搜索会话、候选实验、git 操作、数据集覆盖）
+ * - Orchestration: 流程编排（手递手、阻塞、回滚、重试）
+ * - WritePackage: 写作包组装（证据矩阵、图表、引用）
+ * - PaperQc: 论文质量检查（编译、页数、LaTeX 检查）
+ * - CitationCollection: 引用收集（候选、验证、幻觉检测）
+ * - FigureQc: 图表质检（重复、标题对齐、文本对齐）
+ * - ReviewIssue: 审查问题（单个问题的跟踪）
+ * - ReviewIssueTracker: 审查问题集合（汇总计数、分数记录）
+ *
+ * 为什么 camelCase vs snake_case 分离？
+ * - TypeScript 代码内部用 camelCase（符合 JS 惯例）
+ * - JSON 存储用 snake_case（符合 Python/其他系统惯例）
+ * - normalize/serialize 负责双向转换
+ */
 import {
   asRecord,
   asStringArray,
@@ -9,6 +31,16 @@ import { normalizeReviewScoreRecords } from "./authoring-review-state";
 
 const DEFAULT_REVIEW_ISSUES_PATH = "reviewer/REVIEW_ISSUES.json";
 
+/**
+ * 实验搜索状态（原始输入）。
+ *
+ * 记录实验搜索全流程的状态——搜索会话、候选实验跟踪、
+ * git 操作状态、数据集覆盖、创新锚点等。
+ *
+ * 为什么这么多字段？因为实验搜索借鉴了超参数优化的概念——
+ * 需要跟踪 baseline、incumbent、frontier、completed、failed、discarded
+ * 等多种实验状态，以及 multi-seed 公平性、ablation 状态等。
+ */
 type ExperimentSearchStateLike = {
   status: string;
   projectId: string | null;
@@ -86,6 +118,15 @@ type ExperimentSearchStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/**
+ * 流程编排状态（原始输入）。
+ *
+ * 记录手递手流水线的执行状态——当前执行者、待交接、
+ * 阻塞/回滚原因、重试预算等。
+ *
+ * 关键设计：retryBudgetRemaining 防止无限重试，
+ * resumeCursor 记录从哪里恢复执行。
+ */
 type OrchestrationStateLike = {
   status: string;
   activeTicketId: string | null;
@@ -114,6 +155,14 @@ type OrchestrationStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/**
+ * 写作包组装状态（原始输入）。
+ *
+ * 记录论文写作所需的所有输入制品——证据矩阵、叙事报告、
+ * 图表包、引用候选、证据计数等。
+ *
+ * assemblyStatus 跟踪组装进度，sectionAssemblyQueuePath 记录待组装章节队列。
+ */
 type WritePackageStateLike = {
   status: string;
   assemblyStatus: string | null;
@@ -141,6 +190,15 @@ type WritePackageStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/**
+ * 论文质量检查状态（原始输入）。
+ *
+ * 记录 LaTeX 编译状态、页数预算、chktex 检查结果、
+ * 图表引用检查、反思轮次等。
+ *
+ * bodyPageCount 和 referenceStartPage 用于精确控制论文页数——
+ * 这是会议论文投稿的关键约束。
+ */
 type PaperQcStateLike = {
   status: string;
   compileStatus: string;
@@ -157,6 +215,13 @@ type PaperQcStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/**
+ * 引用收集状态（原始输入）。
+ *
+ * 跟踪引用收集进度——候选数量、已验证、可疑、幻觉。
+ * hallucinatedCount 是关键指标——LLM 可能编造不存在的引用，
+ * 需要逐个验证。
+ */
 type CitationCollectionStateLike = {
   status: string;
   progressPath: string | null;
@@ -169,6 +234,14 @@ type CitationCollectionStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/**
+ * 图表质检状态（原始输入）。
+ *
+ * 检查图表重复、标题对齐、文本引用对齐、图表选择。
+ *
+ * 为什么需要图表质检？因为论文中的每个图表必须在正文中被正确引用，
+ * 且标题必须与正文描述一致——这是学术写作的基本要求。
+ */
 type FigureQcStateLike = {
   status: string;
   figureReviewPath: string | null;
@@ -181,6 +254,7 @@ type FigureQcStateLike = {
   lastUpdatedAt: string | null;
 };
 
+/** 审查问题计数（按严重程度分桶）。 */
 type ReviewIssueCountsLike = {
   critical: number;
   high: number;
@@ -188,6 +262,15 @@ type ReviewIssueCountsLike = {
   low: number;
 };
 
+/**
+ * 单个审查问题（原始输入）。
+ *
+ * 记录一个审查发现的问题——严重程度、描述、目标制品、
+ * 负责人、修复路径、验证状态。
+ *
+ * issueId 自动生成（如果未提供），确保每个问题有唯一标识。
+ * waiverReason 记录豁免原因——有些问题可以不修复但需要说明理由。
+ */
 type ReviewIssueStateLike = {
   issueId: string;
   lane: string | null;
@@ -206,6 +289,12 @@ type ReviewIssueStateLike = {
   updatedAt: string | null;
 };
 
+/**
+ * 审查问题跟踪器状态（原始输入）。
+ *
+ * 汇总所有审查问题——开放计数、问题列表、分数记录、最近审查轮次。
+ * DEFAULT_REVIEW_ISSUES_PATH 是默认存储路径。
+ */
 type ReviewIssueTrackerStateLike = {
   status: string;
   openCounts: ReviewIssueCountsLike;
@@ -217,6 +306,12 @@ type ReviewIssueTrackerStateLike = {
   pendingReason: string | null;
 };
 
+/**
+ * 解析实验搜索状态。
+ *
+ * 从 unknown JSON 安全转换为强类型状态。兼容 camelCase 和 snake_case 键名。
+ * 所有状态字段通过 normalizeStage 标准化，数值字段通过 pickNumber 安全提取。
+ */
 export function normalizeExperimentSearchState(
   value: unknown
 ): ExperimentSearchStateLike {
@@ -455,6 +550,11 @@ export function normalizeExperimentSearchState(
   };
 }
 
+/**
+ * 序列化实验搜索状态。
+ *
+ * 将 camelCase 内部表示转为 snake_case JSON 格式，与存储格式一致。
+ */
 export function serializeExperimentSearchState(
   state: ExperimentSearchStateLike
 ): Record<string, unknown> {
@@ -536,6 +636,12 @@ export function serializeExperimentSearchState(
   };
 }
 
+/**
+ * 解析流程编排状态。
+ *
+ * 从 unknown JSON 安全转换。记录手递手流水线的执行状态——
+ * 当前执行者、待交接、阻塞/回滚原因、重试预算。
+ */
 export function normalizeOrchestrationState(
   value: unknown
 ): OrchestrationStateLike {
@@ -614,6 +720,9 @@ export function normalizeOrchestrationState(
   };
 }
 
+/**
+ * 序列化流程编排状态。
+ */
 export function serializeOrchestrationState(
   value: OrchestrationStateLike
 ): Record<string, unknown> {
@@ -646,6 +755,12 @@ export function serializeOrchestrationState(
   };
 }
 
+/**
+ * 解析写作包组装状态。
+ *
+ * 从 unknown JSON 安全转换。记录论文写作所需的所有输入制品。
+ * sourceArtifactCount / derivedArtifactCount 确保为非负整数。
+ */
 export function normalizeWritePackageState(
   value: unknown
 ): WritePackageStateLike {
@@ -727,6 +842,9 @@ export function normalizeWritePackageState(
   };
 }
 
+/**
+ * 序列化写作包组装状态。
+ */
 export function serializeWritePackageState(
   value: WritePackageStateLike
 ): Record<string, unknown> {
@@ -758,6 +876,11 @@ export function serializeWritePackageState(
   };
 }
 
+/**
+ * 解析论文质量检查状态。
+ *
+ * 从 unknown JSON 安全转换。记录 LaTeX 编译、页数预算、chktex 检查等结果。
+ */
 export function normalizePaperQcState(value: unknown): PaperQcStateLike {
   const record = asRecord(value) ?? {};
   return {
@@ -797,6 +920,9 @@ export function normalizePaperQcState(value: unknown): PaperQcStateLike {
   };
 }
 
+/**
+ * 序列化论文质量检查状态。
+ */
 export function serializePaperQcState(
   state: PaperQcStateLike
 ): Record<string, unknown> {
@@ -817,6 +943,11 @@ export function serializePaperQcState(
   };
 }
 
+/**
+ * 解析引用收集状态。
+ *
+ * 从 unknown JSON 安全转换。跟踪引用收集的候选、验证、可疑、幻觉计数。
+ */
 export function normalizeCitationCollectionState(
   value: unknown
 ): CitationCollectionStateLike {
@@ -850,6 +981,9 @@ export function normalizeCitationCollectionState(
   };
 }
 
+/**
+ * 序列化引用收集状态。
+ */
 export function serializeCitationCollectionState(
   state: CitationCollectionStateLike
 ): Record<string, unknown> {
@@ -866,6 +1000,11 @@ export function serializeCitationCollectionState(
   };
 }
 
+/**
+ * 解析图表质检状态。
+ *
+ * 从 unknown JSON 安全转换。检查图表重复、标题对齐、文本引用对齐。
+ */
 export function normalizeFigureQcState(value: unknown): FigureQcStateLike {
   const record = asRecord(value) ?? {};
   return {
@@ -896,6 +1035,9 @@ export function normalizeFigureQcState(value: unknown): FigureQcStateLike {
   };
 }
 
+/**
+ * 序列化图表质检状态。
+ */
 export function serializeFigureQcState(
   state: FigureQcStateLike
 ): Record<string, unknown> {
@@ -912,6 +1054,11 @@ export function serializeFigureQcState(
   };
 }
 
+/**
+ * 解析审查问题计数。
+ *
+ * 从 unknown JSON 安全转换，确保所有计数为非负整数。
+ */
 export function normalizeReviewIssueCounts(
   value: unknown
 ): ReviewIssueCountsLike {
@@ -924,6 +1071,9 @@ export function normalizeReviewIssueCounts(
   };
 }
 
+/**
+ * 序列化审查问题计数。
+ */
 export function serializeReviewIssueCounts(
   counts: ReviewIssueCountsLike
 ): Record<string, unknown> {
@@ -935,6 +1085,12 @@ export function serializeReviewIssueCounts(
   };
 }
 
+/**
+ * 解析单个审查问题。
+ *
+ * 从 unknown JSON 安全转换。如果未提供 issueId，自动生成唯一标识。
+ * 所有状态字段通过 normalizeStage 标准化。
+ */
 export function normalizeReviewIssueState(
   value: unknown
 ): ReviewIssueStateLike {
@@ -962,6 +1118,9 @@ export function normalizeReviewIssueState(
   };
 }
 
+/**
+ * 序列化单个审查问题。
+ */
 export function serializeReviewIssueState(
   issue: ReviewIssueStateLike
 ): Record<string, unknown> {
@@ -984,6 +1143,13 @@ export function serializeReviewIssueState(
   };
 }
 
+/**
+ * 解析审查问题跟踪器状态。
+ *
+ * 从 unknown JSON 安全转换。汇总所有审查问题——
+ * 开放计数、问题列表（递归 normalize）、分数记录。
+ * issueManifestPath 默认为 DEFAULT_REVIEW_ISSUES_PATH。
+ */
 export function normalizeReviewIssueTrackerState(
   value: unknown
 ): ReviewIssueTrackerStateLike {
@@ -1013,6 +1179,11 @@ export function normalizeReviewIssueTrackerState(
   };
 }
 
+/**
+ * 序列化审查问题跟踪器状态。
+ *
+ * 将 camelCase 内部表示转为 snake_case JSON，递归序列化每个问题。
+ */
 export function serializeReviewIssueTrackerState(
   state: ReviewIssueTrackerStateLike
 ): Record<string, unknown> {

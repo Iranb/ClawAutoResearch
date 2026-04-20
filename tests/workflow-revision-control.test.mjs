@@ -124,3 +124,48 @@ test("materializeRevisionControlState aggregates review session, issue tracker, 
     "reviewer/file-audits/_aggregate/review-before_stage_handoff-academic_writer/AGGREGATE_REVISION_PACKET.md"
   );
 });
+
+test("materializeRevisionControlState includes blocked paragraph logic audit as a revision source", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-paragraph-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "review",
+    paragraph_logic_audit: {
+      status: "blocked",
+      audit_json_path: "academic_writer/PARAGRAPH_LOGIC_AUDIT.json",
+      audit_report_path: "academic_writer/PARAGRAPH_LOGIC_AUDIT.md",
+      reverse_outline_path: "academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md",
+      blocking_issue_count: 2,
+      pending_reason: "Paragraph handoffs in introduction and discussion remain weak.",
+    },
+    paper_story_state: {
+      status: "ready",
+      revision_cycle_path: "academic_writer/PAPER_REVISION_STATE.json",
+    },
+    external_review_state: {
+      status: "missing",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: new Date().toISOString(),
+    hook_points: {},
+    hooks: {},
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "review",
+  });
+
+  assert.equal(result.state.status, "active");
+  assert.equal(
+    result.state.openSources.some((entry) => entry.sourceType === "paragraph_logic_audit"),
+    true
+  );
+  assert.equal(result.state.nextReviewerRole, "cross-reviewer");
+});

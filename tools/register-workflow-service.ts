@@ -51,6 +51,7 @@ import { ensureWorkflowDispatchMailboxMessage } from "./workflow-handoff-runtime
 import { maybeBroadcastWorkflowStatusUpdate } from "./stage-broadcast";
 import {
   aggregateGateReviewRound,
+  buildAutoGatePanelDiscussionPolicy,
   buildAutoGateReviewPrompt,
   createGateReviewRound,
   defaultGateReviewPanel,
@@ -59,6 +60,8 @@ import {
   materializeGateReviewPacket,
   parseGateReviewResult,
   readGateReviewStore,
+  resolveAutoGateIdForStage,
+  resolveAutoGateMode,
   saveGateReviewStore,
   type GateReviewAttempt,
   type GateReviewReviewerRole,
@@ -74,6 +77,7 @@ import {
   readCodeReviewStore,
   saveCodeReviewStore,
   type CodeReviewAttempt,
+  type CodeReviewReviewerRole,
   type CodeReviewResult,
 } from "./workflow-code-review.js";
 import {
@@ -86,8 +90,22 @@ import {
   readAutoModeDiscussionStore,
   saveAutoModeDiscussionStore,
   type AutoModeDiscussionAttempt as AutoModeDiscussionReviewAttempt,
+  type AutoModeDiscussionReviewerRole,
   type AutoModeDiscussionResult,
 } from "./workflow-auto-discussion";
+import {
+  aggregateWorkflowPanelDiscussionRound,
+  buildWorkflowPanelDiscussionPrompt,
+  materializeWorkflowPanelDiscussionState,
+  normalizeWorkflowPanelDiscussionPolicy,
+  parseWorkflowPanelDiscussionResult,
+  readWorkflowPanelDiscussionStore,
+  saveWorkflowPanelDiscussionStore,
+  type WorkflowPanelDiscussionAggregate,
+  type WorkflowPanelDiscussionPolicy,
+  type WorkflowPanelParticipantRole,
+  type WorkflowPanelDiscussionResult,
+} from "./workflow-panel-discussion";
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
@@ -246,6 +264,18 @@ type RuntimeSubagentApi = {
   }) => Promise<{ messages: unknown[] }>;
 };
 
+type WorkflowPanelRuntimeAttempt<Role extends string, Result> = {
+  reviewerRole: Role;
+  sessionKey: string;
+  runId: string | null;
+  queueKey?: string | null;
+  status: "pending" | "completed" | "error";
+  launchedAt: string;
+  completedAt: string | null;
+  error: string | null;
+  result: Result | null;
+};
+
 type IdleResearchLaunchAttempt = {
   launched: boolean;
   reason:
@@ -394,6 +424,32 @@ type AutoModeDiscussionAttempt = {
   fingerprint: string | null;
   stage: string | null;
   riskLevel: string | null;
+  status: string | null;
+  reviewCount: number;
+  roundsStarted: number;
+  recommendedOwner: DispatchableWorkflowRole | null;
+  actionItems: string[];
+  blockers: string[];
+  summary: string | null;
+  roundId: string | null;
+  packetPath: string | null;
+  resolved: boolean;
+};
+
+type WorkflowPanelDiscussionServiceAttempt = {
+  launched: boolean;
+  reason:
+    | "started"
+    | "reviewing"
+    | "updated"
+    | "resolved"
+    | "no_runtime_subagent"
+    | "round_limit_reached";
+  projectId: string | null;
+  projectRoot: string;
+  discussionId: string;
+  topic: string;
+  stage: string | null;
   status: string | null;
   reviewCount: number;
   roundsStarted: number;
@@ -571,6 +627,242 @@ function readAutoModeDiscussionAnnounceResult(params: {
     ...parsed,
     runId: readString(payload?.runId) ?? parsed.runId ?? params.attempt.runId,
   };
+}
+
+function readWorkflowPanelDiscussionAnnounceResult<Role extends string, Result>(params: {
+  entries: Array<{ announceId: string; payload: Record<string, unknown> | null }>;
+  attempt: WorkflowPanelRuntimeAttempt<Role, Result>;
+  announceIdPrefix: string;
+  parseResult: (text: string, reviewerRole: Role) => Result;
+  reviveStructuredResult?: (
+    value: Record<string, unknown>,
+    attempt: WorkflowPanelRuntimeAttempt<Role, Result>,
+    parsed: Result
+  ) => Result;
+}): Result | null {
+  if (!params.attempt.runId) {
+    return null;
+  }
+  const targetAnnounceId = `${params.announceIdPrefix}:${params.attempt.runId}:${params.attempt.reviewerRole}`;
+  const match = params.entries.find((entry) => entry.announceId === targetAnnounceId);
+  const payload = asRecord(match?.payload);
+  const result = asRecord(payload?.result);
+  if (result) {
+    const parsed = params.parseResult(
+      JSON.stringify(result),
+      params.attempt.reviewerRole
+    );
+    return params.reviveStructuredResult
+      ? params.reviveStructuredResult(result, params.attempt, parsed)
+      : parsed;
+  }
+  const rawText = readString(payload?.rawText ?? payload?.text);
+  if (!rawText) {
+    return null;
+  }
+  return params.parseResult(rawText, params.attempt.reviewerRole);
+}
+
+async function launchWorkflowPanelDiscussionAttempts<Role extends string, Result>(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  participants: Role[];
+  requesterSessionKey: string;
+  projectRoot: string;
+  projectId: string | null;
+  source: string;
+  family: string;
+  kind: string;
+  buildSessionKey: (reviewerRole: Role) => string;
+  buildQueueKey: (reviewerRole: Role) => string;
+  buildPrompt: (reviewerRole: Role) => string;
+  buildSummary: (reviewerRole: Role) => string;
+  extraSystemPrompt: string;
+  buildErrorResult: (reviewerRole: Role, errorMessage: string) => Result;
+}): Promise<Array<WorkflowPanelRuntimeAttempt<Role, Result>>> {
+  const attempts: Array<WorkflowPanelRuntimeAttempt<Role, Result>> = [];
+  for (const reviewerRole of params.participants) {
+    const sessionKey = params.buildSessionKey(reviewerRole);
+    const queueKey = params.buildQueueKey(reviewerRole);
+    try {
+      const started = await launchWorkflowNestedRunTransition({
+        runtimeSubagent: params.runtimeSubagent,
+        source: params.source,
+        queueKey,
+        ownerAgent: reviewerRole,
+        sessionKey,
+        requesterSessionKey: params.requesterSessionKey,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        family: params.family,
+        kind: params.kind,
+        summary: params.buildSummary(reviewerRole),
+        message: params.buildPrompt(reviewerRole),
+        idempotencyKey: queueKey,
+        extraSystemPrompt: params.extraSystemPrompt,
+      });
+      if (!started.launched || !started.runId) {
+        throw new Error(
+          started.error ??
+            `Workflow panel discussion reviewer ${String(reviewerRole)} failed to launch.`
+        );
+      }
+      attempts.push({
+        reviewerRole,
+        sessionKey,
+        runId: started.runId,
+        queueKey,
+        status: "pending",
+        launchedAt: nowIso(),
+        completedAt: null,
+        error: null,
+        result: null,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      attempts.push({
+        reviewerRole,
+        sessionKey,
+        runId: null,
+        queueKey,
+        status: "error",
+        launchedAt: nowIso(),
+        completedAt: nowIso(),
+        error: errorMessage,
+        result: params.buildErrorResult(reviewerRole, errorMessage),
+      });
+    }
+  }
+  return attempts;
+}
+
+async function pollWorkflowPanelDiscussionAttempts<Role extends string, Result>(params: {
+  runtimeSubagent: RuntimeSubagentApi;
+  attempts: Array<WorkflowPanelRuntimeAttempt<Role, Result>>;
+  projectRoot: string;
+  projectId: string | null;
+  announceIdPrefix: string;
+  parseResult: (text: string, reviewerRole: Role) => Result;
+  reviveStructuredResult?: (
+    value: Record<string, unknown>,
+    attempt: WorkflowPanelRuntimeAttempt<Role, Result>,
+    parsed: Result
+  ) => Result;
+  buildErrorResult: (reviewerRole: Role, errorMessage: string) => Result;
+  buildNoResponseResult: (reviewerRole: Role) => Result;
+  buildFailureSummary: (attempt: WorkflowPanelRuntimeAttempt<Role, Result>) => string;
+  buildCompletionSummary: (attempt: WorkflowPanelRuntimeAttempt<Role, Result>) => string;
+  buildFailurePayload: (
+    attempt: WorkflowPanelRuntimeAttempt<Role, Result>,
+    errorMessage: string,
+    result: Result
+  ) => Record<string, unknown>;
+  buildCompletionPayload: (
+    attempt: WorkflowPanelRuntimeAttempt<Role, Result>,
+    result: Result
+  ) => Record<string, unknown>;
+  hydratePendingAttempt?: (
+    attempt: WorkflowPanelRuntimeAttempt<Role, Result>
+  ) => Promise<WorkflowPanelRuntimeAttempt<Role, Result>>;
+}): Promise<Array<WorkflowPanelRuntimeAttempt<Role, Result>>> {
+  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
+  const nextAttempts: Array<WorkflowPanelRuntimeAttempt<Role, Result>> = [];
+
+  for (const originalAttempt of params.attempts) {
+    let attempt = originalAttempt;
+    if (attempt.status !== "pending") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (params.hydratePendingAttempt) {
+      attempt = await params.hydratePendingAttempt(attempt);
+      if (attempt.status !== "pending") {
+        nextAttempts.push(attempt);
+        continue;
+      }
+    }
+    const announcedResult = readWorkflowPanelDiscussionAnnounceResult({
+      entries: announceStore.entries,
+      attempt,
+      announceIdPrefix: params.announceIdPrefix,
+      parseResult: params.parseResult,
+      reviveStructuredResult: params.reviveStructuredResult,
+    });
+    if (announcedResult) {
+      nextAttempts.push({
+        ...attempt,
+        status: "completed",
+        completedAt: attempt.completedAt ?? nowIso(),
+        error: null,
+        result: announcedResult,
+      });
+      continue;
+    }
+    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    const waited = await params.runtimeSubagent.waitForRun({
+      runId: attempt.runId,
+      timeoutMs: 1,
+    });
+    if (waited.status === "timeout") {
+      nextAttempts.push(attempt);
+      continue;
+    }
+    if (waited.status === "error") {
+      const errorMessage = waited.error ?? "panel discussion run failed";
+      const result = params.buildErrorResult(attempt.reviewerRole, errorMessage);
+      const failedAttempt = {
+        ...attempt,
+        status: "error" as const,
+        completedAt: nowIso(),
+        error: errorMessage,
+        result,
+      };
+      await recordWorkflowAnnounceEvent({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        announceId: `${params.announceIdPrefix}:${attempt.runId}:${attempt.reviewerRole}`,
+        parentSessionKey: null,
+        childSessionKey: attempt.sessionKey,
+        deliveryMode: "internal",
+        summary: params.buildFailureSummary(failedAttempt),
+        payload: params.buildFailurePayload(failedAttempt, errorMessage, result),
+      });
+      nextAttempts.push(failedAttempt);
+      continue;
+    }
+    const messages = params.runtimeSubagent.getSessionMessages
+      ? await params.runtimeSubagent.getSessionMessages({
+          sessionKey: attempt.sessionKey,
+          limit: 20,
+        })
+      : { messages: [] };
+    const latestText = extractLatestAssistantText(messages.messages);
+    const result = latestText
+      ? params.parseResult(latestText, attempt.reviewerRole)
+      : params.buildNoResponseResult(attempt.reviewerRole);
+    const completedAttempt = {
+      ...attempt,
+      status: "completed" as const,
+      completedAt: nowIso(),
+      error: null,
+      result,
+    };
+    await recordWorkflowAnnounceEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      announceId: `${params.announceIdPrefix}:${attempt.runId}:${attempt.reviewerRole}`,
+      parentSessionKey: null,
+      childSessionKey: attempt.sessionKey,
+      deliveryMode: "internal",
+      summary: params.buildCompletionSummary(completedAttempt),
+      payload: params.buildCompletionPayload(completedAttempt, result),
+    });
+    nextAttempts.push(completedAttempt);
+  }
+
+  return nextAttempts;
 }
 
 function resolveWorkflowRequesterSessionKey(params: {
@@ -2626,131 +2918,60 @@ async function pollCodeReviewAttempts(params: {
   projectRoot: string;
   projectId: string | null;
 }) {
-  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
-  const nextAttempts: CodeReviewAttempt[] = [];
-
-  for (const attempt of params.attempts) {
-    if (attempt.status !== "pending") {
-      nextAttempts.push(attempt);
-      continue;
-    }
-
-    const announcedResult = readCodeReviewAnnounceResult({
-      entries: announceStore.entries,
-      attempt,
-    });
-    if (announcedResult) {
-      nextAttempts.push({
-        ...attempt,
-        status: "completed",
-        completedAt: attempt.completedAt ?? nowIso(),
-        error: null,
-        result: {
-          ...announcedResult,
-          runId: announcedResult.runId ?? attempt.runId,
-        },
-      });
-      continue;
-    }
-
-    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
-      nextAttempts.push(attempt);
-      continue;
-    }
-
-    const waited = await params.runtimeSubagent.waitForRun({
+  return pollWorkflowPanelDiscussionAttempts({
+    runtimeSubagent: params.runtimeSubagent,
+    attempts: params.attempts,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    announceIdPrefix: "code-review",
+    parseResult: (text, reviewerRole) =>
+      parseCodeReviewResult(text, reviewerRole as CodeReviewReviewerRole),
+    reviveStructuredResult: (value, attempt, parsed) => ({
+      ...parsed,
+      createdAt: readString(value.createdAt) ?? parsed.createdAt,
+      runId: readString(value.runId) ?? attempt.runId,
+      rawText: readString(value.rawText) ?? parsed.rawText,
+    }),
+    buildErrorResult: (reviewerRole, errorMessage) =>
+      parseCodeReviewResult(
+        JSON.stringify({
+          verdict: "block",
+          overallScore: 0,
+          criticalBlockers: [errorMessage],
+          summary: "Code innovation reviewer run failed before returning a valid response.",
+        }),
+        reviewerRole as CodeReviewReviewerRole
+      ),
+    buildNoResponseResult: (reviewerRole) =>
+      parseCodeReviewResult(
+        JSON.stringify({
+          verdict: "block",
+          overallScore: 0,
+          criticalBlockers: ["Reviewer returned no readable response."],
+          summary: "No readable code innovation review response was found in the session transcript.",
+        }),
+        reviewerRole as CodeReviewReviewerRole
+      ),
+    buildFailureSummary: (attempt) =>
+      `Code reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+    buildCompletionSummary: (attempt) =>
+      `Code reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+    buildFailurePayload: (attempt, errorMessage, result) => ({
+      reviewerRole: attempt.reviewerRole,
       runId: attempt.runId,
-      timeoutMs: 1,
-    });
-    if (waited.status === "timeout") {
-      nextAttempts.push(attempt);
-      continue;
-    }
-    if (waited.status === "error") {
-      const failedAttempt = {
-        ...attempt,
-        status: "error" as const,
-        completedAt: nowIso(),
-        error: waited.error ?? "code innovation review run failed",
-        result: parseCodeReviewResult(
-          JSON.stringify({
-            verdict: "block",
-            overallScore: 0,
-            criticalBlockers: [waited.error ?? "code innovation review run failed"],
-            summary:
-              "Code innovation reviewer run failed before returning a valid response.",
-          }),
-          attempt.reviewerRole
-        ),
-      };
-      await recordWorkflowAnnounceEvent({
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
-        announceId: `code-review:${attempt.runId}:${attempt.reviewerRole}`,
-        parentSessionKey: null,
-        childSessionKey: attempt.sessionKey,
-        deliveryMode: "internal",
-        summary: `Code reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
-        payload: {
-          reviewerRole: attempt.reviewerRole,
-          runId: attempt.runId,
-          status: "error",
-          error: failedAttempt.error,
-          completedAt: failedAttempt.completedAt,
-          result: failedAttempt.result,
-        },
-      });
-      nextAttempts.push(failedAttempt);
-      continue;
-    }
-
-    const messages = params.runtimeSubagent.getSessionMessages
-      ? await params.runtimeSubagent.getSessionMessages({
-          sessionKey: attempt.sessionKey,
-          limit: 20,
-        })
-      : { messages: [] };
-    const latestText = extractLatestAssistantText(messages.messages);
-    const completedAttempt = {
-      ...attempt,
-      status: "completed" as const,
-      completedAt: nowIso(),
-      error: null,
-      result: {
-        ...parseCodeReviewResult(
-          latestText ??
-            JSON.stringify({
-              verdict: "block",
-              overallScore: 0,
-              criticalBlockers: ["Reviewer returned no readable response."],
-              summary:
-                "No readable code innovation review response was found in the session transcript.",
-            }),
-          attempt.reviewerRole
-        ),
-        runId: attempt.runId,
-      },
-    };
-    await recordWorkflowAnnounceEvent({
-      projectRoot: params.projectRoot,
-      projectId: params.projectId,
-      announceId: `code-review:${attempt.runId}:${attempt.reviewerRole}`,
-      parentSessionKey: null,
-      childSessionKey: attempt.sessionKey,
-      deliveryMode: "internal",
-      summary: `Code reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
-      payload: {
-        reviewerRole: attempt.reviewerRole,
-        runId: attempt.runId,
-        status: "completed",
-        completedAt: completedAttempt.completedAt,
-        result: completedAttempt.result,
-      },
-    });
-    nextAttempts.push(completedAttempt);
-  }
-
-  return nextAttempts;
+      status: "error",
+      error: errorMessage,
+      completedAt: attempt.completedAt,
+      result,
+    }),
+    buildCompletionPayload: (attempt, result) => ({
+      reviewerRole: attempt.reviewerRole,
+      runId: attempt.runId,
+      status: "completed",
+      completedAt: attempt.completedAt,
+      result,
+    }),
+  });
 }
 
 async function pollAutoModeDiscussionAttempts(params: {
@@ -2760,30 +2981,77 @@ async function pollAutoModeDiscussionAttempts(params: {
   projectId: string | null;
   projectsRoot?: string | null;
 }) {
-  const announceStore = await readWorkflowAnnounceOutboxStore(params.projectRoot);
-  const nextAttempts: AutoModeDiscussionReviewAttempt[] = [];
-
-  for (const originalAttempt of params.attempts) {
-    let attempt = originalAttempt;
-    if (attempt.status !== "pending") {
-      nextAttempts.push(attempt);
-      continue;
-    }
-    if (!attempt.runId && attempt.queueKey) {
-      const activeQueuedRun = await getBackgroundWorkflowRunByQueueKey({
-        queueKey: attempt.queueKey,
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
-        projectsRoot: params.projectsRoot,
-        runtimeSubagent: params.runtimeSubagent,
-      });
-      if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
-        attempt = {
-          ...attempt,
-          sessionKey: activeQueuedRun.backgroundSessionKey,
-          runId: activeQueuedRun.runId,
-        };
-      } else {
+  return pollWorkflowPanelDiscussionAttempts({
+    runtimeSubagent: params.runtimeSubagent,
+    attempts: params.attempts,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    announceIdPrefix: "auto-discussion",
+    parseResult: (text, reviewerRole) =>
+      parseAutoModeDiscussionResult(text, reviewerRole as AutoModeDiscussionReviewerRole),
+    reviveStructuredResult: (value, attempt, parsed) => ({
+      ...parsed,
+      createdAt: readString(value.createdAt) ?? parsed.createdAt,
+      runId: readString(value.runId) ?? attempt.runId,
+      rawText: readString(value.rawText) ?? parsed.rawText,
+    }),
+    buildErrorResult: (reviewerRole, errorMessage) =>
+      parseAutoModeDiscussionResult(
+        JSON.stringify({
+          riskAssessment: "blocked",
+          confidence: 0,
+          recommendedOwner: "researcher",
+          blockers: [errorMessage],
+          summary: "Auto discussion run failed before returning a valid response.",
+        }),
+        reviewerRole as AutoModeDiscussionReviewerRole
+      ),
+    buildNoResponseResult: (reviewerRole) =>
+      parseAutoModeDiscussionResult(
+        JSON.stringify({
+          riskAssessment: "blocked",
+          confidence: 0,
+          recommendedOwner: "researcher",
+          blockers: ["Reviewer returned no readable response."],
+          summary: "No readable auto discussion response was found in the session transcript.",
+        }),
+        reviewerRole as AutoModeDiscussionReviewerRole
+      ),
+    buildFailureSummary: (attempt) =>
+      `Auto discussion reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+    buildCompletionSummary: (attempt) =>
+      `Auto discussion reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+    buildFailurePayload: (attempt, errorMessage, result) => ({
+      reviewerRole: attempt.reviewerRole,
+      runId: attempt.runId,
+      status: "error",
+      error: errorMessage,
+      completedAt: attempt.completedAt,
+      result,
+    }),
+    buildCompletionPayload: (attempt, result) => ({
+      reviewerRole: attempt.reviewerRole,
+      runId: attempt.runId,
+      status: "completed",
+      completedAt: attempt.completedAt,
+      result,
+    }),
+    hydratePendingAttempt: async (attempt) => {
+      if (!attempt.runId && attempt.queueKey) {
+        const activeQueuedRun = await getBackgroundWorkflowRunByQueueKey({
+          queueKey: attempt.queueKey,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          projectsRoot: params.projectsRoot,
+          runtimeSubagent: params.runtimeSubagent,
+        });
+        if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
+          return {
+            ...attempt,
+            sessionKey: activeQueuedRun.backgroundSessionKey,
+            runId: activeQueuedRun.runId,
+          };
+        }
         const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
           queueKey: attempt.queueKey,
           projectRoot: params.projectRoot,
@@ -2791,12 +3059,11 @@ async function pollAutoModeDiscussionAttempts(params: {
           projectsRoot: params.projectsRoot,
         });
         if (pendingQueueState.queued || pendingQueueState.active) {
-          nextAttempts.push(attempt);
-          continue;
+          return attempt;
         }
-        nextAttempts.push({
+        return {
           ...attempt,
-          status: "error" as const,
+          status: "error",
           completedAt: nowIso(),
           error: "Queued auto discussion reviewer run disappeared before launch.",
           result: parseAutoModeDiscussionResult(
@@ -2809,124 +3076,332 @@ async function pollAutoModeDiscussionAttempts(params: {
             }),
             attempt.reviewerRole
           ),
-        });
-        continue;
+        };
       }
-    }
-    const announcedResult = readAutoModeDiscussionAnnounceResult({
-      entries: announceStore.entries,
-      attempt,
-    });
-    if (announcedResult) {
-      nextAttempts.push({
-        ...attempt,
-        status: "completed",
-        completedAt: attempt.completedAt ?? nowIso(),
-        error: null,
-        result: {
-          ...announcedResult,
-          runId: announcedResult.runId ?? attempt.runId,
-        },
-      });
-      continue;
-    }
-    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
-      nextAttempts.push(attempt);
-      continue;
-    }
-    const waited = await params.runtimeSubagent.waitForRun({
-      runId: attempt.runId,
-      timeoutMs: 1,
-    });
-    if (waited.status === "timeout") {
-      nextAttempts.push(attempt);
-      continue;
-    }
-    if (waited.status === "error") {
-      const failedAttempt = {
-        ...attempt,
-        status: "error" as const,
-        completedAt: nowIso(),
-        error: waited.error ?? "auto discussion run failed",
-        result: parseAutoModeDiscussionResult(
-          JSON.stringify({
-            riskAssessment: "blocked",
-            confidence: 0,
-            recommendedOwner: "researcher",
-            blockers: [waited.error ?? "auto discussion run failed"],
-            summary: "Auto discussion run failed before returning a valid response.",
-          }),
-          attempt.reviewerRole
-        ),
-      };
-      await recordWorkflowAnnounceEvent({
+      return attempt;
+    },
+  });
+}
+
+export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  panelDiscussionPolicy: unknown;
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
+
+  return enqueueWorkflowTask({
+    key: resolveWorkflowCoordinationKey({
+      projectRoot: params.projectRoot,
+      workflowPolicy: params.workflowPolicy,
+      deps,
+    }),
+    label: "workflow_panel_discussion",
+    logger: params.logger,
+    task: async (): Promise<WorkflowPanelDiscussionServiceAttempt> => {
+      const policy = normalizeWorkflowPanelDiscussionPolicy(params.panelDiscussionPolicy);
+      const materialized = await materializeWorkflowPanelDiscussionState({
         projectRoot: params.projectRoot,
         projectId: params.projectId,
-        announceId: `auto-discussion:${attempt.runId}:${attempt.reviewerRole}`,
-        parentSessionKey: null,
-        childSessionKey: attempt.sessionKey,
-        deliveryMode: "internal",
-        summary: `Auto discussion reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
-        payload: {
-          reviewerRole: attempt.reviewerRole,
-          runId: attempt.runId,
-          status: "error",
-          error: failedAttempt.error,
-          completedAt: failedAttempt.completedAt,
-          result: failedAttempt.result,
-        },
+        policyLike: policy,
       });
-      nextAttempts.push(failedAttempt);
-      continue;
-    }
-    const messages = params.runtimeSubagent.getSessionMessages
-      ? await params.runtimeSubagent.getSessionMessages({
-          sessionKey: attempt.sessionKey,
-          limit: 20,
-        })
-      : { messages: [] };
-    const latestText = extractLatestAssistantText(messages.messages);
-    const completedAttempt = {
-      ...attempt,
-      status: "completed" as const,
-      completedAt: nowIso(),
-      error: null,
-      result: {
-        ...parseAutoModeDiscussionResult(
-          latestText ??
+      const store = await readWorkflowPanelDiscussionStore(
+        params.projectRoot,
+        policy.discussionId
+      );
+      const currentRound = store.currentRound;
+      const roundsStarted =
+        store.roundsStartedByFingerprint[materialized.packetFingerprint] ?? 0;
+
+      if (
+        currentRound?.packetFingerprint === materialized.packetFingerprint &&
+        currentRound.status === "resolved"
+      ) {
+        return {
+          launched: false,
+          reason: "resolved",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          discussionId: policy.discussionId,
+          topic: policy.topic,
+          stage: currentRound.stage,
+          status: currentRound.status,
+          reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: currentRound.aggregate?.recommendedOwner ?? null,
+          actionItems: currentRound.aggregate?.actionItems ?? [],
+          blockers: currentRound.aggregate?.blockers ?? [],
+          summary: currentRound.aggregate?.summary ?? null,
+          roundId: currentRound.roundId,
+          packetPath: currentRound.packetPath,
+          resolved: true,
+        };
+      }
+
+      if (
+        !materialized.createdRound &&
+        currentRound?.packetFingerprint === materialized.packetFingerprint &&
+        currentRound.status === "reviewing"
+      ) {
+        if (!params.runtimeSubagent) {
+          return {
+            launched: false,
+            reason: "no_runtime_subagent",
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            discussionId: policy.discussionId,
+            topic: policy.topic,
+            stage: currentRound.stage,
+            status: currentRound.status,
+            reviewCount: currentRound.aggregate?.reviewCount ?? 0,
+            roundsStarted,
+            recommendedOwner: currentRound.aggregate?.recommendedOwner ?? null,
+            actionItems: currentRound.aggregate?.actionItems ?? [],
+            blockers: currentRound.aggregate?.blockers ?? [],
+            summary: currentRound.aggregate?.summary ?? null,
+            roundId: currentRound.roundId,
+            packetPath: currentRound.packetPath,
+            resolved: false,
+          };
+        }
+
+        const attempts = await pollWorkflowPanelDiscussionAttempts({
+          runtimeSubagent: params.runtimeSubagent,
+          attempts: currentRound.attempts,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          announceIdPrefix: `panel-discussion:${policy.discussionId}`,
+          parseResult: (text, reviewerRole) =>
+            parseWorkflowPanelDiscussionResult(
+              text,
+              reviewerRole as WorkflowPanelParticipantRole
+            ),
+          reviveStructuredResult: (value, attempt, parsed) => ({
+            ...parsed,
+            createdAt: readString(value.createdAt) ?? parsed.createdAt,
+            runId: readString(value.runId) ?? attempt.runId,
+            rawText: readString(value.rawText) ?? parsed.rawText,
+          }),
+          buildErrorResult: (reviewerRole, errorMessage) =>
+            parseWorkflowPanelDiscussionResult(
+              JSON.stringify({
+                decision: policy.blockedDecisions[0] ?? "blocked",
+                confidence: 0,
+                recommendedOwner: "researcher",
+                blockers: [errorMessage],
+                summary: "Panel discussion run failed before returning a valid response.",
+              }),
+              reviewerRole as WorkflowPanelParticipantRole
+            ),
+          buildNoResponseResult: (reviewerRole) =>
+            parseWorkflowPanelDiscussionResult(
+              JSON.stringify({
+                decision: policy.blockedDecisions[0] ?? "blocked",
+                confidence: 0,
+                recommendedOwner: "researcher",
+                blockers: ["Reviewer returned no readable response."],
+                summary: "No readable panel discussion response was found in the session transcript.",
+              }),
+              reviewerRole as WorkflowPanelParticipantRole
+            ),
+          buildFailureSummary: (attempt) =>
+            `Panel discussion reviewer ${attempt.reviewerRole} failed ${attempt.runId}.`,
+          buildCompletionSummary: (attempt) =>
+            `Panel discussion reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
+          buildFailurePayload: (attempt, errorMessage, result) => ({
+            reviewerRole: attempt.reviewerRole,
+            runId: attempt.runId,
+            status: "error",
+            error: errorMessage,
+            completedAt: attempt.completedAt,
+            result,
+          }),
+          buildCompletionPayload: (attempt, result) => ({
+            reviewerRole: attempt.reviewerRole,
+            runId: attempt.runId,
+            status: "completed",
+            completedAt: attempt.completedAt,
+            result,
+          }),
+        });
+
+        const nextRound = {
+          ...currentRound,
+          attempts,
+          updatedAt: nowIso(),
+        };
+        nextRound.aggregate = aggregateWorkflowPanelDiscussionRound({
+          round: nextRound,
+          policy,
+        });
+        nextRound.status = nextRound.aggregate.status;
+        const nextStore = {
+          ...store,
+          updatedAt: nowIso(),
+          currentRound: nextRound,
+        };
+        await saveWorkflowPanelDiscussionStore(
+          params.projectRoot,
+          policy.discussionId,
+          nextStore
+        );
+        return {
+          launched: false,
+          reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          discussionId: policy.discussionId,
+          topic: policy.topic,
+          stage: nextRound.stage,
+          status: nextRound.status,
+          reviewCount: nextRound.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: nextRound.aggregate?.recommendedOwner ?? null,
+          actionItems: nextRound.aggregate?.actionItems ?? [],
+          blockers: nextRound.aggregate?.blockers ?? [],
+          summary: nextRound.aggregate?.summary ?? null,
+          roundId: nextRound.roundId,
+          packetPath: nextRound.packetPath,
+          resolved: nextRound.status === "resolved",
+        };
+      }
+
+      if (roundsStarted >= policy.maxRounds) {
+        return {
+          launched: false,
+          reason: "round_limit_reached",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          discussionId: policy.discussionId,
+          topic: policy.topic,
+          stage: currentRound?.stage ?? policy.stage,
+          status: currentRound?.status ?? "blocked",
+          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
+          roundsStarted,
+          recommendedOwner: currentRound?.aggregate?.recommendedOwner ?? null,
+          actionItems: currentRound?.aggregate?.actionItems ?? [],
+          blockers: currentRound?.aggregate?.blockers ?? [],
+          summary: currentRound?.aggregate?.summary ?? null,
+          roundId: currentRound?.roundId ?? null,
+          packetPath: currentRound?.packetPath ?? materialized.packetPath,
+          resolved: false,
+        };
+      }
+
+      if (!params.runtimeSubagent) {
+        return {
+          launched: false,
+          reason: "no_runtime_subagent",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          discussionId: policy.discussionId,
+          topic: policy.topic,
+          stage: policy.stage,
+          status: null,
+          reviewCount: 0,
+          roundsStarted,
+          recommendedOwner: null,
+          actionItems: [],
+          blockers: [],
+          summary: null,
+          roundId: null,
+          packetPath: materialized.packetPath,
+          resolved: false,
+        };
+      }
+
+      const requesterSessionKey =
+        resolveWorkflowRequesterSessionKey({
+          projectRoot: params.projectRoot,
+          workflowPolicy: params.workflowPolicy,
+          deps,
+        }) ?? "agent:researcher:main";
+      const attempts = await launchWorkflowPanelDiscussionAttempts({
+        runtimeSubagent: params.runtimeSubagent,
+        participants: policy.participants,
+        requesterSessionKey,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        source: "workflow_panel_discussion",
+        family: "review",
+        kind: "workflow_panel_discussion",
+        buildSessionKey: (reviewerRole) =>
+          deriveAgentSessionKeyForRole({
+            requesterSessionKey,
+            targetRole: reviewerRole,
+          }),
+        buildQueueKey: (reviewerRole) =>
+          slugifyForIdempotency(
+            `openclaw-research:panel-discussion:${policy.discussionId}:${params.projectId ?? path.basename(params.projectRoot)}:${materialized.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
+          ),
+        buildPrompt: (reviewerRole) =>
+          buildWorkflowPanelDiscussionPrompt({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            reviewerRole,
+            policy,
+            packetPath: materialized.packetPath,
+            packetJsonPath: materialized.packetJsonPath,
+          }),
+        buildSummary: (reviewerRole) =>
+          `Run panel discussion ${policy.discussionId} for ${reviewerRole}.`,
+        extraSystemPrompt:
+          "Workflow panel discussion reviewer.\n" +
+          "Review only the supplied panel discussion packet and return the required JSON schema.",
+        buildErrorResult: (reviewerRole, errorMessage) =>
+          parseWorkflowPanelDiscussionResult(
             JSON.stringify({
-              riskAssessment: "blocked",
+              decision: policy.blockedDecisions[0] ?? "blocked",
               confidence: 0,
               recommendedOwner: "researcher",
-              blockers: ["Reviewer returned no readable response."],
-              summary:
-                "No readable auto discussion response was found in the session transcript.",
+              blockers: [errorMessage],
+              summary: "Panel discussion reviewer run failed to start.",
             }),
-          attempt.reviewerRole
-        ),
-        runId: attempt.runId,
-      },
-    };
-    await recordWorkflowAnnounceEvent({
-      projectRoot: params.projectRoot,
-      projectId: params.projectId,
-      announceId: `auto-discussion:${attempt.runId}:${attempt.reviewerRole}`,
-      parentSessionKey: null,
-      childSessionKey: attempt.sessionKey,
-      deliveryMode: "internal",
-      summary: `Auto discussion reviewer ${attempt.reviewerRole} completed ${attempt.runId}.`,
-      payload: {
-        reviewerRole: attempt.reviewerRole,
-        runId: attempt.runId,
-        status: "completed",
-        completedAt: completedAttempt.completedAt,
-        result: completedAttempt.result,
-      },
-    });
-    nextAttempts.push(completedAttempt);
-  }
+            reviewerRole
+          ),
+      });
 
-  return nextAttempts;
+      const nextRound = {
+        ...materialized.currentRound,
+        attempts,
+        updatedAt: nowIso(),
+      };
+      const nextStore = {
+        ...materialized.store,
+        updatedAt: nowIso(),
+        currentRound: nextRound,
+      };
+      await saveWorkflowPanelDiscussionStore(
+        params.projectRoot,
+        policy.discussionId,
+        nextStore
+      );
+      return {
+        launched: true,
+        reason: "started",
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+        discussionId: policy.discussionId,
+        topic: policy.topic,
+        stage: policy.stage,
+        status: nextRound.status,
+        reviewCount: 0,
+        roundsStarted:
+          nextStore.roundsStartedByFingerprint[materialized.packetFingerprint] ?? roundsStarted,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary: null,
+        roundId: nextRound.roundId,
+        packetPath: nextRound.packetPath,
+        resolved: false,
+      };
+    },
+  });
 }
 
 function buildAutoMitigationLaunchKey(params: {
@@ -3410,84 +3885,54 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         });
       }
 
-      const requesterSessionKey = resolveWorkflowRequesterSessionKey({
+      const requesterSessionKey =
+        resolveWorkflowRequesterSessionKey({
+          projectRoot: params.projectRoot,
+          workflowPolicy: params.workflowPolicy,
+          deps,
+        }) ?? "agent:researcher:main";
+      const attempts = await launchWorkflowPanelDiscussionAttempts({
+        runtimeSubagent: params.runtimeSubagent,
+        participants: defaultCodeReviewPanel(),
+        requesterSessionKey,
         projectRoot: params.projectRoot,
-        workflowPolicy: params.workflowPolicy,
-        deps,
-      });
-      const attempts: CodeReviewAttempt[] = [];
-      for (const reviewerRole of defaultCodeReviewPanel()) {
-        const sessionKey = deriveAgentSessionKeyForRole({
-          requesterSessionKey: requesterSessionKey ?? undefined,
-          targetRole: reviewerRole,
-        });
-        const queueKey = slugifyForIdempotency(
-          `openclaw-research:auto-code-review:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
-        );
-        try {
-          const started = await launchWorkflowNestedRunTransition({
-            runtimeSubagent: params.runtimeSubagent,
-            source: "workflow_auto_code_review",
-            queueKey,
-            ownerAgent: reviewerRole,
-            sessionKey,
-            requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
+        projectId: params.projectId,
+        source: "workflow_auto_code_review",
+        family: "review",
+        kind: "workflow_auto_code_review",
+        buildSessionKey: (reviewerRole) =>
+          deriveAgentSessionKeyForRole({
+            requesterSessionKey,
+            targetRole: reviewerRole,
+          }),
+        buildQueueKey: (reviewerRole) =>
+          slugifyForIdempotency(
+            `openclaw-research:auto-code-review:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}`
+          ),
+        buildPrompt: (reviewerRole) =>
+          buildCodeReviewPrompt({
             projectRoot: params.projectRoot,
             projectId: params.projectId,
-            family: "review",
-            kind: "workflow_auto_code_review",
-            summary: `Run code innovation review for ${reviewerRole}.`,
-            message: buildCodeReviewPrompt({
-              projectRoot: params.projectRoot,
-              projectId: params.projectId,
-              reviewerRole,
-              packetPath: packet.packetPath,
-              packetJsonPath: packet.packetJsonPath,
+            reviewerRole,
+            packetPath: packet.packetPath,
+            packetJsonPath: packet.packetJsonPath,
+          }),
+        buildSummary: (reviewerRole) =>
+          `Run code innovation review for ${reviewerRole}.`,
+        extraSystemPrompt:
+          "Workflow code innovation reviewer.\n" +
+          "Review only the supplied code review packet and return the required JSON schema.",
+        buildErrorResult: (reviewerRole, errorMessage) =>
+          parseCodeReviewResult(
+            JSON.stringify({
+              verdict: "block",
+              overallScore: 0,
+              criticalBlockers: [errorMessage],
+              summary: "Code reviewer run failed to start.",
             }),
-            idempotencyKey: queueKey,
-            extraSystemPrompt:
-              "Workflow code innovation reviewer.\n" +
-              "Review only the supplied code review packet and return the required JSON schema.",
-          });
-          if (!started.launched || !started.runId) {
-            throw new Error(
-              started.error ??
-                "Code innovation reviewer run failed to launch through the workflow runtime."
-            );
-          }
-          attempts.push({
-            reviewerRole,
-            sessionKey,
-            runId: started.runId,
-            status: "pending",
-            launchedAt: nowIso(),
-            completedAt: null,
-            error: null,
-            result: null,
-          });
-        } catch (error) {
-          attempts.push({
-            reviewerRole,
-            sessionKey,
-            runId: null,
-            status: "error",
-            launchedAt: nowIso(),
-            completedAt: nowIso(),
-            error: error instanceof Error ? error.message : String(error),
-            result: parseCodeReviewResult(
-              JSON.stringify({
-                verdict: "block",
-                overallScore: 0,
-                criticalBlockers: [
-                  error instanceof Error ? error.message : String(error),
-                ],
-                summary: "Code reviewer run failed to start.",
-              }),
-              reviewerRole
-            ),
-          });
-        }
-      }
+            reviewerRole
+          ),
+      });
 
       const round = createCodeReviewRound({
         stage: "code",
@@ -3584,19 +4029,137 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           approved: false,
         });
       }
-      if (
-        params.autoIteratorResult.stageAfter !== "submit" ||
-        params.autoIteratorResult.gateBlocking !== true
-      ) {
+      const gateStage = params.autoIteratorResult.stageAfter ?? null;
+      const gateId = resolveAutoGateIdForStage(gateStage);
+      const gateMode = resolveAutoGateMode({
+        stage: gateStage,
+        autoGate: params.workflowPolicy.autoGate,
+      });
+      if (!gateId || params.autoIteratorResult.gateBlocking !== true) {
         return finish({
           launched: false,
           reason: "not_submit_gate",
           projectId: params.projectId,
           projectRoot: params.projectRoot,
-          gateId: null,
-          stage: params.autoIteratorResult.stageAfter ?? null,
+          gateId: gateId ?? null,
+          stage: gateStage,
           status: null,
           reviewCount: 0,
+          approved: false,
+        });
+      }
+      if (gateMode === "panel_gate") {
+        const gatePacket = await materializeGateReviewPacket({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          stage: gateStage,
+          gateId,
+        });
+        const panelAttempt = await maybeAdvanceWorkflowPanelDiscussionForProject({
+          runtimeSubagent: params.runtimeSubagent,
+          workflowPolicy: params.workflowPolicy,
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          logger: params.logger,
+          deps: params.deps,
+          panelDiscussionPolicy: buildAutoGatePanelDiscussionPolicy({
+            projectRoot: params.projectRoot,
+            gateId,
+            stage: gateStage,
+            autoGate: params.workflowPolicy.autoGate,
+            packetPath: gatePacket.packetPath,
+            packetJsonPath: gatePacket.packetJsonPath,
+            reviewedArtifacts: gatePacket.reviewedArtifacts,
+          }),
+        });
+        const panelStore = await readWorkflowPanelDiscussionStore(
+          params.projectRoot,
+          `gate-review-${gateId.toLowerCase()}`
+        );
+        const panelRound = panelStore.currentRound;
+        if (panelRound) {
+          const attempts: GateReviewAttempt[] = panelRound.attempts.map((attempt) => ({
+            reviewerRole: attempt.reviewerRole as GateReviewReviewerRole,
+            sessionKey: attempt.sessionKey,
+            runId: attempt.runId,
+            status: attempt.status,
+            launchedAt: attempt.launchedAt,
+            completedAt: attempt.completedAt,
+            error: attempt.error,
+            result: attempt.result
+              ? {
+                  ...parseGateReviewResult(
+                    attempt.result.rawText ??
+                      JSON.stringify({
+                        verdict: attempt.result.decision,
+                        overallScore: attempt.result.confidence,
+                        criticalBlockers: attempt.result.blockers,
+                        majorIssues: attempt.result.actionItems,
+                        summary: attempt.result.summary,
+                      }),
+                    attempt.reviewerRole as GateReviewReviewerRole
+                  ),
+                  runId: attempt.result.runId ?? attempt.runId,
+                }
+              : null,
+          }));
+          const gateRound = createGateReviewRound({
+            gateId,
+            stage: gateStage,
+            packetPath: gatePacket.packetPath,
+            packetJsonPath: gatePacket.packetJsonPath,
+            packetFingerprint: gatePacket.packetFingerprint,
+            attempts,
+          });
+          gateRound.aggregate = aggregateGateReviewRound(
+            gateRound,
+            params.workflowPolicy.autoGate
+          );
+          gateRound.status = gateRound.aggregate.status;
+          await saveGateReviewStore(params.projectRoot, {
+            schemaVersion: 1,
+            updatedAt: nowIso(),
+            roundsStarted:
+              panelStore.roundsStartedByFingerprint[panelRound.packetFingerprint] ?? 1,
+            currentRound: gateRound,
+          });
+          return finish({
+            launched: panelAttempt.launched,
+            reason:
+              gateRound.status === "approved"
+                ? "updated"
+                : panelAttempt.reason === "started" || panelAttempt.reason === "reviewing"
+                  ? panelAttempt.reason
+                  : panelAttempt.reason === "resolved"
+                    ? "updated"
+                    : panelAttempt.reason === "round_limit_reached"
+                      ? "already_rejected"
+                  : gateRound.status === "rejected"
+                    ? "updated"
+                    : panelAttempt.reason,
+            projectId: params.projectId,
+            projectRoot: params.projectRoot,
+            gateId,
+            stage: gateStage,
+            status: gateRound.status,
+            reviewCount: gateRound.aggregate?.reviewCount ?? 0,
+            approved: gateRound.aggregate?.approved === true,
+          });
+        }
+        return finish({
+          launched: panelAttempt.launched,
+          reason:
+            panelAttempt.reason === "resolved"
+              ? "updated"
+              : panelAttempt.reason === "round_limit_reached"
+                ? "already_rejected"
+                : panelAttempt.reason,
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId,
+          stage: gateStage,
+          status: panelAttempt.status,
+          reviewCount: panelAttempt.reviewCount,
           approved: false,
         });
       }
@@ -3604,7 +4167,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
         path.join(params.projectRoot, "PROJECT_MANIFEST.json")
       );
       const scoreEvaluation = evaluateAutoGate(
-        "submit",
+        gateStage,
         manifest,
         params.workflowPolicy.autoGate
       );
@@ -3614,8 +4177,8 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           reason: "already_rejected",
           projectId: params.projectId,
           projectRoot: params.projectRoot,
-          gateId: "GATE-5",
-          stage: "submit",
+          gateId,
+          stage: gateStage,
           status: "rejected",
           reviewCount: scoreEvaluation.scoreRecordCount,
           approved: false,
@@ -3626,8 +4189,8 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
         reason: "manual_confirmation_required",
         projectId: params.projectId,
         projectRoot: params.projectRoot,
-        gateId: "GATE-5",
-        stage: "submit",
+        gateId,
+        stage: gateStage,
         status:
           scoreEvaluation.scoreRecordCount > 0 && scoreEvaluation.pass
             ? "thresholds_passed"

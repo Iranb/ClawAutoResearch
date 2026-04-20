@@ -1,3 +1,15 @@
+/**
+ * 研究循环状态类型定义。
+ *
+ * 定义空闲研究循环（Idle Research）、头脑风暴循环（Brainstorm Cycle）、
+ * 创新反思（Innovation Reflection）、创意 Top3 快照的状态结构。
+ *
+ * 空闲研究循环是后台任务——Researcher 空闲时自动运行，持续收集文献、
+ * 更新知识图谱。cooldownMinutes 控制运行频率，防止过度调用 API。
+ *
+ * 头脑风暴循环是创意生成流程——多轮选项生成、评估、选择。
+ * 每个 round 有多个 options，最终选出一个最佳方向。
+ */
 import {
   asRecord,
   asStringArray,
@@ -33,6 +45,13 @@ const DEFAULT_BRAINSTORM_THEORY_BRIEF_PATH =
 const DEFAULT_BRAINSTORM_STORYLINE_BRIEF_PATH =
   `${DEFAULT_BRAINSTORM_CYCLE_DIR}/STORYLINE_BRIEF.json`;
 
+/**
+ * 空闲研究状态。
+ *
+ * 后台文献收集任务——当 Researcher 空闲时自动运行。
+ * maxPapersPerCycle 控制每轮收集论文数量，cooldownMinutes 控制冷却时间。
+ * refreshGraphOnNewCorePapers 决定是否在发现新核心论文时刷新知识图谱。
+ */
 type IdleResearchStateLike = {
   enabled: boolean;
   topic: string | null;
@@ -52,6 +71,12 @@ type IdleResearchStateLike = {
   lastRoundNewCorePapers: number;
 };
 
+/**
+ * 创意 Top3 快照。
+ *
+ * 记录创意排名前 3 的方向——选中的方向 ID、轨道 ID、
+ * 排名历史、研究提案路径。用于跟踪创意排序的变化。
+ */
 type IdeationTop3SnapshotLike = {
   refreshedAt: string | null;
   selectedDirectionId: string | null;
@@ -62,6 +87,13 @@ type IdeationTop3SnapshotLike = {
   researchProposalPath: string | null;
 };
 
+/**
+ * 创新反思状态。
+ *
+ * 实验完成后的反思环节——记录已反思的实验 ID、
+ * 最近反思时间、最新的创意 Top3 快照。
+ * requiredAfterExperiments 控制是否必须在实验后进行反思。
+ */
 type InnovationReflectionStateLike = {
   requiredAfterExperiments: boolean;
   status: string;
@@ -73,6 +105,11 @@ type InnovationReflectionStateLike = {
   latestIdeationTop3: IdeationTop3SnapshotLike | null;
 };
 
+/**
+ * 头脑风暴循环中的单个选项。
+ *
+ * 记录一个创意选项的 ID、标题、摘要、评分、状态、裁决。
+ */
 type BrainstormCycleOptionStateLike = {
   optionId: string;
   title: string | null;
@@ -82,6 +119,11 @@ type BrainstormCycleOptionStateLike = {
   verdict: string | null;
 };
 
+/**
+ * 头脑风暴循环中的一轮。
+ *
+ * 每轮有一个焦点（focus），包含多个选项。多轮循环逐步收敛到最佳方向。
+ */
 type BrainstormCycleRoundStateLike = {
   roundId: string;
   label: string | null;
@@ -90,6 +132,16 @@ type BrainstormCycleRoundStateLike = {
   options: BrainstormCycleOptionStateLike[];
 };
 
+/**
+ * 头脑风暴循环完整状态。
+ *
+ * 记录整个创意生成流程——多轮选项、选中的方向、所有产物路径
+ * （TOPIC_SUMMARY、RESEARCH_BRIEF、LOGIC_CHAIN、EVIDENCE_CHAIN、
+ * REASONING_TRACE、QUESTION_PACKET、WORKING_MEMORY、SYNTHESIS_PACKET 等）。
+ *
+ * provider 是创意生成的提供者（默认 workflow_core_brainstorm），
+ * contractVersion 用于跟踪合约版本变化。
+ */
 type BrainstormCycleStateLike = {
   status: string;
   mode: string | null;
@@ -126,6 +178,9 @@ type BrainstormCycleStateLike = {
   pendingReason: string | null;
 };
 
+/**
+ * 解析空闲研究状态。
+ */
 export function normalizeIdleResearchState(
   value: unknown
 ): IdleResearchStateLike {
@@ -185,6 +240,12 @@ export function normalizeIdleResearchState(
   };
 }
 
+/**
+ * 计算下次空闲研究运行时间。
+ *
+ * 基于 lastRunAt + cooldownMinutes 计算。如果 cooldownMinutes <= 0 或没有上次运行时间，
+ * 返回 lastRunAt（表示立即可以运行）。
+ */
 export function computeIdleResearchNextDueAt(
   state: IdleResearchStateLike
 ): string | null {
@@ -198,6 +259,12 @@ export function computeIdleResearchNextDueAt(
   return new Date(lastRunMs + state.cooldownMinutes * 60 * 1000).toISOString();
 }
 
+/**
+ * 检查空闲研究是否到期。
+ *
+ * 到期条件：已启用 + 有主题 + 未运行中 + （没有上次运行时间或已超过冷却时间）。
+ * 用于调度器判断是否应该启动下一轮后台文献收集。
+ */
 export function isIdleResearchDue(state: IdleResearchStateLike): boolean {
   if (!state.enabled || !state.topic) {
     return false;
@@ -215,6 +282,9 @@ export function isIdleResearchDue(state: IdleResearchStateLike): boolean {
   return Date.now() >= Date.parse(nextDueAt);
 }
 
+/**
+ * 序列化空闲研究状态。
+ */
 export function serializeIdleResearchState(
   state: IdleResearchStateLike
 ): Record<string, unknown> {
@@ -238,6 +308,9 @@ export function serializeIdleResearchState(
   };
 }
 
+/**
+ * 解析创意 Top3 快照。
+ */
 export function normalizeIdeationTop3Snapshot(
   value: unknown
 ): IdeationTop3SnapshotLike | null {
@@ -267,6 +340,9 @@ export function normalizeIdeationTop3Snapshot(
   };
 }
 
+/**
+ * 序列化创意 Top3 快照。
+ */
 export function serializeIdeationTop3Snapshot(
   state: IdeationTop3SnapshotLike | null
 ): Record<string, unknown> | null {
@@ -284,6 +360,9 @@ export function serializeIdeationTop3Snapshot(
   };
 }
 
+/**
+ * 解析创新反思状态。
+ */
 export function normalizeInnovationReflectionState(
   value: unknown
 ): InnovationReflectionStateLike {
@@ -317,6 +396,9 @@ export function normalizeInnovationReflectionState(
   };
 }
 
+/**
+ * 序列化创新反思状态。
+ */
 export function serializeInnovationReflectionState(
   state: InnovationReflectionStateLike
 ): Record<string, unknown> {
@@ -333,6 +415,10 @@ export function serializeInnovationReflectionState(
   };
 }
 
+/**
+ * 解析头脑风暴选项状态。
+ * optionId 必须存在，否则返回 null（无效选项）。
+ */
 export function normalizeBrainstormCycleOptionState(
   value: unknown
 ): BrainstormCycleOptionStateLike | null {
@@ -356,6 +442,9 @@ export function normalizeBrainstormCycleOptionState(
   };
 }
 
+/**
+ * 序列化头脑风暴选项状态。
+ */
 export function serializeBrainstormCycleOptionState(
   state: BrainstormCycleOptionStateLike
 ): Record<string, unknown> {
@@ -369,6 +458,10 @@ export function serializeBrainstormCycleOptionState(
   };
 }
 
+/**
+ * 解析头脑风暴轮次状态。
+ * roundId 必须存在，否则返回 null。options 递归 normalize。
+ */
 export function normalizeBrainstormCycleRoundState(
   value: unknown
 ): BrainstormCycleRoundStateLike | null {
@@ -396,6 +489,9 @@ export function normalizeBrainstormCycleRoundState(
   };
 }
 
+/**
+ * 序列化头脑风暴轮次状态。
+ */
 export function serializeBrainstormCycleRoundState(
   state: BrainstormCycleRoundStateLike
 ): Record<string, unknown> {
@@ -410,6 +506,11 @@ export function serializeBrainstormCycleRoundState(
   };
 }
 
+/**
+ * 解析头脑风暴循环完整状态。
+ * 所有产物路径使用默认路径（如果未配置）。
+ * provider 默认为 workflow_core_brainstorm，contractVersion 默认为 1。
+ */
 export function normalizeBrainstormCycleState(
   value: unknown
 ): BrainstormCycleStateLike {
@@ -505,6 +606,9 @@ export function normalizeBrainstormCycleState(
   };
 }
 
+/**
+ * 序列化头脑风暴循环状态。
+ */
 export function serializeBrainstormCycleState(
   state: BrainstormCycleStateLike
 ): Record<string, unknown> {

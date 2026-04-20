@@ -177,6 +177,7 @@ Reviewer 先对当前 evidence packet 做一次本地反思：
 ```
 
 - 再把 reject-first simulation、novelty attack、unsupported-claim audit、reverse outline、figure/table QC、limitation audit 写成 durable artifacts，而不是只留在评论里
+- 对段落之间的逻辑不要只给“flow 不好”这种泛评价；先读 `academic_writer/PARAGRAPH_LOGIC_AUDIT.md` 和 `academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md`，再把具体断裂点写成 bounded revise items
 
 在正式汇总结论前，必须从三个镜头做判断：
 

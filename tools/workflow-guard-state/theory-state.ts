@@ -1,3 +1,19 @@
+/**
+ * 理论状态（Theory State）类型定义。
+ *
+ * 管理理论支持和形式化推导的状态——
+ * TheoryObjectPacket 定义定理/引理的完整信息（statement、result、assumptions、
+ * derivation outline、evidence pointers、caveats），
+ * TheoryStateFile 管理所有 theorem candidates 和 lemma packets，
+ * TheorySupportState 是运行时摘要（计数、就绪状态、待解决原因）。
+ *
+ * 为什么需要理论状态？因为论文中的理论推导需要严格管理——
+ * 每个定理需要明确的假设、推导大纲、证据指针、注意事项，
+ * 并且需要决定哪些内容放在正文、哪些放在附录。
+ *
+ * buildTheoryAppendixPlanMarkdown 和 buildTheoryAppendixSectionDraft
+ * 用于生成理论附录的 Markdown 内容。
+ */
 import {
   asRecord,
   asStringArray,
@@ -69,6 +85,12 @@ type TheorySupportStateLike = {
   pendingReason: string | null;
 };
 
+/**
+ * 解析理论对象包（定理/引理）。
+ *
+ * statement 必须存在，否则返回 null（无效的理论对象）。
+ * packetId 如果未提供则自动生成。
+ */
 export function normalizeTheoryObjectPacket(
   value: unknown
 ): TheoryObjectPacketLike | null {
@@ -113,6 +135,9 @@ export function normalizeTheoryObjectPacket(
   };
 }
 
+/**
+ * 序列化理论对象包。
+ */
 export function serializeTheoryObjectPacket(
   packet: TheoryObjectPacketLike
 ): Record<string, unknown> {
@@ -136,6 +161,12 @@ export function serializeTheoryObjectPacket(
   };
 }
 
+/**
+ * 解析理论状态文件。
+ *
+ * 包含所有定理候选、引理包、附录章节计划。
+ * schema_version 用于跟踪格式版本变化。
+ */
 export function normalizeTheoryStateFile(value: unknown): TheoryStateFileLike {
   const record = asRecord(value) ?? {};
   const theoremCandidates = Array.isArray(record.theorem_candidates)
@@ -190,6 +221,9 @@ export function normalizeTheoryStateFile(value: unknown): TheoryStateFileLike {
   };
 }
 
+/**
+ * 序列化理论状态文件。
+ */
 export function serializeTheoryStateFile(
   state: TheoryStateFileLike
 ): Record<string, unknown> {
@@ -214,6 +248,11 @@ export function serializeTheoryStateFile(
   };
 }
 
+/**
+ * 解析理论支持状态（运行时摘要）。
+ *
+ * 汇总理论状态——定理/引理数量、证明包数量、正文就绪状态。
+ */
 export function normalizeTheorySupportState(
   value: unknown
 ): TheorySupportStateLike {
@@ -256,6 +295,9 @@ export function normalizeTheorySupportState(
   };
 }
 
+/**
+ * 序列化理论支持状态。
+ */
 export function serializeTheorySupportState(
   state: TheorySupportStateLike
 ): Record<string, unknown> {
@@ -276,6 +318,9 @@ export function serializeTheorySupportState(
   };
 }
 
+/**
+ * 将理论对象包标签转换为可读文本。
+ */
 export function humanizeTheoryPacketLabel(
   value: string | null | undefined
 ): string {
@@ -289,6 +334,9 @@ export function humanizeTheoryPacketLabel(
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+/**
+ * 去重理论对象包列表（按 packet_id 去重）。
+ */
 export function dedupeTheoryPackets(
   packets: TheoryObjectPacketLike[]
 ): TheoryObjectPacketLike[] {
@@ -316,6 +364,12 @@ export function dedupeTheoryPackets(
   });
 }
 
+/**
+ * 推断理论附录章节结构。
+ *
+ * 根据定理/引理包自动生成附录章节计划——
+ * 将 body_safe=false 的包分组到附录章节。
+ */
 export function inferTheoryAppendixSections(params: {
   packets: TheoryObjectPacketLike[];
   existingSections: TheoryAppendixSectionLike[];
@@ -404,6 +458,11 @@ export function renderLatexItemList(items: string[]): string {
   ].join("\n");
 }
 
+/**
+ * 构建理论附录计划的 Markdown 内容。
+ *
+ * 生成包含所有章节标题、目的、包含的理论对象的 Markdown 文档。
+ */
 export function buildTheoryAppendixPlanMarkdown(params: {
   theoryFile: TheoryStateFileLike;
   packets: TheoryObjectPacketLike[];
@@ -493,6 +552,12 @@ export function buildTheoryAppendixPlanMarkdown(params: {
   return `${lines.join("\n").trim()}\n`;
 }
 
+/**
+ * 生成单个理论附录章节的草稿。
+ *
+ * 将定理/引理包转换为 LaTeX 格式的附录章节——
+ * 包含标题、陈述、假设、推导大纲、注意事项。
+ */
 export function buildTheoryAppendixSectionDraft(params: {
   theoryFile: TheoryStateFileLike;
   packets: TheoryObjectPacketLike[];

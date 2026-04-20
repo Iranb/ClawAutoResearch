@@ -21,6 +21,7 @@ test("workflow indexes Zotero-aware literature management and selected scientifi
   assert.ok(skillIndex.reviewer.includes("./reviewer/peer-review"));
   assert.ok(skillIndex.reviewer.includes("./reviewer/paper-review-checklist"));
   assert.ok(skillIndex.coder.includes("./coder/scientific-visualization"));
+  assert.ok(skillIndex["cross-reviewer"].includes("./cross-reviewer/review-phase"));
 });
 
 test("workflow docs and agent guides mention Zotero bot collections and the new scientific-skill handoffs", async () => {
@@ -139,6 +140,8 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(paperWrite, /writing quality|AI-typical|burstiness/i);
   assert.match(paperWrite, /reader'?s journey|where am i\?|load-bearing paragraph|clarity test/i);
   assert.match(paperWrite, /claim verification|major distortion|unverifiable/i);
+  assert.match(paperWrite, /PARAGRAPH_LOGIC_AUDIT\.md/i);
+  assert.match(paperWrite, /PARAGRAPH_LOGIC_REVERSE_OUTLINE\.md/i);
 
   const paperPhase = await fs.readFile(
     path.join(repoRoot, "skills", "academic_writer", "paper-phase", "SKILL.md"),
@@ -169,6 +172,15 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(researchPaperWriting, /writing-judgment-framework\.md/i);
   assert.match(researchPaperWriting, /thesis-crystallization\.md/i);
 
+  const implementExperiment = await fs.readFile(
+    path.join(repoRoot, "skills", "coder", "implement-experiment", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(implementExperiment, /implementation_proof\.changed_files/i);
+  assert.match(implementExperiment, /implementation_proof\.integration_points/i);
+  assert.match(implementExperiment, /implementation_proof\.activation_signals/i);
+  assert.match(implementExperiment, /implementation_proof\.execution_command/i);
+
   const reviewerDocs = [
     path.join(repoRoot, "agents", "reviewer", "AGENTS.md"),
     path.join(repoRoot, "skills", "reviewer", "review-phase", "SKILL.md"),
@@ -192,6 +204,7 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(reviewPhase, /Workflow Orientation/i);
   assert.match(reviewPhase, /revise.*routes back to Writer/i);
   assert.match(reviewPhase, /paper-review-checklist/i);
+  assert.match(reviewPhase, /PARAGRAPH_LOGIC_AUDIT\.md/i);
 
   const reviewerChecklist = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "paper-review-checklist", "SKILL.md"),
@@ -212,6 +225,13 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(writerChecklist, /survey/i);
   assert.match(writerChecklist, /research_paper_writing_checklist\.md/i);
   assert.match(writerChecklist, /survey_paper_writing_agent_guide\.md/i);
+
+  const crossReviewPhase = await fs.readFile(
+    path.join(repoRoot, "skills", "cross-reviewer", "review-phase", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(crossReviewPhase, /Workflow Orientation/i);
+  assert.match(crossReviewPhase, /PARAGRAPH_LOGIC_AUDIT\.md/i);
 
   const paperReview = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "paper-review", "SKILL.md"),
@@ -247,6 +267,14 @@ test("workflow docs and agent guides mention Zotero bot collections and the new 
   assert.match(crossReviewerResume, /Workflow Orientation/i);
   assert.match(crossReviewerResume, /analyze -> review -> write -> submit/i);
   assert.match(crossReviewerResume, /Revision contract:/i);
+
+  const crossReviewerPhase = await fs.readFile(
+    path.join(repoRoot, "skills", "cross-reviewer", "review-phase", "SKILL.md"),
+    "utf8"
+  );
+  assert.match(crossReviewerPhase, /Workflow Orientation/i);
+  assert.match(crossReviewerPhase, /Multi-Round Cross-Review Order/i);
+  assert.match(crossReviewerPhase, /Artifact Gate Review/i);
 
   const rebuttalTemplate = await fs.readFile(
     path.join(repoRoot, "skills", "reviewer", "review-response", "REBUTTAL_TEMPLATE.md"),

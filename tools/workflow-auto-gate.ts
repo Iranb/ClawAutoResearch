@@ -4,8 +4,18 @@ import * as path from "node:path";
 import {
   DEFAULT_WORKFLOW_AUTO_GATE,
   type WorkflowAutoGateConfig,
+  type WorkflowAutoGateMode,
   type WorkflowAutoMode,
+  resolveWorkflowAutoGateModeForStage,
+  resolveWorkflowAutoGateStageKey,
 } from "./workflow-auto-mode";
+import {
+  buildWorkflowPanelDiscussionPrompt,
+  createWorkflowPanelDiscussionRound,
+  parseWorkflowPanelDiscussionResult,
+  type WorkflowPanelDiscussionAttempt,
+  type WorkflowPanelDiscussionResult,
+} from "./workflow-panel-discussion";
 
 export type GateReviewReviewerRole = "analyzer" | "reviewer" | "cross-reviewer";
 
@@ -185,6 +195,20 @@ function collectStrings(value: unknown): string[] {
     );
   }
   return [];
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  }
+  return ordered;
 }
 
 function extractJsonObject(text: string): string | null {
@@ -458,27 +482,28 @@ export function buildAutoGateReviewPrompt(params: {
   packetPath: string;
   packetJsonPath: string;
 }): string {
-  return [
-    `Auto gate review request for ${params.reviewerRole}.`,
-    `Project ID: ${params.projectId ?? path.basename(params.projectRoot)}`,
-    `Project root: ${params.projectRoot}`,
-    `Current stage: ${params.stage ?? "unknown"}`,
-    `Gate: ${params.gateId}`,
-    `Read this review packet first: ${params.packetPath}`,
-    `Structured packet JSON: ${params.packetJsonPath}`,
-    "Review only the packet and the referenced project artifacts. Do not expand scope beyond gate evaluation.",
-    "Return ONLY valid JSON with this schema:",
-    `{
-  "verdict": "pass | revise | rollback | block",
-  "overallScore": 0-10,
-  "dimensionScores": { "quality": 0-10, "evidence": 0-10, "clarity": 0-10, "citation": 0-10, "publishability": 0-10 },
-  "criticalBlockers": ["..."],
-  "majorIssues": ["..."],
-  "suggestedRollbackStage": "write | analyze | experiment | review | null",
-  "reviewedArtifacts": ["relative/path"],
-  "summary": "one concise paragraph"
-}`,
-  ].join("\n");
+  return buildWorkflowPanelDiscussionPrompt({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    reviewerRole: params.reviewerRole,
+    packetPath: params.packetPath,
+    packetJsonPath: params.packetJsonPath,
+    policy: {
+      discussionId: `gate-review-${params.gateId.toLowerCase()}`,
+      topic: `Evaluate whether ${params.gateId} should pass`,
+      stage: params.stage,
+      participants: defaultGateReviewPanel(),
+      maxRounds: 2,
+      quorum: defaultGateReviewPanel().length,
+      resolvedDecisions: ["pass", "approved"],
+      blockedDecisions: ["block", "rollback", "rejected"],
+      packetArtifacts: [],
+      promptInstructions:
+        "Review only the packet and referenced project artifacts. Do not expand scope beyond gate evaluation. Also score quality, evidence, clarity, citation, and publishability in the JSON response.",
+      summary: [],
+      context: {},
+    },
+  });
 }
 
 function maybeAssistantLikeMessage(message: Record<string, unknown>): boolean {
@@ -514,22 +539,34 @@ export function parseGateReviewResult(
 ): GateReviewResult {
   const now = new Date().toISOString();
   try {
-    const jsonText = extractJsonObject(text) ?? text;
+    let normalizedText = text;
+    const extracted = extractJsonObject(text);
+    if (extracted) {
+      const preParsed = asRecord(JSON.parse(extracted));
+      if (readString(preParsed.decision) == null && readString(preParsed.verdict) != null) {
+        normalizedText = JSON.stringify({
+          ...preParsed,
+          decision: readString(preParsed.verdict),
+        });
+      }
+    }
+    const jsonText = extractJsonObject(normalizedText) ?? normalizedText;
     const record = asRecord(JSON.parse(jsonText));
+    const generic = parseWorkflowPanelDiscussionResult(normalizedText, reviewerRole);
     const dimensionScores = normalizeDimensionScores(record.dimensionScores);
     return {
       reviewerRole,
-      verdict: normalizeVerdict(record.verdict),
+      verdict: normalizeVerdict(record.verdict ?? generic.decision),
       overallScore: clampScore(record.overallScore),
       dimensionScores,
-      criticalBlockers: collectStrings(record.criticalBlockers),
-      majorIssues: collectStrings(record.majorIssues),
+      criticalBlockers: collectStrings(record.criticalBlockers ?? generic.blockers),
+      majorIssues: collectStrings(record.majorIssues ?? generic.actionItems),
       suggestedRollbackStage: readString(record.suggestedRollbackStage),
       reviewedArtifacts: collectStrings(record.reviewedArtifacts),
-      summary: readString(record.summary),
-      createdAt: now,
-      runId: readString(record.runId),
-      rawText: text,
+      summary: readString(record.summary) ?? generic.summary,
+      createdAt: generic.createdAt ?? now,
+      runId: readString(record.runId) ?? generic.runId,
+      rawText: generic.rawText,
     };
   } catch (error) {
     return {
@@ -615,17 +652,55 @@ export function createGateReviewRound(params: {
   packetFingerprint: string;
   attempts: GateReviewAttempt[];
 }): GateReviewRound {
-  const now = new Date().toISOString();
-  return {
-    gateId: params.gateId,
-    stage: params.stage,
-    roundId: randomUUID(),
+  const round = createWorkflowPanelDiscussionRound({
+    policy: {
+      discussionId: `gate-review-${params.gateId.toLowerCase()}`,
+      topic: `Evaluate whether ${params.gateId} should pass`,
+      stage: params.stage,
+      participants: defaultGateReviewPanel(),
+      maxRounds: 2,
+      quorum: defaultGateReviewPanel().length,
+      resolvedDecisions: ["pass", "approved"],
+      blockedDecisions: ["block", "rollback", "rejected"],
+      packetArtifacts: [],
+      promptInstructions: null,
+      summary: [],
+      context: {},
+    },
     packetPath: params.packetPath,
     packetJsonPath: params.packetJsonPath,
     packetFingerprint: params.packetFingerprint,
+    attempts: params.attempts.map(
+      (attempt) =>
+        ({
+          ...attempt,
+          result: attempt.result
+            ? ({
+                reviewerRole: attempt.result.reviewerRole,
+                decision: attempt.result.verdict,
+                confidence: attempt.result.overallScore,
+                recommendedOwner: null,
+                actionItems: attempt.result.majorIssues,
+                blockers: attempt.result.criticalBlockers,
+                summary: attempt.result.summary,
+                createdAt: attempt.result.createdAt,
+                runId: attempt.result.runId,
+                rawText: attempt.result.rawText,
+              } satisfies WorkflowPanelDiscussionResult)
+            : null,
+        } satisfies WorkflowPanelDiscussionAttempt)
+    ),
+  });
+  return {
+    gateId: params.gateId,
+    stage: params.stage,
+    roundId: round.roundId,
+    packetPath: round.packetPath,
+    packetJsonPath: round.packetJsonPath,
+    packetFingerprint: round.packetFingerprint,
     status: "reviewing",
-    launchedAt: now,
-    updatedAt: now,
+    launchedAt: round.launchedAt,
+    updatedAt: round.updatedAt,
     attempts: params.attempts,
     aggregate: null,
   };
@@ -649,6 +724,74 @@ export async function evaluateSubmitAutoGate(params: {
 
 export function defaultGateReviewPanel(): GateReviewReviewerRole[] {
   return [...PANEL_ROLES];
+}
+
+export function resolveAutoGateIdForStage(stage: string | null): string | null {
+  const stageKey = resolveWorkflowAutoGateStageKey(stage);
+  if (stageKey === "review_to_write") {
+    return "GATE-REVIEW-TO-WRITE";
+  }
+  if (stageKey === "write_to_submit") {
+    return "GATE-WRITE-TO-SUBMIT";
+  }
+  if (stageKey === "submit_to_done") {
+    return "GATE-5";
+  }
+  return null;
+}
+
+export function resolveAutoGateMode(params: {
+  stage: string | null;
+  autoGate: WorkflowAutoGateConfig;
+}): WorkflowAutoGateMode | null {
+  return resolveWorkflowAutoGateModeForStage({
+    stage: params.stage,
+    config: params.autoGate,
+  });
+}
+
+export function buildAutoGatePanelDiscussionPolicy(params: {
+  projectRoot: string;
+  gateId: string;
+  stage: string | null;
+  autoGate: WorkflowAutoGateConfig;
+  packetPath: string;
+  packetJsonPath: string;
+  reviewedArtifacts?: string[];
+}): Record<string, unknown> {
+  const threshold = thresholdForStage(params.stage, params.autoGate);
+  return {
+    discussionId: `gate-review-${params.gateId.toLowerCase()}`,
+    topic: `Evaluate whether ${params.gateId} should pass`,
+    stage: params.stage,
+    participants: defaultGateReviewPanel(),
+    maxRounds: params.autoGate.maxReviewRounds,
+    quorum: params.autoGate.quorum,
+    resolvedDecisions: ["pass", "approved"],
+    blockedDecisions: ["block", "rollback", "rejected"],
+    packetArtifacts: uniqueStrings([
+      path.relative(params.projectRoot, params.packetPath),
+      path.relative(params.projectRoot, params.packetJsonPath),
+      ...(params.reviewedArtifacts ?? []),
+    ]),
+    promptInstructions:
+      "Review only the gate packet and referenced project artifacts. Do not expand scope beyond gate evaluation. Return a gate verdict with scoring, blockers, rollback advice, and a concise summary.",
+    summary: [
+      `Gate: ${params.gateId}`,
+      `Stage: ${params.stage ?? "unknown"}`,
+      `Threshold avg: ${threshold.avg}`,
+      `Threshold minSingle: ${threshold.minSingle}`,
+    ],
+    context: {
+      gateId: params.gateId,
+      gateStage: params.stage,
+      thresholdAvg: threshold.avg,
+      thresholdMinSingle: threshold.minSingle,
+      packetPath: params.packetPath,
+      packetJsonPath: params.packetJsonPath,
+      reviewedArtifacts: params.reviewedArtifacts ?? [],
+    },
+  };
 }
 
 export function defaultAutoGateConfig(): WorkflowAutoGateConfig {

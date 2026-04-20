@@ -6,6 +6,7 @@ export type RevisionControlSource = {
     | "review_session"
     | "review_issue_tracker"
     | "external_review"
+    | "paragraph_logic_audit"
     | "rebuttal_response";
   sourceId: string;
   severity: "low" | "medium" | "high" | "critical";
@@ -65,6 +66,7 @@ function normalizeRevisionSource(value: unknown): RevisionControlSource | null {
     sourceType !== "review_session" &&
     sourceType !== "review_issue_tracker" &&
     sourceType !== "external_review" &&
+    sourceType !== "paragraph_logic_audit" &&
     sourceType !== "rebuttal_response"
   ) {
     return null;

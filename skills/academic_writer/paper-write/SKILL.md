@@ -349,6 +349,16 @@ Then update the writing contract:
 }
 ```
 
+Then materialize the durable paragraph-flow packet so the next loop sees the same evidence:
+
+```json
+{
+  "action": "materialize_paragraph_logic_audit_state"
+}
+```
+
+Use `academic_writer/PARAGRAPH_LOGIC_AUDIT.md` and `academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md` as the source of truth for cross-paragraph repairs. If the audit is `blocked`, fix the weakest section before broadening new prose.
+
 If proof-aware writing is enabled, also update the appendix status when needed:
 
 ```json

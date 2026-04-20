@@ -207,6 +207,27 @@
             "minimum": 1,
             "default": 2
           },
+          "gateModes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "review_to_write": {
+                "type": "string",
+                "enum": ["manual_gate", "panel_gate"],
+                "default": "panel_gate"
+              },
+              "write_to_submit": {
+                "type": "string",
+                "enum": ["manual_gate", "panel_gate"],
+                "default": "panel_gate"
+              },
+              "submit_to_done": {
+                "type": "string",
+                "enum": ["manual_gate", "panel_gate"],
+                "default": "manual_gate"
+              }
+            }
+          },
           "thresholds": {
             "type": "object",
             "additionalProperties": false,

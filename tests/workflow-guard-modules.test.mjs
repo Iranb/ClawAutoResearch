@@ -116,7 +116,13 @@ test("buildWritingGuidance surfaces story-first and adversarial review reminders
     writerGuidance.prepend.some((entry) => /story spine|claim-to-experiment|fallback/i.test(entry))
   );
   assert.ok(
+    writerGuidance.prepend.some((entry) => /Writing flow map:/i.test(entry))
+  );
+  assert.ok(
     writerGuidance.append.some((entry) => /reject-first|reverse-outline|unsupported/i.test(entry))
+  );
+  assert.ok(
+    writerGuidance.append.some((entry) => /Revision loop rule:/i.test(entry))
   );
 
   const reviewerGuidance = buildWritingGuidance(
@@ -195,7 +201,13 @@ test("buildWritingGuidance surfaces story-first and adversarial review reminders
     reviewerGuidance.prepend.some((entry) => /citation integrity gate/i.test(entry))
   );
   assert.ok(
+    reviewerGuidance.prepend.some((entry) => /Writing flow map:/i.test(entry))
+  );
+  assert.ok(
     reviewerGuidance.append.some((entry) => /reject-first|novelty attack/i.test(entry))
+  );
+  assert.ok(
+    reviewerGuidance.append.some((entry) => /Review routing rule:/i.test(entry))
   );
 });
 
