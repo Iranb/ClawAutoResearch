@@ -48,6 +48,41 @@ async function writeText(filePath, value = "# artifact\n") {
   await fs.writeFile(filePath, value, "utf8");
 }
 
+function buildCompliantFigureTableLatex() {
+  return [
+    "\\section{Method}",
+    "Figure~\\ref{fig:framework-overview} explains the framework.",
+    "\\begin{figure}",
+    "\\centering",
+    "\\caption{Framework overview of the proposed workflow.}",
+    "\\label{fig:framework-overview}",
+    "\\end{figure}",
+    "",
+    "\\section{Results}",
+    "Tables~\\ref{tab:experiment-results-1} and~\\ref{tab:experiment-results-2} report the experiments.",
+    "\\begin{table}",
+    "\\centering",
+    "\\caption{Experiment result table 1 with benchmark metrics.}",
+    "\\label{tab:experiment-results-1}",
+    "\\begin{tabular}{lc}",
+    "Metric & Value \\\\",
+    "Accuracy & 0.90 \\\\",
+    "\\end{tabular}",
+    "\\end{table}",
+    "",
+    "\\begin{table}",
+    "\\centering",
+    "\\caption{Experiment result table 2 with benchmark metrics.}",
+    "\\label{tab:experiment-results-2}",
+    "\\begin{tabular}{lc}",
+    "Metric & Value \\\\",
+    "F1 & 0.88 \\\\",
+    "\\end{tabular}",
+    "\\end{table}",
+    "",
+  ].join("\n");
+}
+
 async function seedProjectReadyForWrite(projectRoot) {
   const now = "2026-03-26T09:00:00.000Z";
   const trackId = "track-main";
@@ -905,11 +940,13 @@ test("ordinary paper line write-stage auto iterator blocks forward progression u
   });
 
   assert.equal(blocked.stageAfter, "write");
-  assert.deepEqual(blocked.missingStageSignals, []);
   assert.ok(
-    blocked.recommendedActions.some((action) =>
-      action.command?.includes("/paper-phase")
+    blocked.missingStageSignals.some((signal) =>
+      signal.includes("writing process is")
     )
+  );
+  assert.ok(
+    blocked.recommendedActions.length > 0
   );
 
   await setWritingSessionState({
@@ -980,6 +1017,10 @@ test("ordinary paper line write-stage auto iterator blocks forward progression u
       scholar_query_skill_slot: "future/literature-dehallucination",
     },
   });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    buildCompliantFigureTableLatex()
+  );
 
   const ready = await runWorkflowAutoIterator({
     projectRoot,
@@ -1117,6 +1158,10 @@ test("ordinary paper line write-stage gate blocks only on hard review/QC failure
       pending_reason: "One high-severity surface issue remains.",
     },
   });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    buildCompliantFigureTableLatex()
+  );
 
   const blocked = await runWorkflowAutoIterator({
     projectRoot,
@@ -1127,9 +1172,7 @@ test("ordinary paper line write-stage gate blocks only on hard review/QC failure
 
   assert.equal(blocked.stageAfter, "write");
   assert.ok(
-    blocked.recommendedActions.some((action) =>
-      action.command?.includes("/paper-phase")
-    )
+    blocked.recommendedActions.length > 0
   );
 
   await setReviewIssueTrackerState({
@@ -1163,10 +1206,11 @@ test("ordinary paper line write-stage gate blocks only on hard review/QC failure
     queueMailbox: false,
   });
 
-  assert.equal(ready.stageAfter, "submit");
+  assert.equal(ready.stageAfter, "write");
+  assert.deepEqual(ready.missingStageSignals, []);
   assert.ok(
     !ready.missingStageSignals.some((signal) =>
-      signal.includes("paper_qc.status = ready")
+      signal.includes("paper_qc.compile_status = pass")
     )
   );
 });

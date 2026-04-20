@@ -75,8 +75,11 @@ async function makeExperimentProject() {
       papernexus_sync_status: "synced",
     },
     experiment_search: {
-      status: "missing",
+      status: "planning",
       multi_seed_status: "pending",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      search_exhaustion_status: "active",
       plot_pack_status: "pending",
       pending_reason: "Pre-launch review has not approved a bundle yet.",
     },
