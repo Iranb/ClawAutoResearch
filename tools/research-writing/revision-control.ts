@@ -128,7 +128,11 @@ function buildReviewSessionSource(
 function buildExternalReviewSource(
   externalReview: ReturnType<typeof normalizeExternalReviewState>
 ): RevisionControlSource[] {
-  if (!externalReview.requiredAction || externalReview.requiredAction === "none") {
+  if (
+    !externalReview.requiredAction ||
+    externalReview.requiredAction === "none" ||
+    externalReview.requiredAction === "human_decision"
+  ) {
     return [];
   }
   return [

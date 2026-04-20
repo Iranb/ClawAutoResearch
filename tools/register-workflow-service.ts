@@ -107,9 +107,10 @@ import {
   type WorkflowPanelDiscussionResult,
 } from "./workflow-panel-discussion";
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
-import { asRecord, asString } from "./workflow-guard-core/coercion";
+import { asRecord, asString, normalizeStage } from "./workflow-guard-core/coercion";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
+import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
 import { updateAutoDispatchDiagnostics } from "./workflow-auto-dispatch-diagnostics";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
@@ -513,6 +514,47 @@ type WorkflowCoordinatorVisibleStatusUpdate = {
   summary: string;
   dedupeKey: string;
 };
+
+function buildSurveyBriefRefinementPanelPolicy(params: {
+  topic: string | null;
+  diagnosticsPath: string | null;
+  surveyBriefPath: string | null;
+  literatureReviewPath: string | null;
+  sotaMatrixPath: string | null;
+  gapSynthesisPath: string | null;
+  blockingIssues: string[];
+}) {
+  return {
+    discussionId: "survey-brief-refinement",
+    topic: `Refine the survey brief for ${params.topic ?? "the current survey topic"}`,
+    stage: "survey_review",
+    participants: ["researcher", "analyzer", "reviewer"],
+    maxRounds: 2,
+    quorum: 2,
+    resolvedDecisions: ["resolved", "pass", "approved"],
+    blockedDecisions: ["blocked", "rollback", "rejected"],
+    packetArtifacts: [
+      "PROJECT_MANIFEST.json",
+      "TRACK_REGISTRY.json",
+      params.diagnosticsPath,
+      params.surveyBriefPath,
+      params.literatureReviewPath,
+      params.sotaMatrixPath,
+      params.gapSynthesisPath,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0),
+    promptInstructions:
+      "Review the auto-generated survey brief as a bounded synthesis artifact. Focus on whether the taxonomy is stable, whether the benchmark landscape is explicit, and whether unresolved gaps/limitations are carried into the brief without overclaiming consensus.",
+    summary: [
+      `Topic: ${params.topic ?? "unset"}`,
+      ...params.blockingIssues.slice(0, 5),
+    ],
+    context: {
+      artifact: params.surveyBriefPath,
+      diagnostics: params.diagnosticsPath,
+      blockingIssues: params.blockingIssues,
+    },
+  };
+}
 
 const DEFAULT_WORKFLOW_COORDINATOR_INTERVAL_MS = 120_000;
 const DEFAULT_WORKFLOW_COORDINATOR_MAX_PROJECTS = 3;
@@ -3404,6 +3446,95 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
   });
 }
 
+export async function maybeAdvanceSurveyBriefRefinementForProject(params: {
+  runtimeSubagent?: RuntimeSubagentApi;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  projectRoot: string;
+  projectId: string | null;
+  autoIteratorResult: {
+    stageAfter?: string | null;
+  };
+  logger?: WorkflowCoordinatorLogger;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}) {
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const surveyReview = normalizeSurveyReviewState(
+    asRecord(manifest.survey_review)
+  );
+  const stageAfter =
+    normalizeStage(params.autoIteratorResult.stageAfter) ??
+    normalizeStage(manifest.current_stage);
+  if (stageAfter !== "survey_review") {
+    return {
+      launched: false,
+      reason: "reviewing",
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      discussionId: "survey-brief-refinement",
+      topic: surveyReview.topic ?? "survey brief refinement",
+      stage: stageAfter,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    } satisfies WorkflowPanelDiscussionServiceAttempt;
+  }
+  const phase = normalizeStage(surveyReview.currentPhase);
+  const shouldRefine =
+    (phase === "brief_synthesis" ||
+      phase === "taxonomy_refinement" ||
+      phase === "gap_closure") &&
+    surveyReview.gateReady !== true &&
+    Boolean(surveyReview.surveyBriefPath);
+  if (!shouldRefine) {
+    return {
+      launched: false,
+      reason: "reviewing",
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      discussionId: "survey-brief-refinement",
+      topic: surveyReview.topic ?? "survey brief refinement",
+      stage: "survey_review",
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    } satisfies WorkflowPanelDiscussionServiceAttempt;
+  }
+  return maybeAdvanceWorkflowPanelDiscussionForProject({
+    runtimeSubagent: params.runtimeSubagent,
+    workflowPolicy: params.workflowPolicy,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    logger: params.logger,
+    deps: params.deps,
+    panelDiscussionPolicy: buildSurveyBriefRefinementPanelPolicy({
+      topic: surveyReview.topic,
+      diagnosticsPath: surveyReview.diagnosticsPath,
+      surveyBriefPath: surveyReview.surveyBriefPath,
+      literatureReviewPath: surveyReview.literatureReviewPath,
+      sotaMatrixPath: surveyReview.sotaMatrixPath,
+      gapSynthesisPath: surveyReview.gapSynthesisPath,
+      blockingIssues: surveyReview.gateBlockingIssues,
+    }),
+  });
+}
+
 function buildAutoMitigationLaunchKey(params: {
   projectRoot: string;
   fingerprint: string | null;
@@ -5211,9 +5342,25 @@ export function createWorkflowCoordinatorService(
             })
           )
         );
+        const surveyBriefRefinementAttempts = await Promise.all(
+          refreshedResults.map((entry) =>
+            maybeAdvanceSurveyBriefRefinementForProject({
+              runtimeSubagent: plugin.api.runtime?.subagent,
+              workflowPolicy,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              autoIteratorResult: entry.result,
+              logger,
+              deps: resolvedDeps,
+            })
+          )
+        );
         const discussionRefreshedResults = await Promise.all(
           refreshedResults.map(async (entry, index) => {
-            if (autoModeDiscussions[index]?.resolved !== true) {
+            if (
+              autoModeDiscussions[index]?.resolved !== true &&
+              surveyBriefRefinementAttempts[index]?.resolved !== true
+            ) {
               return entry;
             }
             const refreshed = await enqueueWorkflowTask({

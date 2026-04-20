@@ -347,6 +347,11 @@ export function formatWorkflowStatusText(params: {
       ? [
           `Survey review: status=${snapshot.surveyReviewStatus}, phase=${snapshot.surveyReviewCurrentPhase ?? "unset"}, topic=${snapshot.surveyReviewTopic ?? "unset"}, mode=${snapshot.surveyReviewMode ?? "unset"}, candidates=${snapshot.surveyReviewCandidatePaperCount ?? 0}, included=${snapshot.surveyReviewIncludedPaperCount ?? 0}, excluded=${snapshot.surveyReviewExcludedPaperCount ?? 0}, query_rounds=${snapshot.surveyReviewQueryRoundCount ?? 0}`,
           `Survey synthesis: graph_grounded_brief=${snapshot.surveyReviewGraphGroundedBriefReady ? "true" : "false"}, survey_brief=${snapshot.surveyReviewSurveyBriefPath ?? "unset"}, pending_reason=${snapshot.surveyReviewPendingReason ?? "none"}`,
+          ...(snapshot.surveyBriefRefinementStatus
+            ? [
+                `Survey brief refinement: status=${snapshot.surveyBriefRefinementStatus}, reviews=${snapshot.surveyBriefRefinementReviewCount ?? 0}, packet=${snapshot.surveyBriefRefinementPacketPath ?? "unset"}, summary=${snapshot.surveyBriefRefinementSummary ?? "pending reviewer quorum"}`,
+              ]
+            : []),
           ...(snapshot.surveyVisualCompilerStatus
             ? [
                 `Survey visual compiler: status=${snapshot.surveyVisualCompilerStatus}, rows=${snapshot.surveyVisualCompilerRowCount ?? 0}, insertion_map=${snapshot.surveyVisualCompilerInsertionMapPath ?? "unset"}`,

@@ -1814,6 +1814,11 @@ export type WorkflowSnapshot = {
   surveyReviewSurveyBriefPath: string | null;
   surveyReviewGateBlockingIssueCount: number | null;
   surveyReviewPendingReason: string | null;
+  surveyBriefRefinementStatus: string | null;
+  surveyBriefRefinementReviewCount: number | null;
+  surveyBriefRefinementRoundId: string | null;
+  surveyBriefRefinementPacketPath: string | null;
+  surveyBriefRefinementSummary: string | null;
   ideationContractStatus: string | null;
   ideationContractSelectedDirectionId: string | null;
   ideationContractSelectedTrackId: string | null;

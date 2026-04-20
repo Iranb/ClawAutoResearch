@@ -365,6 +365,12 @@ export async function materializeSurveyReviewDiagnostics(params: {
       candidatePapers >= 20 &&
       includedPapers >= 10 &&
       coverageKeywords >= 2;
+    const screenedBreadthReady =
+      queryRounds >= 3 &&
+      candidatePapers >= 50 &&
+      includedPapers >= 20 &&
+      excludedPapers >= 20 &&
+      coverageKeywords >= 2;
     const nicheCoverageReady =
       queryRounds >= 2 &&
       candidatePapers > 0 &&
@@ -372,7 +378,8 @@ export async function materializeSurveyReviewDiagnostics(params: {
       includedPapers >= 6 &&
       excludedPapers >= 1 &&
       coverageKeywords >= 2;
-    const breadthReady = broadCoverageReady || nicheCoverageReady;
+    const breadthReady =
+      broadCoverageReady || screenedBreadthReady || nicheCoverageReady;
     coverage = buildDiagnostic({
       status: breadthReady ? "ready" : "partial",
       summary: breadthReady

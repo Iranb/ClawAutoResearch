@@ -54,8 +54,11 @@ The internal phases are:
 1. `bootstrap`
 2. `retrieval`
 3. `screening`
-4. `synthesis`
-5. `complete`
+4. `brief_synthesis`
+5. `taxonomy_refinement`
+6. `gap_closure`
+7. `synthesis`
+8. `complete`
 
 Do not route into `plan`, `code`, or `experiment`.
 Once the survey packet is truly complete, the workflow may hand off into `write` with `paper_mode=survey`; that handoff is for writing only, not for experimental planning.

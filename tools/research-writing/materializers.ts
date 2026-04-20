@@ -62,6 +62,330 @@ function collectMarkdownSignalLines(
   return uniqueStrings(lines).slice(0, limit);
 }
 
+function normalizeSectionId(value: string | null | undefined): string | null {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  return normalized || null;
+}
+
+function extractMarkdownSectionItems(
+  rawText: string | null | undefined
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  if (!rawText) {
+    return result;
+  }
+  const lines = rawText.split(/\r?\n/);
+  let currentSection: string | null = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const headingMatch = trimmed.match(/^##\s+(.+)$/);
+    if (headingMatch) {
+      currentSection = normalizeSectionId(headingMatch[1]);
+      if (currentSection && !result[currentSection]) {
+        result[currentSection] = [];
+      }
+      continue;
+    }
+    if (!currentSection) {
+      continue;
+    }
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const item = trimmed.replace(/^[-*+]\s+/, "").trim();
+      if (item) {
+        result[currentSection].push(item);
+      }
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(result).map(([key, values]) => [key, uniqueStrings(values)])
+  );
+}
+
+function sentenceFromSignal(
+  value: string | null | undefined,
+  fallback: string
+): string {
+  const normalized = String(value ?? "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized.endsWith(".") ? normalized : `${normalized}.`;
+}
+
+function sectionDisplayTitle(sectionId: string): string {
+  switch (sectionId) {
+    case "scope_and_protocol":
+      return "Scope and Protocol";
+    case "evidence_synthesis":
+      return "Evidence Synthesis";
+    case "benchmark_landscape":
+      return "Benchmark Landscape";
+    case "open_problems":
+      return "Open Problems";
+    default:
+      return sectionId
+        .split("_")
+        .filter(Boolean)
+        .map((part) => part[0]?.toUpperCase() + part.slice(1))
+        .join(" ");
+  }
+}
+
+function sectionLabel(sectionId: string): string {
+  return `sec:${sectionId}`;
+}
+
+function renderSurveySectionDraft(params: {
+  sectionId: string;
+  title: string;
+  bullets: string[];
+  briefLines: string[];
+  comparativeLines: string[];
+  gapLines: string[];
+  coverageLines: string[];
+  abstractWorkbenchLines: string[];
+  introWorkbenchLines: string[];
+}): string {
+  const bullets = params.bullets;
+  const lead =
+    bullets[0] ??
+    params.briefLines[0] ??
+    params.comparativeLines[0] ??
+    params.gapLines[0] ??
+    params.coverageLines[0] ??
+    `Draft the ${params.title.toLowerCase()} section from the current survey packet.`;
+  const support =
+    bullets[1] ??
+    params.briefLines[1] ??
+    params.comparativeLines[1] ??
+    params.gapLines[1] ??
+    params.coverageLines[1] ??
+    `Keep the section aligned with the current survey brief and included papers.`;
+  if (params.sectionId === "abstract") {
+    const abstractLines =
+      params.abstractWorkbenchLines.length > 0
+        ? params.abstractWorkbenchLines.slice(0, 5)
+        : [lead, support];
+    return [
+      "\\begin{abstract}",
+      abstractLines.map((line) => sentenceFromSignal(line, lead)).join(" "),
+      "\\end{abstract}",
+      "",
+    ].join("\n");
+  }
+  const heading = `\\section{${params.title}}\n\\label{${sectionLabel(params.sectionId)}}`;
+  const paragraphOne = sentenceFromSignal(lead, `Introduce ${params.title.toLowerCase()}.`);
+  const paragraphTwo = sentenceFromSignal(
+    support,
+    `Keep ${params.title.toLowerCase()} grounded in the survey packet evidence.`
+  );
+  const checklistSource =
+    bullets.slice(2, 5).length > 0
+      ? bullets.slice(2, 5)
+      : params.sectionId === "introduction"
+        ? params.introWorkbenchLines.slice(0, 3)
+        : params.sectionId === "benchmark_landscape"
+          ? params.comparativeLines.slice(0, 3)
+          : params.sectionId === "open_problems"
+            ? params.gapLines.slice(0, 3)
+            : params.coverageLines.slice(0, 3);
+  const checklist =
+    checklistSource.length > 0
+      ? [
+          "\\begin{itemize}",
+          ...checklistSource.map((line) => `\\item ${sentenceFromSignal(line, line)}`),
+          "\\end{itemize}",
+        ].join("\n")
+      : "";
+  return [heading, "", paragraphOne, "", paragraphTwo, checklist ? `\n${checklist}` : "", ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function renderSurveySectionPacket(params: {
+  sectionId: string;
+  title: string;
+  draftPath: string;
+  bullets: string[];
+  briefLines: string[];
+  evidencePointers: string[];
+}): string {
+  const goal =
+    params.bullets[0] ??
+    params.briefLines[0] ??
+    `Draft the ${params.title.toLowerCase()} section so it stays aligned with the survey brief.`;
+  const checklist = uniqueStrings([
+    ...params.bullets.slice(1),
+    ...params.briefLines.slice(1, 4),
+  ]).slice(0, 6);
+  const evidencePointers =
+    params.evidencePointers.length > 0
+      ? params.evidencePointers
+      : ["researcher/SURVEY_BRIEF.md"];
+  return [
+    `# Section Packet: ${params.title}`,
+    "",
+    `- Section: ${params.sectionId}`,
+    `- Goal: ${goal}`,
+    `- Draft path: ${params.draftPath}`,
+    "",
+    "## Evidence Pointers",
+    ...evidencePointers.map((line) => `- ${line}`),
+    "",
+    "## Drafting Checklist",
+    ...(checklist.length > 0
+      ? checklist.map((line) => `- ${line}`)
+      : ["- Keep claims grounded in the active survey packet."]),
+    "",
+  ].join("\n");
+}
+
+async function materializeSurveySectionDraftScaffolds(params: {
+  projectRoot: string;
+  requiredSections: string[];
+  currentSectionPackets: Record<string, unknown>;
+}) {
+  const [
+    sectionBriefsText,
+    comparativeAnalysisText,
+    selfReviewText,
+    surveyBriefText,
+    gapText,
+    coverageText,
+    abstractWorkbenchText,
+    introWorkbenchText,
+  ] = await Promise.all([
+    readTextIfExists(path.join(params.projectRoot, "academic_writer", "SURVEY_SECTION_BRIEFS.md")),
+    readTextIfExists(
+      path.join(params.projectRoot, "academic_writer", "SURVEY_COMPARATIVE_ANALYSIS.md")
+    ),
+    readTextIfExists(path.join(params.projectRoot, "academic_writer", "SURVEY_SELF_REVIEW.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "SURVEY_BRIEF.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "GAP_SYNTHESIS.md")),
+    readTextIfExists(path.join(params.projectRoot, "researcher", "COVERAGE_SUMMARY.md")),
+    readTextIfExists(
+      path.join(params.projectRoot, "academic_writer", "ABSTRACT_5_SENTENCE_WORKBENCH.md")
+    ),
+    readTextIfExists(
+      path.join(params.projectRoot, "academic_writer", "INTRO_5_PARAGRAPH_WORKBENCH.md")
+    ),
+  ]);
+
+  const briefLines = collectMarkdownSignalLines(surveyBriefText, 8);
+  const comparativeLines = collectMarkdownSignalLines(comparativeAnalysisText, 10);
+  const selfReviewLines = collectMarkdownSignalLines(selfReviewText, 10);
+  const gapLines = collectMarkdownSignalLines(gapText, 8);
+  const coverageLines = collectMarkdownSignalLines(coverageText, 8);
+  const abstractWorkbenchLines = collectMarkdownSignalLines(abstractWorkbenchText, 8);
+  const introWorkbenchLines = collectMarkdownSignalLines(introWorkbenchText, 8);
+  const sectionItems = extractMarkdownSectionItems(sectionBriefsText);
+
+  const sectionPacketsPatch: Record<string, Record<string, unknown>> = {};
+  const generatedFiles: string[] = [];
+
+  for (const rawSectionId of params.requiredSections) {
+    const sectionId = normalizeSectionId(rawSectionId);
+    if (!sectionId) {
+      continue;
+    }
+    const title = sectionDisplayTitle(sectionId);
+    const packetPath = `academic_writer/section_packets/${sectionId}.md`;
+    const draftPath = `academic_writer/paper/sections/${sectionId}.tex`;
+    const packetResolvedPath = path.join(params.projectRoot, packetPath);
+    const draftResolvedPath = path.join(params.projectRoot, draftPath);
+    const existingPacket = params.currentSectionPackets[sectionId];
+    const bullets = sectionItems[sectionId] ?? [];
+    const evidencePointers = uniqueStrings([
+      "researcher/SURVEY_BRIEF.md",
+      sectionId === "scope_and_protocol" ? "researcher/REVIEW_PROTOCOL.md" : null,
+      sectionId === "taxonomy" ? "researcher/SOTA_MATRIX.md" : null,
+      sectionId === "evidence_synthesis" ? "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md" : null,
+      sectionId === "benchmark_landscape" ? "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json" : null,
+      sectionId === "open_problems" ? "researcher/GAP_SYNTHESIS.md" : null,
+      sectionId === "conclusion" ? "academic_writer/SURVEY_SELF_REVIEW.md" : null,
+    ]);
+
+    const existingPacketText = await readTextIfExists(packetResolvedPath);
+    if (!existingPacketText || !existingPacketText.trim()) {
+      await writeTextEnsured(
+        packetResolvedPath,
+        `${renderSurveySectionPacket({
+          sectionId,
+          title,
+          draftPath,
+          bullets,
+          briefLines,
+          evidencePointers,
+        })}\n`
+      );
+      generatedFiles.push(packetPath);
+    }
+
+    const existingDraftText = await readTextIfExists(draftResolvedPath);
+    if (!existingDraftText || !existingDraftText.trim()) {
+      await writeTextEnsured(
+        draftResolvedPath,
+        `${renderSurveySectionDraft({
+          sectionId,
+          title,
+          bullets,
+          briefLines,
+          comparativeLines,
+          gapLines,
+          coverageLines,
+          abstractWorkbenchLines,
+          introWorkbenchLines,
+        })}\n`
+      );
+      generatedFiles.push(draftPath);
+    }
+
+    sectionPacketsPatch[sectionId] = {
+      ...(existingPacket && typeof existingPacket === "object" ? existingPacket : {}),
+      section: sectionId,
+      goal:
+        bullets[0] ??
+        briefLines[0] ??
+        `Draft ${title.toLowerCase()} from the active survey packet.`,
+      packet_path: packetPath,
+      draft_path: draftPath,
+      required_graph_evidence_pointers: evidencePointers,
+      forbidden_unsupported_claims: [],
+      missing_citation_placeholders: [],
+      required_citation_count:
+        sectionId === "abstract" || sectionId === "conclusion"
+          ? 0
+          : sectionId === "scope_and_protocol" || sectionId === "benchmark_landscape"
+            ? 4
+            : 3,
+      dependent_sections:
+        sectionId === "conclusion"
+          ? ["taxonomy", "evidence_synthesis", "benchmark_landscape", "open_problems"]
+          : sectionId === "benchmark_landscape"
+            ? ["taxonomy", "evidence_synthesis"]
+            : [],
+      status: "drafting",
+      stale: false,
+      updated_at: new Date().toISOString(),
+      review_verdict: null,
+    };
+  }
+
+  return {
+    sectionPacketsPatch,
+    generatedFiles: uniqueStrings(generatedFiles),
+  };
+}
+
 async function materializeSurveyWritingCompanionArtifacts(params: {
   projectRoot: string;
   paperStoryState: PaperStoryState;
@@ -570,9 +894,31 @@ export async function materializeWritingSupportArtifacts(params: {
     generatedFiles.push(...surveySupport.generatedFiles);
   }
 
-  const writingSession = await bootstrapWritingSession({
+  let writingSession = await bootstrapWritingSession({
     projectRoot: params.projectRoot,
   });
+  if (writingContract.paperMode === "survey") {
+    const surveySectionScaffolds = await materializeSurveySectionDraftScaffolds({
+      projectRoot: params.projectRoot,
+      requiredSections: writingContract.requiredSections,
+      currentSectionPackets: writingSession.sectionPackets,
+    });
+    generatedFiles.push(...surveySectionScaffolds.generatedFiles);
+    const currentSection =
+      writingSession.nextSuggestedSection ??
+      writingSession.currentSection ??
+      writingSession.draftOrder[0] ??
+      writingContract.requiredSections[0] ??
+      null;
+    const sessionResult = await setWritingSessionState({
+      projectRoot: params.projectRoot,
+      writingSession: {
+        current_section: currentSection,
+        section_packets: surveySectionScaffolds.sectionPacketsPatch,
+      },
+    });
+    writingSession = sessionResult.state;
+  }
   await syncAuthoringArtifactRecovery({
     projectRoot: params.projectRoot,
     writingSession,

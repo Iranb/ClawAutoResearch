@@ -39,6 +39,7 @@ import {
   maybeAdvanceAutoCodeReviewForProject,
   listWorkflowCoordinatorProjects,
   maybeAdvanceAutoModeDiscussionForProject,
+  maybeAdvanceSurveyBriefRefinementForProject,
   maybeAdvanceWorkflowPanelDiscussionForProject,
   maybeAdvanceAutoGateReviewForProject,
   maybeDispatchAutoModeMitigationForProject,
@@ -2537,6 +2538,70 @@ test("maybeAdvanceWorkflowPanelDiscussionForProject creates and resolves a reusa
   assert.equal(updated.resolved, true);
   assert.equal(updated.reviewCount, 2);
   assert.equal(updated.recommendedOwner, "academic_writer");
+});
+
+test("maybeAdvanceSurveyBriefRefinementForProject launches a survey brief refinement panel when survey synthesis remains blocked", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "survey_review");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "survey_review",
+    survey_review: {
+      status: "synthesizing",
+      current_phase: "taxonomy_refinement",
+      topic: "Generalized Category Discovery",
+      survey_brief_path: "researcher/SURVEY_BRIEF.md",
+      diagnostics_path: "researcher/SURVEY_GATE_DIAGNOSTICS.json",
+      literature_review_path: "researcher/LITERATURE_REVIEW.md",
+      sota_matrix_path: "researcher/SOTA_MATRIX.md",
+      gap_synthesis_path: "researcher/GAP_SYNTHESIS.md",
+      gate_ready: false,
+      gate_blocking_issues: [
+        "Strengthen the taxonomy/theme sections so the survey is organized by method families instead of a flat bibliography.",
+      ],
+    },
+  });
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"), "# Survey Brief\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "SURVEY_GATE_DIAGNOSTICS.json"), "{}\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "LITERATURE_REVIEW.md"), "# Literature Review\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "SOTA_MATRIX.md"), "# SOTA Matrix\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n", "utf8");
+
+  const result = await maybeAdvanceSurveyBriefRefinementForProject({
+    runtimeSubagent: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `survey-brief-panel-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      stageAfter: "survey_review",
+    },
+  });
+
+  assert.equal(result.launched, true);
+  assert.equal(result.discussionId, "survey-brief-refinement");
+  assert.equal(runtimeCalls.length, 3);
 });
 
 test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to the chosen owner", async (t) => {

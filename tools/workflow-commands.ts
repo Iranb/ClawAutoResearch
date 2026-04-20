@@ -373,6 +373,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "运行 IDEA-CATALYST 的跨域 research30 检索，并把结果回写到 scouting report。",
   },
   {
+    label: COMMAND_LABELS.broad_paper_search,
+    intro: "运行 broad multi-provider literature search，把合并后的候选论文与 source index 持久化到当前项目。",
+  },
+  {
     label: COMMAND_LABELS.citation_calibrate,
     intro: "运行当前项目的 citation calibration，并更新 reviewer 侧验证报告。",
   },

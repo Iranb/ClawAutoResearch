@@ -105,6 +105,8 @@ type ProjectsStateLike = {
 };
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
+const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set(["write"]);
+type StagePreflightResult = Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>>;
 
 const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
   "repair_implementation",
@@ -177,6 +179,161 @@ function buildAutoIteratorStageHandoffAcceptanceChecks(params: {
     default:
       return [];
   }
+}
+
+function mergeStagePreflightResults(results: StagePreflightResult[]): StagePreflightResult {
+  const mergedContracts: string[] = [];
+  const seenContracts = new Set<string>();
+  const materializedArtifacts: StagePreflightResult["materializedArtifacts"] = [];
+  const emittedHookEvents: StagePreflightResult["emittedHookEvents"] = [];
+  const errors: StagePreflightResult["errors"] = [];
+  let manifest: ManifestLike = {};
+  for (const result of results) {
+    manifest = result.manifest;
+    for (const contract of result.materializedContracts) {
+      if (seenContracts.has(contract)) {
+        continue;
+      }
+      seenContracts.add(contract);
+      mergedContracts.push(contract);
+    }
+    materializedArtifacts.push(...result.materializedArtifacts);
+    emittedHookEvents.push(...result.emittedHookEvents);
+    errors.push(...result.errors);
+  }
+  return {
+    manifest,
+    materializedContracts: mergedContracts,
+    materializedArtifacts,
+    emittedHookEvents,
+    errors,
+  };
+}
+
+function shouldBootstrapTransitionStage(params: {
+  stageBefore: string | null;
+  stageAfter: string | null;
+}): boolean {
+  const stageBefore = normalizeStage(params.stageBefore);
+  const stageAfter = normalizeStage(params.stageAfter);
+  return Boolean(
+    stageAfter &&
+      stageAfter !== stageBefore &&
+      TRANSITION_BOOTSTRAP_PREP_STAGES.has(stageAfter)
+  );
+}
+
+function hasDurableCurrentStageEvidence(params: {
+  currentStage: string | null;
+  previousStage: string | null;
+  manifest: ManifestLike;
+}): boolean {
+  const currentStage = normalizeStage(params.currentStage);
+  const previousStage = normalizeStage(params.previousStage);
+  if (!currentStage || !previousStage) {
+    return false;
+  }
+  const manifest = params.manifest;
+  switch (currentStage) {
+    case "idea": {
+      if (!["graph_build", "frontier_mapping"].includes(previousStage)) {
+        return false;
+      }
+      const brainstormCycle = asRecord(manifest.brainstorm_cycle) ?? {};
+      const ideationContract = asRecord(manifest.ideation_contract) ?? {};
+      const ideaCatalyst = asRecord(manifest.idea_catalyst) ?? {};
+      return [
+        normalizeStage(brainstormCycle.status),
+        normalizeStage(ideationContract.status),
+        normalizeStage(ideaCatalyst.status),
+      ].some((status) =>
+        ["ready", "reconciled", "complete", "completed", "judging", "active"].includes(
+          status ?? ""
+        )
+      );
+    }
+    case "analyze": {
+      if (previousStage !== "experiment") {
+        return false;
+      }
+      const experimentSearch = asRecord(manifest.experiment_search) ?? {};
+      const executionProof = asRecord(manifest.execution_proof) ?? {};
+      return (
+        normalizeStage(experimentSearch.status) === "ready_for_analysis" &&
+        normalizeStage(executionProof.status) === "ready"
+      );
+    }
+    case "review": {
+      if (!["analyze", "write"].includes(previousStage)) {
+        return false;
+      }
+      const reviewSession = asRecord(manifest.review_session) ?? {};
+      const resultsStoryline = asRecord(manifest.results_storyline) ?? {};
+      return ["completed", "ready", "received"].includes(
+        normalizeStage(reviewSession.status) ?? ""
+      ) || normalizeStage(resultsStoryline.status) === "ready";
+    }
+    case "write": {
+      if (!["survey_review", "review", "revise", "analyze", "experiment"].includes(previousStage)) {
+        return false;
+      }
+      const writingSession = asRecord(manifest.writing_session) ?? {};
+      const paperStory = asRecord(manifest.paper_story_state) ?? {};
+      const resultsStoryline = asRecord(manifest.results_storyline) ?? {};
+      const titleWorkbench = asRecord(manifest.title_abstract_intro_workbench) ?? {};
+      return (
+        !["missing", "pending", "bootstrapping"].includes(
+          normalizeStage(writingSession.status) ?? "missing"
+        ) ||
+        normalizeStage(paperStory.status) === "ready" ||
+        normalizeStage(resultsStoryline.status) === "ready" ||
+        normalizeStage(titleWorkbench.status) === "ready"
+      );
+    }
+    case "submit": {
+      if (!["write", "review"].includes(previousStage)) {
+        return false;
+      }
+      const writingSession = asRecord(manifest.writing_session) ?? {};
+      const reviewSession = asRecord(manifest.review_session) ?? {};
+      return (
+        normalizeStage(writingSession.status) === "ready_for_submit" ||
+        ["completed", "ready"].includes(normalizeStage(reviewSession.status) ?? "")
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+function resolveCriticalSubmitRollbackStage(manifest: ManifestLike): string | null {
+  const citationIntegrity = asRecord(manifest.citation_integrity) ?? {};
+  const verificationStatus = normalizeStage(citationIntegrity.verification_status);
+  const hallucinatedCitationCount = pickNumber(citationIntegrity, [
+    "hallucinated_citation_count",
+    "hallucinatedCitationCount",
+  ]) ?? 0;
+  const allCitationsReal = citationIntegrity.all_citations_real === true;
+  if (
+    verificationStatus &&
+    verificationStatus !== "verified" &&
+    verificationStatus !== "ready"
+  ) {
+    return "review";
+  }
+  if (!allCitationsReal || hallucinatedCitationCount > 0) {
+    return "review";
+  }
+  return null;
+}
+
+function resolveCriticalAnalyzeRollbackStage(manifest: ManifestLike): string | null {
+  const executionProof = asRecord(manifest.execution_proof) ?? {};
+  const status = normalizeStage(executionProof.status);
+  if (status && status !== "ready") {
+    return "experiment";
+  }
+  return null;
 }
 
 function resolveExperimentRollbackStage(params: {
@@ -670,7 +827,7 @@ export async function runWorkflowAutoIteratorImpl(
         manifest,
       }) ?? stageBefore;
   }
-  const stagePreflight = await maybePrepareWorkflowStageContracts({
+  const initialStagePreflight = await maybePrepareWorkflowStageContracts({
     projectRoot,
     manifest,
     stage: stageBefore,
@@ -693,11 +850,12 @@ export async function runWorkflowAutoIteratorImpl(
       queueLiteratureDiscoveryRequisition: deps.queueLiteratureDiscoveryRequisition,
     },
   });
+  let stagePreflight = initialStagePreflight;
   manifest = {
     ...manifest,
-    ...stagePreflight.manifest,
+    ...initialStagePreflight.manifest,
   };
-  const revisionControlState = normalizeRevisionControlState(
+  let revisionControlState = normalizeRevisionControlState(
     asRecord(manifest.revision_control_state)
   );
   trackRegistry =
@@ -804,6 +962,15 @@ export async function runWorkflowAutoIteratorImpl(
     });
     const previousStage = previousStages.find((candidate) => !visited.has(candidate)) ?? null;
     if (!previousStage) {
+      break;
+    }
+    if (
+      hasDurableCurrentStageEvidence({
+        currentStage: stageEffective,
+        previousStage,
+        manifest,
+      })
+    ) {
       break;
     }
     visited.add(previousStage);
@@ -937,11 +1104,21 @@ export async function runWorkflowAutoIteratorImpl(
       normalizeStage(experimentDecisionBeforeAdvance?.decision) ?? ""
     ) ||
       experimentRollbackStage != null);
+  const criticalAnalyzeRollbackStage =
+    stageEffective === "analyze" ? resolveCriticalAnalyzeRollbackStage(manifest) : null;
+  const criticalSubmitRollbackStage =
+    stageEffective === "submit" ? resolveCriticalSubmitRollbackStage(manifest) : null;
   if (
     experimentRollbackStage != null &&
     !surveyWorkflow
   ) {
     stageAfter = experimentRollbackStage;
+    regressed = true;
+  } else if (criticalAnalyzeRollbackStage) {
+    stageAfter = criticalAnalyzeRollbackStage;
+    regressed = true;
+  } else if (criticalSubmitRollbackStage) {
+    stageAfter = criticalSubmitRollbackStage;
     regressed = true;
   } else if (
     !reviewedAutoPrelaunch &&
@@ -967,8 +1144,52 @@ export async function runWorkflowAutoIteratorImpl(
     revisionDrivenRouting = true;
   }
 
+  if (
+    shouldBootstrapTransitionStage({
+      stageBefore: stageEffective,
+      stageAfter,
+    })
+  ) {
+    const targetStagePreflight = await maybePrepareWorkflowStageContracts({
+      projectRoot,
+      manifest,
+      stage: stageAfter,
+      agentId: actorRole,
+      trigger: `auto_iterator:${mode}:target_stage`,
+      deps: {
+        materializeIdeationContract: deps.materializeIdeationContract,
+        materializePaperStoryState: deps.materializePaperStoryState,
+        materializeExperimentReviewState: deps.materializeExperimentReviewState,
+        materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
+        materializeSurveyReviewState: deps.materializeSurveyReviewState,
+        materializeInnovationSynthesisState: deps.materializeInnovationSynthesisState,
+        materializeResultsStoryline: deps.materializeResultsStoryline,
+        materializeTitleAbstractIntroWorkbench:
+          deps.materializeTitleAbstractIntroWorkbench,
+        materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
+        materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
+        materializePapernexusPacketContracts: deps.materializePapernexusPacketContracts,
+        queueIdeaCatalystRequisition: deps.queueIdeaCatalystRequisition,
+        queueLiteratureDiscoveryRequisition: deps.queueLiteratureDiscoveryRequisition,
+      },
+    });
+    stagePreflight = mergeStagePreflightResults([
+      initialStagePreflight,
+      targetStagePreflight,
+    ]);
+    manifest = {
+      ...manifest,
+      ...targetStagePreflight.manifest,
+    };
+    revisionControlState = normalizeRevisionControlState(
+      asRecord(manifest.revision_control_state)
+    );
+  }
+
   const activeStageSignals =
-    stageAfter !== stageEffective
+    criticalAnalyzeRollbackStage
+      ? effectiveMissingSignals
+      : stageAfter !== stageEffective
       ? await deps.getMissingStageSignals({
           projectRoot,
           manifest,
@@ -1146,7 +1367,6 @@ export async function runWorkflowAutoIteratorImpl(
       ? `Use ${revisionControlState.activeRevisionPacketPath ?? "reviewer/REVISION_CONTROL_PACKET.md"} as the only revision source of truth, repair the bounded manuscript artifacts, update durable writing state, then rerun research_workflow.auto_iterator_tick.`
       : null;
   if (revisionDrivenRouting) {
-    dispatchStageSignals = [];
     stageRepairCommand = null;
   }
   const stageReadinessRepairSummary =
