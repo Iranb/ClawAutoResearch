@@ -7,15 +7,23 @@ import {
   readProjectManifest,
   readProjectText,
   writeProjectJson,
+  writeProjectManifest,
   writeProjectText,
 } from "../research-contracts/core/project-io";
 import {
   collectSurveyBackgroundReferenceLines,
   collectSurveyEntries,
+  summarizeSurveyRoleCoverage,
 } from "../survey-review-artifacts";
 import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { materializeFairCompareMatrix } from "../research-evidence/fair-compare";
+import {
+  normalizeBenchmarkProtocolState,
+  normalizeVenueCompetitionState,
+  serializeBenchmarkProtocolState,
+} from "../research-contracts/evidence-contracts";
+import { materializeVenueCompetitionIntel } from "../research-intel/venue-competition";
 
 export const DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH =
   "academic_writer/SURVEY_COMPARABILITY_REPORT.md";
@@ -23,6 +31,8 @@ export const DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH =
   "researcher/SOURCE_TO_CLAIM_INDEX.json";
 export const DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH =
   "researcher/SURVEY_TRACEABILITY_AUDIT.json";
+export const DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH =
+  "researcher/SURVEY_TOP_TIER_BRIDGE.json";
 
 function extractMatrixMethods(matrixText: string): string[] {
   const methods = new Set<string>();
@@ -99,11 +109,18 @@ function claimUsesGapLanguage(text: string): boolean {
   return /\bgap|open problem|limitation|challenge|future|blind spot|contradiction\b/i.test(text);
 }
 
+function sortedCountKeys(counts: Record<string, number>): string[] {
+  return Object.entries(counts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key]) => key);
+}
+
 export async function materializeSurveyAnalysis(params: {
   projectRoot: string;
   outputReportPath?: string;
   outputIndexPath?: string;
   traceabilityAuditPath?: string;
+  topTierBridgePath?: string;
 }) {
   const manifest = await readProjectManifest(params.projectRoot);
   const surveyState = normalizeSurveyReviewState(manifest.survey_review);
@@ -142,6 +159,11 @@ export async function materializeSurveyAnalysis(params: {
     excludedPapers: excludedJsonValue,
     screeningDecisions: screeningDecisionsValue,
     limit: 8,
+  });
+  const roleCoverage = summarizeSurveyRoleCoverage({
+    screeningDecisions: screeningDecisionsValue,
+    includedPapers: includedJsonValue,
+    excludedPapers: excludedJsonValue,
   });
   const claims = `${briefText ?? ""}\n${reviewText ?? ""}`
     .split(/\r?\n/)
@@ -245,7 +267,159 @@ export async function materializeSurveyAnalysis(params: {
     ...(backgroundAnchors.length > 0
       ? [`Boundary references remain important for scope honesty: ${backgroundAnchors.slice(0, 2).join("; ")}.`]
       : []),
+    ...(Object.keys(roleCoverage.paperRoleCounts).length === 0
+      ? [
+          "Screening packet still lacks paper_role annotations for closest prior work / strongest baseline style routing.",
+        ]
+      : []),
   ];
+  const benchmarkFamilies = [
+    ...fairCompareRows
+      .map((row) => row.benchmark)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+    ...sortedCountKeys(roleCoverage.benchmarkFamilyCounts),
+  ].filter((value, index, values) => values.indexOf(value) === index);
+  const primaryMetrics = fairCompareRows
+    .map((row) => row.metric)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const protocolHints = fairCompareRows
+    .map((row) => row.protocol)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const currentBenchmarkProtocol = normalizeBenchmarkProtocolState(
+    manifest.benchmark_protocol
+  );
+  const benchmarkHintsPath = "researcher/SURVEY_BENCHMARK_HINTS.json";
+  const protocolHintsPath = "researcher/SURVEY_PROTOCOL_HINTS.json";
+  const fairnessHintsPath = "researcher/SURVEY_BASELINE_FAIRNESS.json";
+  await writeProjectJson(params.projectRoot, benchmarkHintsPath, {
+    schemaVersion: 1,
+    generatedAt: nowIso(),
+    benchmarkFamilies,
+    primaryMetrics,
+    protocolHints,
+    roleCoverage,
+  });
+  await writeProjectJson(params.projectRoot, protocolHintsPath, {
+    schemaVersion: 1,
+    generatedAt: nowIso(),
+    selectedBenchmarkFamily:
+      currentBenchmarkProtocol.benchmarkFamily ?? benchmarkFamilies[0] ?? null,
+    selectedPrimaryMetric:
+      currentBenchmarkProtocol.primaryMetric ?? primaryMetrics[0] ?? null,
+    selectedProtocolHint:
+      currentBenchmarkProtocol.splitDescriptor ?? protocolHints[0] ?? null,
+    locked: false,
+    source: "survey_analysis",
+  });
+  await writeProjectJson(params.projectRoot, fairnessHintsPath, {
+    schemaVersion: 1,
+    generatedAt: nowIso(),
+    fairCompareRowCount: fairCompareRows.length,
+    fairnessCounts,
+    summary:
+      comparabilityReady
+        ? "Survey packet already exposes benchmark-level fair compare rows."
+        : blockingIssues[0] ?? "Fair-compare support is still incomplete.",
+  });
+  let nextBenchmarkProtocol = currentBenchmarkProtocol;
+  if (
+    currentBenchmarkProtocol.status === "missing" &&
+    (benchmarkFamilies.length > 0 || primaryMetrics.length > 0 || fairCompareRows.length > 0)
+  ) {
+    nextBenchmarkProtocol = normalizeBenchmarkProtocolState({
+      ...serializeBenchmarkProtocolState(currentBenchmarkProtocol),
+      status: "partial",
+      benchmark_family: benchmarkFamilies[0] ?? null,
+      primary_metric: primaryMetrics[0] ?? null,
+      split_descriptor: protocolHints[0] ?? null,
+      evaluation_harness: protocolHints[0] ?? null,
+      registry_path: benchmarkHintsPath,
+      protocol_lock_path: protocolHintsPath,
+      fairness_report_path: fairnessHintsPath,
+      official_eval_recipe: protocolHints[0] ?? primaryMetrics[0] ?? null,
+      locked: false,
+      drift_status: "pending",
+      fair_compare_status:
+        comparabilityReady ? "pass" : fairCompareRows.length > 0 ? "warning" : "missing",
+      fair_compare_summary:
+        comparabilityReady
+          ? "Survey-derived benchmark hints expose at least one fair-compare row."
+          : blockingIssues[0] ??
+            "Survey-derived benchmark hints still need stronger comparability support.",
+      allowed_deviation_count:
+        (fairnessCounts.backbone_confounded ?? 0) +
+        (fairnessCounts.protocol_confounded ?? 0),
+      allowed_deviation_status:
+        (fairnessCounts.backbone_confounded ?? 0) +
+          (fairnessCounts.protocol_confounded ?? 0) >
+        0
+          ? "blocked"
+          : "none",
+      pending_reason:
+        "Survey-derived benchmark hints are available, but experiment-grade protocol lock still requires planner/experiment confirmation.",
+      last_materialized_at: nowIso(),
+    });
+    manifest.benchmark_protocol = serializeBenchmarkProtocolState(nextBenchmarkProtocol);
+    await writeProjectManifest(params.projectRoot, manifest);
+  }
+  const venueCompetition =
+    benchmarkFamilies.length > 0 || includedSources.length > 0
+      ? await materializeVenueCompetitionIntel({
+          projectRoot: params.projectRoot,
+        }).catch(() => normalizeVenueCompetitionState(manifest.venue_competition))
+      : normalizeVenueCompetitionState(manifest.venue_competition);
+  const topTierBridgePath =
+    params.topTierBridgePath ?? DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH;
+  const topTierBridgeReady =
+    benchmarkFamilies.length > 0 && (comparabilityReady || fairCompareRows.length > 0);
+  await writeProjectJson(params.projectRoot, topTierBridgePath, {
+    schemaVersion: 1,
+    generatedAt: nowIso(),
+    ready: topTierBridgeReady,
+    roleCoverage,
+    benchmarkHints: {
+      benchmarkFamilies,
+      primaryMetrics,
+      protocolHints,
+      selectedBenchmarkFamily:
+        nextBenchmarkProtocol.benchmarkFamily ?? benchmarkFamilies[0] ?? null,
+      selectedPrimaryMetric:
+        nextBenchmarkProtocol.primaryMetric ?? primaryMetrics[0] ?? null,
+    },
+    contracts: {
+      benchmarkProtocol: {
+        status: nextBenchmarkProtocol.status,
+        benchmarkFamily: nextBenchmarkProtocol.benchmarkFamily,
+        fairCompareStatus: nextBenchmarkProtocol.fairCompareStatus,
+        pendingReason: nextBenchmarkProtocol.pendingReason,
+      },
+      venueCompetition: {
+        status: venueCompetition.status,
+        competitorSlatePath: venueCompetition.competitorSlatePath,
+        acceptanceRiskStatus: venueCompetition.acceptanceRiskStatus,
+        pendingReason: venueCompetition.pendingReason,
+      },
+    },
+    blockingIssues: [
+      ...(topTierBridgeReady
+        ? []
+        : [
+            benchmarkFamilies.length === 0
+              ? "Survey packet still lacks benchmark-family hints strong enough to seed top-tier evidence contracts."
+              : "Survey packet still needs stronger fair-compare support before the top-tier bridge is trustworthy.",
+          ]),
+    ],
+    warnings: [
+      ...(venueCompetition.status === "ready"
+        ? []
+        : [
+            "Venue competition contract is still partial or missing; competitor slate should be refreshed before top-tier positioning claims.",
+          ]),
+      ...warnings,
+    ],
+  });
   const reportLines = [
     "# Survey Comparability Report",
     "",
@@ -289,6 +463,7 @@ export async function materializeSurveyAnalysis(params: {
       fairCompareRows,
       fairnessCounts,
       backgroundAnchors,
+      roleCoverage,
       claims: enrichedClaims,
     }
   );
@@ -323,6 +498,10 @@ export async function materializeSurveyAnalysis(params: {
     sourceToClaimIndexPath: params.outputIndexPath ?? DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
     traceabilityAuditPath:
       params.traceabilityAuditPath ?? DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
+    topTierBridgePath,
+    roleCoverage,
+    benchmarkProtocolStatus: nextBenchmarkProtocol.status,
+    venueCompetitionStatus: venueCompetition.status,
     backgroundAnchorCount: backgroundAnchors.length,
     blockingIssues,
     warnings,

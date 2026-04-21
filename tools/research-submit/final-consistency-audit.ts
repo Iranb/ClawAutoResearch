@@ -37,6 +37,8 @@ export async function materializeFinalConsistencyAudit(params: {
     survey
       ? `- Survey analysis ready: ${survey.diagnostics.ready && survey.traceabilityReady && survey.comparabilityReady ? "yes" : "no"}`
       : "- Survey analysis: not applicable",
+    survey ? `- Survey benchmark contract: ${survey.benchmarkProtocolStatus}` : "- Survey benchmark contract: not applicable",
+    survey ? `- Survey competitor contract: ${survey.venueCompetitionStatus}` : "- Survey competitor contract: not applicable",
     "",
     "## Blocking issues",
     ...(citation.issues.length > 0 ? citation.issues.map((issue) => `- citation: ${issue}`) : ["- citation: none"]),

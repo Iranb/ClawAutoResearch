@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
   DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+  DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
   DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
   materializeSurveyAnalysis,
 } from "../tools/research-authoring/survey-analysis.ts";
@@ -129,6 +130,18 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
           title: "Open World Object Detection: A Survey",
           decision: "background",
           reason: "scope boundary anchor",
+          paper_role: "boundary_reference",
+          evidence_role: "scope_guardrail",
+          benchmark_family: "OpenWorldDetection",
+        },
+        {
+          title: "Graph Pretraining for SurveyBench",
+          decision: "include",
+          paper_role: "strong_baseline",
+          evidence_role: "representative_family_member",
+          benchmark_family: "SurveyBench",
+          task_family: "graph_reasoning",
+          setting_family: "standard",
         },
       ],
     }
@@ -152,6 +165,7 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
   );
   assert.equal(sourceIndex.claims.length >= 2, true);
   assert.equal(sourceIndex.claims[0].traceabilityStatus, "ready");
+  assert.equal(sourceIndex.roleCoverage.paperRoleCounts.strong_baseline, 1);
 
   const report = await fs.readFile(
     path.join(projectRoot, DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH),
@@ -159,6 +173,14 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
   );
   assert.match(report, /Traceable claims/i);
   assert.match(report, /Fair Compare Summary/i);
+
+  const topTierBridge = JSON.parse(
+    await fs.readFile(path.join(projectRoot, DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH), "utf8")
+  );
+  assert.equal(topTierBridge.ready, true);
+  assert.equal(topTierBridge.roleCoverage.paperRoleCounts.strong_baseline, 1);
+  assert.equal(topTierBridge.benchmarkHints.selectedBenchmarkFamily, "SurveyBench");
+  assert.equal(topTierBridge.contracts.benchmarkProtocol.status, "partial");
 });
 
 test("materializeSurveyAnalysis flags unsupported synthesis claims when traceability is weak", async (t) => {
