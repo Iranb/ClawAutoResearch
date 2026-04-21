@@ -344,7 +344,7 @@ path_exists() {
 }
 
 is_git_repo() {
-  [[ -d "$PLUGIN_DIR/.git" ]]
+  git -C "$PLUGIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
 copy_file() {
