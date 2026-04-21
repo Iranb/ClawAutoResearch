@@ -314,9 +314,11 @@ async function materializeSurveySectionDraftScaffolds(params: {
       sectionId === "scope_and_protocol" ? "researcher/REVIEW_PROTOCOL.md" : null,
       sectionId === "scope_and_protocol" ? "researcher/CANDIDATE_SCREENING_DECISIONS.json" : null,
       sectionId === "scope_and_protocol" ? "researcher/EXCLUDED_PAPERS.json" : null,
+      sectionId === "scope_and_protocol" ? "researcher/TOPIC_RELEVANCE_AUDIT.json" : null,
       sectionId === "taxonomy" ? "researcher/SOTA_MATRIX.md" : null,
       sectionId === "taxonomy" ? "researcher/INCLUDED_PAPERS.json" : null,
       sectionId === "evidence_synthesis" ? "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md" : null,
+      sectionId === "evidence_synthesis" ? "researcher/TOPIC_RELEVANCE_AUDIT.json" : null,
       sectionId === "benchmark_landscape" ? "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json" : null,
       sectionId === "open_problems" ? "researcher/GAP_SYNTHESIS.md" : null,
       sectionId === "conclusion" ? "academic_writer/SURVEY_SELF_REVIEW.md" : null,
@@ -504,6 +506,10 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
 ## Boundary / Related Anchors
 ${backgroundLines.length > 0 ? backgroundLines.map((line) => `- ${line}`).join("\n") : "- Keep adjacent-task references visible when they explain scope boundaries or contrastive baselines."}
 
+## Body-Aware Topic Relevance
+- Use researcher/TOPIC_RELEVANCE_AUDIT.json when deciding whether a borderline paper belongs in the core synthesis, only in boundary-setting prose, or should stay excluded.
+- Prefer full-text topic evidence over title-only guesswork when a title is generic or transfer-oriented.
+
 ## Coverage / Boundary Reminders
 ${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries, blind spots, and excluded directions explicit."}
 
@@ -526,6 +532,7 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie 
               "Surface blind spots, recency limits, and incomparable settings.",
               `Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.`,
               `Keep boundary references visible: ${backgroundLines.length > 0 ? backgroundLines.slice(0, 2).join("; ") : "related NCD / OWR / OSR / GZSL anchors when they explain exclusions"}.`,
+              "If a paper's title is generic, rely on TOPIC_RELEVANCE_AUDIT.json before calling it core evidence.",
             ]
           : sectionId === "taxonomy"
             ? [

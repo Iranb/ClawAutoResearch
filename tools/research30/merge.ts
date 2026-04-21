@@ -9,6 +9,7 @@ import type {
   BroadPaperProviderQueryResult,
 } from "./provider-contract";
 import { matchVenueRegistry } from "./venue-registry";
+import { scorePaperTopicRelevance } from "./topic-relevance";
 
 export type MergedPaperCandidate = CanonicalPaperRecord & {
   providerAgreementCount: number;
@@ -17,6 +18,9 @@ export type MergedPaperCandidate = CanonicalPaperRecord & {
   recallScore: number;
   selectionScore: number;
   metadataOnly: boolean;
+  topicRelevanceScore: number;
+  matchedTopicTokens: string[];
+  topicRelevanceEvidenceSource: "missing" | "title" | "title_abstract" | "full_text";
 };
 
 function scoreCandidate(params: {
@@ -24,6 +28,7 @@ function scoreCandidate(params: {
   providerAgreementCount: number;
   providerScores: Record<string, number | null>;
   preferredVenuePacks: string[];
+  topicRelevanceScore: number;
 }): { recallScore: number; selectionScore: number } {
   const providerAgreementScore = params.providerAgreementCount * 25;
   const citationScore = Math.min(30, Math.max(0, Math.floor((params.candidate.citationCount ?? 0) / 10)));
@@ -36,7 +41,18 @@ function scoreCandidate(params: {
   const providerScore = Object.values(params.providerScores)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
     .sort((left, right) => right - left)[0] ?? 0;
-  const recallScore = providerAgreementScore + citationScore + venueScore + providerScore / 10;
+  const infrastructureScore =
+    providerAgreementScore + citationScore + venueScore + providerScore / 10;
+  const gatedFactor =
+    params.topicRelevanceScore >= 60
+      ? 1
+      : params.topicRelevanceScore >= 30
+        ? 0.6
+        : params.topicRelevanceScore >= 15
+          ? 0.35
+          : 0.15;
+  const recallScore =
+    params.topicRelevanceScore + infrastructureScore * gatedFactor;
   return {
     recallScore,
     selectionScore: recallScore + oaScore + metadataPenalty,
@@ -79,6 +95,7 @@ function buildCandidateFromHit(params: {
 }
 
 export function mergeProviderQueryResults(params: {
+  topic: string;
   queryResults: BroadPaperProviderQueryResult[];
   preferredVenuePacks: string[];
 }): MergedPaperCandidate[] {
@@ -97,6 +114,11 @@ export function mergeProviderQueryResults(params: {
       }
       const existing = byCanonicalId.get(normalized.canonicalId);
       if (!existing) {
+        const topicRelevance = scorePaperTopicRelevance({
+          topic: params.topic,
+          title: normalized.title,
+          abstract: hit.abstract,
+        });
         byCanonicalId.set(normalized.canonicalId, {
           ...normalized,
           providerAgreementCount: 1,
@@ -105,6 +127,9 @@ export function mergeProviderQueryResults(params: {
           recallScore: 0,
           selectionScore: 0,
           metadataOnly: normalized.resolutionStatus === "metadata_only_unresolved",
+          topicRelevanceScore: topicRelevance.score,
+          matchedTopicTokens: topicRelevance.matchedTokens,
+          topicRelevanceEvidenceSource: topicRelevance.evidenceSource,
         });
         continue;
       }
@@ -129,6 +154,9 @@ export function mergeProviderQueryResults(params: {
         metadataOnly:
           merged.resolutionStatus === "metadata_only_unresolved" ||
           existing.metadataOnly,
+        topicRelevanceScore: existing.topicRelevanceScore,
+        matchedTopicTokens: existing.matchedTopicTokens,
+        topicRelevanceEvidenceSource: existing.topicRelevanceEvidenceSource,
       });
     }
   }
@@ -140,6 +168,7 @@ export function mergeProviderQueryResults(params: {
         providerAgreementCount: candidate.providerAgreementCount,
         providerScores: candidate.providerScores,
         preferredVenuePacks: params.preferredVenuePacks,
+        topicRelevanceScore: candidate.topicRelevanceScore,
       });
       return {
         ...candidate,
@@ -167,5 +196,8 @@ export function serializeMergedPaperCandidate(
     recall_score: candidate.recallScore,
     selection_score: candidate.selectionScore,
     metadata_only: candidate.metadataOnly,
+    topic_relevance_score: candidate.topicRelevanceScore,
+    matched_topic_tokens: candidate.matchedTopicTokens,
+    topic_relevance_evidence_source: candidate.topicRelevanceEvidenceSource,
   };
 }

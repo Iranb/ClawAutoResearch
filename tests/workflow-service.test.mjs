@@ -2680,7 +2680,7 @@ test("maybeAdvanceSurveyBriefRefinementForProject launches a survey brief refine
 
   assert.equal(result.launched, true);
   assert.equal(result.discussionId, "survey-brief-refinement");
-  assert.equal(runtimeCalls.length, 3);
+  assert.equal(runtimeCalls.length, 4);
 });
 
 test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to the chosen owner", async (t) => {

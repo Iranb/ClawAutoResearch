@@ -177,3 +177,111 @@ test("broad paper search persists merged candidates, staged pdfs, and source ind
   const stagedPdf = await fs.readFile(stagedPdfPath);
   assert.ok(stagedPdf.subarray(0, 5).toString("ascii") === "%PDF-");
 });
+
+test("broad paper search keeps high-relevance papers and drops noisy high-citation matches from the source index", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broad-paper-search-filter-"));
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    JSON.stringify(
+      {
+        project_id: "survey-gcd",
+        survey_review: {
+          topic: "Generalized Category Discovery v3",
+        },
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.startsWith("https://api.openalex.org/works")) {
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: "https://openalex.org/W123",
+              display_name: "Generalized Category Discovery",
+              publication_year: 2022,
+              publication_date: "2022-06-01",
+              doi: "https://doi.org/10.1109/cvpr52688.2022.00734",
+              primary_location: {
+                landing_page_url: "https://example.org/gcd",
+                pdf_url: "https://example.org/gcd.pdf",
+                source: {
+                  display_name: "Computer Vision and Pattern Recognition",
+                  type: "conference",
+                },
+              },
+              authorships: [{ author: { display_name: "Kai Vaze" } }],
+              cited_by_count: 150,
+              type_crossref: "proceedings-article",
+            },
+            {
+              id: "https://openalex.org/W999",
+              display_name: "Anchors: High-Precision Model-Agnostic Explanations",
+              publication_year: 2018,
+              publication_date: "2018-02-01",
+              doi: "https://doi.org/10.1609/aaai.v32i1.11491",
+              primary_location: {
+                landing_page_url: "https://example.org/anchors",
+                pdf_url: "https://example.org/anchors.pdf",
+                source: {
+                  display_name: "Proceedings of the AAAI Conference on Artificial Intelligence",
+                  type: "conference",
+                },
+              },
+              authorships: [{ author: { display_name: "Marco Ribeiro" } }],
+              cited_by_count: 2037,
+              type_crossref: "proceedings-article",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (target === "https://example.org/gcd.pdf" || target === "https://example.org/anchors.pdf") {
+      return new Response(Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(1024, "B")]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    if (
+      target.startsWith("https://api.crossref.org/works") ||
+      target.startsWith("https://api.semanticscholar.org/graph/v1/paper/search") ||
+      target.startsWith("https://dblp.org/search/publ/api")
+    ) {
+      return new Response(JSON.stringify({ message: { items: [] }, data: [], result: { hits: { hit: [] } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unhandled fetch URL in test: ${target}`);
+  };
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await runBroadPaperSearch({
+    projectRoot,
+    topic: "Generalized Category Discovery v3",
+    providers: ["openalex"],
+    maxQueries: 3,
+    maxResultsPerQuery: 5,
+    maxResolutionAttempts: 3,
+  });
+
+  assert.equal(result.mergedCandidates.length >= 2, true);
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.equal(sourceIndex.papers.some((entry) => /Generalized Category Discovery/i.test(entry.title)), true);
+  assert.equal(sourceIndex.papers.some((entry) => /Anchors:/i.test(entry.title)), false);
+});

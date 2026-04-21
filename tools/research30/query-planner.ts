@@ -4,6 +4,7 @@ import {
   type VenueRegistryEntry,
 } from "./venue-registry";
 import type { BroadPaperSearchDepth, BroadPaperSearchQuery } from "./provider-contract";
+import { sanitizeTopicForSearch } from "./topic-relevance";
 
 type QueryFamily =
   | "direct"
@@ -86,7 +87,7 @@ function addQuery(
   if (!query) {
     return;
   }
-  const key = `${params.family}::${query.toLowerCase()}::${params.venuePack ?? ""}`;
+  const key = `${query.toLowerCase()}::${params.venuePack ?? ""}`;
   if (seen.has(key)) {
     return;
   }
@@ -111,8 +112,9 @@ export function buildBroadPaperSearchPlan(params: {
   queries: BroadPaperSearchQuery[];
 } {
   const topic = params.topic.trim();
-  const normalizedTopic = normalizeTitle(topic);
-  const preferredVenuePacks = inferVenuePacksFromTopic(topic);
+  const searchTopic = sanitizeTopicForSearch(topic) || topic;
+  const normalizedTopic = normalizeTitle(searchTopic);
+  const preferredVenuePacks = inferVenuePacksFromTopic(searchTopic || topic);
   const maxQueries =
     typeof params.maxQueries === "number" && Number.isFinite(params.maxQueries)
       ? Math.max(4, Math.min(12, Math.floor(params.maxQueries)))
@@ -124,8 +126,8 @@ export function buildBroadPaperSearchPlan(params: {
 
   addQuery(queries, seen, {
     family: "direct",
-    query: topic,
-    rationale: "Preserve the original user wording as the primary recall query.",
+    query: searchTopic,
+    rationale: "Use the normalized core topic as the primary recall query.",
   });
   addQuery(queries, seen, {
     family: "paragraph_semantic",
@@ -134,23 +136,23 @@ export function buildBroadPaperSearchPlan(params: {
   });
   addQuery(queries, seen, {
     family: "synonym",
-    query: buildSynonymVariant(topic),
+    query: buildSynonymVariant(searchTopic),
     rationale: "Expand common CS/AI abbreviations into canonical terminology.",
   });
   addQuery(queries, seen, {
     family: "task_method",
-    query: buildMethodTaskQuery(topic),
+    query: buildMethodTaskQuery(searchTopic),
     rationale: "Backfill baseline and benchmark literature around the topic.",
   });
   addQuery(queries, seen, {
     family: "synonym",
-    query: buildCondensedQuery(topic),
+    query: buildCondensedQuery(searchTopic),
     rationale: "Use a shorter condensed query for providers that degrade on long descriptions.",
   });
   for (const venuePack of preferredVenuePacks) {
     addQuery(queries, seen, {
       family: "venue_pack",
-      query: `${buildCondensedQuery(topic) ?? topic} ${venuePack.replace(/_/g, " ")}`,
+      query: `${buildCondensedQuery(searchTopic) ?? searchTopic} ${venuePack.replace(/_/g, " ")}`,
       rationale: "Bias recall toward likely top-tier venue families for the topic.",
       venuePack,
     });

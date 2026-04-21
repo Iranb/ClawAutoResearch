@@ -14,6 +14,7 @@ export type WorkflowPaperSourceEntry = {
   canonicalId: string | null;
   title: string | null;
   normalizedTitle: string | null;
+  sourceHints: string[];
   arxivId: string | null;
   doi: string | null;
   pmid: string | null;
@@ -43,6 +44,7 @@ export function normalizeWorkflowPaperSourceEntry(
       canonicalId: null,
       title: null,
       normalizedTitle: null,
+      sourceHints: [],
       arxivId: null,
       doi: null,
       pmid: null,
@@ -67,6 +69,7 @@ export function normalizeWorkflowPaperSourceEntry(
     canonicalId: record.canonicalId,
     title: record.title,
     normalizedTitle: record.normalizedTitle,
+    sourceHints: record.sourceHints,
     arxivId: record.arxivId,
     doi: record.doi,
     pmid: record.pmid,

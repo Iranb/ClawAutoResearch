@@ -116,7 +116,9 @@ export async function searchCrossref(
     if (params.fromYear) {
       filters.push(`from-pub-date:${params.fromYear}-01-01`);
     }
-    url.searchParams.set("filter", filters.join(","));
+    if (filters.length > 0) {
+      url.searchParams.set("filter", filters.join(","));
+    }
     const payload = await fetchJsonWithTimeout<CrossrefResponse>({
       url,
       signal: params.signal,

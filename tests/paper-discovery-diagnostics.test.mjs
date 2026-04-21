@@ -81,7 +81,8 @@ test("literature coverage audit focuses on screened survey papers and keeps pend
         venue: "International Conference on Learning Representations",
         source_provider: "semanticscholar",
         citation_count: 20,
-        resolution_status: "resolved_pdf",
+        resolution_status: "resolved_markdown",
+        source_path: path.join(projectRoot, "researcher", "paper-staging", "md", "2403.13684--sptnet.md"),
       },
       {
         canonical_id: "doi:10.1609/aaai.v32i1.11491",
@@ -103,6 +104,17 @@ test("literature coverage audit focuses on screened survey papers and keeps pend
       },
     ],
   });
+  await fs.mkdir(path.join(projectRoot, "researcher", "paper-staging", "md"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "paper-staging", "md", "2403.13684--sptnet.md"),
+    [
+      "# SPTNet",
+      "",
+      "Generalized Category Discovery (GCD) is the main task studied in this paper.",
+      "We evaluate generalized category discovery on ImageNet-100 and fine-grained benchmarks.",
+    ].join("\n"),
+    "utf8"
+  );
 
   const audit = await auditLiteratureCoverage({ projectRoot });
   const packet = await planCitationExpansion({ projectRoot, maxSeeds: 2 });
@@ -113,6 +125,7 @@ test("literature coverage audit focuses on screened survey papers and keeps pend
   assert.equal(audit.backgroundPaperCount, 1);
   assert.equal(audit.pendingRoundCount, 1);
   assert.equal(audit.verdict, "thin");
+  assert.equal(audit.topicRelevance.fullTextReviewedCount >= 1, true);
   assert.equal(packet.seeds.some((seed) => /Anchors/i.test(seed.title ?? "")), false);
   assert.equal(
     packet.seeds.some((seed) =>
@@ -120,4 +133,58 @@ test("literature coverage audit focuses on screened survey papers and keeps pend
     ),
     true
   );
+});
+
+test("topic relevance audit can rescue a paper with a generic title when markdown body is on-topic", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-topic-relevance-")
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-gcd",
+    survey_review: {
+      topic: "Generalized Category Discovery",
+    },
+  });
+  const markdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "md",
+    "creation-paper.md"
+  );
+  await fs.mkdir(path.dirname(markdownPath), { recursive: true });
+  await fs.writeFile(
+    markdownPath,
+    [
+      "# Learning through Creation",
+      "",
+      "This work studies Generalized Category Discovery in an on-the-fly setting.",
+      "The generalized category discovery problem is discussed throughout the paper.",
+    ].join("\n"),
+    "utf8"
+  );
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2603.13858",
+        title: "Learning through Creation",
+        year: 2026,
+        source_kind: "markdown",
+        source_path: markdownPath,
+        source_provider: "hf",
+        resolution_status: "resolved_markdown",
+      },
+    ],
+  });
+
+  const audit = await auditLiteratureCoverage({ projectRoot });
+  const topicAudit = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "TOPIC_RELEVANCE_AUDIT.json"), "utf8")
+  );
+
+  assert.equal(audit.topicRelevance.relevantCount, 1);
+  assert.equal(topicAudit.entries[0].evidenceSource, "full_text");
+  assert.equal(topicAudit.entries[0].status, "relevant");
 });

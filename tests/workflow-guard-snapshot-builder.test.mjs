@@ -337,7 +337,7 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
             "reviewer/panel-discussions/survey-brief-refinement/PANEL_DISCUSSION_PACKET.json",
           packetFingerprint: "survey-brief-fingerprint",
           status: "reviewing",
-          participants: ["researcher", "analyzer", "reviewer"],
+          participants: ["researcher", "analyzer", "planner", "reviewer"],
           maxRounds: 2,
           launchedAt: "2026-04-20T08:44:13.731Z",
           updatedAt: "2026-04-20T08:44:13.731Z",
