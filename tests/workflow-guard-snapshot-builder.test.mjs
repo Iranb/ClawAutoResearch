@@ -986,6 +986,7 @@ test("snapshot builder surfaces survey review state for projectless review workf
           taxonomy_stability_status: "unstable",
           representative_methods_status: "partial",
           benchmark_alignment_status: "partial",
+          topic_relevance_status: "needs_revision",
           gap_closure_status: "partial",
           gate_blocking_issues: [
             "Expand SOTA matrix coverage before write handoff.",
@@ -1058,6 +1059,7 @@ test("snapshot builder surfaces survey review state for projectless review workf
   assert.equal(snapshot.surveyReviewTaxonomyStabilityStatus, "unstable");
   assert.equal(snapshot.surveyReviewRepresentativeMethodsStatus, "partial");
   assert.equal(snapshot.surveyReviewBenchmarkAlignmentStatus, "partial");
+  assert.equal(snapshot.surveyReviewTopicRelevanceStatus, "needs_revision");
   assert.equal(snapshot.surveyReviewGapClosureStatus, "partial");
   assert.equal(snapshot.surveyReviewGateBlockingIssueCount, 1);
   assert.equal(

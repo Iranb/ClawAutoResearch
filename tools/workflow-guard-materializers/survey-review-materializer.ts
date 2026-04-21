@@ -598,6 +598,16 @@ export async function materializeSurveyReviewStateImpl(params: {
       diagnostics.gapClosure.summary ??
       "Carry the main unresolved gaps and limitations into the survey brief.";
   } else if (
+    surveyBriefReady &&
+    diagnostics.topicRelevance.status !== "ready"
+  ) {
+    status = "synthesizing";
+    currentPhase = "brief_synthesis";
+    pendingReason =
+      diagnostics.topicRelevance.blockers[0] ??
+      diagnostics.topicRelevance.summary ??
+      "Revisit the include/background boundary using the topic relevance audit before write handoff.";
+  } else if (
     queryRoundCount > 0 &&
     diagnostics.coverage.status !== "ready"
   ) {
@@ -656,6 +666,8 @@ export async function materializeSurveyReviewStateImpl(params: {
     representative_methods_summary: diagnostics.representativeMethods.summary,
     benchmark_alignment_status: diagnostics.benchmarkAlignment.status,
     benchmark_alignment_summary: diagnostics.benchmarkAlignment.summary,
+    topic_relevance_status: diagnostics.topicRelevance.status,
+    topic_relevance_summary: diagnostics.topicRelevance.summary,
     gap_closure_status: diagnostics.gapClosure.status,
     gap_closure_summary: diagnostics.gapClosure.summary,
     pending_reason: pendingReason,

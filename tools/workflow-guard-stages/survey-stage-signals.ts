@@ -123,7 +123,7 @@ export async function collectSurveyReviewStageMissingSignals(params: {
     }
     if (!state.gateReady) {
       missing.push(
-        `survey_review quality gates must be ready before WRITE handoff: coverage=${state.coverageStatus ?? "missing"}, taxonomy=${state.taxonomyStabilityStatus ?? "missing"}, representative_methods=${state.representativeMethodsStatus ?? "missing"}, benchmark_alignment=${state.benchmarkAlignmentStatus ?? "missing"}, gap_closure=${state.gapClosureStatus ?? "missing"}`
+        `survey_review quality gates must be ready before WRITE handoff: coverage=${state.coverageStatus ?? "missing"}, taxonomy=${state.taxonomyStabilityStatus ?? "missing"}, representative_methods=${state.representativeMethodsStatus ?? "missing"}, benchmark_alignment=${state.benchmarkAlignmentStatus ?? "missing"}, topic_relevance=${state.topicRelevanceStatus ?? "missing"}, gap_closure=${state.gapClosureStatus ?? "missing"}`
       );
     }
     if (state.coverageStatus !== "ready") {
@@ -152,6 +152,13 @@ export async function collectSurveyReviewStageMissingSignals(params: {
         state.benchmarkAlignmentSummary
           ? `survey benchmark-alignment gate is not aligned: ${state.benchmarkAlignmentSummary}`
           : "survey benchmark-alignment gate is not aligned"
+      );
+    }
+    if (state.topicRelevanceStatus && state.topicRelevanceStatus !== "ready") {
+      missing.push(
+        state.topicRelevanceSummary
+          ? `survey topic-relevance gate is not ready: ${state.topicRelevanceSummary}`
+          : "survey topic-relevance gate is not ready"
       );
     }
     if (state.gapClosureStatus !== "closed") {

@@ -49,6 +49,8 @@ export type SurveyReviewState = {
   representativeMethodsSummary: string | null;
   benchmarkAlignmentStatus: string | null;
   benchmarkAlignmentSummary: string | null;
+  topicRelevanceStatus: string | null;
+  topicRelevanceSummary: string | null;
   gapClosureStatus: string | null;
   gapClosureSummary: string | null;
   pendingReason: string | null;
@@ -212,6 +214,13 @@ export function normalizeSurveyReviewState(value: unknown): SurveyReviewState {
       "benchmarkAlignmentSummary",
       "benchmark_alignment_summary",
     ]),
+    topicRelevanceStatus: normalizeOptionalStatus(
+      record.topicRelevanceStatus ?? record.topic_relevance_status
+    ),
+    topicRelevanceSummary: pickString(record, [
+      "topicRelevanceSummary",
+      "topic_relevance_summary",
+    ]),
     gapClosureStatus: normalizeOptionalStatus(
       record.gapClosureStatus ?? record.gap_closure_status
     ),
@@ -266,6 +275,8 @@ export function serializeSurveyReviewState(
     representative_methods_summary: state.representativeMethodsSummary,
     benchmark_alignment_status: state.benchmarkAlignmentStatus,
     benchmark_alignment_summary: state.benchmarkAlignmentSummary,
+    topic_relevance_status: state.topicRelevanceStatus,
+    topic_relevance_summary: state.topicRelevanceSummary,
     gap_closure_status: state.gapClosureStatus,
     gap_closure_summary: state.gapClosureSummary,
     pending_reason: state.pendingReason,

@@ -65,6 +65,7 @@ test("serializeSurveyReviewState preserves survey counts and durable paths", () 
     taxonomy_stability_status: "stable",
     representative_methods_status: "ready",
     benchmark_alignment_status: "aligned",
+    topic_relevance_status: "ready",
     gap_closure_status: "closed",
   });
 
@@ -83,6 +84,7 @@ test("serializeSurveyReviewState preserves survey counts and durable paths", () 
   assert.equal(serialized.coverage_status, "ready");
   assert.equal(serialized.taxonomy_stability_status, "stable");
   assert.equal(serialized.benchmark_alignment_status, "aligned");
+  assert.equal(serialized.topic_relevance_status, "ready");
   assert.equal(serialized.survey_brief_path, DEFAULT_SURVEY_BRIEF_PATH);
 });
 
@@ -105,6 +107,7 @@ test("getSurveyReviewStateSummary exposes survey readiness and artifact counts",
       taxonomy_stability_status: "stable",
       representative_methods_status: "ready",
       benchmark_alignment_status: "aligned",
+      topic_relevance_status: "ready",
       gap_closure_status: "closed",
     },
   });
@@ -121,5 +124,6 @@ test("getSurveyReviewStateSummary exposes survey readiness and artifact counts",
   assert.equal(summary.state.pendingPlannedRoundCount, 0);
   assert.equal(summary.state.graphGroundedBriefReady, true);
   assert.equal(summary.state.gateReady, true);
+  assert.equal(summary.state.topicRelevanceStatus, "ready");
   assert.equal(summary.ready, true);
 });

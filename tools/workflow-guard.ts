@@ -1812,6 +1812,7 @@ export type WorkflowSnapshot = {
   surveyReviewTaxonomyStabilityStatus: string | null;
   surveyReviewRepresentativeMethodsStatus: string | null;
   surveyReviewBenchmarkAlignmentStatus: string | null;
+  surveyReviewTopicRelevanceStatus: string | null;
   surveyReviewGapClosureStatus: string | null;
   surveyReviewSurveyBriefPath: string | null;
   surveyReviewGateBlockingIssueCount: number | null;

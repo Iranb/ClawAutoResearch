@@ -55,6 +55,7 @@ export type LiteratureCoverageAudit = {
     relevantCount: number;
     boundaryCount: number;
     offTopicCount: number;
+    screenedIncludedOffTopicCount: number;
     insufficientEvidenceCount: number;
     fullTextReviewedCount: number;
     titleOnlyCount: number;
@@ -320,6 +321,7 @@ function buildCoverageMarkdown(audit: LiteratureCoverageAudit): string {
     `- Topic-relevant papers: ${audit.topicRelevance.relevantCount}`,
     `- Boundary papers: ${audit.topicRelevance.boundaryCount}`,
     `- Off-topic papers: ${audit.topicRelevance.offTopicCount}`,
+    `- Screened included off-topic papers: ${audit.topicRelevance.screenedIncludedOffTopicCount}`,
     `- Full-text reviewed: ${audit.topicRelevance.fullTextReviewedCount}`,
     `- Metadata-only unresolved: ${audit.metadataGaps.metadataOnlyUnresolved}`,
     `- Missing baseline hints: ${audit.missingBaselineHints.join(", ") || "none"}`,
@@ -609,6 +611,7 @@ export async function auditLiteratureCoverage(params: {
       relevantCount: topicRelevanceAudit.relevantCount,
       boundaryCount: topicRelevanceAudit.boundaryCount,
       offTopicCount: topicRelevanceAudit.offTopicCount,
+      screenedIncludedOffTopicCount: offTopicScreenedCount,
       insufficientEvidenceCount: topicRelevanceAudit.insufficientEvidenceCount,
       fullTextReviewedCount: topicRelevanceAudit.fullTextReviewedCount,
       titleOnlyCount: topicRelevanceAudit.titleOnlyCount,

@@ -41,8 +41,25 @@ export type SurveyReviewDiagnostics = {
   taxonomyStability: SurveyQualityGateDiagnostic;
   representativeMethods: SurveyQualityGateDiagnostic;
   benchmarkAlignment: SurveyQualityGateDiagnostic;
+  topicRelevance: SurveyQualityGateDiagnostic;
   gapClosure: SurveyQualityGateDiagnostic;
 };
+
+type TopicRelevanceAuditLike = {
+  screenedIncludedCount?: number | null;
+  topicRelevance?: {
+    relevantCount?: number | null;
+    boundaryCount?: number | null;
+    offTopicCount?: number | null;
+    insufficientEvidenceCount?: number | null;
+    fullTextReviewedCount?: number | null;
+    titleOnlyCount?: number | null;
+    screenedIncludedOffTopicCount?: number | null;
+  } | null;
+};
+
+const DEFAULT_TOPIC_RELEVANCE_AUDIT_PATH = "researcher/TOPIC_RELEVANCE_AUDIT.json";
+const DEFAULT_LITERATURE_COVERAGE_AUDIT_PATH = "researcher/LITERATURE_COVERAGE_AUDIT.json";
 
 function getCandidatePaperCount(
   queryRegistry: Record<string, unknown> | null,
@@ -177,6 +194,8 @@ export async function materializeSurveyReviewDiagnostics(params: {
     screeningDecisionsJson,
     includedJson,
     excludedJson,
+    topicRelevanceAudit,
+    coverageAudit,
     reviewProtocolText,
     literatureReviewText,
     sotaMatrixText,
@@ -198,6 +217,12 @@ export async function materializeSurveyReviewDiagnostics(params: {
     ),
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, params.state.excludedPapersPath) ?? ""
+    ),
+    readJsonIfExists<TopicRelevanceAuditLike>(
+      resolveProjectArtifactPath(projectRoot, DEFAULT_TOPIC_RELEVANCE_AUDIT_PATH) ?? ""
+    ),
+    readJsonIfExists<TopicRelevanceAuditLike>(
+      resolveProjectArtifactPath(projectRoot, DEFAULT_LITERATURE_COVERAGE_AUDIT_PATH) ?? ""
     ),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, params.state.reviewProtocolPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, params.state.literatureReviewPath)),
@@ -316,7 +341,24 @@ export async function materializeSurveyReviewDiagnostics(params: {
       /\bchallenges?\b/,
       /\bfuture work\b/,
     ]) ||
-    hasAnyKeyword(coverageSummaryNormalized, [/\bopen problems?\b/, /\bblind\s*spots?\b/]);
+      hasAnyKeyword(coverageSummaryNormalized, [/\bopen problems?\b/, /\bblind\s*spots?\b/]);
+  const topicAuditCounts = {
+    ...(coverageAudit?.topicRelevance ?? {}),
+    ...(topicRelevanceAudit?.topicRelevance ?? {}),
+  };
+  const screenedIncludedOffTopicCountRaw =
+    typeof topicAuditCounts.screenedIncludedOffTopicCount === "number"
+      ? topicAuditCounts.screenedIncludedOffTopicCount
+      : null;
+  const screenedIncludedOffTopicCount =
+    screenedIncludedOffTopicCountRaw != null
+      ? Math.max(0, Math.floor(screenedIncludedOffTopicCountRaw))
+      : null;
+  const fullTextReviewedCount =
+    typeof topicAuditCounts.fullTextReviewedCount === "number"
+      ? Math.max(0, Math.floor(topicAuditCounts.fullTextReviewedCount))
+      : 0;
+  const fullTextCoverageExpectation = Math.min(Math.max(includedPapers, 0), 5);
 
   let coverage = buildDiagnostic({
     status: "missing",
@@ -474,6 +516,37 @@ export async function materializeSurveyReviewDiagnostics(params: {
       : ["Make benchmark / dataset / metric alignment explicit in REVIEW_PROTOCOL.md and SOTA_MATRIX.md before write handoff."],
   });
 
+  const topicRelevanceReady =
+    screenedIncludedOffTopicCount == null || screenedIncludedOffTopicCount === 0;
+  const topicRelevance = buildDiagnostic({
+    status: topicRelevanceReady ? "ready" : "needs_revision",
+    summary:
+      screenedIncludedOffTopicCount == null
+        ? "Body-aware topic relevance audit is not available yet; current gate assumes no explicit off-topic findings."
+        : screenedIncludedOffTopicCount === 0
+          ? `Body-aware topic relevance is acceptable for the screened included set (full_text_reviewed=${fullTextReviewedCount}).`
+          : `Body-aware topic relevance found ${screenedIncludedOffTopicCount} off-topic paper(s) inside the screened included set.`,
+    evidencePaths: [
+      DEFAULT_TOPIC_RELEVANCE_AUDIT_PATH,
+      DEFAULT_LITERATURE_COVERAGE_AUDIT_PATH,
+      params.state.includedPapersPath ?? "",
+    ].filter(Boolean),
+    blockers:
+      screenedIncludedOffTopicCount != null && screenedIncludedOffTopicCount > 0
+        ? [
+            "Revisit the include/background boundary for papers flagged as off-topic by the body-aware relevance audit before write handoff.",
+          ]
+        : [],
+    warnings:
+      screenedIncludedOffTopicCount == null
+        ? ["Generate a fresh topic relevance audit once fuller paper text is available for stronger boundary checking."]
+        : fullTextCoverageExpectation > 0 && fullTextReviewedCount < fullTextCoverageExpectation
+          ? [
+              `Full-text topic relevance review is still shallow (${fullTextReviewedCount}/${fullTextCoverageExpectation} expected for the current included set).`,
+            ]
+          : [],
+  });
+
   const gapClosed = gapItems.length >= 2 && gapLoopSignals;
   const gapClosure = buildDiagnostic({
     status: gapClosed ? "closed" : gapItems.length > 0 ? "partial" : "missing",
@@ -493,6 +566,7 @@ export async function materializeSurveyReviewDiagnostics(params: {
     ...taxonomyStability.blockers,
     ...representativeMethods.blockers,
     ...benchmarkAlignment.blockers,
+    ...topicRelevance.blockers,
     ...gapClosure.blockers,
   ];
   const warnings = [
@@ -500,6 +574,7 @@ export async function materializeSurveyReviewDiagnostics(params: {
     ...taxonomyStability.warnings,
     ...representativeMethods.warnings,
     ...benchmarkAlignment.warnings,
+    ...topicRelevance.warnings,
     ...gapClosure.warnings,
   ];
   const ready =
@@ -507,6 +582,7 @@ export async function materializeSurveyReviewDiagnostics(params: {
     taxonomyStability.status === "stable" &&
     representativeMethods.status === "ready" &&
     benchmarkAlignment.status === "aligned" &&
+    topicRelevance.status === "ready" &&
     gapClosure.status === "closed";
 
   const diagnostics: SurveyReviewDiagnostics = {
@@ -531,6 +607,7 @@ export async function materializeSurveyReviewDiagnostics(params: {
     taxonomyStability,
     representativeMethods,
     benchmarkAlignment,
+    topicRelevance,
     gapClosure,
   };
 

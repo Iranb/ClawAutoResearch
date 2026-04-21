@@ -722,6 +722,98 @@ test("materializeSurveyReviewState ignores stale pending candidates once screeni
   assert.equal(result.state.currentPhase, "complete");
 });
 
+test("materializeSurveyReviewState blocks completion when body-aware topic relevance flags off-topic included papers", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [
+      { query: "gcd survey", provider: "zotero" },
+      { query: "gcd survey recent", provider: "openalex" },
+      { query: "gcd benchmarks", provider: "semanticscholar" },
+      { query: "gcd failure modes", provider: "dblp" },
+    ],
+    candidate_paper_count: 52,
+    saturation: { assessed: true, verdict: "saturated" },
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 20 }, (_unused, index) => ({
+      canonical_id: `arxiv:2603.000${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    excludedPapers: Array.from({ length: 18 }, (_unused, index) => ({
+      canonical_id: `arxiv:2503.100${index}`,
+    })),
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Prompt tuning\n- Prototype learning\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Prompt | stable | BenchA | Accuracy |",
+      "| B | Prototype | robust | BenchB | F1 |",
+      "| C | Hybrid | transfer | BenchC | AUC |",
+      "| D | Contrastive | caveat | BenchD | mAP |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- benchmark alignment\n- scaling\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Coverage spans core venues.\n- Scope and blind spots are explicit.\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_BRIEF_PATH),
+    "# Survey Brief\n\n## Themes\n- Prompt tuning\n- Prototype learning\n\n## Open Problems\n- benchmark alignment\n- scaling\n"
+  );
+  await writeJson(path.join(projectRoot, "researcher", "TOPIC_RELEVANCE_AUDIT.json"), {
+    generatedAt: "2026-04-21T00:00:00.000Z",
+    topic: "Generalized Category Discovery",
+    relevantCount: 18,
+    boundaryCount: 1,
+    offTopicCount: 3,
+    insufficientEvidenceCount: 0,
+    fullTextReviewedCount: 4,
+    titleOnlyCount: 16,
+    entries: [],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "LITERATURE_COVERAGE_AUDIT.json"), {
+    topicRelevance: {
+      relevantCount: 18,
+      boundaryCount: 1,
+      offTopicCount: 3,
+      screenedIncludedOffTopicCount: 2,
+      insufficientEvidenceCount: 0,
+      fullTextReviewedCount: 4,
+      titleOnlyCount: 16,
+    },
+  });
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-topic-relevance-gate",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.status, "synthesizing");
+  assert.equal(result.state.currentPhase, "brief_synthesis");
+  assert.equal(result.state.topicRelevanceStatus, "needs_revision");
+  assert.match(result.state.topicRelevanceSummary ?? "", /off-topic paper/i);
+  assert.match(result.state.pendingReason ?? "", /include\/background boundary/i);
+  assert.equal(result.state.gateReady, false);
+});
+
 test("materializeSurveyReviewState moves into taxonomy_refinement once a brief exists but themes are still weak", async (t) => {
   const projectRoot = await makeSurveyProjectRoot();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

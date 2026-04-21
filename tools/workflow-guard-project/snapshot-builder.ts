@@ -1175,6 +1175,7 @@ export async function buildWorkflowSnapshotFromProjectState(
       surveyReview.representativeMethodsStatus,
     surveyReviewBenchmarkAlignmentStatus:
       surveyReview.benchmarkAlignmentStatus,
+    surveyReviewTopicRelevanceStatus: surveyReview.topicRelevanceStatus,
     surveyReviewGapClosureStatus: surveyReview.gapClosureStatus,
     surveyReviewSurveyBriefPath: surveyReview.surveyBriefPath,
     surveyReviewGateBlockingIssueCount: surveyReview.gateBlockingIssues.length,
