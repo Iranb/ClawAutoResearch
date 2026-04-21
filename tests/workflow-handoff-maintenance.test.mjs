@@ -134,3 +134,48 @@ test("runWorkflowHandoffMaintenancePass marks long-stalled handoffs as failed", 
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].status, "failed");
 });
+
+test("runWorkflowHandoffMaintenancePass supersedes stale stage-owner intents once stage lineage moved on", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-supersede-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo",
+        current_stage: "code",
+        orchestration_state: {
+          pending_handoff_id: "intent-new",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    idempotencyKey: "old-plan-intent",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stageBefore: "idea",
+    stageAfter: "plan",
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 4,
+    },
+  });
+
+  const result = await runWorkflowHandoffMaintenancePass({
+    projectRoot,
+    now: new Date(),
+  });
+  assert.deepEqual(result.supersededIntentIds, [created.intent.intentId]);
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents[0].status, "superseded");
+});
