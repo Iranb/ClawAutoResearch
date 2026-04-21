@@ -102,6 +102,8 @@ export type OpportunityScorecardState = VersionedEvidenceContract & {
   status: string;
   verdict: string | null;
   scorecardPath: string | null;
+  competitorObjectionCount: number;
+  positioningStatus: string | null;
   graphContextStatus: string | null;
   pendingReason: string | null;
 };
@@ -279,6 +281,10 @@ export function normalizeOpportunityScorecardState(value: unknown): OpportunityS
     scorecardPath:
       pickString(record, ["scorecardPath", "scorecard_path"]) ??
       "researcher/TOP_TIER_OPPORTUNITY.json",
+    competitorObjectionCount:
+      pickNumber(record, ["competitorObjectionCount", "competitor_objection_count"]) ?? 0,
+    positioningStatus:
+      pickString(record, ["positioningStatus", "positioning_status"]) ?? null,
     graphContextStatus:
       pickString(record, ["graphContextStatus", "graph_context_status"]) ?? null,
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]) ?? null,
@@ -413,6 +419,8 @@ export function serializeOpportunityScorecardState(
     status: state.status,
     verdict: state.verdict,
     scorecard_path: state.scorecardPath,
+    competitor_objection_count: state.competitorObjectionCount,
+    positioning_status: state.positioningStatus,
     graph_context_status: state.graphContextStatus,
     pending_reason: state.pendingReason,
   };
