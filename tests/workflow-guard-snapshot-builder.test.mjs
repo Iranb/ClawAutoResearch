@@ -482,11 +482,17 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   manifest.benchmark_protocol = {
     status: "ready",
     benchmark_family: "OpenWorldGraphBench",
+    primary_metric: "H-score",
+    split_descriptor: "baseline-a validation split",
+    evaluation_harness: "open-world-hscore-v1",
     protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
     fairness_report_path: "researcher/BASELINE_FAIRNESS_REPORT.json",
     locked: true,
     drift_status: "pass",
     fair_compare_status: "pass",
+    fair_compare_summary:
+      "Main compare keeps the same backbone, split, and evaluation harness.",
+    allowed_deviation_count: 0,
     allowed_deviation_status: "none",
   };
   manifest.statistical_evidence = {
@@ -602,6 +608,17 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
   assert.equal(snapshot.benchmarkProtocolFamily, "OpenWorldGraphBench");
   assert.equal(snapshot.benchmarkProtocolLocked, true);
   assert.equal(snapshot.benchmarkProtocolDriftStatus, "pass");
+  assert.equal(snapshot.benchmarkProtocolPrimaryMetric, "H-score");
+  assert.equal(snapshot.benchmarkProtocolSplitDescriptor, "baseline-a validation split");
+  assert.equal(snapshot.benchmarkProtocolEvaluationHarness, "open-world-hscore-v1");
+  assert.equal(snapshot.benchmarkProtocolFairCompareStatus, "pass");
+  assert.equal(snapshot.benchmarkProtocolFairCompareSummary, "Main compare keeps the same backbone, split, and evaluation harness.");
+  assert.equal(snapshot.benchmarkProtocolAllowedDeviationCount, 0);
+  assert.equal(snapshot.benchmarkProtocolAllowedDeviationStatus, "none");
+  assert.equal(
+    snapshot.benchmarkProtocolFairnessReportPath,
+    "researcher/BASELINE_FAIRNESS_REPORT.json"
+  );
   assert.equal(snapshot.statisticalEvidenceStatus, "ready");
   assert.equal(snapshot.statisticalEvidenceClaimStrengthStatus, "strong");
   assert.equal(snapshot.statisticalEvidenceSignificantResultCount, 3);

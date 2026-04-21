@@ -2243,6 +2243,16 @@ test("workflow-status command returns a readable workflow summary", async () => 
         benchmarkProtocolFamily: "OpenWorldGraphBench",
         benchmarkProtocolLocked: true,
         benchmarkProtocolDriftStatus: "pass",
+        benchmarkProtocolPrimaryMetric: "H-score",
+        benchmarkProtocolSplitDescriptor: "baseline-a validation split",
+        benchmarkProtocolEvaluationHarness: "open-world-hscore-v1",
+        benchmarkProtocolFairCompareStatus: "pass",
+        benchmarkProtocolFairCompareSummary:
+          "Main compare keeps the same backbone, split, and evaluation harness.",
+        benchmarkProtocolAllowedDeviationCount: 0,
+        benchmarkProtocolAllowedDeviationStatus: "none",
+        benchmarkProtocolFairnessReportPath:
+          "researcher/BASELINE_FAIRNESS_REPORT.json",
         benchmarkProtocolPath: "researcher/BENCHMARK_PROTOCOL.json",
         statisticalEvidenceStatus: "partial",
         statisticalEvidenceAggregatePath: "analyzer/STATISTICAL_EVIDENCE.json",
@@ -2549,7 +2559,10 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(result.text ?? "", /Research program: status=draft, onboarding=incomplete, goal=Improve generalized category discovery under confirmation bias\., baseline=ResNet-50 ERM baseline, primary_metric=H-score, datasets=2, success_criteria=1, active_tracks=1\/2/);
   assert.match(result.text ?? "", /Research program Zotero path: bot\/gcd-confirmation-bias-mitigation/);
   assert.match(result.text ?? "", /Research program checklist: missing=baseline_reference, primary_metric/);
-  assert.match(result.text ?? "", /Benchmark protocol: status=ready, family=OpenWorldGraphBench, locked=true, drift=pass/);
+  assert.match(
+    result.text ?? "",
+    /Benchmark protocol: status=ready, family=OpenWorldGraphBench, metric=H-score, split=baseline-a validation split, harness=open-world-hscore-v1, locked=true, drift=pass, fair_compare=pass, deviations=none/
+  );
   assert.match(result.text ?? "", /Statistical evidence: status=partial, claim_strength=moderate, significant=2, insufficient_seeds=1/);
   assert.match(result.text ?? "", /Venue competition: status=partial, venues=ICLR,NeurIPS, risk=moderate, graph_context=ready/);
   assert.match(result.text ?? "", /Ablation evidence: status=ready, sufficiency=partial, publication_critical=2/);
