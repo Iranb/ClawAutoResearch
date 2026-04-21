@@ -252,6 +252,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   assert.equal(statistics.claimStrengthStatus, "strong");
   assert.equal(ablations.sufficiencyStatus, "sufficient");
   assert.equal(venue.status, "ready");
+  assert.equal(venue.objectionCount > 0, true);
   assert.equal(opportunity.verdict, "worth_top_tier_bet");
   assert.equal(mechanism.status, "ready");
   assert.equal(repro.status, "ready");
@@ -264,6 +265,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   );
   assert.equal(manifest.benchmark_protocol.locked, true);
   assert.equal(manifest.benchmark_protocol.fair_compare_status, "pass");
+  assert.equal(manifest.venue_competition.objection_count > 0, true);
   assert.equal(manifest.statistical_evidence.claim_strength_status, "strong");
   assert.equal(manifest.reproducibility_pack.status, "ready");
   assert.equal(manifest.camera_ready_evidence.status, "ready");
@@ -271,6 +273,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   await fs.access(path.join(projectRoot, "researcher", "BENCHMARK_REGISTRY.json"));
   await fs.access(path.join(projectRoot, "researcher", "PROTOCOL_LOCK.json"));
   await fs.access(path.join(projectRoot, "researcher", "BASELINE_FAIRNESS_REPORT.json"));
+  await fs.access(path.join(projectRoot, "researcher", "VENUE_COMPETITOR_OBJECTIONS.json"));
   await fs.access(path.join(projectRoot, "analyzer", "STATISTICAL_EVIDENCE_SUMMARY.md"));
   await fs.access(path.join(projectRoot, "researcher", "PAPER_IDENTITY_REGISTRY.json"));
   await fs.access(path.join(projectRoot, "academic_writer", "FIGURE_REGISTRY.json"));

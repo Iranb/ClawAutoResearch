@@ -22,6 +22,19 @@ type CompetitorSlateEntry = {
   comparisonReason: string;
 };
 
+type CompetitorObjectionEntry = {
+  canonicalId: string;
+  title: string | null;
+  venue: string | null;
+  objectionTag:
+    | "recent_delta"
+    | "missing_comparison"
+    | "reproducibility_challenge"
+    | "protocol_mismatch";
+  reviewerObjection: string;
+  requiredEvidence: string[];
+};
+
 function deriveTargetVenues(manifest: Record<string, unknown>): string[] {
   const researchProgram = manifest.research_program as Record<string, unknown> | undefined;
   const explicit = researchProgram?.target_venues ?? researchProgram?.targetVenues;
@@ -56,6 +69,55 @@ function buildCompetitorSlateEntries(entries: Awaited<ReturnType<typeof material
     }));
 }
 
+function buildCompetitorObjectionEntries(params: {
+  competitors: CompetitorSlateEntry[];
+  benchmarkFamily: string | null;
+  fairCompareStatus: string | null;
+  targetVenues: string[];
+}): CompetitorObjectionEntry[] {
+  const venueLabel =
+    params.targetVenues.length > 0 ? params.targetVenues.slice(0, 2).join("/") : "top-tier venue";
+  return params.competitors.map((entry) => {
+    const benchmarkPhrase = params.benchmarkFamily
+      ? ` on ${params.benchmarkFamily}`
+      : "";
+    if (entry.comparisonReason === "recent_competitor") {
+      return {
+        canonicalId: entry.canonicalId,
+        title: entry.title,
+        venue: entry.venue,
+        objectionTag:
+          params.fairCompareStatus === "pass" ? "recent_delta" : "protocol_mismatch",
+        reviewerObjection:
+          params.fairCompareStatus === "pass"
+            ? `A ${venueLabel} reviewer will ask for the exact delta over this recent competitor${benchmarkPhrase}, not a generic novelty claim.`
+            : `A ${venueLabel} reviewer will question whether the claimed delta over this recent competitor is fair until the benchmark/protocol comparison is explicit${benchmarkPhrase}.`,
+        requiredEvidence:
+          params.fairCompareStatus === "pass"
+            ? ["benchmark_protocol", "statistical_evidence", "mechanism_evidence"]
+            : ["benchmark_protocol", "fair_compare_matrix", "survey_traceability"],
+      };
+    }
+    return {
+      canonicalId: entry.canonicalId,
+      title: entry.title,
+      venue: entry.venue,
+      objectionTag:
+        entry.maturity === "preprint_with_metadata"
+          ? "reproducibility_challenge"
+          : "missing_comparison",
+      reviewerObjection:
+        entry.maturity === "preprint_with_metadata"
+          ? `A reviewer may challenge whether this comparison is reproducible enough to support a strong claim${benchmarkPhrase}.`
+          : `A reviewer will ask why this established paper is not treated as a direct comparison anchor${benchmarkPhrase}.`,
+      requiredEvidence:
+        entry.maturity === "preprint_with_metadata"
+          ? ["reproducibility_pack", "benchmark_protocol", "citation_integrity"]
+          : ["benchmark_protocol", "venue_competition", "claim_evidence"],
+    };
+  });
+}
+
 export async function materializeVenueCompetitionIntel(params: {
   projectRoot: string;
   outputPath?: string;
@@ -65,6 +127,10 @@ export async function materializeVenueCompetitionIntel(params: {
   const current = normalizeVenueCompetitionState(manifest.venue_competition);
   const patch = params.patch ?? {};
   const registry = await materializePaperIdentityRegistry({ projectRoot: params.projectRoot });
+  const benchmarkProtocol =
+    manifest.benchmark_protocol && typeof manifest.benchmark_protocol === "object"
+      ? (manifest.benchmark_protocol as Record<string, unknown>)
+      : null;
   const defaultTargetVenues =
     current.targetVenues.length > 0 ? current.targetVenues : deriveTargetVenues(manifest);
   const targetVenues =
@@ -73,10 +139,24 @@ export async function materializeVenueCompetitionIntel(params: {
     ) ??
     defaultTargetVenues;
   const competitorSlate = buildCompetitorSlateEntries(registry.entries);
+  const competitorObjections = buildCompetitorObjectionEntries({
+    competitors: competitorSlate,
+    benchmarkFamily:
+      (typeof benchmarkProtocol?.benchmark_family === "string" && benchmarkProtocol.benchmark_family) ||
+      (typeof benchmarkProtocol?.benchmarkFamily === "string" && benchmarkProtocol.benchmarkFamily) ||
+      null,
+    fairCompareStatus:
+      (typeof benchmarkProtocol?.fair_compare_status === "string" && benchmarkProtocol.fair_compare_status) ||
+      (typeof benchmarkProtocol?.fairCompareStatus === "string" && benchmarkProtocol.fairCompareStatus) ||
+      null,
+    targetVenues,
+  });
   const acceptanceRiskStatus =
     competitorSlate.length >= 5 ? "crowded" : competitorSlate.length >= 2 ? "competitive" : "thin_signal";
   const defaultCompetitorSlatePath =
     current.competitorSlatePath ?? "researcher/VENUE_COMPETITION.json";
+  const defaultObjectionMapPath =
+    current.objectionMapPath ?? "researcher/VENUE_COMPETITOR_OBJECTIONS.json";
   await writeProjectJson(
     params.projectRoot,
     params.outputPath ?? defaultCompetitorSlatePath,
@@ -87,6 +167,22 @@ export async function materializeVenueCompetitionIntel(params: {
       competitorSlate,
       acceptanceRiskStatus,
       registryCoverage: registry.counts,
+    }
+  );
+  await writeProjectJson(
+    params.projectRoot,
+    (typeof patch.objection_map_path === "string" && patch.objection_map_path) ||
+      (typeof patch.objectionMapPath === "string" && patch.objectionMapPath) ||
+      defaultObjectionMapPath,
+    {
+      schemaVersion: 1,
+      generatedAt: nowIso(),
+      targetVenues,
+      benchmarkFamily:
+        (typeof benchmarkProtocol?.benchmark_family === "string" && benchmarkProtocol.benchmark_family) ||
+        (typeof benchmarkProtocol?.benchmarkFamily === "string" && benchmarkProtocol.benchmarkFamily) ||
+        null,
+      objections: competitorObjections,
     }
   );
   const next = normalizeVenueCompetitionState({
@@ -101,6 +197,15 @@ export async function materializeVenueCompetitionIntel(params: {
       (typeof patch.competitor_slate_path === "string" && patch.competitor_slate_path) ||
       (typeof patch.competitorSlatePath === "string" && patch.competitorSlatePath) ||
       defaultCompetitorSlatePath,
+    objection_map_path:
+      (typeof patch.objection_map_path === "string" && patch.objection_map_path) ||
+      (typeof patch.objectionMapPath === "string" && patch.objectionMapPath) ||
+      defaultObjectionMapPath,
+    objection_count:
+      (typeof patch.objection_count === "number" && Number.isFinite(patch.objection_count)) ||
+      (typeof patch.objectionCount === "number" && Number.isFinite(patch.objectionCount))
+        ? Number(patch.objection_count ?? patch.objectionCount)
+        : competitorObjections.length,
     acceptance_risk_status:
       (typeof patch.acceptance_risk_status === "string" && patch.acceptance_risk_status) ||
       (typeof patch.acceptanceRiskStatus === "string" && patch.acceptanceRiskStatus) ||
