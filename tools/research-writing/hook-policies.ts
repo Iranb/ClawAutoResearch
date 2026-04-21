@@ -935,7 +935,11 @@ function buildWritingHookPolicies(params: {
       "researcher/REVIEW_PROTOCOL.md",
       "researcher/INCLUDED_PAPERS.json",
       "researcher/EXCLUDED_PAPERS.json",
+      "researcher/SOURCE_TO_CLAIM_INDEX.json",
+      "researcher/SURVEY_TRACEABILITY_AUDIT.json",
       "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
+      "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
+      "analyzer/FAIR_COMPARE_MATRIX.json",
     ]);
 
     if (sectionSet.has("abstract")) {
@@ -1137,6 +1141,70 @@ function buildWritingHookPolicies(params: {
         appliesWhen: baseAppliesWhen,
         filters: {
           fileGlobs: ["academic_writer/paper/main.tex"],
+        },
+      })
+    );
+    hooks.push(
+      buildHook({
+        hookId: "survey-source-traceability-audit",
+        stage: "review",
+        hookPoint: "before_stage_handoff",
+        order: 320,
+        parallelGroup: "writing-closeout",
+        filePath: "academic_writer/paper/main.tex",
+        blockingMode: "block_stage",
+        auditorRole: "cross-reviewer",
+        requirementPrompt: buildPrompt({
+          title: "survey source traceability before review handoff",
+          paperMode: params.paperMode,
+          topTierVerdict: params.topTierVerdict,
+          requirements: [
+            "Core synthesis claims should remain traceable to SOURCE_TO_CLAIM_INDEX.json rather than floating as unsupported survey prose.",
+            "If SURVEY_TRACEABILITY_AUDIT.json still reports unsupported synthesis claims or missing source links, require revision instead of passing the draft forward.",
+            "Background-only references may explain scope boundaries, but they must not silently replace true included-paper support for core synthesis claims.",
+          ],
+          supportingArtifacts: surveySectionArtifacts,
+        }),
+        supportingArtifacts: surveySectionArtifacts,
+        appliesWhen: baseAppliesWhen,
+        filters: {
+          fileGlobs: [
+            "academic_writer/paper/main.tex",
+            "researcher/SOURCE_TO_CLAIM_INDEX.json",
+            "researcher/SURVEY_TRACEABILITY_AUDIT.json",
+          ],
+        },
+      })
+    );
+    hooks.push(
+      buildHook({
+        hookId: "survey-comparability-audit",
+        stage: "review",
+        hookPoint: "before_stage_handoff",
+        order: 325,
+        parallelGroup: "writing-closeout",
+        filePath: "academic_writer/paper/main.tex",
+        blockingMode: "block_stage",
+        auditorRole: "cross-reviewer",
+        requirementPrompt: buildPrompt({
+          title: "survey comparability before review handoff",
+          paperMode: params.paperMode,
+          topTierVerdict: params.topTierVerdict,
+          requirements: [
+            "Benchmark and method comparisons should remain grounded in SURVEY_COMPARABILITY_REPORT.md and FAIR_COMPARE_MATRIX.json rather than free-form leaderboard prose.",
+            "If the fair-compare packet still lacks usable rows or flags unresolved fairness assumptions, request revision instead of passing review closeout.",
+            "Do not let the manuscript imply fair cross-family comparison when the comparability artifacts still mark settings as unclear or confounded.",
+          ],
+          supportingArtifacts: surveySectionArtifacts,
+        }),
+        supportingArtifacts: surveySectionArtifacts,
+        appliesWhen: baseAppliesWhen,
+        filters: {
+          fileGlobs: [
+            "academic_writer/paper/main.tex",
+            "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
+            "analyzer/FAIR_COMPARE_MATRIX.json",
+          ],
         },
       })
     );
