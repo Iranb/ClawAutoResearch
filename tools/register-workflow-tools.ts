@@ -29,6 +29,7 @@ import {
   getPaperStoryStateSummary,
   getInnovationSynthesisStateSummary,
   getResultsStorylineStateSummary,
+  getStorylinePlannerStateSummary,
   auditLiteratureCoverageForWorkflow,
   runBroadPaperSearchForWorkflow,
   materializeIdeationContract,
@@ -38,6 +39,7 @@ import {
   materializeLiteratureDiscoveryPacket,
   materializePlanState,
   materializePaperStoryState,
+  materializeStorylinePlannerState,
   materializeResultsStorylineState,
   planCitationExpansionForWorkflow,
   queuePaperIngestionRequest,
@@ -352,6 +354,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
+  "materialize_storyline_planner_state",
   "materialize_results_storyline_state",
   "materialize_title_abstract_intro_workbench_state",
   "materialize_innovation_synthesis_state",
@@ -464,6 +467,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_file_audit_policy: "setFileAuditPolicyForProject",
   materialize_file_audit_packet: "materializeFileAuditPacket",
   materialize_paper_story_state: "materializePaperStoryState",
+  materialize_storyline_planner_state: "materializeStorylinePlannerState",
   materialize_results_storyline_state: "materializeResultsStorylineState",
   materialize_title_abstract_intro_workbench_state:
     "materializeTitleAbstractIntroWorkbenchState",
@@ -500,6 +504,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
   get_paper_story_state: "getPaperStoryStateSummary",
+  get_storyline_planner_state: "getStorylinePlannerStateSummary",
   get_results_storyline_state: "getResultsStorylineStateSummary",
   get_innovation_synthesis_state: "getInnovationSynthesisStateSummary",
   get_title_abstract_intro_workbench_state:
@@ -1720,6 +1725,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_plan_state",
               "materialize_papernexus_packet_contracts",
               "materialize_paper_story_state",
+              "materialize_storyline_planner_state",
               "materialize_results_storyline_state",
               "materialize_title_abstract_intro_workbench_state",
               "materialize_innovation_synthesis_state",
@@ -1755,6 +1761,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
   "get_theory_state",
   "get_writing_contract",
   "get_paper_story_state",
+  "get_storyline_planner_state",
   "get_results_storyline_state",
   "get_innovation_synthesis_state",
   "get_title_abstract_intro_workbench_state",
@@ -4162,6 +4169,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_storyline_planner_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const summary = await getStorylinePlannerStateSummary({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(summary, null, 2));
+            }
             case "get_results_storyline_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getResultsStorylineStateSummary({
@@ -4226,6 +4240,30 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_storyline_planner_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const payload =
+                asObject(params.storylinePlannerMaterialization) ??
+                asObject(params.storylinePlanner) ??
+                {};
+              const result = await materializeStorylinePlannerState({
+                projectRoot: resolvedProjectRoot,
+                topic:
+                  readString(payload.topic) ??
+                  readString(payload.survey_topic) ??
+                  null,
+                configuredMode:
+                  (readString(payload.configured_mode) ??
+                    readString(payload.configuredMode) ??
+                    null) as
+                    | "heuristic"
+                    | "reviewer_judged"
+                    | "learned_shadow"
+                    | "learned_primary"
+                    | null,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

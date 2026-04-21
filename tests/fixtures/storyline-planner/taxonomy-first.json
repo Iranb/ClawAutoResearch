@@ -1,0 +1,25 @@
+{
+  "project_id": "fixture-taxonomy-first",
+  "topic": "Graph Reasoning Agents",
+  "artifacts": {
+    "researcher/SURVEY_BRIEF.md": "# Survey Brief\n\n## Themes\n- Retrieval-augmented agents\n- Planner-augmented agents\n- Reflective agents\n\n## Open Problems\n- Tool-use evaluation is still inconsistent.\n",
+    "researcher/LITERATURE_REVIEW.md": "# Literature Review\n\n## Taxonomy\n- Retrieval-augmented agents\n- Planner-augmented agents\n- Reflective agents\n\n## Family Contrast\n- Families differ more in architecture than in benchmark protocol.\n",
+    "researcher/SOTA_MATRIX.md": "# SOTA Matrix\n\n| Method | Family | Notes | Dataset | Metric |\n| --- | --- | --- | --- | --- |\n| A | Retrieval | strong baseline | AgentBench | Success rate |\n| B | Planner | structured decomposition | GraphArena | Accuracy |\n| C | Reflective | self-checking loop | ToolBench | F1 |\n",
+    "researcher/GAP_SYNTHESIS.md": "# Gap Synthesis\n\n## Open Problems\n- Cross-family transfer is still weak.\n",
+    "researcher/COVERAGE_SUMMARY.md": "# Coverage Summary\n\n- Search coverage spans the main agent families.\n- Blind spots are documented but bounded.\n",
+    "researcher/REVIEW_PROTOCOL.md": "# Review Protocol\n\n- Include only agentic graph reasoning papers with explicit tool or planner components.\n",
+    "researcher/INCLUDED_PAPERS.json": {
+      "papers": [
+        { "canonical_id": "arxiv:2502.00001", "title": "Graph Agent A", "year": 2025 },
+        { "canonical_id": "arxiv:2502.00002", "title": "Graph Agent B", "year": 2024 },
+        { "canonical_id": "arxiv:2502.00003", "title": "Graph Agent C", "year": 2025 }
+      ]
+    },
+    "researcher/EXCLUDED_PAPERS.json": {
+      "backgroundPapers": []
+    },
+    "researcher/CANDIDATE_SCREENING_DECISIONS.json": {
+      "decisions": []
+    }
+  }
+}
