@@ -6057,6 +6057,7 @@ async function getMissingStageSignals(params: {
   trackRegistry: TrackRegistryLike | null;
   experimentLedger: ExperimentLedger | null;
   currentStage: string | null;
+  includeOrchestrationValidation?: boolean;
 }): Promise<string[]> {
   const { projectRoot, manifest, trackRegistry, experimentLedger, currentStage } = params;
   if (!currentStage) {
@@ -6194,6 +6195,10 @@ async function getMissingStageSignals(params: {
           loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
           readJsonIfExists,
           getCodeStageBundleMissingSignals,
+        },
+        {
+          includeOrchestrationValidation:
+            params.includeOrchestrationValidation !== false,
         }
       );
     case "code":

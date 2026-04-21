@@ -6256,6 +6256,186 @@ test("auto iterator advances code to experiment when aggressive code innovation 
   assert.equal(result.gateBlocking, false);
 });
 
+test("auto iterator does not regress code back to plan when stale next_transition_candidate already points at experiment", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const autoGate = {
+    ...defaultAutoGateConfig(),
+    enabled: true,
+  };
+  const round = createCodeReviewRound({
+    stage: "code",
+    packetPath: path.join(
+      projectRoot,
+      "reviewer",
+      "code-review",
+      "CODE_REVIEW_PACKET.md"
+    ),
+    packetJsonPath: path.join(
+      projectRoot,
+      "reviewer",
+      "code-review",
+      "CODE_REVIEW_PACKET.json"
+    ),
+    packetFingerprint: "approved-code-packet-stale-next-stage",
+    attempts: [
+      {
+        reviewerRole: "researcher",
+        sessionKey: "agent:researcher:main",
+        runId: "code-review-researcher",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "researcher",
+          verdict: "pass",
+          overallScore: 9,
+          dimensionScores: { innovation_alignment: 9, baseline_fidelity: 9 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["coder/EXPERIMENT_INDEX.md"],
+          summary: "Innovation contract matches the active track.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-researcher",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "orchestrator",
+        sessionKey: "agent:orchestrator:main",
+        runId: "code-review-orchestrator",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "orchestrator",
+          verdict: "pass",
+          overallScore: 8.8,
+          dimensionScores: { validation_plan: 9, ablation_plan: 8.5 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["orchestrator/PLAN_AUDIT.md"],
+          summary: "Validation steps cover each innovation point.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-orchestrator",
+          rawText: "{}",
+        },
+      },
+      {
+        reviewerRole: "reviewer",
+        sessionKey: "agent:reviewer:main",
+        runId: "code-review-reviewer",
+        status: "completed",
+        launchedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:01:00.000Z",
+        error: null,
+        result: {
+          reviewerRole: "reviewer",
+          verdict: "pass",
+          overallScore: 8.9,
+          dimensionScores: { execution_readiness: 9, eval_fidelity: 8.8 },
+          criticalBlockers: [],
+          majorIssues: [],
+          suggestedRollbackStage: null,
+          reviewedArtifacts: ["coder/experiments/track-1/exp-1__baseline/README.md"],
+          summary: "Bundle is executable and respects baseline evaluation.",
+          createdAt: "2026-04-01T00:01:00.000Z",
+          runId: "code-review-reviewer",
+          rawText: "{}",
+        },
+      },
+    ],
+  });
+  round.aggregate = aggregateCodeReviewRound(round, autoGate);
+  round.status = round.aggregate.status;
+  await saveCodeReviewStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-04-01T00:01:00.000Z",
+    roundsStarted: 1,
+    currentRound: round,
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "code";
+  manifest.owner_agent = "coder";
+  manifest.orchestration_state = {
+    ...(manifest.orchestration_state ?? {}),
+    status: "running",
+    current_owner: "coder",
+    next_owner: "researcher",
+    next_transition_candidate: "experiment",
+    pending_handoff_id: null,
+    pending_owner_candidate: null,
+    pending_stage_candidate: null,
+    handoff_phase: "idle",
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate,
+    },
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageEffective, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.regressed, false);
+  assert.equal(result.gateBlocking, false);
+  assert.ok(
+    result.missingStageSignals.every(
+      (signal) => !/next_transition_candidate should be code while current_stage=plan/i.test(signal)
+    )
+  );
+});
+
 test("auto iterator keeps top-tier experiment stage blocked until benchmark, statistics, and ablation evidence are present", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
