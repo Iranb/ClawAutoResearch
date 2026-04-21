@@ -847,6 +847,12 @@ test("survey review closeout requires comparability and traceability artifacts",
     ),
     true
   );
+  assert.equal(
+    missing.some((signal) =>
+      /SURVEY_TOP_TIER_BRIDGE\.json/i.test(signal)
+    ),
+    true
+  );
 });
 
 test("submit stage requires storyline and title/abstract/intro workbench to be ready", async (t) => {

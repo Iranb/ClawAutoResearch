@@ -560,6 +560,11 @@ export async function collectReviewStageMissingSignals(
       "researcher",
       "SURVEY_TRACEABILITY_AUDIT.json"
     );
+    const topTierBridgePath = path.join(
+      ctx.projectRoot,
+      "researcher",
+      "SURVEY_TOP_TIER_BRIDGE.json"
+    );
     const fairCompareMatrixPath = path.join(
       ctx.projectRoot,
       "analyzer",
@@ -573,6 +578,9 @@ export async function collectReviewStageMissingSignals(
     }
     if (!(await deps.fileHasNonWhitespaceContent(fairCompareMatrixPath))) {
       missing.push("{PROJ}/analyzer/FAIR_COMPARE_MATRIX.json");
+    }
+    if (!(await deps.fileHasNonWhitespaceContent(topTierBridgePath))) {
+      missing.push("{PROJ}/researcher/SURVEY_TOP_TIER_BRIDGE.json");
     }
     const traceabilityAudit = await deps.readJsonIfExists(traceabilityAuditPath);
     if (!traceabilityAudit) {

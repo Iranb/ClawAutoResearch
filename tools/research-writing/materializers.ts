@@ -29,6 +29,7 @@ import { materializeFigureTableRegistry } from "../research-authoring/figure-tab
 import {
   DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
   DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+  DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
   DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
   materializeSurveyAnalysis,
 } from "../research-authoring/survey-analysis";
@@ -490,6 +491,8 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
   const analysisSummaryLines = [
     `Traceable synthesis claims: ${surveyAnalysis.traceableClaimCount}/${surveyAnalysis.claimCount}.`,
     `Fair-compare rows available: ${surveyAnalysis.fairCompareRowCount}.`,
+    `Benchmark contract status: ${surveyAnalysis.benchmarkProtocolStatus}.`,
+    `Competitor contract status: ${surveyAnalysis.venueCompetitionStatus}.`,
     ...(surveyAnalysis.blockingIssues.length > 0
       ? surveyAnalysis.blockingIssues.slice(0, 3)
       : []),
@@ -835,6 +838,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
         "researcher/REVIEW_PROTOCOL.md",
         DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
         DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+        DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
         DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
         "analyzer/FAIR_COMPARE_MATRIX.json",
       ],
@@ -863,6 +867,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
       ...visualCompiler.generatedFiles,
       methodologyConsistency.path,
       DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+      DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
       DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
     ],
   };

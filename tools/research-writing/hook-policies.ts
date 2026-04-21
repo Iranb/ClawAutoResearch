@@ -936,6 +936,7 @@ function buildWritingHookPolicies(params: {
       "researcher/INCLUDED_PAPERS.json",
       "researcher/EXCLUDED_PAPERS.json",
       "researcher/SOURCE_TO_CLAIM_INDEX.json",
+      "researcher/SURVEY_TOP_TIER_BRIDGE.json",
       "researcher/SURVEY_TRACEABILITY_AUDIT.json",
       "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
       "academic_writer/SURVEY_COMPARABILITY_REPORT.md",

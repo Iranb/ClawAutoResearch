@@ -350,3 +350,118 @@ export function collectSurveyBackgroundReferenceLines(params: {
   }
   return ordered.slice(0, Math.max(1, params.limit ?? 8));
 }
+
+function collectNormalizedFieldValues(
+  entry: Record<string, unknown>,
+  keys: string[]
+): string[] {
+  const values: string[] = [];
+  for (const key of keys) {
+    const raw = entry[key];
+    if (typeof raw === "string" && raw.trim()) {
+      values.push(raw.trim());
+    } else if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === "string" && item.trim()) {
+          values.push(item.trim());
+        }
+      }
+    }
+  }
+  return [...new Set(values)];
+}
+
+function countStringValues(values: string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const value of values) {
+    counts[value] = (counts[value] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export function summarizeSurveyRoleCoverage(params: {
+  screeningDecisions?: unknown;
+  includedPapers?: unknown;
+  excludedPapers?: unknown;
+}): {
+  paperRoleCounts: Record<string, number>;
+  evidenceRoleCounts: Record<string, number>;
+  benchmarkFamilyCounts: Record<string, number>;
+  taskFamilyCounts: Record<string, number>;
+  settingFamilyCounts: Record<string, number>;
+} {
+  const merged = new Map<
+    string,
+    {
+      paperRoles: Set<string>;
+      evidenceRoles: Set<string>;
+      benchmarkFamilies: Set<string>;
+      taskFamilies: Set<string>;
+      settingFamilies: Set<string>;
+    }
+  >();
+  const allEntries = [
+    ...collectSurveyEntries(params.screeningDecisions, ["decisions", "papers", "items"]),
+    ...collectSurveyEntries(params.includedPapers, ["papers", "included", "includedPapers", "items"]),
+    ...collectSurveyEntries(params.excludedPapers, [
+      "excludedPapers",
+      "excluded",
+      "backgroundPapers",
+      "papers",
+      "items",
+    ]),
+  ];
+
+  for (const [index, entry] of allEntries.entries()) {
+    const keys = buildEntryIdentityKeys(entry);
+    const identity = keys[0] ?? `entry-${index + 1}`;
+    if (!merged.has(identity)) {
+      merged.set(identity, {
+        paperRoles: new Set<string>(),
+        evidenceRoles: new Set<string>(),
+        benchmarkFamilies: new Set<string>(),
+        taskFamilies: new Set<string>(),
+        settingFamilies: new Set<string>(),
+      });
+    }
+    const target = merged.get(identity)!;
+    for (const value of collectNormalizedFieldValues(entry, ["paper_role", "paperRole"])) {
+      target.paperRoles.add(value);
+    }
+    for (const value of collectNormalizedFieldValues(entry, ["evidence_role", "evidenceRole"])) {
+      target.evidenceRoles.add(value);
+    }
+    for (const value of collectNormalizedFieldValues(entry, ["benchmark_family", "benchmarkFamily"])) {
+      target.benchmarkFamilies.add(value);
+    }
+    for (const value of collectNormalizedFieldValues(entry, ["task_family", "taskFamily"])) {
+      target.taskFamilies.add(value);
+    }
+    for (const value of collectNormalizedFieldValues(entry, ["setting_family", "settingFamily"])) {
+      target.settingFamilies.add(value);
+    }
+  }
+
+  const flattened = {
+    paperRoles: [] as string[],
+    evidenceRoles: [] as string[],
+    benchmarkFamilies: [] as string[],
+    taskFamilies: [] as string[],
+    settingFamilies: [] as string[],
+  };
+  for (const entry of merged.values()) {
+    flattened.paperRoles.push(...entry.paperRoles);
+    flattened.evidenceRoles.push(...entry.evidenceRoles);
+    flattened.benchmarkFamilies.push(...entry.benchmarkFamilies);
+    flattened.taskFamilies.push(...entry.taskFamilies);
+    flattened.settingFamilies.push(...entry.settingFamilies);
+  }
+
+  return {
+    paperRoleCounts: countStringValues(flattened.paperRoles),
+    evidenceRoleCounts: countStringValues(flattened.evidenceRoles),
+    benchmarkFamilyCounts: countStringValues(flattened.benchmarkFamilies),
+    taskFamilyCounts: countStringValues(flattened.taskFamilies),
+    settingFamilyCounts: countStringValues(flattened.settingFamilies),
+  };
+}
