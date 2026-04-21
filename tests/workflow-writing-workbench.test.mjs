@@ -8,6 +8,7 @@ import { createPluginRegistrationContext } from "../tools/plugin-registration-sh
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import { materializeResultsStoryline } from "../tools/research-writing/results-storyline.ts";
 import { materializeTitleAbstractIntroWorkbench } from "../tools/research-writing/title-abstract-intro-workbench.ts";
+import { collectReviewStageMissingSignals } from "../tools/workflow-guard-stages/execution-stage-signals.ts";
 import { maybePrepareWorkflowStageContracts } from "../tools/workflow-guard-runtime/stage-preflight.ts";
 
 async function writeJson(targetPath, value) {
@@ -693,6 +694,156 @@ test("review stage requires storyline and title/abstract/intro workbench to be r
   assert.equal(
     snapshot.missingStageSignals.some((signal) =>
       /paragraph_logic_audit\.status must be ready before REVIEW closeout/i.test(signal)
+    ),
+    true
+  );
+});
+
+test("survey review closeout requires comparability and traceability artifacts", async (t) => {
+  const projectRoot = await makeWorkbenchProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = await readManifest(projectRoot);
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.current_stage = "review";
+  manifest.writing_contract = {
+    paper_mode: "survey",
+    required_sections: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+    section_order: [
+      "abstract",
+      "introduction",
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+      "conclusion",
+    ],
+  };
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+
+  const missing = await collectReviewStageMissingSignals(
+    {
+      projectRoot,
+      manifest,
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      isNonEmptyDirectory: async () => true,
+      pathExists: async (targetPath) => {
+        try {
+          await fs.access(targetPath);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      manifestFieldExists: () => true,
+      getExperimentLedgerPath: () => path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"),
+      loadExperimentSearchState: async () => ({}),
+      loadExperimentReviewState: async () => ({}),
+      isExperimentSearchReadyForAnalysis: () => true,
+      hasActiveExperimentRuns: () => false,
+      normalizeAutonomousExecutionState: () => ({
+        experimentLaunchMode: "manual",
+        requireAnalyzerReview: false,
+        requireCrossReview: false,
+      }),
+      normalizeBenchmarkProtocolState: () => ({}),
+      normalizeStatisticalEvidenceState: () => ({}),
+      normalizeAblationEvidenceState: () => ({}),
+      normalizeMechanismEvidenceState: () => ({}),
+      normalizeVenueCompetitionState: () => ({}),
+      normalizeOpportunityScorecardState: () => ({}),
+      readJsonIfExists: async (targetPath) => {
+        try {
+          return JSON.parse(await fs.readFile(targetPath, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      normalizeStage: (value) =>
+        typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null,
+      normalizeFigureQcState: (value) => ({
+        figureReviewPath:
+          value && typeof value === "object" && typeof value.figure_review_path === "string"
+            ? value.figure_review_path
+            : "reviewer/FIGURE_REVIEW.md",
+      }),
+      resolveProjectArtifactPath: (_root, artifactPath) =>
+        artifactPath ? path.join(projectRoot, artifactPath) : null,
+      findUnsupportedPrimaryClaimsInSelectedWritingScope: async () => ({
+        blocked: false,
+        reason: null,
+      }),
+      normalizeReviewPressurePacketState: (value) => ({
+        rejectFirstReviewPath: value?.reject_first_review_path ?? null,
+        noveltyAttackPath: value?.novelty_attack_path ?? null,
+        unsupportedClaimAuditPath: value?.unsupported_claim_audit_path ?? null,
+        reverseOutlinePath: value?.reverse_outline_path ?? null,
+        figureTableQcPath: value?.figure_table_qc_path ?? null,
+        limitationAuditPath: value?.limitation_audit_path ?? null,
+      }),
+      getReviewPressurePacketValidationErrors: () => [],
+      normalizeWritingContractState: (value) => ({
+        paperMode: value?.paper_mode ?? value?.paperMode ?? null,
+        paper_mode: value?.paper_mode ?? value?.paperMode ?? null,
+      }),
+      normalizeCitationIntegrityState: () => ({
+        enabled: false,
+        verificationRequired: false,
+        verificationStatus: "missing",
+        bibliographyEntryCount: 0,
+        minimumCitationCount: 0,
+        topicRelevanceStatus: "unknown",
+      }),
+      normalizeResultsStorylineState: (value) => value ?? {},
+      normalizeTitleAbstractIntroWorkbenchState: (value) => value ?? {},
+      normalizeParagraphLogicAuditState: (value) => value ?? {},
+      fileHasNonWhitespaceContent: async (targetPath) => {
+        if (!targetPath) {
+          return false;
+        }
+        try {
+          return (await fs.readFile(targetPath, "utf8")).trim().length > 0;
+        } catch {
+          return false;
+        }
+      },
+      DEFAULT_FIGURE_REVIEW_PATH: "reviewer/FIGURE_REVIEW.md",
+      DEFAULT_SUBMISSION_SIMULATION_REVIEW_PATH:
+        "reviewer/SUBMISSION_SIMULATION_REVIEW.md",
+    }
+  );
+
+  assert.equal(
+    missing.some((signal) =>
+      /SURVEY_COMPARABILITY_REPORT\.md/i.test(signal)
+    ),
+    true
+  );
+  assert.equal(
+    missing.some((signal) =>
+      /SOURCE_TO_CLAIM_INDEX\.json/i.test(signal)
+    ),
+    true
+  );
+  assert.equal(
+    missing.some((signal) =>
+      /SURVEY_TRACEABILITY_AUDIT\.json/i.test(signal)
     ),
     true
   );

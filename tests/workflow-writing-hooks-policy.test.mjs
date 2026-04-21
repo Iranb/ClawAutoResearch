@@ -390,6 +390,8 @@ test("materializeWritingHookPolicies generates survey-specific section hooks", a
   assert.ok(hookIds.includes("survey-evidence-synthesis-audit"));
   assert.ok(hookIds.includes("survey-open-problems-audit"));
   assert.ok(hookIds.includes("survey-conclusion-boundary-audit"));
+  assert.ok(hookIds.includes("survey-source-traceability-audit"));
+  assert.ok(hookIds.includes("survey-comparability-audit"));
   assert.ok(hookIds.includes("citation-topicality-audit"));
   assert.ok(hookIds.includes("method-comparison-coverage-audit"));
   assert.ok(hookIds.includes("reviewer-issues-appendix-audit"));
@@ -416,6 +418,22 @@ test("materializeWritingHookPolicies generates survey-specific section hooks", a
   );
   assert.ok(comparisonHook);
   assert.equal(comparisonHook?.hookPoint, "before_stage_handoff");
+
+  const traceabilityHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "survey-source-traceability-audit"
+  );
+  assert.ok(traceabilityHook);
+  assert.equal(traceabilityHook?.auditorRole, "cross-reviewer");
+  assert.equal(traceabilityHook?.hookPoint, "before_stage_handoff");
+  assert.match(traceabilityHook?.requirementPrompt ?? "", /SOURCE_TO_CLAIM_INDEX\.json/i);
+
+  const comparabilityHook = result.policy.auditHooks.find(
+    (entry) => entry.hookId === "survey-comparability-audit"
+  );
+  assert.ok(comparabilityHook);
+  assert.equal(comparabilityHook?.auditorRole, "cross-reviewer");
+  assert.equal(comparabilityHook?.hookPoint, "before_stage_handoff");
+  assert.match(comparabilityHook?.requirementPrompt ?? "", /SURVEY_COMPARABILITY_REPORT\.md/i);
 
   const appendixHook = result.policy.auditHooks.find(
     (entry) => entry.hookId === "reviewer-issues-appendix-audit"

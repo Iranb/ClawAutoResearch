@@ -301,14 +301,15 @@ export function collectSurveyBackgroundReferenceLines(params: {
   screeningDecisions?: unknown;
   limit?: number;
 }): string[] {
-  const lines: string[] = [];
+  const lines: Array<{ key: string; line: string }> = [];
   const pushLine = (entry: Record<string, unknown>) => {
     const title = pickString(entry, ["title", "paper_title", "paperTitle", "name"]);
     const reason = pickString(entry, ["reason", "decision_reason", "decisionReason"]);
     if (!title) {
       return;
     }
-    lines.push(reason ? `${title} - ${reason}` : title);
+    const key = normalizeTitle(title) ?? title.toLowerCase();
+    lines.push({ key, line: reason ? `${title} - ${reason}` : title });
   };
 
   for (const entry of collectSurveyEntries(params.excludedPapers, ["backgroundPapers"])) {
@@ -330,14 +331,22 @@ export function collectSurveyBackgroundReferenceLines(params: {
     }
   }
 
+  const bestByKey = new Map<string, string>();
+  for (const entry of lines) {
+    const current = bestByKey.get(entry.key);
+    if (!current || current.length < entry.line.length) {
+      bestByKey.set(entry.key, entry.line);
+    }
+  }
   const seen = new Set<string>();
   const ordered: string[] = [];
-  for (const line of lines) {
-    if (!line || seen.has(line)) {
+  for (const { key, line } of lines) {
+    const best = bestByKey.get(key) ?? line;
+    if (!best || seen.has(key)) {
       continue;
     }
-    seen.add(line);
-    ordered.push(line);
+    seen.add(key);
+    ordered.push(best);
   }
   return ordered.slice(0, Math.max(1, params.limit ?? 8));
 }
