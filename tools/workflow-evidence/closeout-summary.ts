@@ -171,6 +171,9 @@ export function summarizeEvidenceCloseoutState(manifest: Record<string, unknown>
       pushLocal("reproducibility environment capture unset");
     }
   }
+  if (venueCompetition.status !== "missing" && venueCompetition.objectionCount === 0) {
+    pushLocal("venue competition objection map missing");
+  }
 
   const submitReady =
     !["graph_unavailable", "unverified_graph_context"].includes(

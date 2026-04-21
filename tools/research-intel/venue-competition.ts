@@ -240,6 +240,8 @@ export async function materializeOpportunityScorecard(params: {
   const statisticalEvidence = manifest.statistical_evidence as Record<string, unknown> | undefined;
   const benchmarkLocked = Boolean(benchmarkProtocol?.locked);
   const statisticalReady = typeof statisticalEvidence?.status === "string" && statisticalEvidence.status !== "missing";
+  const competitorObjectionReady = venueCompetition.objectionCount > 0;
+  const positioningStatus = competitorObjectionReady ? "ready" : "partial";
   const graphContextStatus = venueCompetition.graphContextStatus ?? "missing";
   const score = [
     venueCompetition.status === "ready" ? 1 : 0,
@@ -262,6 +264,8 @@ export async function materializeOpportunityScorecard(params: {
     targetVenues: venueCompetition.targetVenues,
     benchmarkLocked,
     statisticalReady,
+    competitorObjectionCount: venueCompetition.objectionCount,
+    positioningStatus,
     graphContextStatus,
     acceptanceRiskStatus: venueCompetition.acceptanceRiskStatus,
   });
@@ -273,6 +277,17 @@ export async function materializeOpportunityScorecard(params: {
       (typeof patch.verdict === "string" && patch.verdict) ||
       verdict,
     scorecard_path: scorecardPath,
+    competitor_objection_count:
+      (typeof patch.competitor_objection_count === "number" &&
+        Number.isFinite(patch.competitor_objection_count)) ||
+      (typeof patch.competitorObjectionCount === "number" &&
+        Number.isFinite(patch.competitorObjectionCount))
+        ? Number(patch.competitor_objection_count ?? patch.competitorObjectionCount)
+        : venueCompetition.objectionCount,
+    positioning_status:
+      (typeof patch.positioning_status === "string" && patch.positioning_status) ||
+      (typeof patch.positioningStatus === "string" && patch.positioningStatus) ||
+      positioningStatus,
     graph_context_status:
       (typeof patch.graph_context_status === "string" && patch.graph_context_status) ||
       (typeof patch.graphContextStatus === "string" && patch.graphContextStatus) ||
@@ -281,7 +296,9 @@ export async function materializeOpportunityScorecard(params: {
       (typeof patch.pending_reason === "string" && patch.pending_reason) ||
       (typeof patch.pendingReason === "string" && patch.pendingReason) ||
       (verdict === "worth_top_tier_bet"
-        ? null
+        ? competitorObjectionReady
+          ? null
+          : "Top-tier opportunity is evidence-strong, but reviewer-facing competitor objections are still missing."
         : "Top-tier opportunity remains weak until benchmark lock, statistical evidence, and competitor slate are all in place."),
     last_materialized_at: nowIso(),
   });

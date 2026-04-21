@@ -23,7 +23,10 @@ import {
   normalizeVenueCompetitionState,
   serializeBenchmarkProtocolState,
 } from "../research-contracts/evidence-contracts";
-import { materializeVenueCompetitionIntel } from "../research-intel/venue-competition";
+import {
+  materializeOpportunityScorecard,
+  materializeVenueCompetitionIntel,
+} from "../research-intel/venue-competition";
 
 export const DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH =
   "academic_writer/SURVEY_COMPARABILITY_REPORT.md";
@@ -370,6 +373,26 @@ export async function materializeSurveyAnalysis(params: {
           projectRoot: params.projectRoot,
         }).catch(() => normalizeVenueCompetitionState(manifest.venue_competition))
       : normalizeVenueCompetitionState(manifest.venue_competition);
+  const opportunityScorecard =
+    benchmarkFamilies.length > 0 || includedSources.length > 0
+      ? await materializeOpportunityScorecard({
+          projectRoot: params.projectRoot,
+        }).catch(() => ({
+          status: "missing",
+          verdict: null,
+          competitorObjectionCount: 0,
+          positioningStatus: null,
+          graphContextStatus: null,
+          pendingReason: null,
+        }))
+      : {
+          status: "missing",
+          verdict: null,
+          competitorObjectionCount: 0,
+          positioningStatus: null,
+          graphContextStatus: null,
+          pendingReason: null,
+        };
   const topTierBridgePath =
     params.topTierBridgePath ?? DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH;
   const topTierBridgeReady =
@@ -402,6 +425,13 @@ export async function materializeSurveyAnalysis(params: {
         objectionCount: venueCompetition.objectionCount,
         acceptanceRiskStatus: venueCompetition.acceptanceRiskStatus,
         pendingReason: venueCompetition.pendingReason,
+      },
+      opportunityScorecard: {
+        status: opportunityScorecard.status,
+        verdict: opportunityScorecard.verdict,
+        positioningStatus: opportunityScorecard.positioningStatus,
+        competitorObjectionCount: opportunityScorecard.competitorObjectionCount,
+        pendingReason: opportunityScorecard.pendingReason,
       },
     },
     blockingIssues: [
@@ -505,6 +535,8 @@ export async function materializeSurveyAnalysis(params: {
     benchmarkProtocolStatus: nextBenchmarkProtocol.status,
     venueCompetitionStatus: venueCompetition.status,
     venueCompetitionObjectionCount: venueCompetition.objectionCount,
+    opportunityScorecardStatus: opportunityScorecard.status,
+    opportunityScorecardVerdict: opportunityScorecard.verdict,
     backgroundAnchorCount: backgroundAnchors.length,
     blockingIssues,
     warnings,

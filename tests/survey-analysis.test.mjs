@@ -200,8 +200,13 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
   assert.equal(topTierBridge.benchmarkHints.selectedBenchmarkFamily, "SurveyBench");
   assert.equal(topTierBridge.contracts.benchmarkProtocol.status, "partial");
   assert.equal(topTierBridge.contracts.venueCompetition.objectionCount > 0, true);
+  assert.equal(topTierBridge.contracts.opportunityScorecard.status, "partial");
+  assert.equal(topTierBridge.contracts.opportunityScorecard.verdict, "not_ready_for_top_tier");
   await fs.access(
     path.join(projectRoot, "researcher", "VENUE_COMPETITOR_OBJECTIONS.json")
+  );
+  await fs.access(
+    path.join(projectRoot, "researcher", "TOP_TIER_OPPORTUNITY.json")
   );
 });
 

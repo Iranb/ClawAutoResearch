@@ -254,6 +254,8 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   assert.equal(venue.status, "ready");
   assert.equal(venue.objectionCount > 0, true);
   assert.equal(opportunity.verdict, "worth_top_tier_bet");
+  assert.equal(opportunity.positioningStatus, "ready");
+  assert.equal(opportunity.competitorObjectionCount > 0, true);
   assert.equal(mechanism.status, "ready");
   assert.equal(repro.status, "ready");
   assert.equal(cameraReady.status, "ready");
@@ -266,6 +268,8 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   assert.equal(manifest.benchmark_protocol.locked, true);
   assert.equal(manifest.benchmark_protocol.fair_compare_status, "pass");
   assert.equal(manifest.venue_competition.objection_count > 0, true);
+  assert.equal(manifest.opportunity_scorecard.positioning_status, "ready");
+  assert.equal(manifest.opportunity_scorecard.competitor_objection_count > 0, true);
   assert.equal(manifest.statistical_evidence.claim_strength_status, "strong");
   assert.equal(manifest.reproducibility_pack.status, "ready");
   assert.equal(manifest.camera_ready_evidence.status, "ready");
