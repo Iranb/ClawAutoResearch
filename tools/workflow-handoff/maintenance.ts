@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import { appendWorkflowHandoffEvent } from "./handoff-events";
 import {
+  countWorkflowHandoffAttemptsTotal,
   readWorkflowHandoffIntentStore,
   transitionWorkflowHandoffIntent,
 } from "./handoff-store";
@@ -9,6 +11,8 @@ export type WorkflowHandoffMaintenanceResult = {
   staleClaimIntentIds: string[];
   ackTimeoutIntentIds: string[];
   stalledIntentIds: string[];
+  supersededIntentIds: string[];
+  exhaustedIntentIds: string[];
 };
 
 export async function runWorkflowHandoffMaintenancePass(params: {
@@ -22,9 +26,91 @@ export async function runWorkflowHandoffMaintenancePass(params: {
     staleClaimIntentIds: [],
     ackTimeoutIntentIds: [],
     stalledIntentIds: [],
+    supersededIntentIds: [],
+    exhaustedIntentIds: [],
   };
+  const manifestPath = `${params.projectRoot}/PROJECT_MANIFEST.json`;
+  let manifest: Record<string, unknown> | null = null;
+  try {
+    manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  } catch {
+    manifest = null;
+  }
+  const currentStage =
+    typeof manifest?.current_stage === "string" ? manifest.current_stage.trim() : null;
+  const pendingHandoffId =
+    manifest?.orchestration_state &&
+    typeof manifest.orchestration_state === "object" &&
+    !Array.isArray(manifest.orchestration_state) &&
+    typeof (manifest.orchestration_state as Record<string, unknown>).pending_handoff_id === "string"
+      ? ((manifest.orchestration_state as Record<string, unknown>).pending_handoff_id as string)
+      : manifest?.orchestration_state &&
+          typeof manifest.orchestration_state === "object" &&
+          !Array.isArray(manifest.orchestration_state) &&
+          typeof (manifest.orchestration_state as Record<string, unknown>).pendingHandoffId === "string"
+        ? ((manifest.orchestration_state as Record<string, unknown>).pendingHandoffId as string)
+        : null;
 
   for (const intent of store.intents) {
+    if (
+      !["completed", "expired", "superseded", "escalated", "cancelled"].includes(
+        intent.status
+      ) &&
+      countWorkflowHandoffAttemptsTotal(intent) >= intent.deliveryPlan.maxAttemptsTotal &&
+      intent.deliveryPlan.maxAttemptsTotal > 0
+    ) {
+      await transitionWorkflowHandoffIntent({
+        projectRoot: params.projectRoot,
+        intentId: intent.intentId,
+        toStatus: "failed",
+        terminalReason: "delivery_attempt_budget_exhausted",
+        summary: "Handoff exhausted its delivery attempt budget.",
+      });
+      result.exhaustedIntentIds.push(intent.intentId);
+      continue;
+    }
+
+    if (
+      intent.reason === "stage_owner_change" &&
+      intent.status !== "superseded" &&
+      currentStage &&
+      pendingHandoffId &&
+      pendingHandoffId !== intent.intentId &&
+      intent.intentId !== pendingHandoffId &&
+      intent.stageAfter === currentStage
+    ) {
+      await transitionWorkflowHandoffIntent({
+        projectRoot: params.projectRoot,
+        intentId: intent.intentId,
+        toStatus: "superseded",
+        terminalReason: "replaced_by_newer_stage_owner_handoff",
+        summary:
+          "Superseded stale stage-owner handoff because a newer pending handoff now owns this stage transition.",
+      });
+      result.supersededIntentIds.push(intent.intentId);
+      continue;
+    }
+
+    if (
+      intent.reason === "stage_owner_change" &&
+      intent.status !== "superseded" &&
+      currentStage &&
+      intent.stageBefore !== currentStage &&
+      intent.stageAfter !== currentStage &&
+      !["completed", "expired", "superseded", "escalated", "cancelled"].includes(intent.status)
+    ) {
+      await transitionWorkflowHandoffIntent({
+        projectRoot: params.projectRoot,
+        intentId: intent.intentId,
+        toStatus: "superseded",
+        terminalReason: "stage_lineage_drift",
+        summary:
+          "Superseded stage-owner handoff because the live project stage no longer matches either side of the handoff lineage.",
+      });
+      result.supersededIntentIds.push(intent.intentId);
+      continue;
+    }
+
     if (
       intent.expiresAt &&
       Date.parse(intent.expiresAt) <= now.getTime() &&

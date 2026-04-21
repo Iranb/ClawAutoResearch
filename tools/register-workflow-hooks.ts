@@ -47,6 +47,7 @@ import {
 } from "./workflow-subagent-sessions";
 import { isWorkflowManagedAgentContext } from "./workflow-agent-isolation.js";
 import { isWorkflowStageBroadcastMessage } from "./stage-broadcast";
+import { inspectWorkflowLobsterReadiness, normalizeWorkflowLobsterHandoffConfig } from "./lobster-handoff";
 import {
   getToolContext,
   readString,
@@ -762,6 +763,12 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           }
           if (snapshot.projectRoot && snapshot.role) {
             if (agentCtx.sessionKey) {
+              const lobsterReadiness = await inspectWorkflowLobsterReadiness({
+                config: normalizeWorkflowLobsterHandoffConfig(
+                  workflowPolicy.lobsterHandoff
+                ),
+                autoModeActive: workflowPolicy.autoMode !== "off",
+              }).catch(() => null);
               await upsertWorkflowAgentCapability({
                 projectRoot: snapshot.projectRoot,
                 projectId: snapshot.projectId,
@@ -773,6 +780,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
                 canUseResearchWorkflow: true,
                 canReceiveNativeDispatch: true,
                 canRunExecPacket: true,
+                canUseLobster: lobsterReadiness?.status === "ready",
                 confidence: "high",
               }).catch(() => null);
             }

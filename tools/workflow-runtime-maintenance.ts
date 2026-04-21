@@ -34,6 +34,10 @@ import {
   runWorkflowHandoffMaintenancePass,
   type WorkflowHandoffMaintenanceResult,
 } from "./workflow-handoff/maintenance";
+import {
+  findWorkflowHandoffIntent,
+  transitionWorkflowHandoffIntent,
+} from "./workflow-handoff/handoff-store";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 
@@ -395,6 +399,53 @@ async function replayQueueEntry(params: {
   };
 }
 
+function computeResetAckDeadlineAt(params: {
+  fallbackAfterMs: number | null;
+}): string | null {
+  if (
+    typeof params.fallbackAfterMs === "number" &&
+    Number.isFinite(params.fallbackAfterMs) &&
+    params.fallbackAfterMs > 0
+  ) {
+    return new Date(Date.now() + Math.floor(params.fallbackAfterMs)).toISOString();
+  }
+  return null;
+}
+
+async function syncQueuedHandoffIntentAfterReplay(params: {
+  projectRoot: string;
+  queueKey: string;
+  sessionKey: string | null;
+}): Promise<void> {
+  if (!params.queueKey.startsWith("handoff:")) {
+    return;
+  }
+  const intentId = params.queueKey.slice("handoff:".length);
+  const intent = await findWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+  });
+  if (!intent) {
+    return;
+  }
+  await transitionWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+    toStatus: "dispatched",
+    patch: {
+      toSessionKey: params.sessionKey ?? intent.toSessionKey,
+      deliveryPlan: {
+        ...intent.deliveryPlan,
+        ackDeadlineAt: computeResetAckDeadlineAt({
+          fallbackAfterMs: intent.deliveryPlan.fallbackAfterMs,
+        }),
+      },
+    },
+    summary:
+      "Runtime maintenance replay dispatched the queued handoff and reset the acknowledgement deadline.",
+  });
+}
+
 async function recordBroadcastFailures(params: {
   projectRoot: string;
   projectId: string | null;
@@ -497,7 +548,12 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
 
   const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
   const replayCandidates = queueStore.entries.filter(
-    (entry) => entry.status === "needs_repair" || entry.status === "degraded"
+    (entry) =>
+      entry.status === "needs_repair" ||
+      entry.status === "degraded" ||
+      (entry.status === "queued" &&
+        entry.entryType === "dispatch_task" &&
+        entry.queueKey.startsWith("handoff:"))
   );
   const replayedQueueKeys: string[] = [];
   const exhaustedQueueKeys: string[] = [];
@@ -614,6 +670,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     });
     if (replay.launched) {
       replayedQueueKeys.push(entry.queueKey);
+      await syncQueuedHandoffIntentAfterReplay({
+        projectRoot,
+        queueKey: entry.queueKey,
+        sessionKey: replay.sessionKey,
+      });
       await reconcileSupersededRepairSessions({
         projectRoot,
         queueKey: entry.queueKey,

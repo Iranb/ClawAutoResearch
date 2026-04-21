@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  classifyWorkflowLobsterFailureReason,
   DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
   handoffWorkflowTaskToAgent,
+  inspectWorkflowLobsterReadiness,
   normalizeWorkflowLobsterHandoffConfig,
   shouldUseLobsterForWorkflowHandoff,
 } from "../tools/lobster-handoff.ts";
@@ -95,7 +97,7 @@ test("handoffWorkflowTaskToAgent keeps native dispatch when Lobster is disabled"
 
   assert.equal(calls.length, 1);
   assert.equal(result.backend, "native");
-  assert.equal(result.fallbackReason, null);
+  assert.equal(result.fallbackReason, "lobster_config_disabled");
 });
 
 test("handoffWorkflowTaskToAgent uses Lobster when enabled for auto mode", async () => {
@@ -189,4 +191,40 @@ test("handoffWorkflowTaskToAgent falls back to native when Lobster fails", async
   } finally {
     await fs.rm(projectRoot, { recursive: true, force: true });
   }
+});
+
+test("inspectWorkflowLobsterReadiness reports config-disabled and auto-mode-inactive states", async () => {
+  const disabled = await inspectWorkflowLobsterReadiness({
+    config: {
+      ...DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
+      enabled: false,
+    },
+    autoModeActive: true,
+  });
+  assert.equal(disabled.status, "config_disabled");
+
+  const autoModeInactive = await inspectWorkflowLobsterReadiness({
+    config: {
+      ...DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG,
+      enabled: true,
+      autoModeOnly: true,
+    },
+    autoModeActive: false,
+  });
+  assert.equal(autoModeInactive.status, "auto_mode_inactive");
+});
+
+test("classifyWorkflowLobsterFailureReason preserves concrete root causes", () => {
+  assert.equal(
+    classifyWorkflowLobsterFailureReason("Tool not available: lobster"),
+    "lobster_plugin_not_loaded"
+  );
+  assert.equal(
+    classifyWorkflowLobsterFailureReason("spawn lobster ENOENT"),
+    "lobster_binary_missing"
+  );
+  assert.equal(
+    classifyWorkflowLobsterFailureReason("tool execution failed"),
+    "lobster_tool_error"
+  );
 });
