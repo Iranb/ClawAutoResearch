@@ -5,6 +5,15 @@ import {
   readWorkflowPaperSourceIndex,
   type WorkflowPaperSourceEntry,
 } from "./paper-source-index";
+import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
+import {
+  collectSurveyEntries,
+  summarizeSurveyQueryRegistry,
+  summarizeSurveyScreening,
+} from "./survey-review-artifacts";
+import { scorePaperTopicRelevance } from "./research30/topic-relevance";
+import { readPaperBodyText } from "./research30/paper-body-text";
 
 export type LiteratureCoverageVerdict = "thin" | "adequate" | "strong";
 
@@ -14,8 +23,14 @@ export type LiteratureCoverageAudit = {
   auditPath: string;
   markdownPath: string;
   verdict: LiteratureCoverageVerdict;
+  focusTopic: string | null;
+  focusSource: "screened_included" | "topic_relevant" | "full_source_index";
   totalPapers: number;
   recentPaperCount: number;
+  screenedIncludedCount: number;
+  backgroundPaperCount: number;
+  pendingScreeningCount: number;
+  pendingRoundCount: number;
   metadataGaps: {
     missingCanonicalId: number;
     missingYear: number;
@@ -34,6 +49,42 @@ export type LiteratureCoverageAudit = {
   }>;
   missingBaselineHints: string[];
   recommendations: string[];
+  topicRelevance: {
+    auditPath: string;
+    markdownPath: string;
+    relevantCount: number;
+    boundaryCount: number;
+    offTopicCount: number;
+    insufficientEvidenceCount: number;
+    fullTextReviewedCount: number;
+    titleOnlyCount: number;
+  };
+};
+
+export type TopicRelevanceAuditEntry = {
+  canonicalId: string | null;
+  title: string | null;
+  score: number;
+  status: "relevant" | "boundary" | "off_topic" | "insufficient_evidence";
+  evidenceSource: "missing" | "title" | "title_abstract" | "full_text";
+  matchedTokens: string[];
+  matchedPhrases: string[];
+  bodySourcePath: string | null;
+};
+
+export type TopicRelevanceAudit = {
+  projectId: string | null;
+  generatedAt: string;
+  topic: string | null;
+  auditPath: string;
+  markdownPath: string;
+  relevantCount: number;
+  boundaryCount: number;
+  offTopicCount: number;
+  insufficientEvidenceCount: number;
+  fullTextReviewedCount: number;
+  titleOnlyCount: number;
+  entries: TopicRelevanceAuditEntry[];
 };
 
 export type CitationExpansionPacket = {
@@ -121,14 +172,155 @@ function selectCitationSeeds(entries: WorkflowPaperSourceEntry[], maxSeeds: numb
     .slice(0, Math.max(1, maxSeeds));
 }
 
+function buildEntryIdentityKeys(entry: {
+  canonicalId?: string | null;
+  doi?: string | null;
+  arxivId?: string | null;
+  title?: string | null;
+}): string[] {
+  return uniqueStrings(
+    [entry.canonicalId, entry.doi, entry.arxivId]
+      .map((value) => asString(value)?.toLowerCase() ?? null)
+      .concat(normalizeTitle(entry.title))
+  );
+}
+
+function buildIncludedIdentityKeySet(entries: Record<string, unknown>[]): Set<string> {
+  return new Set(
+    entries.flatMap((entry) =>
+      uniqueStrings([
+        asString(entry.canonical_id ?? entry.canonicalId)?.toLowerCase() ?? null,
+        asString(entry.doi)?.toLowerCase() ?? null,
+        asString(entry.arxiv ?? entry.arxiv_id ?? entry.arxivId)?.toLowerCase() ?? null,
+        normalizeTitle(asString(entry.title ?? entry.paper_title ?? entry.paperTitle ?? entry.name)),
+      ])
+    )
+  );
+}
+
+async function evaluateTopicRelevanceForEntries(params: {
+  projectId: string | null;
+  projectRoot: string;
+  entries: WorkflowPaperSourceEntry[];
+  topic: string | null;
+}): Promise<TopicRelevanceAudit> {
+  const generatedAt = new Date().toISOString();
+  const auditPath = path.join(params.projectRoot, "researcher", "TOPIC_RELEVANCE_AUDIT.json");
+  const markdownPath = path.join(params.projectRoot, "researcher", "TOPIC_RELEVANCE_AUDIT.md");
+  const topic = params.topic;
+  if (!topic) {
+    const emptyAudit: TopicRelevanceAudit = {
+      projectId: params.projectId,
+      generatedAt,
+      topic: null,
+      auditPath,
+      markdownPath,
+      relevantCount: 0,
+      boundaryCount: 0,
+      offTopicCount: 0,
+      insufficientEvidenceCount: 0,
+      fullTextReviewedCount: 0,
+      titleOnlyCount: 0,
+      entries: [],
+    };
+    await writeJsonEnsured(auditPath, emptyAudit);
+    await writeTextEnsured(
+      markdownPath,
+      "# Topic Relevance Audit\n\n- Topic: none\n- Status: skipped because the project topic is missing.\n"
+    );
+    return emptyAudit;
+  }
+  const results = await Promise.all(
+    params.entries.map(async (entry) => {
+      const body = await readPaperBodyText({ entry });
+      const relevance = scorePaperTopicRelevance({
+        topic,
+        title: entry.title,
+        bodyText: body.text,
+      });
+      const status: TopicRelevanceAuditEntry["status"] =
+        relevance.score >= 45
+          ? "relevant"
+          : relevance.score >= 24
+            ? "boundary"
+            : body.text || entry.sourcePath
+              ? "off_topic"
+              : "insufficient_evidence";
+      return {
+        canonicalId: entry.canonicalId,
+        title: entry.title,
+        score: relevance.score,
+        status,
+        evidenceSource: relevance.evidenceSource,
+        matchedTokens: relevance.matchedTokens,
+        matchedPhrases: relevance.matchedPhrases,
+        bodySourcePath: body.sourcePath,
+      } satisfies TopicRelevanceAuditEntry;
+    })
+  );
+  const sortedEntries = [...results].sort(
+    (left, right) =>
+      right.score - left.score ||
+      (left.title ?? left.canonicalId ?? "").localeCompare(right.title ?? right.canonicalId ?? "")
+  );
+  const audit: TopicRelevanceAudit = {
+      projectId: params.projectId,
+      generatedAt,
+      topic,
+      auditPath,
+    markdownPath,
+    relevantCount: sortedEntries.filter((entry) => entry.status === "relevant").length,
+    boundaryCount: sortedEntries.filter((entry) => entry.status === "boundary").length,
+    offTopicCount: sortedEntries.filter((entry) => entry.status === "off_topic").length,
+    insufficientEvidenceCount: sortedEntries.filter(
+      (entry) => entry.status === "insufficient_evidence"
+    ).length,
+    fullTextReviewedCount: sortedEntries.filter((entry) => entry.evidenceSource === "full_text").length,
+    titleOnlyCount: sortedEntries.filter((entry) => entry.evidenceSource !== "full_text").length,
+    entries: sortedEntries,
+  };
+  const markdown = [
+    "# Topic Relevance Audit",
+    "",
+    `- Generated at: ${audit.generatedAt}`,
+    `- Topic: ${audit.topic ?? "unset"}`,
+    `- Relevant: ${audit.relevantCount}`,
+    `- Boundary: ${audit.boundaryCount}`,
+    `- Off-topic: ${audit.offTopicCount}`,
+    `- Insufficient evidence: ${audit.insufficientEvidenceCount}`,
+    `- Full-text reviewed: ${audit.fullTextReviewedCount}`,
+    `- Title/metadata only: ${audit.titleOnlyCount}`,
+    "",
+    "## Top Entries",
+    ...audit.entries.slice(0, 20).map(
+      (entry) =>
+        `- ${entry.title ?? entry.canonicalId ?? "unknown"} | status=${entry.status} | score=${entry.score} | evidence=${entry.evidenceSource} | matched=${entry.matchedTokens.join(", ") || "none"}`
+    ),
+    "",
+  ].join("\n");
+  await writeJsonEnsured(auditPath, audit);
+  await writeTextEnsured(markdownPath, `${markdown}\n`);
+  return audit;
+}
+
 function buildCoverageMarkdown(audit: LiteratureCoverageAudit): string {
   const lines = [
     "# Literature Coverage Audit",
     "",
     `- Generated at: ${audit.generatedAt}`,
     `- Verdict: ${audit.verdict}`,
+    `- Focus topic: ${audit.focusTopic ?? "none"}`,
+    `- Focus source: ${audit.focusSource}`,
     `- Total papers: ${audit.totalPapers}`,
     `- Recent papers (last 2 years): ${audit.recentPaperCount}`,
+    `- Screened included papers: ${audit.screenedIncludedCount}`,
+    `- Background-related papers: ${audit.backgroundPaperCount}`,
+    `- Pending retrieval rounds: ${audit.pendingRoundCount}`,
+    `- Pending screening candidates: ${audit.pendingScreeningCount}`,
+    `- Topic-relevant papers: ${audit.topicRelevance.relevantCount}`,
+    `- Boundary papers: ${audit.topicRelevance.boundaryCount}`,
+    `- Off-topic papers: ${audit.topicRelevance.offTopicCount}`,
+    `- Full-text reviewed: ${audit.topicRelevance.fullTextReviewedCount}`,
     `- Metadata-only unresolved: ${audit.metadataGaps.metadataOnlyUnresolved}`,
     `- Missing baseline hints: ${audit.missingBaselineHints.join(", ") || "none"}`,
     "",
@@ -171,14 +363,115 @@ export async function auditLiteratureCoverage(params: {
   const { entries } = await readWorkflowPaperSourceIndex({
     projectRoot: params.projectRoot,
   });
+  const surveyState = normalizeSurveyReviewState(manifest.survey_review);
+  const surveyTopic =
+    asString(surveyState.topic) ??
+    asString((manifest.research_program as Record<string, unknown> | undefined)?.goal) ??
+    null;
+  const [includedJson, excludedJson, candidateJson, screeningDecisionsJson, queryRegistry] =
+    await Promise.all([
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, surveyState.includedPapersPath) ?? ""
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, surveyState.excludedPapersPath) ?? ""
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, surveyState.candidatePapersPath) ?? ""
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, surveyState.screeningDecisionsPath) ?? ""
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, surveyState.queryRegistryPath) ?? ""
+      ),
+    ]);
+  const querySummary = summarizeSurveyQueryRegistry(queryRegistry);
+  const screeningSummary = summarizeSurveyScreening({
+    candidatePapers: candidateJson,
+    screeningDecisions: screeningDecisionsJson,
+    includedPapers: includedJson,
+    excludedPapers: excludedJson,
+  });
+  const includedEntries = collectSurveyEntries(includedJson, [
+    "papers",
+    "included",
+    "includedPapers",
+    "items",
+  ]);
+  const includedKeys = buildIncludedIdentityKeySet(includedEntries);
+  const screenedEntries = entries.filter((entry) => {
+    const candidates = buildEntryIdentityKeys({
+      canonicalId: entry.canonicalId,
+      doi: entry.doi,
+      arxivId: entry.arxivId,
+      title: entry.title,
+    });
+    return candidates.some((value) => includedKeys.has(value));
+  });
+  const topicRelevanceAudit = await evaluateTopicRelevanceForEntries({
+    projectId,
+    projectRoot: params.projectRoot,
+    entries,
+    topic: surveyTopic,
+  });
+  const relevantKeySet = new Set(
+    topicRelevanceAudit.entries
+      .filter((entry) => entry.status === "relevant" || entry.status === "boundary")
+      .flatMap((entry) =>
+        buildEntryIdentityKeys({
+          canonicalId: entry.canonicalId,
+          title: entry.title,
+        })
+      )
+  );
+  const offTopicScreenedCount = topicRelevanceAudit.entries.filter((entry) => {
+    if (entry.status !== "off_topic") {
+      return false;
+    }
+    const keys = buildEntryIdentityKeys({
+      canonicalId: entry.canonicalId,
+      title: entry.title,
+    });
+    return keys.some((value) => includedKeys.has(value));
+  }).length;
+  const topicRelevantEntries =
+    surveyTopic != null
+      ? entries.filter((entry) =>
+          buildEntryIdentityKeys({
+            canonicalId: entry.canonicalId,
+            doi: entry.doi,
+            arxivId: entry.arxivId,
+            title: entry.title,
+          }).some((value) => relevantKeySet.has(value))
+        )
+      : entries;
+  const focusEntries =
+    screenedEntries.length > 0
+      ? screenedEntries
+      : topicRelevantEntries.length > 0
+        ? topicRelevantEntries
+        : entries;
+  const focusSource: LiteratureCoverageAudit["focusSource"] =
+    screenedEntries.length > 0
+      ? "screened_included"
+      : topicRelevantEntries.length > 0
+        ? "topic_relevant"
+        : "full_source_index";
   const currentYear = new Date(generatedAt).getUTCFullYear();
-  const recentPaperCount = entries.filter(
-    (entry) => typeof entry.year === "number" && entry.year >= currentYear - 1
-  ).length;
+  const recentPaperCount =
+    includedEntries.length > 0
+      ? includedEntries.filter((entry) => {
+          const year = entry.year;
+          return typeof year === "number" && Number.isFinite(year) && year >= currentYear - 1;
+        }).length
+      : focusEntries.filter(
+          (entry) => typeof entry.year === "number" && entry.year >= currentYear - 1
+        ).length;
   const baselineHints = readBaselineHints(manifest);
   const baselineMatches = baselineHints.map((hint) => {
     const normalizedHint = normalizeTitle(hint);
-    const matches = entries.filter((entry) => {
+    const matches = focusEntries.filter((entry) => {
       const normalizedTitle = normalizeTitle(entry.title);
       return Boolean(normalizedHint && normalizedTitle && normalizedTitle.includes(normalizedHint));
     });
@@ -191,8 +484,38 @@ export async function auditLiteratureCoverage(params: {
   const missingBaselineHints = baselineMatches
     .filter((entry) => entry.canonicalIds.length === 0 && entry.titles.length === 0)
     .map((entry) => entry.hint);
+  const effectivePaperCount =
+    screeningSummary.includedCount > 0 ? screeningSummary.includedCount : focusEntries.length;
+  const explicitSaturationReady =
+    querySummary.hasExplicitSaturation &&
+    querySummary.pendingRoundCount === 0 &&
+    screeningSummary.pendingCount === 0;
   const recommendations: string[] = [];
-  if (entries.length < 15) {
+  if (offTopicScreenedCount > 0) {
+    recommendations.push(
+      `${offTopicScreenedCount} screened included paper(s) look weakly related after body-aware topic relevance review; revisit the include/background boundary.`
+    );
+  }
+  if (
+    screeningSummary.includedCount > 0 &&
+    topicRelevanceAudit.fullTextReviewedCount <
+      Math.min(screeningSummary.includedCount, 5)
+  ) {
+    recommendations.push(
+      "Full-text topic relevance coverage is still shallow; fetch markdown-first paper content for more included papers before trusting the boundary decisions."
+    );
+  }
+  if (querySummary.pendingRoundCount > 0) {
+    recommendations.push(
+      `Survey retrieval still has ${querySummary.pendingRoundCount} pending round(s); do not treat coverage as final yet.`
+    );
+  }
+  if (screeningSummary.pendingCount > 0) {
+    recommendations.push(
+      `Survey screening still has ${screeningSummary.pendingCount} pending candidate(s); finalize those decisions before trusting the packet.`
+    );
+  }
+  if (effectivePaperCount < 15) {
     recommendations.push(
       "Paper set is still thin; expand discovery before trusting frontier or survey synthesis."
     );
@@ -207,12 +530,20 @@ export async function auditLiteratureCoverage(params: {
       `Baseline hints still missing from PAPER_SOURCE_INDEX.json: ${missingBaselineHints.join(", ")}.`
     );
   }
-  if (Object.keys(countBy(entries.map((entry) => entry.sourceProvider))).length < 2) {
+  if (Object.keys(countBy(focusEntries.map((entry) => entry.sourceProvider))).length < 2) {
     recommendations.push(
       "Discovery sources are concentrated; consider mixing papers.cool with PASA or manual venue sweeps."
     );
   }
-  if (entries.length < 25) {
+  if (
+    surveyState.topic &&
+    effectivePaperCount < 40 &&
+    !explicitSaturationReady
+  ) {
+    recommendations.push(
+      "Survey coverage is below the usual 40-paper comfort zone and saturation is not durably justified yet; keep bounded citation expansion running."
+    );
+  } else if (effectivePaperCount < 25) {
     recommendations.push(
       "Keep citation expansion running until the project reaches a healthier paper pool (roughly 25+ for experimental work, 40+ for survey work) or until saturation is explicitly justified."
     );
@@ -223,9 +554,15 @@ export async function auditLiteratureCoverage(params: {
     );
   }
   const verdict: LiteratureCoverageVerdict =
-    entries.length < 15 || missingBaselineHints.length > 0
+    effectivePaperCount < 15 || missingBaselineHints.length > 0
       ? "thin"
-      : recentPaperCount < 5
+      : offTopicScreenedCount > 0
+        ? "adequate"
+      : querySummary.pendingRoundCount > 0 || screeningSummary.pendingCount > 0
+        ? "adequate"
+        : surveyState.topic && effectivePaperCount < 40 && !explicitSaturationReady
+          ? "adequate"
+          : recentPaperCount < 5
         ? "adequate"
         : "strong";
   const auditPath = path.join(params.projectRoot, "researcher", "LITERATURE_COVERAGE_AUDIT.json");
@@ -240,24 +577,42 @@ export async function auditLiteratureCoverage(params: {
     auditPath,
     markdownPath,
     verdict,
-    totalPapers: entries.length,
+    focusTopic: surveyTopic,
+    focusSource,
+    totalPapers: effectivePaperCount,
     recentPaperCount,
+    screenedIncludedCount: screeningSummary.includedCount,
+    backgroundPaperCount: screeningSummary.backgroundCount,
+    pendingScreeningCount: screeningSummary.pendingCount,
+    pendingRoundCount: querySummary.pendingRoundCount,
     metadataGaps: {
-      missingCanonicalId: entries.filter((entry) => !entry.canonicalId).length,
-      missingYear: entries.filter((entry) => entry.year == null).length,
-      missingVenue: entries.filter((entry) => !entry.venue).length,
-      missingSourcePath: entries.filter((entry) => !entry.sourcePath).length,
-      metadataOnlyUnresolved: entries.filter(
+      missingCanonicalId: focusEntries.filter((entry) => !entry.canonicalId).length,
+      missingYear: focusEntries.filter((entry) => entry.year == null).length,
+      missingVenue: focusEntries.filter((entry) => !entry.venue).length,
+      missingSourcePath: focusEntries.filter((entry) => !entry.sourcePath).length,
+      metadataOnlyUnresolved: focusEntries.filter(
         (entry) => entry.resolutionStatus === "metadata_only_unresolved"
       ).length,
     },
-    providerCoverage: countBy(entries.map((entry) => entry.sourceProvider)),
-    venueCoverage: countBy(entries.map((entry) => entry.venue)),
-    yearCoverage: countBy(entries.map((entry) => (entry.year != null ? String(entry.year) : null))),
+    providerCoverage: countBy(focusEntries.map((entry) => entry.sourceProvider)),
+    venueCoverage: countBy(focusEntries.map((entry) => entry.venue)),
+    yearCoverage: countBy(
+      focusEntries.map((entry) => (entry.year != null ? String(entry.year) : null))
+    ),
     baselineHints,
     baselineMatches,
     missingBaselineHints,
     recommendations,
+    topicRelevance: {
+      auditPath: topicRelevanceAudit.auditPath,
+      markdownPath: topicRelevanceAudit.markdownPath,
+      relevantCount: topicRelevanceAudit.relevantCount,
+      boundaryCount: topicRelevanceAudit.boundaryCount,
+      offTopicCount: topicRelevanceAudit.offTopicCount,
+      insufficientEvidenceCount: topicRelevanceAudit.insufficientEvidenceCount,
+      fullTextReviewedCount: topicRelevanceAudit.fullTextReviewedCount,
+      titleOnlyCount: topicRelevanceAudit.titleOnlyCount,
+    },
   };
   await writeJsonEnsured(auditPath, audit);
   await writeTextEnsured(markdownPath, buildCoverageMarkdown(audit));
@@ -277,8 +632,67 @@ export async function planCitationExpansion(params: {
   const { entries } = await readWorkflowPaperSourceIndex({
     projectRoot: params.projectRoot,
   });
+  const surveyState = normalizeSurveyReviewState(manifest.survey_review);
+  const surveyTopic =
+    asString(surveyState.topic) ??
+    asString((manifest.research_program as Record<string, unknown> | undefined)?.goal) ??
+    null;
+  const [includedJson] = await Promise.all([
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(params.projectRoot, surveyState.includedPapersPath) ?? ""
+    ),
+  ]);
+  const includedEntries = collectSurveyEntries(includedJson, [
+    "papers",
+    "included",
+    "includedPapers",
+    "items",
+  ]);
+  const includedKeys = buildIncludedIdentityKeySet(includedEntries);
+  const screenedEntries = entries.filter((entry) => {
+    const candidates = buildEntryIdentityKeys({
+      canonicalId: entry.canonicalId,
+      doi: entry.doi,
+      arxivId: entry.arxivId,
+      title: entry.title,
+    });
+    return candidates.some((value) => includedKeys.has(value));
+  });
+  const topicRelevanceAudit = await evaluateTopicRelevanceForEntries({
+    projectId,
+    projectRoot: params.projectRoot,
+    entries,
+    topic: surveyTopic,
+  });
+  const relevantKeySet = new Set(
+    topicRelevanceAudit.entries
+      .filter((entry) => entry.status === "relevant" || entry.status === "boundary")
+      .flatMap((entry) =>
+        buildEntryIdentityKeys({
+          canonicalId: entry.canonicalId,
+          title: entry.title,
+        })
+      )
+  );
+  const topicRelevantEntries =
+    surveyTopic != null
+      ? entries.filter((entry) =>
+          buildEntryIdentityKeys({
+            canonicalId: entry.canonicalId,
+            doi: entry.doi,
+            arxivId: entry.arxivId,
+            title: entry.title,
+          }).some((value) => relevantKeySet.has(value))
+        )
+      : entries;
+  const seedEntries =
+    screenedEntries.length > 0
+      ? screenedEntries
+      : topicRelevantEntries.length > 0
+        ? topicRelevantEntries
+        : entries;
   const maxSeeds = Math.max(1, Math.min(12, Math.floor(params.maxSeeds ?? 6)));
-  const seeds = selectCitationSeeds(entries, maxSeeds);
+  const seeds = selectCitationSeeds(seedEntries, maxSeeds);
   const packetPath = path.join(params.projectRoot, "researcher", "CITATION_EXPANSION_PACKET.json");
   const markdownPath = path.join(params.projectRoot, "researcher", "CITATION_EXPANSION_PACKET.md");
   const queries = seeds.flatMap((seed) => {

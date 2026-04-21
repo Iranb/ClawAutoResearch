@@ -2362,6 +2362,23 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   await writeText(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n- coverage blind spot\n- unresolved comparison\n");
   await writeText(path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"), "# Coverage Summary\n- broad scope\n- blind spots documented\n");
   await writeText(path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"), "# Review Protocol\n- inclusion / exclusion logic\n");
+  await writeJson(path.join(projectRoot, "researcher", "EXCLUDED_PAPERS.json"), {
+    backgroundPapers: [
+      {
+        title: "Open World Object Detection: A Survey",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "CANDIDATE_SCREENING_DECISIONS.json"), {
+    decisions: [
+      {
+        title: "Open World Object Detection: A Survey",
+        decision: "reference",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
 
   const result = await executeWorkflowTool(tool, {
     action: "materialize_writing_support_artifacts",
@@ -2397,6 +2414,7 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   );
   assert.match(comparative, /Required Comparison Axes/i);
   assert.match(comparative, /tradeoff/i);
+  assert.match(comparative, /Open World Object Detection: A Survey/i);
 
   const visualizationPlan = await fs.readFile(
     path.join(projectRoot, "academic_writer", "SURVEY_VISUALIZATION_PLAN.md"),

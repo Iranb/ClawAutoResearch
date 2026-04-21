@@ -40,6 +40,55 @@ const DEFAULT_PROVIDERS: BroadPaperProviderName[] = [
   "core",
 ];
 
+function shouldRetryProviderResult(result: BroadPaperProviderQueryResult): boolean {
+  if (result.status !== "error" || !result.error) {
+    return false;
+  }
+  return /HTTP 429|timed? ?out|ECONNRESET|ETIMEDOUT/i.test(result.error);
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function executeProviderQueries(params: {
+  providers: BroadPaperProviderName[];
+  queries: BroadPaperSearchQuery[];
+  depth: BroadPaperSearchDepth;
+  maxResultsPerQuery: number;
+  fromYear: number | null;
+}): Promise<BroadPaperProviderQueryResult[]> {
+  const results: BroadPaperProviderQueryResult[] = [];
+  for (const provider of params.providers) {
+    for (const query of params.queries) {
+      let result = await runProviderQuery({
+        provider,
+        query,
+        depth: params.depth,
+        maxResultsPerQuery: params.maxResultsPerQuery,
+        fromYear: params.fromYear,
+      });
+      if (shouldRetryProviderResult(result)) {
+        for (const backoffMs of [150, 400]) {
+          await delay(backoffMs);
+          result = await runProviderQuery({
+            provider,
+            query,
+            depth: params.depth,
+            maxResultsPerQuery: params.maxResultsPerQuery,
+            fromYear: params.fromYear,
+          });
+          if (!shouldRetryProviderResult(result)) {
+            break;
+          }
+        }
+      }
+      results.push(result);
+    }
+  }
+  return results;
+}
+
 async function runProviderQuery(params: {
   provider: BroadPaperProviderName;
   query: BroadPaperSearchQuery;
@@ -100,13 +149,16 @@ function buildArtifactPaths(projectRoot: string, generatedAt: string) {
 }
 
 function shouldPersistCandidate(candidate: MergedPaperCandidate): boolean {
+  const topicRelevant = candidate.topicRelevanceScore >= 18;
   return (
-    candidate.providerAgreementCount >= 2 ||
-    candidate.venuePackHits.length > 0 ||
-    candidate.selectionScore >= 40 ||
-    candidate.resolutionStatus === "resolved_pdf" ||
-    candidate.resolutionStatus === "resolved_markdown" ||
-    candidate.resolutionStatus === "metadata_only_unresolved"
+    (topicRelevant && candidate.selectionScore >= 40) ||
+    (candidate.providerAgreementCount >= 2 && candidate.topicRelevanceScore >= 20) ||
+    (candidate.venuePackHits.length > 0 && candidate.topicRelevanceScore >= 20) ||
+    ((candidate.resolutionStatus === "resolved_pdf" ||
+      candidate.resolutionStatus === "resolved_markdown") &&
+      candidate.topicRelevanceScore >= 18) ||
+    (candidate.resolutionStatus === "metadata_only_unresolved" &&
+      candidate.topicRelevanceScore >= 30)
   );
 }
 
@@ -153,21 +205,16 @@ export async function runBroadPaperSearch(params: {
   });
   const providers = params.providers?.length ? params.providers : DEFAULT_PROVIDERS;
   const queryResults = (
-    await Promise.all(
-      plan.queries.flatMap((query) =>
-        providers.map((provider) =>
-          runProviderQuery({
-            provider,
-            query,
-            depth,
-            maxResultsPerQuery,
-            fromYear: params.fromYear ?? null,
-          })
-        )
-      )
-    )
+    await executeProviderQueries({
+      providers,
+      queries: plan.queries,
+      depth,
+      maxResultsPerQuery,
+      fromYear: params.fromYear ?? null,
+    })
   ).sort((left, right) => left.provider.localeCompare(right.provider) || left.queryId.localeCompare(right.queryId));
   const merged = mergeProviderQueryResults({
+    topic: params.topic,
     queryResults,
     preferredVenuePacks: plan.preferredVenuePacks,
   });
@@ -229,7 +276,10 @@ export async function runBroadPaperSearch(params: {
     projectRoot: params.projectRoot,
   });
   const citationExpansionPacket =
-    coverageAudit.verdict === "thin" || coverageAudit.missingBaselineHints.length > 0
+    coverageAudit.verdict !== "strong" ||
+    coverageAudit.missingBaselineHints.length > 0 ||
+    coverageAudit.pendingRoundCount > 0 ||
+    coverageAudit.pendingScreeningCount > 0
       ? await planCitationExpansion({
           projectRoot: params.projectRoot,
         })

@@ -164,6 +164,16 @@ export async function collectSurveyReviewStageMissingSignals(params: {
     if (state.gateBlockingIssues.length > 0) {
       missing.push(`survey_review blocking issues: ${state.gateBlockingIssues.join(" | ")}`);
     }
+    if ((state.pendingPlannedRoundCount ?? 0) > 0) {
+      missing.push(
+        `survey_review still has ${state.pendingPlannedRoundCount} pending retrieval round(s)`
+      );
+    }
+    if ((state.pendingScreeningCount ?? 0) > 0) {
+      missing.push(
+        `survey_review still has ${state.pendingScreeningCount} pending screening candidate(s)`
+      );
+    }
   }
 
   if (!queryRegistryReady) {
