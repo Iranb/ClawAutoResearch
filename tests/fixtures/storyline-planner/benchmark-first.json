@@ -1,6 +1,7 @@
 {
   "project_id": "fixture-benchmark-first",
   "topic": "Generalized Category Discovery",
+  "expected_primary_strategy_id": "evaluation_crisis_first",
   "artifacts": {
     "researcher/SURVEY_BRIEF.md": "# Survey Brief\n\n## Themes\n- Prototype-centric methods\n- Prompt-driven methods\n\n## Benchmark Landscape\n- Comparisons only make sense when open-set assumptions match.\n\n## Open Problems\n- Metric drift still distorts reported wins.\n",
     "researcher/LITERATURE_REVIEW.md": "# Literature Review\n\n## Taxonomy\n- Prototype-centric methods\n- Prompt-driven methods\n\n## Benchmark Caveats\n- Several papers are non-comparable because they change open-set assumptions.\n",

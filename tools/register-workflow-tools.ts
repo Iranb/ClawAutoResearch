@@ -95,6 +95,7 @@ import {
   setReviewIssueTrackerState,
   setReviewSessionState,
   setSurveyReviewState,
+  setStorylinePlannerState,
   setWritePackageState,
   setWritingSessionState,
   setWritingContractState,
@@ -354,6 +355,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
   "materialize_paper_story_state",
+  "set_storyline_planner_state",
   "materialize_storyline_planner_state",
   "materialize_results_storyline_state",
   "materialize_title_abstract_intro_workbench_state",
@@ -467,6 +469,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_file_audit_policy: "setFileAuditPolicyForProject",
   materialize_file_audit_packet: "materializeFileAuditPacket",
   materialize_paper_story_state: "materializePaperStoryState",
+  set_storyline_planner_state: "setStorylinePlannerState",
   materialize_storyline_planner_state: "materializeStorylinePlannerState",
   materialize_results_storyline_state: "materializeResultsStorylineState",
   materialize_title_abstract_intro_workbench_state:
@@ -1761,6 +1764,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
   "get_theory_state",
   "get_writing_contract",
   "get_paper_story_state",
+  "set_storyline_planner_state",
   "get_storyline_planner_state",
   "get_results_storyline_state",
   "get_innovation_synthesis_state",
@@ -4243,6 +4247,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "set_storyline_planner_state": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await setStorylinePlannerState({
+                projectRoot: resolvedProjectRoot,
+                storylinePlanner: requireObject(
+                  params.storylinePlanner ?? {},
+                  "storylinePlanner"
+                ),
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "materialize_storyline_planner_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const payload =
@@ -4264,6 +4279,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     | "learned_shadow"
                     | "learned_primary"
                     | null,
+                learnedModelPath:
+                  readString(payload.learned_model_path) ??
+                  readString(payload.learnedModelPath) ??
+                  null,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

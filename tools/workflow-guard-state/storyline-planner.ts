@@ -20,6 +20,9 @@ export type StorylinePlannerState = {
   judgePacketPath: string | null;
   selectionPath: string | null;
   shadowSelectionPath: string | null;
+  learnedPrimaryEvidencePath: string | null;
+  learnedModelId: string | null;
+  learnedModelPath: string | null;
   selectionFingerprint: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
@@ -33,6 +36,8 @@ export const DEFAULT_STORYLINE_PLANNER_SELECTION_PATH =
   "academic_writer/SURVEY_STORYLINE_SELECTION.json";
 export const DEFAULT_STORYLINE_PLANNER_SHADOW_SELECTION_PATH =
   "academic_writer/SURVEY_STORYLINE_SHADOW_SELECTION.json";
+export const DEFAULT_STORYLINE_PLANNER_LEARNED_PRIMARY_EVIDENCE_PATH =
+  "academic_writer/SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE.json";
 
 export function normalizeStorylinePlannerState(value: unknown): StorylinePlannerState {
   const record = asRecord(value) ?? {};
@@ -73,6 +78,13 @@ export function normalizeStorylinePlannerState(value: unknown): StorylinePlanner
     shadowSelectionPath:
       pickString(record, ["shadowSelectionPath", "shadow_selection_path"]) ??
       DEFAULT_STORYLINE_PLANNER_SHADOW_SELECTION_PATH,
+    learnedPrimaryEvidencePath:
+      pickString(record, [
+        "learnedPrimaryEvidencePath",
+        "learned_primary_evidence_path",
+      ]) ?? DEFAULT_STORYLINE_PLANNER_LEARNED_PRIMARY_EVIDENCE_PATH,
+    learnedModelId: pickString(record, ["learnedModelId", "learned_model_id"]),
+    learnedModelPath: pickString(record, ["learnedModelPath", "learned_model_path"]),
     selectionFingerprint: pickString(record, [
       "selectionFingerprint",
       "selection_fingerprint",
@@ -99,6 +111,9 @@ export function serializeStorylinePlannerState(
     judge_packet_path: value.judgePacketPath,
     selection_path: value.selectionPath,
     shadow_selection_path: value.shadowSelectionPath,
+    learned_primary_evidence_path: value.learnedPrimaryEvidencePath,
+    learned_model_id: value.learnedModelId,
+    learned_model_path: value.learnedModelPath,
     selection_fingerprint: value.selectionFingerprint,
     pending_reason: value.pendingReason,
     last_updated_at: value.lastUpdatedAt,

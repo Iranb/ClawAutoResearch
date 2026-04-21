@@ -3,6 +3,7 @@ export const DEFAULT_STORYLINE_PLANNER_CANDIDATES_PATH = "academic_writer/SURVEY
 export const DEFAULT_STORYLINE_PLANNER_JUDGE_PACKET_PATH = "academic_writer/SURVEY_STORYLINE_JUDGE_PACKET.json";
 export const DEFAULT_STORYLINE_PLANNER_SELECTION_PATH = "academic_writer/SURVEY_STORYLINE_SELECTION.json";
 export const DEFAULT_STORYLINE_PLANNER_SHADOW_SELECTION_PATH = "academic_writer/SURVEY_STORYLINE_SHADOW_SELECTION.json";
+export const DEFAULT_STORYLINE_PLANNER_LEARNED_PRIMARY_EVIDENCE_PATH = "academic_writer/SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE.json";
 export function normalizeStorylinePlannerState(value) {
     const record = asRecord(value) ?? {};
     return {
@@ -25,6 +26,12 @@ export function normalizeStorylinePlannerState(value) {
             DEFAULT_STORYLINE_PLANNER_SELECTION_PATH,
         shadowSelectionPath: pickString(record, ["shadowSelectionPath", "shadow_selection_path"]) ??
             DEFAULT_STORYLINE_PLANNER_SHADOW_SELECTION_PATH,
+        learnedPrimaryEvidencePath: pickString(record, [
+            "learnedPrimaryEvidencePath",
+            "learned_primary_evidence_path",
+        ]) ?? DEFAULT_STORYLINE_PLANNER_LEARNED_PRIMARY_EVIDENCE_PATH,
+        learnedModelId: pickString(record, ["learnedModelId", "learned_model_id"]),
+        learnedModelPath: pickString(record, ["learnedModelPath", "learned_model_path"]),
         selectionFingerprint: pickString(record, ["selectionFingerprint", "selection_fingerprint"]),
         pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
         lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
@@ -45,6 +52,9 @@ export function serializeStorylinePlannerState(value) {
         judge_packet_path: value.judgePacketPath,
         selection_path: value.selectionPath,
         shadow_selection_path: value.shadowSelectionPath,
+        learned_primary_evidence_path: value.learnedPrimaryEvidencePath,
+        learned_model_id: value.learnedModelId,
+        learned_model_path: value.learnedModelPath,
         selection_fingerprint: value.selectionFingerprint,
         pending_reason: value.pendingReason,
         last_updated_at: value.lastUpdatedAt,

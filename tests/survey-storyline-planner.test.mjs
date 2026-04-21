@@ -8,7 +8,18 @@ import { promisify } from "node:util";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
-import { materializeSurveyStorylinePlanner } from "../tools/research-writing/survey-storyline-planner.ts";
+import {
+  collectSurveyStorylineSignals,
+  buildSurveyStorylineCandidates,
+} from "../tools/research-writing/survey-storyline.ts";
+import {
+  buildSurveyStorylineFeatureVector,
+  materializeSurveyStorylinePlanner,
+} from "../tools/research-writing/survey-storyline-planner.ts";
+import {
+  trainLearnedStorylineModel,
+  writeLearnedStorylineModel,
+} from "../tools/research-writing/survey-storyline-model.ts";
 
 const execFile = promisify(execFileCallback);
 
@@ -90,6 +101,84 @@ async function makeSurveyPlannerProjectRoot() {
     ),
   ]);
   return projectRoot;
+}
+
+async function writeFixtureProject(projectRoot, fixture) {
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: fixture.project_id ?? "fixture-storyline-project",
+    current_stage: "review",
+    owner_agent: "researcher",
+    workflow_line: "survey",
+    survey_review: {
+      status: "completed",
+      topic: fixture.topic,
+    },
+  });
+  const artifacts = fixture.artifacts ?? {};
+  for (const [relativePath, payload] of Object.entries(artifacts)) {
+    if (typeof payload === "string") {
+      await writeText(path.join(projectRoot, relativePath), payload);
+    } else {
+      await writeJson(path.join(projectRoot, relativePath), payload);
+    }
+  }
+}
+
+async function trainTemporaryLearnedModelFromFixtures(fixtureNames) {
+  const examples = [];
+  for (const fixtureName of fixtureNames) {
+    const fixturePath = path.join(
+      process.cwd(),
+      "tests",
+      "fixtures",
+      "storyline-planner",
+      fixtureName
+    );
+    const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8"));
+    const projectRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-storyline-train-fixture-")
+    );
+    try {
+      await writeFixtureProject(projectRoot, fixture);
+      const signals = await collectSurveyStorylineSignals({
+        projectRoot,
+        topic: fixture.topic,
+      });
+      const candidates = buildSurveyStorylineCandidates({
+        topic: signals.topic,
+        familyLines: signals.familyLines,
+        benchmarkLines: signals.benchmarkLines,
+        benchmarkPressureLines: signals.benchmarkPressureLines,
+        gapLines: signals.gapLines,
+        contradictionLines: signals.contradictionLines,
+        coverageLines: signals.coverageLines,
+        backgroundLines: signals.backgroundLines,
+        litReviewText: signals.literatureReviewText,
+        surveyBriefText: signals.surveyBriefText,
+        reviewProtocolText: signals.reviewProtocolText,
+      });
+      examples.push({
+        fixtureName,
+        expectedStrategyId: fixture.expected_primary_strategy_id,
+        candidateFeatureVectors: candidates.map((candidate) => ({
+          strategyId: candidate.strategyId,
+          featureVector: buildSurveyStorylineFeatureVector(signals, candidate),
+        })),
+      });
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  }
+  const model = trainLearnedStorylineModel({ examples });
+  const modelPath = path.join(
+    os.tmpdir(),
+    `storyline-model-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+  );
+  await writeLearnedStorylineModel({
+    model,
+    explicitPath: modelPath,
+  });
+  return { model, modelPath };
 }
 
 function createResearchWorkflowTool(params = {}) {
@@ -217,4 +306,71 @@ test("replay_survey_storyline_planner replays taxonomy-first fixture determinist
   const report = JSON.parse(stdout);
   assert.equal(report.primary_selection.selectedStrategyId, "taxonomy_first");
   assert.equal(report.packet_summary.intellectual_center_section, "taxonomy");
+});
+
+test("materializeSurveyStorylinePlanner can use a trained learned_primary model", async (t) => {
+  const projectRoot = await makeSurveyPlannerProjectRoot();
+  const { modelPath } = await trainTemporaryLearnedModelFromFixtures([
+    "benchmark-first.json",
+    "taxonomy-first.json",
+  ]);
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(modelPath, { force: true });
+  });
+
+  const result = await materializeSurveyStorylinePlanner({
+    projectRoot,
+    topic: "Generalized Category Discovery",
+    configuredMode: "learned_primary",
+    learnedModelPath: modelPath,
+  });
+
+  assert.equal(result.state.activePrimaryMode, "learned_primary");
+  assert.equal(result.state.fallbackTriggered, false);
+  assert.ok((result.selection.selectionConfidence ?? 0) >= 0.5);
+  assert.equal(result.selection.selectedStrategyId, "evaluation_crisis_first");
+  assert.equal(result.state.learnedModelPath, modelPath);
+  assert.ok(
+    result.generatedFiles.includes(
+      "academic_writer/SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE.json"
+    )
+  );
+});
+
+test("learned_primary can use the bundled trained model by default", async (t) => {
+  const projectRoot = await makeSurveyPlannerProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializeSurveyStorylinePlanner({
+    projectRoot,
+    topic: "Generalized Category Discovery",
+    configuredMode: "learned_primary",
+  });
+
+  assert.equal(result.state.activePrimaryMode, "learned_primary");
+  assert.equal(result.state.fallbackTriggered, false);
+  assert.equal(result.selection.selectedStrategyId, "evaluation_crisis_first");
+  assert.ok(result.state.learnedModelId);
+});
+
+test("learned_primary falls back to reviewer_judged when the model is missing", async (t) => {
+  const projectRoot = await makeSurveyPlannerProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializeSurveyStorylinePlanner({
+    projectRoot,
+    topic: "Generalized Category Discovery",
+    configuredMode: "learned_primary",
+    learnedModelPath: path.join(projectRoot, "missing-model.json"),
+  });
+
+  assert.equal(result.state.activePrimaryMode, "reviewer_judged");
+  assert.equal(result.state.fallbackTriggered, true);
+  assert.match(result.state.fallbackReason ?? "", /no trained model artifact/i);
+  assert.equal(result.selection.selectedStrategyId, "evaluation_crisis_first");
 });

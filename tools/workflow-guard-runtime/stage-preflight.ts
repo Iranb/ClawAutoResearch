@@ -1249,7 +1249,14 @@ export async function maybePrepareWorkflowStageContracts(params: {
     (params.deps.materializeStorylinePlannerState ?? materializeSurveyStorylinePlanner)({
       projectRoot,
       topic: normalizeSurveyReviewState(manifest.survey_review).topic,
-      configuredMode: "reviewer_judged",
+      configuredMode:
+        (normalizeStorylinePlannerState(manifest.storyline_planner)
+          .configuredMode as
+          | "heuristic"
+          | "reviewer_judged"
+          | "learned_shadow"
+          | "learned_primary"
+          | null) ?? "reviewer_judged",
     })
   );
   await runStep("paper_story_state", shouldMaterializePaperStory, () =>
