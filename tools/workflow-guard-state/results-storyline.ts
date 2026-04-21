@@ -8,10 +8,12 @@ import {
 
 export type ResultsStorylineQuestion = {
   questionId: string;
+  sectionId: string | null;
   prompt: string | null;
   objective: string | null;
   evidenceIds: string[];
   figureTableIds: string[];
+  tensionIds: string[];
   answerStatus: string;
   searchRequired: boolean;
 };
@@ -19,6 +21,11 @@ export type ResultsStorylineQuestion = {
 export type ResultsStorylineState = {
   status: string;
   workflowLine: "experiment" | "survey" | null;
+  storyStrategy: string | null;
+  storyStrategyRationale: string[];
+  storyThesis: string | null;
+  intellectualCenterSection: string | null;
+  supportPacketPath: string | null;
   questionOrder: ResultsStorylineQuestion[];
   evidenceModules: string[];
   figureTableOrder: string[];
@@ -45,10 +52,12 @@ function normalizeQuestion(
   return {
     questionId:
       pickString(record, ["questionId", "question_id"]) ?? `q${fallbackIndex + 1}`,
+    sectionId: pickString(record, ["sectionId", "section_id"]),
     prompt: pickString(record, ["prompt", "question"]),
     objective: pickString(record, ["objective"]),
     evidenceIds: asStringArray(record.evidenceIds ?? record.evidence_ids),
     figureTableIds: asStringArray(record.figureTableIds ?? record.figure_table_ids),
+    tensionIds: asStringArray(record.tensionIds ?? record.tension_ids),
     answerStatus:
       normalizeStage(record.answerStatus ?? record.answer_status) ?? "missing",
     searchRequired:
@@ -61,10 +70,12 @@ function serializeQuestion(
 ): Record<string, unknown> {
   return {
     question_id: value.questionId,
+    section_id: value.sectionId,
     prompt: value.prompt,
     objective: value.objective,
     evidence_ids: value.evidenceIds,
     figure_table_ids: value.figureTableIds,
+    tension_ids: value.tensionIds,
     answer_status: value.answerStatus,
     search_required: value.searchRequired,
   };
@@ -86,6 +97,19 @@ export function normalizeResultsStorylineState(
   return {
     status: normalizeStage(record.status) ?? "missing",
     workflowLine,
+    storyStrategy: pickString(record, ["storyStrategy", "story_strategy"]),
+    storyStrategyRationale: asStringArray(
+      record.storyStrategyRationale ?? record.story_strategy_rationale
+    ),
+    storyThesis: pickString(record, ["storyThesis", "story_thesis"]),
+    intellectualCenterSection: pickString(record, [
+      "intellectualCenterSection",
+      "intellectual_center_section",
+    ]),
+    supportPacketPath: pickString(record, [
+      "supportPacketPath",
+      "support_packet_path",
+    ]),
     questionOrder: questionsRaw
       .map((entry, index) => normalizeQuestion(entry, index))
       .filter((entry): entry is ResultsStorylineQuestion => Boolean(entry)),
@@ -120,6 +144,11 @@ export function serializeResultsStorylineState(
   return {
     status: value.status,
     workflow_line: value.workflowLine,
+    story_strategy: value.storyStrategy,
+    story_strategy_rationale: value.storyStrategyRationale,
+    story_thesis: value.storyThesis,
+    intellectual_center_section: value.intellectualCenterSection,
+    support_packet_path: value.supportPacketPath,
     question_order: value.questionOrder.map((entry) => serializeQuestion(entry)),
     evidence_modules: value.evidenceModules,
     figure_table_order: value.figureTableOrder,

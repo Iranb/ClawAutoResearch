@@ -28,6 +28,7 @@ import {
   normalizeWritingContractState,
   serializeWritingContractState,
 } from "../workflow-guard-state/writing-contract";
+import { materializeSurveyStorylinePacket } from "../research-writing/survey-storyline";
 import type { PaperStoryState } from "../workflow-guard.js";
 
 type ClaimSupportSummary = {
@@ -238,6 +239,23 @@ export async function materializePaperStoryStateImpl(
   const graphStorylinePacket = asRecord(graphStorylinePacketRecord) ?? {};
   const ideaFragmentsPacket = asRecord(ideaFragmentsRecord) ?? {};
   const rankedFragmentsPacket = asRecord(rankedFragmentsRecord) ?? {};
+  const surveyStoryline =
+    surveyWritingBridgeReady
+      ? await materializeSurveyStorylinePacket({
+          projectRoot,
+          topic: surveyReviewState.topic,
+          packetPath: current.surveyStorylinePacketPath,
+          memoPath: current.surveyStorylineMemoPath,
+        })
+      : null;
+  const surveyStorylinePacket = surveyStoryline?.packet ?? null;
+  const surveySectionPlans = surveyStorylinePacket?.sectionPlans ?? [];
+  const surveyClustersById = new Map(
+    (surveyStorylinePacket?.evidenceClusters ?? []).map((entry) => [
+      entry.clusterId,
+      entry,
+    ])
+  );
   const claimSupport = deps.summarizeClaimSupport({
     claimEvidenceMatrixRaw: claimEvidenceMatrixText,
     unsupportedClaimsRaw: unsupportedClaimsText,
@@ -250,7 +268,7 @@ export async function materializePaperStoryStateImpl(
   const taskSummary =
     pickString(graphStorylinePacket, ["task_summary", "taskSummary"]) ??
     (surveyWritingBridgeReady
-      ? `Write a graph-grounded survey paper on ${surveyReviewState.topic ?? "the selected survey topic"}.`
+      ? `Write a survey paper on ${surveyReviewState.topic ?? "the selected survey topic"} that stays aligned with the active storyline thesis.`
       : null) ??
     researchProgram.goal ??
     ideationState.longTermGoal ??
@@ -268,7 +286,8 @@ export async function materializePaperStoryStateImpl(
   const insightSummary =
     pickString(graphStorylinePacket, ["insight_summary", "insightSummary"]) ??
     (surveyWritingBridgeReady
-      ? deps.collectMarkdownSignalLines(surveyBriefText).slice(0, 1)[0] ??
+      ? surveyStorylinePacket?.thesis ??
+        deps.collectMarkdownSignalLines(surveyBriefText).slice(0, 1)[0] ??
         deps.collectMarkdownSignalLines(surveyLiteratureReviewText, {
           includeSectionsContaining: ["taxonomy", "theme", "cluster"],
         }).slice(0, 1)[0] ??
@@ -290,6 +309,7 @@ export async function materializePaperStoryStateImpl(
       .filter((entry): entry is string => Boolean(entry)),
     ...(surveyWritingBridgeReady
       ? [
+          `Selected storyline strategy: ${surveyStorylinePacket?.selectedStrategyLabel ?? "taxonomy-first"} with intellectual center "${surveyStorylinePacket?.intellectualCenterSection ?? "taxonomy"}".`,
           `Synthesize ${surveyReviewState.includedPaperCount ?? "the included"} papers into a reviewer-readable thematic structure.`,
           "Turn durable survey coverage into a theme-to-evidence writing packet instead of a flat paper list.",
           "Make contradiction areas and open gaps explicit before prose-level synthesis.",
@@ -324,6 +344,7 @@ export async function materializePaperStoryStateImpl(
       ? [
           "Keeps coverage decisions explicit through included/excluded packets and the review protocol.",
           "Lets the draft cite benchmark clusters, method families, and disagreement areas from durable survey artifacts.",
+          `Uses the macro-story "${surveyStorylinePacket?.selectedStrategyLabel ?? "taxonomy-first"}" to choose section order rather than mirroring a bibliography walk.`,
           "Preserves graph-grounded traceability from survey brief to prose-level themes.",
         ]
       : [
@@ -405,7 +426,12 @@ ${deps.renderMarkdownBulletList(
 
 ## Narrative Arc
 ${deps.quoteMarkdownText(
-  (storylineBrief ? pickString(storylineBrief, ["arc"]) : null) ??
+  (surveyWritingBridgeReady
+    ? surveyStorylinePacket?.bodySectionOrder
+        .map((entry) => entry.replace(/_/g, " "))
+        .join(" -> ")
+    : null) ??
+    (storylineBrief ? pickString(storylineBrief, ["arc"]) : null) ??
     "Task -> challenge -> insight -> contribution -> advantage"
 )}
 
@@ -441,6 +467,7 @@ ${crossDomainStorySection}
 ## Survey Storyline Hooks
 ${deps.renderMarkdownBulletList(
   uniqueStrings([
+    ...(surveyStorylinePacket?.selectedStrategyRationale ?? []),
     ...deps.collectMarkdownSignalLines(surveyLiteratureReviewText, {
       includeSectionsContaining: ["theme", "taxonomy", "cluster"],
     }),
@@ -528,7 +555,18 @@ ${packetModuleMotivations.length > 0
 
 Survey mode note: this file acts as a theme-to-evidence map rather than an experiment-launch contract.
 
-## Theme 1 (theme-1)
+${(surveySectionPlans.length > 0
+    ? surveySectionPlans
+        .map((plan, index) => {
+          const primaryCluster =
+            surveyClustersById.get(plan.evidenceClusterIds[0] ?? "") ?? null;
+          return `## Theme ${index + 1} (${plan.sectionId})
+- Theme: ${plan.prompt}
+- Evidence target: ${primaryCluster?.label ?? "survey evidence cluster"}${plan.anchorIds.length > 0 ? ` (${plan.anchorIds.join(", ")})` : ""}
+- Validation step: ${plan.objective}`;
+        })
+        .join("\n\n")
+    : `## Theme 1 (theme-1)
 - Theme: Core method families in ${deps.quoteMarkdownText(surveyReviewState.topic)}
 - Evidence target: representative included papers + taxonomy notes
 - Validation step: cite canonical papers for each family and keep their boundaries explicit
@@ -541,7 +579,7 @@ Survey mode note: this file acts as a theme-to-evidence map rather than an exper
 ## Theme 3 (theme-3)
 - Theme: Open problems, disagreement zones, and unresolved gaps
 - Evidence target: gap synthesis + survey brief
-- Validation step: frame these as synthesis claims backed by included papers, not speculative future-work filler, and connect each gap to a comparison or coverage blind spot
+- Validation step: frame these as synthesis claims backed by included papers, not speculative future-work filler, and connect each gap to a comparison or coverage blind spot`)}
 `
     : `# Claim To Experiment Map
 
@@ -669,6 +707,14 @@ ${deps.renderMarkdownBulletList(
     idea_to_claim_map_path:
       pickString(patch, ["ideaToClaimMapPath", "idea_to_claim_map_path"]) ??
       current.ideaToClaimMapPath,
+    survey_storyline_packet_path:
+      pickString(patch, [
+        "surveyStorylinePacketPath",
+        "survey_storyline_packet_path",
+      ]) ?? current.surveyStorylinePacketPath,
+    survey_storyline_memo_path:
+      pickString(patch, ["surveyStorylineMemoPath", "survey_storyline_memo_path"]) ??
+      current.surveyStorylineMemoPath,
     pending_reason:
       surveyWritingBridgeReady
         ? null
@@ -681,6 +727,9 @@ ${deps.renderMarkdownBulletList(
   });
 
   const generatedFiles: string[] = [];
+  if (surveyStoryline) {
+    generatedFiles.push(...surveyStoryline.generatedFiles);
+  }
   const fileSpecs: Array<[string | null, string]> = [
     [nextState.taskSummaryPath, taskSummaryDoc],
     [nextState.challengeStatementPath, challengeDoc],
@@ -750,8 +799,22 @@ ${crossDomainStorySection || "- No cross-domain bridge configured."}
   if (
     surveyWritingBridgeReady &&
     (currentWritingContract.paperMode !== "survey" ||
-      !currentWritingContract.requiredSections.includes("scope_and_protocol"))
+      !currentWritingContract.requiredSections.includes("scope_and_protocol") ||
+      (surveyStorylinePacket &&
+        JSON.stringify(currentWritingContract.sectionOrder) !==
+          JSON.stringify(surveyStorylinePacket.fullSectionOrder)))
   ) {
+    const surveySectionOrder =
+      surveyStorylinePacket?.fullSectionOrder ?? [
+        "abstract",
+        "introduction",
+        "scope_and_protocol",
+        "taxonomy",
+        "evidence_synthesis",
+        "benchmark_landscape",
+        "open_problems",
+        "conclusion",
+      ];
     manifest.writing_contract = serializeWritingContractState(
       normalizeWritingContractState({
         ...serializeWritingContractState(currentWritingContract),
@@ -779,16 +842,7 @@ ${crossDomainStorySection || "- No cross-domain bridge configured."}
           "open_problems",
           "conclusion",
         ],
-        section_order: [
-          "abstract",
-          "introduction",
-          "scope_and_protocol",
-          "taxonomy",
-          "evidence_synthesis",
-          "benchmark_landscape",
-          "open_problems",
-          "conclusion",
-        ],
+        section_order: surveySectionOrder,
         storyline_source: "survey_packet",
         pending_reason: null,
       })

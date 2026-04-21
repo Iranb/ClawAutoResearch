@@ -43,6 +43,10 @@ const DEFAULT_PAPER_STORY_CONTRIBUTION_TO_STORY_BRIDGE_PATH =
   "academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md";
 const DEFAULT_PAPER_STORY_FIGURE_ANCHOR_PLAN_PATH =
   "academic_writer/FIGURE_ANCHOR_PLAN.md";
+const DEFAULT_PAPER_STORY_SURVEY_STORYLINE_PACKET_PATH =
+  "academic_writer/SURVEY_STORYLINE_PACKET.json";
+const DEFAULT_PAPER_STORY_SURVEY_STORYLINE_MEMO_PATH =
+  "academic_writer/SURVEY_STORYLINE_PACKET.md";
 
 export function normalizePaperStoryState(value: unknown): PaperStoryState {
   const record = asRecord(value) ?? {};
@@ -129,6 +133,16 @@ export function normalizePaperStoryState(value: unknown): PaperStoryState {
     figureAnchorPlanPath:
       pickString(record, ["figureAnchorPlanPath", "figure_anchor_plan_path"]) ??
       DEFAULT_PAPER_STORY_FIGURE_ANCHOR_PLAN_PATH,
+    surveyStorylinePacketPath:
+      pickString(record, [
+        "surveyStorylinePacketPath",
+        "survey_storyline_packet_path",
+      ]) ?? DEFAULT_PAPER_STORY_SURVEY_STORYLINE_PACKET_PATH,
+    surveyStorylineMemoPath:
+      pickString(record, [
+        "surveyStorylineMemoPath",
+        "survey_storyline_memo_path",
+      ]) ?? DEFAULT_PAPER_STORY_SURVEY_STORYLINE_MEMO_PATH,
     claimEvidenceMatrixPath:
       pickString(record, [
         "claimEvidenceMatrixPath",
@@ -191,6 +205,8 @@ export function serializePaperStoryState(
     prewrite_rejection_simulation_path: value.prewriteRejectionSimulationPath,
     contribution_to_story_bridge_path: value.contributionToStoryBridgePath,
     figure_anchor_plan_path: value.figureAnchorPlanPath,
+    survey_storyline_packet_path: value.surveyStorylinePacketPath,
+    survey_storyline_memo_path: value.surveyStorylineMemoPath,
     claim_evidence_matrix_path: value.claimEvidenceMatrixPath,
     track_verdicts_path: value.trackVerdictsPath,
     unsupported_claims_path: value.unsupportedClaimsPath,

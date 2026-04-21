@@ -321,6 +321,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "只输入主题就启动全自动综述主线：自动建 survey 项目、绑定频道并后台启动 survey pipeline。",
   },
   {
+    label: COMMAND_LABELS.bind_project,
+    intro: "把当前频道显式绑定到一个已有 workflow project，适合 Discord 里切换或修正项目上下文。",
+  },
+  {
     label: COMMAND_LABELS.clear_project_binding,
     intro: "清空当前频道的 workflow 项目绑定，适合频道绑错项目时在原频道内执行。",
   },
@@ -1474,6 +1478,91 @@ function createClearProjectBindingCommandHandler(
   };
 }
 
+function createBindProjectCommandHandler(
+  api: WorkflowCommandApi,
+  deps: WorkflowCommandDependencies
+) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.bind_project;
+    try {
+      const routePeer = resolveRoutePeerFromCommandContext(ctx);
+      if (!routePeer || routePeer.kind === "direct") {
+        return {
+          text:
+            `❌ ${commandLabel} 必须在要绑定的频道或群组会话里调用，` +
+            "不能在私聊里代替其他频道执行。",
+        };
+      }
+
+      const explicitProject =
+        extractQuotedSegment(ctx.args) ?? readString(ctx.args);
+      if (!explicitProject) {
+        return {
+          text:
+            `❌ ${commandLabel} requires an explicit project id or absolute project path, ` +
+            'for example: /bind-project "survey-graph-reasoning"',
+        };
+      }
+
+      const { projectRoot, projectId, workflowPolicy, target } =
+        await resolveProjectRootForProjectBoundCommand({
+          api,
+          ctx,
+          deps,
+          explicitArgument: explicitProject,
+        });
+
+      if (path.isAbsolute(explicitProject)) {
+        const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+        if (!(await pathExists(manifestPath))) {
+          throw new Error(
+            `The explicit project path is not a workflow project root: missing ${manifestPath}`
+          );
+        }
+      }
+
+      const channelKey = target.bindingChannelKey;
+      if (!channelKey) {
+        return {
+          text:
+            `❌ ${commandLabel} 无法解析当前频道的 workflow binding key。` +
+            "请在目标频道内直接调用这个命令。",
+        };
+      }
+
+      const result = await deps.bindChannelProjectForWorkflow({
+        policy: workflowPolicy,
+        workspaceDir: target.workspaceDir ?? undefined,
+        sessionKey: target.sessionKey ?? undefined,
+        messageChannel: ctx.channel,
+        channelKey,
+        projectRoot,
+        projectId,
+        title: projectId,
+        topic: projectId,
+        boundByAgent: "researcher",
+        notes: `Manually bound via ${commandLabel}.`,
+      });
+
+      return {
+        text:
+          `Bound this channel to workflow project ${projectId}.\n` +
+          `project_root=${projectRoot}\n` +
+          `channel_key=${result.binding.channelKey ?? channelKey}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to bind the workflow channel to a project.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to bind the workflow project: ${message}`,
+      };
+    }
+  };
+}
+
 function createWorkflowStatusCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -2023,6 +2112,13 @@ export function createResearchWorkflowCommands(
         "Start the full automated survey pipeline from only a topic by bootstrapping a survey project and running the survey line in the background.",
       acceptsArgs: true,
       handler: createAutoReviewCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "bind-project",
+      description:
+        "Bind the current channel to an existing workflow project by project id or absolute project path.",
+      acceptsArgs: true,
+      handler: createBindProjectCommandHandler(api, resolvedDeps),
     },
     {
       name: "clear-project-binding",

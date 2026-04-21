@@ -1,12 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { readJsonIfExists, readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { writeProjectJson } from "../research-contracts/core/project-io";
 import type {
   PaperStoryState,
   ReviewPressurePacketState,
 } from "../workflow-guard.js";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import { collectSurveyBackgroundReferenceLines } from "../survey-review-artifacts";
 import { setWritingSessionState } from "../workflow-guard-setters/writing-state-setters";
 import { syncAuthoringArtifactRecovery } from "./authoring-artifact-recovery";
 import {
@@ -19,6 +22,7 @@ import { materializeRebuttalResponse } from "./rebuttal-materializer";
 import { materializeRevisionCycle } from "./revision-cycle";
 import { materializeParagraphLogicAudit } from "./paragraph-logic-audit";
 import { materializeSurveyVisualCompiler } from "./survey-visual-compiler";
+import { normalizeSurveyStorylinePacket } from "./survey-storyline";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
 import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
@@ -306,8 +310,12 @@ async function materializeSurveySectionDraftScaffolds(params: {
     const bullets = sectionItems[sectionId] ?? [];
     const evidencePointers = uniqueStrings([
       "researcher/SURVEY_BRIEF.md",
+      "academic_writer/SURVEY_STORYLINE_PACKET.json",
       sectionId === "scope_and_protocol" ? "researcher/REVIEW_PROTOCOL.md" : null,
+      sectionId === "scope_and_protocol" ? "researcher/CANDIDATE_SCREENING_DECISIONS.json" : null,
+      sectionId === "scope_and_protocol" ? "researcher/EXCLUDED_PAPERS.json" : null,
       sectionId === "taxonomy" ? "researcher/SOTA_MATRIX.md" : null,
+      sectionId === "taxonomy" ? "researcher/INCLUDED_PAPERS.json" : null,
       sectionId === "evidence_synthesis" ? "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md" : null,
       sectionId === "benchmark_landscape" ? "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json" : null,
       sectionId === "open_problems" ? "researcher/GAP_SYNTHESIS.md" : null,
@@ -392,6 +400,7 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
 }) {
   const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  const surveyState = normalizeSurveyReviewState(manifest.survey_review);
   const surveyReview =
     manifest.survey_review && typeof manifest.survey_review === "object"
       ? (manifest.survey_review as Record<string, unknown>)
@@ -412,6 +421,9 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
     gapSynthesis,
     coverageSummary,
     reviewProtocol,
+    excludedJson,
+    screeningDecisionsJson,
+    surveyStorylinePacketRaw,
   ] = await Promise.all([
     readTextIfExists(path.join(params.projectRoot, "researcher", "SURVEY_BRIEF.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "LITERATURE_REVIEW.md")),
@@ -419,6 +431,24 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
     readTextIfExists(path.join(params.projectRoot, "researcher", "GAP_SYNTHESIS.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "COVERAGE_SUMMARY.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "REVIEW_PROTOCOL.md")),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        surveyState.excludedPapersPath ?? "researcher/EXCLUDED_PAPERS.json"
+      ) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        surveyState.screeningDecisionsPath ?? "researcher/CANDIDATE_SCREENING_DECISIONS.json"
+      ) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        params.paperStoryState.surveyStorylinePacketPath
+      ) ?? ""
+    ),
   ]);
 
   const comparativeLines = uniqueStrings([
@@ -429,6 +459,24 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
   const gapLines = collectMarkdownSignalLines(gapSynthesis, 6);
   const briefLines = collectMarkdownSignalLines(surveyBrief, 6);
   const protocolLines = collectMarkdownSignalLines(reviewProtocol, 5);
+  const backgroundLines = collectSurveyBackgroundReferenceLines({
+    excludedPapers: excludedJson,
+    screeningDecisions: screeningDecisionsJson,
+    limit: 6,
+  });
+  const surveyStorylinePacket = normalizeSurveyStorylinePacket(surveyStorylinePacketRaw);
+  const surveyStorylinePlans = surveyStorylinePacket?.sectionPlans ?? [];
+  const surveyPlanBySection = new Map(
+    surveyStorylinePlans.map((plan) => [plan.sectionId, plan] as const)
+  );
+  const surveyBodyOrder =
+    surveyStorylinePacket?.bodySectionOrder ?? [
+      "scope_and_protocol",
+      "taxonomy",
+      "evidence_synthesis",
+      "benchmark_landscape",
+      "open_problems",
+    ];
 
   const comparativeAnalysisPath = path.join(
     params.projectRoot,
@@ -440,6 +488,8 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
 ## Topic
 - ${topic}
 - Included papers: ${includedCount ?? "unset"}
+- Selected storyline strategy: ${surveyStorylinePacket?.selectedStrategyLabel ?? "taxonomy-first"}
+- Story thesis: ${surveyStorylinePacket?.thesis ?? "stabilize one survey thesis before drafting"}
 
 ## Required Comparison Axes
 - method family and organizing assumption
@@ -450,6 +500,9 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
 
 ## Comparison Evidence To Reuse
 ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join("\n") : "- Expand SOTA matrix and literature review evidence before claiming strong comparative synthesis."}
+
+## Boundary / Related Anchors
+${backgroundLines.length > 0 ? backgroundLines.map((line) => `- ${line}`).join("\n") : "- Keep adjacent-task references visible when they explain scope boundaries or contrastive baselines."}
 
 ## Coverage / Boundary Reminders
 ${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries, blind spots, and excluded directions explicit."}
@@ -463,40 +516,66 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie 
     "academic_writer",
     "SURVEY_SECTION_BRIEFS.md"
   );
+  const dynamicSectionBriefs = surveyBodyOrder
+    .map((sectionId) => {
+      const plan = surveyPlanBySection.get(sectionId);
+      const defaultBullets =
+        sectionId === "scope_and_protocol"
+          ? [
+              "Explain inclusion / exclusion logic and search boundary.",
+              "Surface blind spots, recency limits, and incomparable settings.",
+              `Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.`,
+              `Keep boundary references visible: ${backgroundLines.length > 0 ? backgroundLines.slice(0, 2).join("; ") : "related NCD / OWR / OSR / GZSL anchors when they explain exclusions"}.`,
+            ]
+          : sectionId === "taxonomy"
+            ? [
+                "Define stable method families and the principle that separates them.",
+                "Mention where family boundaries blur or overlap.",
+                "Compare families, do not just list them.",
+              ]
+            : sectionId === "evidence_synthesis"
+              ? [
+                  "Use representative papers to compare strengths, weaknesses, and tradeoffs.",
+                  "Include at least one contradiction / non-comparable warning paragraph.",
+                  `Reuse: ${briefLines.length > 0 ? briefLines.slice(0, 3).map((line) => `"${line}"`).join(", ") : "SURVEY_BRIEF.md synthesis bullets"}.`,
+                ]
+              : sectionId === "benchmark_landscape"
+                ? [
+                    "State which benchmark comparisons are fair and which are shaky.",
+                    "Compare datasets, metrics, and backbone/modality assumptions.",
+                    "Do not collapse incompatible results into one ranking.",
+                  ]
+                : [
+                    "Rank the main unresolved problems by evidence gap importance.",
+                    "Tie each open problem to missing comparisons, weak coverage, or contradiction zones.",
+                  ];
+      return [
+        `## ${sectionDisplayTitle(sectionId)}`,
+        `- ${plan?.prompt ?? `Keep ${sectionDisplayTitle(sectionId).toLowerCase()} aligned with the selected survey thesis.`}`,
+        `- ${plan?.objective ?? defaultBullets[0]}`,
+        `- ${plan?.coreMessage ?? defaultBullets[1] ?? defaultBullets[0]}`,
+        ...defaultBullets.slice(1).map((line) => `- ${line}`),
+      ].join("\n");
+    })
+    .join("\n\n");
   const sectionBriefs = `# Survey Section Briefs
+
+## Storyline Thesis
+- ${surveyStorylinePacket?.thesis ?? `Explain why ${topic} needs a survey now.`}
+- Selected macro-story: ${surveyStorylinePacket?.selectedStrategyLabel ?? "taxonomy-first"}.
+- Intellectual center: ${surveyStorylinePacket?.intellectualCenterSection ?? "taxonomy"}.
 
 ## Introduction
 - Explain why ${topic} needs a survey now.
 - State what this survey contributes beyond a paper list.
-- Preview the comparison axes and the field structure.
+- Preview the selected field structure and the strongest comparison pressure.
 
-## Scope and Protocol
-- Explain inclusion / exclusion logic and search boundary.
-- Surface blind spots, recency limits, and incomparable settings.
-- Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.
-
-## Taxonomy
-- Define stable method families and the principle that separates them.
-- Mention where family boundaries blur or overlap.
-- Compare families, do not just list them.
-
-## Evidence Synthesis
-- Use representative papers to compare strengths, weaknesses, and tradeoffs.
-- Include at least one contradiction / non-comparable warning paragraph.
-- Reuse: ${briefLines.length > 0 ? briefLines.slice(0, 3).map((line) => `"${line}"`).join(", ") : "SURVEY_BRIEF.md synthesis bullets"}.
-
-## Benchmark Landscape
-- State which benchmark comparisons are fair and which are shaky.
-- Compare datasets, metrics, and backbone/modality assumptions.
-- Do not collapse incompatible results into one ranking.
-
-## Open Problems
-- Rank the main unresolved problems by evidence gap importance.
-- Tie each open problem to missing comparisons, weak coverage, or contradiction zones.
+${dynamicSectionBriefs}
 
 ## Conclusion
 - Summarize what the field now understands with confidence.
 - Keep unresolved boundaries explicit.
+- End on the same thesis used by the storyline packet, not a new claim.
 `;
 
   const selfReviewPath = path.join(
@@ -507,6 +586,11 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie 
   const selfReview = `# Survey Self Review
 
 Use this before calling the survey draft mature.
+
+## Thesis Sharpness
+- Can a reviewer restate the survey's one-sentence thesis after reading the introduction?
+- Does the chosen body order actually serve the selected macro-story (${surveyStorylinePacket?.selectedStrategyLabel ?? "taxonomy-first"})?
+- Is the intellectual center section (${surveyStorylinePacket?.intellectualCenterSection ?? "taxonomy"}) visibly carrying the manuscript's deepest insight?
 
 ## Coverage Breadth
 - Does the manuscript teach the field structure rather than only listing papers?

@@ -36,6 +36,7 @@ import {
   listChannelProjectBindingsForWorkflow,
   recordWorkflowContactEvent,
   runWorkflowAutoIterator,
+  type AutoIteratorResult,
 } from "./workflow-guard";
 import { ensureProjectsBindingIndex } from "./channel-project-bindings";
 import {
@@ -158,6 +159,89 @@ type WorkflowCoordinatorProject = {
   updatedAt: string | null;
   channelKey: string | null;
 };
+
+type WorkflowCoordinatorPassEntry = WorkflowCoordinatorProject & {
+  result: AutoIteratorResult;
+};
+
+function buildWorkflowCoordinatorFailureResult(params: {
+  project: WorkflowCoordinatorProject;
+  policy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  error: unknown;
+}): AutoIteratorResult {
+  const errorMessage =
+    params.error instanceof Error ? params.error.message : String(params.error);
+  return {
+    projectRoot: params.project.projectRoot,
+    projectId: params.project.projectId,
+    mode: "service",
+    configuredAutoMode: params.policy?.autoMode ?? "off",
+    effectiveAutoMode: params.policy?.autoMode ?? "off",
+    autoModeRiskLevel: "stable",
+    autoModeReasons: [],
+    autoModeRiskFingerprint: null,
+    autoModeMitigationStatus: null,
+    autoModeMitigationRoundsStarted: 0,
+    autoModeMitigationRoundsRemaining: 0,
+    stageBefore: params.project.stage,
+    stageEffective: params.project.stage,
+    stageAfter: params.project.stage,
+    stageChanged: false,
+    regressed: false,
+    gateBlocking: true,
+    gateReason: errorMessage,
+    timedDefaultTriggered: false,
+    missingStageSignals: [errorMessage],
+    ownerBefore: null,
+    ownerAfter: null,
+    ownerActivated: false,
+    pendingHandoff: false,
+    pendingHandoffPhase: null,
+    pendingHandoffExecutionId: null,
+    nextAction: errorMessage,
+    resumeAction: errorMessage,
+    blockingReason: errorMessage,
+    experimentDecision: null,
+    experimentDecisionRationale: null,
+    experimentRollbackStage: null,
+    graphPresenceCheck: null,
+    projectsStateUpdated: false,
+    auditPath: null,
+    materializedArtifacts: [],
+    hookEvents: [],
+    recommendedActions: [],
+  };
+}
+
+async function settleCoordinatorProjectStep<
+  TEntry extends { projectId?: string | null; projectRoot?: string | null },
+  TResult,
+  TErrorResult = TResult,
+>(params: {
+  entries: TEntry[];
+  stepName: string;
+  logger?: WorkflowCoordinatorLogger;
+  run: (entry: TEntry, index: number) => Promise<TResult>;
+  onError: (entry: TEntry, index: number, error: unknown) => TErrorResult;
+}): Promise<Array<TResult | TErrorResult>> {
+  return Promise.all(
+    params.entries.map(async (entry, index) => {
+      try {
+        return await params.run(entry, index);
+      } catch (error) {
+        params.logger?.warn?.(
+          `Workflow coordinator ${params.stepName} failed for one project.`,
+          {
+            projectId: entry.projectId ?? null,
+            projectRoot: entry.projectRoot ?? null,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
+        return params.onError(entry, index, error);
+      }
+    })
+  );
+}
 
 const POOLED_SERVICE_ROLES = new Set([
   "researcher",
@@ -1060,40 +1144,49 @@ export async function runWorkflowCoordinatorPass(params: {
   maxProjects?: number;
   logger?: WorkflowCoordinatorLogger;
   deps?: Partial<WorkflowCoordinatorDependencies>;
-}) {
+}): Promise<WorkflowCoordinatorPassEntry[]> {
   const deps = resolveWorkflowCoordinatorDependencies(params.deps);
   const projects = await deps.listWorkflowCoordinatorProjects({
     projectsRoot: params.projectsRoot,
     maxProjects: params.maxProjects,
   });
-  const results = [];
-
-  for (const project of projects) {
-    const result = await enqueueWorkflowTask({
-      key: resolveWorkflowCoordinationKey({
-        projectRoot: project.projectRoot,
-        workflowPolicy: params.policy,
-        deps,
-      }),
-      label: "workflow_coordinator_tick",
-      logger: params.logger,
-      task: () =>
-        deps.runWorkflowAutoIterator({
+  return settleCoordinatorProjectStep({
+    entries: projects,
+    stepName: "auto_iterator",
+    logger: params.logger,
+    run: async (project) => {
+      const result = await enqueueWorkflowTask({
+        key: resolveWorkflowCoordinationKey({
           projectRoot: project.projectRoot,
-          policy: params.policy,
-          agentId: "researcher",
-          mode: "service",
-          queueMailbox: params.queueMailbox,
-          cooldownSeconds: params.cooldownSeconds,
+          workflowPolicy: params.policy,
+          deps,
         }),
-    });
-    results.push({
+        label: "workflow_coordinator_tick",
+        logger: params.logger,
+        task: () =>
+          deps.runWorkflowAutoIterator({
+            projectRoot: project.projectRoot,
+            policy: params.policy,
+            agentId: "researcher",
+            mode: "service",
+            queueMailbox: params.queueMailbox,
+            cooldownSeconds: params.cooldownSeconds,
+          }),
+      });
+      return {
+        ...project,
+        result,
+      };
+    },
+    onError: (project, _index, error) => ({
       ...project,
-      result,
-    });
-  }
-
-  return results;
+      result: buildWorkflowCoordinatorFailureResult({
+        project,
+        policy: params.policy,
+        error,
+      }),
+    }),
+  });
 }
 
 function hasRecommendedIdleResearchAction(result: {
@@ -5188,8 +5281,11 @@ export function createWorkflowCoordinatorService(
           logger,
           deps: resolvedDeps,
         });
-        await Promise.all(
-          results.map((entry) =>
+        await settleCoordinatorProjectStep({
+          entries: results,
+          stepName: "runtime_maintenance",
+          logger,
+          run: (entry) =>
             resolvedDeps.runWorkflowRuntimeMaintenancePass({
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5220,17 +5316,20 @@ export function createWorkflowCoordinatorService(
                   sessionKey: result.sessionKey,
                 };
               },
-            })
-          )
-        );
-        await Promise.all(
-          results.map((entry) =>
+            }),
+          onError: () => null,
+        });
+        await settleCoordinatorProjectStep({
+          entries: results,
+          stepName: "task_reconcile",
+          logger,
+          run: (entry) =>
             reconcileClaimedWorkflowTasksForProject({
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
-            })
-          )
-        );
+            }),
+          onError: () => null,
+        });
         const artifactHookAttempts = await Promise.all(
           results.map((entry) =>
             maybeAdvanceWorkflowHookPointForProject({

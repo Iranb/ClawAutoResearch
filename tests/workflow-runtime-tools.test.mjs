@@ -2347,6 +2347,73 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   await writeText(path.join(projectRoot, "academic_writer", "story", "REJECTION_RISK_TABLE.md"), "# Risks\n");
   await writeText(path.join(projectRoot, "academic_writer", "story", "PIPELINE_FIGURE_SKETCH.md"), "# Figure\n");
   await writeText(path.join(projectRoot, "academic_writer", "story", "MODULE_MOTIVATION_MAP.md"), "# Modules\n");
+  await writeJson(path.join(projectRoot, "academic_writer", "SURVEY_STORYLINE_PACKET.json"), {
+    schema_version: 1,
+    topic: "Generalized Category Discovery",
+    selected_strategy_id: "evaluation_crisis_first",
+    selected_strategy_label: "Evaluation-crisis-first",
+    selected_strategy_rationale: [
+      "Benchmark comparisons are only fair under matched open-set assumptions.",
+      "The field story is misleading when protocol drift is hidden behind a single leaderboard.",
+    ],
+    thesis:
+      "For generalized category discovery, the decisive organizing question is which benchmark and metric comparisons are actually fair.",
+    intellectual_center_section: "benchmark_landscape",
+    body_section_order: [
+      "scope_and_protocol",
+      "benchmark_landscape",
+      "taxonomy",
+      "evidence_synthesis",
+      "open_problems",
+    ],
+    section_plans: [
+      {
+        section_id: "scope_and_protocol",
+        prompt: "What scope and protocol boundaries define this survey?",
+        objective: "Open with inclusion, exclusion, and comparability rules.",
+        core_message: "Scope discipline comes before synthesis claims.",
+        evidence_cluster_ids: ["scope_protocol"],
+        anchor_ids: ["protocol:review"],
+        tension_ids: [],
+      },
+      {
+        section_id: "benchmark_landscape",
+        prompt: "Which benchmark comparisons are actually fair?",
+        objective: "Expose protocol drift before aggregating wins.",
+        core_message: "Benchmark landscape is the intellectual center for this survey.",
+        evidence_cluster_ids: ["benchmark_landscape"],
+        anchor_ids: ["benchmark:cifar100", "benchmark:imagenet100"],
+        tension_ids: ["tension-1"],
+      },
+      {
+        section_id: "taxonomy",
+        prompt: "Which families remain meaningful once benchmark constraints are explicit?",
+        objective: "Rebuild taxonomy after the evaluation contract is visible.",
+        core_message: "Taxonomy only becomes credible once evaluation drift is explicit.",
+        evidence_cluster_ids: ["taxonomy"],
+        anchor_ids: ["family:prototype", "family:prompt"],
+        tension_ids: ["tension-1"],
+      },
+      {
+        section_id: "evidence_synthesis",
+        prompt: "What comparative evidence survives those constraints?",
+        objective: "Compare strengths and weaknesses under matched settings.",
+        core_message: "Evidence synthesis should keep non-comparable results visible.",
+        evidence_cluster_ids: ["evidence_synthesis"],
+        anchor_ids: ["paper:a", "paper:b"],
+        tension_ids: ["tension-1"],
+      },
+      {
+        section_id: "open_problems",
+        prompt: "What problems remain unresolved after the benchmark contract is clarified?",
+        objective: "End with open problems that fall out of the selected thesis.",
+        core_message: "Open problems must inherit the benchmark comparability story.",
+        evidence_cluster_ids: ["open_problems"],
+        anchor_ids: ["gap:metric-drift"],
+        tension_ids: ["tension-1"],
+      },
+    ],
+  });
   await writeJson(path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_TO_CLAIM_MAP.json"), {
     top_fragments: [],
   });
@@ -2362,6 +2429,23 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   await writeText(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n- coverage blind spot\n- unresolved comparison\n");
   await writeText(path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"), "# Coverage Summary\n- broad scope\n- blind spots documented\n");
   await writeText(path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"), "# Review Protocol\n- inclusion / exclusion logic\n");
+  await writeJson(path.join(projectRoot, "researcher", "EXCLUDED_PAPERS.json"), {
+    backgroundPapers: [
+      {
+        title: "Open World Object Detection: A Survey",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "CANDIDATE_SCREENING_DECISIONS.json"), {
+    decisions: [
+      {
+        title: "Open World Object Detection: A Survey",
+        decision: "reference",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
 
   const result = await executeWorkflowTool(tool, {
     action: "materialize_writing_support_artifacts",
@@ -2395,8 +2479,17 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
     path.join(projectRoot, "academic_writer", "SURVEY_COMPARATIVE_ANALYSIS.md"),
     "utf8"
   );
+  const sectionBriefs = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "SURVEY_SECTION_BRIEFS.md"),
+    "utf8"
+  );
   assert.match(comparative, /Required Comparison Axes/i);
   assert.match(comparative, /tradeoff/i);
+  assert.match(comparative, /Open World Object Detection: A Survey/i);
+  assert.match(comparative, /Evaluation-crisis-first/i);
+  assert.match(sectionBriefs, /Selected macro-story: Evaluation-crisis-first/i);
+  assert.match(sectionBriefs, /Intellectual center: benchmark_landscape/i);
+  assert.match(sectionBriefs, /Which benchmark comparisons are actually fair/i);
 
   const visualizationPlan = await fs.readFile(
     path.join(projectRoot, "academic_writer", "SURVEY_VISUALIZATION_PLAN.md"),

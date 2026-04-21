@@ -564,6 +564,9 @@ async function shouldMaterializePaperStory(params: {
       state.claimToExperimentMapPath,
       state.fallbackNarrativePath,
       state.rejectionRiskTablePath,
+      ...(surveyWritingBridgeReady
+        ? [state.surveyStorylinePacketPath, state.surveyStorylineMemoPath]
+        : []),
     ])
   ) {
     return true;
@@ -581,6 +584,8 @@ async function shouldMaterializePaperStory(params: {
           surveyReviewState.gapSynthesisPath,
           surveyReviewState.coverageSummaryPath,
           surveyReviewState.sotaMatrixPath,
+          state.surveyStorylinePacketPath,
+          state.surveyStorylineMemoPath,
           state.claimEvidenceMatrixPath,
           state.trackVerdictsPath,
           state.unsupportedClaimsPath,
@@ -964,6 +969,7 @@ async function shouldMaterializeResultsStoryline(params: {
     paperStory.claimEvidenceMatrixPath,
     paperStory.trackVerdictsPath,
     paperStory.unsupportedClaimsPath,
+    paperStory.surveyStorylinePacketPath,
     "academic_writer/FIGURE_TABLE_ALIGNMENT.md",
     writePackage.evaluationSummaryPath,
     writePackage.ablationSummaryPath,
