@@ -120,3 +120,124 @@ test("top-tier evidence materializers own manifest evidence blocks", async (t) =
   assert.equal(manifest.benchmark_protocol.benchmark_family, "CIFAR");
   assert.equal(manifest.statistical_evidence.significant_result_count, 2);
 });
+
+test("benchmark registry materializer records split lock, fairness labels, and drift beyond metric name", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-benchmark-protocol-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    research_program: {
+      baseline_reference: "SimGCD",
+      primary_metric: "h_score",
+      datasets: ["CIFAR-100"],
+    },
+  });
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_mode: "gcd_fine_grained",
+    primary_metric_contract: {
+      metric_name: "h_score",
+      direction: "higher_is_better",
+      primary_evidence: [
+        "Use the baseline-a validation split, checkpoint selection, and H-score evaluation unchanged.",
+      ],
+    },
+    baseline_fairness_contract: {
+      locked_dataset_protocol: true,
+      locked_metric_protocol: true,
+      locked_evaluation_harness: true,
+    },
+    protocol_lock_contract: {
+      benchmark_family: "ProtoGCD-CIFAR100",
+      canonical_dataset: "CIFAR-100",
+      split_descriptor: "baseline-a validation split",
+      split_source: "researcher/splits/baseline-a.json",
+      split_checksum: "sha256:baseline-a",
+      evaluation_harness: "protogcd-hscore-v1",
+      official_eval_recipe:
+        "Use the baseline-a validation split, checkpoint selection, and H-score evaluation unchanged.",
+      fair_compare_notes: [
+        "Main table keeps the same ViT-B/16 backbone and evaluation harness as the reproduced baseline.",
+      ],
+      fairness_checks: {
+        same_backbone: "pass",
+        same_pretraining: "pass",
+        same_split: "pass",
+        same_evaluation_harness: "pass",
+        baseline_reference_mode: "reproduced",
+      },
+      allowed_deviations: [
+        {
+          deviation_id: "diag-metric",
+          scope: "appendix diagnostics",
+          rationale: "Track an extra diagnostic metric without changing the headline protocol.",
+          allowed_in_main_results: true,
+          label: "appendix_only",
+        },
+      ],
+    },
+  });
+
+  const first = await materializeBenchmarkRegistry({ projectRoot });
+  assert.equal(first.locked, true);
+  assert.equal(first.splitDescriptor, "baseline-a validation split");
+  assert.equal(first.fairCompareStatus, "pass");
+  assert.equal(first.allowedDeviationCount, 1);
+  assert.equal(first.allowedDeviationStatus, "ready");
+
+  const protocolLockPath = path.join(projectRoot, "researcher", "PROTOCOL_LOCK.json");
+  const fairnessReportPath = path.join(
+    projectRoot,
+    "researcher",
+    "BASELINE_FAIRNESS_REPORT.json"
+  );
+  const firstLock = JSON.parse(await fs.readFile(protocolLockPath, "utf8"));
+  const firstFairness = JSON.parse(await fs.readFile(fairnessReportPath, "utf8"));
+  assert.equal(firstLock.splitDescriptor, "baseline-a validation split");
+  assert.equal(firstFairness.fairCompareLabel, "fair_compare");
+
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_mode: "gcd_fine_grained",
+    primary_metric_contract: {
+      metric_name: "h_score",
+      direction: "higher_is_better",
+      primary_evidence: [
+        "Use the baseline-b validation split, checkpoint selection, and H-score evaluation unchanged.",
+      ],
+    },
+    baseline_fairness_contract: {
+      locked_dataset_protocol: true,
+      locked_metric_protocol: true,
+      locked_evaluation_harness: true,
+    },
+    protocol_lock_contract: {
+      benchmark_family: "ProtoGCD-CIFAR100",
+      canonical_dataset: "CIFAR-100",
+      split_descriptor: "baseline-b validation split",
+      split_source: "researcher/splits/baseline-b.json",
+      split_checksum: "sha256:baseline-b",
+      evaluation_harness: "protogcd-hscore-v1",
+      official_eval_recipe:
+        "Use the baseline-b validation split, checkpoint selection, and H-score evaluation unchanged.",
+      fair_compare_notes: [
+        "Current compare still keeps the same backbone, but the split changed.",
+      ],
+      fairness_checks: {
+        same_backbone: "pass",
+        same_pretraining: "pass",
+        same_split: "fail",
+        same_evaluation_harness: "pass",
+        baseline_reference_mode: "reproduced",
+      },
+    },
+  });
+
+  const drifted = await materializeBenchmarkRegistry({ projectRoot });
+  assert.equal(drifted.driftStatus, "fail");
+  assert.equal(drifted.fairCompareStatus, "fail");
+  assert.match(drifted.pendingReason ?? "", /Protocol drift detected/i);
+});

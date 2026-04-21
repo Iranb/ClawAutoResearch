@@ -68,6 +68,9 @@ export function summarizeEvidenceCloseoutState(manifest: Record<string, unknown>
     benchmarkProtocol.status !== "missing" &&
     benchmarkProtocol.locked === true &&
     benchmarkProtocol.driftStatus !== "fail" &&
+    benchmarkProtocol.fairCompareStatus !== "missing" &&
+    benchmarkProtocol.fairCompareStatus !== "fail" &&
+    benchmarkProtocol.allowedDeviationStatus !== "blocked" &&
     statisticalEvidence.status !== "missing" &&
     Boolean(statisticalEvidence.claimStrengthStatus) &&
     ablationEvidence.status !== "missing" &&
@@ -81,6 +84,15 @@ export function summarizeEvidenceCloseoutState(manifest: Record<string, unknown>
     }
     if (benchmarkProtocol.driftStatus === "fail") {
       pushLocal("benchmark protocol drift failed");
+    }
+    if (benchmarkProtocol.fairCompareStatus === "missing") {
+      pushLocal("benchmark protocol fair-compare notes missing");
+    }
+    if (benchmarkProtocol.fairCompareStatus === "fail") {
+      pushLocal("benchmark protocol fair compare failed");
+    }
+    if (benchmarkProtocol.allowedDeviationStatus === "blocked") {
+      pushLocal("benchmark protocol deviations are not allowed in main results");
     }
     if (statisticalEvidence.status === "missing") {
       pushLocal("statistical evidence missing");

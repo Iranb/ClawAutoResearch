@@ -483,8 +483,11 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
     status: "ready",
     benchmark_family: "OpenWorldGraphBench",
     protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
+    fairness_report_path: "researcher/BASELINE_FAIRNESS_REPORT.json",
     locked: true,
     drift_status: "pass",
+    fair_compare_status: "pass",
+    allowed_deviation_status: "none",
   };
   manifest.statistical_evidence = {
     status: "ready",

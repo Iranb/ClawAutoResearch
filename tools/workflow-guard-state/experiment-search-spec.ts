@@ -128,6 +128,35 @@ export type ExperimentSearchBaselineFairnessContractLike = {
   lockedEvaluationHarness: boolean;
 };
 
+export type ExperimentSearchAllowedDeviationLike = {
+  deviationId: string | null;
+  scope: string | null;
+  rationale: string | null;
+  allowedInMainResults: boolean;
+  label: string | null;
+};
+
+export type ExperimentSearchProtocolLockFairnessChecksLike = {
+  sameBackbone: string | null;
+  samePretraining: string | null;
+  sameSplit: string | null;
+  sameEvaluationHarness: string | null;
+  baselineReferenceMode: string | null;
+};
+
+export type ExperimentSearchProtocolLockContractLike = {
+  benchmarkFamily: string | null;
+  canonicalDataset: string | null;
+  splitDescriptor: string | null;
+  splitSource: string | null;
+  splitChecksum: string | null;
+  evaluationHarness: string | null;
+  officialEvalRecipe: string | null;
+  allowedDeviations: ExperimentSearchAllowedDeviationLike[];
+  fairCompareNotes: string[];
+  fairnessChecks: ExperimentSearchProtocolLockFairnessChecksLike;
+};
+
 /**
  * 验证步骤。
  *
@@ -167,6 +196,7 @@ export type ExperimentSearchSpecLike = {
   graphMemoryBasis: ExperimentSearchGraphMemoryBasisLike;
   primaryMetricContract: ExperimentSearchMetricContractLike;
   baselineFairnessContract: ExperimentSearchBaselineFairnessContractLike;
+  protocolLockContract: ExperimentSearchProtocolLockContractLike;
   requiredValidationSteps: ExperimentSearchValidationStepLike[];
   innovationInvalidityCriteria: Record<string, unknown> | null;
   tuningExhaustionCriteria: Record<string, unknown> | null;
@@ -200,6 +230,33 @@ export function normalizeExperimentSearchSpec(
     asRecord(
       record.baselineFairnessContract ?? record.baseline_fairness_contract
     ) ?? {};
+  const protocolLockContract =
+    asRecord(record.protocolLockContract ?? record.protocol_lock_contract) ?? {};
+  const protocolLockFairnessChecks =
+    asRecord(
+      protocolLockContract.fairnessChecks ??
+        protocolLockContract.fairness_checks
+    ) ?? {};
+  const allowedDeviations = Array.isArray(
+    protocolLockContract.allowedDeviations ??
+      protocolLockContract.allowed_deviations
+  )
+    ? ((protocolLockContract.allowedDeviations ??
+        protocolLockContract.allowed_deviations) as unknown[])
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .map((entry) => ({
+          deviationId: pickString(entry, ["deviationId", "deviation_id"]),
+          scope: pickString(entry, ["scope"]),
+          rationale: pickString(entry, ["rationale"]),
+          allowedInMainResults:
+            pickBoolean(entry, [
+              "allowedInMainResults",
+              "allowed_in_main_results",
+            ]) ?? false,
+          label: pickString(entry, ["label"]),
+        }))
+    : [];
   const requiredValidationSteps = Array.isArray(
     record.requiredValidationSteps ?? record.required_validation_steps
   )
@@ -409,6 +466,63 @@ export function normalizeExperimentSearchSpec(
           "lockedEvaluationHarness",
           "locked_evaluation_harness",
         ]) ?? true,
+    },
+    protocolLockContract: {
+      benchmarkFamily: pickString(protocolLockContract, [
+        "benchmarkFamily",
+        "benchmark_family",
+      ]),
+      canonicalDataset: pickString(protocolLockContract, [
+        "canonicalDataset",
+        "canonical_dataset",
+      ]),
+      splitDescriptor: pickString(protocolLockContract, [
+        "splitDescriptor",
+        "split_descriptor",
+      ]),
+      splitSource: pickString(protocolLockContract, [
+        "splitSource",
+        "split_source",
+      ]),
+      splitChecksum: pickString(protocolLockContract, [
+        "splitChecksum",
+        "split_checksum",
+      ]),
+      evaluationHarness: pickString(protocolLockContract, [
+        "evaluationHarness",
+        "evaluation_harness",
+      ]),
+      officialEvalRecipe: pickString(protocolLockContract, [
+        "officialEvalRecipe",
+        "official_eval_recipe",
+      ]),
+      allowedDeviations,
+      fairCompareNotes: asStringArray(
+        protocolLockContract.fairCompareNotes ??
+          protocolLockContract.fair_compare_notes
+      ),
+      fairnessChecks: {
+        sameBackbone: pickString(protocolLockFairnessChecks, [
+          "sameBackbone",
+          "same_backbone",
+        ]),
+        samePretraining: pickString(protocolLockFairnessChecks, [
+          "samePretraining",
+          "same_pretraining",
+        ]),
+        sameSplit: pickString(protocolLockFairnessChecks, [
+          "sameSplit",
+          "same_split",
+        ]),
+        sameEvaluationHarness: pickString(protocolLockFairnessChecks, [
+          "sameEvaluationHarness",
+          "same_evaluation_harness",
+        ]),
+        baselineReferenceMode: pickString(protocolLockFairnessChecks, [
+          "baselineReferenceMode",
+          "baseline_reference_mode",
+        ]),
+      },
     },
     requiredValidationSteps,
     innovationInvalidityCriteria:

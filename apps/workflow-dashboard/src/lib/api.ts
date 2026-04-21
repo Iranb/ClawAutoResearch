@@ -84,6 +84,8 @@ export type ProjectDetailSummary = {
   evidenceBoard: {
     benchmarkProtocolStatus: string | null;
     benchmarkProtocolLocked: boolean;
+    benchmarkProtocolFairCompareStatus: string | null;
+    benchmarkProtocolAllowedDeviationStatus: string | null;
     statisticalEvidenceStatus: string | null;
     statisticalEvidenceClaimStrength: string | null;
     venueCompetitionStatus: string | null;

@@ -69,6 +69,8 @@ const projectSummaryResponse = {
   evidenceBoard: {
     benchmarkProtocolStatus: "blocked",
     benchmarkProtocolLocked: false,
+    benchmarkProtocolFairCompareStatus: "missing",
+    benchmarkProtocolAllowedDeviationStatus: "none",
     statisticalEvidenceStatus: "missing",
     statisticalEvidenceClaimStrength: null,
     venueCompetitionStatus: "missing",

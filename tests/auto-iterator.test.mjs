@@ -4587,8 +4587,14 @@ test("auto iterator keeps top-tier analyze stage blocked until mechanism and ven
     status: "ready",
     benchmark_family: "OpenWorldGraphBench",
     protocol_lock_path: "researcher/BENCHMARK_PROTOCOL.json",
+    fairness_report_path: "researcher/BASELINE_FAIRNESS_REPORT.json",
     locked: true,
     drift_status: "pass",
+    fair_compare_status: "pass",
+    fair_compare_summary:
+      "Main compare keeps the same backbone, split, and evaluation harness.",
+    allowed_deviation_count: 0,
+    allowed_deviation_status: "none",
   };
   manifest.statistical_evidence = {
     status: "ready",
@@ -6341,6 +6347,96 @@ test("auto iterator keeps top-tier experiment stage blocked until benchmark, sta
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /ablation_evidence\.status must not be missing/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator keeps top-tier experiment stage blocked when fair compare fails", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now, trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "ready_for_analysis";
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    multi_seed_status: "ready",
+    plot_pack_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+  };
+  manifest.opportunity_scorecard = {
+    status: "ready",
+    verdict: "worth_top_tier_bet",
+    graph_context_status: "ready",
+    scorecard_path: "researcher/TOP_TIER_OPPORTUNITY.json",
+  };
+  manifest.benchmark_protocol = {
+    status: "ready",
+    benchmark_family: "OpenWorldGraphBench",
+    protocol_lock_path: "researcher/PROTOCOL_LOCK.json",
+    fairness_report_path: "researcher/BASELINE_FAIRNESS_REPORT.json",
+    locked: true,
+    drift_status: "pass",
+    fair_compare_status: "fail",
+    allowed_deviation_status: "none",
+  };
+  manifest.statistical_evidence = {
+    status: "ready",
+    claim_strength_status: "strong",
+  };
+  manifest.ablation_evidence = {
+    status: "ready",
+    sufficiency_status: "sufficient",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: now,
+    summary: {
+      activeExperimentIds: [],
+      lastCompletedExperimentId: "exp-1",
+      lastFailedExperimentId: null,
+    },
+    experiments: [
+      {
+        experimentId: "exp-1",
+        trackId,
+        status: "completed",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /benchmark_protocol\.fair_compare_status must not be fail/i.test(signal)
     )
   );
 });

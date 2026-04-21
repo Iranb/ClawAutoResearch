@@ -24,11 +24,20 @@ type VersionedEvidenceContract = {
 export type BenchmarkProtocolState = VersionedEvidenceContract & {
   status: string;
   benchmarkFamily: string | null;
+  primaryMetric: string | null;
+  metricDirection: string | null;
+  splitDescriptor: string | null;
+  evaluationHarness: string | null;
   registryPath: string | null;
   protocolLockPath: string | null;
+  fairnessReportPath: string | null;
   officialEvalRecipe: string | null;
   locked: boolean;
   driftStatus: string | null;
+  fairCompareStatus: string | null;
+  fairCompareSummary: string | null;
+  allowedDeviationCount: number;
+  allowedDeviationStatus: string | null;
   pendingReason: string | null;
 };
 
@@ -112,16 +121,36 @@ export function normalizeBenchmarkProtocolState(value: unknown): BenchmarkProtoc
     status: normalizeStatus(record.status),
     benchmarkFamily:
       pickString(record, ["benchmarkFamily", "benchmark_family"]) ?? null,
+    primaryMetric:
+      pickString(record, ["primaryMetric", "primary_metric"]) ?? null,
+    metricDirection:
+      pickString(record, ["metricDirection", "metric_direction"]) ?? null,
+    splitDescriptor:
+      pickString(record, ["splitDescriptor", "split_descriptor"]) ?? null,
+    evaluationHarness:
+      pickString(record, ["evaluationHarness", "evaluation_harness"]) ?? null,
     registryPath:
       pickString(record, ["registryPath", "registry_path"]) ??
       "researcher/BENCHMARK_REGISTRY.json",
     protocolLockPath:
       pickString(record, ["protocolLockPath", "protocol_lock_path"]) ??
       "researcher/PROTOCOL_LOCK.json",
+    fairnessReportPath:
+      pickString(record, ["fairnessReportPath", "fairness_report_path"]) ??
+      "researcher/BASELINE_FAIRNESS_REPORT.json",
     officialEvalRecipe:
       pickString(record, ["officialEvalRecipe", "official_eval_recipe"]) ?? null,
     locked: pickBoolean(record, ["locked"]) ?? false,
     driftStatus: pickString(record, ["driftStatus", "drift_status"]) ?? null,
+    fairCompareStatus:
+      pickString(record, ["fairCompareStatus", "fair_compare_status"]) ?? null,
+    fairCompareSummary:
+      pickString(record, ["fairCompareSummary", "fair_compare_summary"]) ?? null,
+    allowedDeviationCount:
+      pickNumber(record, ["allowedDeviationCount", "allowed_deviation_count"]) ?? 0,
+    allowedDeviationStatus:
+      pickString(record, ["allowedDeviationStatus", "allowed_deviation_status"]) ??
+      null,
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]) ?? null,
   };
 }
@@ -257,11 +286,20 @@ export function serializeBenchmarkProtocolState(
     last_materialized_at: state.lastMaterializedAt,
     status: state.status,
     benchmark_family: state.benchmarkFamily,
+    primary_metric: state.primaryMetric,
+    metric_direction: state.metricDirection,
+    split_descriptor: state.splitDescriptor,
+    evaluation_harness: state.evaluationHarness,
     registry_path: state.registryPath,
     protocol_lock_path: state.protocolLockPath,
+    fairness_report_path: state.fairnessReportPath,
     official_eval_recipe: state.officialEvalRecipe,
     locked: state.locked,
     drift_status: state.driftStatus,
+    fair_compare_status: state.fairCompareStatus,
+    fair_compare_summary: state.fairCompareSummary,
+    allowed_deviation_count: state.allowedDeviationCount,
+    allowed_deviation_status: state.allowedDeviationStatus,
     pending_reason: state.pendingReason,
   };
 }
