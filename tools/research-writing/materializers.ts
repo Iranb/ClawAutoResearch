@@ -28,6 +28,7 @@ import { materializeVenueRoutingPlan } from "./venue-routing";
 import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
 import {
   DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
+  DEFAULT_SURVEY_EVIDENCE_PACKET_PATH,
   DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
   DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
   DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
@@ -839,6 +840,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
         "researcher/GAP_SYNTHESIS.md",
         "researcher/REVIEW_PROTOCOL.md",
         DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
+        DEFAULT_SURVEY_EVIDENCE_PACKET_PATH,
         DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
         DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
         DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
@@ -868,6 +870,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
       "analyzer/FAIR_COMPARE_MATRIX.json",
       ...visualCompiler.generatedFiles,
       methodologyConsistency.path,
+      DEFAULT_SURVEY_EVIDENCE_PACKET_PATH,
       DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
       DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,
       DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,

@@ -208,6 +208,12 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
   await fs.access(
     path.join(projectRoot, "researcher", "TOP_TIER_OPPORTUNITY.json")
   );
+  const evidencePacket = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "SURVEY_EVIDENCE_PACKET.json"), "utf8")
+  );
+  assert.equal(Array.isArray(evidencePacket.screening.entries), true);
+  assert.equal(Array.isArray(evidencePacket.gaps), true);
+  assert.equal(Array.isArray(evidencePacket.baselineSlate), true);
 });
 
 test("materializeSurveyAnalysis flags unsupported synthesis claims when traceability is weak", async (t) => {
