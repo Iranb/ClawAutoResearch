@@ -28,7 +28,8 @@ import {
   normalizeWritingContractState,
   serializeWritingContractState,
 } from "../workflow-guard-state/writing-contract";
-import { materializeSurveyStorylinePacket } from "../research-writing/survey-storyline";
+import { serializeStorylinePlannerState } from "../workflow-guard-state/storyline-planner";
+import { materializeSurveyStorylinePlanner } from "../research-writing/survey-storyline-planner";
 import type { PaperStoryState } from "../workflow-guard.js";
 
 type ClaimSupportSummary = {
@@ -239,16 +240,14 @@ export async function materializePaperStoryStateImpl(
   const graphStorylinePacket = asRecord(graphStorylinePacketRecord) ?? {};
   const ideaFragmentsPacket = asRecord(ideaFragmentsRecord) ?? {};
   const rankedFragmentsPacket = asRecord(rankedFragmentsRecord) ?? {};
-  const surveyStoryline =
+  const surveyStorylinePlanner =
     surveyWritingBridgeReady
-      ? await materializeSurveyStorylinePacket({
+      ? await materializeSurveyStorylinePlanner({
           projectRoot,
           topic: surveyReviewState.topic,
-          packetPath: current.surveyStorylinePacketPath,
-          memoPath: current.surveyStorylineMemoPath,
         })
       : null;
-  const surveyStorylinePacket = surveyStoryline?.packet ?? null;
+  const surveyStorylinePacket = surveyStorylinePlanner?.packet ?? null;
   const surveySectionPlans = surveyStorylinePacket?.sectionPlans ?? [];
   const surveyClustersById = new Map(
     (surveyStorylinePacket?.evidenceClusters ?? []).map((entry) => [
@@ -727,8 +726,8 @@ ${deps.renderMarkdownBulletList(
   });
 
   const generatedFiles: string[] = [];
-  if (surveyStoryline) {
-    generatedFiles.push(...surveyStoryline.generatedFiles);
+  if (surveyStorylinePlanner) {
+    generatedFiles.push(...surveyStorylinePlanner.generatedFiles);
   }
   const fileSpecs: Array<[string | null, string]> = [
     [nextState.taskSummaryPath, taskSummaryDoc],
@@ -849,6 +848,11 @@ ${crossDomainStorySection || "- No cross-domain bridge configured."}
     );
   }
 
+  if (surveyStorylinePlanner) {
+    manifest.storyline_planner = serializeStorylinePlannerState(
+      surveyStorylinePlanner.state
+    );
+  }
   manifest.paper_story_state = serializePaperStoryState(nextState);
   await deps.saveManifest(projectRoot, manifest);
   const summary = await deps.getPaperStoryStateSummary({ projectRoot });

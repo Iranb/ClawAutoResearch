@@ -1,0 +1,36 @@
+{
+  "project_id": "fixture-benchmark-first",
+  "topic": "Generalized Category Discovery",
+  "artifacts": {
+    "researcher/SURVEY_BRIEF.md": "# Survey Brief\n\n## Themes\n- Prototype-centric methods\n- Prompt-driven methods\n\n## Benchmark Landscape\n- Comparisons only make sense when open-set assumptions match.\n\n## Open Problems\n- Metric drift still distorts reported wins.\n",
+    "researcher/LITERATURE_REVIEW.md": "# Literature Review\n\n## Taxonomy\n- Prototype-centric methods\n- Prompt-driven methods\n\n## Benchmark Caveats\n- Several papers are non-comparable because they change open-set assumptions.\n",
+    "researcher/SOTA_MATRIX.md": "# SOTA Matrix\n\n| Method | Family | Notes | Dataset | Metric |\n| --- | --- | --- | --- | --- |\n| A | Prototype | non-comparable protocol caveat | CIFAR100 | Accuracy |\n| B | Prompt | evaluation drift warning | ImageNet100 | H-score |\n| C | Hybrid | metric mismatch warning | CUB | F1 |\n",
+    "researcher/GAP_SYNTHESIS.md": "# Gap Synthesis\n\n## Open Problems\n- Result tables still mix non-comparable open-set assumptions.\n- Benchmark wins remain fragile under metric drift.\n",
+    "researcher/COVERAGE_SUMMARY.md": "# Coverage Summary\n\n- Search coverage spans core benchmark families.\n- Scope boundaries and blind spots are explicit.\n- Evaluation drift remains central.\n",
+    "researcher/REVIEW_PROTOCOL.md": "# Review Protocol\n\n- Benchmark comparisons must stay tied to dataset split and metric assumptions.\n- Non-comparable settings should be called out explicitly.\n",
+    "researcher/INCLUDED_PAPERS.json": {
+      "papers": [
+        { "canonical_id": "arxiv:2501.00001", "title": "Paper A", "year": 2025 },
+        { "canonical_id": "arxiv:2501.00002", "title": "Paper B", "year": 2025 },
+        { "canonical_id": "arxiv:2501.00003", "title": "Paper C", "year": 2024 }
+      ]
+    },
+    "researcher/EXCLUDED_PAPERS.json": {
+      "backgroundPapers": [
+        {
+          "title": "Open World Recognition Survey",
+          "reason": "boundary reference when open-set assumptions shift"
+        }
+      ]
+    },
+    "researcher/CANDIDATE_SCREENING_DECISIONS.json": {
+      "decisions": [
+        {
+          "title": "Open World Recognition Survey",
+          "decision": "background",
+          "reason": "boundary reference when open-set assumptions shift"
+        }
+      ]
+    }
+  }
+}

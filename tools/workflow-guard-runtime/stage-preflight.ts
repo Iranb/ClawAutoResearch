@@ -31,6 +31,7 @@ import {
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
 import { materializeResultsStoryline } from "../research-writing/results-storyline";
+import { materializeSurveyStorylinePlanner } from "../research-writing/survey-storyline-planner";
 import { materializeTitleAbstractIntroWorkbench } from "../research-writing/title-abstract-intro-workbench";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
 import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
@@ -46,6 +47,7 @@ import {
 } from "../workflow-guard-state/innovation-synthesis";
 import { normalizeWritePackageState } from "../workflow-guard-state/execution-state";
 import { normalizeResultsStorylineState } from "../workflow-guard-state/results-storyline";
+import { normalizeStorylinePlannerState } from "../workflow-guard-state/storyline-planner";
 import { normalizeTitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
 import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
 import {
@@ -76,6 +78,11 @@ type StagePreflightDeps = {
     paperStoryMaterialization?: Record<string, unknown>;
     trigger?: string | null;
     agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeStorylinePlannerState?: (params: {
+    projectRoot: string;
+    topic?: string | null;
+    configuredMode?: "heuristic" | "reviewer_judged" | "learned_shadow" | "learned_primary" | null;
   }) => Promise<unknown>;
   materializeReviewPressurePacket: (params: {
     projectRoot: string;
@@ -202,6 +209,12 @@ const PAPER_STORY_PREP_STAGES = new Set([
   "analyze",
   "review",
   "write",
+  "submit",
+]);
+const STORYLINE_PLANNER_PREP_STAGES = new Set([
+  "survey_review",
+  "write",
+  "review",
   "submit",
 ]);
 const EXPERIMENT_REVIEW_PREP_STAGES = new Set(["experiment"]);
@@ -600,6 +613,50 @@ async function shouldMaterializePaperStory(params: {
           state.unsupportedClaimsPath,
         ]
   );
+  return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
+}
+
+async function shouldMaterializeStorylinePlanner(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !STORYLINE_PLANNER_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const surveyReviewState = normalizeSurveyReviewState(params.manifest.survey_review);
+  if (surveyReviewState.status !== "completed") {
+    return false;
+  }
+  const current = normalizeStorylinePlannerState(params.manifest.storyline_planner);
+  if (current.status === "missing") {
+    return true;
+  }
+  if (
+    await anyArtifactMissing(params.projectRoot, [
+      current.candidatePath,
+      current.judgePacketPath,
+      current.selectionPath,
+      current.shadowSelectionPath,
+    ])
+  ) {
+    return true;
+  }
+  const stateTimestamp = parseTimestampMs(current.lastUpdatedAt);
+  if (stateTimestamp === null) {
+    return true;
+  }
+  const sourceTimestamp = await latestArtifactMtimeMs(params.projectRoot, [
+    surveyReviewState.surveyBriefPath,
+    surveyReviewState.literatureReviewPath,
+    surveyReviewState.reviewProtocolPath,
+    surveyReviewState.sotaMatrixPath,
+    surveyReviewState.gapSynthesisPath,
+    surveyReviewState.coverageSummaryPath,
+    surveyReviewState.includedPapersPath,
+    surveyReviewState.excludedPapersPath,
+    surveyReviewState.screeningDecisionsPath,
+  ]);
   return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
 }
 
@@ -1186,6 +1243,13 @@ export async function maybePrepareWorkflowStageContracts(params: {
       ideaCatalystMaterialization: {
         basis_stage: params.stage,
       },
+    })
+  );
+  await runStep("storyline_planner", shouldMaterializeStorylinePlanner, () =>
+    (params.deps.materializeStorylinePlannerState ?? materializeSurveyStorylinePlanner)({
+      projectRoot,
+      topic: normalizeSurveyReviewState(manifest.survey_review).topic,
+      configuredMode: "reviewer_judged",
     })
   );
   await runStep("paper_story_state", shouldMaterializePaperStory, () =>

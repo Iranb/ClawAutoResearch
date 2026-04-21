@@ -215,6 +215,10 @@ import {
   normalizeResultsStorylineState,
 } from "./workflow-guard-state/results-storyline";
 import {
+  normalizeStorylinePlannerState,
+  serializeStorylinePlannerState,
+} from "./workflow-guard-state/storyline-planner";
+import {
   normalizeTitleAbstractIntroWorkbenchState,
 } from "./workflow-guard-state/title-abstract-intro-workbench";
 import {
@@ -371,6 +375,7 @@ import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializ
 import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
 import { materializeInnovationSynthesis } from "./research-writing/innovation-synthesis";
 import { materializeResultsStoryline } from "./research-writing/results-storyline";
+import { materializeSurveyStorylinePlanner } from "./research-writing/survey-storyline-planner";
 import { materializeTitleAbstractIntroWorkbench } from "./research-writing/title-abstract-intro-workbench";
 import {
   buildNonOwnerRoutingAdvice as buildNonOwnerRoutingAdviceImpl,
@@ -1387,6 +1392,9 @@ export type StoryGapSearchRequisitionState = ReturnType<
 >;
 export type ResultsStorylineState = ReturnType<
   typeof normalizeResultsStorylineState
+>;
+export type StorylinePlannerState = ReturnType<
+  typeof normalizeStorylinePlannerState
 >;
 export type TitleAbstractIntroWorkbenchState = ReturnType<
   typeof normalizeTitleAbstractIntroWorkbenchState
@@ -7190,6 +7198,54 @@ export async function getResultsStorylineStateSummary(params: {
   };
 }
 
+export async function getStorylinePlannerStateSummary(params: {
+  projectRoot: string;
+}): Promise<{
+  state: StorylinePlannerState;
+  candidateResolvedPath: string | null;
+  candidateExists: boolean;
+  judgePacketResolvedPath: string | null;
+  judgePacketExists: boolean;
+  selectionResolvedPath: string | null;
+  selectionExists: boolean;
+  shadowSelectionResolvedPath: string | null;
+  shadowSelectionExists: boolean;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const state = normalizeStorylinePlannerState(manifest.storyline_planner);
+  const candidateResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.candidatePath
+  );
+  const judgePacketResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.judgePacketPath
+  );
+  const selectionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.selectionPath
+  );
+  const shadowSelectionResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.shadowSelectionPath
+  );
+  return {
+    state,
+    candidateResolvedPath,
+    candidateExists: candidateResolvedPath ? await pathExists(candidateResolvedPath) : false,
+    judgePacketResolvedPath,
+    judgePacketExists: judgePacketResolvedPath
+      ? await pathExists(judgePacketResolvedPath)
+      : false,
+    selectionResolvedPath,
+    selectionExists: selectionResolvedPath ? await pathExists(selectionResolvedPath) : false,
+    shadowSelectionResolvedPath,
+    shadowSelectionExists: shadowSelectionResolvedPath
+      ? await pathExists(shadowSelectionResolvedPath)
+      : false,
+  };
+}
+
 export async function getTitleAbstractIntroWorkbenchStateSummary(params: {
   projectRoot: string;
 }): Promise<{
@@ -9198,6 +9254,23 @@ export async function materializeResultsStorylineState(params: {
   return materializeResultsStoryline(params);
 }
 
+export async function materializeStorylinePlannerState(params: {
+  projectRoot: string;
+  topic?: string | null;
+  configuredMode?: "heuristic" | "reviewer_judged" | "learned_shadow" | "learned_primary" | null;
+}): Promise<Awaited<ReturnType<typeof materializeSurveyStorylinePlanner>>> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const surveyReview = normalizeSurveyReviewState(manifest.survey_review);
+  const result = await materializeSurveyStorylinePlanner({
+    projectRoot: params.projectRoot,
+    topic: params.topic ?? surveyReview.topic,
+    configuredMode: params.configuredMode ?? "reviewer_judged",
+  });
+  manifest.storyline_planner = serializeStorylinePlannerState(result.state);
+  await saveManifest(params.projectRoot, manifest);
+  return result;
+}
+
 export async function materializeTitleAbstractIntroWorkbenchState(params: {
   projectRoot: string;
   stage?: string | null;
@@ -9777,6 +9850,7 @@ export async function runWorkflowAutoIterator(params: {
       queueIdeaCatalystRequisition,
       queueLiteratureDiscoveryRequisition,
       materializeIdeationContract,
+      materializeStorylinePlannerState,
       materializePaperStoryState,
       materializeExperimentReviewState,
       materializeReviewPressurePacket,

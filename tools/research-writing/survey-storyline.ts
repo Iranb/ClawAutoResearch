@@ -24,16 +24,16 @@ const DEFAULT_SURVEY_BODY_SECTION_ORDER = [
   "open_problems",
 ] as const;
 
-type SurveyStorylineStrategyId =
+export type SurveyStorylineStrategyId =
   | "taxonomy_first"
   | "evaluation_crisis_first"
   | "contradiction_first"
   | "historical_evolution_first"
   | "application_split_first";
 
-type SurveyBodySectionId = (typeof DEFAULT_SURVEY_BODY_SECTION_ORDER)[number];
+export type SurveyBodySectionId = (typeof DEFAULT_SURVEY_BODY_SECTION_ORDER)[number];
 
-type SurveyStorylineSectionPlan = {
+export type SurveyStorylineSectionPlan = {
   sectionId: SurveyBodySectionId;
   prompt: string;
   objective: string;
@@ -43,7 +43,7 @@ type SurveyStorylineSectionPlan = {
   tensionIds: string[];
 };
 
-type SurveyStorylineEvidenceCluster = {
+export type SurveyStorylineEvidenceCluster = {
   clusterId: string;
   label: string;
   kind: "scope" | "taxonomy" | "evidence" | "benchmark" | "gap" | "disagreement";
@@ -51,14 +51,14 @@ type SurveyStorylineEvidenceCluster = {
   anchorIds: string[];
 };
 
-type SurveyStorylineTension = {
+export type SurveyStorylineTension = {
   tensionId: string;
   label: string;
   signal: string;
   source: string;
 };
 
-type SurveyStorylineCandidate = {
+export type SurveyStorylineCandidate = {
   strategyId: SurveyStorylineStrategyId;
   label: string;
   score: number;
@@ -86,6 +86,33 @@ export type SurveyStorylinePacket = {
   sectionPlans: SurveyStorylineSectionPlan[];
   candidates: SurveyStorylineCandidate[];
   generatedAt: string;
+};
+
+export type SurveyStorylineSignals = {
+  topic: string;
+  surveyBriefText: string | null;
+  literatureReviewText: string | null;
+  sotaMatrixText: string | null;
+  gapSynthesisText: string | null;
+  coverageSummaryText: string | null;
+  reviewProtocolText: string | null;
+  familyLines: string[];
+  benchmarkLines: string[];
+  benchmarkPressureLines: string[];
+  gapLines: string[];
+  coverageLines: string[];
+  backgroundLines: string[];
+  contradictionLines: string[];
+  includedLabels: string[];
+};
+
+export type SurveyStorylineSelection = {
+  selectedStrategyId: SurveyStorylineStrategyId;
+  selectedStrategyRationale: string[];
+  selectionMode: "heuristic" | "reviewer_judged" | "learned_shadow" | "learned_primary";
+  selectionConfidence: number | null;
+  fallbackTriggered: boolean;
+  fallbackReason: string | null;
 };
 
 function nowIso(): string {
@@ -365,10 +392,11 @@ function buildStrategyThesis(params: {
   }
 }
 
-function buildStrategyCandidates(params: {
+export function buildSurveyStorylineCandidates(params: {
   topic: string;
   familyLines: string[];
   benchmarkLines: string[];
+  benchmarkPressureLines?: string[];
   gapLines: string[];
   contradictionLines: string[];
   coverageLines: string[];
@@ -407,7 +435,7 @@ function buildStrategyCandidates(params: {
       /\bcaveat/i,
     ]);
   const benchmarkSignalCount =
-    params.benchmarkLines.length +
+    (params.benchmarkPressureLines?.length ?? params.benchmarkLines.length) +
     countKeywordHits(combinedText, [
       /\bbenchmark/i,
       /\bdataset/i,
@@ -477,10 +505,10 @@ function buildStrategyCandidates(params: {
         (contradictionSignalCount > 0 ? 1 : 0),
       rationale: uniqueStrings([
         params.benchmarkLines[0]
-          ? `Benchmark comparability is already a visible organizing tension: ${params.benchmarkLines[0]}`
+          ? `Benchmark comparability is already a visible organizing tension: ${(params.benchmarkPressureLines ?? params.benchmarkLines)[0]}`
           : null,
-        params.benchmarkLines[1]
-          ? `Protocol-level comparison pressure is strong enough to justify an evaluation-led opening: ${params.benchmarkLines[1]}`
+        (params.benchmarkPressureLines ?? params.benchmarkLines)[1]
+          ? `Protocol-level comparison pressure is strong enough to justify an evaluation-led opening: ${(params.benchmarkPressureLines ?? params.benchmarkLines)[1]}`
           : null,
       ]),
       bodySectionOrder: [
@@ -665,7 +693,7 @@ function buildSectionPlans(params: {
   });
 }
 
-function renderPacketMarkdown(packet: SurveyStorylinePacket): string {
+export function renderSurveyStorylinePacketMarkdown(packet: SurveyStorylinePacket): string {
   const candidateRows = packet.candidates
     .map(
       (candidate, index) =>
@@ -723,6 +751,325 @@ function renderPacketMarkdown(packet: SurveyStorylinePacket): string {
     "| --- | --- | --- | --- | --- |",
     candidateRows || "| 1 | taxonomy-first | 0 | taxonomy | No candidate evidence available. |",
   ].join("\n");
+}
+
+export async function collectSurveyStorylineSignals(params: {
+  projectRoot: string;
+  topic: string | null;
+}): Promise<SurveyStorylineSignals> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const [
+    surveyBriefText,
+    literatureReviewText,
+    sotaMatrixText,
+    gapSynthesisText,
+    coverageSummaryText,
+    reviewProtocolText,
+    includedJson,
+    excludedJson,
+    screeningDecisionsJson,
+  ] = await Promise.all([
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/SURVEY_BRIEF.md")),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/LITERATURE_REVIEW.md")),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/SOTA_MATRIX.md")),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/GAP_SYNTHESIS.md")),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/COVERAGE_SUMMARY.md")),
+    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/REVIEW_PROTOCOL.md")),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, "researcher/INCLUDED_PAPERS.json") ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, "researcher/EXCLUDED_PAPERS.json") ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, "researcher/CANDIDATE_SCREENING_DECISIONS.json") ?? ""
+    ),
+  ]);
+
+  const topic =
+    params.topic?.trim() ||
+    firstMeaningfulLine(surveyBriefText, literatureReviewText) ||
+    "the survey topic";
+  const familyLines = uniqueStrings([
+    ...extractSectionListItems(surveyBriefText, ["theme", "taxonomy", "family", "cluster"]),
+    ...extractSectionListItems(literatureReviewText, ["taxonomy", "theme", "family", "cluster"]),
+  ]).slice(0, 6);
+  const benchmarkLines = uniqueStrings([
+    ...collectMarkdownSignalLines(reviewProtocolText, 6).filter((line) =>
+      /\bdataset\b|\bbenchmark\b|\bmetric\b|\bsetting\b|\bfair\b|\bcompar/i.test(line)
+    ),
+    ...collectMarkdownSignalLines(coverageSummaryText, 6).filter((line) =>
+      /\bfair\b|\bcompar|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b/i.test(line)
+    ),
+    ...collectMarkdownSignalLines(gapSynthesisText, 6).filter((line) =>
+      /\bfair\b|\bcompar|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b/i.test(line)
+    ),
+    ...collectMarkdownSignalLines(sotaMatrixText, 8).filter((line) =>
+      /\bdataset\b|\bbenchmark\b|\bmetric\b|\bsetting\b|\bfair\b|\bcompar/i.test(line)
+    ),
+    ...collectSotaEvidenceLines(sotaMatrixText, 6),
+  ]).slice(0, 8);
+  const benchmarkPressureLines = uniqueStrings([
+    ...collectMarkdownSignalLines(reviewProtocolText, 6).filter((line) =>
+      /\bfair\b|\bcompar|\bnon[-\s]?comparable|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b|\bprotocol/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(coverageSummaryText, 6).filter((line) =>
+      /\bfair\b|\bcompar|\bnon[-\s]?comparable|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(gapSynthesisText, 6).filter((line) =>
+      /\bfair\b|\bcompar|\bnon[-\s]?comparable|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(sotaMatrixText, 8).filter((line) =>
+      /\bfair\b|\bcompar|\bnon[-\s]?comparable|\bdrift\b|\bmismatch\b|\bcaveat\b|\bwarning\b/i.test(
+        line
+      )
+    ),
+  ]).slice(0, 6);
+  const gapLines = uniqueStrings([
+    ...extractSectionListItems(gapSynthesisText, [
+      "gap",
+      "open problem",
+      "limitation",
+      "challenge",
+      "future",
+    ]),
+    ...collectMarkdownSignalLines(gapSynthesisText, 6),
+  ]).slice(0, 6);
+  const coverageLines = collectMarkdownSignalLines(coverageSummaryText, 6);
+  const backgroundLines = collectSurveyBackgroundReferenceLines({
+    excludedPapers: excludedJson,
+    screeningDecisions: screeningDecisionsJson,
+    limit: 6,
+  });
+  const contradictionLines = uniqueStrings([
+    ...collectMarkdownSignalLines(literatureReviewText, 8).filter((line) =>
+      /\bcontradict|\binconsistent|\bmixed|\btrade[-\s]?off|\bnon[-\s]?comparable|\bboundary|\boverlap|\bcaveat/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(gapSynthesisText, 8).filter((line) =>
+      /\bcontradict|\binconsistent|\bmixed|\btrade[-\s]?off|\bnon[-\s]?comparable|\bboundary|\boverlap|\bcaveat/i.test(
+        line
+      )
+    ),
+    ...collectMarkdownSignalLines(sotaMatrixText, 8).filter((line) =>
+      /\btrade[-\s]?off|\bnon[-\s]?comparable|\bcaveat|\bwarning/i.test(line)
+    ),
+    ...backgroundLines,
+  ]).slice(0, 6);
+  const includedLabels = collectEntryLabels(
+    includedJson,
+    ["papers", "items", "includedPapers", "included"],
+    6
+  );
+
+  return {
+    topic,
+    surveyBriefText,
+    literatureReviewText,
+    sotaMatrixText,
+    gapSynthesisText,
+    coverageSummaryText,
+    reviewProtocolText,
+    familyLines,
+    benchmarkLines,
+    benchmarkPressureLines,
+    gapLines,
+    coverageLines,
+    backgroundLines,
+    contradictionLines,
+    includedLabels,
+  };
+}
+
+function buildSurveyStorylinePacketFromSelection(params: {
+  signals: SurveyStorylineSignals;
+  candidates: SurveyStorylineCandidate[];
+  selection: SurveyStorylineSelection;
+}): SurveyStorylinePacket {
+  const selected =
+    params.candidates.find(
+      (candidate) => candidate.strategyId === params.selection.selectedStrategyId
+    ) ?? params.candidates[0] ?? {
+      strategyId: "taxonomy_first" as const,
+      label: strategyLabel("taxonomy_first"),
+      score: 0,
+      rationale: [
+        "No strong storyline signals were found, so the survey falls back to a conservative taxonomy-first plan.",
+      ],
+      bodySectionOrder: [...DEFAULT_SURVEY_BODY_SECTION_ORDER],
+      ...buildStrategyThesis({
+        strategyId: "taxonomy_first",
+        topic: params.signals.topic,
+      }),
+    };
+
+  const tensions: SurveyStorylineTension[] = uniqueStrings([
+    ...params.signals.contradictionLines,
+    ...params.signals.gapLines,
+    ...params.signals.backgroundLines,
+  ])
+    .slice(0, 5)
+    .map((signal, index) => ({
+      tensionId: `tension-${index + 1}`,
+      label:
+        selected.strategyId === "evaluation_crisis_first"
+          ? `Comparability fault line ${index + 1}`
+          : selected.strategyId === "contradiction_first"
+            ? `Disagreement zone ${index + 1}`
+            : `Review pressure ${index + 1}`,
+      signal,
+      source:
+        params.signals.backgroundLines.includes(signal)
+          ? "background_reference"
+          : params.signals.gapLines.includes(signal)
+            ? "gap_synthesis"
+            : "survey_packet",
+    }));
+
+  const evidenceClusters: SurveyStorylineEvidenceCluster[] = [
+    {
+      clusterId: "scope_protocol",
+      label: "Scope and protocol anchors",
+      kind: "scope",
+      summary: sentenceCase(
+        firstMeaningfulLine(
+          params.signals.reviewProtocolText,
+          params.signals.coverageSummaryText
+        ),
+        "The survey must make scope, inclusion, exclusion, and retrieval boundaries explicit before broader synthesis."
+      ),
+      anchorIds: uniqueStrings([
+        "protocol:review",
+        ...params.signals.coverageLines
+          .slice(0, 3)
+          .map((line, index) => `coverage:${slugify(line, `coverage-${index + 1}`)}`),
+      ]),
+    },
+    {
+      clusterId: "taxonomy",
+      label: "Taxonomy anchors",
+      kind: "taxonomy",
+      summary: sentenceCase(
+        params.signals.familyLines[0],
+        "The field needs a stable family-level organizing lens before the manuscript broadens its comparative claims."
+      ),
+      anchorIds: uniqueStrings(
+        params.signals.familyLines
+          .slice(0, 6)
+          .map((line, index) => `family:${slugify(line, `family-${index + 1}`)}`)
+      ),
+    },
+    {
+      clusterId: "evidence_synthesis",
+      label: "Evidence synthesis anchors",
+      kind: "evidence",
+      summary: sentenceCase(
+        firstMeaningfulLine(
+          params.signals.surveyBriefText,
+          params.signals.literatureReviewText
+        ),
+        "Comparative synthesis should be grounded in representative exemplars instead of a flat paper list."
+      ),
+      anchorIds: uniqueStrings([
+        ...params.signals.includedLabels.map(
+          (label, index) => `paper:${slugify(label, `paper-${index + 1}`)}`
+        ),
+        ...params.signals.benchmarkLines
+          .slice(0, 2)
+          .map((line, index) => `comparison:${slugify(line, `comparison-${index + 1}`)}`),
+      ]).slice(0, 6),
+    },
+    {
+      clusterId: "benchmark_landscape",
+      label: "Benchmark landscape anchors",
+      kind: "benchmark",
+      summary: sentenceCase(
+        params.signals.benchmarkLines[0],
+        "Benchmark comparisons must stay explicit about datasets, metrics, and non-comparable settings."
+      ),
+      anchorIds: uniqueStrings(
+        params.signals.benchmarkLines
+          .slice(0, 6)
+          .map((line, index) => `benchmark:${slugify(line, `benchmark-${index + 1}`)}`)
+      ),
+    },
+    {
+      clusterId: "open_problems",
+      label: "Open-problem anchors",
+      kind: "gap",
+      summary: sentenceCase(
+        params.signals.gapLines[0],
+        "Open problems should be tied back to concrete comparison gaps, boundary cases, or unresolved disagreements."
+      ),
+      anchorIds: uniqueStrings(
+        params.signals.gapLines
+          .slice(0, 6)
+          .map((line, index) => `gap:${slugify(line, `gap-${index + 1}`)}`)
+      ),
+    },
+    {
+      clusterId: "disagreement_zone",
+      label: "Disagreement / boundary anchors",
+      kind: "disagreement",
+      summary: sentenceCase(
+        params.signals.contradictionLines[0],
+        "The survey should keep disagreement zones and non-comparable evidence visible instead of smoothing them away."
+      ),
+      anchorIds: uniqueStrings(
+        params.signals.contradictionLines
+          .slice(0, 6)
+          .map(
+            (line, index) =>
+              `tension:${slugify(line, `tension-anchor-${index + 1}`)}`
+          )
+      ),
+    },
+  ];
+
+  const sectionPlans = buildSectionPlans({
+    topic: params.signals.topic,
+    selected,
+    evidenceClusters,
+    tensions,
+  });
+
+  return {
+    schemaVersion: 1,
+    topic: params.signals.topic,
+    selectedStrategyId: selected.strategyId,
+    selectedStrategyLabel: selected.label,
+    selectedStrategyRationale:
+      params.selection.selectedStrategyRationale.length > 0
+        ? params.selection.selectedStrategyRationale
+        : selected.rationale.length > 0
+          ? selected.rationale
+          : [
+              "No strong storyline-specific signal was detected, so the survey falls back to a conservative thesis.",
+            ],
+    thesis: selected.thesis,
+    openingMove: selected.openingMove,
+    organizingQuestion: `What manuscript order best teaches ${params.signals.topic} without flattening its benchmark constraints, family structure, and unresolved gaps?`,
+    intellectualCenterSection: selected.intellectualCenterSection,
+    bodySectionOrder: selected.bodySectionOrder,
+    fullSectionOrder: [
+      "abstract",
+      "introduction",
+      ...selected.bodySectionOrder,
+      "conclusion",
+    ],
+    primaryTensions: tensions,
+    evidenceClusters,
+    sectionPlans,
+    candidates: params.candidates,
+    generatedAt: nowIso(),
+  };
 }
 
 export function normalizeSurveyStorylinePacket(value: unknown): SurveyStorylinePacket | null {
@@ -1001,6 +1348,9 @@ export async function materializeSurveyStorylinePacket(params: {
   topic: string | null;
   packetPath?: string | null;
   memoPath?: string | null;
+  selection?: SurveyStorylineSelection | null;
+  candidates?: SurveyStorylineCandidate[] | null;
+  signals?: SurveyStorylineSignals | null;
 }): Promise<{
   packet: SurveyStorylinePacket;
   generatedFiles: string[];
@@ -1008,242 +1358,47 @@ export async function materializeSurveyStorylinePacket(params: {
   const projectRoot = path.resolve(params.projectRoot);
   const packetPath = params.packetPath ?? DEFAULT_SURVEY_STORYLINE_PACKET_PATH;
   const memoPath = params.memoPath ?? DEFAULT_SURVEY_STORYLINE_MEMO_PATH;
-  const [
-    surveyBriefText,
-    literatureReviewText,
-    sotaMatrixText,
-    gapSynthesisText,
-    coverageSummaryText,
-    reviewProtocolText,
-    includedJson,
-    excludedJson,
-    screeningDecisionsJson,
-  ] = await Promise.all([
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/SURVEY_BRIEF.md")),
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/LITERATURE_REVIEW.md")),
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/SOTA_MATRIX.md")),
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/GAP_SYNTHESIS.md")),
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/COVERAGE_SUMMARY.md")),
-    readTextIfExists(resolveProjectArtifactPath(projectRoot, "researcher/REVIEW_PROTOCOL.md")),
-    readJsonIfExists<Record<string, unknown>>(
-      resolveProjectArtifactPath(projectRoot, "researcher/INCLUDED_PAPERS.json") ?? ""
-    ),
-    readJsonIfExists<Record<string, unknown>>(
-      resolveProjectArtifactPath(projectRoot, "researcher/EXCLUDED_PAPERS.json") ?? ""
-    ),
-    readJsonIfExists<Record<string, unknown>>(
-      resolveProjectArtifactPath(projectRoot, "researcher/CANDIDATE_SCREENING_DECISIONS.json") ?? ""
-    ),
-  ]);
-
-  const topic =
-    params.topic?.trim() ||
-    firstMeaningfulLine(surveyBriefText, literatureReviewText) ||
-    "the survey topic";
-  const familyLines = uniqueStrings([
-    ...extractSectionListItems(surveyBriefText, ["theme", "taxonomy", "family", "cluster"]),
-    ...extractSectionListItems(literatureReviewText, ["taxonomy", "theme", "family", "cluster"]),
-  ]).slice(0, 6);
-  const benchmarkLines = uniqueStrings([
-    ...collectMarkdownSignalLines(reviewProtocolText, 6).filter((line) =>
-      /\bdataset\b|\bbenchmark\b|\bmetric\b|\bsetting\b|\bfair\b|\bcompar/i.test(line)
-    ),
-    ...collectMarkdownSignalLines(sotaMatrixText, 8).filter((line) =>
-      /\bdataset\b|\bbenchmark\b|\bmetric\b|\bsetting\b|\bfair\b|\bcompar/i.test(line)
-    ),
-    ...collectSotaEvidenceLines(sotaMatrixText, 6),
-  ]).slice(0, 8);
-  const gapLines = uniqueStrings([
-    ...extractSectionListItems(gapSynthesisText, ["gap", "open problem", "limitation", "challenge", "future"]),
-    ...collectMarkdownSignalLines(gapSynthesisText, 6),
-  ]).slice(0, 6);
-  const coverageLines = collectMarkdownSignalLines(coverageSummaryText, 6);
-  const backgroundLines = collectSurveyBackgroundReferenceLines({
-    excludedPapers: excludedJson,
-    screeningDecisions: screeningDecisionsJson,
-    limit: 6,
-  });
-  const contradictionLines = uniqueStrings([
-    ...collectMarkdownSignalLines(literatureReviewText, 8).filter((line) =>
-      /\bcontradict|\binconsistent|\bmixed|\btrade[-\s]?off|\bnon[-\s]?comparable|\bboundary|\boverlap|\bcaveat/i.test(
-        line
-      )
-    ),
-    ...collectMarkdownSignalLines(gapSynthesisText, 8).filter((line) =>
-      /\bcontradict|\binconsistent|\bmixed|\btrade[-\s]?off|\bnon[-\s]?comparable|\bboundary|\boverlap|\bcaveat/i.test(
-        line
-      )
-    ),
-    ...collectMarkdownSignalLines(sotaMatrixText, 8).filter((line) =>
-      /\btrade[-\s]?off|\bnon[-\s]?comparable|\bcaveat|\bwarning/i.test(line)
-    ),
-    ...backgroundLines,
-  ]).slice(0, 6);
-  const includedLabels = collectEntryLabels(includedJson, ["papers", "items", "includedPapers", "included"], 6);
-
-  const candidates = buildStrategyCandidates({
-    topic,
-    familyLines,
-    benchmarkLines,
-    gapLines,
-    contradictionLines,
-    coverageLines,
-    backgroundLines,
-    litReviewText: literatureReviewText,
-    surveyBriefText,
-    reviewProtocolText,
-  });
-  const selected = candidates[0] ?? {
-    strategyId: "taxonomy_first" as const,
-    label: strategyLabel("taxonomy_first"),
-    score: 0,
-    rationale: ["No strong storyline signals were found, so the survey falls back to a conservative taxonomy-first plan."],
-    bodySectionOrder: [...DEFAULT_SURVEY_BODY_SECTION_ORDER],
-    ...buildStrategyThesis({
-      strategyId: "taxonomy_first",
-      topic,
-    }),
-  };
-
-  const tensions: SurveyStorylineTension[] = uniqueStrings([
-    ...contradictionLines,
-    ...gapLines,
-    ...backgroundLines,
-  ])
-    .slice(0, 5)
-    .map((signal, index) => ({
-      tensionId: `tension-${index + 1}`,
-      label:
-        selected.strategyId === "evaluation_crisis_first"
-          ? `Comparability fault line ${index + 1}`
-          : selected.strategyId === "contradiction_first"
-            ? `Disagreement zone ${index + 1}`
-            : `Review pressure ${index + 1}`,
-      signal,
-      source:
-        backgroundLines.includes(signal)
-          ? "background_reference"
-          : gapLines.includes(signal)
-            ? "gap_synthesis"
-            : "survey_packet",
+  const signals =
+    params.signals ??
+    (await collectSurveyStorylineSignals({
+      projectRoot,
+      topic: params.topic,
     }));
-
-  const evidenceClusters: SurveyStorylineEvidenceCluster[] = [
-    {
-      clusterId: "scope_protocol",
-      label: "Scope and protocol anchors",
-      kind: "scope",
-      summary:
-        sentenceCase(
-          firstMeaningfulLine(reviewProtocolText, coverageSummaryText),
-          "The survey must make scope, inclusion, exclusion, and retrieval boundaries explicit before broader synthesis."
-        ),
-      anchorIds: uniqueStrings([
-        "protocol:review",
-        ...coverageLines.slice(0, 3).map((line, index) => `coverage:${slugify(line, `coverage-${index + 1}`)}`),
-      ]),
-    },
-    {
-      clusterId: "taxonomy",
-      label: "Taxonomy anchors",
-      kind: "taxonomy",
-      summary:
-        sentenceCase(
-          familyLines[0],
-          "The field needs a stable family-level organizing lens before the manuscript broadens its comparative claims."
-        ),
-      anchorIds: uniqueStrings(
-        familyLines.slice(0, 6).map((line, index) => `family:${slugify(line, `family-${index + 1}`)}`)
-      ),
-    },
-    {
-      clusterId: "evidence_synthesis",
-      label: "Evidence synthesis anchors",
-      kind: "evidence",
-      summary:
-        sentenceCase(
-          firstMeaningfulLine(surveyBriefText, literatureReviewText),
-          "Comparative synthesis should be grounded in representative exemplars instead of a flat paper list."
-        ),
-      anchorIds: uniqueStrings([
-        ...includedLabels.map((label, index) => `paper:${slugify(label, `paper-${index + 1}`)}`),
-        ...benchmarkLines.slice(0, 2).map((line, index) => `comparison:${slugify(line, `comparison-${index + 1}`)}`),
-      ]).slice(0, 6),
-    },
-    {
-      clusterId: "benchmark_landscape",
-      label: "Benchmark landscape anchors",
-      kind: "benchmark",
-      summary:
-        sentenceCase(
-          benchmarkLines[0],
-          "Benchmark comparisons must stay explicit about datasets, metrics, and non-comparable settings."
-        ),
-      anchorIds: uniqueStrings(
-        benchmarkLines.slice(0, 6).map((line, index) => `benchmark:${slugify(line, `benchmark-${index + 1}`)}`)
-      ),
-    },
-    {
-      clusterId: "open_problems",
-      label: "Open-problem anchors",
-      kind: "gap",
-      summary:
-        sentenceCase(
-          gapLines[0],
-          "Open problems should be tied back to concrete comparison gaps, boundary cases, or unresolved disagreements."
-        ),
-      anchorIds: uniqueStrings(
-        gapLines.slice(0, 6).map((line, index) => `gap:${slugify(line, `gap-${index + 1}`)}`)
-      ),
-    },
-    {
-      clusterId: "disagreement_zone",
-      label: "Disagreement / boundary anchors",
-      kind: "disagreement",
-      summary:
-        sentenceCase(
-          contradictionLines[0],
-          "The survey should keep disagreement zones and non-comparable evidence visible instead of smoothing them away."
-        ),
-      anchorIds: uniqueStrings(
-        contradictionLines.slice(0, 6).map((line, index) => `tension:${slugify(line, `tension-anchor-${index + 1}`)}`)
-      ),
-    },
-  ];
-
-  const sectionPlans = buildSectionPlans({
-    topic,
-    selected,
-    evidenceClusters,
-    tensions,
-  });
-
-  const packet: SurveyStorylinePacket = {
-    schemaVersion: 1,
-    topic,
-    selectedStrategyId: selected.strategyId,
-    selectedStrategyLabel: selected.label,
-    selectedStrategyRationale:
-      selected.rationale.length > 0
-        ? selected.rationale
-        : ["No strong storyline-specific signal was detected, so the survey falls back to a conservative thesis."],
-    thesis: selected.thesis,
-    openingMove: selected.openingMove,
-    organizingQuestion: `What manuscript order best teaches ${topic} without flattening its benchmark constraints, family structure, and unresolved gaps?`,
-    intellectualCenterSection: selected.intellectualCenterSection,
-    bodySectionOrder: selected.bodySectionOrder,
-    fullSectionOrder: [
-      "abstract",
-      "introduction",
-      ...selected.bodySectionOrder,
-      "conclusion",
-    ],
-    primaryTensions: tensions,
-    evidenceClusters,
-    sectionPlans,
+  const candidates =
+    params.candidates ??
+    buildSurveyStorylineCandidates({
+      topic: signals.topic,
+      familyLines: signals.familyLines,
+      benchmarkLines: signals.benchmarkLines,
+      benchmarkPressureLines: signals.benchmarkPressureLines,
+      gapLines: signals.gapLines,
+      contradictionLines: signals.contradictionLines,
+      coverageLines: signals.coverageLines,
+      backgroundLines: signals.backgroundLines,
+      litReviewText: signals.literatureReviewText,
+      surveyBriefText: signals.surveyBriefText,
+      reviewProtocolText: signals.reviewProtocolText,
+    });
+  const selection =
+    params.selection ?? {
+      selectedStrategyId:
+        candidates[0]?.strategyId ?? "taxonomy_first",
+      selectedStrategyRationale:
+        candidates[0]?.rationale.length
+          ? candidates[0].rationale
+          : [
+              "No strong storyline-specific signal was detected, so the survey falls back to a conservative thesis.",
+            ],
+      selectionMode: "heuristic",
+      selectionConfidence: null,
+      fallbackTriggered: false,
+      fallbackReason: null,
+    };
+  const packet = buildSurveyStorylinePacketFromSelection({
+    signals,
     candidates,
-    generatedAt: nowIso(),
-  };
+    selection,
+  });
 
   const resolvedPacketPath = resolveProjectArtifactPath(projectRoot, packetPath);
   const resolvedMemoPath = resolveProjectArtifactPath(projectRoot, memoPath);
@@ -1296,7 +1451,10 @@ export async function materializeSurveyStorylinePacket(params: {
     })),
     generated_at: packet.generatedAt,
   });
-  await writeTextEnsured(resolvedMemoPath, `${renderPacketMarkdown(packet)}\n`);
+  await writeTextEnsured(
+    resolvedMemoPath,
+    `${renderSurveyStorylinePacketMarkdown(packet)}\n`
+  );
 
   return {
     packet,
