@@ -1,6 +1,7 @@
 {
   "project_id": "fixture-taxonomy-first",
   "topic": "Graph Reasoning Agents",
+  "expected_primary_strategy_id": "taxonomy_first",
   "artifacts": {
     "researcher/SURVEY_BRIEF.md": "# Survey Brief\n\n## Themes\n- Retrieval-augmented agents\n- Planner-augmented agents\n- Reflective agents\n\n## Open Problems\n- Tool-use evaluation is still inconsistent.\n",
     "researcher/LITERATURE_REVIEW.md": "# Literature Review\n\n## Taxonomy\n- Retrieval-augmented agents\n- Planner-augmented agents\n- Reflective agents\n\n## Family Contrast\n- Families differ more in architecture than in benchmark protocol.\n",

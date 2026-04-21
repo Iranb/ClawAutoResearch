@@ -8,6 +8,13 @@ import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import { serializeStorylinePlannerState } from "../workflow-guard-state/storyline-planner";
 import {
+  confidenceFromLearnedMargin,
+  readLearnedStorylineModel,
+  resolveBundledLearnedStorylineModelPath,
+  scoreCandidateWithLearnedModel,
+  type LearnedStorylineModel,
+} from "./survey-storyline-model";
+import {
   buildSurveyStorylineCandidates,
   collectSurveyStorylineSignals,
   materializeSurveyStorylinePacket,
@@ -28,6 +35,8 @@ export const DEFAULT_SURVEY_STORYLINE_SHADOW_SELECTION_PATH =
   "academic_writer/SURVEY_STORYLINE_SHADOW_SELECTION.json";
 export const DEFAULT_SURVEY_STORYLINE_REPLAY_DIR =
   "researcher/storyline-replay";
+export const DEFAULT_SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE_PATH =
+  "academic_writer/SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE.json";
 
 type PlannerMode =
   | "heuristic"
@@ -126,6 +135,9 @@ type SurveyStorylinePlannerStateLike = {
   judgePacketPath: string | null;
   selectionPath: string | null;
   shadowSelectionPath: string | null;
+  learnedPrimaryEvidencePath: string | null;
+  learnedModelId: string | null;
+  learnedModelPath: string | null;
   lastUpdatedAt: string | null;
   selectionFingerprint: string | null;
   pendingReason: string | null;
@@ -156,7 +168,7 @@ function scoreNormalized(value: number, maxValue: number): number {
   return Math.max(0, Math.min(5, (value / maxValue) * 5));
 }
 
-function buildFeatureVector(
+export function buildSurveyStorylineFeatureVector(
   signals: SurveyStorylineSignals,
   candidate: SurveyStorylineCandidate
 ): CandidateFeatureVector {
@@ -348,7 +360,7 @@ function buildReviewerJudgment(params: {
   candidates: SurveyStorylineCandidate[];
 }): SurveyStorylineJudgePacket {
   const candidateVerdicts: CandidateJudgeVerdict[] = params.candidates.map((candidate) => {
-    const features = buildFeatureVector(params.signals, candidate);
+    const features = buildSurveyStorylineFeatureVector(params.signals, candidate);
     const rubric = REVIEW_CRITERIA.map((criterion) =>
       computeCriterionScore({
         signals: params.signals,
@@ -448,35 +460,18 @@ function buildReviewerJudgment(params: {
   };
 }
 
-const DEFAULT_LEARNED_SHADOW_WEIGHTS: Record<string, number> = {
-  bias: 0,
-  heuristic_score: 0.18,
-  benchmark_pressure: 0.22,
-  contradiction_pressure: 0.2,
-  family_signal: 0.16,
-  historical_pressure: 0.1,
-  application_pressure: 0.1,
-  order_novelty: 0.06,
-  intellectual_center_benchmark: 0.08,
-  intellectual_center_taxonomy: 0.05,
-  intellectual_center_evidence: 0.07,
-};
-
-function buildLearnedShadowSelection(params: {
+function buildLearnedSelection(params: {
+  model: LearnedStorylineModel;
   signals: SurveyStorylineSignals;
   candidates: SurveyStorylineCandidate[];
+  mode: "learned_shadow" | "learned_primary";
 }): SurveyStorylineSelectionArtifact {
   const scored = params.candidates.map((candidate) => {
-    const features = buildFeatureVector(params.signals, candidate);
-    const total = Object.entries(DEFAULT_LEARNED_SHADOW_WEIGHTS).reduce(
-      (sum, [featureId, weight]) => {
-        if (featureId === "bias") {
-          return sum + weight;
-        }
-        return sum + (features[featureId] ?? 0) * weight;
-      },
-      0
-    );
+    const features = buildSurveyStorylineFeatureVector(params.signals, candidate);
+    const total = scoreCandidateWithLearnedModel({
+      model: params.model,
+      featureVector: features,
+    });
     return {
       candidate,
       total,
@@ -490,21 +485,24 @@ function buildLearnedShadowSelection(params: {
     scored.length >= 2 ? Math.abs((scored[0]?.total ?? 0) - (scored[1]?.total ?? 0)) : 0;
   return {
     schemaVersion: 1,
-    mode: "learned_shadow",
+    mode: params.mode,
     topic: params.signals.topic,
     selectedStrategyId: winner?.strategyId ?? "taxonomy_first",
     selectedStrategyLabel: winner?.label ?? "Taxonomy-first",
     selectedStrategyRationale: uniqueStrings([
       winner?.rationale[0] ?? null,
-      `Shadow reranker score margin: ${margin.toFixed(4)}.`,
+      `${params.mode === "learned_primary" ? "Primary" : "Shadow"} reranker score margin: ${margin.toFixed(4)}.`,
       runnerUp
         ? `Runner-up candidate: ${runnerUp.label}.`
         : "No runner-up candidate was available.",
     ]),
-    selectionConfidence: Number(Math.max(0, Math.min(1, margin / 5)).toFixed(4)),
+    selectionConfidence: confidenceFromLearnedMargin({
+      margin,
+      threshold: params.model.confidenceMarginThreshold,
+    }),
     fallbackTriggered: false,
     fallbackReason: null,
-    selectionFingerprint: `${params.signals.topic}:${winner?.strategyId ?? "taxonomy_first"}:learned_shadow`,
+    selectionFingerprint: `${params.signals.topic}:${winner?.strategyId ?? "taxonomy_first"}:${params.mode}:${params.model.modelId}`,
     comparedStrategyIds: params.candidates.map((entry) => entry.strategyId),
     generatedAt: nowIso(),
   };
@@ -549,7 +547,7 @@ function serializeCandidatesArtifact(
     topic,
     candidates: candidates.map((candidate) => ({
       ...candidate,
-      featureVector: buildFeatureVector(signals, candidate),
+      featureVector: buildSurveyStorylineFeatureVector(signals, candidate),
     })),
     generatedAt: nowIso(),
   };
@@ -559,10 +557,12 @@ export async function materializeSurveyStorylinePlanner(params: {
   projectRoot: string;
   topic: string | null;
   configuredMode?: PlannerMode | null;
+  learnedModelPath?: string | null;
   candidatePath?: string | null;
   judgePacketPath?: string | null;
   selectionPath?: string | null;
   shadowSelectionPath?: string | null;
+  learnedPrimaryEvidencePath?: string | null;
   packetPath?: string | null;
   memoPath?: string | null;
 }): Promise<{
@@ -572,6 +572,7 @@ export async function materializeSurveyStorylinePlanner(params: {
   selection: SurveyStorylineSelectionArtifact;
   shadowSelection: SurveyStorylineSelectionArtifact;
   packet: SurveyStorylinePacket;
+  learnedPrimaryEvidence: Record<string, unknown>;
   generatedFiles: string[];
 }> {
   const projectRoot = path.resolve(params.projectRoot);
@@ -580,7 +581,12 @@ export async function materializeSurveyStorylinePlanner(params: {
   const selectionPath = params.selectionPath ?? DEFAULT_SURVEY_STORYLINE_SELECTION_PATH;
   const shadowSelectionPath =
     params.shadowSelectionPath ?? DEFAULT_SURVEY_STORYLINE_SHADOW_SELECTION_PATH;
+  const learnedPrimaryEvidencePath =
+    params.learnedPrimaryEvidencePath ??
+    DEFAULT_SURVEY_STORYLINE_LEARNED_PRIMARY_EVIDENCE_PATH;
   const configuredMode = params.configuredMode ?? "reviewer_judged";
+  const effectiveLearnedModelPath =
+    params.learnedModelPath ?? resolveBundledLearnedStorylineModelPath();
   const manifest =
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
@@ -617,6 +623,16 @@ export async function materializeSurveyStorylinePlanner(params: {
     judgePacket,
     candidates,
   });
+  const learnedModel = await readLearnedStorylineModel(effectiveLearnedModelPath);
+  const learnedPrimarySelection =
+    learnedModel
+      ? buildLearnedSelection({
+          model: learnedModel,
+          signals,
+          candidates,
+          mode: "learned_primary",
+        })
+      : null;
   if (configuredMode === "heuristic") {
     selection = {
       ...selection,
@@ -630,15 +646,70 @@ export async function materializeSurveyStorylinePlanner(params: {
       fallbackReason: "Configured mode prefers the heuristic primary path.",
       selectionFingerprint: `${signals.topic}:${candidates[0]?.strategyId ?? selection.selectedStrategyId}:heuristic`,
     };
+  } else if (configuredMode === "learned_primary") {
+    if (!learnedPrimarySelection) {
+      selection = {
+        ...selection,
+        fallbackTriggered: true,
+        fallbackReason:
+          "learned primary requested but no trained model artifact is available; falling back to reviewer_judged.",
+      };
+    } else if ((learnedPrimarySelection.selectionConfidence ?? 0) < 0.5) {
+      selection = {
+        ...selection,
+        fallbackTriggered: true,
+        fallbackReason:
+          `learned primary confidence ${(learnedPrimarySelection.selectionConfidence ?? 0).toFixed(4)} is below the stable threshold 0.5; falling back to reviewer_judged.`,
+      };
+    } else {
+      selection = learnedPrimarySelection;
+    }
   }
-  const shadowSelection = buildLearnedShadowSelection({
-    signals,
-    candidates,
-  });
+  const shadowSelection = learnedModel
+    ? buildLearnedSelection({
+        model: learnedModel,
+        signals,
+        candidates,
+        mode: "learned_shadow",
+      })
+    : {
+        schemaVersion: 1,
+        mode: "learned_shadow" as const,
+        topic: signals.topic,
+        selectedStrategyId: selection.selectedStrategyId,
+        selectedStrategyLabel: selection.selectedStrategyLabel,
+        selectedStrategyRationale: [
+          "No trained learned model artifact is available, so shadow mode mirrors the primary selection.",
+        ],
+        selectionConfidence: 0,
+        fallbackTriggered: true,
+        fallbackReason: "No trained learned model artifact is available.",
+        selectionFingerprint: `${signals.topic}:${selection.selectedStrategyId}:learned_shadow:missing_model`,
+        comparedStrategyIds: candidates.map((entry) => entry.strategyId),
+        generatedAt: nowIso(),
+      };
   const shadowDiffStatus =
     shadowSelection.selectedStrategyId === selection.selectedStrategyId
       ? "match"
       : "diverged";
+  const learnedPrimaryEvidence = {
+    schema_version: 1,
+    configured_mode: configuredMode,
+    learned_model_id: learnedModel?.modelId ?? null,
+    learned_model_path: effectiveLearnedModelPath,
+    learned_primary_candidate:
+      learnedPrimarySelection == null
+        ? null
+        : {
+            selected_strategy_id: learnedPrimarySelection.selectedStrategyId,
+            selection_confidence: learnedPrimarySelection.selectionConfidence,
+            selection_fingerprint: learnedPrimarySelection.selectionFingerprint,
+          },
+    primary_selection_mode: selection.mode,
+    primary_fallback_triggered: selection.fallbackTriggered,
+    primary_fallback_reason: selection.fallbackReason,
+    generated_at: nowIso(),
+  };
   const packetSelection: SurveyStorylineSelection = {
     selectedStrategyId: selection.selectedStrategyId,
     selectedStrategyRationale: selection.selectedStrategyRationale,
@@ -661,11 +732,16 @@ export async function materializeSurveyStorylinePlanner(params: {
   const resolvedJudgePacketPath = resolveProjectArtifactPath(projectRoot, judgePacketPath);
   const resolvedSelectionPath = resolveProjectArtifactPath(projectRoot, selectionPath);
   const resolvedShadowSelectionPath = resolveProjectArtifactPath(projectRoot, shadowSelectionPath);
+  const resolvedLearnedPrimaryEvidencePath = resolveProjectArtifactPath(
+    projectRoot,
+    learnedPrimaryEvidencePath
+  );
   if (
     !resolvedCandidatePath ||
     !resolvedJudgePacketPath ||
     !resolvedSelectionPath ||
-    !resolvedShadowSelectionPath
+    !resolvedShadowSelectionPath ||
+    !resolvedLearnedPrimaryEvidencePath
   ) {
     throw new Error("Unable to resolve survey storyline planner paths.");
   }
@@ -746,6 +822,10 @@ export async function materializeSurveyStorylinePlanner(params: {
     compared_strategy_ids: shadowSelection.comparedStrategyIds,
     generated_at: shadowSelection.generatedAt,
   });
+  await writeJsonEnsured(
+    resolvedLearnedPrimaryEvidencePath,
+    learnedPrimaryEvidence
+  );
 
   const state: SurveyStorylinePlannerStateLike = {
     status: "ready",
@@ -761,6 +841,9 @@ export async function materializeSurveyStorylinePlanner(params: {
     judgePacketPath,
     selectionPath,
     shadowSelectionPath,
+    learnedPrimaryEvidencePath,
+    learnedModelId: learnedModel?.modelId ?? null,
+    learnedModelPath: effectiveLearnedModelPath,
     lastUpdatedAt: nowIso(),
     selectionFingerprint: selection.selectionFingerprint,
     pendingReason: null,
@@ -771,6 +854,7 @@ export async function materializeSurveyStorylinePlanner(params: {
     judgePacketPath,
     selectionPath,
     shadowSelectionPath,
+    learnedPrimaryEvidencePath,
     ...packetResult.generatedFiles,
   ]);
 
@@ -785,6 +869,7 @@ export async function materializeSurveyStorylinePlanner(params: {
     selection,
     shadowSelection,
     packet: packetResult.packet,
+    learnedPrimaryEvidence,
     generatedFiles,
   };
 }

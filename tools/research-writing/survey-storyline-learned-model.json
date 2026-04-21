@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "model_id": "survey-storyline-learned-c1fd4978e08d",
+  "trained_at": "2026-04-21T04:12:26.336Z",
+  "training_example_count": 2,
+  "epochs": 12,
+  "strategy_ids": [
+    "evaluation_crisis_first",
+    "contradiction_first",
+    "taxonomy_first",
+    "application_split_first",
+    "historical_evolution_first"
+  ],
+  "feature_ids": [
+    "heuristic_score",
+    "benchmark_pressure",
+    "contradiction_pressure",
+    "family_signal",
+    "historical_pressure",
+    "application_pressure",
+    "order_novelty",
+    "intellectual_center_benchmark",
+    "intellectual_center_taxonomy",
+    "intellectual_center_evidence"
+  ],
+  "weights": {
+    "heuristic_score": 17.625,
+    "benchmark_pressure": 4.625,
+    "contradiction_pressure": -1.25,
+    "family_signal": 2.1,
+    "historical_pressure": 0,
+    "application_pressure": -0.75,
+    "order_novelty": 0.625,
+    "intellectual_center_benchmark": 0.375,
+    "intellectual_center_taxonomy": -0.125,
+    "intellectual_center_evidence": -0.25
+  },
+  "bias": 0,
+  "confidence_margin_threshold": 167.29,
+  "metadata": {
+    "source_fixtures": [
+      "benchmark-first.json",
+      "taxonomy-first.json"
+    ],
+    "notes": [
+      "Deterministic linear reranker trained from fixture labels via positive-vs-negative feature centroids.",
+      "Use reviewer-judged planner as fallback when confidence stays below threshold."
+    ]
+  }
+}

@@ -7210,6 +7210,8 @@ export async function getStorylinePlannerStateSummary(params: {
   selectionExists: boolean;
   shadowSelectionResolvedPath: string | null;
   shadowSelectionExists: boolean;
+  learnedPrimaryEvidenceResolvedPath: string | null;
+  learnedPrimaryEvidenceExists: boolean;
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const state = normalizeStorylinePlannerState(manifest.storyline_planner);
@@ -7229,6 +7231,10 @@ export async function getStorylinePlannerStateSummary(params: {
     params.projectRoot,
     state.shadowSelectionPath
   );
+  const learnedPrimaryEvidenceResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    state.learnedPrimaryEvidencePath
+  );
   return {
     state,
     candidateResolvedPath,
@@ -7243,7 +7249,31 @@ export async function getStorylinePlannerStateSummary(params: {
     shadowSelectionExists: shadowSelectionResolvedPath
       ? await pathExists(shadowSelectionResolvedPath)
       : false,
+    learnedPrimaryEvidenceResolvedPath,
+    learnedPrimaryEvidenceExists: learnedPrimaryEvidenceResolvedPath
+      ? await pathExists(learnedPrimaryEvidenceResolvedPath)
+      : false,
   };
+}
+
+export async function setStorylinePlannerState(params: {
+  projectRoot: string;
+  storylinePlanner: Record<string, unknown>;
+}): Promise<{
+  state: StorylinePlannerState;
+}> {
+  const manifest = await readManifestEnsured(params.projectRoot);
+  const current = normalizeStorylinePlannerState(manifest.storyline_planner);
+  const patch = asRecord(params.storylinePlanner) ?? {};
+  const next = normalizeStorylinePlannerState({
+    ...serializeStorylinePlannerState(current),
+    ...patch,
+    last_updated_at:
+      pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ?? new Date().toISOString(),
+  });
+  manifest.storyline_planner = serializeStorylinePlannerState(next);
+  await saveManifest(params.projectRoot, manifest);
+  return { state: next };
 }
 
 export async function getTitleAbstractIntroWorkbenchStateSummary(params: {
@@ -9258,13 +9288,24 @@ export async function materializeStorylinePlannerState(params: {
   projectRoot: string;
   topic?: string | null;
   configuredMode?: "heuristic" | "reviewer_judged" | "learned_shadow" | "learned_primary" | null;
+  learnedModelPath?: string | null;
 }): Promise<Awaited<ReturnType<typeof materializeSurveyStorylinePlanner>>> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const surveyReview = normalizeSurveyReviewState(manifest.survey_review);
+  const storylinePlanner = normalizeStorylinePlannerState(manifest.storyline_planner);
   const result = await materializeSurveyStorylinePlanner({
     projectRoot: params.projectRoot,
     topic: params.topic ?? surveyReview.topic,
-    configuredMode: params.configuredMode ?? "reviewer_judged",
+    configuredMode:
+      params.configuredMode ??
+      (storylinePlanner.configuredMode as
+        | "heuristic"
+        | "reviewer_judged"
+        | "learned_shadow"
+        | "learned_primary"
+        | null) ??
+      "reviewer_judged",
+    learnedModelPath: params.learnedModelPath ?? storylinePlanner.learnedModelPath,
   });
   manifest.storyline_planner = serializeStorylinePlannerState(result.state);
   await saveManifest(params.projectRoot, manifest);
