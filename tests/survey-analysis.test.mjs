@@ -119,6 +119,24 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
       { canonical_id: "paper:2", title: "Reasoning Agents on GraphArena" },
     ],
   });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "paper:1",
+        title: "Graph Pretraining for SurveyBench",
+        year: 2025,
+        venue: "NeurIPS",
+        citation_count: 42,
+      },
+      {
+        canonical_id: "paper:2",
+        title: "Reasoning Agents on GraphArena",
+        year: 2024,
+        venue: "ICLR",
+        citation_count: 31,
+      },
+    ],
+  });
   await writeJson(path.join(projectRoot, "researcher", "EXCLUDED_PAPERS.json"), {
     backgroundPapers: [{ title: "Open World Object Detection: A Survey" }],
   });
@@ -181,6 +199,10 @@ test("materializeSurveyAnalysis writes comparability and traceability audits for
   assert.equal(topTierBridge.roleCoverage.paperRoleCounts.strong_baseline, 1);
   assert.equal(topTierBridge.benchmarkHints.selectedBenchmarkFamily, "SurveyBench");
   assert.equal(topTierBridge.contracts.benchmarkProtocol.status, "partial");
+  assert.equal(topTierBridge.contracts.venueCompetition.objectionCount > 0, true);
+  await fs.access(
+    path.join(projectRoot, "researcher", "VENUE_COMPETITOR_OBJECTIONS.json")
+  );
 });
 
 test("materializeSurveyAnalysis flags unsupported synthesis claims when traceability is weak", async (t) => {

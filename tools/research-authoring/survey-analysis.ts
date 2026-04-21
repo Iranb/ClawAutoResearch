@@ -398,6 +398,8 @@ export async function materializeSurveyAnalysis(params: {
       venueCompetition: {
         status: venueCompetition.status,
         competitorSlatePath: venueCompetition.competitorSlatePath,
+        objectionMapPath: venueCompetition.objectionMapPath,
+        objectionCount: venueCompetition.objectionCount,
         acceptanceRiskStatus: venueCompetition.acceptanceRiskStatus,
         pendingReason: venueCompetition.pendingReason,
       },
@@ -502,6 +504,7 @@ export async function materializeSurveyAnalysis(params: {
     roleCoverage,
     benchmarkProtocolStatus: nextBenchmarkProtocol.status,
     venueCompetitionStatus: venueCompetition.status,
+    venueCompetitionObjectionCount: venueCompetition.objectionCount,
     backgroundAnchorCount: backgroundAnchors.length,
     blockingIssues,
     warnings,

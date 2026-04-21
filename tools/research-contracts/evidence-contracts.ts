@@ -56,6 +56,8 @@ export type VenueCompetitionState = VersionedEvidenceContract & {
   status: string;
   targetVenues: string[];
   competitorSlatePath: string | null;
+  objectionMapPath: string | null;
+  objectionCount: number;
   acceptanceRiskStatus: string | null;
   graphContextStatus: string | null;
   pendingReason: string | null;
@@ -188,6 +190,11 @@ export function normalizeVenueCompetitionState(value: unknown): VenueCompetition
     competitorSlatePath:
       pickString(record, ["competitorSlatePath", "competitor_slate_path"]) ??
       "researcher/VENUE_COMPETITION.json",
+    objectionMapPath:
+      pickString(record, ["objectionMapPath", "objection_map_path"]) ??
+      "researcher/VENUE_COMPETITOR_OBJECTIONS.json",
+    objectionCount:
+      pickNumber(record, ["objectionCount", "objection_count"]) ?? 0,
     acceptanceRiskStatus:
       pickString(record, ["acceptanceRiskStatus", "acceptance_risk_status"]) ?? null,
     graphContextStatus:
@@ -330,6 +337,8 @@ export function serializeVenueCompetitionState(
     status: state.status,
     target_venues: state.targetVenues,
     competitor_slate_path: state.competitorSlatePath,
+    objection_map_path: state.objectionMapPath,
+    objection_count: state.objectionCount,
     acceptance_risk_status: state.acceptanceRiskStatus,
     graph_context_status: state.graphContextStatus,
     pending_reason: state.pendingReason,

@@ -493,6 +493,7 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
     `Fair-compare rows available: ${surveyAnalysis.fairCompareRowCount}.`,
     `Benchmark contract status: ${surveyAnalysis.benchmarkProtocolStatus}.`,
     `Competitor contract status: ${surveyAnalysis.venueCompetitionStatus}.`,
+    `Competitor objections available: ${surveyAnalysis.venueCompetitionObjectionCount}.`,
     ...(surveyAnalysis.blockingIssues.length > 0
       ? surveyAnalysis.blockingIssues.slice(0, 3)
       : []),
