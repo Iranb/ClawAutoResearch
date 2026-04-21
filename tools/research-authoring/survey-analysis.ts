@@ -19,6 +19,7 @@ import {
 import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { materializeFairCompareMatrix } from "../research-evidence/fair-compare";
+import { materializeBenchmarkProtocolConvergence } from "../research-evidence/protocol-convergence";
 import { readWorkflowPaperSourceIndex } from "../paper-source-index";
 import {
   normalizeBenchmarkProtocolState,
@@ -642,6 +643,12 @@ export async function materializeSurveyAnalysis(params: {
           projectRoot: params.projectRoot,
         }).catch(() => normalizeVenueCompetitionState(manifest.venue_competition))
       : normalizeVenueCompetitionState(manifest.venue_competition);
+  const convergedBenchmarkProtocol =
+    benchmarkFamilies.length > 0 || primaryMetrics.length > 0
+      ? await materializeBenchmarkProtocolConvergence({
+          projectRoot: params.projectRoot,
+        }).catch(() => nextBenchmarkProtocol)
+      : nextBenchmarkProtocol;
   const opportunityScorecard =
     benchmarkFamilies.length > 0 || includedSources.length > 0
       ? await materializeOpportunityScorecard({
@@ -651,6 +658,8 @@ export async function materializeSurveyAnalysis(params: {
           verdict: null,
           competitorObjectionCount: 0,
           positioningStatus: null,
+          deltaPlanPath: null,
+          deltaPlannerStatus: null,
           graphContextStatus: null,
           pendingReason: null,
         }))
@@ -659,6 +668,8 @@ export async function materializeSurveyAnalysis(params: {
           verdict: null,
           competitorObjectionCount: 0,
           positioningStatus: null,
+          deltaPlanPath: null,
+          deltaPlannerStatus: null,
           graphContextStatus: null,
           pendingReason: null,
         };
@@ -797,10 +808,12 @@ export async function materializeSurveyAnalysis(params: {
     evidencePacketPath,
     contracts: {
       benchmarkProtocol: {
-        status: nextBenchmarkProtocol.status,
-        benchmarkFamily: nextBenchmarkProtocol.benchmarkFamily,
-        fairCompareStatus: nextBenchmarkProtocol.fairCompareStatus,
-        pendingReason: nextBenchmarkProtocol.pendingReason,
+        status: convergedBenchmarkProtocol.status,
+        benchmarkFamily: convergedBenchmarkProtocol.benchmarkFamily,
+        fairCompareStatus: convergedBenchmarkProtocol.fairCompareStatus,
+        convergenceStatus: convergedBenchmarkProtocol.convergenceStatus,
+        candidatePath: convergedBenchmarkProtocol.candidatePath,
+        pendingReason: convergedBenchmarkProtocol.pendingReason,
       },
       venueCompetition: {
         status: venueCompetition.status,
@@ -815,6 +828,8 @@ export async function materializeSurveyAnalysis(params: {
         verdict: opportunityScorecard.verdict,
         positioningStatus: opportunityScorecard.positioningStatus,
         competitorObjectionCount: opportunityScorecard.competitorObjectionCount,
+        deltaPlanPath: opportunityScorecard.deltaPlanPath,
+        deltaPlannerStatus: opportunityScorecard.deltaPlannerStatus,
         pendingReason: opportunityScorecard.pendingReason,
       },
     },
@@ -917,11 +932,13 @@ export async function materializeSurveyAnalysis(params: {
     topTierBridgePath,
     evidencePacketPath,
     roleCoverage,
-    benchmarkProtocolStatus: nextBenchmarkProtocol.status,
+    benchmarkProtocolStatus: convergedBenchmarkProtocol.status,
+    benchmarkProtocolConvergenceStatus: convergedBenchmarkProtocol.convergenceStatus,
     venueCompetitionStatus: venueCompetition.status,
     venueCompetitionObjectionCount: venueCompetition.objectionCount,
     opportunityScorecardStatus: opportunityScorecard.status,
     opportunityScorecardVerdict: opportunityScorecard.verdict,
+    opportunityDeltaPlannerStatus: opportunityScorecard.deltaPlannerStatus,
     backgroundAnchorCount: backgroundAnchors.length,
     blockingIssues,
     warnings,

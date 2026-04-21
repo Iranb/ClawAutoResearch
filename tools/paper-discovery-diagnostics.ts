@@ -13,6 +13,7 @@ import {
   summarizeSurveyScreening,
 } from "./survey-review-artifacts";
 import { scorePaperTopicRelevance } from "./research30/topic-relevance";
+import { scoreSemanticTopicRelevance } from "./research30/semantic-relevance";
 import { readPaperBodyText } from "./research30/paper-body-text";
 
 export type LiteratureCoverageVerdict = "thin" | "adequate" | "strong";
@@ -66,6 +67,8 @@ export type TopicRelevanceAuditEntry = {
   canonicalId: string | null;
   title: string | null;
   score: number;
+  lexicalScore: number;
+  semanticScore: number;
   status: "relevant" | "boundary" | "off_topic" | "insufficient_evidence";
   evidenceSource: "missing" | "title" | "title_abstract" | "full_text";
   matchedTokens: string[];
@@ -239,10 +242,17 @@ async function evaluateTopicRelevanceForEntries(params: {
         title: entry.title,
         bodyText: body.text,
       });
+      const semantic = scoreSemanticTopicRelevance({
+        topic,
+        title: entry.title,
+        bodyText: body.text,
+      });
+      const combinedScore = Math.max(relevance.score, semantic.rerankScore);
       const status: TopicRelevanceAuditEntry["status"] =
-        relevance.score >= 45
+        combinedScore >= 45 ||
+        (relevance.evidenceSource === "full_text" && semantic.rerankScore >= 40)
           ? "relevant"
-          : relevance.score >= 24
+          : combinedScore >= 24
             ? "boundary"
             : body.text || entry.sourcePath
               ? "off_topic"
@@ -250,7 +260,9 @@ async function evaluateTopicRelevanceForEntries(params: {
       return {
         canonicalId: entry.canonicalId,
         title: entry.title,
-        score: relevance.score,
+        score: combinedScore,
+        lexicalScore: relevance.score,
+        semanticScore: semantic.rerankScore,
         status,
         evidenceSource: relevance.evidenceSource,
         matchedTokens: relevance.matchedTokens,
@@ -295,7 +307,7 @@ async function evaluateTopicRelevanceForEntries(params: {
     "## Top Entries",
     ...audit.entries.slice(0, 20).map(
       (entry) =>
-        `- ${entry.title ?? entry.canonicalId ?? "unknown"} | status=${entry.status} | score=${entry.score} | evidence=${entry.evidenceSource} | matched=${entry.matchedTokens.join(", ") || "none"}`
+        `- ${entry.title ?? entry.canonicalId ?? "unknown"} | status=${entry.status} | score=${entry.score} | lexical=${entry.lexicalScore} | semantic=${entry.semanticScore.toFixed(1)} | evidence=${entry.evidenceSource} | matched=${entry.matchedTokens.join(", ") || "none"}`
     ),
     "",
   ].join("\n");

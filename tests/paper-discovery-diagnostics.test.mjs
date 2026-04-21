@@ -188,3 +188,57 @@ test("topic relevance audit can rescue a paper with a generic title when markdow
   assert.equal(topicAudit.entries[0].evidenceSource, "full_text");
   assert.equal(topicAudit.entries[0].status, "relevant");
 });
+
+test("semantic reranker rescues synonym-heavy body text when lexical overlap is weak", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-semantic-relevance-")
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-gcd",
+    survey_review: {
+      topic: "Generalized Category Discovery",
+    },
+  });
+  const markdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "md",
+    "semantic-body.md"
+  );
+  await fs.mkdir(path.dirname(markdownPath), { recursive: true });
+  await fs.writeFile(
+    markdownPath,
+    [
+      "# A Practical Recipe",
+      "",
+      "We study open-world recognition with unseen class clustering under a shared protocol.",
+      "The method targets novel label grouping and class discovery without relying on known taxonomy size.",
+    ].join("\n"),
+    "utf8"
+  );
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2604.00001",
+        title: "A Practical Recipe",
+        year: 2026,
+        source_kind: "markdown",
+        source_path: markdownPath,
+        source_provider: "hf",
+        resolution_status: "resolved_markdown",
+      },
+    ],
+  });
+
+  await auditLiteratureCoverage({ projectRoot });
+  const topicAudit = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "TOPIC_RELEVANCE_AUDIT.json"), "utf8")
+  );
+
+  assert.equal(topicAudit.entries[0].lexicalScore < topicAudit.entries[0].score, true);
+  assert.equal(topicAudit.entries[0].semanticScore > topicAudit.entries[0].lexicalScore, true);
+  assert.equal(topicAudit.entries[0].status, "relevant");
+});
