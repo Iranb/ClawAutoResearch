@@ -134,6 +134,8 @@ export type ProjectDetailSummary = {
   evidenceBoard: {
     benchmarkProtocolStatus: string | null;
     benchmarkProtocolLocked: boolean;
+    benchmarkProtocolFairCompareStatus: string | null;
+    benchmarkProtocolAllowedDeviationStatus: string | null;
     statisticalEvidenceStatus: string | null;
     statisticalEvidenceClaimStrength: string | null;
     venueCompetitionStatus: string | null;
@@ -329,6 +331,10 @@ export async function readProjectDetailSummary(params: {
     evidenceBoard: {
       benchmarkProtocolStatus: dashboardSummary.evidenceBoard.benchmarkProtocol.status,
       benchmarkProtocolLocked: dashboardSummary.evidenceBoard.benchmarkProtocol.locked,
+      benchmarkProtocolFairCompareStatus:
+        dashboardSummary.evidenceBoard.benchmarkProtocol.fairCompareStatus,
+      benchmarkProtocolAllowedDeviationStatus:
+        dashboardSummary.evidenceBoard.benchmarkProtocol.allowedDeviationStatus,
       statisticalEvidenceStatus: dashboardSummary.evidenceBoard.statisticalEvidence.status,
       statisticalEvidenceClaimStrength:
         dashboardSummary.evidenceBoard.statisticalEvidence.claimStrengthStatus,

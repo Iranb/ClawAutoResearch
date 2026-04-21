@@ -79,7 +79,10 @@ export async function verifyWorkflowTaskCompletion(params: {
     case "benchmark_protocol":
       return benchmarkProtocol.status !== "missing" &&
         benchmarkProtocol.locked &&
-        benchmarkProtocol.driftStatus !== "fail"
+        benchmarkProtocol.driftStatus !== "fail" &&
+        benchmarkProtocol.fairCompareStatus !== "missing" &&
+        benchmarkProtocol.fairCompareStatus !== "fail" &&
+        benchmarkProtocol.allowedDeviationStatus !== "blocked"
         ? { verified: true, reason: null }
         : {
             verified: false,

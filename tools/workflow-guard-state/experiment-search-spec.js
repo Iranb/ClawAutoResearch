@@ -32,6 +32,25 @@ export function normalizeExperimentSearchSpec(value) {
     const graphMemoryBasis = asRecord(record.graphMemoryBasis ?? record.graph_memory_basis) ?? {};
     const primaryMetricContract = asRecord(record.primaryMetricContract ?? record.primary_metric_contract) ?? {};
     const baselineFairnessContract = asRecord(record.baselineFairnessContract ?? record.baseline_fairness_contract) ?? {};
+    const protocolLockContract = asRecord(record.protocolLockContract ?? record.protocol_lock_contract) ?? {};
+    const protocolLockFairnessChecks = asRecord(protocolLockContract.fairnessChecks ?? protocolLockContract.fairness_checks) ?? {};
+    const allowedDeviations = Array.isArray(protocolLockContract.allowedDeviations ??
+        protocolLockContract.allowed_deviations)
+        ? (protocolLockContract.allowedDeviations ??
+            protocolLockContract.allowed_deviations)
+            .map((entry) => asRecord(entry))
+            .filter((entry) => Boolean(entry))
+            .map((entry) => ({
+            deviationId: pickString(entry, ["deviationId", "deviation_id"]),
+            scope: pickString(entry, ["scope"]),
+            rationale: pickString(entry, ["rationale"]),
+            allowedInMainResults: pickBoolean(entry, [
+                "allowedInMainResults",
+                "allowed_in_main_results",
+            ]) ?? false,
+            label: pickString(entry, ["label"]),
+        }))
+        : [];
     const requiredValidationSteps = Array.isArray(record.requiredValidationSteps ?? record.required_validation_steps)
         ? (record.requiredValidationSteps ??
             record.required_validation_steps)
@@ -195,6 +214,61 @@ export function normalizeExperimentSearchSpec(value) {
                 "lockedEvaluationHarness",
                 "locked_evaluation_harness",
             ]) ?? true,
+        },
+        protocolLockContract: {
+            benchmarkFamily: pickString(protocolLockContract, [
+                "benchmarkFamily",
+                "benchmark_family",
+            ]),
+            canonicalDataset: pickString(protocolLockContract, [
+                "canonicalDataset",
+                "canonical_dataset",
+            ]),
+            splitDescriptor: pickString(protocolLockContract, [
+                "splitDescriptor",
+                "split_descriptor",
+            ]),
+            splitSource: pickString(protocolLockContract, [
+                "splitSource",
+                "split_source",
+            ]),
+            splitChecksum: pickString(protocolLockContract, [
+                "splitChecksum",
+                "split_checksum",
+            ]),
+            evaluationHarness: pickString(protocolLockContract, [
+                "evaluationHarness",
+                "evaluation_harness",
+            ]),
+            officialEvalRecipe: pickString(protocolLockContract, [
+                "officialEvalRecipe",
+                "official_eval_recipe",
+            ]),
+            allowedDeviations,
+            fairCompareNotes: asStringArray(protocolLockContract.fairCompareNotes ??
+                protocolLockContract.fair_compare_notes),
+            fairnessChecks: {
+                sameBackbone: pickString(protocolLockFairnessChecks, [
+                    "sameBackbone",
+                    "same_backbone",
+                ]),
+                samePretraining: pickString(protocolLockFairnessChecks, [
+                    "samePretraining",
+                    "same_pretraining",
+                ]),
+                sameSplit: pickString(protocolLockFairnessChecks, [
+                    "sameSplit",
+                    "same_split",
+                ]),
+                sameEvaluationHarness: pickString(protocolLockFairnessChecks, [
+                    "sameEvaluationHarness",
+                    "same_evaluation_harness",
+                ]),
+                baselineReferenceMode: pickString(protocolLockFairnessChecks, [
+                    "baselineReferenceMode",
+                    "baseline_reference_mode",
+                ]),
+            },
         },
         requiredValidationSteps,
         innovationInvalidityCriteria: asRecord(record.innovationInvalidityCriteria ??

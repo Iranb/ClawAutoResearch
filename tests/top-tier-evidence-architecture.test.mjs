@@ -69,13 +69,36 @@ async function setupProject() {
     search_mode: "gcd_fine_grained",
     primary_metric_contract: {
       metric_name: "h_score",
-      direction: "maximize",
-      primary_evidence: ["researcher/artifacts/results/metrics.json"],
+      direction: "higher_is_better",
+      primary_evidence: [
+        "Use the ProtoGCD validation split, checkpoint selection, and H-score evaluation unchanged.",
+      ],
     },
     baseline_fairness_contract: {
       locked_dataset_protocol: true,
       locked_metric_protocol: true,
       locked_evaluation_harness: true,
+    },
+    protocol_lock_contract: {
+      benchmark_family: "ProtoGCD-CIFAR100",
+      canonical_dataset: "CIFAR-100",
+      split_descriptor: "ProtoGCD baseline-a validation split",
+      split_source: "researcher/splits/protogcd-baseline-a.json",
+      split_checksum: "sha256:proto-split-demo",
+      evaluation_harness: "protogcd-hscore-v1",
+      official_eval_recipe:
+        "Use the ProtoGCD validation split, checkpoint selection, and H-score evaluation unchanged.",
+      fair_compare_notes: [
+        "Main table uses the same ViT-B/16 backbone as the reproduced SimGCD baseline.",
+        "All headline comparisons keep the same validation split and evaluation harness.",
+      ],
+      fairness_checks: {
+        same_backbone: "pass",
+        same_pretraining: "pass",
+        same_split: "pass",
+        same_evaluation_harness: "pass",
+        baseline_reference_mode: "reproduced",
+      },
     },
   });
   await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
@@ -223,6 +246,9 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   const audit = await materializeFinalConsistencyAudit({ projectRoot });
 
   assert.equal(benchmark.locked, true);
+  assert.equal(benchmark.splitDescriptor, "ProtoGCD baseline-a validation split");
+  assert.equal(benchmark.fairCompareStatus, "pass");
+  assert.equal(benchmark.allowedDeviationStatus, "none");
   assert.equal(statistics.claimStrengthStatus, "strong");
   assert.equal(ablations.sufficiencyStatus, "sufficient");
   assert.equal(venue.status, "ready");
@@ -237,12 +263,14 @@ test("top-tier evidence architecture materializers produce durable artifacts and
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
   assert.equal(manifest.benchmark_protocol.locked, true);
+  assert.equal(manifest.benchmark_protocol.fair_compare_status, "pass");
   assert.equal(manifest.statistical_evidence.claim_strength_status, "strong");
   assert.equal(manifest.reproducibility_pack.status, "ready");
   assert.equal(manifest.camera_ready_evidence.status, "ready");
 
   await fs.access(path.join(projectRoot, "researcher", "BENCHMARK_REGISTRY.json"));
   await fs.access(path.join(projectRoot, "researcher", "PROTOCOL_LOCK.json"));
+  await fs.access(path.join(projectRoot, "researcher", "BASELINE_FAIRNESS_REPORT.json"));
   await fs.access(path.join(projectRoot, "analyzer", "STATISTICAL_EVIDENCE_SUMMARY.md"));
   await fs.access(path.join(projectRoot, "researcher", "PAPER_IDENTITY_REGISTRY.json"));
   await fs.access(path.join(projectRoot, "academic_writer", "FIGURE_REGISTRY.json"));

@@ -283,6 +283,21 @@ export async function collectExperimentStageMissingSignals(
         "PROJECT_MANIFEST.json.benchmark_protocol.drift_status must not be fail before top-tier ANALYZE handoff"
       );
     }
+    if (benchmarkProtocol.fairCompareStatus === "missing") {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.fair_compare_status must not be missing before top-tier ANALYZE handoff"
+      );
+    }
+    if (benchmarkProtocol.fairCompareStatus === "fail") {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.fair_compare_status must not be fail before top-tier ANALYZE handoff"
+      );
+    }
+    if (benchmarkProtocol.allowedDeviationStatus === "blocked") {
+      missing.push(
+        "PROJECT_MANIFEST.json.benchmark_protocol.allowed_deviation_status must not be blocked before top-tier ANALYZE handoff"
+      );
+    }
     if (statisticalEvidence.status === "missing") {
       missing.push(
         "PROJECT_MANIFEST.json.statistical_evidence.status must not be missing when opportunity_scorecard.verdict = worth_top_tier_bet"

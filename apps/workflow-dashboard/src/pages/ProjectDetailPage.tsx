@@ -187,6 +187,8 @@ export function ProjectDetailPage() {
   const summaryEvidenceBoard = summary?.evidenceBoard ?? {
     benchmarkProtocolStatus: null,
     benchmarkProtocolLocked: false,
+    benchmarkProtocolFairCompareStatus: null,
+    benchmarkProtocolAllowedDeviationStatus: null,
     statisticalEvidenceStatus: null,
     statisticalEvidenceClaimStrength: null,
     venueCompetitionStatus: null,
@@ -418,7 +420,19 @@ export function ProjectDetailPage() {
                     <p className="detail-card__value">
                       {formatEvidenceLine(
                         summaryEvidenceBoard.benchmarkProtocolStatus,
-                        summaryEvidenceBoard.benchmarkProtocolLocked ? "locked" : "unlocked",
+                        [
+                          summaryEvidenceBoard.benchmarkProtocolLocked
+                            ? "locked"
+                            : "unlocked",
+                          summaryEvidenceBoard.benchmarkProtocolFairCompareStatus
+                            ? `fair=${summaryEvidenceBoard.benchmarkProtocolFairCompareStatus}`
+                            : null,
+                          summaryEvidenceBoard.benchmarkProtocolAllowedDeviationStatus
+                            ? `deviations=${summaryEvidenceBoard.benchmarkProtocolAllowedDeviationStatus}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · "),
                       )}
                     </p>
                   </article>
