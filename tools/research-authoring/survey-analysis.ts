@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import {
   materializeSurveyReviewDiagnostics,
 } from "../survey-review-diagnostics";
@@ -18,6 +19,7 @@ import {
 import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { materializeFairCompareMatrix } from "../research-evidence/fair-compare";
+import { readWorkflowPaperSourceIndex } from "../paper-source-index";
 import {
   normalizeBenchmarkProtocolState,
   normalizeVenueCompetitionState,
@@ -36,6 +38,8 @@ export const DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH =
   "researcher/SURVEY_TRACEABILITY_AUDIT.json";
 export const DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH =
   "researcher/SURVEY_TOP_TIER_BRIDGE.json";
+export const DEFAULT_SURVEY_EVIDENCE_PACKET_PATH =
+  "researcher/SURVEY_EVIDENCE_PACKET.json";
 
 function extractMatrixMethods(matrixText: string): string[] {
   const methods = new Set<string>();
@@ -118,12 +122,245 @@ function sortedCountKeys(counts: Record<string, number>): string[] {
     .map(([key]) => key);
 }
 
+function classifyScreeningReasonType(params: {
+  decision: string | null;
+  reason: string | null;
+  paperRoles: string[];
+  evidenceRoles: string[];
+}): string {
+  const reason = normalizeText(params.reason);
+  const roles = [...params.paperRoles, ...params.evidenceRoles].map((value) => value.toLowerCase());
+  if (roles.includes("strong_baseline") || roles.includes("closest_prior")) {
+    return "core_baseline";
+  }
+  if (roles.includes("benchmark_anchor")) {
+    return "benchmark_anchor";
+  }
+  if (roles.includes("contradiction_anchor")) {
+    return "contradiction_anchor";
+  }
+  if (params.decision === "background") {
+    return "scope_boundary";
+  }
+  if (/task mismatch|different task|adjacent task/.test(reason)) {
+    return "task_mismatch";
+  }
+  if (/setting mismatch|protocol mismatch|different setting/.test(reason)) {
+    return "setting_mismatch";
+  }
+  if (/metric mismatch|different metric/.test(reason)) {
+    return "metric_mismatch";
+  }
+  if (/benchmark mismatch|non comparable|incomparable/.test(reason)) {
+    return "benchmark_mismatch";
+  }
+  if (/maturity|preprint|insufficient evidence/.test(reason)) {
+    return "maturity_limit";
+  }
+  if (/inspiration|background|boundary/.test(reason)) {
+    return "scope_boundary";
+  }
+  return params.decision === "exclude" ? "generic_exclusion" : "generic_support";
+}
+
+function classifyGapType(text: string): string {
+  const normalized = normalizeText(text);
+  if (/benchmark|metric|protocol|fair/.test(normalized)) {
+    return "benchmark_alignment";
+  }
+  if (/contradiction|conflict|disagree/.test(normalized)) {
+    return "contradiction";
+  }
+  if (/blind spot|coverage|missing/.test(normalized)) {
+    return "coverage_blind_spot";
+  }
+  if (/shift|domain|robust/.test(normalized)) {
+    return "robustness_or_transfer";
+  }
+  if (/scale|latency|cost|efficien/.test(normalized)) {
+    return "scalability";
+  }
+  return "open_problem";
+}
+
+function classifyGapSeverity(text: string): "high" | "medium" | "low" {
+  const normalized = normalizeText(text);
+  if (/benchmark|protocol|contradiction|critical|core|main/.test(normalized)) {
+    return "high";
+  }
+  if (/blind spot|coverage|robust|transfer|generalization/.test(normalized)) {
+    return "medium";
+  }
+  return "low";
+}
+
+function extractOpenProblemLines(text: string | null | undefined): string[] {
+  if (!text) {
+    return [];
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line))
+    .map((line) => line.replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, "").trim())
+    .filter(Boolean);
+}
+
+function collectFieldValues(entry: Record<string, unknown>, keys: string[]): string[] {
+  const values: string[] = [];
+  for (const key of keys) {
+    const raw = entry[key];
+    if (typeof raw === "string" && raw.trim()) {
+      values.push(raw.trim());
+      continue;
+    }
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === "string" && item.trim()) {
+          values.push(item.trim());
+        }
+      }
+    }
+  }
+  return [...new Set(values)];
+}
+
+function buildScreeningPacket(params: {
+  included: Record<string, unknown>[];
+  excluded: Record<string, unknown>[];
+  background: Record<string, unknown>[];
+  decisions: Record<string, unknown>[];
+}): Array<{
+  canonicalId: string | null;
+  title: string | null;
+  decision: string;
+  reason: string | null;
+  reasonType: string;
+  paperRoles: string[];
+  evidenceRoles: string[];
+  taskFamilies: string[];
+  settingFamilies: string[];
+  benchmarkFamilies: string[];
+  metricFamilies: string[];
+  exclusionReasonTypes: string[];
+}> {
+  const merged = new Map<
+    string,
+    {
+      canonicalId: string | null;
+      title: string | null;
+      decision: string;
+      reason: string | null;
+      paperRoles: Set<string>;
+      evidenceRoles: Set<string>;
+      taskFamilies: Set<string>;
+      settingFamilies: Set<string>;
+      benchmarkFamilies: Set<string>;
+      metricFamilies: Set<string>;
+      exclusionReasonTypes: Set<string>;
+    }
+  >();
+  const allEntries = [
+    ...params.decisions.map((entry) => ({ source: "decision" as const, entry })),
+    ...params.included.map((entry) => ({ source: "included" as const, entry })),
+    ...params.excluded.map((entry) => ({ source: "excluded" as const, entry })),
+    ...params.background.map((entry) => ({ source: "background" as const, entry })),
+  ];
+  for (const { source, entry } of allEntries) {
+    const canonicalId =
+      (typeof entry.canonical_id === "string" && entry.canonical_id.trim()) ||
+      (typeof entry.canonicalId === "string" && entry.canonicalId.trim()) ||
+      null;
+    const title =
+      (typeof entry.title === "string" && entry.title.trim()) ||
+      (typeof entry.paper_title === "string" && entry.paper_title.trim()) ||
+      (typeof entry.paperTitle === "string" && entry.paperTitle.trim()) ||
+      (typeof entry.name === "string" && entry.name.trim()) ||
+      null;
+    const identity = canonicalId ?? normalizeText(title) ?? `${source}-${merged.size + 1}`;
+    if (!merged.has(identity)) {
+      merged.set(identity, {
+        canonicalId,
+        title,
+        decision:
+          source === "included"
+            ? "include"
+            : source === "background"
+              ? "background"
+              : source === "excluded"
+                ? "exclude"
+                : (typeof entry.decision === "string" && entry.decision.trim().toLowerCase()) ||
+                  (typeof entry.status === "string" && entry.status.trim().toLowerCase()) ||
+                  "unknown",
+        reason:
+          (typeof entry.reason === "string" && entry.reason.trim()) ||
+          (typeof entry.decision_reason === "string" && entry.decision_reason.trim()) ||
+          (typeof entry.decisionReason === "string" && entry.decisionReason.trim()) ||
+          null,
+        paperRoles: new Set<string>(),
+        evidenceRoles: new Set<string>(),
+        taskFamilies: new Set<string>(),
+        settingFamilies: new Set<string>(),
+        benchmarkFamilies: new Set<string>(),
+        metricFamilies: new Set<string>(),
+        exclusionReasonTypes: new Set<string>(),
+      });
+    }
+    const target = merged.get(identity)!;
+    for (const value of collectFieldValues(entry, ["paper_role", "paperRole"])) {
+      target.paperRoles.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["evidence_role", "evidenceRole"])) {
+      target.evidenceRoles.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["task_family", "taskFamily"])) {
+      target.taskFamilies.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["setting_family", "settingFamily"])) {
+      target.settingFamilies.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["benchmark_family", "benchmarkFamily"])) {
+      target.benchmarkFamilies.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["metric_family", "metricFamily"])) {
+      target.metricFamilies.add(value);
+    }
+    for (const value of collectFieldValues(entry, ["exclusion_reason_type", "exclusionReasonType"])) {
+      target.exclusionReasonTypes.add(value);
+    }
+  }
+  return [...merged.values()].map((entry) => {
+    const paperRoles = [...entry.paperRoles];
+    const evidenceRoles = [...entry.evidenceRoles];
+    return {
+      canonicalId: entry.canonicalId,
+      title: entry.title,
+      decision: entry.decision,
+      reason: entry.reason,
+      reasonType: classifyScreeningReasonType({
+        decision: entry.decision,
+        reason: entry.reason,
+        paperRoles,
+        evidenceRoles,
+      }),
+      paperRoles,
+      evidenceRoles,
+      taskFamilies: [...entry.taskFamilies],
+      settingFamilies: [...entry.settingFamilies],
+      benchmarkFamilies: [...entry.benchmarkFamilies],
+      metricFamilies: [...entry.metricFamilies],
+      exclusionReasonTypes: [...entry.exclusionReasonTypes],
+    };
+  });
+}
+
 export async function materializeSurveyAnalysis(params: {
   projectRoot: string;
   outputReportPath?: string;
   outputIndexPath?: string;
   traceabilityAuditPath?: string;
   topTierBridgePath?: string;
+  evidencePacketPath?: string;
 }) {
   const manifest = await readProjectManifest(params.projectRoot);
   const surveyState = normalizeSurveyReviewState(manifest.survey_review);
@@ -135,13 +372,16 @@ export async function materializeSurveyAnalysis(params: {
     briefText,
     reviewText,
     matrixText,
+    gapSynthesisText,
     includedJsonValue,
     excludedJsonValue,
     screeningDecisionsValue,
+    paperSourceIndex,
   ] = await Promise.all([
     readProjectText(params.projectRoot, surveyState.surveyBriefPath),
     readProjectText(params.projectRoot, surveyState.literatureReviewPath),
     readProjectText(params.projectRoot, surveyState.sotaMatrixPath),
+    readProjectText(params.projectRoot, surveyState.gapSynthesisPath),
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(params.projectRoot, surveyState.includedPapersPath) ?? ""
     ),
@@ -151,7 +391,11 @@ export async function materializeSurveyAnalysis(params: {
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(params.projectRoot, surveyState.screeningDecisionsPath) ?? ""
     ),
+    readWorkflowPaperSourceIndex({
+      projectRoot: params.projectRoot,
+    }).catch(() => ({ entries: [], sourceIndexPath: "researcher/PAPER_SOURCE_INDEX.json" })),
   ]);
+  const sourceEntries = paperSourceIndex.entries;
   const methods = extractMatrixMethods(matrixText ?? "");
   const fairCompareRows = await materializeFairCompareMatrix({
     projectRoot: params.projectRoot,
@@ -167,6 +411,30 @@ export async function materializeSurveyAnalysis(params: {
     screeningDecisions: screeningDecisionsValue,
     includedPapers: includedJsonValue,
     excludedPapers: excludedJsonValue,
+  });
+  const includedEntries = collectSurveyEntries(includedJsonValue, [
+    "papers",
+    "included",
+    "includedPapers",
+    "items",
+  ]);
+  const excludedEntries = collectSurveyEntries(excludedJsonValue, [
+    "excludedPapers",
+    "excluded",
+    "papers",
+    "items",
+  ]);
+  const backgroundEntries = collectSurveyEntries(excludedJsonValue, ["backgroundPapers"]);
+  const screeningDecisionEntries = collectSurveyEntries(screeningDecisionsValue, [
+    "decisions",
+    "papers",
+    "items",
+  ]);
+  const screeningPacket = buildScreeningPacket({
+    included: includedEntries,
+    excluded: excludedEntries,
+    background: backgroundEntries,
+    decisions: screeningDecisionEntries,
   });
   const claims = `${briefText ?? ""}\n${reviewText ?? ""}`
     .split(/\r?\n/)
@@ -293,6 +561,7 @@ export async function materializeSurveyAnalysis(params: {
   const currentBenchmarkProtocol = normalizeBenchmarkProtocolState(
     manifest.benchmark_protocol
   );
+  const currentYear = new Date().getUTCFullYear();
   const benchmarkHintsPath = "researcher/SURVEY_BENCHMARK_HINTS.json";
   const protocolHintsPath = "researcher/SURVEY_PROTOCOL_HINTS.json";
   const fairnessHintsPath = "researcher/SURVEY_BASELINE_FAIRNESS.json";
@@ -393,6 +662,120 @@ export async function materializeSurveyAnalysis(params: {
           graphContextStatus: null,
           pendingReason: null,
         };
+  const coverageAxes = {
+    seminalCoverage: {
+      count: sourceEntries.filter(
+        (entry) =>
+          screeningPacket.some(
+            (screened) =>
+              screened.decision === "include" &&
+              screened.canonicalId &&
+              screened.canonicalId === entry.canonicalId
+          ) &&
+          entry.year != null &&
+          entry.year <= currentYear - 3
+      ).length,
+    },
+    recentCompetitorCoverage: {
+      count: sourceEntries.filter(
+        (entry) =>
+          screeningPacket.some(
+            (screened) =>
+              screened.decision === "include" &&
+              screened.canonicalId &&
+              screened.canonicalId === entry.canonicalId
+          ) &&
+          entry.year != null &&
+          entry.year >= currentYear - 1
+      ).length,
+    },
+    contradictionCoverage: {
+      count: screeningPacket.filter(
+        (entry) =>
+          entry.reasonType === "contradiction_anchor" ||
+          entry.evidenceRoles.some((value) => value.toLowerCase() === "contradiction_anchor")
+      ).length,
+    },
+    benchmarkFamilyCoverage: roleCoverage.benchmarkFamilyCounts,
+    venueFamilyCoverage: sourceEntries
+      .filter((entry) =>
+        screeningPacket.some(
+          (screened) =>
+            screened.decision === "include" &&
+            screened.canonicalId &&
+            screened.canonicalId === entry.canonicalId
+        )
+      )
+      .reduce<Record<string, number>>((counts, entry) => {
+        const key = entry.venueFamily ?? entry.venue ?? "unknown";
+        counts[key] = (counts[key] ?? 0) + 1;
+        return counts;
+      }, {}),
+  };
+  const gapEntries = extractOpenProblemLines(gapSynthesisText ?? undefined).map((text, index) => {
+    const supportingCanonicalIds = includedSources
+      .filter((entry) => {
+        const normalizedClaim = normalizeText(text);
+        return (
+          (entry.normalizedTitle && normalizedClaim.includes(entry.normalizedTitle)) ||
+          tokenize(text).filter((token) => entry.normalizedTitle.includes(token)).length >= 3
+        );
+      })
+      .map((entry) => entry.canonicalId)
+      .filter((value): value is string => Boolean(value));
+    return {
+      gapId: `gap-${index + 1}`,
+      text,
+      gapType: classifyGapType(text),
+      severity: classifyGapSeverity(text),
+      supportingCanonicalIds,
+      sourceArtifacts: ["researcher/GAP_SYNTHESIS.md", "researcher/SURVEY_BRIEF.md"],
+    };
+  });
+  const baselineSlate = screeningPacket.filter(
+    (entry) =>
+      entry.decision === "include" &&
+      (entry.paperRoles.some((value) =>
+        ["strong_baseline", "closest_prior", "benchmark_anchor"].includes(value.toLowerCase())
+      ) ||
+        entry.reasonType === "core_baseline" ||
+        entry.reasonType === "benchmark_anchor")
+  );
+  const contradictionAnchors = screeningPacket.filter(
+    (entry) =>
+      entry.reasonType === "contradiction_anchor" ||
+      entry.evidenceRoles.some((value) => value.toLowerCase() === "contradiction_anchor")
+  );
+  const ablationObligations = venueCompetition.objectionCount > 0
+    ? ((await readJsonIfExists<Record<string, unknown>>(
+        path.join(params.projectRoot, venueCompetition.objectionMapPath ?? "researcher/VENUE_COMPETITOR_OBJECTIONS.json")
+      ))?.objections as Array<Record<string, unknown>> | undefined ?? [])
+        .map((entry, index) => ({
+          obligationId: `obligation-${index + 1}`,
+          canonicalId:
+            (typeof entry.canonicalId === "string" && entry.canonicalId) || null,
+          reviewerObjection:
+            (typeof entry.reviewerObjection === "string" && entry.reviewerObjection) || null,
+          requiredEvidence: Array.isArray(entry.requiredEvidence)
+            ? entry.requiredEvidence.filter((value): value is string => typeof value === "string")
+            : [],
+        }))
+    : [];
+  const evidencePacketPath =
+    params.evidencePacketPath ?? DEFAULT_SURVEY_EVIDENCE_PACKET_PATH;
+  await writeProjectJson(params.projectRoot, evidencePacketPath, {
+    schemaVersion: 1,
+    generatedAt: nowIso(),
+    screening: {
+      entries: screeningPacket,
+      roleCoverage,
+    },
+    coverageAxes,
+    gaps: gapEntries,
+    baselineSlate,
+    contradictionAnchors,
+    ablationObligations,
+  });
   const topTierBridgePath =
     params.topTierBridgePath ?? DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH;
   const topTierBridgeReady =
@@ -411,6 +794,7 @@ export async function materializeSurveyAnalysis(params: {
       selectedPrimaryMetric:
         nextBenchmarkProtocol.primaryMetric ?? primaryMetrics[0] ?? null,
     },
+    evidencePacketPath,
     contracts: {
       benchmarkProtocol: {
         status: nextBenchmarkProtocol.status,
@@ -531,6 +915,7 @@ export async function materializeSurveyAnalysis(params: {
     traceabilityAuditPath:
       params.traceabilityAuditPath ?? DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
     topTierBridgePath,
+    evidencePacketPath,
     roleCoverage,
     benchmarkProtocolStatus: nextBenchmarkProtocol.status,
     venueCompetitionStatus: venueCompetition.status,
