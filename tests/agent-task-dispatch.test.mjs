@@ -453,6 +453,39 @@ test("dispatchWorkflowTaskToAgent waits for workflow mailbox acknowledgement whe
   assert.equal(result.attempts[0].acceptedByTranscript, false);
 });
 
+test("dispatchWorkflowTaskToAgent treats a started run as dispatched even before mailbox acknowledgement lands", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-mailbox-pending-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "run-mailbox-pending-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Continue the code stage.",
+    mailboxMessageId: "msg-pending-1",
+    waitTimeoutMs: 2000,
+    retryOnTimeout: true,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.acknowledgedByMailbox, false);
+  assert.equal(result.attempts[0].acceptedByMailbox, false);
+  assert.equal(result.attempts[0].error, null);
+});
+
 test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime is unavailable", async () => {
   const result = await dispatchWorkflowTaskToAgent({
     requesterSessionKey: "agent:researcher:discord:group:paper-lab",

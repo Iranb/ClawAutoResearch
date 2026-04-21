@@ -150,6 +150,7 @@ import {
   maybeBroadcastWorkflowStatusUpdate,
 } from "./stage-broadcast";
 import { handoffWorkflowTaskToAgent } from "./workflow-execution/delivery-adapter";
+import { inspectWorkflowLobsterReadiness } from "./lobster-handoff";
 import { ensureWorkflowDispatchMailboxMessage } from "./workflow-handoff-runtime";
 import {
   buildPapernexusWrapperBackgroundRunRequest,
@@ -2233,6 +2234,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           };
           await traceAction("started");
           if (projectRoot && ctx.sessionKey) {
+            const lobsterReadiness = await inspectWorkflowLobsterReadiness({
+              config: workflowPolicy.lobsterHandoff,
+              autoModeActive: workflowPolicy.autoMode !== "off",
+            }).catch(() => null);
             await upsertWorkflowAgentCapability({
               projectRoot,
               projectId: snapshot.projectId,
@@ -2244,6 +2249,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               canUseResearchWorkflow: true,
               canReceiveNativeDispatch: true,
               canRunExecPacket: true,
+              canUseLobster: lobsterReadiness?.status === "ready",
               confidence: "high",
             });
             await upsertWorkflowAgentSessionRegistryEntry({

@@ -1,6 +1,7 @@
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs/promises";
 
 import {
   dispatchWorkflowTaskToAgent,
@@ -53,6 +54,21 @@ export type WorkflowHandoffDispatchResult = WorkflowTaskDispatchResult & {
   backend: "native" | "lobster";
   lobsterStatus: "ok" | "needs_approval" | "cancelled" | "error" | null;
   fallbackReason: string | null;
+};
+
+export type WorkflowLobsterReadiness = {
+  enabledByConfig: boolean;
+  activeForMode: boolean;
+  binaryFound: boolean;
+  pipelineFound: boolean;
+  pipelinePath: string;
+  status:
+    | "ready"
+    | "config_disabled"
+    | "auto_mode_inactive"
+    | "binary_missing"
+    | "pipeline_missing";
+  reason: string | null;
 };
 
 type LobsterToolEnvelope = {
@@ -215,6 +231,127 @@ function resolveBundledPipelinePath(config: WorkflowLobsterHandoffConfig) {
     readString(config.pipelinePath) ??
     path.join(getPluginRoot(), "lobster", "workflows", "workflow-agent-dispatch.lobster")
   );
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findExecutableOnPath(command: string): Promise<string | null> {
+  const pathEnv = process.env.PATH ?? "";
+  const directories = pathEnv
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const extensions =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT")
+          .split(";")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : [""];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      if (await fileExists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+export async function inspectWorkflowLobsterReadiness(params: {
+  config: WorkflowLobsterHandoffConfig;
+  autoModeActive?: boolean;
+}): Promise<WorkflowLobsterReadiness> {
+  const enabledByConfig = params.config.enabled === true;
+  const activeForMode = shouldUseLobsterForWorkflowHandoff(params);
+  const pipelinePath = resolveBundledPipelinePath(params.config);
+  if (!enabledByConfig) {
+    return {
+      enabledByConfig,
+      activeForMode,
+      binaryFound: false,
+      pipelineFound: false,
+      pipelinePath,
+      status: "config_disabled",
+      reason: "lobster_config_disabled",
+    };
+  }
+  if (!activeForMode) {
+    return {
+      enabledByConfig,
+      activeForMode,
+      binaryFound: false,
+      pipelineFound: false,
+      pipelinePath,
+      status: "auto_mode_inactive",
+      reason: "lobster_auto_mode_inactive",
+    };
+  }
+  const [binaryPath, pipelineFound] = await Promise.all([
+    findExecutableOnPath("lobster"),
+    fileExists(pipelinePath),
+  ]);
+  if (!binaryPath) {
+    return {
+      enabledByConfig,
+      activeForMode,
+      binaryFound: false,
+      pipelineFound,
+      pipelinePath,
+      status: "binary_missing",
+      reason: "lobster_binary_missing",
+    };
+  }
+  if (!pipelineFound) {
+    return {
+      enabledByConfig,
+      activeForMode,
+      binaryFound: true,
+      pipelineFound: false,
+      pipelinePath,
+      status: "pipeline_missing",
+      reason: "lobster_pipeline_missing",
+    };
+  }
+  return {
+    enabledByConfig,
+    activeForMode,
+    binaryFound: true,
+    pipelineFound: true,
+    pipelinePath,
+    status: "ready",
+    reason: null,
+  };
+}
+
+export function classifyWorkflowLobsterFailureReason(
+  error: string | null | undefined
+): string | null {
+  const normalized = readString(error)?.toLowerCase() ?? "";
+  if (!normalized) {
+    return null;
+  }
+  if (/tool not available: lobster|unknown tool|not in allowlist|plugin.+lobster/i.test(normalized)) {
+    return "lobster_plugin_not_loaded";
+  }
+  if (/spawn lobster enoent|lobster not found|binary_missing/i.test(normalized)) {
+    return "lobster_binary_missing";
+  }
+  if (/pipeline_missing|workflow-agent-dispatch\.lobster/i.test(normalized)) {
+    return "lobster_pipeline_missing";
+  }
+  if (/tool execution failed|lobster failed|lobster_invalid_output/i.test(normalized)) {
+    return "lobster_tool_error";
+  }
+  return normalized;
 }
 
 function readGatewayToken() {
@@ -397,10 +534,11 @@ export async function handoffWorkflowTaskToAgent(
   );
   const requireMailboxAcknowledgement =
     params.requireMailboxAcknowledgement !== false;
-  const useLobster = shouldUseLobsterForWorkflowHandoff({
+  const lobsterReadiness = await inspectWorkflowLobsterReadiness({
     config: lobsterConfig,
     autoModeActive: params.autoModeActive,
   });
+  const useLobster = lobsterReadiness.status === "ready";
 
   const runNative = async (reason: string | null) =>
     buildFallbackResult(
@@ -448,7 +586,7 @@ export async function handoffWorkflowTaskToAgent(
     );
 
   if (!useLobster) {
-    return runNative(null);
+    return runNative(lobsterReadiness.reason);
   }
 
   if (!params.requesterSessionKey) {
@@ -515,7 +653,11 @@ export async function handoffWorkflowTaskToAgent(
       fallbackReason: null,
     };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason =
+      classifyWorkflowLobsterFailureReason(
+        error instanceof Error ? error.message : String(error)
+      ) ??
+      (error instanceof Error ? error.message : String(error));
     if (lobsterConfig.fallbackToNative) {
       params.logger?.warn?.("Lobster handoff failed; falling back to native dispatch.", {
         projectRoot: params.projectRoot,

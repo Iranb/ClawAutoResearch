@@ -371,21 +371,6 @@ async function runSingleDispatchAttempt(params: {
         timeoutMs: params.waitTimeoutMs,
       });
       if (waited.status === "ok") {
-        if (params.requireMailboxAcknowledgement === true && params.mailboxMessageId) {
-          return {
-            accepted: false,
-            attempt: {
-              strategy: params.strategy,
-              sessionKey: params.sessionKey,
-              runId: started.runId,
-              waitStatus: waited.status,
-              dispatched: false,
-              acceptedByMailbox: false,
-              acceptedByTranscript: false,
-              error: "workflow mailbox handoff was not acknowledged before the dispatch timeout",
-            },
-          };
-        }
         return {
           accepted: true,
           attempt: {
@@ -415,13 +400,10 @@ async function runSingleDispatchAttempt(params: {
             sessionKey: params.sessionKey,
             runId: started.runId,
             waitStatus: waited.status,
-            dispatched: accepted,
+            dispatched: true,
             acceptedByMailbox: false,
             acceptedByTranscript,
-            error:
-              accepted || acceptedByTranscript
-                ? null
-                : "agent dispatch timed out before the target transcript advanced",
+            error: null,
           },
         };
       }
@@ -440,21 +422,6 @@ async function runSingleDispatchAttempt(params: {
       };
     }
 
-    if (params.requireMailboxAcknowledgement === true && params.mailboxMessageId) {
-      return {
-        accepted: false,
-        attempt: {
-          strategy: params.strategy,
-          sessionKey: params.sessionKey,
-          runId: started.runId,
-          waitStatus: null,
-          dispatched: false,
-          acceptedByMailbox: false,
-          acceptedByTranscript: false,
-          error: "workflow mailbox handoff was not acknowledged before returning control",
-        },
-      };
-    }
     return {
       accepted: true,
       attempt: {
