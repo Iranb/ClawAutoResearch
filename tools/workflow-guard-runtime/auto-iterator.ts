@@ -235,6 +235,45 @@ function hasDurableCurrentStageEvidence(params: {
   }
   const manifest = params.manifest;
   switch (currentStage) {
+    case "code": {
+      if (previousStage !== "plan") {
+        return false;
+      }
+      const orchestration = asRecord(manifest.orchestration_state) ?? {};
+      const currentOwner = normalizeStage(
+        orchestration.current_owner ??
+          orchestration.currentOwner ??
+          manifest.owner_agent ??
+          manifest.ownerAgent
+      );
+      const nextTransitionCandidate = normalizeStage(
+        orchestration.next_transition_candidate ??
+          orchestration.nextTransitionCandidate
+      );
+      const currentMicroStage = normalizeStage(
+        manifest.current_micro_stage ?? manifest.currentMicroStage
+      );
+      const resumeCursor = normalizeStage(
+        pickString(orchestration, ["resumeCursor", "resume_cursor"])
+      );
+      return (
+        currentOwner === "coder" ||
+        nextTransitionCandidate === "code" ||
+        nextTransitionCandidate === "experiment" ||
+        [
+          "implementation_requested",
+          "bundles_implemented",
+          "implementation_ready",
+          "implementation_repair",
+        ].includes(currentMicroStage ?? "") ||
+        [
+          "implementation_requested",
+          "bundles_implemented",
+          "implementation_ready",
+          "implementation_repair",
+        ].includes(resumeCursor ?? "")
+      );
+    }
     case "idea": {
       if (!["graph_build", "frontier_mapping"].includes(previousStage)) {
         return false;
@@ -533,6 +572,7 @@ type AutoIteratorDeps = {
     trackRegistry: TrackRegistryLike | null;
     experimentLedger: ExperimentLedgerLike | null;
     currentStage: string | null;
+    includeOrchestrationValidation?: boolean;
   }) => Promise<string[]>;
   evaluateWorkflowAutoModeRisk: (params: {
     configuredMode: NonNullable<WorkflowGuardPolicy["autoMode"]>;
@@ -980,6 +1020,7 @@ export async function runWorkflowAutoIteratorImpl(
       trackRegistry,
       experimentLedger,
       currentStage: previousStage,
+      includeOrchestrationValidation: false,
     });
     if (previousMissing.length === 0) {
       break;

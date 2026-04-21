@@ -2853,6 +2853,8 @@ async function getMissingStageSignals(params) {
                 getOrchestrationStateValidationErrors,
                 loadTrackInnovationEvidence: loadTrackInnovationEvidenceFromHelper,
                 getCodeStageBundleMissingSignals,
+            }, {
+                includeOrchestrationValidation: params.includeOrchestrationValidation !== false,
             });
         case "code":
             return collectCodeStageMissingSignals({ projectRoot, manifest, trackRegistry, experimentLedger }, {

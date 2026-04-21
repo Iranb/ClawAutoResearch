@@ -275,7 +275,10 @@ export async function collectIdeaStageMissingSignals(
 
 export async function collectPlanStageMissingSignals(
   ctx: StageSignalsContext,
-  deps: IdeationStageDeps
+  deps: IdeationStageDeps,
+  options?: {
+    includeOrchestrationValidation?: boolean;
+  }
 ): Promise<string[]> {
   const missing: string[] = [];
   if (!(await deps.pathExists(path.join(ctx.projectRoot, "orchestrator", "PLAN.md")))) {
@@ -328,12 +331,14 @@ export async function collectPlanStageMissingSignals(
     }
   }
 
-  const orchestrationState = deps.normalizeOrchestrationState(
-    ctx.manifest?.orchestration_state
-  );
-  missing.push(
-    ...deps.getOrchestrationStateValidationErrors(orchestrationState, "plan")
-  );
+  if (options?.includeOrchestrationValidation !== false) {
+    const orchestrationState = deps.normalizeOrchestrationState(
+      ctx.manifest?.orchestration_state
+    );
+    missing.push(
+      ...deps.getOrchestrationStateValidationErrors(orchestrationState, "plan")
+    );
+  }
   const decompositionPath = path.join(ctx.projectRoot, "planner", "DECOMPOSITION_PACKET.json");
   if (await deps.pathExists(decompositionPath)) {
     const audit = auditDecompositionPacketObject(
