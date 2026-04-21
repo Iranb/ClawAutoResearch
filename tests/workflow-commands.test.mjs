@@ -24,6 +24,17 @@ async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-command-"));
 }
 
+async function makeProject(projectsRoot, projectId, stage = "setup") {
+  const projectRoot = path.join(projectsRoot, projectId);
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: projectId, current_stage: stage }, null, 2)}\n`,
+    "utf8"
+  );
+  return projectRoot;
+}
+
 function makeApi(overrides = {}) {
   return {
     config: {},
@@ -562,6 +573,7 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/project-init/);
   assert.match(result.text, /\/auto-research/);
   assert.match(result.text, /\/auto-review/);
+  assert.match(result.text, /\/bind-project/);
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
   assert.match(result.text, /\/clear-project-binding/);
@@ -957,6 +969,68 @@ test("clear-project-binding command removes the workflow project binding for the
   );
 });
 
+test("bind-project command binds the current channel to an existing workflow project", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = await makeProject(projectsRoot, "alpha", "code");
+  let captured = null;
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const bindProject = getCommand(
+    createResearchWorkflowCommands(api, {
+      resolveConversationBindingRecord() {
+        return {
+          targetSessionKey: "agent:researcher:discord:group:paper-lab",
+        };
+      },
+      async bindChannelProjectForWorkflow(params) {
+        captured = params;
+        return {
+          enabled: true,
+          storePath: "/tmp/channel-project-bindings.json",
+          channelKey: params.channelKey ?? null,
+          binding: {
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          },
+        };
+      },
+    }),
+    "bind-project"
+  );
+
+  const result = await bindProject.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/bind-project "alpha"',
+    args: '"alpha"',
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /Bound this channel to workflow project alpha\./);
+  assert.equal(captured.projectId, "alpha");
+  assert.equal(captured.projectRoot, projectRoot);
+  assert.equal(captured.messageChannel, "discord");
+  assert.equal(
+    captured.channelKey,
+    "binding:discord:default:channel:paper-lab"
+  );
+});
+
 test("clear-project-binding command rejects direct conversations", async () => {
   const api = makeApi();
   const clearBinding = getCommand(
@@ -979,6 +1053,30 @@ test("clear-project-binding command rejects direct conversations", async () => {
   });
 
   assert.match(result.text, /必须在要清理绑定的频道或群组会话里调用/);
+});
+
+test("bind-project command rejects direct conversations", async () => {
+  const api = makeApi();
+  const bindProject = getCommand(
+    createResearchWorkflowCommands(api),
+    "bind-project"
+  );
+
+  const result = await bindProject.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/bind-project "alpha"',
+    args: '"alpha"',
+    config: {},
+    from: "discord:user:12345",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /必须在要绑定的频道或群组会话里调用/);
 });
 
 test("literature-review command starts a project-bound background continuation on the bound researcher session", async () => {

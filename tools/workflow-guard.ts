@@ -1352,6 +1352,8 @@ export type PaperStoryState = {
   prewriteRejectionSimulationPath: string | null;
   contributionToStoryBridgePath: string | null;
   figureAnchorPlanPath: string | null;
+  surveyStorylinePacketPath: string | null;
+  surveyStorylineMemoPath: string | null;
   claimEvidenceMatrixPath: string | null;
   trackVerdictsPath: string | null;
   unsupportedClaimsPath: string | null;

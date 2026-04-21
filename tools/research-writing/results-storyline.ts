@@ -16,15 +16,10 @@ import {
   type ResultsStorylineState,
 } from "../workflow-guard-state/results-storyline";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import { normalizeSurveyStorylinePacket } from "./survey-storyline";
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function normalizeStage(value: unknown): string | null {
-  return typeof value === "string" && value.trim()
-    ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
-    : null;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -97,46 +92,62 @@ function makeExperimentQuestions(params: {
   return [
     {
       questionId: "effectiveness",
+      sectionId: null,
       prompt: `Does the method improve ${primaryMetric} over ${baselineReference}?`,
-      objective: "Open Results with the cleanest effectiveness question before diving into mechanism or nuance.",
+      objective:
+        "Open Results with the cleanest effectiveness question before diving into mechanism or nuance.",
       evidenceIds: ids.slice(0, 2),
       figureTableIds: visuals.slice(0, 2),
+      tensionIds: [],
       answerStatus: ids.length > 0 ? "supported" : "partial",
       searchRequired: false,
     },
     {
       questionId: "mechanism",
+      sectionId: null,
       prompt: "What mechanism explains the observed gain?",
-      objective: "Make the causal or structural mechanism explicit instead of leaving the gain as a black-box empirical win.",
+      objective:
+        "Make the causal or structural mechanism explicit instead of leaving the gain as a black-box empirical win.",
       evidenceIds: ids.slice(0, 3),
       figureTableIds: visuals.slice(1, 3),
+      tensionIds: [],
       answerStatus: ids.length > 1 ? "supported" : "partial",
       searchRequired: false,
     },
     {
       questionId: "baseline",
+      sectionId: null,
       prompt: `How does the method compare against ${baselineReference} under the fairest shared protocol?`,
       objective: "Prevent the strongest-baseline comparison from being buried or deferred.",
       evidenceIds: ids.slice(0, 2),
-      figureTableIds: visuals.filter((entry) => /^table/i.test(entry) || /^tab:/i.test(entry)).slice(0, 2),
+      figureTableIds: visuals
+        .filter((entry) => /^table/i.test(entry) || /^tab:/i.test(entry))
+        .slice(0, 2),
+      tensionIds: [],
       answerStatus: ids.length > 0 ? "supported" : "partial",
       searchRequired: false,
     },
     {
       questionId: "boundary",
+      sectionId: null,
       prompt: "Where does the method fail, require qualification, or become brittle?",
-      objective: "Force boundary conditions into the main Results arc instead of leaving them to reviewer pressure or limitations alone.",
+      objective:
+        "Force boundary conditions into the main Results arc instead of leaving them to reviewer pressure or limitations alone.",
       evidenceIds: ids.slice(-2),
       figureTableIds: visuals.slice(2, 4),
+      tensionIds: [],
       answerStatus: failureKnown ? "supported" : "partial",
       searchRequired: false,
     },
     {
       questionId: "robustness_cost",
+      sectionId: null,
       prompt: "What is the robustness, cost, or scalability trade-off once the main effect is established?",
-      objective: "Close the Results arc with practical trade-offs instead of an isolated final benchmark dump.",
+      objective:
+        "Close the Results arc with practical trade-offs instead of an isolated final benchmark dump.",
       evidenceIds: ids.slice(-2),
       figureTableIds: visuals.slice(3, 5),
+      tensionIds: [],
       answerStatus: visuals.length >= 3 ? "supported" : "partial",
       searchRequired: false,
     },
@@ -146,76 +157,137 @@ function makeExperimentQuestions(params: {
 function makeSurveyQuestions(params: {
   topic: string | null;
   figureTableIds: string[];
+  supportPacket: ReturnType<typeof normalizeSurveyStorylinePacket>;
 }): ResultsStorylineQuestion[] {
   const topic = params.topic ?? "the survey topic";
-  return [
-    {
-      questionId: "scope_protocol",
-      prompt: `What is the survey scope and protocol for ${topic}?`,
-      objective: "Start with inclusion, exclusion, and retrieval discipline before synthesis claims.",
-      evidenceIds: ["survey:scope", "survey:protocol"],
-      figureTableIds: params.figureTableIds.slice(0, 1),
-      answerStatus: "supported",
+  const packet = params.supportPacket;
+  if (!packet || packet.sectionPlans.length === 0) {
+    return [
+      {
+        questionId: "scope_protocol",
+        sectionId: "scope_and_protocol",
+        prompt: `What is the survey scope and protocol for ${topic}?`,
+        objective: "Start with inclusion, exclusion, and retrieval discipline before synthesis claims.",
+        evidenceIds: ["survey:scope", "survey:protocol"],
+        figureTableIds: params.figureTableIds.slice(0, 1),
+        tensionIds: [],
+        answerStatus: "supported",
+        searchRequired: false,
+      },
+      {
+        questionId: "taxonomy",
+        sectionId: "taxonomy",
+        prompt: `How should the field around ${topic} be organized into stable families or themes?`,
+        objective: "Turn the literature into a durable structure instead of a paper list.",
+        evidenceIds: ["survey:taxonomy"],
+        figureTableIds: params.figureTableIds.slice(0, 2),
+        tensionIds: [],
+        answerStatus: "supported",
+        searchRequired: false,
+      },
+      {
+        questionId: "evidence_synthesis",
+        sectionId: "evidence_synthesis",
+        prompt: "What does the comparative evidence actually support across those families?",
+        objective: "Synthesize comparable findings before moving to benchmark landscape or open problems.",
+        evidenceIds: ["survey:evidence_synthesis"],
+        figureTableIds: params.figureTableIds.slice(1, 3),
+        tensionIds: [],
+        answerStatus: "supported",
+        searchRequired: false,
+      },
+      {
+        questionId: "benchmark_landscape",
+        sectionId: "benchmark_landscape",
+        prompt: "Which benchmark and evaluation patterns are genuinely comparable, and where are they not?",
+        objective: "Keep benchmark landscape honest about incompatibilities and evaluation drift.",
+        evidenceIds: ["survey:benchmark_landscape"],
+        figureTableIds: params.figureTableIds.slice(2, 4),
+        tensionIds: [],
+        answerStatus: "supported",
+        searchRequired: false,
+      },
+      {
+        questionId: "open_problems",
+        sectionId: "open_problems",
+        prompt: "What open problems and disagreement zones remain once the comparative landscape is mapped?",
+        objective: "End with explicit unresolved gaps instead of vague future-work filler.",
+        evidenceIds: ["survey:open_problems"],
+        figureTableIds: params.figureTableIds.slice(3, 5),
+        tensionIds: [],
+        answerStatus: "supported",
+        searchRequired: false,
+      },
+    ];
+  }
+
+  const sectionPlans = packet.sectionPlans;
+  return sectionPlans.map((plan, index) => {
+    const visuals =
+      plan.sectionId === packet.intellectualCenterSection
+        ? params.figureTableIds.slice(Math.max(0, index - 1), Math.max(0, index - 1) + 3)
+        : params.figureTableIds.slice(index, index + 2);
+    return {
+      questionId: plan.sectionId,
+      sectionId: plan.sectionId,
+      prompt: plan.prompt,
+      objective: plan.objective,
+      evidenceIds: uniqueStrings([
+        ...plan.evidenceClusterIds,
+        ...plan.anchorIds,
+      ]),
+      figureTableIds: visuals,
+      tensionIds: plan.tensionIds,
+      answerStatus:
+        plan.anchorIds.length > 0 || plan.evidenceClusterIds.length > 0 ? "supported" : "partial",
       searchRequired: false,
-    },
-    {
-      questionId: "taxonomy",
-      prompt: `How should the field around ${topic} be organized into stable families or themes?`,
-      objective: "Turn the literature into a durable structure instead of a paper list.",
-      evidenceIds: ["survey:taxonomy"],
-      figureTableIds: params.figureTableIds.slice(0, 2),
-      answerStatus: "supported",
-      searchRequired: false,
-    },
-    {
-      questionId: "evidence_synthesis",
-      prompt: "What does the comparative evidence actually support across those families?",
-      objective: "Synthesize comparable findings before moving to benchmark landscape or open problems.",
-      evidenceIds: ["survey:evidence_synthesis"],
-      figureTableIds: params.figureTableIds.slice(1, 3),
-      answerStatus: "supported",
-      searchRequired: false,
-    },
-    {
-      questionId: "benchmark_landscape",
-      prompt: "Which benchmark and evaluation patterns are genuinely comparable, and where are they not?",
-      objective: "Keep benchmark landscape honest about incompatibilities and evaluation drift.",
-      evidenceIds: ["survey:benchmark_landscape"],
-      figureTableIds: params.figureTableIds.slice(2, 4),
-      answerStatus: "supported",
-      searchRequired: false,
-    },
-    {
-      questionId: "open_problems",
-      prompt: "What open problems and disagreement zones remain once the comparative landscape is mapped?",
-      objective: "End with explicit unresolved gaps instead of vague future-work filler.",
-      evidenceIds: ["survey:open_problems"],
-      figureTableIds: params.figureTableIds.slice(3, 5),
-      answerStatus: "supported",
-      searchRequired: false,
-    },
-  ];
+    };
+  });
 }
 
 function renderMarkdown(params: {
   workflowLine: "experiment" | "survey";
   questions: ResultsStorylineQuestion[];
+  state: Pick<
+    ResultsStorylineState,
+    "storyStrategy" | "storyStrategyRationale" | "storyThesis" | "intellectualCenterSection"
+  >;
 }): string {
   const intro =
     params.workflowLine === "survey"
       ? "Use this file as the survey synthesis order: the section sequence should answer field-structure questions in reviewer-readable order."
       : "Use this file as the Results argument order: the section sequence should answer reviewer questions, not mirror experiment execution order.";
+  const surveyHeader =
+    params.workflowLine === "survey"
+      ? [
+          params.state.storyStrategy
+            ? `- story_strategy: ${params.state.storyStrategy}`
+            : null,
+          params.state.intellectualCenterSection
+            ? `- intellectual_center_section: ${params.state.intellectualCenterSection}`
+            : null,
+          params.state.storyThesis
+            ? `- story_thesis: ${params.state.storyThesis}`
+            : null,
+          ...(params.state.storyStrategyRationale.length > 0
+            ? ["", "## Strategy Rationale", ...params.state.storyStrategyRationale.map((entry) => `- ${entry}`)]
+            : []),
+        ].filter((entry): entry is string => Boolean(entry))
+      : [];
   return [
     "# Results Question Order",
     "",
     intro,
+    ...(surveyHeader.length > 0 ? ["", ...surveyHeader] : []),
     "",
     ...params.questions.map((entry, index) =>
       [
         `## ${index + 1}. ${entry.prompt ?? entry.questionId}`,
+        `- section_id: ${entry.sectionId ?? "unset"}`,
         `- objective: ${entry.objective ?? "unset"}`,
         `- evidence_ids: ${entry.evidenceIds.join(", ") || "unset"}`,
         `- figure_table_ids: ${entry.figureTableIds.join(", ") || "unset"}`,
+        `- tension_ids: ${entry.tensionIds.join(", ") || "unset"}`,
         `- answer_status: ${entry.answerStatus}`,
       ].join("\n")
     ),
@@ -251,6 +323,7 @@ export async function materializeResultsStoryline(params: {
     surveyBriefsText,
     surveyComparativeText,
     surveySelfReviewText,
+    surveyStorylinePacketRaw,
   ] = await Promise.all([
     readTextIfExists(resolveProjectArtifactPath(projectRoot, paperStory.claimToExperimentMapPath)),
     readTextIfExists(resolveProjectArtifactPath(projectRoot, paperStory.claimEvidenceMatrixPath)),
@@ -268,17 +341,23 @@ export async function materializeResultsStoryline(params: {
     readTextIfExists(
       resolveProjectArtifactPath(projectRoot, "academic_writer/SURVEY_SELF_REVIEW.md")
     ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, paperStory.surveyStorylinePacketPath) ?? ""
+    ),
   ]);
 
   const claimIds = extractClaimIds(`${claimMapText ?? ""}\n${claimEvidenceMatrixText ?? ""}`);
   const figureTableIds = extractFigureTableIds(figureTableAlignmentText);
+  const supportPacket = normalizeSurveyStorylinePacket(surveyStorylinePacketRaw);
   const questions =
     workflowLine === "survey"
       ? makeSurveyQuestions({
           topic:
+            supportPacket?.topic ??
             firstMeaningfulLine(surveyBriefsText, surveyComparativeText, surveySelfReviewText) ??
             researchProgram.goal,
           figureTableIds,
+          supportPacket,
         })
       : makeExperimentQuestions({
           primaryMetric: researchProgram.primaryMetric,
@@ -289,16 +368,17 @@ export async function materializeResultsStoryline(params: {
           trackVerdictsText,
         });
 
-  const evidenceModules = uniqueStrings(
-    questions.flatMap((entry) => entry.evidenceIds)
-  );
-  const figureTableOrder = uniqueStrings(
-    questions.flatMap((entry) => entry.figureTableIds)
-  );
+  const evidenceModules = uniqueStrings(questions.flatMap((entry) => entry.evidenceIds));
+  const figureTableOrder = uniqueStrings(questions.flatMap((entry) => entry.figureTableIds));
   const hasCoreInputs =
     paperStory.status === "ready" &&
     (workflowLine === "survey"
-      ? Boolean(surveyBriefsText || surveyComparativeText || surveySelfReviewText)
+      ? Boolean(
+          supportPacket ||
+            surveyBriefsText ||
+            surveyComparativeText ||
+            surveySelfReviewText
+        )
       : Boolean(claimMapText && claimEvidenceMatrixText));
   const status =
     hasCoreInputs && questions.length > 0
@@ -314,11 +394,15 @@ export async function materializeResultsStoryline(params: {
         : "Claim-to-experiment and claim-evidence artifacts are still too thin to stabilize the results storyline.";
   const storylineFingerprint = buildFingerprint({
     workflowLine,
+    storyStrategy: supportPacket?.selectedStrategyId ?? null,
+    intellectualCenterSection: supportPacket?.intellectualCenterSection ?? null,
     questions: questions.map((entry) => ({
       questionId: entry.questionId,
+      sectionId: entry.sectionId,
       prompt: entry.prompt,
       evidenceIds: entry.evidenceIds,
       figureTableIds: entry.figureTableIds,
+      tensionIds: entry.tensionIds,
       answerStatus: entry.answerStatus,
     })),
   });
@@ -327,6 +411,14 @@ export async function materializeResultsStoryline(params: {
     ...serializeResultsStorylineState(current),
     status,
     workflow_line: workflowLine,
+    story_strategy: supportPacket?.selectedStrategyId ?? current.storyStrategy,
+    story_strategy_rationale:
+      supportPacket?.selectedStrategyRationale ?? current.storyStrategyRationale,
+    story_thesis: supportPacket?.thesis ?? current.storyThesis,
+    intellectual_center_section:
+      supportPacket?.intellectualCenterSection ?? current.intellectualCenterSection,
+    support_packet_path:
+      supportPacket ? paperStory.surveyStorylinePacketPath : current.supportPacketPath,
     question_order: questions,
     evidence_modules: evidenceModules,
     figure_table_order: figureTableOrder,
@@ -347,7 +439,11 @@ export async function materializeResultsStoryline(params: {
   if (questionOrderPath) {
     await writeTextEnsured(
       questionOrderPath,
-      `${renderMarkdown({ workflowLine, questions })}\n`
+      `${renderMarkdown({
+        workflowLine,
+        questions,
+        state,
+      })}\n`
     );
     generatedFiles.push(state.resultsQuestionOrderPath ?? "");
   }
@@ -355,14 +451,20 @@ export async function materializeResultsStoryline(params: {
     await writeJsonEnsured(evidenceSequencePath, {
       schemaVersion: 1,
       workflowLine,
+      story_strategy: state.storyStrategy,
+      story_thesis: state.storyThesis,
+      intellectual_center_section: state.intellectualCenterSection,
+      support_packet_path: state.supportPacketPath,
       storylineFingerprint,
       questions: questions.map((entry, index) => ({
         order: index + 1,
         question_id: entry.questionId,
+        section_id: entry.sectionId,
         prompt: entry.prompt,
         objective: entry.objective,
         evidence_ids: entry.evidenceIds,
         figure_table_ids: entry.figureTableIds,
+        tension_ids: entry.tensionIds,
         answer_status: entry.answerStatus,
         search_required: entry.searchRequired,
       })),

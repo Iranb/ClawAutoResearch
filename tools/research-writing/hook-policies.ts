@@ -214,6 +214,8 @@ function buildWritingHookPolicies(params: {
       }
     : experimentAppliesWhen;
   const surveyArtifacts = [
+    "academic_writer/SURVEY_STORYLINE_PACKET.md",
+    "academic_writer/SURVEY_STORYLINE_PACKET.json",
     "academic_writer/SURVEY_SECTION_BRIEFS.md",
     "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
     "academic_writer/SURVEY_SELF_REVIEW.md",
@@ -470,6 +472,7 @@ function buildWritingHookPolicies(params: {
         topTierVerdict: params.topTierVerdict,
         requirements: surveyMode
           ? [
+              "The survey storyline packet must expose one explicit thesis, a chosen macro-story strategy, and an intellectual-center section; the manuscript must follow that choice rather than defaulting back to a paper list.",
               "The storyline must organize the survey synthesis in an order that teaches scope, taxonomy, evidence synthesis, benchmark landscape, and open problems rather than listing papers.",
               "Each major synthesis question must map to evidence modules or comparison artifacts, and must keep non-comparable results explicit.",
             ]
@@ -506,6 +509,7 @@ function buildWritingHookPolicies(params: {
         requirements: surveyMode
           ? [
               "The preferred title, abstract skeleton, and introduction workbench must all tell the same survey thesis and organizing lens.",
+              "The title / abstract / introduction layer must agree with the selected macro-story and intellectual-center section from the survey storyline packet.",
               "The abstract and introduction workbench must keep scope boundaries, evidence base, and contribution lens aligned with the manuscript and survey evidence packet.",
             ]
           : [

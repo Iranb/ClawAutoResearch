@@ -284,6 +284,85 @@ test("runWorkflowCoordinatorPass invokes auto iterator in service mode", async (
   assert.equal(results[0].projectId, "alpha");
 });
 
+test("runWorkflowCoordinatorPass isolates one project failure instead of aborting the whole pass", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = await makeProject(projectsRoot, "alpha", "graph_build");
+  const betaRoot = await makeProject(projectsRoot, "beta", "code");
+  const calls = [];
+  const warnings = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const results = await runWorkflowCoordinatorPass({
+    projectsRoot,
+    cooldownSeconds: 90,
+    queueMailbox: true,
+    maxProjects: 3,
+    logger: {
+      warn(message, meta) {
+        warnings.push({ message, meta });
+      },
+    },
+    deps: {
+      async listWorkflowCoordinatorProjects() {
+        return [
+          {
+            projectId: "alpha",
+            projectRoot: alphaRoot,
+            source: "scan",
+            stage: "graph_build",
+            updatedAt: null,
+          },
+          {
+            projectId: "beta",
+            projectRoot: betaRoot,
+            source: "scan",
+            stage: "code",
+            updatedAt: null,
+          },
+        ];
+      },
+      async runWorkflowAutoIterator(params) {
+        calls.push(params);
+        if (params.projectRoot === alphaRoot) {
+          throw new Error("alpha iterator exploded");
+        }
+        return {
+          stageBefore: "code",
+          stageAfter: "code",
+          stageChanged: false,
+          regressed: false,
+          gateBlocking: false,
+          recommendedActions: [
+            {
+              kind: "drive_stage",
+              owner: "coder",
+              stage: "code",
+              summary: "Continue implementation.",
+              command: "/implement-experiment",
+              mailboxMessageId: null,
+              cooldownRemainingSeconds: 0,
+              blocking: false,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(results.length, 2);
+  assert.equal(results[0].projectId, "alpha");
+  assert.equal(results[0].result.gateBlocking, true);
+  assert.match(results[0].result.blockingReason ?? "", /alpha iterator exploded/i);
+  assert.equal(results[1].projectId, "beta");
+  assert.equal(results[1].result.stageAfter, "code");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message ?? "", /auto[_ ]iterator failed for one project/i);
+});
+
 test("maybeLaunchIdleResearchForProject starts one bounded researcher background run for a due idle topic", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
@@ -3378,6 +3457,156 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
   assert.ok(runs.some((entry) => entry.deliver === false && /Immediate command: \/implement-experiment/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /\[Workflow Status\]/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /handed off/i.test(entry.message)));
+});
+
+test("workflow coordinator isolates runtime maintenance failure for one project", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = await makeProject(projectsRoot, "alpha", "code");
+  const betaRoot = await makeProject(projectsRoot, "beta", "code");
+  const runs = [];
+  const warnings = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const plugin = {
+    getWorkflowPolicy() {
+      return {
+        autoMode: "conservative",
+        autoGate: defaultAutoGateConfig(),
+        enableChannelProjectBindings: false,
+        projectsRoot,
+        heartbeatBackgroundChecks: true,
+        agentContactCooldownSeconds: 300,
+        enableWorkflowMailbox: true,
+      };
+    },
+    api: {
+      runtime: {
+        subagent: {
+          async run(params) {
+            runs.push(params);
+            return { runId: `run-${runs.length}` };
+          },
+        },
+      },
+      registerService() {},
+      logger: {
+        debug() {},
+        info() {},
+        warn() {},
+      },
+    },
+  };
+
+  const service = createWorkflowCoordinatorService(plugin, {
+    async listWorkflowCoordinatorProjects() {
+      return [
+        {
+          projectId: "alpha",
+          projectRoot: alphaRoot,
+          source: "scan",
+          stage: "code",
+          updatedAt: null,
+        },
+        {
+          projectId: "beta",
+          projectRoot: betaRoot,
+          source: "scan",
+          stage: "code",
+          updatedAt: null,
+        },
+      ];
+    },
+    async runWorkflowAutoIterator(params) {
+      if (params.projectRoot === alphaRoot) {
+        return {
+          stageBefore: "code",
+          stageAfter: "code",
+          stageChanged: false,
+          regressed: false,
+          gateBlocking: false,
+          recommendedActions: [],
+        };
+      }
+      return {
+        stageBefore: "code",
+        stageAfter: "code",
+        stageChanged: false,
+        regressed: false,
+        gateBlocking: false,
+        recommendedActions: [
+          {
+            kind: "drive_stage",
+            owner: "coder",
+            stage: "code",
+            summary: "Implement the approved experiments as runnable bundles.",
+            command: "/implement-experiment",
+            mailboxMessageId: null,
+            cooldownRemainingSeconds: 0,
+            blocking: false,
+          },
+        ],
+      };
+    },
+    async runWorkflowRuntimeMaintenancePass(params) {
+      if (params.projectRoot === alphaRoot) {
+        throw new Error("alpha maintenance exploded");
+      }
+      return {};
+    },
+  });
+
+  await service.start({
+    logger: {
+      debug() {},
+      info() {},
+      warn(message, meta) {
+        warnings.push({ message, meta });
+      },
+    },
+  });
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (
+      runs.some(
+        (entry) =>
+          entry.deliver === false &&
+          /Immediate command: \/implement-experiment/.test(entry.message)
+      ) &&
+      warnings.some((entry) =>
+        /runtime[_ ]maintenance failed for one project/i.test(entry.message ?? "")
+      )
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await service.stop({
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+    },
+  });
+
+  assert.ok(
+    runs.some(
+      (entry) =>
+        entry.deliver === false &&
+        /Immediate command: \/implement-experiment/.test(entry.message)
+    )
+  );
+  assert.ok(
+    warnings.some((entry) =>
+      /runtime[_ ]maintenance failed for one project/i.test(entry.message ?? "")
+    )
+  );
+  assert.ok(
+    warnings.every(
+      (entry) => !/Workflow coordinator pass failed/i.test(entry.message ?? "")
+    )
+  );
 });
 
 test("maybeAdvanceAutoGateReviewForProject leaves submit under manual confirmation and does not launch reviewers", async (t) => {

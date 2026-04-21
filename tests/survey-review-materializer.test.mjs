@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   DEFAULT_SURVEY_BRIEF_PATH,
+  DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH,
   DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH,
   DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH,
   DEFAULT_SURVEY_GAP_SYNTHESIS_PATH,
@@ -14,6 +15,7 @@ import {
   DEFAULT_SURVEY_LITERATURE_REVIEW_PATH,
   DEFAULT_SURVEY_QUERY_REGISTRY_PATH,
   DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH,
+  DEFAULT_SURVEY_SCREENING_DECISIONS_PATH,
   DEFAULT_SURVEY_SOTA_MATRIX_PATH,
 } from "../tools/workflow-guard-state/survey-review.ts";
 import { normalizeWritingContractState } from "../tools/workflow-guard-state/writing-contract.ts";
@@ -224,6 +226,131 @@ test("completed survey artifacts can seed survey-mode paper story and writing co
     "conclusion",
   ]);
   assert.equal(writingContract.proofAppendixRequired, false);
+});
+
+test("survey paper story selects a benchmark-led macro-story when evaluation pressure dominates", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [
+      { query: "gcd survey benchmark mismatch", provider: "papers-cool" },
+      { query: "gcd evaluation protocol comparison", provider: "pasa-paper-search" },
+      { query: "gcd benchmark drift", provider: "papers-cool" },
+      { query: "gcd metric inconsistency", provider: "pasa-paper-search" },
+      { query: "gcd non comparable results", provider: "papers-cool" },
+      { query: "gcd dataset split caveat", provider: "pasa-paper-search" },
+    ],
+    candidate_paper_count: 58,
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), [
+    "# Review Protocol",
+    "",
+    "- Benchmark comparisons must stay tied to dataset split and metric assumptions.",
+    "- Non-comparable settings should be called out explicitly.",
+    "- Fair comparison requires identical open-set assumptions.",
+  ].join("\n"));
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 16 }, (_unused, index) => ({
+      canonical_id: `arxiv:2502.00${String(index + 1).padStart(3, "0")}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    backgroundPapers: [
+      {
+        title: "Open World Recognition Survey",
+        reason: "boundary reference when open-set assumptions shift",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_SCREENING_DECISIONS_PATH), {
+    decisions: [
+      {
+        title: "Open World Recognition Survey",
+        decision: "background",
+        reason: "boundary reference when open-set assumptions shift",
+      },
+    ],
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Prototype-centric methods\n- Prompt-driven methods\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Prototype-centric | non-comparable protocol caveat | CIFAR100 | Accuracy |",
+      "| B | Prompt-driven | evaluation drift warning | ImageNet100 | H-score |",
+      "| C | Hybrid | metric mismatch warning | CUB | F1 |",
+      "| D | Calibration | split mismatch caveat | iNat | AUC |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    [
+      "# Gap Synthesis",
+      "",
+      "## Open Problems",
+      "- Result tables still mix non-comparable open-set assumptions.",
+      "- Benchmark wins remain fragile under metric drift.",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    [
+      "# Coverage Summary",
+      "",
+      "- Search coverage spans the core benchmark families.",
+      "- Scope boundaries and blind spots are explicit.",
+      "- Evaluation drift and fairness caveats remain central.",
+    ].join("\n")
+  );
+
+  await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+  await materializePaperStoryState({
+    projectRoot,
+    trigger: "test",
+    agentId: "researcher",
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const packet = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "academic_writer", "SURVEY_STORYLINE_PACKET.json"),
+      "utf8"
+    )
+  );
+  const claimMap = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "story", "CLAIM_TO_EXPERIMENT_MAP.md"),
+    "utf8"
+  );
+
+  assert.equal(packet.selected_strategy_id, "evaluation_crisis_first");
+  assert.deepEqual(packet.body_section_order.slice(0, 3), [
+    "scope_and_protocol",
+    "benchmark_landscape",
+    "taxonomy",
+  ]);
+  assert.deepEqual(manifest.writing_contract.section_order.slice(0, 5), [
+    "abstract",
+    "introduction",
+    "scope_and_protocol",
+    "benchmark_landscape",
+    "taxonomy",
+  ]);
+  assert.match(claimMap, /Theme 2 \(benchmark_landscape\)/i);
+  assert.match(claimMap, /Theme 3 \(taxonomy\)/i);
 });
 
 test("survey review stays blocked when survey-quality gates are not ready", async (t) => {
@@ -443,6 +570,156 @@ test("materializeSurveyReviewState keeps survey review in retrieval when retriev
   assert.match(brief, /## Themes/m);
   assert.match(brief, /Speech omni/i);
   assert.match(brief, /## Recommended Next Sweep/m);
+});
+
+test("materializeSurveyReviewState blocks completion when pending screening candidates remain unresolved", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [
+      { query: "gcd survey", provider: "zotero" },
+      { query: "gcd survey recent", provider: "openalex" },
+      { query: "gcd benchmarks", provider: "semanticscholar" },
+      { query: "gcd failure modes", provider: "dblp" },
+    ],
+    candidate_paper_count: 52,
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH), {
+    papers: [
+      { title: "OpenGCD", decision: "pending_screen" },
+      { title: "On-the-Fly Category Discovery", decision: "pending_screen" },
+    ],
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 20 }, (_unused, index) => ({
+      canonical_id: `arxiv:2601.000${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 20 }, (_unused, index) => ({
+      canonical_id: `arxiv:2501.100${index}`,
+    })),
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Prompt tuning\n- Prototype learning\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Prompt | stable | BenchA | Accuracy |",
+      "| B | Prototype | robust | BenchB | F1 |",
+      "| C | Hybrid | transfer | BenchC | AUC |",
+      "| D | Contrastive | caveat | BenchD | mAP |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- benchmark alignment\n- scaling\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Coverage spans core venues.\n- Scope and blind spots are explicit.\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-pending-screening",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.status, "screening");
+  assert.equal(result.state.currentPhase, "screening");
+  assert.equal(result.state.pendingScreeningCount, 2);
+  assert.equal(result.state.coverageStatus, "partial");
+  assert.match(result.state.pendingReason ?? "", /pending screening candidate/i);
+});
+
+test("materializeSurveyReviewState ignores stale pending candidates once screening decisions resolve them", async (t) => {
+  const projectRoot = await makeSurveyProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_QUERY_REGISTRY_PATH), {
+    rounds: [
+      { query: "gcd survey", provider: "zotero" },
+      { query: "gcd survey recent", provider: "openalex" },
+      { query: "gcd benchmarks", provider: "semanticscholar" },
+      { query: "gcd failure modes", provider: "dblp" },
+    ],
+    candidate_paper_count: 52,
+    saturation: { assessed: true, verdict: "saturated" },
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH), {
+    papers: [
+      { title: "OpenGCD", decision: "pending_screen" },
+      { title: "Open World Object Detection: A Survey", decision: "pending_screen" },
+    ],
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_SCREENING_DECISIONS_PATH), {
+    decisions: [
+      { title: "OpenGCD", decision: "include" },
+      { title: "Open World Object Detection: A Survey", decision: "reference" },
+    ],
+  });
+  await writeText(path.join(projectRoot, DEFAULT_SURVEY_REVIEW_PROTOCOL_PATH), "# Review Protocol\n");
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_INCLUDED_PAPERS_PATH), {
+    papers: Array.from({ length: 20 }, (_unused, index) => ({
+      canonical_id: `arxiv:2602.000${index}`,
+    })),
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH), {
+    excludedPapers: Array.from({ length: 18 }, (_unused, index) => ({
+      canonical_id: `arxiv:2502.100${index}`,
+    })),
+    backgroundPapers: [
+      { title: "Open World Object Detection: A Survey" },
+      { title: "A Review of Novel Class Discovery" },
+    ],
+  });
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_LITERATURE_REVIEW_PATH),
+    "# Literature Review\n\n## Taxonomy\n- Prompt tuning\n- Prototype learning\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_SOTA_MATRIX_PATH),
+    [
+      "# SOTA Matrix",
+      "",
+      "| Method | Family | Notes | Dataset | Metric |",
+      "| --- | --- | --- | --- | --- |",
+      "| A | Prompt | stable | BenchA | Accuracy |",
+      "| B | Prototype | robust | BenchB | F1 |",
+      "| C | Hybrid | transfer | BenchC | AUC |",
+      "| D | Contrastive | caveat | BenchD | mAP |",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_GAP_SYNTHESIS_PATH),
+    "# Gap Synthesis\n\n## Open Problems\n- benchmark alignment\n- scaling\n"
+  );
+  await writeText(
+    path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),
+    "# Coverage Summary\n\n- Coverage spans core venues.\n- Scope and blind spots are explicit.\n"
+  );
+
+  const result = await materializeSurveyReviewState({
+    projectRoot,
+    trigger: "test-resolved-screening",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.pendingScreeningCount, 0);
+  assert.equal(result.state.backgroundPaperCount, 2);
+  assert.equal(result.state.status, "completed");
+  assert.equal(result.state.currentPhase, "complete");
 });
 
 test("materializeSurveyReviewState moves into taxonomy_refinement once a brief exists but themes are still weak", async (t) => {

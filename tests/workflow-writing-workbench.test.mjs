@@ -204,6 +204,219 @@ async function makeWorkbenchProjectRoot() {
   return projectRoot;
 }
 
+async function makeSurveyWorkbenchProjectRoot() {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-survey-writing-workbench-")
+  );
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-workbench-project",
+    current_stage: "review",
+    owner_agent: "academic_writer",
+    workflow_line: "survey",
+    survey_review: {
+      status: "completed",
+      topic: "Generalized Category Discovery",
+      included_paper_count: 14,
+    },
+    writing_contract: {
+      paper_mode: "survey",
+      required_sections: [
+        "abstract",
+        "introduction",
+        "scope_and_protocol",
+        "taxonomy",
+        "evidence_synthesis",
+        "benchmark_landscape",
+        "open_problems",
+        "conclusion",
+      ],
+      section_order: [
+        "abstract",
+        "introduction",
+        "scope_and_protocol",
+        "benchmark_landscape",
+        "taxonomy",
+        "evidence_synthesis",
+        "open_problems",
+        "conclusion",
+      ],
+    },
+    paper_story_state: {
+      status: "ready",
+      story_spine_path: "academic_writer/story/STORY_SPINE.md",
+      challenge_statement_path: "academic_writer/story/CHALLENGE_STATEMENT.md",
+      contribution_to_story_bridge_path: "academic_writer/CONTRIBUTION_TO_STORY_BRIDGE.md",
+      claim_to_experiment_map_path: "academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md",
+      fallback_narrative_path: "academic_writer/story/FALLBACK_NARRATIVE.md",
+      survey_storyline_packet_path: "academic_writer/SURVEY_STORYLINE_PACKET.json",
+    },
+    review_pressure_packet: {
+      status: "ready",
+      reverse_outline_path: "reviewer/story-pressure/REVERSE_OUTLINE.md",
+      limitation_audit_path: "reviewer/story-pressure/LIMITATION_AUDIT.md",
+    },
+    innovation_synthesis_state: {
+      status: "ready",
+      central_thesis:
+        "The decisive question in generalized category discovery is which benchmark comparisons are actually fair.",
+      integrated_contribution_statement_path:
+        "academic_writer/INTEGRATED_CONTRIBUTION_STATEMENT.md",
+      synthesis_memo_path: "academic_writer/INNOVATION_SYNTHESIS_MEMO.md",
+    },
+  });
+
+  await Promise.all([
+    writeText(
+      path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"),
+      "# Story Spine\nThe survey should lead with benchmark comparability before taxonomy.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "story", "CHALLENGE_STATEMENT.md"),
+      "# Challenge Statement\nResult tables still mix non-comparable open-set assumptions.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "CONTRIBUTION_TO_STORY_BRIDGE.md"),
+      "# Bridge\nBenchmark comparability is the intellectual center that reorders the rest of the survey.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "story", "CLAIM_TO_EXPERIMENT_MAP.md"),
+      "# Claim Map\n## Theme 1 (scope_and_protocol)\n- Theme: scope\n\n## Theme 2 (benchmark_landscape)\n- Theme: benchmark\n\n## Theme 3 (taxonomy)\n- Theme: taxonomy\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "story", "FALLBACK_NARRATIVE.md"),
+      "# Fallback Narrative\n- keep the manuscript scoped to benchmark comparability if the broader field thesis gets too wide\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "FIGURE_TABLE_ALIGNMENT.md"),
+      "# Figure/Table Alignment\nTable 1 shows benchmark comparability. Figure 1 shows the field map. Table 2 shows family trade-offs.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "SURVEY_SECTION_BRIEFS.md"),
+      "# Survey Section Briefs\n\n## Storyline Thesis\n- For generalized category discovery, the decisive organizing question is which benchmark and metric comparisons are actually fair.\n\n## Scope and Protocol\n- What scope and protocol boundaries define this survey?\n\n## Benchmark Landscape\n- Which benchmark comparisons are actually fair?\n\n## Taxonomy\n- Which families remain meaningful once benchmark constraints are explicit?\n\n## Evidence Synthesis\n- What comparative evidence survives those constraints?\n\n## Open Problems\n- What remains unresolved once the benchmark contract is visible?\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "SURVEY_COMPARATIVE_ANALYSIS.md"),
+      "# Survey Comparative Analysis\n- non-comparable results must stay explicit\n- benchmark and metric coverage are the main story\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "SURVEY_SELF_REVIEW.md"),
+      "# Survey Self Review\n- thesis sharpness matters\n- benchmark landscape is the intellectual center\n"
+    ),
+    writeText(
+      path.join(projectRoot, "reviewer", "story-pressure", "REVERSE_OUTLINE.md"),
+      "# Reverse Outline\n- keep the benchmark-first ordering visible in the introduction\n"
+    ),
+    writeText(
+      path.join(projectRoot, "reviewer", "story-pressure", "LIMITATION_AUDIT.md"),
+      "# Limitation Audit\n- do not generalize across non-comparable open-set assumptions\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+      "\\input{sections/abstract}\n\\input{sections/introduction}\n\\input{sections/benchmark_landscape}\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "INNOVATION_SYNTHESIS_MEMO.md"),
+      "# Innovation Synthesis Memo\nBenchmark comparability is the selected macro-story.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "academic_writer", "INTEGRATED_CONTRIBUTION_STATEMENT.md"),
+      "# Integrated Contribution Statement\nThe survey reorganizes the field around evaluation comparability before family-level synthesis.\n"
+    ),
+    writeJson(path.join(projectRoot, "academic_writer", "SURVEY_STORYLINE_PACKET.json"), {
+      schema_version: 1,
+      topic: "Generalized Category Discovery",
+      selected_strategy_id: "evaluation_crisis_first",
+      selected_strategy_label: "Evaluation-crisis-first",
+      selected_strategy_rationale: [
+        "Benchmark comparisons are only fair under matched open-set assumptions.",
+        "The field story is misleading when protocol drift is hidden behind a single leaderboard.",
+      ],
+      thesis:
+        "For generalized category discovery, the decisive organizing question is which benchmark and metric comparisons are actually fair.",
+      intellectual_center_section: "benchmark_landscape",
+      body_section_order: [
+        "scope_and_protocol",
+        "benchmark_landscape",
+        "taxonomy",
+        "evidence_synthesis",
+        "open_problems",
+      ],
+      evidence_clusters: [
+        {
+          cluster_id: "scope_protocol",
+          label: "Scope and protocol anchors",
+          kind: "scope",
+          summary: "Scope discipline comes before synthesis claims.",
+          anchor_ids: ["protocol:review"],
+        },
+        {
+          cluster_id: "benchmark_landscape",
+          label: "Benchmark landscape anchors",
+          kind: "benchmark",
+          summary: "Benchmark landscape is the intellectual center for this survey.",
+          anchor_ids: ["benchmark:cifar100", "benchmark:imagenet100"],
+        },
+        {
+          cluster_id: "taxonomy",
+          label: "Taxonomy anchors",
+          kind: "taxonomy",
+          summary: "Taxonomy only becomes credible once evaluation drift is explicit.",
+          anchor_ids: ["family:prototype", "family:prompt"],
+        },
+      ],
+      section_plans: [
+        {
+          section_id: "scope_and_protocol",
+          prompt: "What scope and protocol boundaries define this survey on generalized category discovery?",
+          objective: "Open with inclusion, exclusion, and comparability rules.",
+          core_message: "Scope discipline comes before synthesis claims.",
+          evidence_cluster_ids: ["scope_protocol"],
+          anchor_ids: ["protocol:review"],
+          tension_ids: [],
+        },
+        {
+          section_id: "benchmark_landscape",
+          prompt: "Which benchmark comparisons are actually fair, and where does protocol drift break comparability?",
+          objective: "Expose protocol drift before aggregating wins.",
+          core_message: "Benchmark landscape is the intellectual center for this survey.",
+          evidence_cluster_ids: ["benchmark_landscape"],
+          anchor_ids: ["benchmark:cifar100", "benchmark:imagenet100"],
+          tension_ids: ["tension-1"],
+        },
+        {
+          section_id: "taxonomy",
+          prompt: "Which families remain meaningful once benchmark constraints are explicit?",
+          objective: "Rebuild taxonomy after the evaluation contract is visible.",
+          core_message: "Taxonomy only becomes credible once evaluation drift is explicit.",
+          evidence_cluster_ids: ["taxonomy"],
+          anchor_ids: ["family:prototype", "family:prompt"],
+          tension_ids: ["tension-1"],
+        },
+        {
+          section_id: "evidence_synthesis",
+          prompt: "What comparative evidence survives those constraints?",
+          objective: "Compare strengths and weaknesses under matched settings.",
+          core_message: "Evidence synthesis should keep non-comparable results visible.",
+          evidence_cluster_ids: ["benchmark_landscape", "taxonomy"],
+          anchor_ids: ["paper:a", "paper:b"],
+          tension_ids: ["tension-1"],
+        },
+        {
+          section_id: "open_problems",
+          prompt: "What remains unresolved once the benchmark contract is visible?",
+          objective: "End with open problems that fall out of the selected thesis.",
+          core_message: "Open problems must inherit the benchmark comparability story.",
+          evidence_cluster_ids: ["benchmark_landscape"],
+          anchor_ids: ["gap:metric-drift"],
+          tension_ids: ["tension-1"],
+        },
+      ],
+    }),
+  ]);
+
+  return projectRoot;
+}
+
 test("materializeResultsStoryline writes reviewer-question order and evidence sequence", async (t) => {
   const projectRoot = await makeWorkbenchProjectRoot();
   t.after(async () => {
@@ -230,6 +443,33 @@ test("materializeResultsStoryline writes reviewer-question order and evidence se
   );
   assert.match(questionOrder, /Does the method improve support_precision/i);
   assert.match(questionOrder, /What mechanism explains the observed gain/i);
+});
+
+test("materializeResultsStoryline uses survey storyline packet to drive survey question order", async (t) => {
+  const projectRoot = await makeSurveyWorkbenchProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializeResultsStoryline({
+    projectRoot,
+    stage: "review",
+  });
+
+  assert.equal(result.state.status, "ready");
+  assert.equal(result.state.workflowLine, "survey");
+  assert.equal(result.state.storyStrategy, "evaluation_crisis_first");
+  assert.equal(result.state.intellectualCenterSection, "benchmark_landscape");
+  assert.equal(result.state.questionOrder[1].sectionId, "benchmark_landscape");
+  assert.ok(result.state.questionOrder[1].evidenceIds.includes("benchmark:cifar100"));
+
+  const questionOrder = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "RESULTS_QUESTION_ORDER.md"),
+    "utf8"
+  );
+  assert.match(questionOrder, /story_strategy: evaluation_crisis_first/i);
+  assert.match(questionOrder, /intellectual_center_section: benchmark_landscape/i);
+  assert.match(questionOrder, /Which benchmark comparisons are actually fair/i);
 });
 
 test("materializeTitleAbstractIntroWorkbench writes aligned title and drafting workbench artifacts", async (t) => {

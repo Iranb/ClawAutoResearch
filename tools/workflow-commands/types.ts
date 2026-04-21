@@ -53,6 +53,7 @@ export type WorkflowCommandKind =
   | "project_init"
   | "auto_research"
   | "auto_review"
+  | "bind_project"
   | "clear_project_binding"
   | "workflow_status"
   | "handoff_status"
@@ -141,6 +142,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   project_init: "/project-init",
   auto_research: "/auto-research",
   auto_review: "/auto-review",
+  bind_project: "/bind-project",
   clear_project_binding: "/clear-project-binding",
   workflow_status: "/workflow-status",
   handoff_status: "/handoff-status",

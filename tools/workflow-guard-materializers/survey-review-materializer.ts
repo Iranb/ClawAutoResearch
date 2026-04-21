@@ -17,83 +17,12 @@ import {
   serializeSurveyReviewState,
   type SurveyReviewState,
 } from "../workflow-guard-state/survey-review";
+import {
+  summarizeSurveyQueryRegistry,
+  summarizeSurveyScreening,
+} from "../survey-review-artifacts";
 import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.js";
 import { materializeWorkflowPanelDiscussionState } from "../workflow-panel-discussion";
-
-function countPaperEntries(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return 0;
-  }
-  if (typeof record.totalCount === "number" && Number.isFinite(record.totalCount)) {
-    return Math.max(0, Math.floor(record.totalCount));
-  }
-  if (typeof record.total_count === "number" && Number.isFinite(record.total_count)) {
-    return Math.max(0, Math.floor(record.total_count));
-  }
-  if (Array.isArray(record.papers)) {
-    return record.papers.length;
-  }
-  if (Array.isArray(record.included)) {
-    return record.included.length;
-  }
-  if (Array.isArray(record.includedPapers)) {
-    return record.includedPapers.length;
-  }
-  if (Array.isArray(record.excluded)) {
-    return record.excluded.length;
-  }
-  if (Array.isArray(record.excludedPapers) || Array.isArray(record.backgroundPapers)) {
-    return (Array.isArray(record.excludedPapers) ? record.excludedPapers.length : 0) +
-      (Array.isArray(record.backgroundPapers) ? record.backgroundPapers.length : 0);
-  }
-  return 0;
-}
-
-function countQueryRounds(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return 0;
-  }
-  if (Array.isArray(record.rounds)) {
-    return record.rounds.length;
-  }
-  if (Array.isArray(record.retrieval_rounds)) {
-    return record.retrieval_rounds.length;
-  }
-  if (Array.isArray(record.retrievalRounds)) {
-    return record.retrievalRounds.length;
-  }
-  if (Array.isArray(record.queryRounds)) {
-    return record.queryRounds.length;
-  }
-  if (Array.isArray(record.queries)) {
-    return record.queries.length;
-  }
-  return 0;
-}
-
-function countPendingPlannedRounds(value: unknown): number {
-  const record = asRecord(value);
-  if (!record) {
-    return 0;
-  }
-  const planned =
-    (Array.isArray(record.planned_rounds) ? record.planned_rounds : null) ??
-    (Array.isArray(record.plannedRounds) ? record.plannedRounds : null) ??
-    [];
-  return planned.filter((entry) => {
-    const item = asRecord(entry);
-    const status = typeof item?.status === "string" ? item.status.trim().toLowerCase() : "";
-    return !status || status === "pending" || status === "planned" || status === "queued";
-  }).length;
-}
 
 function hasNonWhitespaceContent(text: string | null | undefined): boolean {
   return Boolean(text && text.trim().length > 0);
@@ -439,6 +368,8 @@ export async function materializeSurveyReviewStateImpl(params: {
 
   const [
     queryRegistry,
+    candidateJson,
+    screeningDecisionsJson,
     includedJson,
     excludedJson,
     literatureText,
@@ -451,6 +382,12 @@ export async function materializeSurveyReviewStateImpl(params: {
   ] = await Promise.all([
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, merged.queryRegistryPath) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, merged.candidatePapersPath) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, merged.screeningDecisionsPath) ?? ""
     ),
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, merged.includedPapersPath) ?? ""
@@ -487,10 +424,20 @@ export async function materializeSurveyReviewStateImpl(params: {
   const gapExists = hasNonWhitespaceContent(gapSynthesisText);
   const coverageExists = hasNonWhitespaceContent(coverageSummaryText);
 
-  const queryRoundCount = countQueryRounds(queryRegistry);
-  const pendingPlannedRounds = countPendingPlannedRounds(queryRegistry);
-  const includedPaperCount = countPaperEntries(includedJson);
-  const excludedPaperCount = countPaperEntries(excludedJson);
+  const querySummary = summarizeSurveyQueryRegistry(queryRegistry);
+  const screeningSummary = summarizeSurveyScreening({
+    candidatePapers: candidateJson,
+    screeningDecisions: screeningDecisionsJson,
+    includedPapers: includedJson,
+    excludedPapers: excludedJson,
+  });
+  const queryRoundCount = querySummary.queryRoundCount;
+  const pendingPlannedRounds = querySummary.pendingRoundCount;
+  const includedPaperCount = screeningSummary.includedCount;
+  const backgroundPaperCount = screeningSummary.backgroundCount;
+  const excludedPaperCount =
+    screeningSummary.excludedCount + screeningSummary.backgroundCount;
+  const pendingScreeningCount = screeningSummary.pendingCount;
   const candidatePaperCount =
     typeof (queryRegistry as Record<string, unknown> | null)?.candidate_paper_count ===
       "number"
@@ -515,7 +462,7 @@ export async function materializeSurveyReviewStateImpl(params: {
                 Number((queryRegistry as Record<string, unknown>).total_count)
               )
             : Math.max(
-                includedPaperCount + excludedPaperCount,
+                includedPaperCount + excludedPaperCount + pendingScreeningCount,
                 merged.candidatePaperCount ?? 0
               );
   const synthesizedFamilies = uniqueStrings([
@@ -594,7 +541,10 @@ export async function materializeSurveyReviewStateImpl(params: {
       candidatePaperCount,
       includedPaperCount,
       excludedPaperCount,
+      backgroundPaperCount,
       queryRoundCount,
+      pendingScreeningCount,
+      pendingPlannedRoundCount: pendingPlannedRounds,
     },
   });
 
@@ -614,6 +564,11 @@ export async function materializeSurveyReviewStateImpl(params: {
     currentPhase = "retrieval";
     pendingReason =
       `Continue retrieval before synthesis; ${pendingPlannedRounds} planned survey search rounds are still pending.`;
+  } else if (pendingScreeningCount > 0) {
+    status = "screening";
+    currentPhase = "screening";
+    pendingReason =
+      `Resolve ${pendingScreeningCount} pending screening candidate(s) before treating the survey packet as complete.`;
   } else if (!surveyBriefReady && (literatureReviewExists || sotaExists || gapExists)) {
     status = "synthesizing";
     currentPhase = "brief_synthesis";
@@ -681,6 +636,9 @@ export async function materializeSurveyReviewStateImpl(params: {
     candidate_paper_count: candidatePaperCount,
     included_paper_count: includedPaperCount,
     excluded_paper_count: excludedPaperCount,
+    background_paper_count: backgroundPaperCount,
+    pending_screening_count: pendingScreeningCount,
+    pending_planned_round_count: pendingPlannedRounds,
     graph_grounded_brief_ready:
       surveyBriefReady ||
       (coverageExists && literatureReviewExists && gapExists),
