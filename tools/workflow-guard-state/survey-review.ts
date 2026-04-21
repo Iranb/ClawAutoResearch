@@ -5,6 +5,10 @@ import {
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
+import {
+  DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH,
+  DEFAULT_SURVEY_SCREENING_DECISIONS_PATH,
+} from "../survey-review-artifacts";
 
 export type SurveyReviewState = {
   status: string;
@@ -19,6 +23,8 @@ export type SurveyReviewState = {
   reviewProtocolPath: string | null;
   includedPapersPath: string | null;
   excludedPapersPath: string | null;
+  candidatePapersPath: string | null;
+  screeningDecisionsPath: string | null;
   sotaMatrixPath: string | null;
   gapSynthesisPath: string | null;
   coverageSummaryPath: string | null;
@@ -26,7 +32,10 @@ export type SurveyReviewState = {
   candidatePaperCount: number | null;
   includedPaperCount: number | null;
   excludedPaperCount: number | null;
+  backgroundPaperCount: number | null;
   queryRoundCount: number | null;
+  pendingScreeningCount: number | null;
+  pendingPlannedRoundCount: number | null;
   graphGroundedBriefReady: boolean;
   diagnosticsPath: string | null;
   gateReady: boolean;
@@ -57,6 +66,7 @@ export const DEFAULT_SURVEY_INCLUDED_PAPERS_PATH =
   `${DEFAULT_SURVEY_DIR}/INCLUDED_PAPERS.json`;
 export const DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH =
   `${DEFAULT_SURVEY_DIR}/EXCLUDED_PAPERS.json`;
+export { DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH, DEFAULT_SURVEY_SCREENING_DECISIONS_PATH };
 export const DEFAULT_SURVEY_SOTA_MATRIX_PATH = `${DEFAULT_SURVEY_DIR}/SOTA_MATRIX.md`;
 export const DEFAULT_SURVEY_GAP_SYNTHESIS_PATH =
   `${DEFAULT_SURVEY_DIR}/GAP_SYNTHESIS.md`;
@@ -121,6 +131,12 @@ export function normalizeSurveyReviewState(value: unknown): SurveyReviewState {
     excludedPapersPath:
       pickString(record, ["excludedPapersPath", "excluded_papers_path"]) ??
       DEFAULT_SURVEY_EXCLUDED_PAPERS_PATH,
+    candidatePapersPath:
+      pickString(record, ["candidatePapersPath", "candidate_papers_path"]) ??
+      DEFAULT_SURVEY_CANDIDATE_PAPERS_PATH,
+    screeningDecisionsPath:
+      pickString(record, ["screeningDecisionsPath", "screening_decisions_path"]) ??
+      DEFAULT_SURVEY_SCREENING_DECISIONS_PATH,
     sotaMatrixPath:
       pickString(record, ["sotaMatrixPath", "sota_matrix_path"]) ??
       DEFAULT_SURVEY_SOTA_MATRIX_PATH,
@@ -142,8 +158,17 @@ export function normalizeSurveyReviewState(value: unknown): SurveyReviewState {
     excludedPaperCount: normalizeOptionalCount(
       record.excludedPaperCount ?? record.excluded_paper_count
     ),
+    backgroundPaperCount: normalizeOptionalCount(
+      record.backgroundPaperCount ?? record.background_paper_count
+    ),
     queryRoundCount: normalizeOptionalCount(
       record.queryRoundCount ?? record.query_round_count
+    ),
+    pendingScreeningCount: normalizeOptionalCount(
+      record.pendingScreeningCount ?? record.pending_screening_count
+    ),
+    pendingPlannedRoundCount: normalizeOptionalCount(
+      record.pendingPlannedRoundCount ?? record.pending_planned_round_count
     ),
     graphGroundedBriefReady:
       pickBoolean(record, [
@@ -215,6 +240,8 @@ export function serializeSurveyReviewState(
     review_protocol_path: state.reviewProtocolPath,
     included_papers_path: state.includedPapersPath,
     excluded_papers_path: state.excludedPapersPath,
+    candidate_papers_path: state.candidatePapersPath,
+    screening_decisions_path: state.screeningDecisionsPath,
     sota_matrix_path: state.sotaMatrixPath,
     gap_synthesis_path: state.gapSynthesisPath,
     coverage_summary_path: state.coverageSummaryPath,
@@ -222,7 +249,10 @@ export function serializeSurveyReviewState(
     candidate_paper_count: state.candidatePaperCount,
     included_paper_count: state.includedPaperCount,
     excluded_paper_count: state.excludedPaperCount,
+    background_paper_count: state.backgroundPaperCount,
     query_round_count: state.queryRoundCount,
+    pending_screening_count: state.pendingScreeningCount,
+    pending_planned_round_count: state.pendingPlannedRoundCount,
     graph_grounded_brief_ready: state.graphGroundedBriefReady,
     diagnostics_path: state.diagnosticsPath,
     gate_ready: state.gateReady,

@@ -2362,6 +2362,23 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   await writeText(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n- coverage blind spot\n- unresolved comparison\n");
   await writeText(path.join(projectRoot, "researcher", "COVERAGE_SUMMARY.md"), "# Coverage Summary\n- broad scope\n- blind spots documented\n");
   await writeText(path.join(projectRoot, "researcher", "REVIEW_PROTOCOL.md"), "# Review Protocol\n- inclusion / exclusion logic\n");
+  await writeJson(path.join(projectRoot, "researcher", "EXCLUDED_PAPERS.json"), {
+    backgroundPapers: [
+      {
+        title: "Open World Object Detection: A Survey",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "CANDIDATE_SCREENING_DECISIONS.json"), {
+    decisions: [
+      {
+        title: "Open World Object Detection: A Survey",
+        decision: "reference",
+        reason: "boundary survey for scope contrast",
+      },
+    ],
+  });
 
   const result = await executeWorkflowTool(tool, {
     action: "materialize_writing_support_artifacts",
@@ -2375,6 +2392,9 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_SELF_REVIEW.md"));
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_VISUALIZATION_PLAN.md"));
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_VISUAL_ASSET_INDEX.json"));
+  assert.ok(result.generatedFiles.includes("researcher/SOURCE_TO_CLAIM_INDEX.json"));
+  assert.ok(result.generatedFiles.includes("researcher/SURVEY_TRACEABILITY_AUDIT.json"));
+  assert.ok(result.generatedFiles.includes("analyzer/FAIR_COMPARE_MATRIX.json"));
   assert.ok(
     result.generatedFiles.includes(
       "academic_writer/paper/tables/survey_taxonomy_overview.tex"
@@ -2397,6 +2417,8 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   );
   assert.match(comparative, /Required Comparison Axes/i);
   assert.match(comparative, /tradeoff/i);
+  assert.match(comparative, /Open World Object Detection: A Survey/i);
+  assert.match(comparative, /Traceable synthesis claims/i);
 
   const visualizationPlan = await fs.readFile(
     path.join(projectRoot, "academic_writer", "SURVEY_VISUALIZATION_PLAN.md"),
@@ -2419,6 +2441,15 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   );
   assert.equal(Array.isArray(assetIndex.tableDrafts), true);
   assert.equal(Array.isArray(assetIndex.figureSpecs), true);
+  assert.ok(assetIndex.sourceArtifacts.includes("researcher/SOURCE_TO_CLAIM_INDEX.json"));
+
+  const traceabilityAudit = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "SURVEY_TRACEABILITY_AUDIT.json"),
+      "utf8"
+    )
+  );
+  assert.equal(typeof traceabilityAudit.traceabilityReady, "boolean");
 });
 
 test("research_workflow materialize_paragraph_logic_audit_state captures cross-paragraph breaks", async (t) => {

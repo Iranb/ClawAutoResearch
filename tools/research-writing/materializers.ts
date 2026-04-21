@@ -1,12 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { readJsonIfExists, readTextIfExists, writeTextEnsured } from "../workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { writeProjectJson } from "../research-contracts/core/project-io";
 import type {
   PaperStoryState,
   ReviewPressurePacketState,
 } from "../workflow-guard.js";
+import { normalizeSurveyReviewState } from "../workflow-guard-state/survey-review";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import { collectSurveyBackgroundReferenceLines } from "../survey-review-artifacts";
 import { setWritingSessionState } from "../workflow-guard-setters/writing-state-setters";
 import { syncAuthoringArtifactRecovery } from "./authoring-artifact-recovery";
 import {
@@ -22,7 +25,12 @@ import { materializeSurveyVisualCompiler } from "./survey-visual-compiler";
 import { materializeContributionToStoryBridge } from "./story-bridge";
 import { materializeVenueRoutingPlan } from "./venue-routing";
 import { materializeFigureTableRegistry } from "../research-authoring/figure-table-registry";
-import { materializeSurveyAnalysis } from "../research-authoring/survey-analysis";
+import {
+  DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
+  DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+  DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
+  materializeSurveyAnalysis,
+} from "../research-authoring/survey-analysis";
 import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
@@ -307,7 +315,10 @@ async function materializeSurveySectionDraftScaffolds(params: {
     const evidencePointers = uniqueStrings([
       "researcher/SURVEY_BRIEF.md",
       sectionId === "scope_and_protocol" ? "researcher/REVIEW_PROTOCOL.md" : null,
+      sectionId === "scope_and_protocol" ? "researcher/CANDIDATE_SCREENING_DECISIONS.json" : null,
+      sectionId === "scope_and_protocol" ? "researcher/EXCLUDED_PAPERS.json" : null,
       sectionId === "taxonomy" ? "researcher/SOTA_MATRIX.md" : null,
+      sectionId === "taxonomy" ? "researcher/INCLUDED_PAPERS.json" : null,
       sectionId === "evidence_synthesis" ? "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md" : null,
       sectionId === "benchmark_landscape" ? "academic_writer/SURVEY_VISUAL_INSERTION_MAP.json" : null,
       sectionId === "open_problems" ? "researcher/GAP_SYNTHESIS.md" : null,
@@ -392,6 +403,7 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
 }) {
   const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  const surveyState = normalizeSurveyReviewState(manifest.survey_review);
   const surveyReview =
     manifest.survey_review && typeof manifest.survey_review === "object"
       ? (manifest.survey_review as Record<string, unknown>)
@@ -412,6 +424,8 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
     gapSynthesis,
     coverageSummary,
     reviewProtocol,
+    excludedJson,
+    screeningDecisionsJson,
   ] = await Promise.all([
     readTextIfExists(path.join(params.projectRoot, "researcher", "SURVEY_BRIEF.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "LITERATURE_REVIEW.md")),
@@ -419,6 +433,18 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
     readTextIfExists(path.join(params.projectRoot, "researcher", "GAP_SYNTHESIS.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "COVERAGE_SUMMARY.md")),
     readTextIfExists(path.join(params.projectRoot, "researcher", "REVIEW_PROTOCOL.md")),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        surveyState.excludedPapersPath ?? "researcher/EXCLUDED_PAPERS.json"
+      ) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        surveyState.screeningDecisionsPath ?? "researcher/CANDIDATE_SCREENING_DECISIONS.json"
+      ) ?? ""
+    ),
   ]);
 
   const comparativeLines = uniqueStrings([
@@ -429,6 +455,24 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
   const gapLines = collectMarkdownSignalLines(gapSynthesis, 6);
   const briefLines = collectMarkdownSignalLines(surveyBrief, 6);
   const protocolLines = collectMarkdownSignalLines(reviewProtocol, 5);
+  const backgroundLines = collectSurveyBackgroundReferenceLines({
+    excludedPapers: excludedJson,
+    screeningDecisions: screeningDecisionsJson,
+    limit: 6,
+  });
+  const surveyAnalysis = await materializeSurveyAnalysis({
+    projectRoot: params.projectRoot,
+  });
+  const analysisSummaryLines = [
+    `Traceable synthesis claims: ${surveyAnalysis.traceableClaimCount}/${surveyAnalysis.claimCount}.`,
+    `Fair-compare rows available: ${surveyAnalysis.fairCompareRowCount}.`,
+    ...(surveyAnalysis.blockingIssues.length > 0
+      ? surveyAnalysis.blockingIssues.slice(0, 3)
+      : []),
+    ...(surveyAnalysis.warnings.length > 0
+      ? surveyAnalysis.warnings.slice(0, 2)
+      : []),
+  ];
 
   const comparativeAnalysisPath = path.join(
     params.projectRoot,
@@ -451,8 +495,14 @@ async function materializeSurveyWritingCompanionArtifacts(params: {
 ## Comparison Evidence To Reuse
 ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join("\n") : "- Expand SOTA matrix and literature review evidence before claiming strong comparative synthesis."}
 
+## Boundary / Related Anchors
+${backgroundLines.length > 0 ? backgroundLines.map((line) => `- ${line}`).join("\n") : "- Keep adjacent-task references visible when they explain scope boundaries or contrastive baselines."}
+
 ## Coverage / Boundary Reminders
 ${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries, blind spots, and excluded directions explicit."}
+
+## Comparability / Traceability Status
+${analysisSummaryLines.map((line) => `- ${line}`).join("\n")}
 
 ## Gap / Tradeoff Reminders
 ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie every open problem back to a concrete evidence gap rather than generic future work."}
@@ -474,6 +524,7 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie 
 - Explain inclusion / exclusion logic and search boundary.
 - Surface blind spots, recency limits, and incomparable settings.
 - Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.
+- Keep boundary references visible: ${backgroundLines.length > 0 ? backgroundLines.slice(0, 2).join("; ") : "related NCD / OWR / OSR / GZSL anchors when they explain exclusions"}.
 
 ## Taxonomy
 - Define stable method families and the principle that separates them.
@@ -519,13 +570,14 @@ Use this before calling the survey draft mature.
 ## Evidence Support
 - Can each synthesis claim be traced back to included papers, SOTA matrix evidence, or coverage artifacts?
 - Did any unsupported synthesis slip in?
+- Re-check ${DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH} and ${DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH} before calling the packet clean.
 
 ## Boundary Honesty
 - Did the draft admit where the packet is thin?
 - Did it avoid overclaiming field-wide consensus?
 
 ## Final Skeptical Questions
-${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What would a skeptical reviewer say is still thin, unsupported, or unfairly compared?"}
+${surveyAnalysis.blockingIssues.length > 0 ? surveyAnalysis.blockingIssues.map((line) => `- ${line}`).join("\n") : gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- What would a skeptical reviewer say is still thin, unsupported, or unfairly compared?"}
 `;
 
   const visualizationPlanPath = path.join(
@@ -720,13 +772,13 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
         "researcher/COVERAGE_SUMMARY.md",
         "researcher/GAP_SYNTHESIS.md",
         "researcher/REVIEW_PROTOCOL.md",
+        DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
+        DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+        DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
+        "analyzer/FAIR_COMPARE_MATRIX.json",
       ],
     }),
   ]);
-
-  await materializeSurveyAnalysis({
-    projectRoot: params.projectRoot,
-  });
   const visualCompiler = await materializeSurveyVisualCompiler({
     projectRoot: params.projectRoot,
   });
@@ -737,7 +789,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
   return {
     generatedFiles: [
       "academic_writer/SURVEY_COMPARATIVE_ANALYSIS.md",
-      "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
+      DEFAULT_SURVEY_COMPARABILITY_REPORT_PATH,
       "academic_writer/SURVEY_SECTION_BRIEFS.md",
       "academic_writer/SURVEY_SELF_REVIEW.md",
       "academic_writer/SURVEY_VISUALIZATION_PLAN.md",
@@ -746,9 +798,11 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
       "academic_writer/paper/tables/survey_benchmark_landscape.tex",
       "academic_writer/paper/figures/survey_taxonomy_map.md",
       "academic_writer/paper/figures/survey_benchmark_comparison_map.md",
+      "analyzer/FAIR_COMPARE_MATRIX.json",
       ...visualCompiler.generatedFiles,
       methodologyConsistency.path,
-      "researcher/SOURCE_TO_CLAIM_INDEX.json",
+      DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
+      DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
     ],
   };
 }

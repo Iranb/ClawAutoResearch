@@ -34,15 +34,17 @@ export async function materializeFinalConsistencyAudit(params: {
     `- Camera ready: ${cameraReady.status}`,
     `- Repro pack: ${repro.status}`,
     `- Checklist sync: ${checklistSync.ready ? "pass" : "fail"}`,
-    survey ? `- Survey analysis ready: ${survey.diagnostics.ready ? "yes" : "no"}` : "- Survey analysis: not applicable",
+    survey
+      ? `- Survey analysis ready: ${survey.diagnostics.ready && survey.traceabilityReady && survey.comparabilityReady ? "yes" : "no"}`
+      : "- Survey analysis: not applicable",
     "",
     "## Blocking issues",
     ...(citation.issues.length > 0 ? citation.issues.map((issue) => `- citation: ${issue}`) : ["- citation: none"]),
     ...(claimAudit.unsupportedClaimCount > 0 ? [`- claim-evidence: ${claimAudit.unsupportedClaimCount} unsupported claim(s)`] : ["- claim-evidence: none"]),
     ...(cameraReady.pendingReason ? [`- camera-ready: ${cameraReady.pendingReason}`] : ["- camera-ready: none"]),
     ...(repro.pendingReason ? [`- repro: ${repro.pendingReason}`] : ["- repro: none"]),
-    ...(survey && survey.diagnostics.blockingIssues.length > 0
-      ? survey.diagnostics.blockingIssues.map((issue) => `- survey: ${issue}`)
+    ...(survey && (survey.diagnostics.blockingIssues.length > 0 || survey.blockingIssues.length > 0)
+      ? [...survey.diagnostics.blockingIssues, ...survey.blockingIssues].map((issue) => `- survey: ${issue}`)
       : ["- survey: none"]),
   ];
   await writeProjectText(

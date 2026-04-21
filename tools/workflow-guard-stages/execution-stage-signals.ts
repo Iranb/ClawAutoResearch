@@ -406,6 +406,9 @@ export async function collectReviewStageMissingSignals(
   deps: ExecutionStageDeps
 ): Promise<string[]> {
   const missing: string[] = [];
+  const writingContract = deps.normalizeWritingContractState(ctx.manifest?.writing_contract);
+  const surveyReviewMode =
+    writingContract.paperMode === "survey" || writingContract.paper_mode === "survey";
   const reviewPacketPath = path.join(ctx.projectRoot, "reviewer", "REVIEW_PACKET.json");
   if (await deps.pathExists(reviewPacketPath)) {
     const reviewPacketAudit = auditReviewPacketObject(
@@ -523,6 +526,52 @@ export async function collectReviewStageMissingSignals(
     ) {
       missing.push(
         `PROJECT_MANIFEST.json.citation_integrity.topic_relevance_status must be ready before REVIEW closeout (current: ${citationIntegrity.topicRelevanceStatus})`
+      );
+    }
+  }
+  if (surveyReviewMode) {
+    const comparabilityReportPath = path.join(
+      ctx.projectRoot,
+      "academic_writer",
+      "SURVEY_COMPARABILITY_REPORT.md"
+    );
+    const sourceToClaimIndexPath = path.join(
+      ctx.projectRoot,
+      "researcher",
+      "SOURCE_TO_CLAIM_INDEX.json"
+    );
+    const traceabilityAuditPath = path.join(
+      ctx.projectRoot,
+      "researcher",
+      "SURVEY_TRACEABILITY_AUDIT.json"
+    );
+    const fairCompareMatrixPath = path.join(
+      ctx.projectRoot,
+      "analyzer",
+      "FAIR_COMPARE_MATRIX.json"
+    );
+    if (!(await deps.fileHasNonWhitespaceContent(comparabilityReportPath))) {
+      missing.push("{PROJ}/academic_writer/SURVEY_COMPARABILITY_REPORT.md");
+    }
+    if (!(await deps.fileHasNonWhitespaceContent(sourceToClaimIndexPath))) {
+      missing.push("{PROJ}/researcher/SOURCE_TO_CLAIM_INDEX.json");
+    }
+    if (!(await deps.fileHasNonWhitespaceContent(fairCompareMatrixPath))) {
+      missing.push("{PROJ}/analyzer/FAIR_COMPARE_MATRIX.json");
+    }
+    const traceabilityAudit = await deps.readJsonIfExists(traceabilityAuditPath);
+    if (!traceabilityAudit) {
+      missing.push("{PROJ}/researcher/SURVEY_TRACEABILITY_AUDIT.json");
+    } else if (traceabilityAudit.ready !== true) {
+      const issues = Array.isArray(traceabilityAudit.blockingIssues)
+        ? traceabilityAudit.blockingIssues
+            .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+            .slice(0, 2)
+        : [];
+      missing.push(
+        issues.length > 0
+          ? `survey traceability/comparability must be ready before REVIEW closeout: ${issues.join(" | ")}`
+          : "survey traceability/comparability must be ready before REVIEW closeout"
       );
     }
   }

@@ -1,11 +1,14 @@
 import * as path from "node:path";
-import { asRecord } from "./workflow-guard-core/coercion";
 import {
   readJsonIfExists,
   readTextIfExists,
   writeJsonEnsured,
 } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+import {
+  summarizeSurveyQueryRegistry,
+  summarizeSurveyScreening,
+} from "./survey-review-artifacts";
 import type { SurveyReviewState } from "./workflow-guard-state/survey-review";
 
 export type SurveyQualityGateDiagnostic = {
@@ -27,6 +30,9 @@ export type SurveyReviewDiagnostics = {
     candidatePapers: number;
     includedPapers: number;
     excludedPapers: number;
+    backgroundPapers: number;
+    pendingScreeningCandidates: number;
+    pendingPlannedRounds: number;
     sotaMatrixRows: number;
     taxonomyItems: number;
     gapItems: number;
@@ -37,65 +43,6 @@ export type SurveyReviewDiagnostics = {
   benchmarkAlignment: SurveyQualityGateDiagnostic;
   gapClosure: SurveyQualityGateDiagnostic;
 };
-
-function countPaperEntries(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return 0;
-  }
-  if (typeof record.totalCount === "number" && Number.isFinite(record.totalCount)) {
-    return Math.max(0, Math.floor(record.totalCount));
-  }
-  if (typeof record.total_count === "number" && Number.isFinite(record.total_count)) {
-    return Math.max(0, Math.floor(record.total_count));
-  }
-  if (Array.isArray(record.papers)) {
-    return record.papers.length;
-  }
-  if (Array.isArray(record.included)) {
-    return record.included.length;
-  }
-  if (Array.isArray(record.includedPapers)) {
-    return record.includedPapers.length;
-  }
-  if (Array.isArray(record.excluded)) {
-    return record.excluded.length;
-  }
-  if (Array.isArray(record.excludedPapers) || Array.isArray(record.backgroundPapers)) {
-    return (Array.isArray(record.excludedPapers) ? record.excludedPapers.length : 0) +
-      (Array.isArray(record.backgroundPapers) ? record.backgroundPapers.length : 0);
-  }
-  return 0;
-}
-
-function countQueryRounds(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return 0;
-  }
-  if (Array.isArray(record.rounds)) {
-    return record.rounds.length;
-  }
-  if (Array.isArray(record.retrieval_rounds)) {
-    return record.retrieval_rounds.length;
-  }
-  if (Array.isArray(record.retrievalRounds)) {
-    return record.retrievalRounds.length;
-  }
-  if (Array.isArray(record.queryRounds)) {
-    return record.queryRounds.length;
-  }
-  if (Array.isArray(record.queries)) {
-    return record.queries.length;
-  }
-  return 0;
-}
 
 function getCandidatePaperCount(
   queryRegistry: Record<string, unknown> | null,
@@ -226,6 +173,8 @@ export async function materializeSurveyReviewDiagnostics(params: {
     path.join(projectRoot, "researcher", "SURVEY_GATE_DIAGNOSTICS.json");
   const [
     queryRegistry,
+    candidateJson,
+    screeningDecisionsJson,
     includedJson,
     excludedJson,
     reviewProtocolText,
@@ -237,6 +186,12 @@ export async function materializeSurveyReviewDiagnostics(params: {
   ] = await Promise.all([
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, params.state.queryRegistryPath) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, params.state.candidatePapersPath) ?? ""
+    ),
+    readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, params.state.screeningDecisionsPath) ?? ""
     ),
     readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, params.state.includedPapersPath) ?? ""
@@ -252,12 +207,22 @@ export async function materializeSurveyReviewDiagnostics(params: {
     readTextIfExists(resolveProjectArtifactPath(projectRoot, params.state.surveyBriefPath)),
   ]);
 
-  const queryRounds = countQueryRounds(queryRegistry);
-  const includedPapers = countPaperEntries(includedJson);
-  const excludedPapers = countPaperEntries(excludedJson);
+  const querySummary = summarizeSurveyQueryRegistry(queryRegistry);
+  const screeningSummary = summarizeSurveyScreening({
+    candidatePapers: candidateJson,
+    screeningDecisions: screeningDecisionsJson,
+    includedPapers: includedJson,
+    excludedPapers: excludedJson,
+  });
+  const queryRounds = querySummary.queryRoundCount;
+  const includedPapers = screeningSummary.includedCount;
+  const excludedPapers = screeningSummary.excludedCount + screeningSummary.backgroundCount;
+  const backgroundPapers = screeningSummary.backgroundCount;
+  const pendingScreeningCandidates = screeningSummary.pendingCount;
+  const pendingPlannedRounds = querySummary.pendingRoundCount;
   const candidatePapers = getCandidatePaperCount(
     queryRegistry,
-    includedPapers + excludedPapers
+    includedPapers + excludedPapers + pendingScreeningCandidates
   );
   const coverageSummaryNormalized = normalizeText(coverageSummaryText);
   const literatureReviewNormalized = normalizeText(literatureReviewText);
@@ -378,17 +343,37 @@ export async function materializeSurveyReviewDiagnostics(params: {
       includedPapers >= 6 &&
       excludedPapers >= 1 &&
       coverageKeywords >= 2;
+    const explicitSaturationReady =
+      querySummary.hasExplicitSaturation &&
+      includedPapers >= 6 &&
+      excludedPapers >= 1 &&
+      coverageKeywords >= 2;
     const breadthReady =
-      broadCoverageReady || screenedBreadthReady || nicheCoverageReady;
+      (broadCoverageReady ||
+        screenedBreadthReady ||
+        nicheCoverageReady ||
+        explicitSaturationReady) &&
+      pendingPlannedRounds === 0 &&
+      pendingScreeningCandidates === 0;
     coverage = buildDiagnostic({
       status: breadthReady ? "ready" : "partial",
       summary: breadthReady
-        ? `Coverage looks reusable for synthesis: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, candidate=${candidatePapers}.`
-        : `Coverage is still thin or under-explained: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, candidate=${candidatePapers}.`,
+        ? `Coverage looks reusable for synthesis: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, background=${backgroundPapers}, candidate=${candidatePapers}.`
+        : `Coverage is still thin or under-explained: query_rounds=${queryRounds}, included=${includedPapers}, excluded=${excludedPapers}, background=${backgroundPapers}, pending_rounds=${pendingPlannedRounds}, pending_screening=${pendingScreeningCandidates}, candidate=${candidatePapers}.`,
       evidencePaths: [params.state.queryRegistryPath ?? "", params.state.coverageSummaryPath ?? ""].filter(Boolean),
       blockers: breadthReady
         ? []
         : [
+            ...(pendingPlannedRounds > 0
+              ? [
+                  `Finish the ${pendingPlannedRounds} pending retrieval round(s) recorded in the survey query registry before finalizing synthesis.`,
+                ]
+              : []),
+            ...(pendingScreeningCandidates > 0
+              ? [
+                  `Resolve ${pendingScreeningCandidates} pending screening candidate(s) before treating the survey packet as complete.`,
+                ]
+              : []),
             "Expand search breadth with more retrieval rounds and seed-based citation expansion before finalizing the survey synthesis.",
             "For broad topics, aim for roughly 40-50 candidates and a screened included/excluded split before WRITE handoff.",
           ],
@@ -535,6 +520,9 @@ export async function materializeSurveyReviewDiagnostics(params: {
       candidatePapers,
       includedPapers,
       excludedPapers,
+      backgroundPapers,
+      pendingScreeningCandidates,
+      pendingPlannedRounds,
       sotaMatrixRows: sotaTable.rows,
       taxonomyItems: uniqueTaxonomyItems.length,
       gapItems: gapItems.length,
