@@ -31,6 +31,9 @@ export type BenchmarkProtocolState = VersionedEvidenceContract & {
   registryPath: string | null;
   protocolLockPath: string | null;
   fairnessReportPath: string | null;
+  convergenceStatus: string | null;
+  convergenceReportPath: string | null;
+  candidatePath: string | null;
   officialEvalRecipe: string | null;
   locked: boolean;
   driftStatus: string | null;
@@ -104,6 +107,8 @@ export type OpportunityScorecardState = VersionedEvidenceContract & {
   scorecardPath: string | null;
   competitorObjectionCount: number;
   positioningStatus: string | null;
+  deltaPlanPath: string | null;
+  deltaPlannerStatus: string | null;
   graphContextStatus: string | null;
   pendingReason: string | null;
 };
@@ -142,6 +147,14 @@ export function normalizeBenchmarkProtocolState(value: unknown): BenchmarkProtoc
     fairnessReportPath:
       pickString(record, ["fairnessReportPath", "fairness_report_path"]) ??
       "researcher/BASELINE_FAIRNESS_REPORT.json",
+    convergenceStatus:
+      pickString(record, ["convergenceStatus", "convergence_status"]) ?? null,
+    convergenceReportPath:
+      pickString(record, ["convergenceReportPath", "convergence_report_path"]) ??
+      "researcher/PROTOCOL_CONVERGENCE_REPORT.json",
+    candidatePath:
+      pickString(record, ["candidatePath", "candidate_path"]) ??
+      "researcher/EXPERIMENT_PROTOCOL_CANDIDATE.json",
     officialEvalRecipe:
       pickString(record, ["officialEvalRecipe", "official_eval_recipe"]) ?? null,
     locked: pickBoolean(record, ["locked"]) ?? false,
@@ -285,6 +298,11 @@ export function normalizeOpportunityScorecardState(value: unknown): OpportunityS
       pickNumber(record, ["competitorObjectionCount", "competitor_objection_count"]) ?? 0,
     positioningStatus:
       pickString(record, ["positioningStatus", "positioning_status"]) ?? null,
+    deltaPlanPath:
+      pickString(record, ["deltaPlanPath", "delta_plan_path"]) ??
+      "researcher/VENUE_DELTA_PLAN.json",
+    deltaPlannerStatus:
+      pickString(record, ["deltaPlannerStatus", "delta_planner_status"]) ?? null,
     graphContextStatus:
       pickString(record, ["graphContextStatus", "graph_context_status"]) ?? null,
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]) ?? null,
@@ -306,6 +324,9 @@ export function serializeBenchmarkProtocolState(
     registry_path: state.registryPath,
     protocol_lock_path: state.protocolLockPath,
     fairness_report_path: state.fairnessReportPath,
+    convergence_status: state.convergenceStatus,
+    convergence_report_path: state.convergenceReportPath,
+    candidate_path: state.candidatePath,
     official_eval_recipe: state.officialEvalRecipe,
     locked: state.locked,
     drift_status: state.driftStatus,
@@ -421,6 +442,8 @@ export function serializeOpportunityScorecardState(
     scorecard_path: state.scorecardPath,
     competitor_objection_count: state.competitorObjectionCount,
     positioning_status: state.positioningStatus,
+    delta_plan_path: state.deltaPlanPath,
+    delta_planner_status: state.deltaPlannerStatus,
     graph_context_status: state.graphContextStatus,
     pending_reason: state.pendingReason,
   };

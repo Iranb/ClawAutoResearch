@@ -256,6 +256,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   assert.equal(opportunity.verdict, "worth_top_tier_bet");
   assert.equal(opportunity.positioningStatus, "ready");
   assert.equal(opportunity.competitorObjectionCount > 0, true);
+  assert.equal(opportunity.deltaPlannerStatus, "ready");
   assert.equal(mechanism.status, "ready");
   assert.equal(repro.status, "ready");
   assert.equal(cameraReady.status, "ready");
@@ -270,6 +271,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   assert.equal(manifest.venue_competition.objection_count > 0, true);
   assert.equal(manifest.opportunity_scorecard.positioning_status, "ready");
   assert.equal(manifest.opportunity_scorecard.competitor_objection_count > 0, true);
+  assert.equal(manifest.opportunity_scorecard.delta_planner_status, "ready");
   assert.equal(manifest.statistical_evidence.claim_strength_status, "strong");
   assert.equal(manifest.reproducibility_pack.status, "ready");
   assert.equal(manifest.camera_ready_evidence.status, "ready");
@@ -278,6 +280,7 @@ test("top-tier evidence architecture materializers produce durable artifacts and
   await fs.access(path.join(projectRoot, "researcher", "PROTOCOL_LOCK.json"));
   await fs.access(path.join(projectRoot, "researcher", "BASELINE_FAIRNESS_REPORT.json"));
   await fs.access(path.join(projectRoot, "researcher", "VENUE_COMPETITOR_OBJECTIONS.json"));
+  await fs.access(path.join(projectRoot, "researcher", "VENUE_DELTA_PLAN.json"));
   await fs.access(path.join(projectRoot, "analyzer", "STATISTICAL_EVIDENCE_SUMMARY.md"));
   await fs.access(path.join(projectRoot, "researcher", "PAPER_IDENTITY_REGISTRY.json"));
   await fs.access(path.join(projectRoot, "academic_writer", "FIGURE_REGISTRY.json"));

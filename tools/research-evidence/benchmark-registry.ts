@@ -11,6 +11,7 @@ import {
   writeProjectJson,
   writeProjectManifest,
 } from "../research-contracts/core/project-io";
+import { materializeBenchmarkProtocolConvergence } from "./protocol-convergence";
 
 type FairnessCheckStatus = "pass" | "warning" | "fail" | "unknown";
 
@@ -564,5 +565,7 @@ export async function materializeBenchmarkRegistry(params: {
   });
   manifest.benchmark_protocol = serializeBenchmarkProtocolState(next);
   await writeProjectManifest(params.projectRoot, manifest);
-  return next;
+  return await materializeBenchmarkProtocolConvergence({
+    projectRoot: params.projectRoot,
+  }).catch(() => next);
 }

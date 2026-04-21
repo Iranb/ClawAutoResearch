@@ -11,6 +11,7 @@ import {
   serializeVenueCompetitionState,
 } from "../research-contracts/evidence-contracts";
 import { materializePaperIdentityRegistry } from "./paper-identity-registry";
+import { materializeVenueDeltaPlan } from "./venue-delta-planner";
 
 type CompetitorSlateEntry = {
   canonicalId: string;
@@ -248,6 +249,9 @@ export async function materializeOpportunityScorecard(params: {
     benchmarkLocked ? 1 : 0,
     statisticalReady ? 1 : 0,
   ].reduce((sum, value) => sum + value, 0);
+  const deltaPlan = await materializeVenueDeltaPlan({
+    projectRoot: params.projectRoot,
+  });
   const verdict =
     score >= 3 ? "worth_top_tier_bet" : score === 2 ? "needs_stronger_evidence" : "not_ready_for_top_tier";
   const defaultScorecardPath = current.scorecardPath ?? "researcher/TOP_TIER_OPPORTUNITY.json";
@@ -266,6 +270,8 @@ export async function materializeOpportunityScorecard(params: {
     statisticalReady,
     competitorObjectionCount: venueCompetition.objectionCount,
     positioningStatus,
+    deltaPlanPath: deltaPlan.path,
+    deltaPlannerStatus: deltaPlan.status,
     graphContextStatus,
     acceptanceRiskStatus: venueCompetition.acceptanceRiskStatus,
   });
@@ -288,6 +294,14 @@ export async function materializeOpportunityScorecard(params: {
       (typeof patch.positioning_status === "string" && patch.positioning_status) ||
       (typeof patch.positioningStatus === "string" && patch.positioningStatus) ||
       positioningStatus,
+    delta_plan_path:
+      (typeof patch.delta_plan_path === "string" && patch.delta_plan_path) ||
+      (typeof patch.deltaPlanPath === "string" && patch.deltaPlanPath) ||
+      deltaPlan.path,
+    delta_planner_status:
+      (typeof patch.delta_planner_status === "string" && patch.delta_planner_status) ||
+      (typeof patch.deltaPlannerStatus === "string" && patch.deltaPlannerStatus) ||
+      deltaPlan.status,
     graph_context_status:
       (typeof patch.graph_context_status === "string" && patch.graph_context_status) ||
       (typeof patch.graphContextStatus === "string" && patch.graphContextStatus) ||
