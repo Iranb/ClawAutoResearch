@@ -541,7 +541,7 @@ export function formatWorkflowStatusText(params: {
   }
   if (snapshot.benchmarkProtocolStatus && snapshot.benchmarkProtocolStatus !== "missing") {
     lines.push(
-      `Benchmark protocol: status=${snapshot.benchmarkProtocolStatus}, family=${snapshot.benchmarkProtocolFamily ?? "unset"}, locked=${snapshot.benchmarkProtocolLocked ? "true" : "false"}, drift=${snapshot.benchmarkProtocolDriftStatus ?? "unset"}`
+      `Benchmark protocol: status=${snapshot.benchmarkProtocolStatus}, family=${snapshot.benchmarkProtocolFamily ?? "unset"}, metric=${snapshot.benchmarkProtocolPrimaryMetric ?? "unset"}, split=${snapshot.benchmarkProtocolSplitDescriptor ?? "unset"}, harness=${snapshot.benchmarkProtocolEvaluationHarness ?? "unset"}, locked=${snapshot.benchmarkProtocolLocked ? "true" : "false"}, drift=${snapshot.benchmarkProtocolDriftStatus ?? "unset"}, fair_compare=${snapshot.benchmarkProtocolFairCompareStatus ?? "unset"}, deviations=${snapshot.benchmarkProtocolAllowedDeviationStatus ?? "unset"}`
     );
   }
   if (snapshot.statisticalEvidenceStatus && snapshot.statisticalEvidenceStatus !== "missing") {

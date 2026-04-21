@@ -1871,6 +1871,14 @@ export type WorkflowSnapshot = {
   benchmarkProtocolFamily: string | null;
   benchmarkProtocolLocked: boolean;
   benchmarkProtocolDriftStatus: string | null;
+  benchmarkProtocolPrimaryMetric: string | null;
+  benchmarkProtocolSplitDescriptor: string | null;
+  benchmarkProtocolEvaluationHarness: string | null;
+  benchmarkProtocolFairCompareStatus: string | null;
+  benchmarkProtocolFairCompareSummary: string | null;
+  benchmarkProtocolAllowedDeviationCount: number | null;
+  benchmarkProtocolAllowedDeviationStatus: string | null;
+  benchmarkProtocolFairnessReportPath: string | null;
   benchmarkProtocolPath: string | null;
   benchmarkProtocolPendingReason: string | null;
   statisticalEvidenceStatus: string | null;
