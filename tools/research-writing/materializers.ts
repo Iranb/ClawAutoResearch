@@ -34,6 +34,7 @@ import {
   DEFAULT_SURVEY_TRACEABILITY_AUDIT_PATH,
   materializeSurveyAnalysis,
 } from "../research-authoring/survey-analysis";
+import { materializeSurveyReferenceAlignment } from "../research-authoring/survey-reference-alignment";
 import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
 
 const FALLBACK_RELEVANT_STAGES = new Set(["write", "review", "submit"]);
@@ -536,7 +537,7 @@ ${backgroundLines.length > 0 ? backgroundLines.map((line) => `- ${line}`).join("
 - Prefer full-text topic evidence over title-only guesswork when a title is generic or transfer-oriented.
 
 ## Coverage / Boundary Reminders
-${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries, blind spots, and excluded directions explicit."}
+${coverageLines.length > 0 ? coverageLines.map((line) => `- ${line}`).join("\n") : "- Keep scope boundaries and blind spots explicit."}
 
 ## Comparability / Traceability Status
 ${analysisSummaryLines.map((line) => `- ${line}`).join("\n")}
@@ -556,8 +557,8 @@ ${gapLines.length > 0 ? gapLines.map((line) => `- ${line}`).join("\n") : "- Tie 
       const defaultBullets =
         sectionId === "scope_and_protocol"
           ? [
-              "Explain inclusion / exclusion logic and search boundary.",
-              "Surface blind spots, recency limits, and incomparable settings.",
+              "Explain the selection protocol, search boundary, and scope boundary.",
+              "Surface blind spots, recency limits, and incomparable settings without turning the paper into an exclusion ledger.",
               `Reuse protocol evidence from ${protocolLines.length > 0 ? "REVIEW_PROTOCOL.md" : "the review protocol once refreshed"}.`,
               `Keep boundary references visible: ${backgroundLines.length > 0 ? backgroundLines.slice(0, 2).join("; ") : "related NCD / OWR / OSR / GZSL anchors when they explain exclusions"}.`,
               "If a paper's title is generic, rely on TOPIC_RELEVANCE_AUDIT.json before calling it core evidence.",
@@ -629,7 +630,7 @@ Use this before calling the survey draft mature.
 
 ## Coverage Breadth
 - Does the manuscript teach the field structure rather than only listing papers?
-- Are blind spots and exclusions explicit?
+- Are blind spots and scope boundaries explicit?
 
 ## Comparative Depth
 - Does each core section compare families, assumptions, and tradeoffs?
@@ -855,6 +856,9 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
   const methodologyConsistency = await materializeSurveyMethodologyConsistency({
     projectRoot: params.projectRoot,
   });
+  const referenceAlignment = await materializeSurveyReferenceAlignment({
+    projectRoot: params.projectRoot,
+  });
 
   return {
     generatedFiles: [
@@ -871,6 +875,7 @@ ${comparativeLines.length > 0 ? comparativeLines.map((line) => `- ${line}`).join
       "analyzer/FAIR_COMPARE_MATRIX.json",
       ...visualCompiler.generatedFiles,
       methodologyConsistency.path,
+      referenceAlignment.path,
       DEFAULT_SURVEY_EVIDENCE_PACKET_PATH,
       DEFAULT_SURVEY_SOURCE_TO_CLAIM_INDEX_PATH,
       DEFAULT_SURVEY_TOP_TIER_BRIDGE_PATH,

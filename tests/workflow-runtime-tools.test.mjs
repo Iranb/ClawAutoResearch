@@ -2461,6 +2461,7 @@ test("research_workflow materialize_writing_support_artifacts adds survey-specif
   assert.ok(result.generatedFiles.includes("academic_writer/SURVEY_VISUAL_ASSET_INDEX.json"));
   assert.ok(result.generatedFiles.includes("researcher/SOURCE_TO_CLAIM_INDEX.json"));
   assert.ok(result.generatedFiles.includes("researcher/SURVEY_EVIDENCE_PACKET.json"));
+  assert.ok(result.generatedFiles.includes("researcher/SURVEY_REFERENCE_ALIGNMENT.json"));
   assert.ok(result.generatedFiles.includes("researcher/SURVEY_TOP_TIER_BRIDGE.json"));
   assert.ok(result.generatedFiles.includes("researcher/SURVEY_TRACEABILITY_AUDIT.json"));
   assert.ok(result.generatedFiles.includes("analyzer/FAIR_COMPARE_MATRIX.json"));

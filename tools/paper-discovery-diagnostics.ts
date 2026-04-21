@@ -14,6 +14,7 @@ import {
 } from "./survey-review-artifacts";
 import { scorePaperTopicRelevance } from "./research30/topic-relevance";
 import { scoreSemanticTopicRelevance } from "./research30/semantic-relevance";
+import { scoreLearnedTopicRelevance } from "./research30/learned-relevance";
 import { readPaperBodyText } from "./research30/paper-body-text";
 
 export type LiteratureCoverageVerdict = "thin" | "adequate" | "strong";
@@ -69,6 +70,8 @@ export type TopicRelevanceAuditEntry = {
   score: number;
   lexicalScore: number;
   semanticScore: number;
+  learnedScore: number;
+  modelVersion: string;
   status: "relevant" | "boundary" | "off_topic" | "insufficient_evidence";
   evidenceSource: "missing" | "title" | "title_abstract" | "full_text";
   matchedTokens: string[];
@@ -247,7 +250,12 @@ async function evaluateTopicRelevanceForEntries(params: {
         title: entry.title,
         bodyText: body.text,
       });
-      const combinedScore = Math.max(relevance.score, semantic.rerankScore);
+      const learned = scoreLearnedTopicRelevance({
+        topic,
+        title: entry.title,
+        bodyText: body.text,
+      });
+      const combinedScore = Math.max(relevance.score, semantic.rerankScore, learned.score);
       const status: TopicRelevanceAuditEntry["status"] =
         combinedScore >= 45 ||
         (relevance.evidenceSource === "full_text" && semantic.rerankScore >= 40)
@@ -263,6 +271,8 @@ async function evaluateTopicRelevanceForEntries(params: {
         score: combinedScore,
         lexicalScore: relevance.score,
         semanticScore: semantic.rerankScore,
+        learnedScore: learned.score,
+        modelVersion: learned.modelVersion,
         status,
         evidenceSource: relevance.evidenceSource,
         matchedTokens: relevance.matchedTokens,
@@ -307,7 +317,7 @@ async function evaluateTopicRelevanceForEntries(params: {
     "## Top Entries",
     ...audit.entries.slice(0, 20).map(
       (entry) =>
-        `- ${entry.title ?? entry.canonicalId ?? "unknown"} | status=${entry.status} | score=${entry.score} | lexical=${entry.lexicalScore} | semantic=${entry.semanticScore.toFixed(1)} | evidence=${entry.evidenceSource} | matched=${entry.matchedTokens.join(", ") || "none"}`
+        `- ${entry.title ?? entry.canonicalId ?? "unknown"} | status=${entry.status} | score=${entry.score} | lexical=${entry.lexicalScore} | semantic=${entry.semanticScore.toFixed(1)} | learned=${entry.learnedScore.toFixed(1)} | evidence=${entry.evidenceSource} | matched=${entry.matchedTokens.join(", ") || "none"}`
     ),
     "",
   ].join("\n");

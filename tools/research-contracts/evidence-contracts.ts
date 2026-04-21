@@ -34,6 +34,8 @@ export type BenchmarkProtocolState = VersionedEvidenceContract & {
   convergenceStatus: string | null;
   convergenceReportPath: string | null;
   candidatePath: string | null;
+  writebackStatus: string | null;
+  writebackReportPath: string | null;
   officialEvalRecipe: string | null;
   locked: boolean;
   driftStatus: string | null;
@@ -155,6 +157,11 @@ export function normalizeBenchmarkProtocolState(value: unknown): BenchmarkProtoc
     candidatePath:
       pickString(record, ["candidatePath", "candidate_path"]) ??
       "researcher/EXPERIMENT_PROTOCOL_CANDIDATE.json",
+    writebackStatus:
+      pickString(record, ["writebackStatus", "writeback_status"]) ?? null,
+    writebackReportPath:
+      pickString(record, ["writebackReportPath", "writeback_report_path"]) ??
+      "researcher/EXPERIMENT_SEARCH_SPEC_WRITEBACK.json",
     officialEvalRecipe:
       pickString(record, ["officialEvalRecipe", "official_eval_recipe"]) ?? null,
     locked: pickBoolean(record, ["locked"]) ?? false,
@@ -327,6 +334,8 @@ export function serializeBenchmarkProtocolState(
     convergence_status: state.convergenceStatus,
     convergence_report_path: state.convergenceReportPath,
     candidate_path: state.candidatePath,
+    writeback_status: state.writebackStatus,
+    writeback_report_path: state.writebackReportPath,
     official_eval_recipe: state.officialEvalRecipe,
     locked: state.locked,
     drift_status: state.driftStatus,

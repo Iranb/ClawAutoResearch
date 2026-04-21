@@ -240,5 +240,6 @@ test("semantic reranker rescues synonym-heavy body text when lexical overlap is 
 
   assert.equal(topicAudit.entries[0].lexicalScore < topicAudit.entries[0].score, true);
   assert.equal(topicAudit.entries[0].semanticScore > topicAudit.entries[0].lexicalScore, true);
+  assert.equal(topicAudit.entries[0].learnedScore > topicAudit.entries[0].lexicalScore, true);
   assert.equal(topicAudit.entries[0].status, "relevant");
 });

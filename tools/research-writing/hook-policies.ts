@@ -939,6 +939,7 @@ function buildWritingHookPolicies(params: {
       "researcher/SURVEY_TOP_TIER_BRIDGE.json",
       "researcher/SURVEY_TRACEABILITY_AUDIT.json",
       "researcher/SURVEY_METHODOLOGY_CONSISTENCY.json",
+      "researcher/SURVEY_REFERENCE_ALIGNMENT.json",
       "academic_writer/SURVEY_COMPARABILITY_REPORT.md",
       "analyzer/FAIR_COMPARE_MATRIX.json",
     ]);
@@ -1016,7 +1017,7 @@ function buildWritingHookPolicies(params: {
             paperMode: params.paperMode,
             topTierVerdict: params.topTierVerdict,
             requirements: [
-              "This section must explain inclusion/exclusion logic, retrieval boundary, and known blind spots clearly.",
+              "This section must explain the selection protocol, retrieval boundary, and known blind spots clearly.",
               "Do not let protocol language drift away from REVIEW_PROTOCOL.md or COVERAGE_SUMMARY.md.",
             ],
             supportingArtifacts: surveySectionArtifacts,
@@ -1133,7 +1134,7 @@ function buildWritingHookPolicies(params: {
           topTierVerdict: params.topTierVerdict,
           requirements: [
             "Counts, date ranges, and protocol wording must stay internally consistent across abstract, introduction, scope/protocol, and the survey methodology support files.",
-            "If the manuscript or protocol still disagrees with INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, or SURVEY_METHODOLOGY_CONSISTENCY.json, request revision instead of waving it through.",
+            "If the manuscript or protocol still disagrees with INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SURVEY_METHODOLOGY_CONSISTENCY.json, or SURVEY_REFERENCE_ALIGNMENT.json, request revision instead of waving it through.",
             'Use "reviewed works" / "papers and preprints" language when the evidence set includes preprints; do not let the manuscript overstate that all entries are formally published papers.',
           ],
           supportingArtifacts: surveySectionArtifacts,
