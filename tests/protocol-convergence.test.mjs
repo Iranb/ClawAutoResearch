@@ -12,7 +12,7 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-test("protocol convergence becomes candidate_ready from survey bridge hints", async (t) => {
+test("protocol convergence writes a safe candidate into experiment search spec when fields are missing", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-protocol-convergence-"));
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
 
@@ -36,9 +36,11 @@ test("protocol convergence becomes candidate_ready from survey bridge hints", as
 
   const result = await materializeBenchmarkProtocolConvergence({ projectRoot });
 
-  assert.equal(result.convergenceStatus, "candidate_ready");
+  assert.equal(result.convergenceStatus, "converged");
+  assert.equal(result.writebackStatus, "written");
   await fs.access(path.join(projectRoot, "researcher", "EXPERIMENT_PROTOCOL_CANDIDATE.json"));
   await fs.access(path.join(projectRoot, "researcher", "PROTOCOL_CONVERGENCE_REPORT.json"));
+  await fs.access(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH_SPEC_WRITEBACK.json"));
 });
 
 test("protocol convergence becomes converged when experiment search spec matches survey candidate", async (t) => {
@@ -90,4 +92,40 @@ test("protocol convergence becomes converged when experiment search spec matches
   const benchmark = await materializeBenchmarkRegistry({ projectRoot });
 
   assert.equal(benchmark.convergenceStatus, "converged");
+});
+
+test("protocol convergence refuses to overwrite conflicting experiment search spec fields", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-protocol-conflict-"));
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    benchmark_protocol: {
+      status: "partial",
+      benchmark_family: "SurveyBench",
+      primary_metric: "Accuracy",
+      split_descriptor: "shared split",
+      fair_compare_status: "pass",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "SURVEY_TOP_TIER_BRIDGE.json"), {
+    benchmarkHints: {
+      selectedBenchmarkFamily: "SurveyBench",
+      selectedPrimaryMetric: "Accuracy",
+      protocolHints: ["shared split"],
+    },
+  });
+  await writeJson(path.join(projectRoot, "planner", "EXPERIMENT_SEARCH_SPEC.json"), {
+    search_envelope: {
+      benchmarkFamily: "OtherBench",
+    },
+    primary_metric_contract: {
+      metric_name: "F1",
+    },
+  });
+
+  const result = await materializeBenchmarkProtocolConvergence({ projectRoot });
+
+  assert.equal(result.writebackStatus, "conflict_blocked");
+  assert.equal(result.convergenceStatus, "candidate_ready");
 });

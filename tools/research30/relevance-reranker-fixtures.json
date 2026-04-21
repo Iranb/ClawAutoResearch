@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "modelVersion": "fixture-centroid-v1",
+  "items": [
+    {
+      "label": "positive",
+      "topic": "Generalized Category Discovery",
+      "title": "Generalized Category Discovery",
+      "bodyText": "Generalized category discovery evaluates unseen classes and open-world category grouping under a shared benchmark and protocol."
+    },
+    {
+      "label": "positive",
+      "topic": "Generalized Category Discovery",
+      "title": "A Practical Recipe",
+      "bodyText": "We study open-world recognition with unseen class clustering and novel label grouping under a shared protocol for category discovery."
+    },
+    {
+      "label": "positive",
+      "topic": "Generalized Category Discovery",
+      "title": "Learning through Creation",
+      "bodyText": "This work studies generalized category discovery in an on-the-fly setting and discusses the category discovery problem throughout."
+    },
+    {
+      "label": "negative",
+      "topic": "Generalized Category Discovery",
+      "title": "A Review of Deep Learning in Medical Imaging",
+      "bodyText": "This review surveys medical imaging, radiology workflows, and diagnosis models."
+    },
+    {
+      "label": "negative",
+      "topic": "Generalized Category Discovery",
+      "title": "Anchors: High-Precision Model-Agnostic Explanations",
+      "bodyText": "This paper explains black-box models with anchors and does not study novel class discovery benchmarks."
+    },
+    {
+      "label": "negative",
+      "topic": "Generalized Category Discovery",
+      "title": "Thermal Logs for Data Center Operations",
+      "bodyText": "This document covers cooling failures, rack temperatures, and infrastructure planning."
+    }
+  ]
+}
