@@ -48,6 +48,17 @@ export type WorkflowExecutionRuntime = WorkflowExecutionRuntimeLike & {
   run: NonNullable<WorkflowExecutionRuntimeLike["run"]>;
 };
 
+export type WorkflowBroadcastRuntime = {
+  run: (params: {
+    sessionKey: string;
+    message: string;
+    lane?: string;
+    deliver?: boolean;
+    idempotencyKey?: string;
+    extraSystemPrompt?: string;
+  }) => Promise<{ runId: string }>;
+};
+
 type WorkflowExecutionRuntimeApiLike = {
   config?: Record<string, unknown>;
   runtime?: {
@@ -565,6 +576,45 @@ function buildSubagentRuntime(params: {
   };
 }
 
+export function createWorkflowSubagentRuntimeFromApi(params: {
+  api: WorkflowExecutionRuntimeApiLike;
+}): WorkflowExecutionRuntime | undefined {
+  return buildSubagentRuntime({
+    runtimeApi: params.api,
+  });
+}
+
+export function createWorkflowMonitorRuntimeFromApi(params: {
+  api: WorkflowExecutionRuntimeApiLike;
+}): WorkflowExecutionRuntimeLike | undefined {
+  const subagent = params.api.runtime?.subagent;
+  if (
+    !subagent?.waitForRun &&
+    !subagent?.getSessionMessages &&
+    !subagent?.deleteSession
+  ) {
+    return undefined;
+  }
+  return {
+    runtimeKind: "subagent",
+    waitForRun: subagent.waitForRun,
+    getSessionMessages: subagent.getSessionMessages,
+    deleteSession: subagent.deleteSession,
+  };
+}
+
+export function createWorkflowBroadcastRuntimeFromApi(params: {
+  api: WorkflowExecutionRuntimeApiLike;
+}): WorkflowBroadcastRuntime | undefined {
+  const subagent = params.api.runtime?.subagent;
+  if (!subagent?.run) {
+    return undefined;
+  }
+  return {
+    run: subagent.run,
+  };
+}
+
 export function createWorkflowExecutionRuntimeFromApi(params: {
   api: WorkflowExecutionRuntimeApiLike;
   defaultWorkspaceDir?: string | null;
@@ -579,8 +629,8 @@ export function createWorkflowExecutionRuntimeFromApi(params: {
     defaultAgentId: params.defaultAgentId,
     defaultMessageChannel: params.defaultMessageChannel,
   });
-  const subagent = buildSubagentRuntime({
-    runtimeApi: params.api,
+  const subagent = createWorkflowSubagentRuntimeFromApi({
+    api: params.api,
   });
   return preferEmbedded ? embedded ?? subagent : subagent ?? embedded;
 }

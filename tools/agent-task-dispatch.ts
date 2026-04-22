@@ -512,7 +512,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
       attempts: [],
       fallbackSpawned: false,
       acknowledgedByMailbox: false,
-      error: "Plugin runtime subagent API is unavailable.",
+      error: "Workflow execution runtime is unavailable.",
     });
   }
   const alreadyActiveSessionKey = await findActiveTargetOwnerSession({

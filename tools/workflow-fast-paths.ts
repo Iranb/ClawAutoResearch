@@ -3069,7 +3069,7 @@ export async function startBackgroundWorkflowRun(params: {
 
   if (!params.runtimeSubagent) {
     return queueIfRuntimeUnavailable(
-      "Background workflow execution requires gateway runtime.subagent access."
+      "Background workflow execution requires an available workflow execution runtime."
     );
   }
 

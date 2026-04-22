@@ -32,6 +32,7 @@ import {
 } from "./workflow-session-orchestrator.js";
 import { runWorkflowRuntimeMaintenancePass } from "./workflow-runtime-maintenance.js";
 import {
+  createWorkflowBroadcastRuntimeFromApi,
   createWorkflowExecutionRuntimeFromApi,
   type WorkflowExecutionRuntime,
 } from "./workflow-execution-runtime.js";
@@ -5298,7 +5299,9 @@ export function createWorkflowCoordinatorService(
     api: plugin.api,
     defaultMessageChannel: "discord",
   });
-  const gatewayMessagingRuntime = plugin.api.runtime?.subagent;
+  const gatewayMessagingRuntime = createWorkflowBroadcastRuntimeFromApi({
+    api: plugin.api,
+  });
 
   const runTick = (logger: WorkflowCoordinatorLogger, trigger: string) => {
     if (inFlightTick) {

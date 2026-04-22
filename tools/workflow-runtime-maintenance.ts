@@ -263,7 +263,7 @@ async function replayQueueEntry(params: {
   if (!params.runtimeSubagent) {
     return {
       launched: false,
-      error: "Runtime subagent API is unavailable for workflow repair.",
+      error: "Workflow execution runtime is unavailable for workflow repair.",
       sessionKey: null,
     };
   }
