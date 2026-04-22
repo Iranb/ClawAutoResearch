@@ -42,6 +42,25 @@ CORE_AGENT_IDS=(researcher reviewer orchestrator coder analyzer academic_writer 
 AVAILABLE_AGENT_IDS=()
 OPTIONAL_AGENT_IDS=()
 SELECTED_AGENT_IDS=()
+OPENCLAW_AGENTS_JSON_CACHE=""
+OPENCLAW_AGENTS_JSON_LOADED=false
+OPENCLAW_AGENTS_JSON_STATUS="uninitialized"
+OPENCLAW_AGENTS_JSON_WARNED=false
+OPENCLAW_AGENTS_JSON_WARNING=""
+COMMAND_CAPTURE_STDOUT=""
+COMMAND_CAPTURE_STDERR=""
+COMMAND_CAPTURE_EXIT_CODE=0
+COMMAND_CAPTURE_TIMED_OUT=false
+INSTALL_SCRIPT_CACHE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-research-install-cache.XXXXXX")
+OPENCLAW_AGENTS_JSON_CACHE_FILE="$INSTALL_SCRIPT_CACHE_DIR/openclaw-agents.json"
+OPENCLAW_AGENTS_JSON_STATUS_FILE="$INSTALL_SCRIPT_CACHE_DIR/openclaw-agents.status"
+OPENCLAW_AGENTS_JSON_WARNED_FILE="$INSTALL_SCRIPT_CACHE_DIR/openclaw-agents.warned"
+
+cleanup_install_script_cache() {
+  rm -rf "$INSTALL_SCRIPT_CACHE_DIR"
+}
+
+trap cleanup_install_script_cache EXIT
 
 usage() {
   cat <<'EOF'
@@ -118,6 +137,80 @@ is_truthy() {
       return 1
       ;;
   esac
+}
+
+normalize_timeout_seconds() {
+  local raw="${1:-5}"
+  if [[ "$raw" =~ ^[0-9]+$ ]] && (( raw > 0 )); then
+    printf '%s\n' "$raw"
+  else
+    printf '5\n'
+  fi
+}
+
+run_command_capture_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  COMMAND_CAPTURE_STDOUT=""
+  COMMAND_CAPTURE_STDERR=""
+  COMMAND_CAPTURE_EXIT_CODE=0
+  COMMAND_CAPTURE_TIMED_OUT=false
+
+  if [[ -z "$timeout_seconds" || "$timeout_seconds" == "0" ]]; then
+    COMMAND_CAPTURE_STDOUT="$("$@" 2>/dev/null)" || COMMAND_CAPTURE_EXIT_CODE=$?
+    return "$COMMAND_CAPTURE_EXIT_CODE"
+  fi
+
+  local stdout_file
+  local stderr_file
+  local pid
+  local start_ts
+  local now_ts
+  stdout_file=$(mktemp "${TMPDIR:-/tmp}/openclaw-install-stdout.XXXXXX")
+  stderr_file=$(mktemp "${TMPDIR:-/tmp}/openclaw-install-stderr.XXXXXX")
+
+  (
+    "$@" >"$stdout_file" 2>"$stderr_file"
+  ) &
+  pid=$!
+  start_ts=$(date +%s)
+
+  while kill -0 "$pid" 2>/dev/null; do
+    now_ts=$(date +%s)
+    if (( now_ts - start_ts >= timeout_seconds )); then
+      COMMAND_CAPTURE_TIMED_OUT=true
+      kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      COMMAND_CAPTURE_STDOUT=$(cat "$stdout_file" 2>/dev/null || true)
+      COMMAND_CAPTURE_STDERR=$(cat "$stderr_file" 2>/dev/null || true)
+      COMMAND_CAPTURE_EXIT_CODE=124
+      rm -f "$stdout_file" "$stderr_file"
+      return 124
+    fi
+    sleep 0.1
+  done
+
+  wait "$pid"
+  COMMAND_CAPTURE_EXIT_CODE=$?
+  COMMAND_CAPTURE_STDOUT=$(cat "$stdout_file" 2>/dev/null || true)
+  COMMAND_CAPTURE_STDERR=$(cat "$stderr_file" 2>/dev/null || true)
+  rm -f "$stdout_file" "$stderr_file"
+  return "$COMMAND_CAPTURE_EXIT_CODE"
+}
+
+warn_openclaw_agents_json_issue() {
+  local message="$1"
+  if [[ -f "$OPENCLAW_AGENTS_JSON_WARNED_FILE" ]]; then
+    return 0
+  fi
+  OPENCLAW_AGENTS_JSON_WARNED=true
+  OPENCLAW_AGENTS_JSON_WARNING="$message"
+  : > "$OPENCLAW_AGENTS_JSON_WARNED_FILE"
+  echo "  WARN: $message" >&2
+  echo "        将回退到默认 workspace 路径，并继续安装，不再等待 openclaw agents list --json。" >&2
 }
 
 if is_truthy "${OPENCLAW_INSTALL_ASSUME_YES:-}"; then
@@ -639,9 +732,74 @@ sync_papernexus_skills() {
   update_skills_index_for_papernexus_skills
 }
 
+load_openclaw_agents_json_cache() {
+  if [[ -f "$OPENCLAW_AGENTS_JSON_STATUS_FILE" ]]; then
+    OPENCLAW_AGENTS_JSON_STATUS=$(cat "$OPENCLAW_AGENTS_JSON_STATUS_FILE" 2>/dev/null || printf 'unknown')
+    if [[ -f "$OPENCLAW_AGENTS_JSON_CACHE_FILE" ]]; then
+      OPENCLAW_AGENTS_JSON_CACHE=$(cat "$OPENCLAW_AGENTS_JSON_CACHE_FILE" 2>/dev/null || true)
+    else
+      OPENCLAW_AGENTS_JSON_CACHE=""
+    fi
+    OPENCLAW_AGENTS_JSON_LOADED=true
+    return 0
+  fi
+  OPENCLAW_AGENTS_JSON_LOADED=true
+  local raw
+  local sanitized
+  local timeout_seconds
+  timeout_seconds=$(normalize_timeout_seconds "${OPENCLAW_AGENTS_LIST_TIMEOUT_SECONDS:-5}")
+
+  if ! run_command_capture_with_timeout "$timeout_seconds" openclaw agents list --json; then
+    OPENCLAW_AGENTS_JSON_CACHE=""
+    if [[ "$COMMAND_CAPTURE_TIMED_OUT" == "true" ]]; then
+      OPENCLAW_AGENTS_JSON_STATUS="timeout"
+      printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+      : > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+      warn_openclaw_agents_json_issue "openclaw agents list --json 在 ${timeout_seconds}s 内未返回。"
+    else
+      OPENCLAW_AGENTS_JSON_STATUS="error"
+      printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+      : > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+      warn_openclaw_agents_json_issue "openclaw agents list --json 失败，无法读取已存在 agent/workspace。"
+    fi
+    return 0
+  fi
+
+  raw="$COMMAND_CAPTURE_STDOUT"
+  if [[ -z "$raw" ]]; then
+    OPENCLAW_AGENTS_JSON_STATUS="empty"
+    OPENCLAW_AGENTS_JSON_CACHE=""
+    printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+    : > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+    return 0
+  fi
+  sanitized=$(printf '%s\n' "$raw" | extract_first_json_array)
+  if [[ -n "$sanitized" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      if printf '%s\n' "$sanitized" | jq -e . >/dev/null 2>&1; then
+        OPENCLAW_AGENTS_JSON_STATUS="ok"
+        OPENCLAW_AGENTS_JSON_CACHE="$sanitized"
+        printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+        printf '%s\n' "$OPENCLAW_AGENTS_JSON_CACHE" > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+        return 0
+      fi
+    else
+      OPENCLAW_AGENTS_JSON_STATUS="ok"
+      OPENCLAW_AGENTS_JSON_CACHE="$sanitized"
+      printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+      printf '%s\n' "$OPENCLAW_AGENTS_JSON_CACHE" > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+      return 0
+    fi
+  fi
+  OPENCLAW_AGENTS_JSON_STATUS="raw"
+  OPENCLAW_AGENTS_JSON_CACHE="$raw"
+  printf '%s' "$OPENCLAW_AGENTS_JSON_STATUS" > "$OPENCLAW_AGENTS_JSON_STATUS_FILE"
+  printf '%s\n' "$OPENCLAW_AGENTS_JSON_CACHE" > "$OPENCLAW_AGENTS_JSON_CACHE_FILE"
+}
+
 get_existing_agent_ids() {
-  local json
-  json=$(get_openclaw_agents_json) || true
+  load_openclaw_agents_json_cache
+  local json="$OPENCLAW_AGENTS_JSON_CACHE"
   if [[ -z "$json" ]]; then
     return 0
   fi
@@ -654,8 +812,8 @@ get_existing_agent_ids() {
 
 get_existing_agent_workspace() {
   local id="$1"
-  local json
-  json=$(get_openclaw_agents_json) || true
+  load_openclaw_agents_json_cache
+  local json="$OPENCLAW_AGENTS_JSON_CACHE"
   if [[ -z "$json" ]]; then
     return 0
   fi
@@ -705,25 +863,8 @@ extract_first_json_array() {
 }
 
 get_openclaw_agents_json() {
-  local raw
-  local sanitized
-  raw=$(openclaw agents list --json 2>/dev/null) || true
-  if [[ -z "$raw" ]]; then
-    return 0
-  fi
-  sanitized=$(printf '%s\n' "$raw" | extract_first_json_array)
-  if [[ -n "$sanitized" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-      if printf '%s\n' "$sanitized" | jq -e . >/dev/null 2>&1; then
-        printf '%s\n' "$sanitized"
-        return 0
-      fi
-    else
-      printf '%s\n' "$sanitized"
-      return 0
-    fi
-  fi
-  printf '%s\n' "$raw"
+  load_openclaw_agents_json_cache
+  printf '%s\n' "$OPENCLAW_AGENTS_JSON_CACHE"
 }
 
 agent_exists() {
