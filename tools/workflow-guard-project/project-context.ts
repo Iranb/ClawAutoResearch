@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asString } from "../workflow-guard-core/coercion";
-import { readJsonIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
+import {
+  pathExists,
+  readJsonIfExists,
+  writeJsonEnsured,
+} from "../workflow-guard-core/fs";
 import {
   ensureWorkflowProjectRootImpl,
   sanitizeProjectIdFragment,
@@ -55,16 +59,45 @@ export type WorkflowProjectBootstrapParams = {
   workflowLine?: "experiment" | "survey";
 };
 
+const REQUIRED_WORKFLOW_TEMPLATE_FILES = [
+  "PROJECT_MANIFEST.json",
+  "TRACK_REGISTRY.json",
+  "EXPERIMENT_LEDGER.json",
+  "IDLE_RESEARCH.example.json",
+  "CLAIM_POLICY.md",
+] as const;
+
+async function hasRequiredWorkflowTemplates(templatesRoot: string): Promise<boolean> {
+  const checks = await Promise.all(
+    REQUIRED_WORKFLOW_TEMPLATE_FILES.map((relativePath) =>
+      pathExists(path.join(templatesRoot, relativePath))
+    )
+  );
+  return checks.every(Boolean);
+}
+
+async function resolveWorkflowTemplatesRoot(moduleUrl: string): Promise<string> {
+  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  const candidates = [
+    path.resolve(moduleDir, "..", "..", "templates"),
+    path.resolve(moduleDir, "..", "..", "..", "templates"),
+  ];
+  for (const candidate of candidates) {
+    if (await hasRequiredWorkflowTemplates(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `Workflow templates are missing or incomplete. Checked: ${candidates.join(", ")}`
+  );
+}
+
 export async function ensureWorkflowProjectRoot(
   params: WorkflowProjectBootstrapParams
 ): Promise<Awaited<ReturnType<typeof ensureWorkflowProjectRootImpl>>> {
+  const templatesRoot = await resolveWorkflowTemplatesRoot(import.meta.url);
   return await ensureWorkflowProjectRootImpl(params, {
-    templatesRoot: path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "templates"
-    ),
+    templatesRoot,
     readJsonIfExists,
     writeJsonEnsured,
     getExperimentLedgerPath: (projectRoot: string) =>

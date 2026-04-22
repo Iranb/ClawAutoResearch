@@ -44,6 +44,17 @@ async function fileExists(filePath) {
   }
 }
 
+async function syncTemplatesDir({ repoRoot, distRoot }) {
+  const sourceTemplatesRoot = path.join(repoRoot, "templates");
+  const distTemplatesRoot = path.join(distRoot, "templates");
+  if (!(await fileExists(sourceTemplatesRoot))) {
+    return false;
+  }
+  await fs.rm(distTemplatesRoot, { recursive: true, force: true });
+  await fs.cp(sourceTemplatesRoot, distTemplatesRoot, { recursive: true });
+  return true;
+}
+
 async function resolveRuntimeSpecifier(filePath, specifier) {
   if (!specifier.startsWith(".")) {
     return specifier;
@@ -182,6 +193,7 @@ export async function prepareDistRuntime({
   }
 
   const distToolsRoot = path.join(distRoot, "tools");
+  const templatesCopied = await syncTemplatesDir({ repoRoot, distRoot });
   const copiedHelpers = await copyJsOnlyToolHelpers({ toolsRoot, distToolsRoot });
   const runtimeFiles = await walkFiles(
     distRoot,
@@ -200,6 +212,7 @@ export async function prepareDistRuntime({
 
   return {
     copiedHelpers,
+    templatesCopied,
     runtimeFileCount: runtimeFiles.length,
     rewrittenCount,
   };
@@ -215,7 +228,7 @@ async function main() {
   });
 
   console.log(
-    `[prepare-dist-runtime] copied_helpers=${result.copiedHelpers.length} rewritten_files=${result.rewrittenCount} scanned_runtime_files=${result.runtimeFileCount}`
+    `[prepare-dist-runtime] copied_helpers=${result.copiedHelpers.length} templates_copied=${result.templatesCopied} rewritten_files=${result.rewrittenCount} scanned_runtime_files=${result.runtimeFileCount}`
   );
 }
 
