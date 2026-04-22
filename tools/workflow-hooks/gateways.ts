@@ -4,26 +4,10 @@ import { normalizeWritingContractState } from "../workflow-guard-state/writing-c
 import { mergeBuiltinWorkflowHooksIntoSummary } from "./builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
+import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type { WorkflowHookPoint, WorkflowLine, WorkflowPaperMode } from "./contracts.js";
 
-type RuntimeSubagentApi = {
-  run?: (params: {
-    sessionKey: string;
-    message: string;
-    lane?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-    extraSystemPrompt?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-    status: "ok" | "error" | "timeout";
-    error?: string;
-  }>;
-  getSessionMessages?: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-};
+type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
 
 function extractLatestReadableText(messages: unknown[]): string | null {
   for (const entry of [...messages].reverse()) {
@@ -166,6 +150,12 @@ export async function runWorkflowHookPointGate(params: {
                 extraSystemPrompt:
                   "Workflow file audit reviewer.\n" +
                   "Audit only the supplied target file packet and return the required JSON schema.",
+                projectRoot: params.projectRoot,
+                projectId: params.projectId,
+                ownerAgent: reviewerRole,
+                requesterSessionKey: params.requesterSessionKey ?? null,
+                messageChannel: params.requesterChannel ?? null,
+                workspaceDir: params.projectRoot,
               });
               return {
                 launched: true,

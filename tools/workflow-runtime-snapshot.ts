@@ -23,6 +23,7 @@ import {
   maybeRefreshGraphPresenceForSnapshot,
   reconcileBackgroundWorkflowStateForSnapshot,
 } from "./workflow-runtime-refresh.js";
+import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { maybePrepareWorkflowStageContracts } from "./workflow-guard-runtime/stage-preflight";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
@@ -62,10 +63,16 @@ export async function resolveWorkflowSnapshotContext(params: {
     });
 
   let snapshot = await buildSnapshot();
+  const workflowRuntime = createWorkflowExecutionRuntimeFromApi({
+    api: params.plugin.api,
+    defaultWorkspaceDir: params.agentCtx.workspaceDir ?? undefined,
+    defaultAgentId: params.agentCtx.agentId ?? undefined,
+    defaultMessageChannel: params.agentCtx.messageChannel ?? undefined,
+  });
   await reconcileBackgroundWorkflowStateForSnapshot({
     snapshot,
     workflowPolicy,
-    runtimeSubagent: params.plugin.api.runtime?.subagent,
+    runtimeSubagent: workflowRuntime ?? params.plugin.api.runtime?.subagent,
   });
   snapshot = await buildSnapshot();
 

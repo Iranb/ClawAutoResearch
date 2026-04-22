@@ -1,29 +1,13 @@
 import { readWorkflowAnnounceOutboxStore } from "../workflow-execution/runtime-store";
 import { recordWorkflowAnnounceEvent } from "../workflow-session-orchestrator.js";
+import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type { WorkflowHookReviewerAttempt } from "./contracts.js";
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-export type RuntimeSubagentApi = {
-  run?: (params: {
-    sessionKey: string;
-    message: string;
-    lane?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-    extraSystemPrompt?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-    status: "ok" | "error" | "timeout";
-    error?: string;
-  }>;
-  getSessionMessages?: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-};
+export type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
 
 export async function pollHookReviewerAttempts<
   TResult,

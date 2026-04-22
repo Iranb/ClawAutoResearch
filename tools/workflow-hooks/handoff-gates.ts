@@ -14,13 +14,14 @@ import {
 import { mergeBuiltinWorkflowHooksIntoSummary } from "./builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
+import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type {
   WorkflowHookPoint,
   WorkflowHookPointExecutionSummary,
   WorkflowLine,
   WorkflowPaperMode,
 } from "./contracts.js";
-import type { RuntimeSubagentApi } from "./runtime-review-loop.js";
+type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -212,6 +213,12 @@ export async function evaluateWorkflowHandoffHooks(params: {
                 extraSystemPrompt:
                   "Workflow handoff hook reviewer.\n" +
                   "Audit only the supplied handoff gate packet and return the required JSON schema.",
+                projectRoot: params.projectRoot,
+                projectId: params.projectId,
+                ownerAgent: reviewerRole,
+                requesterSessionKey: params.requesterSessionKey ?? null,
+                messageChannel: params.requesterChannel ?? null,
+                workspaceDir: params.projectRoot,
               });
               return {
                 launched: true,
