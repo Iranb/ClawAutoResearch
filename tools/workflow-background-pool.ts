@@ -18,6 +18,7 @@ import {
   withAdvisoryLock,
   writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
+import type { WorkflowExecutionRuntimeLike } from "./workflow-execution-runtime.js";
 import type {
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state.js";
@@ -77,16 +78,7 @@ export type BackgroundWorkflowSessionLease = {
   projectRoot: string | null;
 };
 
-type RuntimeSubagentWaitApi = {
-  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-    status: "ok" | "error" | "timeout";
-    error?: string;
-  }>;
-  deleteSession?: (params: {
-    sessionKey: string;
-    deleteTranscript?: boolean;
-  }) => Promise<void>;
-};
+type RuntimeSubagentWaitApi = WorkflowExecutionRuntimeLike;
 
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {

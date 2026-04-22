@@ -24,6 +24,7 @@ import {
   upsertWorkflowAgentSessionRegistryEntry,
 } from "./workflow-agent-session-registry";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
+import type { WorkflowExecutionRuntime } from "./workflow-execution-runtime.js";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -35,28 +36,7 @@ export type DispatchableWorkflowRole =
   | "reviewer"
   | "cross-reviewer";
 
-type RuntimeSubagentApi = {
-  run: (params: {
-    sessionKey: string;
-    message: string;
-    lane?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-    extraSystemPrompt?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-    status: "ok" | "error" | "timeout";
-    error?: string;
-  }>;
-  getSessionMessages?: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-  deleteSession?: (params: {
-    sessionKey: string;
-    deleteTranscript?: boolean;
-  }) => Promise<void>;
-};
+type RuntimeSubagentApi = WorkflowExecutionRuntime;
 
 export type WorkflowTaskDispatchAttempt = {
   strategy:
@@ -331,6 +311,10 @@ async function runSingleDispatchAttempt(params: {
       ]
         .filter(Boolean)
         .join("\n"),
+      projectRoot: params.projectRoot,
+      requesterSessionKey: params.requesterSessionKey,
+      messageChannel: params.requesterChannel ?? null,
+      workspaceDir: params.projectRoot,
     });
 
     const mailboxWaitTimeoutMs =

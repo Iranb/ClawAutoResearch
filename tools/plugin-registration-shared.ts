@@ -55,6 +55,25 @@ export type ApiLike = {
         deleteTranscript?: boolean;
       }) => Promise<void>;
     };
+    agent?: {
+      runEmbeddedAgent?: (params: Record<string, unknown>) => Promise<unknown>;
+      resolveAgentDir?: (cfg: unknown, agentId?: string) => string;
+      resolveAgentWorkspaceDir?: (cfg: unknown, agentId?: string) => string;
+      resolveAgentTimeoutMs?: (cfg: unknown) => number;
+      session?: {
+        resolveStorePath?: (store?: string, opts?: { agentId?: string }) => string;
+        loadSessionStore?: (storePath: string) => Record<string, unknown>;
+        saveSessionStore?: (
+          storePath: string,
+          store: Record<string, unknown>
+        ) => Promise<void>;
+        resolveSessionFilePath?: (
+          sessionId: string,
+          sessionEntry?: Record<string, unknown>,
+          opts?: { agentId?: string; sessionsDir?: string }
+        ) => string;
+      };
+    };
   };
   logger?: {
     debug?: (message: string, meta?: Record<string, unknown>) => void;

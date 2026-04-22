@@ -63,9 +63,16 @@ import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
 import type {
+  WorkflowExecutionRuntime,
+  WorkflowExecutionRuntimeLike,
+} from "./workflow-execution-runtime.js";
+import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state.js";
+
+type RuntimeSubagentApi = WorkflowExecutionRuntime;
+type RuntimeSubagentMonitorApi = WorkflowExecutionRuntimeLike;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -1356,23 +1363,13 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
 }): Promise<BackgroundRunRegistryEntry | null> {
   return getBackgroundWorkflowRunByQueueKeyFromPool(params);
 }
 
 async function pruneBackgroundRunRegistry(params: {
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
@@ -1516,12 +1513,7 @@ function matchesBackgroundRunRegistryFilters(
 }
 
 export async function listBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1535,16 +1527,7 @@ export async function listBackgroundWorkflowRuns(params: {
 }
 
 export async function pruneBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-    deleteSession?: (params: {
-      sessionKey: string;
-      deleteTranscript?: boolean;
-    }) => Promise<void>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1583,16 +1566,7 @@ function normalizeStageLike(value: unknown): string | null {
 }
 
 export async function retireBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-    deleteSession?: (params: {
-      sessionKey: string;
-      deleteTranscript?: boolean;
-    }) => Promise<void>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1625,12 +1599,7 @@ async function upsertBackgroundRunRegistryEntry(
 }
 
 export async function acquireBackgroundWorkflowSession(params: {
-  runtimeSubagent?: {
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-  };
+  runtimeSubagent?: RuntimeSubagentMonitorApi;
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
@@ -1779,24 +1748,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
 }
 
 export async function drainQueuedBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: {
-    run: (params: {
-      sessionKey: string;
-      message: string;
-      lane?: string;
-      deliver?: boolean;
-      idempotencyKey?: string;
-      extraSystemPrompt?: string;
-    }) => Promise<{ runId: string }>;
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-    getSessionMessages?: (params: {
-      sessionKey: string;
-      limit?: number;
-    }) => Promise<{ messages: unknown[] }>;
-  };
+  runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy?: {
     lobsterHandoff?: WorkflowLobsterHandoffConfig;
     projectsRoot?: string;
@@ -1948,8 +1900,9 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                   runId: dispatch.runId,
                   sessionKey: dispatch.sessionKey ?? sessionLease.sessionKey,
                   runtime:
-                    dispatch.channel === "sessions_spawn"
-                      ? "subagent"
+                    dispatch.channel === "sessions_spawn" ||
+                    dispatch.channel === "sessions_send"
+                      ? runtimeSubagent.runtimeKind ?? "subagent"
                       : "legacy_dispatch",
                   role: dispatchPayload.toRole,
                   agentId: dispatchPayload.toRole,
@@ -2124,11 +2077,17 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                   idempotencyKey:
                     runPayload.idempotencyKey ?? undefined,
                   extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+                  projectRoot: entry.projectRoot,
+                  projectId: entry.projectId,
+                  ownerAgent: entry.ownerAgent,
+                  requesterSessionKey: entry.requesterSessionKey,
+                  messageChannel: entry.messageChannel,
                 });
                 return {
                   runId: startedRun.runId,
                   sessionKey: backgroundSessionKey,
-                  runtime: "subagent",
+                  sessionId: startedRun.sessionId ?? null,
+                  runtime: startedRun.runtime ?? runtimeSubagent.runtimeKind ?? "subagent",
                   role: entry.ownerAgent,
                   agentId: entry.ownerAgent,
                   ownerAgent: entry.ownerAgent,
@@ -2157,6 +2116,11 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                 deliver: runPayload.deliver,
                 idempotencyKey: runPayload.idempotencyKey ?? undefined,
                 extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+                projectRoot: entry.projectRoot,
+                projectId: entry.projectId,
+                ownerAgent: entry.ownerAgent,
+                requesterSessionKey: entry.requesterSessionKey,
+                messageChannel: entry.messageChannel,
               });
         const effectiveBackgroundSessionKey =
           runLaunch?.sessionKey ?? backgroundSessionKey;
@@ -2552,24 +2516,7 @@ function buildWorkflowOwnedIngestionRequestPrompt(params: {
 }
 
 export async function maybeTriggerQueuedPaperIngestionRequest(params: {
-  runtimeSubagent?: {
-    run: (params: {
-      sessionKey: string;
-      message: string;
-      lane?: string;
-      deliver?: boolean;
-      idempotencyKey?: string;
-      extraSystemPrompt?: string;
-    }) => Promise<{ runId: string }>;
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-    deleteSession?: (params: {
-      sessionKey: string;
-      deleteTranscript?: boolean;
-    }) => Promise<void>;
-  };
+  runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
   snapshot: BackgroundRunSnapshot;
@@ -2829,24 +2776,7 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
 }
 
 export async function startBackgroundWorkflowRun(params: {
-  runtimeSubagent?: {
-    run: (params: {
-      sessionKey: string;
-      message: string;
-      lane?: string;
-      deliver?: boolean;
-      idempotencyKey?: string;
-      extraSystemPrompt?: string;
-    }) => Promise<{ runId: string }>;
-    waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-      status: "ok" | "error" | "timeout";
-      error?: string;
-    }>;
-    deleteSession?: (params: {
-      sessionKey: string;
-      deleteTranscript?: boolean;
-    }) => Promise<void>;
-  };
+  runtimeSubagent?: RuntimeSubagentApi;
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
   snapshot: BackgroundRunSnapshot;
@@ -3260,11 +3190,21 @@ export async function startBackgroundWorkflowRun(params: {
             deliver: false,
             idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
             extraSystemPrompt: mergedContinuationSystemPrompt,
+            projectRoot: resolvedProjectRoot,
+            projectId: resolvedProjectId,
+            ownerAgent,
+            requesterSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
+            messageChannel: params.agentCtx.messageChannel,
+            workspaceDir: resolvedProjectRoot ?? params.agentCtx.workspaceDir ?? null,
           });
           return {
             runId: started.runId,
             sessionKey: backgroundSessionKey,
-            runtime: "subagent",
+            sessionId: started.sessionId ?? null,
+            runtime:
+              started.runtime ??
+              params.runtimeSubagent!.runtimeKind ??
+              "subagent",
             role: ownerAgent,
             agentId: ownerAgent,
             ownerAgent,
@@ -3327,6 +3267,12 @@ export async function startBackgroundWorkflowRun(params: {
           deliver: false,
           idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${Date.now()}`,
           extraSystemPrompt: mergedContinuationSystemPrompt,
+          projectRoot: resolvedProjectRoot,
+          projectId: resolvedProjectId,
+          ownerAgent,
+          requesterSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
+          messageChannel: params.agentCtx.messageChannel,
+          workspaceDir: resolvedProjectRoot ?? params.agentCtx.workspaceDir ?? null,
         })
       ).runId;
   } catch (error) {
