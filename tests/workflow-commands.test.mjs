@@ -35,6 +35,20 @@ async function makeProject(projectsRoot, projectId, stage = "setup") {
   return projectRoot;
 }
 
+async function assertWorkflowProjectScaffold(projectRoot) {
+  for (const relativePath of [
+    "PROJECT_MANIFEST.json",
+    "TRACK_REGISTRY.json",
+    "CLAIM_POLICY.md",
+    path.join("researcher", "EXPERIMENT_LEDGER.json"),
+    path.join("researcher", "idle-research", "IDLE_RESEARCH.json"),
+    path.join("memory", "ideation-memory.md"),
+    path.join("memory", "experiment-memory.md"),
+  ]) {
+    await fs.access(path.join(projectRoot, relativePath));
+  }
+}
+
 function makeApi(overrides = {}) {
   return {
     config: {},
@@ -1262,7 +1276,13 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
 
+  await assertWorkflowProjectScaffold(projectRoot);
   assert.match(result.text ?? "", /Full-auto research pipeline started/i);
+  assert.equal(manifest.current_stage, "setup");
+  assert.equal(manifest.current_micro_stage, "project_init");
+  assert.equal(typeof manifest.idle_research, "object");
+  assert.equal(manifest.idle_research.enabled, false);
+  assert.equal(manifest.idle_research.status, "disabled");
   assert.equal(
     manifest.research_program.baseline_reference,
     "gcd confirmation bias mitigation literature baseline (auto-bootstrap)"
@@ -1359,9 +1379,13 @@ test("auto-review command bootstraps a survey project and starts the background 
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
 
+  await assertWorkflowProjectScaffold(projectRoot);
   assert.match(result.text ?? "", /Full-auto survey pipeline started/i);
   assert.equal(manifest.current_stage, "survey_review");
+  assert.equal(manifest.current_micro_stage, "retrieval");
   assert.equal(manifest.workflow_line, "survey");
+  assert.equal(typeof manifest.idle_research, "object");
+  assert.equal(manifest.idle_research.enabled, false);
   assert.equal(manifest.writing_contract.paper_mode, "survey");
   assert.equal(manifest.writing_contract.storyline_source, "survey_packet");
   assert.equal(manifest.writing_contract.kg_storyline_required, false);

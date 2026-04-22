@@ -64,6 +64,7 @@ import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
 import type {
   WorkflowExecutionRuntime,
+  WorkflowExecutionSessionInspection,
   WorkflowExecutionRuntimeLike,
 } from "./workflow-execution-runtime.js";
 import type {
@@ -132,6 +133,52 @@ function isGatewaySubagentUnavailableError(error: unknown): boolean {
     /gateway request/i.test(message) ||
     /runtime\.subagent/i.test(message) ||
     /plugin runtime subagent methods are only available/i.test(message)
+  );
+}
+
+function isWorkflowSessionInspectionTainted(
+  inspection: WorkflowExecutionSessionInspection | null | undefined
+): boolean {
+  if (!inspection) {
+    return false;
+  }
+  const normalizedStatus = inspection.status?.trim().toLowerCase() ?? null;
+  if (
+    normalizedStatus === "failed" ||
+    normalizedStatus === "completed" ||
+    normalizedStatus === "aborted"
+  ) {
+    return true;
+  }
+  return (
+    inspection.abortedLastRun ||
+    inspection.liveModelSwitchPending ||
+    Boolean(inspection.providerOverride) ||
+    Boolean(inspection.modelOverride)
+  );
+}
+
+async function maybeRotateBackgroundSessionKey(params: {
+  workflowRuntime?: WorkflowRuntimeApi;
+  sessionKey: string | null;
+  parentSessionKey: string | null | undefined;
+  purpose: string;
+  segments?: Array<string | null | undefined>;
+}): Promise<string | null> {
+  const sessionKey = readString(params.sessionKey) ?? null;
+  if (!sessionKey || !params.workflowRuntime?.inspectSession) {
+    return sessionKey;
+  }
+  const inspection = await params.workflowRuntime.inspectSession({ sessionKey });
+  if (!isWorkflowSessionInspectionTainted(inspection)) {
+    return sessionKey;
+  }
+  return (
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: params.parentSessionKey,
+      purpose: params.purpose,
+      segments: [...(params.segments ?? []), `run-${randomUUID().slice(0, 8)}`],
+    }) ?? sessionKey
   );
 }
 
@@ -2349,6 +2396,8 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     "This run was launched from a slash-command fast path into a dedicated workflow subagent session.",
     "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.",
     "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+    "Workflow ownership rule: do not use the generic Agent tool or ad hoc cross-role subagents from this continuation. Let research_workflow, auto_iterator, and workflow handoff own cross-role dispatch explicitly.",
+    "Session hygiene rule: stay inside the current owner role unless workflow state changes ownership. Record durable state and queue official workflow handoffs instead of freelancing into other roles.",
   ];
   if (papernexusBackground) {
     lines.push(
@@ -3153,7 +3202,24 @@ export async function startBackgroundWorkflowRun(params: {
       queueKey: queued.entry.queueKey,
     };
   }
-  const backgroundSessionKey = sessionLease.sessionKey;
+  const backgroundSessionPurpose =
+    isPapernexusBackgroundKind(normalizedKind) &&
+    looksLikePapernexusHeavyCommand(commandText)
+      ? "papernexus-skill"
+      : `workflow-${normalizedKind}`;
+  const backgroundSessionSegments =
+    isPapernexusBackgroundKind(normalizedKind) &&
+    looksLikePapernexusHeavyCommand(commandText)
+      ? [derivePapernexusTaskLabel(commandText)]
+      : [resolvedProjectId, topic];
+  const backgroundSessionKey =
+    (await maybeRotateBackgroundSessionKey({
+      workflowRuntime: params.workflowRuntime,
+      sessionKey: sessionLease.sessionKey,
+      parentSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
+      purpose: backgroundSessionPurpose,
+      segments: backgroundSessionSegments,
+    })) ?? sessionLease.sessionKey;
   const directLaunch = resolvedProjectRoot
     ? await orchestrateWorkflowTransition({
         transition: {
@@ -3166,7 +3232,7 @@ export async function startBackgroundWorkflowRun(params: {
           channelKey: channelKey ?? backgroundSessionKey,
           requesterSessionKey: requesterSessionKeyForOwner ?? params.agentCtx.sessionKey,
           messageChannel: params.agentCtx.messageChannel ?? null,
-          preferredSessionKey: preferredBackgroundSessionKey,
+          preferredSessionKey: backgroundSessionKey,
           family: normalizedFamily,
           kind: normalizedKind,
           summary:
@@ -3178,7 +3244,7 @@ export async function startBackgroundWorkflowRun(params: {
             message: commandText,
             lane: "nested",
             deliver: false,
-            idempotencyKey: `openclaw-research:bg:${preferredBackgroundSessionKey}:${queueKey}`,
+            idempotencyKey: `openclaw-research:bg:${backgroundSessionKey}:${queueKey}`,
             extraSystemPrompt: mergedContinuationSystemPrompt,
           },
         },
@@ -3221,7 +3287,7 @@ export async function startBackgroundWorkflowRun(params: {
         agentCtx: params.agentCtx,
         ownerAgent,
         queueKey,
-        preferredSessionKey: preferredBackgroundSessionKey,
+        preferredSessionKey: backgroundSessionKey,
         family: normalizedFamily,
         kind: normalizedKind,
         projectId:
@@ -3284,7 +3350,7 @@ export async function startBackgroundWorkflowRun(params: {
       agentCtx: params.agentCtx,
       ownerAgent,
       queueKey,
-      preferredSessionKey: preferredBackgroundSessionKey,
+      preferredSessionKey: backgroundSessionKey,
       family: normalizedFamily,
       kind: normalizedKind,
       projectId:

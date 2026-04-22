@@ -24,7 +24,10 @@ import {
   upsertWorkflowAgentSessionRegistryEntry,
 } from "./workflow-agent-session-registry";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
-import type { WorkflowExecutionRuntime } from "./workflow-execution-runtime.js";
+import type {
+  WorkflowExecutionRuntime,
+  WorkflowExecutionSessionInspection,
+} from "./workflow-execution-runtime.js";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -126,6 +129,28 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
     ordered.push(trimmed);
   }
   return ordered;
+}
+
+function isWorkflowSessionInspectionTainted(
+  inspection: WorkflowExecutionSessionInspection | null | undefined
+): boolean {
+  if (!inspection) {
+    return false;
+  }
+  const normalizedStatus = inspection.status?.trim().toLowerCase() ?? null;
+  if (
+    normalizedStatus === "failed" ||
+    normalizedStatus === "completed" ||
+    normalizedStatus === "aborted"
+  ) {
+    return true;
+  }
+  return (
+    inspection.abortedLastRun ||
+    inspection.liveModelSwitchPending ||
+    Boolean(inspection.providerOverride) ||
+    Boolean(inspection.modelOverride)
+  );
 }
 
 export function deriveWorkflowDispatchSessionCandidates(params: {
@@ -635,6 +660,31 @@ export async function dispatchWorkflowTaskToAgent(params: {
           requesterSessionKey: params.requesterSessionKey,
           targetRole: params.toRole,
         });
+  const filteredCandidates: string[] = [];
+  for (const candidate of candidates) {
+    if (!workflowRuntime.inspectSession) {
+      filteredCandidates.push(candidate);
+      continue;
+    }
+    const inspection = await workflowRuntime.inspectSession({
+      sessionKey: candidate,
+    });
+    if (isWorkflowSessionInspectionTainted(inspection)) {
+      attempts.push({
+        strategy:
+          filteredCandidates.length === 0 ? "direct_session" : "alternate_session",
+        sessionKey: candidate,
+        runId: null,
+        waitStatus: null,
+        dispatched: false,
+        acceptedByMailbox: false,
+        acceptedByTranscript: false,
+        error: "session_liveness_probe:tainted_session_state",
+      });
+      continue;
+    }
+    filteredCandidates.push(candidate);
+  }
   const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot).catch(
     () => null
   );
@@ -661,11 +711,11 @@ export async function dispatchWorkflowTaskToAgent(params: {
       canonicalMainSessionKey,
       mailboxMessageId,
       requireMailboxAcknowledgement,
-      candidates,
+      candidates: filteredCandidates,
     },
   });
 
-  for (const [index, sessionKey] of candidates.entries()) {
+  for (const [index, sessionKey] of filteredCandidates.entries()) {
     const runtimeStatus = resolveRuntimeSessionStatus({
       runtimeSessionStatuses,
       sessionKey,

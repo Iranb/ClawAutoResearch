@@ -350,6 +350,103 @@ test("dispatchWorkflowTaskToAgent falls back to a spawned session when direct de
   assert.equal(calls.length, 3);
 });
 
+test("dispatchWorkflowTaskToAgent skips tainted persisted session state and spawns a fresh fallback", async () => {
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async inspectSession(params) {
+        if (params.sessionKey === "agent:coder:discord:group:paper-lab") {
+          return {
+            sessionKey: params.sessionKey,
+            sessionId: "workflow.coder.old123",
+            sessionFile: "/tmp/old-coder-session.jsonl",
+            status: "failed",
+            startedAt: 100,
+            endedAt: 200,
+            updatedAt: 300,
+            abortedLastRun: false,
+            providerOverride: "qwen",
+            modelOverride: "qwen3.6-plus",
+            liveModelSwitchPending: true,
+          };
+        }
+        return null;
+      },
+      async run(params) {
+        calls.push(params.sessionKey);
+        return { runId: "run-fresh-fallback" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot: "/tmp/demo-project",
+    projectId: "demo-project",
+    summary: "Dispatch with tainted prior session state.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.notEqual(result.sessionKey, "agent:coder:discord:group:paper-lab");
+  assert.ok(
+    result.attempts.some(
+      (attempt) =>
+        attempt.sessionKey === "agent:coder:discord:group:paper-lab" &&
+        attempt.error === "session_liveness_probe:tainted_session_state"
+    )
+  );
+});
+
+test("dispatchWorkflowTaskToAgent skips persisted openai override session state", async () => {
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async inspectSession(params) {
+        if (params.sessionKey === "agent:coder:discord:group:paper-lab") {
+          return {
+            sessionKey: params.sessionKey,
+            sessionId: "workflow.coder.openai123",
+            sessionFile: "/tmp/openai-coder-session.jsonl",
+            status: "failed",
+            startedAt: 100,
+            endedAt: 200,
+            updatedAt: 300,
+            abortedLastRun: false,
+            providerOverride: "openai",
+            modelOverride: "gpt-5.4",
+            liveModelSwitchPending: false,
+          };
+        }
+        return null;
+      },
+      async run(params) {
+        calls.push(params.sessionKey);
+        return { runId: "run-openai-fallback" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot: "/tmp/demo-project",
+    projectId: "demo-project",
+    summary: "Dispatch with openai-tainted prior session state.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.notEqual(result.sessionKey, "agent:coder:discord:group:paper-lab");
+  assert.ok(
+    result.attempts.some(
+      (attempt) =>
+        attempt.sessionKey === "agent:coder:discord:group:paper-lab" &&
+        attempt.error === "session_liveness_probe:tainted_session_state"
+    )
+  );
+  assert.ok(calls.length >= 1);
+});
+
 test("dispatchWorkflowTaskToAgent avoids stale same-role capability records", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-dispatch-capability-")

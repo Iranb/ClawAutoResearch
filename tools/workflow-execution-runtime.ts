@@ -23,6 +23,20 @@ type WorkflowExecutionWaitResult = {
   error?: string;
 };
 
+export type WorkflowExecutionSessionInspection = {
+  sessionKey: string;
+  sessionId: string | null;
+  sessionFile: string | null;
+  status: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  updatedAt: number | null;
+  abortedLastRun: boolean;
+  providerOverride: string | null;
+  modelOverride: string | null;
+  liveModelSwitchPending: boolean;
+};
+
 export type WorkflowExecutionRuntimeLike = {
   runtimeKind?: "embedded_agent" | "subagent";
   run?: (params: WorkflowExecutionRunParams) => Promise<{
@@ -38,6 +52,9 @@ export type WorkflowExecutionRuntimeLike = {
     sessionKey: string;
     limit?: number;
   }) => Promise<{ messages: unknown[] }>;
+  inspectSession?: (params: {
+    sessionKey: string;
+  }) => Promise<WorkflowExecutionSessionInspection | null>;
   deleteSession?: (params: {
     sessionKey: string;
     deleteTranscript?: boolean;
@@ -161,6 +178,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function resolveEmbeddedWorkspaceDir(params: {
@@ -316,6 +337,28 @@ async function readSessionMessages(params: {
   } catch {
     return { messages: [] };
   }
+}
+
+function inspectPersistedSessionEntry(params: {
+  entry: Record<string, unknown> | null;
+  sessionKey: string;
+}): WorkflowExecutionSessionInspection | null {
+  if (!params.entry) {
+    return null;
+  }
+  return {
+    sessionKey: params.sessionKey,
+    sessionId: readString(params.entry.sessionId),
+    sessionFile: readString(params.entry.sessionFile),
+    status: readString(params.entry.status),
+    startedAt: readNumber(params.entry.startedAt),
+    endedAt: readNumber(params.entry.endedAt),
+    updatedAt: readNumber(params.entry.updatedAt),
+    abortedLastRun: params.entry.abortedLastRun === true,
+    providerOverride: readString(params.entry.providerOverride),
+    modelOverride: readString(params.entry.modelOverride),
+    liveModelSwitchPending: params.entry.liveModelSwitchPending === true,
+  };
 }
 
 function buildEmbeddedWorkflowRuntimeFacade(params: {
@@ -488,6 +531,30 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
         sessionId,
         agentId,
         limit: getParams.limit,
+      });
+    },
+    async inspectSession(inspectParams) {
+      pruneFinishedEmbeddedRuns();
+      const sessionKey = inspectParams.sessionKey.trim();
+      const state =
+        [...embeddedWorkflowRuns.values()]
+          .reverse()
+          .find((entry) => entry.sessionKey === sessionKey) ?? null;
+      const agentId =
+        state?.agentId ??
+        parseAgentIdFromSessionKey(sessionKey) ??
+        readString(params.defaultAgentId) ??
+        "researcher";
+      const sessionId = state?.sessionId ?? buildEmbeddedSessionId(sessionKey, agentId);
+      const storeState = readSessionStoreEntry({
+        runtimeApi: params.runtimeApi,
+        agentId,
+        sessionKey,
+        sessionId,
+      });
+      return inspectPersistedSessionEntry({
+        entry: storeState?.entry ?? null,
+        sessionKey,
       });
     },
     async deleteSession(deleteParams) {
