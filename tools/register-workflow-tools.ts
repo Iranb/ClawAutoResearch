@@ -291,6 +291,12 @@ type WorkflowToolState = {
 
 type AutoIteratorResult = Awaited<ReturnType<typeof runWorkflowAutoIterator>>;
 
+const TOOL_ACTIONS_AUTO_ACTIVATE_PENDING_HANDOFFS = new Set([
+  "materialize_plan_state",
+  "set_research_program",
+  "set_orchestration_state",
+]);
+
 function resolveSnapshotWorkflowLine(
   snapshot: WorkflowSnapshot
 ): "experiment" | "survey" {
@@ -337,6 +343,64 @@ function resolveWorkflowLineFromManifestRecord(
     return "survey";
   }
   return "experiment";
+}
+
+async function maybeAutoActivatePendingHandoffForToolAction(params: {
+  action: string;
+  plugin: PluginRegistrationContext;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  snapshot: WorkflowSnapshot;
+  ctx: ToolContext;
+  projectRoot: string | null;
+}) {
+  if (!TOOL_ACTIONS_AUTO_ACTIVATE_PENDING_HANDOFFS.has(params.action)) {
+    return { claimed: false, activated: false };
+  }
+  if (!params.projectRoot || !params.snapshot.role) {
+    return { claimed: false, activated: false };
+  }
+  return await claimAndActivateWorkflowHandoffForAgent({
+    projectRoot: params.projectRoot,
+    role: params.snapshot.role,
+    sessionKey: params.ctx.sessionKey,
+    claimLeaseMs: 15 * 60 * 1000,
+    beforeActivateHook: async ({ intent, stageAfter }) => {
+      const hookSummary = await runWorkflowHookPointGate({
+        runtimeSubagent: params.plugin.api.runtime?.subagent,
+        projectRoot: params.projectRoot!,
+        projectId: params.snapshot.projectId,
+        stage: stageAfter,
+        hookPoint: "before_handoff_activation",
+        ownerRole: params.snapshot.role,
+        actorRole: params.snapshot.role,
+        requesterSessionKey: params.ctx.sessionKey,
+        requesterChannel: params.ctx.messageChannel,
+        handoffIntentId: intent.intentId,
+        targetStage: stageAfter,
+        transition: "tool_handoff_activation",
+      });
+      return {
+        allow: hookSummary.aggregateVerdict === "pass",
+        blockingReason: hookSummary.blockingReason,
+      };
+    },
+    afterActivateHook: async ({ intent, stageAfter }) => {
+      await runWorkflowHookPointGate({
+        runtimeSubagent: params.plugin.api.runtime?.subagent,
+        projectRoot: params.projectRoot!,
+        projectId: params.snapshot.projectId,
+        stage: stageAfter,
+        hookPoint: "after_handoff_activation",
+        ownerRole: params.snapshot.role,
+        actorRole: params.snapshot.role,
+        requesterSessionKey: params.ctx.sessionKey,
+        requesterChannel: params.ctx.messageChannel,
+        handoffIntentId: intent.intentId,
+        targetStage: stageAfter,
+        transition: "tool_handoff_activation",
+      });
+    },
+  });
 }
 
 const SERIALIZED_WORKFLOW_ACTIONS = new Set([
@@ -2194,13 +2258,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
       async execute(_id, params) {
         const action = String(params.action ?? "");
         const executeAction = async () => {
-          const state = await resolveWorkflowToolState({
+          let state = await resolveWorkflowToolState({
             plugin,
             agentCtx: ctx,
             rawParams: params,
             action,
           });
-          const {
+          let {
             workflowPolicy,
             channelBinding,
             snapshot,
@@ -2233,6 +2297,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             });
           };
           await traceAction("started");
+          const handoffActivation = await maybeAutoActivatePendingHandoffForToolAction({
+            action,
+            plugin,
+            workflowPolicy,
+            snapshot,
+            ctx,
+            projectRoot,
+          });
+          if (handoffActivation.claimed) {
+            state = await resolveWorkflowToolState({
+              plugin,
+              agentCtx: ctx,
+              rawParams: params,
+              action,
+            });
+            ({
+              workflowPolicy,
+              channelBinding,
+              snapshot,
+              projectRoot,
+              projectRequiredMessage,
+              bindingRole,
+            } = state);
+            if (!handoffActivation.activated) {
+              throw new Error(
+                `Cannot execute ${action} before the pending ${snapshot.role ?? ctx.agentId ?? "workflow"} handoff is activated.${
+                  snapshot.blockingReason ? ` ${snapshot.blockingReason}` : ""
+                }`
+              );
+            }
+          }
           if (projectRoot && ctx.sessionKey) {
             const lobsterReadiness = await inspectWorkflowLobsterReadiness({
               config: workflowPolicy.lobsterHandoff,

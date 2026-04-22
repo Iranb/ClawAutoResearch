@@ -14,6 +14,8 @@ import { createPluginRegistrationContext } from "../tools/plugin-registration-sh
 import {
   bindChannelProjectForWorkflow,
 } from "../tools/workflow-guard.ts";
+import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
+import { syncPreparedWorkflowHandoffToManifest } from "../tools/workflow-handoff/handoff-activation.ts";
 import {
   clearBackgroundWorkflowRunRegistryForTests,
   recordBackgroundWorkflowRun,
@@ -21,8 +23,10 @@ import {
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import {
   getWorkflowRuntimeQueuePath,
+  readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeEvents,
   getWorkflowRuntimeSessionsPath,
+  writeWorkflowRuntimeQueueStore,
 } from "../tools/workflow-runtime-state.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
@@ -98,6 +102,104 @@ async function seedMinimalProject(projectRoot, manifest) {
   });
 }
 
+async function seedProjectWithPendingPlanHandoff(projectRoot) {
+  await seedMinimalProject(projectRoot, {
+    project_id: "demo-project",
+    current_stage: "idea",
+    current_micro_stage: "selection_ready",
+    owner_agent: "researcher",
+    orchestration_state: {
+      status: "waiting",
+      current_owner: "researcher",
+      next_transition_candidate: "plan",
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        trackId: "track-main",
+        track_id: "track-main",
+        status: "active",
+        name: "Main track",
+        hypothesis: "Graph-grounded plan should reach code cleanly.",
+      },
+    ],
+    active_tracks: 1,
+  });
+
+  const handoff = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "demo-project",
+    workflowLine: "experiment",
+    stageBefore: "idea",
+    stageAfter: "plan",
+    ownerBefore: "researcher",
+    ownerAfter: "orchestrator",
+    executionId: "exec-plan-1",
+    nextAction: "Run /plan-research.",
+    nextMicroStage: "planning_requested",
+  });
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot,
+    intent: handoff.intent,
+  });
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "demo-project",
+    entries: [
+      {
+        transitionId: "queue-plan-1",
+        queueId: "queue-plan-1",
+        queueKey: `handoff:${handoff.intent.intentId}`,
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "orchestrator",
+        channelKey: "discord:channel:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:channel:paper-lab",
+        messageChannel: "discord",
+        preferredSessionKey: "agent:orchestrator:discord:channel:paper-lab",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "demo-project",
+        projectRoot,
+        queuedAt: "2026-04-22T06:20:56.278Z",
+        lastAttemptedAt: null,
+        lastCheckedAt: null,
+        attemptCount: 0,
+        summary: "Queued plan handoff.",
+        status: "queued",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        runPayload: null,
+        dispatchPayload: {
+          requesterChannel: "discord",
+          requesterAccountId: null,
+          preferredSessionKeys: ["agent:orchestrator:discord:channel:paper-lab"],
+          fromRole: "researcher",
+          toRole: "orchestrator",
+          projectRoot,
+          projectId: "demo-project",
+          stage: "plan",
+          summary: "Run /plan-research.",
+          command: "Run /plan-research.",
+          mailboxMessageId: null,
+          requireMailboxAcknowledgement: true,
+          extraBody: "Continue only the assigned stage.",
+          waitTimeoutMs: 5000,
+          retryOnTimeout: false,
+          enableSpawnFallback: true,
+          useWorkflowHandoff: true,
+          autoModeActive: true,
+        },
+      },
+    ],
+  });
+  return handoff.intent.intentId;
+}
+
 async function seedPaperSourceIndex(projectRoot, papers) {
   await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
     papers,
@@ -114,6 +216,75 @@ async function writeExecutable(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
   await fs.chmod(targetPath, 0o755);
 }
+
+test("research_workflow plan-mutating actions auto-activate the pending owner handoff before writing state", async (t) => {
+  const scenarios = [
+    {
+      name: "materialize_plan_state",
+      params: {
+        action: "materialize_plan_state",
+        planMaterialization: {},
+      },
+    },
+    {
+      name: "set_research_program",
+      params: {
+        action: "set_research_program",
+        researchProgram: {
+          status: "approved",
+          goal: "Route the plan through the formal handoff activation path.",
+        },
+      },
+    },
+    {
+      name: "set_orchestration_state",
+      params: {
+        action: "set_orchestration_state",
+        orchestrationState: {
+          status: "running",
+          current_owner: "orchestrator",
+          next_transition_candidate: "code",
+        },
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async (t) => {
+      const projectRoot = await makeProjectRoot();
+      t.after(async () => {
+        await fs.rm(projectRoot, { recursive: true, force: true });
+      });
+
+      const intentId = await seedProjectWithPendingPlanHandoff(projectRoot);
+      const tool = createResearchWorkflowTool({
+        workspaceDir: projectRoot,
+        agentId: "orchestrator",
+        sessionKey: "agent:orchestrator:discord:channel:paper-lab",
+        messageChannel: "discord",
+      });
+
+      await executeWorkflowTool(tool, scenario.params);
+
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+      );
+      assert.equal(manifest.current_stage, "plan");
+      assert.equal(manifest.owner_agent, "orchestrator");
+      assert.equal(manifest.orchestration_state.current_owner, "orchestrator");
+      assert.equal(manifest.orchestration_state.pending_handoff_id, null);
+      assert.equal(manifest.orchestration_state.pending_owner_candidate, null);
+      assert.equal(manifest.orchestration_state.pending_stage_candidate, null);
+      assert.equal(manifest.orchestration_state.handoff_phase, "activated");
+
+      const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+      const queueEntry = queue.entries.find((entry) => entry.queueKey === `handoff:${intentId}`);
+      assert.ok(queueEntry);
+      assert.equal(queueEntry.status, "completed");
+      assert.equal(queueEntry.lastError, null);
+    });
+  }
+});
 
 async function writeFakeResearch30Script(targetPath) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
