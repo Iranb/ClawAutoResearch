@@ -54,6 +54,7 @@ import {
   readAutoModeDiscussionStore,
 } from "./workflow-auto-discussion.js";
 import { enqueueWorkflowTask, resolveWorkflowQueueKey } from "./workflow-coordination.js";
+import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 
 // Import types and utilities from decoupled modules
 import {
@@ -78,6 +79,20 @@ import {
   formatWorkflowCommandArgument,
 } from "./workflow-commands/parsers.js";
 import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
+
+function createWorkflowCommandRuntime(params: {
+  api: WorkflowCommandApi;
+  workspaceDir?: string | null;
+  agentId?: string | null;
+  messageChannel?: string | null;
+}) {
+  return createWorkflowExecutionRuntimeFromApi({
+    api: params.api,
+    defaultWorkspaceDir: params.workspaceDir ?? undefined,
+    defaultAgentId: params.agentId ?? undefined,
+    defaultMessageChannel: params.messageChannel ?? undefined,
+  });
+}
 
 import {
   formatWorkflowStatusText,
@@ -778,7 +793,16 @@ function createBackgroundWorkflowCommandHandler(
           : target.workspaceDir ?? undefined;
 
           return deps.startBackgroundWorkflowRun({
-            runtimeSubagent: api.runtime?.subagent,
+            runtimeSubagent: createWorkflowCommandRuntime({
+              api,
+              workspaceDir:
+                commandSnapshot.projectRoot ??
+                resolvedBackgroundWorkspaceDir ??
+                target.workspaceDir ??
+                undefined,
+              agentId: resolvedBackgroundAgentId ?? undefined,
+              messageChannel: ctx.channel,
+            }),
             workflowPolicy,
             agentCtx: {
               agentId: resolvedBackgroundAgentId,
@@ -1237,7 +1261,12 @@ function createAutoResearchCommandHandler(
       });
 
       const started = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: api.runtime?.subagent,
+        runtimeSubagent: createWorkflowCommandRuntime({
+          api,
+          workspaceDir: ensuredProject.projectRoot,
+          agentId: "researcher",
+          messageChannel: ctx.channel,
+        }),
         workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -1368,7 +1397,12 @@ function createAutoReviewCommandHandler(
       });
 
       const started = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: api.runtime?.subagent,
+        runtimeSubagent: createWorkflowCommandRuntime({
+          api,
+          workspaceDir: ensuredProject.projectRoot,
+          agentId: "researcher",
+          messageChannel: ctx.channel,
+        }),
         workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -1763,7 +1797,12 @@ function createSurveyGraphBuildCommandHandler(
 
       const topic = extractQuotedSegment(ctx.args) ?? snapshot.projectId ?? "survey graph build";
       const result = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: api.runtime?.subagent,
+        runtimeSubagent: createWorkflowCommandRuntime({
+          api,
+          workspaceDir: snapshot.projectRoot ?? target.workspaceDir ?? undefined,
+          agentId: "researcher",
+          messageChannel: ctx.channel,
+        }),
         workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -2063,7 +2102,11 @@ async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   try {
     await Promise.race([
       drainQueuedBackgroundWorkflowRuns({
-        runtimeSubagent: api.runtime?.subagent,
+        runtimeSubagent: createWorkflowCommandRuntime({
+          api,
+          workspaceDir: workflowPolicy.projectsRoot,
+          messageChannel: "discord",
+        }),
         workflowPolicy,
         projectsRoot: workflowPolicy.projectsRoot,
         ignoreRetryBackoff: true,

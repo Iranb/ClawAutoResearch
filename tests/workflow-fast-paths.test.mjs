@@ -43,6 +43,7 @@ import {
   retireBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
+import { createWorkflowExecutionRuntimeFromApi } from "../tools/workflow-execution-runtime.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fast-paths-"));
@@ -51,6 +52,88 @@ async function makeTempWorkspace() {
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function createEmbeddedRuntimeHarness(rootDir) {
+  const sessionStores = new Map();
+  const resolveStorePath = (_store, opts = {}) =>
+    path.join(rootDir, "agents", opts.agentId ?? "main", "sessions", "sessions.json");
+  const resolveSessionFilePath = (sessionId, entry, opts = {}) =>
+    entry?.sessionFile ??
+    path.join(opts.sessionsDir ?? path.join(rootDir, "agents", opts.agentId ?? "main", "sessions"), `${sessionId}.jsonl`);
+  const api = {
+    config: {
+      session: {
+        store: path.join(rootDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    },
+    runtime: {
+      agent: {
+        async runEmbeddedAgent(params) {
+          const storePath = resolveStorePath(undefined, { agentId: params.agentId });
+          const sessionFile = resolveSessionFilePath(params.sessionId, undefined, {
+            agentId: params.agentId,
+            sessionsDir: path.dirname(storePath),
+          });
+          await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+          const store = sessionStores.get(storePath) ?? {};
+          store[params.sessionKey] = {
+            sessionId: params.sessionId,
+            sessionFile,
+          };
+          sessionStores.set(storePath, store);
+          await fs.writeFile(
+            sessionFile,
+            [
+              JSON.stringify({ type: "session", id: params.sessionId }),
+              JSON.stringify({
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "text",
+                      text: `Embedded workflow completed: ${params.prompt}`,
+                    },
+                  ],
+                },
+              }),
+            ].join("\n") + "\n",
+            "utf8"
+          );
+          return { ok: true };
+        },
+        resolveAgentDir(_cfg, agentId) {
+          return path.join(rootDir, "agents", agentId ?? "main", "agent");
+        },
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return path.join(rootDir, "workspace", agentId ?? "main");
+        },
+        resolveAgentTimeoutMs() {
+          return 5_000;
+        },
+        session: {
+          resolveStorePath,
+          loadSessionStore(storePath) {
+            return sessionStores.get(storePath) ?? {};
+          },
+          async saveSessionStore(storePath, store) {
+            sessionStores.set(storePath, { ...store });
+          },
+          resolveSessionFilePath,
+        },
+      },
+    },
+    logger: {
+      debug() {},
+      warn() {},
+    },
+  };
+  return createWorkflowExecutionRuntimeFromApi({
+    api,
+    defaultWorkspaceDir: rootDir,
+    defaultAgentId: "researcher",
+    defaultMessageChannel: "discord",
+  });
 }
 
 test.beforeEach(async () => {
@@ -1259,6 +1342,65 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   assert.equal(runtimeQueue.entries[0].status, "running");
   assert.equal(runtimeQueue.entries[0].entryType, "background_run");
   assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
+});
+
+test("startBackgroundWorkflowRun can use embedded workflow runtime without gateway subagent access", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const workflowRuntime = createEmbeddedRuntimeHarness(workspaceRoot);
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    runtimeSubagent: workflowRuntime,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-embedded-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery with semantic shift",
+      summary: "Starting embedded background pipeline",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.reason, "started");
+  assert.equal(result.queued, false);
+  assert.ok(result.runId);
+  assert.match(result.summary, /starting embedded background pipeline/i);
+
+  const projectRoot = result.projectRoot;
+  const runtimeQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(runtimeQueue.entries.length, 1);
+  assert.equal(runtimeQueue.entries[0].status, "running");
+  assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
+
+  const waited = await workflowRuntime.waitForRun({
+    runId: result.runId,
+    timeoutMs: 500,
+  });
+  assert.equal(waited.status, "ok");
+  const transcript = await workflowRuntime.getSessionMessages({
+    sessionKey: result.sessionKey,
+    limit: 5,
+  });
+  assert.match(JSON.stringify(transcript.messages), /Embedded workflow completed/);
 });
 
 test("startBackgroundWorkflowRun tolerates empty legacy background registry and queue files", async (t) => {

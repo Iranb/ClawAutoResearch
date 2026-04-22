@@ -41,29 +41,9 @@ import {
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
+import type { WorkflowExecutionRuntime } from "./workflow-execution-runtime.js";
 
-type RuntimeSubagentApi = {
-  run: (params: {
-    sessionKey: string;
-    message: string;
-    lane?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-    extraSystemPrompt?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
-    status: "ok" | "error" | "timeout";
-    error?: string;
-  }>;
-  getSessionMessages?: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-  deleteSession?: (params: {
-    sessionKey: string;
-    deleteTranscript?: boolean;
-  }) => Promise<void>;
-};
+type RuntimeSubagentApi = WorkflowExecutionRuntime;
 
 type LoggerLike = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -314,11 +294,21 @@ async function replayQueueEntry(params: {
             runPayload.idempotencyKey ??
             `workflow-repair:${entry.queueKey}:${Date.now()}`,
           extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+          ownerAgent: entry.ownerAgent,
+          requesterSessionKey: entry.requesterSessionKey,
+          messageChannel: entry.messageChannel,
+          workspaceDir: entry.projectRoot,
         });
         return {
           runId: started.runId,
           sessionKey,
-          runtime: "subagent",
+          sessionId: started.sessionId ?? null,
+          runtime:
+            started.runtime ??
+            params.runtimeSubagent!.runtimeKind ??
+            "subagent",
           role: entry.ownerAgent,
           agentId: entry.ownerAgent,
           ownerAgent: entry.ownerAgent,
@@ -383,7 +373,9 @@ async function replayQueueEntry(params: {
         runId: dispatch.runId,
         sessionKey: dispatch.sessionKey,
         runtime:
-          dispatch.channel === "sessions_spawn" ? "subagent" : "legacy_dispatch",
+          dispatch.channel === "sessions_spawn" || dispatch.channel === "sessions_send"
+            ? params.runtimeSubagent!.runtimeKind ?? "subagent"
+            : "legacy_dispatch",
         role: dispatchPayload.toRole,
         agentId: dispatchPayload.toRole,
         ownerAgent: entry.ownerAgent,

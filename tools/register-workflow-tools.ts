@@ -179,6 +179,7 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
+import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
 import { writeWorkflowTextArtifact } from "./workflow-artifact-text-writer";
@@ -781,6 +782,22 @@ function resolveWorkflowProjectRootWithOverride(params: {
     return path.resolve(explicit);
   }
   return requireWorkflowProjectRoot(params.state);
+}
+
+function createWorkflowToolRuntime(params: {
+  plugin: PluginRegistrationContext;
+  agentCtx: ToolContext;
+  projectRoot?: string | null;
+}): ReturnType<typeof createWorkflowExecutionRuntimeFromApi> {
+  return createWorkflowExecutionRuntimeFromApi({
+    api: params.plugin.api,
+    defaultWorkspaceDir:
+      readString(params.projectRoot) ??
+      readString(params.agentCtx.workspaceDir) ??
+      undefined,
+    defaultAgentId: readString(params.agentCtx.agentId) ?? undefined,
+    defaultMessageChannel: readString(params.agentCtx.messageChannel) ?? undefined,
+  });
 }
 
 async function maybeBroadcastSimpleHandoffStatus(params: {
@@ -2272,6 +2289,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             projectRequiredMessage,
             bindingRole,
           } = state;
+          const workflowRuntime = createWorkflowToolRuntime({
+            plugin,
+            agentCtx: ctx,
+            projectRoot,
+          });
           const traceAction = async (
             status: "started" | "failed",
             details?: Record<string, unknown>
@@ -2852,7 +2874,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 "backgroundRun"
               );
               const result = await startBackgroundWorkflowRun({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 workflowPolicy,
                 agentCtx: ctx,
                 snapshot,
@@ -2908,7 +2930,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const backgroundRun =
                 buildPapernexusWrapperBackgroundRunRequest(papernexusWrapper);
               const result = await startBackgroundWorkflowRun({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 workflowPolicy,
                 agentCtx: ctx,
                 snapshot,
@@ -3340,7 +3362,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "list_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await listBackgroundWorkflowRuns({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3357,7 +3379,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "prune_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await pruneBackgroundWorkflowRuns({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3376,7 +3398,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "retire_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await retireBackgroundWorkflowRuns({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3578,7 +3600,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 role: snapshot.role,
                 completionNote: readString(params.completionNote),
                 hookGateContext: {
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowRuntime,
                   projectId: snapshot.projectId,
                   stage: snapshot.currentStage,
                   requesterChannel: ctx.messageChannel,
@@ -3686,7 +3708,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 explicitExtraBody ??
                 (body && body.includes("\n") ? body : null);
               const dispatch = await dispatchWorkflowTaskToAgent({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 requesterSessionKey: ctx.sessionKey,
                 requesterChannel: ctx.messageChannel,
                 fromRole: snapshot.role,
@@ -5374,7 +5396,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     stageAfter,
                   });
               const prepareGate = await evaluateWorkflowHandoffHooks({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 projectRoot: resolvedProjectRoot,
                 projectId: snapshot.projectId,
                 hookPoint: "before_prepare_handoff",
@@ -5392,7 +5414,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 );
               }
               const stageGate = await evaluateWorkflowHandoffHooks({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowRuntime,
                 projectRoot: resolvedProjectRoot,
                 projectId: snapshot.projectId,
                 hookPoint: "before_stage_handoff",
@@ -5647,7 +5669,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 idempotencyKey: currentIntent.idempotencyKey,
                 beforeActivateHook: async ({ intent, stageAfter }) => {
                   const hookSummary = await runWorkflowHookPointGate({
-                    runtimeSubagent: plugin.api.runtime?.subagent,
+                    runtimeSubagent: workflowRuntime,
                     projectRoot: resolvedProjectRoot,
                     projectId: snapshot.projectId,
                     stage: stageAfter,
@@ -5667,7 +5689,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 },
                 afterActivateHook: async ({ intent, stageAfter }) => {
                   await runWorkflowHookPointGate({
-                    runtimeSubagent: plugin.api.runtime?.subagent,
+                    runtimeSubagent: workflowRuntime,
                     projectRoot: resolvedProjectRoot,
                     projectId: snapshot.projectId,
                     stage: stageAfter,

@@ -81,6 +81,72 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function createEmbeddedAgentRuntime(rootDir, runs) {
+  const sessionStores = new Map();
+  const resolveStorePath = (_store, opts = {}) =>
+    path.join(rootDir, "agents", opts.agentId ?? "main", "sessions", "sessions.json");
+  const resolveSessionFilePath = (sessionId, entry, opts = {}) =>
+    entry?.sessionFile ??
+    path.join(opts.sessionsDir ?? path.join(rootDir, "agents", opts.agentId ?? "main", "sessions"), `${sessionId}.jsonl`);
+  return {
+    agent: {
+      async runEmbeddedAgent(params) {
+        runs.push(params);
+        const storePath = resolveStorePath(undefined, { agentId: params.agentId });
+        const sessionFile = resolveSessionFilePath(params.sessionId, undefined, {
+          agentId: params.agentId,
+          sessionsDir: path.dirname(storePath),
+        });
+        await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+        const store = sessionStores.get(storePath) ?? {};
+        store[params.sessionKey] = {
+          sessionId: params.sessionId,
+          sessionFile,
+        };
+        sessionStores.set(storePath, store);
+        await fs.writeFile(
+          sessionFile,
+          [
+            JSON.stringify({ type: "session", id: params.sessionId }),
+            JSON.stringify({
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: `Embedded coordinator run: ${params.prompt}`,
+                  },
+                ],
+              },
+            }),
+          ].join("\n") + "\n",
+          "utf8"
+        );
+        return { ok: true };
+      },
+      resolveAgentDir(_cfg, agentId) {
+        return path.join(rootDir, "agents", agentId ?? "main", "agent");
+      },
+      resolveAgentWorkspaceDir(_cfg, agentId) {
+        return path.join(rootDir, "workspace", agentId ?? "main");
+      },
+      resolveAgentTimeoutMs() {
+        return 5_000;
+      },
+      session: {
+        resolveStorePath,
+        loadSessionStore(storePath) {
+          return sessionStores.get(storePath) ?? {};
+        },
+        async saveSessionStore(storePath, store) {
+          sessionStores.set(storePath, { ...store });
+        },
+        resolveSessionFilePath,
+      },
+    },
+  };
+}
+
 async function acknowledgePendingWorkflowMailboxes(projectRoots) {
   for (const projectRoot of projectRoots) {
     const mailboxPath = path.join(
@@ -3457,6 +3523,143 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
   assert.ok(runs.some((entry) => entry.deliver === false && /Immediate command: \/implement-experiment/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /\[Workflow Status\]/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /handed off/i.test(entry.message)));
+});
+
+test("workflow coordinator can launch the next stage owner through embedded runtime without gateway subagent access", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = await makeProject(projectsRoot, "alpha", "code");
+  const runs = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const plugin = {
+    getWorkflowPolicy() {
+      return {
+        autoMode: "conservative",
+        autoGate: defaultAutoGateConfig(),
+        enableChannelProjectBindings: true,
+        projectsRoot,
+        heartbeatBackgroundChecks: true,
+        agentContactCooldownSeconds: 300,
+        enableWorkflowMailbox: true,
+      };
+    },
+    api: {
+      config: {
+        session: {
+          store: path.join(projectsRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+      },
+      runtime: createEmbeddedAgentRuntime(projectsRoot, runs),
+      registerService() {},
+      logger: {
+        debug() {},
+        info() {},
+        warn() {},
+      },
+    },
+  };
+
+  await bindChannelProjectForWorkflow({
+    projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    sessionId: "session-alpha",
+    channelKey: "discord:group:paper-lab",
+    messageChannel: "discord",
+    policy: plugin.getWorkflowPolicy(),
+    boundByAgent: "researcher",
+  });
+
+  const service = createWorkflowCoordinatorService(plugin, {
+    async listWorkflowCoordinatorProjects() {
+      return [
+        {
+          projectId: "alpha",
+          projectRoot,
+          source: "scan",
+          stage: "code",
+          updatedAt: null,
+        },
+      ];
+    },
+    async runWorkflowAutoIterator() {
+      return {
+        stageBefore: "code",
+        stageAfter: "code",
+        stageChanged: false,
+        regressed: false,
+        gateBlocking: false,
+        recommendedActions: [
+          {
+            kind: "drive_stage",
+            owner: "coder",
+            stage: "code",
+            summary: "Implement the approved experiments as runnable bundles.",
+            command: "/implement-experiment",
+            mailboxMessageId: null,
+            cooldownRemainingSeconds: 0,
+            blocking: false,
+          },
+        ],
+      };
+    },
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: projectsRoot,
+        bindings: [
+          {
+            channelKey: "discord:group:paper-lab",
+            projectRoot,
+            projectId: "alpha",
+            messageChannel: "discord",
+            sessionKeySample: "agent:researcher:discord:group:paper-lab",
+            sessionId: null,
+            boundAt: "2026-03-25T00:00:00.000Z",
+            updatedAt: "2026-03-25T00:05:00.000Z",
+            boundByAgent: "researcher",
+            notes: null,
+          },
+        ],
+      };
+    },
+  });
+
+  await service.start({
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+    },
+  });
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (
+      runs.some((entry) =>
+        typeof entry.prompt === "string" &&
+        /Immediate command: \/implement-experiment/.test(entry.prompt)
+      )
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await service.stop({
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+    },
+  });
+
+  assert.ok(
+    runs.some(
+      (entry) =>
+        typeof entry.prompt === "string" &&
+        /Immediate command: \/implement-experiment/.test(entry.prompt)
+    )
+  );
 });
 
 test("workflow coordinator isolates runtime maintenance failure for one project", async (t) => {
