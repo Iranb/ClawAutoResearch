@@ -180,6 +180,7 @@ import {
   type ToolContext,
 } from "./plugin-registration-shared";
 import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
+import { createWorkflowBroadcastRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
 import { writeWorkflowTextArtifact } from "./workflow-artifact-text-writer";
@@ -805,6 +806,14 @@ function createWorkflowToolRuntime(params: {
   });
 }
 
+function createWorkflowToolBroadcastRuntime(params: {
+  plugin: PluginRegistrationContext;
+}) {
+  return createWorkflowBroadcastRuntimeFromApi({
+    api: params.plugin.api,
+  });
+}
+
 async function maybeBroadcastSimpleHandoffStatus(params: {
   runtimeSubagent?: {
     run: (params: {
@@ -1304,6 +1313,9 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
     agentCtx: params.agentCtx,
     projectRoot: params.projectRoot,
   });
+  const workflowBroadcastRuntime = createWorkflowToolBroadcastRuntime({
+    plugin: params.plugin,
+  });
   const requesterSessionKey =
     readString(params.agentCtx.sessionKey) ?? `agent:${params.requesterRole}:main`;
   const preferredSessionKeys =
@@ -1345,7 +1357,7 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
       },
       channelBroadcast: async (handoffIntent: { intentId: string }) => {
         const result = await maybeBroadcastWorkflowStatusUpdate({
-          runtimeSubagent: params.plugin.api.runtime?.subagent,
+          runtimeSubagent: workflowBroadcastRuntime,
           bindingPolicy: params.workflowPolicy,
           sessionKey: params.agentCtx.sessionKey,
           projectId: params.projectId,
@@ -2304,6 +2316,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             agentCtx: ctx,
             projectRoot,
           });
+          const workflowBroadcastRuntime = createWorkflowToolBroadcastRuntime({
+            plugin,
+          });
           const traceAction = async (
             status: "started" | "failed",
             details?: Record<string, unknown>
@@ -2795,7 +2810,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       idempotencyKey: null,
                     }
                   : await maybeBroadcastAutoIteratorStageChange({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -2817,7 +2832,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 result.timedDefaultTriggered === true && !inboundBudget.isExhausted(1500)
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -2895,7 +2910,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
@@ -2986,7 +3001,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
@@ -4924,7 +4939,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(`via task ${completedPaper.importTaskId}`);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -4976,7 +4991,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(operation.detail);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -5014,7 +5029,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(batch.detail);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -5484,7 +5499,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 intent: handoff.intent,
               });
               const prepareBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,
@@ -5533,7 +5548,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   });
                   if (deliveryResult.delivered) {
                     dispatchBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -5604,7 +5619,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               const payload = asObject(intent?.payload) ?? {};
               const ackBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,
@@ -5719,7 +5734,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const activationBroadcast =
                 activatedIntent && intent.activated
                   ? await maybeBroadcastSimpleHandoffStatus({
-                      runtimeSubagent: plugin.api.runtime?.subagent,
+                      runtimeSubagent: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -5776,7 +5791,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 });
               }
               const failureBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: plugin.api.runtime?.subagent,
+                runtimeSubagent: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,

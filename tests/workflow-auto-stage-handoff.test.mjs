@@ -112,7 +112,7 @@ test("maybeDispatchAutoIteratorTask queues an orchestrator auto-stage fallback w
 
   assert.equal(result.dispatched, false);
   assert.equal(result.queuedFallback, true);
-  assert.match(result.error ?? "", /runtime subagent api is unavailable/i);
+  assert.match(result.error ?? "", /workflow execution runtime is unavailable/i);
 
   const queue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(queue.entries.length, 1);
