@@ -65,6 +65,7 @@ import { claimNextWorkflowTaskForOwner } from "./workflow-team/task-graph";
 import { recordWorkflowTeamRoundClaim } from "./workflow-team/team-round";
 import { upsertWorkflowAgentCapability } from "./workflow-handoff/agent-capabilities";
 import { runWorkflowHookPointGate } from "./workflow-hooks/gateways.js";
+import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 
 const WORKFLOW_GUARD_ALLOWED_AGENT_IDS = [
   "researcher",
@@ -314,6 +315,22 @@ async function resolveWorkflowSnapshotForAgentContext(params: {
     autoBind: params.autoBind,
     stagePreflight: false,
     preflightTrigger: "workflow_hook:prompt_or_tool",
+  });
+}
+
+function createWorkflowHookRuntime(params: {
+  plugin: PluginRegistrationContext;
+  agentCtx: ToolContext;
+  projectRoot?: string | null;
+}) {
+  return createWorkflowExecutionRuntimeFromApi({
+    api: params.plugin.api,
+    defaultWorkspaceDir:
+      readString(params.projectRoot) ??
+      readString(params.agentCtx.workspaceDir) ??
+      undefined,
+    defaultAgentId: readString(params.agentCtx.agentId) ?? undefined,
+    defaultMessageChannel: readString(params.agentCtx.messageChannel) ?? undefined,
   });
 }
 
@@ -762,6 +779,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
             });
           }
           if (snapshot.projectRoot && snapshot.role) {
+            const workflowRuntime = createWorkflowHookRuntime({
+              plugin,
+              agentCtx,
+              projectRoot: snapshot.projectRoot,
+            });
             if (agentCtx.sessionKey) {
               const lobsterReadiness = await inspectWorkflowLobsterReadiness({
                 config: normalizeWorkflowLobsterHandoffConfig(
@@ -796,7 +818,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               claimLeaseMs: 15 * 60 * 1000,
               beforeActivateHook: async ({ intent, stageAfter }) => {
                 const hookSummary = await runWorkflowHookPointGate({
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowRuntime,
                   projectRoot: snapshot.projectRoot!,
                   projectId: snapshot.projectId,
                   stage: stageAfter,
@@ -816,7 +838,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               },
               afterActivateHook: async ({ intent, stageAfter }) => {
                 await runWorkflowHookPointGate({
-                  runtimeSubagent: plugin.api.runtime?.subagent,
+                  runtimeSubagent: workflowRuntime,
                   projectRoot: snapshot.projectRoot!,
                   projectId: snapshot.projectId,
                   stage: stageAfter,

@@ -6,6 +6,7 @@ import {
 } from "../agent-task-dispatch";
 import { writeJsonEnsured } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type {
   WorkflowFileAuditHookPolicy,
   WorkflowHookExecutionResult,
@@ -17,20 +18,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-type RuntimeSubagentApi = {
-  run: NonNullable<Parameters<typeof dispatchWorkflowTaskToAgent>[0]["runtimeSubagent"]>["run"];
-  waitForRun?: NonNullable<
-    Parameters<typeof dispatchWorkflowTaskToAgent>[0]["runtimeSubagent"]
-  >["waitForRun"];
-  getSessionMessages?: NonNullable<
-    Parameters<typeof dispatchWorkflowTaskToAgent>[0]["runtimeSubagent"]
-  >["getSessionMessages"];
+type RuntimeSubagentApi = WorkflowExecutionRuntimeLike & {
+  run: NonNullable<WorkflowExecutionRuntimeLike["run"]>;
 };
-type OptionalRuntimeSubagentApi = {
-  run?: RuntimeSubagentApi["run"];
-  waitForRun?: RuntimeSubagentApi["waitForRun"];
-  getSessionMessages?: RuntimeSubagentApi["getSessionMessages"];
-};
+type OptionalRuntimeSubagentApi = WorkflowExecutionRuntimeLike;
 
 function toDispatchRole(value: string | null | undefined): DispatchableWorkflowRole | null {
   if (

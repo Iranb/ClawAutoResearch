@@ -360,6 +360,11 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
   if (!params.projectRoot || !params.snapshot.role) {
     return { claimed: false, activated: false };
   }
+  const workflowRuntime = createWorkflowToolRuntime({
+    plugin: params.plugin,
+    agentCtx: params.ctx,
+    projectRoot: params.projectRoot,
+  });
   return await claimAndActivateWorkflowHandoffForAgent({
     projectRoot: params.projectRoot,
     role: params.snapshot.role,
@@ -367,7 +372,7 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
     claimLeaseMs: 15 * 60 * 1000,
     beforeActivateHook: async ({ intent, stageAfter }) => {
       const hookSummary = await runWorkflowHookPointGate({
-        runtimeSubagent: params.plugin.api.runtime?.subagent,
+        runtimeSubagent: workflowRuntime,
         projectRoot: params.projectRoot!,
         projectId: params.snapshot.projectId,
         stage: stageAfter,
@@ -387,7 +392,7 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
     },
     afterActivateHook: async ({ intent, stageAfter }) => {
       await runWorkflowHookPointGate({
-        runtimeSubagent: params.plugin.api.runtime?.subagent,
+        runtimeSubagent: workflowRuntime,
         projectRoot: params.projectRoot!,
         projectId: params.snapshot.projectId,
         stage: stageAfter,
@@ -1294,6 +1299,11 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
 } {
   let capturedDispatch: Awaited<ReturnType<typeof handoffWorkflowTaskToAgent>> | null =
     null;
+  const workflowRuntime = createWorkflowToolRuntime({
+    plugin: params.plugin,
+    agentCtx: params.agentCtx,
+    projectRoot: params.projectRoot,
+  });
   const requesterSessionKey =
     readString(params.agentCtx.sessionKey) ?? `agent:${params.requesterRole}:main`;
   const preferredSessionKeys =
@@ -1307,7 +1317,7 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
     runtime: {
       nativeDispatch: async () => {
         capturedDispatch = await handoffWorkflowTaskToAgent({
-          runtimeSubagent: params.plugin.api.runtime?.subagent,
+          runtimeSubagent: workflowRuntime,
           workflowPolicy: params.workflowPolicy,
           requesterSessionKey: params.agentCtx.sessionKey,
           requesterChannel: params.agentCtx.messageChannel,
