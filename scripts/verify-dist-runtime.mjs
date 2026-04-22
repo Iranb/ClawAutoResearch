@@ -4,6 +4,15 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const RUNTIME_EXTENSIONS = [".js", ".mjs", ".cjs", ".json", ".node"];
+const REQUIRED_TEMPLATE_FILES = [
+  "PROJECT_MANIFEST.json",
+  "TRACK_REGISTRY.json",
+  "EXPERIMENT_LEDGER.json",
+  "IDLE_RESEARCH.example.json",
+  "CLAIM_POLICY.md",
+  path.join("memory", "ideation-memory.md"),
+  path.join("memory", "experiment-memory.md"),
+];
 const RELATIVE_SPECIFIER_PATTERNS = [
   { regex: /(from\s+)(["'])(\.[^"'()\s]+)\2/g, specifierIndex: 3 },
   {
@@ -116,6 +125,19 @@ export async function verifyDistRuntime({ distRoot = path.join(process.cwd(), "d
       ...unresolved.map((entry) => `unresolved import: ${entry}`),
     ];
     throw new Error(problems.join("\n"));
+  }
+
+  const templatesRoot = path.join(distRoot, "templates");
+  const missingTemplates = [];
+  for (const relativePath of REQUIRED_TEMPLATE_FILES) {
+    if (!(await fileExists(path.join(templatesRoot, relativePath)))) {
+      missingTemplates.push(relativePath);
+    }
+  }
+  if (missingTemplates.length > 0) {
+    throw new Error(
+      `missing dist templates: ${missingTemplates.join(", ")}`
+    );
   }
 
   return {

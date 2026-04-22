@@ -3,67 +3,73 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { prepareDistRuntime } from "../scripts/prepare-dist-runtime.mjs";
+import { verifyDistRuntime } from "../scripts/verify-dist-runtime.mjs";
 
-test("prepareDistRuntime copies JS-only helpers and rewrites runtime import specifiers", async (t) => {
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "openclaw-prepare-dist-runtime-")
+async function writeFileEnsured(targetPath, contents) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, contents, "utf8");
+}
+
+test("prepareDistRuntime copies workflow templates into dist/templates", async () => {
+  const repoRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "claw-auto-research-prepare-dist-")
+  );
+  const distRoot = path.join(repoRoot, "dist");
+  const toolsRoot = path.join(repoRoot, "tools");
+
+  await writeFileEnsured(
+    path.join(distRoot, "tools", "example.js"),
+    'export const value = 1;\n'
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "PROJECT_MANIFEST.json"),
+    "{}\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "TRACK_REGISTRY.json"),
+    "{}\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "EXPERIMENT_LEDGER.json"),
+    "{}\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "IDLE_RESEARCH.example.json"),
+    "{}\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "CLAIM_POLICY.md"),
+    "# claim policy\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "memory", "ideation-memory.md"),
+    "# ideation\n"
+  );
+  await writeFileEnsured(
+    path.join(repoRoot, "templates", "memory", "experiment-memory.md"),
+    "# experiment\n"
   );
 
-  t.after(async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  });
+  try {
+    const result = await prepareDistRuntime({ repoRoot, distRoot, toolsRoot });
+    assert.equal(result.templatesCopied, true);
 
-  const toolsRoot = path.join(tempRoot, "tools");
-  const distRoot = path.join(tempRoot, "dist");
-  await fs.mkdir(path.join(toolsRoot, "nested"), { recursive: true });
-  await fs.mkdir(path.join(distRoot, "tools", "nested"), { recursive: true });
+    await verifyDistRuntime({ distRoot });
 
-  await fs.writeFile(
-    path.join(toolsRoot, "workflow-line-routing.js"),
-    [
-      'import { value } from "./nested/value";',
-      "export const routed = value;",
-      "",
-    ].join("\n"),
-    "utf8"
-  );
-
-  await fs.writeFile(
-    path.join(distRoot, "index.js"),
-    [
-      'import { routed } from "./tools/workflow-line-routing";',
-      "export default routed;",
-      "",
-    ].join("\n"),
-    "utf8"
-  );
-
-  await fs.writeFile(
-    path.join(distRoot, "tools", "nested", "value.js"),
-    "export const value = 7;\n",
-    "utf8"
-  );
-
-  const result = await prepareDistRuntime({
-    repoRoot: tempRoot,
-    distRoot,
-    toolsRoot,
-  });
-
-  assert.equal(result.copiedHelpers.length, 1);
-
-  const copiedHelper = await fs.readFile(
-    path.join(distRoot, "tools", "workflow-line-routing.js"),
-    "utf8"
-  );
-  assert.match(copiedHelper, /\.\/nested\/value\.js/);
-
-  const rewrittenEntry = await fs.readFile(path.join(distRoot, "index.js"), "utf8");
-  assert.match(rewrittenEntry, /\.\/tools\/workflow-line-routing\.js/);
-
-  const imported = await import(pathToFileURL(path.join(distRoot, "index.js")).href);
-  assert.equal(imported.default, 7);
+    for (const relativePath of [
+      "PROJECT_MANIFEST.json",
+      "TRACK_REGISTRY.json",
+      "EXPERIMENT_LEDGER.json",
+      "IDLE_RESEARCH.example.json",
+      "CLAIM_POLICY.md",
+      path.join("memory", "ideation-memory.md"),
+      path.join("memory", "experiment-memory.md"),
+    ]) {
+      await fs.access(path.join(distRoot, "templates", relativePath));
+    }
+  } finally {
+    await fs.rm(repoRoot, { recursive: true, force: true });
+  }
 });
