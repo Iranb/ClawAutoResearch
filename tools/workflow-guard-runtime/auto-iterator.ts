@@ -109,6 +109,7 @@ const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set(["write"]);
 type StagePreflightResult = Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>>;
 
 const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
+  "launch_pending",
   "repair_implementation",
   "continue_tuning",
   "narrow_search",
@@ -417,6 +418,14 @@ function buildExperimentDecisionCommand(params: {
 } {
   const decision = normalizeStage(params.decision);
   switch (decision) {
+    case "launch_pending":
+      return {
+        ownerOverride: "researcher",
+        command:
+          "Run /experiment-phase to schedule the first baseline-faithful launch group, initialize EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json, and delegate atomic bundle launches to Coder /run-experiment. If a bounded search envelope is already approved, let Researcher wake Coder /search-experiment from inside experiment-phase instead of treating the stage as a coder-side repair.",
+        summary:
+          "No experiment launch has started yet; Researcher should orchestrate the first launch group before any coder-side runtime repair loop begins.",
+      };
     case "reconcile_runtime":
       return {
         ownerOverride: "researcher",
