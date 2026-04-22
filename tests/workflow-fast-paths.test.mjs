@@ -1344,6 +1344,140 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   assert.equal(runtimeQueue.entries[0].queueKey, result.queueKey);
 });
 
+test("startBackgroundWorkflowRun rotates away from tainted persisted workflow session state", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+  const sessionKey = "agent:researcher:discord:group:birds-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    workflowRuntime: {
+      async inspectSession(params) {
+        if (/workflow-research-pipeline/i.test(params.sessionKey)) {
+          return {
+            sessionKey: params.sessionKey,
+            sessionId: "workflow.researcher.old123",
+            sessionFile: "/tmp/old-session.jsonl",
+            status: "failed",
+            startedAt: 100,
+            endedAt: 200,
+            updatedAt: 300,
+            abortedLastRun: false,
+            providerOverride: "qwen",
+            modelOverride: "qwen3.6-plus",
+            liveModelSwitchPending: true,
+          };
+        }
+        return null;
+      },
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-rotated" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      sessionId: "session-bg-rotate-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery with semantic shift",
+      summary: "Starting background pipeline with rotated session",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.notEqual(
+    runCalls[0].sessionKey,
+    "agent:researcher:discord:group:birds-room:subagent:workflow-research-pipeline:bird-species-discovery-with-semantic-shift"
+  );
+  assert.match(runCalls[0].sessionKey, /:subagent:workflow-research-pipeline:/);
+  assert.match(runCalls[0].sessionKey, /:run-[a-f0-9]{8}$/);
+  assert.equal(result.sessionKey, runCalls[0].sessionKey);
+});
+
+test("startBackgroundWorkflowRun rotates away from persisted openai workflow session overrides", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    workflowRuntime: {
+      async inspectSession(params) {
+        if (/workflow-research-pipeline/i.test(params.sessionKey)) {
+          return {
+            sessionKey: params.sessionKey,
+            sessionId: "workflow.researcher.openai123",
+            sessionFile: "/tmp/openai-session.jsonl",
+            status: "failed",
+            startedAt: 100,
+            endedAt: 200,
+            updatedAt: 300,
+            abortedLastRun: false,
+            providerOverride: "openai",
+            modelOverride: "gpt-5.4",
+            liveModelSwitchPending: false,
+          };
+        }
+        return null;
+      },
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "bg-run-openai-rotated" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:birds-room",
+      sessionId: "session-bg-openai-rotate-1",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: true,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "bird species discovery with semantic shift",
+      summary: "Starting background pipeline with openai-tainted prior session",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].sessionKey, /:run-[a-f0-9]{8}$/);
+  assert.equal(/openai/i.test(runCalls[0].sessionKey), false);
+});
+
 test("startBackgroundWorkflowRun can use embedded workflow runtime without gateway subagent access", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

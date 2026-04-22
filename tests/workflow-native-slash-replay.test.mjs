@@ -132,7 +132,19 @@ test("native slash replay harness starts /auto-research against a local projects
     "agent:researcher:discord:channel:gcd-research-lab"
   );
   const entries = await fs.readdir(projectsRoot);
-  assert.ok(entries.some((entry) => entry.includes("generalized-category-discovery")));
+  const projectDir = entries.find((entry) =>
+    entry.includes("generalized-category-discovery")
+  );
+  assert.ok(projectDir);
+  for (const relativePath of [
+    "PROJECT_MANIFEST.json",
+    "TRACK_REGISTRY.json",
+    "CLAIM_POLICY.md",
+    path.join("researcher", "EXPERIMENT_LEDGER.json"),
+    path.join("researcher", "idle-research", "IDLE_RESEARCH.json"),
+  ]) {
+    await fs.access(path.join(projectsRoot, projectDir, relativePath));
+  }
 });
 
 test("native slash replay harness starts /auto-review against a local projects root", async () => {
@@ -163,5 +175,17 @@ test("native slash replay harness starts /auto-review against a local projects r
     "agent:researcher:discord:slash:owner"
   );
   const entries = await fs.readdir(projectsRoot);
-  assert.ok(entries.some((entry) => entry.startsWith("survey-generalized-category-discovery")));
+  const projectDir = entries.find((entry) =>
+    entry.startsWith("survey-generalized-category-discovery")
+  );
+  assert.ok(projectDir);
+  for (const relativePath of [
+    "PROJECT_MANIFEST.json",
+    "TRACK_REGISTRY.json",
+    "CLAIM_POLICY.md",
+    path.join("researcher", "EXPERIMENT_LEDGER.json"),
+    path.join("researcher", "idle-research", "IDLE_RESEARCH.json"),
+  ]) {
+    await fs.access(path.join(projectsRoot, projectDir, relativePath));
+  }
 });

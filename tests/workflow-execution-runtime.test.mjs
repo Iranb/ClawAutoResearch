@@ -154,3 +154,74 @@ test("embedded workflow runtime launches local agent runs and reads transcript s
   );
   assert.deepEqual(harness.sessionStores.get(storePath) ?? {}, {});
 });
+
+test("embedded workflow runtime can inspect persisted session metadata", async (t) => {
+  const rootDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-workflow-runtime-inspect-")
+  );
+  t.after(async () => {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  const harness = createEmbeddedRuntimeHarness(rootDir);
+  const runtime = createWorkflowExecutionRuntimeFromApi({
+    api: harness.api,
+    defaultWorkspaceDir: rootDir,
+    defaultAgentId: "researcher",
+    defaultMessageChannel: "discord",
+  });
+
+  const storePath = path.join(
+    rootDir,
+    "agents",
+    "researcher",
+    "sessions",
+    "sessions.json"
+  );
+  harness.sessionStores.set(storePath, {
+    "agent:researcher:discord:group:paper-room:subagent:workflow-research-pipeline:demo": {
+      sessionId: "workflow.researcher.demo123",
+      sessionFile: path.join(
+        rootDir,
+        "agents",
+        "researcher",
+        "sessions",
+        "workflow.researcher.demo123.jsonl"
+      ),
+      status: "failed",
+      startedAt: 100,
+      endedAt: 200,
+      updatedAt: 300,
+      abortedLastRun: false,
+      providerOverride: "qwen",
+      modelOverride: "qwen3.6-plus",
+      liveModelSwitchPending: true,
+    },
+  });
+
+  const inspection = await runtime.inspectSession({
+    sessionKey:
+      "agent:researcher:discord:group:paper-room:subagent:workflow-research-pipeline:demo",
+  });
+
+  assert.deepEqual(inspection, {
+    sessionKey:
+      "agent:researcher:discord:group:paper-room:subagent:workflow-research-pipeline:demo",
+    sessionId: "workflow.researcher.demo123",
+    sessionFile: path.join(
+      rootDir,
+      "agents",
+      "researcher",
+      "sessions",
+      "workflow.researcher.demo123.jsonl"
+    ),
+    status: "failed",
+    startedAt: 100,
+    endedAt: 200,
+    updatedAt: 300,
+    abortedLastRun: false,
+    providerOverride: "qwen",
+    modelOverride: "qwen3.6-plus",
+    liveModelSwitchPending: true,
+  });
+});
