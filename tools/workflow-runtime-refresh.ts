@@ -19,7 +19,7 @@ function readIsoTimestamp(value: string | null | undefined): number | null {
 export async function reconcileBackgroundWorkflowStateForSnapshot(params: {
   snapshot: WorkflowSnapshot;
   workflowPolicy: WorkflowGuardPolicy;
-  runtimeSubagent?: {
+  workflowRuntime?: {
     waitForRun?: (params: { runId: string; timeoutMs?: number }) => Promise<{
       status: "ok" | "error" | "timeout";
       error?: string;
@@ -30,7 +30,7 @@ export async function reconcileBackgroundWorkflowStateForSnapshot(params: {
     return;
   }
   await listBackgroundWorkflowRuns({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     ownerAgent: "researcher",
     projectId: params.snapshot.projectId,
     projectRoot: params.snapshot.projectRoot,

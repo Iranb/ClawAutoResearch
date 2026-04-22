@@ -336,7 +336,7 @@ export async function reconcileClaimedWorkflowTasksForProject(params: {
   };
 }
 
-type RuntimeSubagentApi = WorkflowExecutionRuntime;
+type WorkflowRuntimeApi = WorkflowExecutionRuntime;
 
 type WorkflowPanelRuntimeAttempt<Role extends string, Result> = {
   reviewerRole: Role;
@@ -781,7 +781,7 @@ function readWorkflowPanelDiscussionAnnounceResult<Role extends string, Result>(
 }
 
 async function launchWorkflowPanelDiscussionAttempts<Role extends string, Result>(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   participants: Role[];
   requesterSessionKey: string;
   projectRoot: string;
@@ -802,7 +802,7 @@ async function launchWorkflowPanelDiscussionAttempts<Role extends string, Result
     const queueKey = params.buildQueueKey(reviewerRole);
     try {
       const started = await launchWorkflowNestedRunTransition({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         source: params.source,
         queueKey,
         ownerAgent: reviewerRole,
@@ -853,7 +853,7 @@ async function launchWorkflowPanelDiscussionAttempts<Role extends string, Result
 }
 
 async function pollWorkflowPanelDiscussionAttempts<Role extends string, Result>(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   attempts: Array<WorkflowPanelRuntimeAttempt<Role, Result>>;
   projectRoot: string;
   projectId: string | null;
@@ -914,11 +914,11 @@ async function pollWorkflowPanelDiscussionAttempts<Role extends string, Result>(
       });
       continue;
     }
-    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+    if (!attempt.runId || !params.workflowRuntime.waitForRun) {
       nextAttempts.push(attempt);
       continue;
     }
-    const waited = await params.runtimeSubagent.waitForRun({
+    const waited = await params.workflowRuntime.waitForRun({
       runId: attempt.runId,
       timeoutMs: 1,
     });
@@ -949,8 +949,8 @@ async function pollWorkflowPanelDiscussionAttempts<Role extends string, Result>(
       nextAttempts.push(failedAttempt);
       continue;
     }
-    const messages = params.runtimeSubagent.getSessionMessages
-      ? await params.runtimeSubagent.getSessionMessages({
+    const messages = params.workflowRuntime.getSessionMessages
+      ? await params.workflowRuntime.getSessionMessages({
           sessionKey: attempt.sessionKey,
           limit: 20,
         })
@@ -1667,7 +1667,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
 }
 
 export async function maybeLaunchIdleResearchForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -1693,7 +1693,7 @@ export async function maybeLaunchIdleResearchForProject(params: {
     label: "workflow_idle_research_launch",
     logger: params.logger,
     task: async (): Promise<IdleResearchLaunchAttempt> => {
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return {
           launched: false,
           reason: "no_runtime_subagent",
@@ -1806,7 +1806,7 @@ export async function maybeLaunchIdleResearchForProject(params: {
         deps,
       });
       const launched = await startBackgroundWorkflowRun({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -1898,7 +1898,7 @@ function buildAutoZoteroSyncExtraPrompt(params: {
 }
 
 export async function maybeLaunchAutoZoteroSyncForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -2002,7 +2002,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
         ],
       });
       const launched = await startBackgroundWorkflowRun({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -2061,7 +2061,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
 }
 
 export async function maybeLaunchPaperIngestionWorkerForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -2080,7 +2080,7 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
     label: "workflow_papernexus_upload_worker",
     logger: params.logger,
     task: async (): Promise<PaperIngestionWorkerAttempt> => {
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return {
           launched: false,
           queued: false,
@@ -2108,7 +2108,7 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
         segments: [params.triggerKind ?? "heartbeat"],
       });
       const result = await maybeTriggerQueuedPaperIngestionRequest({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         agentCtx: {
           agentId: "researcher",
@@ -2210,7 +2210,7 @@ function buildAutoStageDispatchExtraBody(params: {
 }
 
 async function launchWorkflowDispatchTransition(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   source: string;
   queueKey: string;
@@ -2292,7 +2292,7 @@ async function launchWorkflowDispatchTransition(params: {
     },
     spawn: async () => {
       const dispatch = await handoffWorkflowTaskToAgent({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         requesterSessionKey: params.requesterSessionKey,
         requesterChannel: params.requesterChannel ?? undefined,
@@ -2325,7 +2325,7 @@ async function launchWorkflowDispatchTransition(params: {
         sessionKey: dispatch.sessionKey,
         runtime:
           dispatch.channel === "sessions_spawn" || dispatch.channel === "sessions_send"
-            ? params.runtimeSubagent.runtimeKind ?? "subagent"
+            ? params.workflowRuntime.runtimeKind ?? "subagent"
             : "legacy_dispatch",
         role: params.owner,
         agentId: params.owner,
@@ -2339,7 +2339,7 @@ async function launchWorkflowDispatchTransition(params: {
 }
 
 async function launchWorkflowNestedRunTransition(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   source: string;
   queueKey: string;
   ownerAgent: string;
@@ -2380,7 +2380,7 @@ async function launchWorkflowNestedRunTransition(params: {
       },
     },
     spawn: async () => {
-      const started = await params.runtimeSubagent.run({
+      const started = await params.workflowRuntime.run({
         sessionKey: params.sessionKey,
         message: params.message,
         lane: "nested",
@@ -2399,7 +2399,7 @@ async function launchWorkflowNestedRunTransition(params: {
         sessionId: started.sessionId ?? null,
         runtime:
           started.runtime ??
-          params.runtimeSubagent.runtimeKind ??
+          params.workflowRuntime.runtimeKind ??
           "subagent",
         role: params.ownerAgent,
         agentId: params.ownerAgent,
@@ -2412,7 +2412,7 @@ async function launchWorkflowNestedRunTransition(params: {
 }
 
 export async function maybeLaunchAutoStageForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -2544,7 +2544,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           activeResearcherSessionsInChannel: null,
         });
       }
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return finalizeAttempt({
           launched: false,
           reason: "no_runtime_subagent",
@@ -2723,7 +2723,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         | null = null;
       if (shouldUsePooledServiceSession(action.owner)) {
         pooledSessionLease = await acquireBackgroundWorkflowSession({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           ownerAgent: action.owner,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           channelKey: requesterBinding.channelKey ?? undefined,
@@ -2797,7 +2797,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         }
       }
       const dispatchLaunch = await launchWorkflowDispatchTransition({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         source: "workflow_auto_stage",
         queueKey: launchKey,
@@ -2968,7 +2968,7 @@ export async function maybeLaunchAutoStageForProject(params: {
 }
 
 async function pollGateReviewAttempts(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   attempts: GateReviewAttempt[];
   projectRoot: string;
   projectId: string | null;
@@ -3000,12 +3000,12 @@ async function pollGateReviewAttempts(params: {
       continue;
     }
 
-    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+    if (!attempt.runId || !params.workflowRuntime.waitForRun) {
       nextAttempts.push(attempt);
       continue;
     }
 
-    const waited = await params.runtimeSubagent.waitForRun({
+    const waited = await params.workflowRuntime.waitForRun({
       runId: attempt.runId,
       timeoutMs: 1,
     });
@@ -3050,8 +3050,8 @@ async function pollGateReviewAttempts(params: {
       continue;
     }
 
-    const messages = params.runtimeSubagent.getSessionMessages
-      ? await params.runtimeSubagent.getSessionMessages({
+    const messages = params.workflowRuntime.getSessionMessages
+      ? await params.workflowRuntime.getSessionMessages({
           sessionKey: attempt.sessionKey,
           limit: 20,
         })
@@ -3099,13 +3099,13 @@ async function pollGateReviewAttempts(params: {
 }
 
 async function pollCodeReviewAttempts(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   attempts: CodeReviewAttempt[];
   projectRoot: string;
   projectId: string | null;
 }) {
   return pollWorkflowPanelDiscussionAttempts({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     attempts: params.attempts,
     projectRoot: params.projectRoot,
     projectId: params.projectId,
@@ -3161,14 +3161,14 @@ async function pollCodeReviewAttempts(params: {
 }
 
 async function pollAutoModeDiscussionAttempts(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   attempts: AutoModeDiscussionReviewAttempt[];
   projectRoot: string;
   projectId: string | null;
   projectsRoot?: string | null;
 }) {
   return pollWorkflowPanelDiscussionAttempts({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     attempts: params.attempts,
     projectRoot: params.projectRoot,
     projectId: params.projectId,
@@ -3229,7 +3229,7 @@ async function pollAutoModeDiscussionAttempts(params: {
           projectRoot: params.projectRoot,
           projectId: params.projectId,
           projectsRoot: params.projectsRoot,
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
         });
         if (activeQueuedRun?.runId && activeQueuedRun.backgroundSessionKey) {
           return {
@@ -3270,7 +3270,7 @@ async function pollAutoModeDiscussionAttempts(params: {
 }
 
 export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -3333,7 +3333,7 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
         currentRound?.packetFingerprint === materialized.packetFingerprint &&
         currentRound.status === "reviewing"
       ) {
-        if (!params.runtimeSubagent) {
+        if (!params.workflowRuntime) {
           return {
             launched: false,
             reason: "no_runtime_subagent",
@@ -3356,7 +3356,7 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
         }
 
         const attempts = await pollWorkflowPanelDiscussionAttempts({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           attempts: currentRound.attempts,
           projectRoot: params.projectRoot,
           projectId: params.projectId,
@@ -3478,7 +3478,7 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
         };
       }
 
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return {
           launched: false,
           reason: "no_runtime_subagent",
@@ -3507,7 +3507,7 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
           deps,
         }) ?? "agent:researcher:main";
       const attempts = await launchWorkflowPanelDiscussionAttempts({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         participants: policy.participants,
         requesterSessionKey,
         projectRoot: params.projectRoot,
@@ -3591,7 +3591,7 @@ export async function maybeAdvanceWorkflowPanelDiscussionForProject(params: {
 }
 
 export async function maybeAdvanceSurveyBriefRefinementForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -3661,7 +3661,7 @@ export async function maybeAdvanceSurveyBriefRefinementForProject(params: {
     } satisfies WorkflowPanelDiscussionServiceAttempt;
   }
   return maybeAdvanceWorkflowPanelDiscussionForProject({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     workflowPolicy: params.workflowPolicy,
     projectRoot: params.projectRoot,
     projectId: params.projectId,
@@ -3734,7 +3734,7 @@ function normalizeHookReviewerRole(
 }
 
 export async function maybeAdvanceWorkflowHookPointForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -3770,7 +3770,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
     label: `workflow_hook_point:${params.hookPoint}`,
     logger: params.logger,
     task: async (): Promise<WorkflowHookPointAttempt> => {
-      const runtimeSubagent = params.runtimeSubagent;
+      const workflowRuntime = params.workflowRuntime;
       if ((params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) === "off") {
         return {
           launched: false,
@@ -3807,7 +3807,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           ? "survey"
           : "experiment";
       const summary = await evaluateWorkflowHooksForPoint({
-        runtimeSubagent,
+        workflowRuntime,
         context: buildWorkflowHookPointContext({
           projectRoot: params.projectRoot,
           projectId: params.projectId,
@@ -3839,7 +3839,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
         }),
         requesterSessionKey,
         requesterChannel: requesterBinding.channelKey ? "discord" : null,
-        launchReviewerRun: runtimeSubagent
+        launchReviewerRun: workflowRuntime
           ? async (launchParams) => {
               const reviewerRole = normalizeHookReviewerRole(launchParams.reviewerRole);
               if (!reviewerRole) {
@@ -3855,7 +3855,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
                 targetRole: reviewerRole,
               });
               const started = await launchWorkflowNestedRunTransition({
-                runtimeSubagent,
+                workflowRuntime,
                 source: "workflow_hook_file_audit",
                 queueKey: `workflow-hook:${launchParams.idempotencyKey}`,
                 ownerAgent: reviewerRole,
@@ -3916,7 +3916,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
               ? launched
                 ? "started"
                 : "reviewing"
-              : params.runtimeSubagent
+              : params.workflowRuntime
                 ? "blocked"
                 : "no_runtime_subagent",
         projectId: params.projectId,
@@ -3935,7 +3935,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
 }
 
 export async function maybeAdvanceAutoCodeReviewForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -4064,7 +4064,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           approved: false,
         });
       }
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return finish({
           launched: false,
           reason: "no_runtime_subagent",
@@ -4084,7 +4084,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         currentRound.status === "reviewing"
       ) {
         const attempts = await pollCodeReviewAttempts({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           attempts: currentRound.attempts,
           projectRoot: params.projectRoot,
           projectId: params.projectId,
@@ -4167,7 +4167,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           deps,
         }) ?? "agent:researcher:main";
       const attempts = await launchWorkflowPanelDiscussionAttempts({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         participants: defaultCodeReviewPanel(),
         requesterSessionKey,
         projectRoot: params.projectRoot,
@@ -4253,7 +4253,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
 }
 
 export async function maybeAdvanceAutoGateReviewForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -4331,7 +4331,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
           gateId,
         });
         const panelAttempt = await maybeAdvanceWorkflowPanelDiscussionForProject({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           workflowPolicy: params.workflowPolicy,
           projectRoot: params.projectRoot,
           projectId: params.projectId,
@@ -4478,7 +4478,7 @@ export async function maybeAdvanceAutoGateReviewForProject(params: {
 }
 
 export async function maybeAdvanceAutoModeDiscussionForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -4622,7 +4622,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         currentRound?.packetFingerprint === packet.packetFingerprint &&
         currentRound.status === "reviewing"
       ) {
-        if (!params.runtimeSubagent) {
+        if (!params.workflowRuntime) {
           return finish({
             launched: false,
             reason: "no_runtime_subagent",
@@ -4644,7 +4644,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           });
         }
         const attempts = await pollAutoModeDiscussionAttempts({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           attempts: currentRound.attempts,
           projectRoot: params.projectRoot,
           projectId: params.projectId,
@@ -4708,7 +4708,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           resolved: false,
         });
       }
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return finish({
           launched: false,
           reason: "no_runtime_subagent",
@@ -4769,7 +4769,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           | null = null;
         if (shouldUsePooledServiceSession(reviewerRole)) {
           pooledSessionLease = await acquireBackgroundWorkflowSession({
-            runtimeSubagent: params.runtimeSubagent,
+            workflowRuntime: params.workflowRuntime,
             ownerAgent: reviewerRole,
             requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
             channelKey: requesterBinding.channelKey ?? undefined,
@@ -4843,7 +4843,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
           );
           const started = await launchWorkflowNestedRunTransition({
-            runtimeSubagent: params.runtimeSubagent,
+            workflowRuntime: params.workflowRuntime,
             source: "workflow_auto_discussion",
             queueKey,
             ownerAgent: reviewerRole,
@@ -4964,7 +4964,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
 }
 
 export async function maybeDispatchAutoModeMitigationForProject(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   projectRoot: string;
   projectId: string | null;
@@ -5010,7 +5010,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           activeResearcherSessionsInChannel: null,
         };
       }
-      if (!params.runtimeSubagent) {
+      if (!params.workflowRuntime) {
         return {
           launched: false,
           reason: "no_runtime_subagent",
@@ -5087,7 +5087,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         | null = null;
       if (shouldUsePooledServiceSession(owner)) {
         pooledSessionLease = await acquireBackgroundWorkflowSession({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           ownerAgent: owner,
           requesterSessionKey: defaultResearcherRequesterSessionKey,
           channelKey: requesterBinding.channelKey ?? undefined,
@@ -5164,7 +5164,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         }
       }
       const dispatchLaunch = await launchWorkflowDispatchTransition({
-        runtimeSubagent: params.runtimeSubagent,
+        workflowRuntime: params.workflowRuntime,
         workflowPolicy: params.workflowPolicy,
         source: "workflow_auto_mitigation",
         queueKey: launchKey,
@@ -5326,7 +5326,7 @@ export function createWorkflowCoordinatorService(
           });
         }
         const drainedQueue = await drainQueuedBackgroundWorkflowRuns({
-          runtimeSubagent: workflowRuntime,
+          workflowRuntime: workflowRuntime,
           workflowPolicy,
           projectsRoot: workflowPolicy.projectsRoot,
         });
@@ -5348,12 +5348,12 @@ export function createWorkflowCoordinatorService(
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
               staleSessionAgeMs: 15 * 60 * 1000,
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               logger,
               sendBroadcast: async (broadcastEntry) => {
                 const result = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: gatewayMessagingRuntime,
+                  workflowRuntime: gatewayMessagingRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: broadcastEntry.sessionKey,
                   projectId: broadcastEntry.projectId,
@@ -5391,7 +5391,7 @@ export function createWorkflowCoordinatorService(
         const artifactHookAttempts = await Promise.all(
           results.map((entry) =>
             maybeAdvanceWorkflowHookPointForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5405,7 +5405,7 @@ export function createWorkflowCoordinatorService(
         const autoCodeReviews = await Promise.all(
           results.map((entry) =>
             maybeAdvanceAutoCodeReviewForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5447,7 +5447,7 @@ export function createWorkflowCoordinatorService(
         const autoGateReviews = await Promise.all(
           codeReviewRefreshedResults.map((entry) =>
             maybeAdvanceAutoGateReviewForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5489,7 +5489,7 @@ export function createWorkflowCoordinatorService(
         const autoModeDiscussions = await Promise.all(
           refreshedResults.map((entry) =>
             maybeAdvanceAutoModeDiscussionForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5502,7 +5502,7 @@ export function createWorkflowCoordinatorService(
         const surveyBriefRefinementAttempts = await Promise.all(
           refreshedResults.map((entry) =>
             maybeAdvanceSurveyBriefRefinementForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5547,7 +5547,7 @@ export function createWorkflowCoordinatorService(
         const autoMitigationAttempts = await Promise.all(
           discussionRefreshedResults.map((entry, index) =>
             maybeDispatchAutoModeMitigationForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5563,7 +5563,7 @@ export function createWorkflowCoordinatorService(
         const beforeStageHandoffHookAttempts = await Promise.all(
           discussionRefreshedResults.map((entry) =>
             maybeAdvanceWorkflowHookPointForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5600,7 +5600,7 @@ export function createWorkflowCoordinatorService(
               } satisfies AutoStageLaunchAttempt);
             }
             return maybeLaunchAutoStageForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5615,7 +5615,7 @@ export function createWorkflowCoordinatorService(
         const idleResearchAttempts = await Promise.all(
           discussionRefreshedResults.map((entry) =>
             maybeLaunchIdleResearchForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5630,7 +5630,7 @@ export function createWorkflowCoordinatorService(
         const autoZoteroSyncAttempts = await Promise.all(
           discussionRefreshedResults.map((entry) =>
             maybeLaunchAutoZoteroSyncForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5645,7 +5645,7 @@ export function createWorkflowCoordinatorService(
         const paperIngestionWorkerAttempts = await Promise.all(
           discussionRefreshedResults.map((entry) =>
             maybeLaunchPaperIngestionWorkerForProject({
-              runtimeSubagent: workflowRuntime,
+              workflowRuntime: workflowRuntime,
               workflowPolicy,
               projectRoot: entry.projectRoot,
               projectId: entry.projectId,
@@ -5755,7 +5755,7 @@ export function createWorkflowCoordinatorService(
               deps: resolveWorkflowCoordinatorDependencies(deps),
             });
             return maybeBroadcastWorkflowStatusUpdate({
-              runtimeSubagent: gatewayMessagingRuntime,
+              workflowRuntime: gatewayMessagingRuntime,
               bindingPolicy: workflowPolicy,
               sessionKey: requesterSessionKey,
               projectId: entry.projectId,

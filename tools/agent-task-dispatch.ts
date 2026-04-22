@@ -36,7 +36,7 @@ export type DispatchableWorkflowRole =
   | "reviewer"
   | "cross-reviewer";
 
-type RuntimeSubagentApi = WorkflowExecutionRuntime;
+type WorkflowRuntimeApi = WorkflowExecutionRuntime;
 
 export type WorkflowTaskDispatchAttempt = {
   strategy:
@@ -255,14 +255,14 @@ export function buildWorkflowDispatchMessage(params: {
 }
 
 async function getMessageCount(
-  runtimeSubagent: RuntimeSubagentApi | undefined,
+  workflowRuntime: WorkflowRuntimeApi | undefined,
   sessionKey: string
 ): Promise<number | null> {
-  if (!runtimeSubagent?.getSessionMessages) {
+  if (!workflowRuntime?.getSessionMessages) {
     return null;
   }
   try {
-    const result = await runtimeSubagent.getSessionMessages({
+    const result = await workflowRuntime.getSessionMessages({
       sessionKey,
       limit: 16,
     });
@@ -273,7 +273,7 @@ async function getMessageCount(
 }
 
 async function runSingleDispatchAttempt(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   sessionKey: string;
   strategy: WorkflowTaskDispatchAttempt["strategy"];
   message: string;
@@ -289,10 +289,10 @@ async function runSingleDispatchAttempt(params: {
   attempt: WorkflowTaskDispatchAttempt;
   accepted: boolean;
 }> {
-  const beforeCount = await getMessageCount(params.runtimeSubagent, params.sessionKey);
+  const beforeCount = await getMessageCount(params.workflowRuntime, params.sessionKey);
 
   try {
-    const started = await params.runtimeSubagent.run({
+    const started = await params.workflowRuntime.run({
       sessionKey: params.sessionKey,
       message: params.message,
       lane: "nested",
@@ -325,7 +325,7 @@ async function runSingleDispatchAttempt(params: {
       const mailboxWait = await waitForWorkflowMailboxAcknowledgement({
         projectRoot: params.projectRoot,
         messageId: params.mailboxMessageId,
-        timeoutMs: params.runtimeSubagent.waitForRun
+        timeoutMs: params.workflowRuntime.waitForRun
           ? mailboxWaitTimeoutMs
           : Math.min(mailboxWaitTimeoutMs, 500),
       });
@@ -349,9 +349,9 @@ async function runSingleDispatchAttempt(params: {
     if (
       typeof params.waitTimeoutMs === "number" &&
       params.waitTimeoutMs > 0 &&
-      params.runtimeSubagent.waitForRun
+      params.workflowRuntime.waitForRun
     ) {
-      const waited = await params.runtimeSubagent.waitForRun({
+      const waited = await params.workflowRuntime.waitForRun({
         runId: started.runId,
         timeoutMs: params.waitTimeoutMs,
       });
@@ -371,7 +371,7 @@ async function runSingleDispatchAttempt(params: {
         };
       }
       if (waited.status === "timeout") {
-        const afterCount = await getMessageCount(params.runtimeSubagent, params.sessionKey);
+        const afterCount = await getMessageCount(params.workflowRuntime, params.sessionKey);
         const acceptedByTranscript =
           beforeCount != null && afterCount != null && afterCount > beforeCount;
         const accepted =
@@ -448,7 +448,7 @@ async function runSingleDispatchAttempt(params: {
 }
 
 export async function dispatchWorkflowTaskToAgent(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   requesterSessionKey?: string;
   requesterChannel?: string;
   preferredSessionKeys?: string[] | null;
@@ -466,7 +466,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
   retryOnTimeout?: boolean;
   enableSpawnFallback?: boolean;
 }): Promise<WorkflowTaskDispatchResult> {
-  const runtimeSubagent = params.runtimeSubagent;
+  const workflowRuntime = params.workflowRuntime;
   const finalizeResult = async (
     result: WorkflowTaskDispatchResult
   ): Promise<WorkflowTaskDispatchResult> => {
@@ -501,7 +501,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
     });
     return result;
   };
-  if (!runtimeSubagent) {
+  if (!workflowRuntime) {
     return finalizeResult({
       dispatched: false,
       sessionKey: null,
@@ -687,9 +687,9 @@ export async function dispatchWorkflowTaskToAgent(params: {
       index > 0 &&
       sessionKey !== canonicalMainSessionKey &&
       runtimeStatus == null &&
-      runtimeSubagent.getSessionMessages
+      workflowRuntime.getSessionMessages
     ) {
-      const candidateMessageCount = await getMessageCount(runtimeSubagent, sessionKey);
+      const candidateMessageCount = await getMessageCount(workflowRuntime, sessionKey);
       if (candidateMessageCount === 0) {
         attempts.push({
           strategy: "alternate_session",
@@ -705,7 +705,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
       }
     }
     const attemptResult = await runSingleDispatchAttempt({
-      runtimeSubagent,
+      workflowRuntime,
       sessionKey,
       strategy: index === 0 ? "direct_session" : "alternate_session",
       message,
@@ -747,7 +747,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
   if (params.enableSpawnFallback !== false) {
     const fallbackSessionKey = buildSpawnFallbackSessionKey(params.toRole);
     const attemptResult = await runSingleDispatchAttempt({
-      runtimeSubagent,
+      workflowRuntime,
       sessionKey: fallbackSessionKey,
       strategy: "spawn_fallback",
       message,
@@ -784,9 +784,9 @@ export async function dispatchWorkflowTaskToAgent(params: {
         error: null,
       });
     }
-    if (!attemptResult.attempt.runId && runtimeSubagent.deleteSession) {
+    if (!attemptResult.attempt.runId && workflowRuntime.deleteSession) {
       try {
-        await runtimeSubagent.deleteSession({
+        await workflowRuntime.deleteSession({
           sessionKey: fallbackSessionKey,
           deleteTranscript: true,
         });

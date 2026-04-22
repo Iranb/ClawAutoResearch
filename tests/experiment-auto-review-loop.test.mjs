@@ -853,7 +853,7 @@ test("maybeLaunchAutoStageForProject dispatches planner-owned reviewed-auto expe
 
   const runtimeCalls = [];
   const result = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: "planner-run-1" };

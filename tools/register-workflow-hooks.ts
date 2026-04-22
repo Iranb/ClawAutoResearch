@@ -818,7 +818,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               claimLeaseMs: 15 * 60 * 1000,
               beforeActivateHook: async ({ intent, stageAfter }) => {
                 const hookSummary = await runWorkflowHookPointGate({
-                  runtimeSubagent: workflowRuntime,
+                  workflowRuntime: workflowRuntime,
                   projectRoot: snapshot.projectRoot!,
                   projectId: snapshot.projectId,
                   stage: stageAfter,
@@ -838,7 +838,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               },
               afterActivateHook: async ({ intent, stageAfter }) => {
                 await runWorkflowHookPointGate({
-                  runtimeSubagent: workflowRuntime,
+                  workflowRuntime: workflowRuntime,
                   projectRoot: snapshot.projectRoot!,
                   projectId: snapshot.projectId,
                   stage: stageAfter,

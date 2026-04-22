@@ -18,10 +18,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-type RuntimeSubagentApi = WorkflowExecutionRuntimeLike & {
+type WorkflowRuntimeApi = WorkflowExecutionRuntimeLike & {
   run: NonNullable<WorkflowExecutionRuntimeLike["run"]>;
 };
-type OptionalRuntimeSubagentApi = WorkflowExecutionRuntimeLike;
+type OptionalWorkflowRuntimeApi = WorkflowExecutionRuntimeLike;
 
 function toDispatchRole(value: string | null | undefined): DispatchableWorkflowRole | null {
   if (
@@ -125,7 +125,7 @@ async function writeAggregateRevisionPacket(params: {
 }
 
 export async function dispatchAggregateHookRevision(params: {
-  runtimeSubagent?: OptionalRuntimeSubagentApi;
+  workflowRuntime?: OptionalWorkflowRuntimeApi;
   requesterSessionKey?: string | null;
   requesterChannel?: string | null;
   projectRoot: string;
@@ -160,9 +160,9 @@ export async function dispatchAggregateHookRevision(params: {
       executions: items,
     });
     const dispatch = await dispatchWorkflowTaskToAgent({
-      runtimeSubagent:
-        params.runtimeSubagent && typeof params.runtimeSubagent.run === "function"
-          ? (params.runtimeSubagent as RuntimeSubagentApi)
+      workflowRuntime:
+        params.workflowRuntime && typeof params.workflowRuntime.run === "function"
+          ? (params.workflowRuntime as WorkflowRuntimeApi)
           : undefined,
       requesterSessionKey: params.requesterSessionKey ?? undefined,
       requesterChannel: params.requesterChannel ?? undefined,

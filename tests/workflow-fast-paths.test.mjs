@@ -184,7 +184,7 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const completedRunIds = new Set();
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run() {
       return { runId: "bg-run-paper-1" };
     },
@@ -200,7 +200,7 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
   });
 
   const launch = await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -267,7 +267,7 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
 
   completedRunIds.add(String(launch.runId));
   const inventory = await listBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectId: "paper-sync-project",
     projectRoot,
@@ -610,7 +610,7 @@ test("startBackgroundWorkflowRun requires an explicit wrapper command for legacy
   await assert.rejects(
     () =>
       startBackgroundWorkflowRun({
-        runtimeSubagent: {
+        workflowRuntime: {
           async run() {
             throw new Error("should not launch");
           },
@@ -651,7 +651,7 @@ test("startBackgroundWorkflowRun gives PaperNexus import continuations explicit 
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-import-1" };
@@ -703,7 +703,7 @@ test("startBackgroundWorkflowRun gives PaperNexus batch continuations explicit m
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-batch-import-1" };
@@ -756,7 +756,7 @@ test("startBackgroundWorkflowRun gives graph-build continuations explicit Zotero
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-graph-build-1" };
@@ -807,7 +807,7 @@ test("startBackgroundWorkflowRun gives zotero-sync continuations explicit non-bl
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-zotero-sync-1" };
@@ -864,7 +864,7 @@ test("startBackgroundWorkflowRun keeps survey continuations on the survey line a
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-survey-1" };
@@ -931,7 +931,7 @@ test("startBackgroundWorkflowRun binds the channel back to the manifest owner in
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "bg-run-resume-owner-fix" };
       },
@@ -1016,7 +1016,7 @@ test("startBackgroundWorkflowRun gives graph-build repair continuations explicit
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-graph-build-repair-1" };
@@ -1138,7 +1138,7 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   );
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: `bg-run-${runCalls.length}` };
@@ -1231,7 +1231,7 @@ test("startBackgroundWorkflowRun for resume-pipeline requeues stale running inge
   );
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: `bg-run-${runCalls.length}` };
@@ -1290,7 +1290,7 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-1" };
@@ -1354,7 +1354,7 @@ test("startBackgroundWorkflowRun can use embedded workflow runtime without gatew
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: workflowRuntime,
+    workflowRuntime: workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -1420,7 +1420,7 @@ test("startBackgroundWorkflowRun tolerates empty legacy background registry and 
   await fs.writeFile(queuePath, "", "utf8");
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "bg-run-empty-registry" };
       },
@@ -1462,7 +1462,7 @@ test("startBackgroundWorkflowRun queues the continuation when runtime subagent a
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error(
           "Plugin runtime subagent methods are only available during a gateway request."
@@ -1525,7 +1525,7 @@ test("startBackgroundWorkflowRun can bootstrap a research-queue continuation", a
   });
 
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runCalls.push(params);
         return { runId: "bg-run-queue-1" };
@@ -1572,7 +1572,7 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
   const projectsRoot = path.join(workspaceRoot, "projects");
   const sharedProjectRoot = path.join(projectsRoot, "birds-room-project");
   const runCalls = [];
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -1591,7 +1591,7 @@ test("startBackgroundWorkflowRun caps researcher background subagents at two per
   });
 
   const baseParams = {
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -1656,7 +1656,7 @@ test("queued researcher background runs persist and auto-replay when a pooled se
   const sharedProjectRoot = path.join(projectsRoot, "birds-room-project");
   const runCalls = [];
   const completedRunIds = new Set();
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -1680,7 +1680,7 @@ test("queued researcher background runs persist and auto-replay when a pooled se
   });
 
   const baseParams = {
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -1735,7 +1735,7 @@ test("queued researcher background runs persist and auto-replay when a pooled se
 
   completedRunIds.add(first.runId);
   const drain = await drainQueuedBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     projectsRoot,
   });
 
@@ -1781,7 +1781,7 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
   const sharedProjectRoot = path.join(projectsRoot, "audit-room-project");
   const runCalls = [];
   const completedRunIds = new Set();
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -1805,7 +1805,7 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
   });
 
   const baseParams = {
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -1862,7 +1862,7 @@ test("queued background workflow lifecycle is recorded in workflow-events.jsonl"
 
   completedRunIds.add(first.runId);
   await drainQueuedBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     projectsRoot,
   });
 
@@ -1919,7 +1919,7 @@ test("drainQueuedBackgroundWorkflowRuns marks projectless workflow dispatch entr
   });
 
   const drained = await drainQueuedBackgroundWorkflowRuns({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "should-not-run" };
       },
@@ -1957,7 +1957,7 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per project 
   const alphaProjectRoot = path.join(projectsRoot, "alpha");
   const betaProjectRoot = path.join(projectsRoot, "beta");
   const runCalls = [];
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -1982,7 +1982,7 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per project 
   });
 
   await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2008,7 +2008,7 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per project 
     },
   });
   await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2035,7 +2035,7 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per project 
   });
 
   const otherProjectSameChannel = await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2070,7 +2070,7 @@ test("startBackgroundWorkflowRun reuses an idle researcher subagent session for 
   const projectsRoot = path.join(workspaceRoot, "projects");
   const runCalls = [];
   const completedRunIds = new Set();
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -2087,7 +2087,7 @@ test("startBackgroundWorkflowRun reuses an idle researcher subagent session for 
   });
 
   const baseParams = {
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2140,7 +2140,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   const runCalls = [];
   const deletedSessions = [];
   const completedRunIds = new Set();
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `bg-run-${runCalls.length}` };
@@ -2160,7 +2160,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   });
 
   const launch = await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2186,7 +2186,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   });
 
   const activeInventory = await listBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectsRoot,
   });
@@ -2197,7 +2197,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   completedRunIds.add(launch.runId);
 
   const idleInventory = await listBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectsRoot,
   });
@@ -2206,7 +2206,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   assert.equal(idleInventory.entries[0].deleteEligible, true);
 
   const pruned = await pruneBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectsRoot,
     idleOlderThanMs: 0,
@@ -2217,7 +2217,7 @@ test("background workflow run inventory reports active then idle sessions and pr
   assert.equal(deletedSessions.length, 1);
 
   const afterPrune = await listBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectsRoot,
   });
@@ -2228,7 +2228,7 @@ test("retireBackgroundWorkflowRuns force-removes matching pooled sessions by sta
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const deletedSessions = [];
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run() {
       return { runId: "bg-run-retire-1" };
     },
@@ -2245,7 +2245,7 @@ test("retireBackgroundWorkflowRuns force-removes matching pooled sessions by sta
   });
 
   await startBackgroundWorkflowRun({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       projectsRoot,
       enableChannelProjectBindings: true,
@@ -2271,7 +2271,7 @@ test("retireBackgroundWorkflowRuns force-removes matching pooled sessions by sta
   });
 
   const retired = await retireBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectId: "retire-project",
     projectsRoot,
@@ -2283,7 +2283,7 @@ test("retireBackgroundWorkflowRuns force-removes matching pooled sessions by sta
   assert.equal(deletedSessions.length, 1);
 
   const afterRetire = await listBackgroundWorkflowRuns({
-    runtimeSubagent,
+    workflowRuntime,
     ownerAgent: "researcher",
     projectId: "retire-project",
     projectsRoot,

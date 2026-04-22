@@ -10,7 +10,7 @@ import {
 } from "./agent-task-dispatch";
 import { recordWorkflowRuntimeIncident } from "./workflow-runtime-incidents.js";
 
-type RuntimeSubagentApi = {
+type WorkflowRuntimeApi = {
   run: (params: {
     sessionKey: string;
     message: string;
@@ -126,7 +126,7 @@ function normalizeLobsterStatus(
 }
 
 type HandoffWorkflowTaskParams = {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy?: {
     lobsterHandoff?: WorkflowLobsterHandoffConfig;
   } | null;
@@ -563,7 +563,7 @@ export async function handoffWorkflowTaskToAgent(
           });
         }
         return nativeDispatch({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel ?? undefined,
           preferredSessionKeys: params.preferredSessionKeys ?? undefined,

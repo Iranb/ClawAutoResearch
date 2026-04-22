@@ -793,7 +793,7 @@ function createBackgroundWorkflowCommandHandler(
           : target.workspaceDir ?? undefined;
 
           return deps.startBackgroundWorkflowRun({
-            runtimeSubagent: createWorkflowCommandRuntime({
+            workflowRuntime: createWorkflowCommandRuntime({
               api,
               workspaceDir:
                 commandSnapshot.projectRoot ??
@@ -1261,7 +1261,7 @@ function createAutoResearchCommandHandler(
       });
 
       const started = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: createWorkflowCommandRuntime({
+        workflowRuntime: createWorkflowCommandRuntime({
           api,
           workspaceDir: ensuredProject.projectRoot,
           agentId: "researcher",
@@ -1397,7 +1397,7 @@ function createAutoReviewCommandHandler(
       });
 
       const started = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: createWorkflowCommandRuntime({
+        workflowRuntime: createWorkflowCommandRuntime({
           api,
           workspaceDir: ensuredProject.projectRoot,
           agentId: "researcher",
@@ -1797,7 +1797,7 @@ function createSurveyGraphBuildCommandHandler(
 
       const topic = extractQuotedSegment(ctx.args) ?? snapshot.projectId ?? "survey graph build";
       const result = await deps.startBackgroundWorkflowRun({
-        runtimeSubagent: createWorkflowCommandRuntime({
+        workflowRuntime: createWorkflowCommandRuntime({
           api,
           workspaceDir: snapshot.projectRoot ?? target.workspaceDir ?? undefined,
           agentId: "researcher",
@@ -2102,7 +2102,7 @@ async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   try {
     await Promise.race([
       drainQueuedBackgroundWorkflowRuns({
-        runtimeSubagent: createWorkflowCommandRuntime({
+        workflowRuntime: createWorkflowCommandRuntime({
           api,
           workspaceDir: workflowPolicy.projectsRoot,
           messageChannel: "discord",

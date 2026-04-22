@@ -76,7 +76,7 @@ export async function resolveWorkflowSnapshotContext(params: {
   await reconcileBackgroundWorkflowStateForSnapshot({
     snapshot,
     workflowPolicy,
-    runtimeSubagent:
+    workflowRuntime:
       workflowRuntime ??
       createWorkflowMonitorRuntimeFromApi({
         api: params.plugin.api,

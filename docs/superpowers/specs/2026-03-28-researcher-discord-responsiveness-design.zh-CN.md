@@ -67,7 +67,7 @@
 
 在当前实现中，许多 workflow 背景任务直接使用：
 
-- `runtimeSubagent.run(..., deliver: false)`
+- `workflowRuntime.run(..., deliver: false)`
 
 这类模式适合内部控制消息、review panel、import polling、机器可读的 JSON 审核等内部工作。
 
@@ -910,7 +910,7 @@ stateDiagram-v2
 一个 session 应被判定为 `active`，当且仅当：
 
 - registry 中它的 `session_status = active`
-- 且 `runtimeSubagent.waitForRun(runId)` 未返回 `ok/error`
+- 且 `workflowRuntime.waitForRun(runId)` 未返回 `ok/error`
 - 且最近心跳或最近检查仍在保鲜期内
 
 如果存在如下情况，则不应再认定为活跃：
@@ -1027,7 +1027,7 @@ OpenClaw 原生 CLI 明确支持：
 
 这说明从 OpenClaw 的总体能力上看，“让回复发到特定 channel/target”是一个被正式支持的能力。
 
-但是，当前插件运行时暴露给 native plugin 的 `runtime.subagent.run(...)` 参数面仍然相对窄，只包含：
+但是，当前插件运行时直接暴露给 native plugin 的原生 plugin subagent run 参数面仍然相对窄，只包含：
 
 - `sessionKey`
 - `message`
@@ -1136,7 +1136,7 @@ OpenClaw 原生 CLI 明确支持：
 - 可以快速上线
 - 足以解决“用户看不到任何反馈”的核心问题
 
-#### 阶段 B：扩展 runtime.subagent.run delivery override
+#### 阶段 B：扩展原生 plugin subagent run 的 delivery override
 
 在这一阶段：
 
