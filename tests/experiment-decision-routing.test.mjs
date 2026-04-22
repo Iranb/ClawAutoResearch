@@ -183,6 +183,53 @@ test("experiment decision handoff routes bounded repair work to coder", async (t
   assert.equal(result.recommendedActions[0]?.owner, "coder");
 });
 
+test("experiment decision routes not-yet-started experiment launch back to researcher", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "experiment",
+    current_micro_stage: "experiment_launch_requested",
+    owner_agent: "coder",
+    autonomous_execution: {},
+    experiment_search: {
+      status: "not_started",
+      baseline_fairness_status: "unknown",
+      implementation_confidence: "unknown",
+      multi_seed_status: "pending",
+      plot_pack_status: "pending",
+      ablation_status: "pending",
+      search_exhaustion_status: "unknown",
+      evidence_cleanliness_status: "unknown",
+    },
+    orchestration_state: {
+      status: "running",
+      current_owner: "coder",
+      next_transition_candidate: "analyze",
+    },
+    idle_research: { enabled: false },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
+
+  const result = await runWorkflowAutoIteratorImpl(
+    {
+      projectRoot,
+      mode: "test",
+      queueMailbox: false,
+    },
+    buildDeps()
+  );
+
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.ownerAfter, "researcher");
+  assert.equal(result.experimentDecision, "launch_pending");
+  assert.match(result.nextAction ?? "", /\/experiment-phase/i);
+  assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
+  assert.equal(result.recommendedActions[0]?.owner, "researcher");
+});
+
 test("experiment decision rollback routes the workflow back to plan with synced orchestration state", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

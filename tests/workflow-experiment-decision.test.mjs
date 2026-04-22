@@ -6,6 +6,28 @@ import {
   summarizeExperimentFailureClusters,
 } from "../tools/workflow-experiment-decision.ts";
 
+test("experiment decision routes launch_not_started back to researcher orchestration", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "not_started",
+      baseline_fairness_status: "unknown",
+      implementation_confidence: "unknown",
+      multi_seed_status: "pending",
+      ablation_status: "pending",
+      innovation_status: "unknown",
+      search_exhaustion_status: "unknown",
+      evidence_cleanliness_status: "unknown",
+    },
+    experimentSearchSpec: {},
+    experimentLedger: { experiments: [] },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "launch_pending");
+  assert.equal(result.validationStage, "launch_planning");
+  assert.match(result.rationale, /no experiment launch has started yet/i);
+});
+
 test("experiment decision requests implementation repair when baseline fairness is not yet clean", () => {
   const result = evaluateExperimentSearchDecision({
     experimentSearch: {

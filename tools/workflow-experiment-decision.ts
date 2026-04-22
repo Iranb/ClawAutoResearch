@@ -35,6 +35,7 @@ export type ExperimentFailureCluster = {
 };
 
 export type ExperimentSearchDecision =
+  | "launch_pending"
   | "repair_implementation"
   | "continue_tuning"
   | "narrow_search"
@@ -294,16 +295,18 @@ export function evaluateExperimentSearchDecision(params: {
     required:
       outerLoop.requireBaselineDatasetCoverageForEffectiveCandidates,
   });
-  const ledgerExperiments = Array.isArray((params.experimentLedger as Record<string, unknown> | null)?.experiments)
-    ? (((params.experimentLedger as Record<string, unknown>).experiments as unknown[]) ?? [])
-    : [];
-  const candidateTexts = ledgerExperiments
+  const ledgerExperiments = (
+    Array.isArray((params.experimentLedger as Record<string, unknown> | null)?.experiments)
+      ? (((params.experimentLedger as Record<string, unknown>).experiments as unknown[]) ?? [])
+      : []
+  )
     .map((entry) =>
       entry && typeof entry === "object" && !Array.isArray(entry)
         ? (entry as Record<string, unknown>)
         : null
     )
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const candidateTexts = ledgerExperiments
     .filter((entry) => {
       const experimentId =
         readString(entry.experiment_id) ?? readString(entry.experimentId);
@@ -325,6 +328,38 @@ export function evaluateExperimentSearchDecision(params: {
     preferredExperimentIds.length > 0 ||
     Boolean(search.lastCandidateBranch) ||
     Boolean(search.lastCandidateCommit);
+  const hasRecordedRunEvidence = ledgerExperiments.some((entry) => {
+    const status = normalizeStageLike(entry.status);
+    if (
+      [
+        "running",
+        "done",
+        "completed",
+        "failed",
+        "timeout",
+        "timed_out",
+        "stalled",
+        "killed",
+        "discard",
+        "discarded",
+        "merged",
+      ].includes(status)
+    ) {
+      return true;
+    }
+    return Boolean(
+      readString(entry.launched_at) ??
+        readString(entry.launchedAt) ??
+        readString(entry.completed_at) ??
+        readString(entry.completedAt) ??
+        readString(entry.remote_run_path) ??
+        readString(entry.remoteRunPath) ??
+        readString(entry.run_id) ??
+        readString(entry.runId) ??
+        readString(entry.screen_name) ??
+        readString(entry.screenName)
+    );
+  });
   const effectiveCandidateClaimed =
     candidateIdentityPresent &&
     (
@@ -481,7 +516,20 @@ export function evaluateExperimentSearchDecision(params: {
     spec.searchLadder[0] ??
     (isReadyLike(search.multiSeedStatus) ? "ablation_validation" : "local_hparam_search");
 
-  if (gpuRecommendation === "reconcile_finished" || likelyFinishedRunCount > 0) {
+  if (
+    !hasRecordedRunEvidence &&
+    !candidateIdentityPresent &&
+    ["not_started", "missing"].includes(searchStatus) &&
+    reviewBlockerCount === 0
+  ) {
+    decision = "launch_pending";
+    rationale =
+      "No experiment launch has started yet, so the workflow should return to Researcher for launch orchestration rather than treating the stage as a coder-side repair.";
+    decisionConfidence = "high";
+    recommendedNextAction =
+      "Run /experiment-phase to schedule the first baseline-faithful launch group, initialize EXPERIMENT_REGISTRY.md / EXPERIMENT_LEDGER.json, and delegate atomic bundle launches to Coder.";
+    validationStage = "launch_planning";
+  } else if (gpuRecommendation === "reconcile_finished" || likelyFinishedRunCount > 0) {
     decision = "reconcile_runtime";
     rationale =
       "Runtime monitor indicates one or more tracked runs are likely finished and need reconciliation.";
