@@ -55,7 +55,7 @@ test("evaluateWorkflowHooksForPoint launches and then settles a file audit hook"
   });
 
   const started = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -72,7 +72,7 @@ test("evaluateWorkflowHooksForPoint launches and then settles a file audit hook"
   assert.equal(started.hooksRun[0]?.launched, true);
 
   const completed = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "ok" }),
       getSessionMessages: async () => ({
         messages: [
@@ -151,7 +151,7 @@ test("evaluateWorkflowHooksForPoint invalidates a cached pass when supporting ar
   });
 
   await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -166,7 +166,7 @@ test("evaluateWorkflowHooksForPoint invalidates a cached pass when supporting ar
   });
 
   await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "ok" }),
       getSessionMessages: async () => ({
         messages: [
@@ -192,7 +192,7 @@ test("evaluateWorkflowHooksForPoint invalidates a cached pass when supporting ar
   );
 
   const rerun = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -251,7 +251,7 @@ test("evaluateWorkflowHooksForPoint restarts auditing when live inputs drift mid
   });
 
   await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -272,7 +272,7 @@ test("evaluateWorkflowHooksForPoint restarts auditing when live inputs drift mid
   );
 
   const rerun = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "ok" }),
       getSessionMessages: async () => ({
         messages: [

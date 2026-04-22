@@ -927,7 +927,7 @@ Problem evidence:
 
 - `Discord inbound worker timed out` is a transport/inbound-worker timeout, not proof that workflow state work failed.
 - Current `auto_iterator_tick` path can synchronously run stage reconciliation, task dispatch, stage broadcast, and status broadcast in one inbound tool call.
-- Current stage broadcast path records an outbox event, but a duplicate outbox entry does not automatically short-circuit `runtimeSubagent.run`.
+- Current stage broadcast path records an outbox event, but a duplicate outbox entry does not automatically short-circuit `workflowRuntime.run`.
 - Repeated user pings or repeated agent recovery turns can therefore trigger duplicate nested broadcasts and long synchronous work inside the Discord inbound worker.
 
 Files:
@@ -962,9 +962,9 @@ Implementation:
   - do not run another `auto_iterator_tick` from the same inbound turn
 - Stage/status broadcast must become outbox-first:
   - call `recordWorkflowBroadcastEvent(...)`
-  - if it returns `created=false` and existing entry is `pending` or `delivered`, skip `runtimeSubagent.run`
+  - if it returns `created=false` and existing entry is `pending` or `delivered`, skip `workflowRuntime.run`
   - if inline budget is exhausted, leave deliveryStatus `pending` and let runtime maintenance deliver it
-  - never call `runtimeSubagent.run` twice for the same idempotency key in the same inbound turn
+  - never call `workflowRuntime.run` twice for the same idempotency key in the same inbound turn
 - Broadcast message budget:
   - max inline broadcast text: 1500 chars
   - max `[ARTIFACTS]` or `Recommended action` inline fragment: 400 chars
@@ -984,7 +984,7 @@ Implementation:
 Tests:
 
 - `auto_iterator_tick` in Discord/chat defers dispatch/broadcast after budget instead of timing out.
-- Duplicate stage broadcast idempotency key records one outbox entry and calls `runtimeSubagent.run` at most once.
+- Duplicate stage broadcast idempotency key records one outbox entry and calls `workflowRuntime.run` at most once.
 - Oversized broadcast payload is materialized and compacted before posting.
 - Repeated user pings coalesce to one active inbound turn per project/channel/action.
 - `Discord inbound worker timed out` incident does not regress or advance workflow stage by itself.
@@ -1215,7 +1215,7 @@ Rules:
 - Inbound tool calls must be treated as request/ack surfaces, not long-running workflow workers.
 - A single inbound turn may run at most one `auto_iterator_tick`.
 - `auto_iterator_tick` may reconcile stage truth inline, but dispatch and broadcast must be deferred when budget is close to exhaustion.
-- Nested `runtimeSubagent.run` calls from an inbound turn must be best-effort and budgeted.
+- Nested `workflowRuntime.run` calls from an inbound turn must be best-effort and budgeted.
 - Duplicate broadcast idempotency keys must skip nested delivery immediately.
 - Long recommended actions, blocker lists, participant summaries, or command text must be materialized to payload files instead of posted inline.
 - When `Discord inbound worker timed out` appears, agents must not infer workflow failure or retry the whole stage. They must inspect live state and pending outbox/queue records.
@@ -1333,7 +1333,7 @@ Loop / blocker guard cases:
 - Cross-domain missing evidence stops after `max_requisition_rounds` and produces `partial`, `waived`, or `blocked`.
 - Survey route recovery never creates code/experiment/analyze handoff during blocker recovery.
 - Discord/chat `auto_iterator_tick` returns compact deferred response when dispatch/broadcast would exceed inbound budget.
-- Duplicate broadcast idempotency keys do not call `runtimeSubagent.run` twice.
+- Duplicate broadcast idempotency keys do not call `workflowRuntime.run` twice.
 - Oversized stage broadcast writes `workflow-broadcast-payloads/<broadcastId>.md` and posts only a compact pointer.
 - `Discord inbound worker timed out` incident does not create a second stage transition or duplicate handoff.
 

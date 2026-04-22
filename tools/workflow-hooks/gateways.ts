@@ -7,7 +7,7 @@ import { buildWorkflowHookPointContext } from "./point-context.js";
 import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type { WorkflowHookPoint, WorkflowLine, WorkflowPaperMode } from "./contracts.js";
 
-type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
+type WorkflowRuntimeApi = WorkflowExecutionRuntimeLike;
 
 function extractLatestReadableText(messages: unknown[]): string | null {
   for (const entry of [...messages].reverse()) {
@@ -68,7 +68,7 @@ async function readWorkflowHookEnvironment(params: {
 }
 
 export async function runWorkflowHookPointGate(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   projectRoot: string;
   projectId: string | null;
   stage: string | null;
@@ -101,7 +101,7 @@ export async function runWorkflowHookPointGate(params: {
     projectRoot: params.projectRoot,
   });
   const summary = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     requesterSessionKey: params.requesterSessionKey,
     requesterChannel: params.requesterChannel,
     context: buildWorkflowHookPointContext({
@@ -125,7 +125,7 @@ export async function runWorkflowHookPointGate(params: {
       emittedHookEvents: params.emittedHookEvents,
     }),
     launchReviewerRun:
-      params.runtimeSubagent?.run != null
+      params.workflowRuntime?.run != null
         ? async (launchParams) => {
             const reviewerRole = normalizeHookReviewerRole(launchParams.reviewerRole);
             if (!reviewerRole) {
@@ -141,7 +141,7 @@ export async function runWorkflowHookPointGate(params: {
               targetRole: reviewerRole,
             });
             try {
-              const started = await params.runtimeSubagent!.run!({
+              const started = await params.workflowRuntime!.run!({
                 sessionKey,
                 message: launchParams.message,
                 lane: "nested",

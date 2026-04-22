@@ -405,7 +405,7 @@ export function buildAutoIteratorStageBroadcastMessage(params: {
 }
 
 export async function maybeBroadcastAutoIteratorStageChange(params: {
-  runtimeSubagent?: StageBroadcastRuntime;
+  workflowRuntime?: StageBroadcastRuntime;
   bindingPolicy?: ChannelProjectBindingPolicy;
   sessionKey?: string;
   projectId: string | null;
@@ -431,7 +431,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       idempotencyKey: null,
     };
   }
-  if (!params.runtimeSubagent) {
+  if (!params.workflowRuntime) {
     return {
       broadcasted: false,
       reasonSkipped: "runtime_unavailable",
@@ -565,7 +565,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
   });
   try {
     const runId = (
-      await params.runtimeSubagent.run({
+      await params.workflowRuntime.run({
         sessionKey: params.sessionKey,
         message: budgeted.message,
         lane: "nested",
@@ -636,7 +636,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
 }
 
 export async function maybeBroadcastWorkflowStatusUpdate(params: {
-  runtimeSubagent?: StageBroadcastRuntime;
+  workflowRuntime?: StageBroadcastRuntime;
   bindingPolicy?: ChannelProjectBindingPolicy;
   sessionKey?: string | null;
   projectId: string | null;
@@ -646,7 +646,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
   summary: string;
   idempotencyKeySuffix?: string | null;
 }): Promise<WorkflowStatusBroadcastResult> {
-  if (!params.runtimeSubagent) {
+  if (!params.workflowRuntime) {
     return {
       broadcasted: false,
       reasonSkipped: "runtime_unavailable",
@@ -746,7 +746,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
   });
   try {
     const runId = (
-      await params.runtimeSubagent.run({
+      await params.workflowRuntime.run({
         sessionKey: params.sessionKey,
         message: budgeted.message,
         lane: "nested",

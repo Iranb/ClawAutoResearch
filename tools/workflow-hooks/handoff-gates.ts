@@ -21,7 +21,7 @@ import type {
   WorkflowLine,
   WorkflowPaperMode,
 } from "./contracts.js";
-type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
+type WorkflowRuntimeApi = WorkflowExecutionRuntimeLike;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -156,7 +156,7 @@ export function buildWorkflowHandoffHookGateRecord(params: {
 }
 
 export async function evaluateWorkflowHandoffHooks(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   projectRoot: string;
   projectId: string | null;
   hookPoint: WorkflowHookPoint;
@@ -170,7 +170,7 @@ export async function evaluateWorkflowHandoffHooks(params: {
 }): Promise<WorkflowHandoffHookGateResult> {
   const environment = await readHookEnvironment(params.projectRoot);
   const summary = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     requesterSessionKey: params.requesterSessionKey,
     requesterChannel: params.requesterChannel,
     context: buildWorkflowHookPointContext({
@@ -188,7 +188,7 @@ export async function evaluateWorkflowHandoffHooks(params: {
       transition: params.transition ?? params.hookPoint,
     }),
     launchReviewerRun:
-      params.runtimeSubagent?.run != null
+      params.workflowRuntime?.run != null
         ? async (launchParams) => {
             const reviewerRole = normalizeHookReviewerRole(launchParams.reviewerRole);
             if (!reviewerRole) {
@@ -204,7 +204,7 @@ export async function evaluateWorkflowHandoffHooks(params: {
               targetRole: reviewerRole,
             });
             try {
-              const started = await params.runtimeSubagent!.run!({
+              const started = await params.workflowRuntime!.run!({
                 sessionKey,
                 message: launchParams.message,
                 lane: "nested",

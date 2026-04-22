@@ -101,7 +101,7 @@ test("writing hooks honor appliesWhen and fine-grained filters before launching"
   });
 
   const started = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },

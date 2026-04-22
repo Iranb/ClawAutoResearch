@@ -440,7 +440,7 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
   });
 
   const launch = await maybeLaunchIdleResearchForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: "idle-run-1" };
@@ -515,7 +515,7 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
   assert.match(runs[0].message, /record_idle_research_run/);
 
   const duplicate = await maybeLaunchIdleResearchForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: "idle-run-2" };
@@ -576,7 +576,7 @@ test("maybeLaunchIdleResearchForProject keeps researcher background capacity iso
   t.after(async () => {
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runCalls.push(params);
       return { runId: `idle-run-${runCalls.length}` };
@@ -584,7 +584,7 @@ test("maybeLaunchIdleResearchForProject keeps researcher background capacity iso
   };
 
   await maybeLaunchIdleResearchForProject({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       enableChannelProjectBindings: true,
       projectsRoot,
@@ -638,7 +638,7 @@ test("maybeLaunchIdleResearchForProject keeps researcher background capacity iso
     },
   });
   await maybeLaunchIdleResearchForProject({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       enableChannelProjectBindings: true,
       projectsRoot,
@@ -693,7 +693,7 @@ test("maybeLaunchIdleResearchForProject keeps researcher background capacity iso
   });
 
   const blocked = await maybeLaunchIdleResearchForProject({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       enableChannelProjectBindings: true,
       projectsRoot,
@@ -761,7 +761,7 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   });
   await fs.mkdir(projectRoot, { recursive: true });
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -864,7 +864,7 @@ test("maybeLaunchAutoStageForProject claims the next matching task for the launc
   });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1061,7 +1061,7 @@ test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair gu
   await fs.mkdir(projectRoot, { recursive: true });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1150,7 +1150,7 @@ test("maybeLaunchAutoStageForProject dispatches a prepared owner handoff even wh
   await fs.mkdir(projectRoot, { recursive: true });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1231,7 +1231,7 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
   await fs.mkdir(projectRoot, { recursive: true });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1325,7 +1325,7 @@ test("maybeLaunchAutoStageForProject honors configured experiment monitor cooldo
   ]);
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1417,7 +1417,7 @@ test("maybeLaunchAutoStageForProject defaults experiment monitor cooldown to fiv
   ]);
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: `monitor-run-${runs.length}` };
@@ -1492,7 +1492,7 @@ test("maybeLaunchAutoStageForProject can dispatch coder-owned search-experiment 
   await fs.mkdir(projectRoot, { recursive: true });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -1572,7 +1572,7 @@ test("maybeLaunchAutoZoteroSyncForProject starts a non-blocking researcher conti
   await seedProjectPapers(projectRoot);
 
   const launch = await maybeLaunchAutoZoteroSyncForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: `zotero-run-${runs.length}` };
@@ -1733,7 +1733,7 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
   });
 
   const launch = await maybeLaunchPaperIngestionWorkerForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: `upload-run-${runs.length}` };
@@ -1816,7 +1816,7 @@ test("maybeLaunchAutoStageForProject keeps the researcher service session pool i
   }));
 
   const makeParams = (projectRoot, projectId) => ({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
@@ -1904,7 +1904,7 @@ test("aggressive auto-stage handoffs no longer queue purely because another proj
     notes: null,
   }));
 
-  const runtimeSubagent = {
+  const workflowRuntime = {
     async run(params) {
       runtimeRuns.push(params);
       sessionMessageCounts.set(
@@ -1933,7 +1933,7 @@ test("aggressive auto-stage handoffs no longer queue purely because another proj
   };
 
   const makeStageParams = (projectRoot, projectId) => ({
-    runtimeSubagent,
+    workflowRuntime,
     workflowPolicy: {
       autoMode: "aggressive",
       autoGate: defaultAutoGateConfig(),
@@ -2015,7 +2015,7 @@ test("maybeLaunchAutoStageForProject waits for risk discussion before generic st
   await fs.mkdir(projectRoot, { recursive: true });
 
   const launch = await maybeLaunchAutoStageForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         return { runId: `stage-run-${runs.length}` };
@@ -2093,7 +2093,7 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
   });
 
   const start = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `discussion-run-${runtimeCalls.length}` };
@@ -2144,7 +2144,7 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
   );
 
   const updated = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new discussion round");
       },
@@ -2280,7 +2280,7 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
   };
 
   const start = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `discussion-run-${runtimeCalls.length}` };
@@ -2329,7 +2329,7 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
   }
 
   const updated = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new discussion round");
       },
@@ -2402,7 +2402,7 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   }));
 
   const makeStageParams = (projectRoot, projectId) => ({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `seed-run-${runtimeCalls.length}` };
@@ -2452,7 +2452,7 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   runtimeCalls.length = 0;
   const completedRunIds = new Set();
   let allowQueueDrain = false;
-  const discussionRuntimeSubagent = {
+  const discussionWorkflowRuntime = {
     async run(params) {
       runtimeCalls.push(params);
       return { runId: `discussion-run-${runtimeCalls.length}` };
@@ -2470,7 +2470,7 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   };
 
   const start = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: discussionRuntimeSubagent,
+    workflowRuntime: discussionWorkflowRuntime,
     workflowPolicy: {
       autoMode: "aggressive",
       autoGate: {
@@ -2524,7 +2524,7 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   assert.equal(queuedResearcherAttempt?.status, "pending");
 
   const updated = await maybeAdvanceAutoModeDiscussionForProject({
-    runtimeSubagent: discussionRuntimeSubagent,
+    workflowRuntime: discussionWorkflowRuntime,
     workflowPolicy: {
       autoMode: "aggressive",
       autoGate: {
@@ -2583,7 +2583,7 @@ test("maybeAdvanceWorkflowPanelDiscussionForProject creates and resolves a reusa
   });
 
   const start = await maybeAdvanceWorkflowPanelDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `panel-run-${runtimeCalls.length}` };
@@ -2622,7 +2622,7 @@ test("maybeAdvanceWorkflowPanelDiscussionForProject creates and resolves a reusa
   assert.equal(runtimeCalls.length, 2);
 
   const updated = await maybeAdvanceWorkflowPanelDiscussionForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new panel discussion round");
       },
@@ -2719,7 +2719,7 @@ test("maybeAdvanceSurveyBriefRefinementForProject launches a survey brief refine
   await fs.writeFile(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n", "utf8");
 
   const result = await maybeAdvanceSurveyBriefRefinementForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `survey-brief-panel-${runtimeCalls.length}` };
@@ -2759,7 +2759,7 @@ test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to t
   await fs.mkdir(projectRoot, { recursive: true });
 
   const dispatch = await maybeDispatchAutoModeMitigationForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([projectRoot]);
@@ -2865,7 +2865,7 @@ test("maybeDispatchAutoModeMitigationForProject does not block another project o
   }));
 
   const makeStageParams = (projectRoot, projectId) => ({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
@@ -2916,7 +2916,7 @@ test("maybeDispatchAutoModeMitigationForProject does not block another project o
   runs.length = 0;
 
   const dispatch = await maybeDispatchAutoModeMitigationForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runs.push(params);
         await acknowledgePendingWorkflowMailboxes([alphaRoot, betaRoot, gammaRoot]);
@@ -3838,7 +3838,7 @@ test("maybeAdvanceAutoGateReviewForProject leaves submit under manual confirmati
   await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf", "utf8");
 
   const start = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         throw new Error(`should not launch submit auto review: ${params.sessionKey}`);
       },
@@ -3991,7 +3991,7 @@ test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data b
   };
 
   const start = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         throw new Error(`should not launch submit auto review: ${params.sessionKey}`);
       },
@@ -4046,7 +4046,7 @@ test("maybeAdvanceAutoGateReviewForProject ignores legacy submit announce data b
   });
 
   const updated = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new round");
       },
@@ -4103,7 +4103,7 @@ test("maybeAdvanceAutoGateReviewForProject routes review-stage panel gates throu
   await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf", "utf8");
 
   const start = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `gate-run-${runtimeCalls.length}` };
@@ -4172,7 +4172,7 @@ test("maybeAdvanceAutoGateReviewForProject routes review-stage panel gates throu
   assert.equal(runtimeCalls.length, 3);
 
   const updated = await maybeAdvanceAutoGateReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new gate panel round");
       },
@@ -4407,7 +4407,7 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   };
 
   const start = await maybeAdvanceAutoCodeReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         runtimeCalls.push(params);
         return { runId: `code-review-run-${runtimeCalls.length}` };
@@ -4484,7 +4484,7 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   }
 
   const updated = await maybeAdvanceAutoCodeReviewForProject({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not relaunch a new code review round");
       },

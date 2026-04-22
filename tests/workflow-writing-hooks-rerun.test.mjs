@@ -86,7 +86,7 @@ test("write_text_artifact exposes change metadata so hooks can rerun only for af
   assert.ok(abstractWrite.artifactKinds.includes("paper_section"));
 
   const started = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -109,7 +109,7 @@ test("write_text_artifact exposes change metadata so hooks can rerun only for af
   );
 
   const completed = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "ok" }),
       getSessionMessages: async () => ({
         messages: [
@@ -164,7 +164,7 @@ test("write_text_artifact exposes change metadata so hooks can rerun only for af
   ]);
 
   const resultsStarted = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },
@@ -193,7 +193,7 @@ test("write_text_artifact exposes change metadata so hooks can rerun only for af
     content: "\\section*{Abstract}\nVersion two.\n",
   });
   const abstractRerun = await evaluateWorkflowHooksForPoint({
-    runtimeSubagent: {
+    workflowRuntime: {
       waitForRun: async () => ({ status: "timeout" }),
       getSessionMessages: async () => ({ messages: [] }),
     },

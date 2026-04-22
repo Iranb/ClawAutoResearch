@@ -373,7 +373,7 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
     claimLeaseMs: 15 * 60 * 1000,
     beforeActivateHook: async ({ intent, stageAfter }) => {
       const hookSummary = await runWorkflowHookPointGate({
-        runtimeSubagent: workflowRuntime,
+        workflowRuntime: workflowRuntime,
         projectRoot: params.projectRoot!,
         projectId: params.snapshot.projectId,
         stage: stageAfter,
@@ -393,7 +393,7 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
     },
     afterActivateHook: async ({ intent, stageAfter }) => {
       await runWorkflowHookPointGate({
-        runtimeSubagent: workflowRuntime,
+        workflowRuntime: workflowRuntime,
         projectRoot: params.projectRoot!,
         projectId: params.snapshot.projectId,
         stage: stageAfter,
@@ -815,7 +815,7 @@ function createWorkflowToolBroadcastRuntime(params: {
 }
 
 async function maybeBroadcastSimpleHandoffStatus(params: {
-  runtimeSubagent?: {
+  workflowRuntime?: {
     run: (params: {
       sessionKey: string;
       message: string;
@@ -841,7 +841,7 @@ async function maybeBroadcastSimpleHandoffStatus(params: {
   phase: string;
 }) {
   return maybeBroadcastWorkflowStatusUpdate({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     bindingPolicy: params.bindingPolicy,
     sessionKey: params.sessionKey,
     projectId: params.projectId,
@@ -1329,7 +1329,7 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
     runtime: {
       nativeDispatch: async () => {
         capturedDispatch = await handoffWorkflowTaskToAgent({
-          runtimeSubagent: workflowRuntime,
+          workflowRuntime: workflowRuntime,
           workflowPolicy: params.workflowPolicy,
           requesterSessionKey: params.agentCtx.sessionKey,
           requesterChannel: params.agentCtx.messageChannel,
@@ -1357,7 +1357,7 @@ function buildWorkflowHandoffDeliveryRuntime(params: {
       },
       channelBroadcast: async (handoffIntent: { intentId: string }) => {
         const result = await maybeBroadcastWorkflowStatusUpdate({
-          runtimeSubagent: workflowBroadcastRuntime,
+          workflowRuntime: workflowBroadcastRuntime,
           bindingPolicy: params.workflowPolicy,
           sessionKey: params.agentCtx.sessionKey,
           projectId: params.projectId,
@@ -2810,7 +2810,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       idempotencyKey: null,
                     }
                   : await maybeBroadcastAutoIteratorStageChange({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -2832,7 +2832,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 result.timedDefaultTriggered === true && !inboundBudget.isExhausted(1500)
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -2899,7 +2899,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 "backgroundRun"
               );
               const result = await startBackgroundWorkflowRun({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 workflowPolicy,
                 agentCtx: ctx,
                 snapshot,
@@ -2910,7 +2910,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
@@ -2955,7 +2955,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const backgroundRun =
                 buildPapernexusWrapperBackgroundRunRequest(papernexusWrapper);
               const result = await startBackgroundWorkflowRun({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 workflowPolicy,
                 agentCtx: ctx,
                 snapshot,
@@ -3001,7 +3001,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
@@ -3387,7 +3387,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "list_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await listBackgroundWorkflowRuns({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3404,7 +3404,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "prune_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await pruneBackgroundWorkflowRuns({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3423,7 +3423,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             case "retire_background_sessions": {
               const backgroundSessions = asObject(params.backgroundSessions);
               const result = await retireBackgroundWorkflowRuns({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 ownerAgent: readString(backgroundSessions?.ownerAgent) ?? bindingRole,
                 channelKey:
                   readString(backgroundSessions?.channelKey) ??
@@ -3625,7 +3625,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 role: snapshot.role,
                 completionNote: readString(params.completionNote),
                 hookGateContext: {
-                  runtimeSubagent: workflowRuntime,
+                  workflowRuntime: workflowRuntime,
                   projectId: snapshot.projectId,
                   stage: snapshot.currentStage,
                   requesterChannel: ctx.messageChannel,
@@ -3733,7 +3733,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 explicitExtraBody ??
                 (body && body.includes("\n") ? body : null);
               const dispatch = await dispatchWorkflowTaskToAgent({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 requesterSessionKey: ctx.sessionKey,
                 requesterChannel: ctx.messageChannel,
                 fromRole: snapshot.role,
@@ -4939,7 +4939,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(`via task ${completedPaper.importTaskId}`);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: workflowBroadcastRuntime,
+                  workflowRuntime: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -4991,7 +4991,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(operation.detail);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: workflowBroadcastRuntime,
+                  workflowRuntime: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -5029,7 +5029,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   summaryParts.push(batch.detail);
                 }
                 const broadcastResult = await maybeBroadcastWorkflowStatusUpdate({
-                  runtimeSubagent: workflowBroadcastRuntime,
+                  workflowRuntime: workflowBroadcastRuntime,
                   bindingPolicy: workflowPolicy,
                   sessionKey: ctx.sessionKey,
                   projectId: snapshot.projectId,
@@ -5421,7 +5421,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     stageAfter,
                   });
               const prepareGate = await evaluateWorkflowHandoffHooks({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 projectRoot: resolvedProjectRoot,
                 projectId: snapshot.projectId,
                 hookPoint: "before_prepare_handoff",
@@ -5439,7 +5439,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 );
               }
               const stageGate = await evaluateWorkflowHandoffHooks({
-                runtimeSubagent: workflowRuntime,
+                workflowRuntime: workflowRuntime,
                 projectRoot: resolvedProjectRoot,
                 projectId: snapshot.projectId,
                 hookPoint: "before_stage_handoff",
@@ -5499,7 +5499,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 intent: handoff.intent,
               });
               const prepareBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: workflowBroadcastRuntime,
+                workflowRuntime: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,
@@ -5548,7 +5548,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   });
                   if (deliveryResult.delivered) {
                     dispatchBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -5619,7 +5619,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               const payload = asObject(intent?.payload) ?? {};
               const ackBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: workflowBroadcastRuntime,
+                workflowRuntime: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,
@@ -5694,7 +5694,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 idempotencyKey: currentIntent.idempotencyKey,
                 beforeActivateHook: async ({ intent, stageAfter }) => {
                   const hookSummary = await runWorkflowHookPointGate({
-                    runtimeSubagent: workflowRuntime,
+                    workflowRuntime: workflowRuntime,
                     projectRoot: resolvedProjectRoot,
                     projectId: snapshot.projectId,
                     stage: stageAfter,
@@ -5714,7 +5714,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 },
                 afterActivateHook: async ({ intent, stageAfter }) => {
                   await runWorkflowHookPointGate({
-                    runtimeSubagent: workflowRuntime,
+                    workflowRuntime: workflowRuntime,
                     projectRoot: resolvedProjectRoot,
                     projectId: snapshot.projectId,
                     stage: stageAfter,
@@ -5734,7 +5734,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const activationBroadcast =
                 activatedIntent && intent.activated
                   ? await maybeBroadcastSimpleHandoffStatus({
-                      runtimeSubagent: workflowBroadcastRuntime,
+                      workflowRuntime: workflowBroadcastRuntime,
                       bindingPolicy: workflowPolicy,
                       sessionKey: ctx.sessionKey,
                       projectId: snapshot.projectId,
@@ -5791,7 +5791,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 });
               }
               const failureBroadcast = await maybeBroadcastSimpleHandoffStatus({
-                runtimeSubagent: workflowBroadcastRuntime,
+                workflowRuntime: workflowBroadcastRuntime,
                 bindingPolicy: workflowPolicy,
                 sessionKey: ctx.sessionKey,
                 projectId: snapshot.projectId,

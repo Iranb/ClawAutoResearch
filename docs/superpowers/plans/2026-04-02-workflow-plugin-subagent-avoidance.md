@@ -4,7 +4,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reshape `openclaw-research` so critical workflow paths no longer depend on plugin-internal `runtime.subagent.*` execution, minimizing `Plugin runtime subagent methods are only available during a gateway request` failures even before `openclaw` upstream is fully fixed.
+**Goal:** Reshape `openclaw-research` so critical workflow paths no longer depend on direct plugin-internal raw subagent API execution. Business code should rely on the workflow execution runtime adapter instead, minimizing `Plugin runtime subagent methods are only available during a gateway request` failures even before `openclaw` upstream is fully fixed.
 
 **Architecture:** Keep workflow-owned orchestration, durable queueing, announce, and broadcast as the primary execution substrate. Treat plugin delegated subagent usage as best-effort enhancement only. All critical slash commands and workflow stage transitions must be queue-first, stateful, and replayable without relying on plugin tool internal subagent dispatch.
 

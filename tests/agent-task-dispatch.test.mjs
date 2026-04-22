@@ -67,7 +67,7 @@ test("buildWorkflowDispatchMessage includes project and mailbox context", () => 
 test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the target session", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "run-1" };
@@ -108,7 +108,7 @@ test("dispatchWorkflowTaskToAgent records structured diagnostics with candidate 
   });
 
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "run-diagnostic-1" };
       },
@@ -220,7 +220,7 @@ test("dispatchWorkflowTaskToAgent reuses an already active owner session instead
 
   let runCalls = 0;
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         runCalls += 1;
         throw new Error("should not dispatch a new writer run");
@@ -256,7 +256,7 @@ test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packe
 
   const longCommand = `python3 scripts/do_work.py --payload ${"x".repeat(2200)}`;
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "run-long-command" };
@@ -287,7 +287,7 @@ test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packe
 test("dispatchWorkflowTaskToAgent retries alternate direct session candidates before giving up", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params.sessionKey);
         if (params.sessionKey === "agent:coder:discord:group:paper-lab:thread:idea-1") {
@@ -322,7 +322,7 @@ test("dispatchWorkflowTaskToAgent retries alternate direct session candidates be
 test("dispatchWorkflowTaskToAgent falls back to a spawned session when direct delivery fails", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params.sessionKey);
         if (!params.sessionKey.includes(":subagent:")) {
@@ -374,7 +374,7 @@ test("dispatchWorkflowTaskToAgent avoids stale same-role capability records", as
   });
 
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params.sessionKey);
         return { runId: "spawn-after-stale-capability" };
@@ -400,7 +400,7 @@ test("dispatchWorkflowTaskToAgent retries timeout only when requested and transc
   const calls = [];
   const counts = new Map();
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params.sessionKey);
         counts.set(params.sessionKey, (counts.get(params.sessionKey) ?? 0) + 1);
@@ -471,7 +471,7 @@ test("dispatchWorkflowTaskToAgent waits for workflow mailbox acknowledgement whe
   );
 
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         setTimeout(async () => {
           const mailbox = JSON.parse(await fs.readFile(mailboxPath, "utf8"));
@@ -510,7 +510,7 @@ test("dispatchWorkflowTaskToAgent treats a started run as dispatched even before
   });
 
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "run-mailbox-pending-1" };
       },
@@ -553,7 +553,7 @@ test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime 
 test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for PaperNexus-heavy commands", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "run-papernexus-1" };
@@ -588,7 +588,7 @@ test("dispatchWorkflowTaskToAgent prefers a dedicated subagent session for Paper
 test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as heavy work", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "run-papernexus-typed-1" };
@@ -624,7 +624,7 @@ test("dispatchWorkflowTaskToAgent treats remote typed PaperNexus brief calls as 
 test("dispatchWorkflowTaskToAgent treats wrapper-based PaperNexus chains as heavy work", async () => {
   const calls = [];
   const result = await dispatchWorkflowTaskToAgent({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "run-papernexus-wrapper-1" };

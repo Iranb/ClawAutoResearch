@@ -336,7 +336,7 @@ test("dispatchAggregateHookRevision writes per-target aggregate packets", async 
 
   const calls = [];
   const results = await dispatchAggregateHookRevision({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: `run-${calls.length}` };

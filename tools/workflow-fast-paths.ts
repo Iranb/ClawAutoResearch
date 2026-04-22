@@ -71,8 +71,8 @@ import type {
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state.js";
 
-type RuntimeSubagentApi = WorkflowExecutionRuntime;
-type RuntimeSubagentMonitorApi = WorkflowExecutionRuntimeLike;
+type WorkflowRuntimeApi = WorkflowExecutionRuntime;
+type WorkflowRuntimeMonitorApi = WorkflowExecutionRuntimeLike;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -1363,13 +1363,13 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
 }): Promise<BackgroundRunRegistryEntry | null> {
   return getBackgroundWorkflowRunByQueueKeyFromPool(params);
 }
 
 async function pruneBackgroundRunRegistry(params: {
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
@@ -1407,9 +1407,9 @@ async function pruneBackgroundRunRegistry(params: {
       ...entry,
       lastCheckedAt: checkedAt,
     };
-    if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
+    if (entry.status === "active" && params.workflowRuntime?.waitForRun) {
       try {
-        const waited = await params.runtimeSubagent.waitForRun({
+        const waited = await params.workflowRuntime.waitForRun({
           runId: entry.runId,
           timeoutMs: 1,
         });
@@ -1513,7 +1513,7 @@ function matchesBackgroundRunRegistryFilters(
 }
 
 export async function listBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1527,7 +1527,7 @@ export async function listBackgroundWorkflowRuns(params: {
 }
 
 export async function pruneBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1566,7 +1566,7 @@ function normalizeStageLike(value: unknown): string | null {
 }
 
 export async function retireBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -1599,7 +1599,7 @@ async function upsertBackgroundRunRegistryEntry(
 }
 
 export async function acquireBackgroundWorkflowSession(params: {
-  runtimeSubagent?: RuntimeSubagentMonitorApi;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
@@ -1748,7 +1748,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
 }
 
 export async function drainQueuedBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy?: {
     lobsterHandoff?: WorkflowLobsterHandoffConfig;
     projectsRoot?: string;
@@ -1757,8 +1757,8 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
   ignoreRetryBackoff?: boolean;
   handoffWorkflowTaskToAgent?: typeof handoffWorkflowTaskToAgent;
 }): Promise<QueuedBackgroundWorkflowDrainResult> {
-  const runtimeSubagent = params.runtimeSubagent;
-  if (!runtimeSubagent) {
+  const workflowRuntime = params.workflowRuntime;
+  if (!workflowRuntime) {
     return {
       started: [],
       remaining: await pruneBackgroundWorkflowQueue({
@@ -1796,7 +1796,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
     }
 
     const sessionLease = await acquireBackgroundWorkflowSession({
-      runtimeSubagent,
+      workflowRuntime,
       ownerAgent: entry.ownerAgent,
       requesterSessionKey: entry.requesterSessionKey,
       messageChannel: entry.messageChannel,
@@ -1842,7 +1842,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                   ? await (
                       params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent
                     )({
-                      runtimeSubagent,
+                      workflowRuntime,
                       workflowPolicy: params.workflowPolicy ?? undefined,
                       requesterSessionKey: entry.requesterSessionKey,
                       requesterChannel:
@@ -1869,7 +1869,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                       autoModeActive: dispatchPayload.autoModeActive,
                     })
                   : await dispatchWorkflowTaskToAgent({
-                      runtimeSubagent,
+                      workflowRuntime,
                       requesterSessionKey: entry.requesterSessionKey,
                       requesterChannel:
                         dispatchPayload.requesterChannel ?? undefined,
@@ -1902,7 +1902,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                   runtime:
                     dispatch.channel === "sessions_spawn" ||
                     dispatch.channel === "sessions_send"
-                      ? runtimeSubagent.runtimeKind ?? "subagent"
+                      ? workflowRuntime.runtimeKind ?? "subagent"
                       : "legacy_dispatch",
                   role: dispatchPayload.toRole,
                   agentId: dispatchPayload.toRole,
@@ -1932,7 +1932,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
         if (dispatchLaunch == null) {
           const legacyDispatch = entry.dispatchPayload.useWorkflowHandoff
             ? await (params.handoffWorkflowTaskToAgent ?? handoffWorkflowTaskToAgent)({
-                runtimeSubagent,
+                workflowRuntime,
                 workflowPolicy: params.workflowPolicy ?? undefined,
                 requesterSessionKey: entry.requesterSessionKey,
                 requesterChannel:
@@ -1957,7 +1957,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                 autoModeActive: entry.dispatchPayload.autoModeActive,
               })
             : await dispatchWorkflowTaskToAgent({
-                runtimeSubagent,
+                workflowRuntime,
                 requesterSessionKey: entry.requesterSessionKey,
                 requesterChannel:
                   entry.dispatchPayload.requesterChannel ?? undefined,
@@ -2069,7 +2069,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
               projectId: entry.projectId,
               queueKey: entry.queueKey,
               spawn: async () => {
-                const startedRun = await runtimeSubagent.run({
+                const startedRun = await workflowRuntime.run({
                   sessionKey: backgroundSessionKey,
                   message: runPayload.message,
                   lane: runPayload.lane,
@@ -2087,7 +2087,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                   runId: startedRun.runId,
                   sessionKey: backgroundSessionKey,
                   sessionId: startedRun.sessionId ?? null,
-                  runtime: startedRun.runtime ?? runtimeSubagent.runtimeKind ?? "subagent",
+                  runtime: startedRun.runtime ?? workflowRuntime.runtimeKind ?? "subagent",
                   role: entry.ownerAgent,
                   agentId: entry.ownerAgent,
                   ownerAgent: entry.ownerAgent,
@@ -2109,7 +2109,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                 runId: runLaunch.runId,
                 sessionKey: runLaunch.sessionKey ?? backgroundSessionKey,
               }
-            : await runtimeSubagent.run({
+            : await workflowRuntime.run({
                 sessionKey: backgroundSessionKey,
                 message: runPayload.message,
                 lane: runPayload.lane,
@@ -2516,7 +2516,7 @@ function buildWorkflowOwnedIngestionRequestPrompt(params: {
 }
 
 export async function maybeTriggerQueuedPaperIngestionRequest(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
   snapshot: BackgroundRunSnapshot;
@@ -2619,7 +2619,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     sharedCorpus: queuedCandidate.sharedCorpus,
   });
   const result = await startBackgroundWorkflowRun({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     workflowPolicy: params.workflowPolicy,
     agentCtx: params.agentCtx,
     snapshot: {
@@ -2776,7 +2776,7 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
 }
 
 export async function startBackgroundWorkflowRun(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: WorkflowGuardPolicy;
   agentCtx: BackgroundRunAgentContext;
   snapshot: BackgroundRunSnapshot;
@@ -3067,7 +3067,7 @@ export async function startBackgroundWorkflowRun(params: {
       unavailableReason: reason,
     });
 
-  if (!params.runtimeSubagent) {
+  if (!params.workflowRuntime) {
     return queueIfRuntimeUnavailable(
       "Background workflow execution requires an available workflow execution runtime."
     );
@@ -3078,7 +3078,7 @@ export async function startBackgroundWorkflowRun(params: {
     (normalizedKind === "graph_build" || normalizedKind === "resume_pipeline")
   ) {
     await maybeTriggerQueuedPaperIngestionRequest({
-      runtimeSubagent: params.runtimeSubagent,
+      workflowRuntime: params.workflowRuntime,
       workflowPolicy: params.workflowPolicy,
       agentCtx: params.agentCtx,
       snapshot: {
@@ -3093,7 +3093,7 @@ export async function startBackgroundWorkflowRun(params: {
   }
 
   const sessionLease = await acquireBackgroundWorkflowSession({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     ownerAgent,
     requesterSessionKey: requesterSessionKeyForOwner ?? undefined,
     messageChannel: params.agentCtx.messageChannel,
@@ -3183,7 +3183,7 @@ export async function startBackgroundWorkflowRun(params: {
           },
         },
         spawn: async () => {
-          const started = await params.runtimeSubagent!.run({
+          const started = await params.workflowRuntime!.run({
             sessionKey: backgroundSessionKey,
             message: commandText,
             lane: "nested",
@@ -3203,7 +3203,7 @@ export async function startBackgroundWorkflowRun(params: {
             sessionId: started.sessionId ?? null,
             runtime:
               started.runtime ??
-              params.runtimeSubagent!.runtimeKind ??
+              params.workflowRuntime!.runtimeKind ??
               "subagent",
             role: ownerAgent,
             agentId: ownerAgent,
@@ -3260,7 +3260,7 @@ export async function startBackgroundWorkflowRun(params: {
     runId =
       directLaunch?.runId ??
       (
-        await params.runtimeSubagent.run({
+        await params.workflowRuntime.run({
           sessionKey: backgroundSessionKey,
           message: commandText,
           lane: "nested",

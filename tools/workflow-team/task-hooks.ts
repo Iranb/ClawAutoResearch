@@ -187,7 +187,7 @@ export async function completeWorkflowTaskAndContinue(params: {
   completionNote?: string | null;
   ttlMs?: number;
   hookGateContext?: {
-    runtimeSubagent?: Parameters<typeof runWorkflowHookPointGate>[0]["runtimeSubagent"];
+    workflowRuntime?: Parameters<typeof runWorkflowHookPointGate>[0]["workflowRuntime"];
     projectId?: string | null;
     stage?: string | null;
     requesterChannel?: string | null;
@@ -240,7 +240,7 @@ export async function completeWorkflowTaskAndContinue(params: {
     };
   }
   const defaultHookGate = await runWorkflowHookPointGate({
-    runtimeSubagent: params.hookGateContext?.runtimeSubagent,
+    workflowRuntime: params.hookGateContext?.workflowRuntime,
     projectRoot: params.projectRoot,
     projectId: params.hookGateContext?.projectId ?? store?.projectId ?? null,
     stage: params.hookGateContext?.stage ?? store?.stage ?? null,

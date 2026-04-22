@@ -7,13 +7,13 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export type RuntimeSubagentApi = WorkflowExecutionRuntimeLike;
+export type WorkflowRuntimeApi = WorkflowExecutionRuntimeLike;
 
 export async function pollHookReviewerAttempts<
   TResult,
   TAttempt extends WorkflowHookReviewerAttempt<TResult>,
 >(params: {
-  runtimeSubagent: RuntimeSubagentApi;
+  workflowRuntime: WorkflowRuntimeApi;
   attempts: TAttempt[];
   projectRoot: string;
   projectId: string | null;
@@ -56,12 +56,12 @@ export async function pollHookReviewerAttempts<
       continue;
     }
 
-    if (!attempt.runId || !params.runtimeSubagent.waitForRun) {
+    if (!attempt.runId || !params.workflowRuntime.waitForRun) {
       nextAttempts.push(attempt);
       continue;
     }
 
-    const waited = await params.runtimeSubagent.waitForRun({
+    const waited = await params.workflowRuntime.waitForRun({
       runId: attempt.runId,
       timeoutMs: 1,
     });
@@ -103,8 +103,8 @@ export async function pollHookReviewerAttempts<
       continue;
     }
 
-    const messages = params.runtimeSubagent.getSessionMessages
-      ? await params.runtimeSubagent.getSessionMessages({
+    const messages = params.workflowRuntime.getSessionMessages
+      ? await params.workflowRuntime.getSessionMessages({
           sessionKey: attempt.sessionKey,
           limit: 20,
         })

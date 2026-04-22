@@ -13,7 +13,7 @@
 
 已知上游存在一个真实缺陷：
 
-- plugin tool 在普通 chat / agent 执行路径中，可能拿到的是 unavailable `runtime.subagent`
+- plugin tool 在普通 chat / agent 执行路径中，可能拿到的是 unavailable 的原生 plugin subagent API
 - 结果是在工具“可见、可调用”的情况下，深层执行时才报：
   `Plugin runtime subagent methods are only available during a gateway request.`
 
@@ -27,7 +27,7 @@
 2. 有些路径不会
 3. 即使传了，也仍然依赖 gateway request scope 或 fallback gateway context 是否可用
 
-因此，在 `openclaw` upstream 完成根修复前，`openclaw-research` 不能把关键 workflow 建立在“plugin tool 内部再去调用 `runtime.subagent.*`”这条路径上。
+因此，在 `openclaw` upstream 完成根修复前，`openclaw-research` 不能把关键 workflow 建立在“plugin tool 内部再去直接调用原生 plugin subagent API”这条路径上。
 
 ---
 
@@ -61,7 +61,7 @@
 1. 不直接重写 `openclaw` 本体
 2. 不移除所有 subagent 机制
 3. 不禁用普通 OpenClaw agent / sessions / workflow orchestrator
-4. 不要求所有 plugin tool 完全不能使用 `runtime.subagent`
+4. 不要求所有 plugin tool 完全不能使用原生 plugin subagent API
 5. 不推翻现有 project state files、manifest、runtime queue、announce outbox 体系
 
 ---
@@ -85,7 +85,7 @@
 
 - tool 可见
 - tool 入口在 plugin runtime 中执行
-- tool 内部直接依赖 `runtime.subagent.run(...)`
+- tool 内部直接依赖原生 plugin subagent run
 - 失败时没有 durable queue / explicit fallback
 
 ### 4.3 关键 workflow 必须改成 workflow-owned dispatch
@@ -213,7 +213,7 @@ PaperNexus、literature、brainstorm、graph status 等关键动作，统一走�
 
 - 保持可从 Discord 启动
 - 保持 background 模式
-- 不因为 runtime.subagent 缺失直接报错
+- 不因为原生 plugin subagent API 缺失直接报错
 
 约束：
 

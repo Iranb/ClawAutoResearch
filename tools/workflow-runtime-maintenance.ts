@@ -43,7 +43,7 @@ import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 import type { WorkflowExecutionRuntime } from "./workflow-execution-runtime.js";
 
-type RuntimeSubagentApi = WorkflowExecutionRuntime;
+type WorkflowRuntimeApi = WorkflowExecutionRuntime;
 
 type LoggerLike = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -256,11 +256,11 @@ function buildPreferredSessionKeys(
 
 async function replayQueueEntry(params: {
   entry: WorkflowRuntimeQueueEntry;
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy?: WorkflowPolicyLike;
   logger?: LoggerLike;
 }) {
-  if (!params.runtimeSubagent) {
+  if (!params.workflowRuntime) {
     return {
       launched: false,
       error: "Workflow execution runtime is unavailable for workflow repair.",
@@ -285,7 +285,7 @@ async function replayQueueEntry(params: {
         if (!runPayload?.message) {
           throw new Error("Background workflow repair is missing a durable run payload.");
         }
-        const started = await params.runtimeSubagent!.run({
+        const started = await params.workflowRuntime!.run({
           sessionKey,
           message: runPayload.message,
           lane: runPayload.lane,
@@ -307,7 +307,7 @@ async function replayQueueEntry(params: {
           sessionId: started.sessionId ?? null,
           runtime:
             started.runtime ??
-            params.runtimeSubagent!.runtimeKind ??
+            params.workflowRuntime!.runtimeKind ??
             "subagent",
           role: entry.ownerAgent,
           agentId: entry.ownerAgent,
@@ -323,7 +323,7 @@ async function replayQueueEntry(params: {
 
       const dispatch = dispatchPayload.useWorkflowHandoff
         ? await handoffWorkflowTaskToAgent({
-            runtimeSubagent: params.runtimeSubagent,
+            workflowRuntime: params.workflowRuntime,
             workflowPolicy: params.workflowPolicy ?? undefined,
             requesterSessionKey: entry.requesterSessionKey,
             requesterChannel: dispatchPayload.requesterChannel ?? undefined,
@@ -347,7 +347,7 @@ async function replayQueueEntry(params: {
             logger: params.logger,
           })
         : await dispatchWorkflowTaskToAgent({
-            runtimeSubagent: params.runtimeSubagent,
+            workflowRuntime: params.workflowRuntime,
             requesterSessionKey: entry.requesterSessionKey,
             requesterChannel: dispatchPayload.requesterChannel ?? undefined,
             preferredSessionKeys,
@@ -374,7 +374,7 @@ async function replayQueueEntry(params: {
         sessionKey: dispatch.sessionKey,
         runtime:
           dispatch.channel === "sessions_spawn" || dispatch.channel === "sessions_send"
-            ? params.runtimeSubagent!.runtimeKind ?? "subagent"
+            ? params.workflowRuntime!.runtimeKind ?? "subagent"
             : "legacy_dispatch",
         role: dispatchPayload.toRole,
         agentId: dispatchPayload.toRole,
@@ -472,7 +472,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
   projectId?: string | null;
   staleSessionAgeMs?: number;
   maxRepairAttempts?: number;
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy?: WorkflowPolicyLike;
   logger?: LoggerLike;
   sendBroadcast?: (entry: WorkflowRuntimeBroadcastEntry) => Promise<{
@@ -499,7 +499,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
         typeof params.staleSessionAgeMs === "number" && Number.isFinite(params.staleSessionAgeMs)
           ? params.staleSessionAgeMs
           : null,
-      hasRuntimeSubagent: Boolean(params.runtimeSubagent),
+      hasWorkflowRuntime: Boolean(params.workflowRuntime),
     },
   });
 
@@ -673,7 +673,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
 
     const replay = await replayQueueEntry({
       entry,
-      runtimeSubagent: params.runtimeSubagent,
+      workflowRuntime: params.workflowRuntime,
       workflowPolicy: params.workflowPolicy,
       logger: params.logger,
     });

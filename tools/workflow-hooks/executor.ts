@@ -9,7 +9,7 @@ import {
   writeFileAuditReport,
 } from "./file-audit-runner.js";
 import { dispatchAggregateHookRevision } from "./revision-dispatch.js";
-import { pollHookReviewerAttempts, type RuntimeSubagentApi } from "./runtime-review-loop.js";
+import { pollHookReviewerAttempts, type WorkflowRuntimeApi } from "./runtime-review-loop.js";
 import {
   buildDefaultFileAuditHookState,
   getEmptyWorkflowHooksStateStore,
@@ -321,7 +321,7 @@ function getPassedExecutionFingerprint(params: {
 }
 
 export async function evaluateWorkflowHooksForPoint(params: {
-  runtimeSubagent?: RuntimeSubagentApi;
+  workflowRuntime?: WorkflowRuntimeApi;
   context: WorkflowHookPointContext;
   requesterSessionKey?: string | null;
   requesterChannel?: string | null;
@@ -525,7 +525,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
         store.hooks[hook.hookId] = nextState;
       } else {
       const attempts = await pollHookReviewerAttempts({
-        runtimeSubagent: params.runtimeSubagent ?? {},
+        workflowRuntime: params.workflowRuntime ?? {},
         attempts: [toAttempt(activeRound)],
         projectRoot: params.context.projectRoot,
         projectId: params.context.projectId,
@@ -672,7 +672,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
       }
     }
 
-    if (!params.runtimeSubagent || !params.launchReviewerRun) {
+    if (!params.workflowRuntime || !params.launchReviewerRun) {
       executions.push({
         hookId: hook.hookId,
         hookPoint: hook.hookPoint,
@@ -783,7 +783,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
   const newDispatches =
     toDispatch.length > 0
       ? await dispatchAggregateHookRevision({
-          runtimeSubagent: params.runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
           projectRoot: params.context.projectRoot,

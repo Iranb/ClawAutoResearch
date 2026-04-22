@@ -78,7 +78,7 @@ test("isWorkflowStageBroadcastMessage recognizes rendered stage updates", () => 
 
 test("maybeBroadcastAutoIteratorStageChange skips when the stage is unchanged", async () => {
   const result = await maybeBroadcastAutoIteratorStageChange({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not run");
       },
@@ -106,7 +106,7 @@ test("maybeBroadcastAutoIteratorStageChange posts a deliverable nested run when 
   const calls = [];
   try {
     const result = await maybeBroadcastAutoIteratorStageChange({
-      runtimeSubagent: {
+      workflowRuntime: {
         async run(params) {
           calls.push(params);
           return { runId: "broadcast-run-1" };
@@ -165,7 +165,7 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
   );
 
   const result = await maybeBroadcastWorkflowStatusUpdate({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: "status-run-1" };
@@ -201,7 +201,7 @@ test("maybeBroadcastAutoIteratorStageChange short-circuits duplicate broadcast i
   });
 
   const base = {
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         calls.push(params);
         return { runId: `broadcast-run-${calls.length}` };
@@ -237,7 +237,7 @@ test("maybeBroadcastAutoIteratorStageChange records Discord inbound timeout as i
   });
 
   const result = await maybeBroadcastAutoIteratorStageChange({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("Discord inbound worker timed out.");
       },
@@ -271,7 +271,7 @@ test("maybeBroadcastAutoIteratorStageChange supersedes stale pending/failed stag
   });
 
   await maybeBroadcastAutoIteratorStageChange({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         if (shouldFail) throw new Error("temporary broadcast failure");
         return { runId: "run-ok" };
@@ -290,7 +290,7 @@ test("maybeBroadcastAutoIteratorStageChange supersedes stale pending/failed stag
   });
   shouldFail = false;
   await maybeBroadcastAutoIteratorStageChange({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "run-ok" };
       },
@@ -350,7 +350,7 @@ test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcas
   });
 
   const result = await maybeBroadcastWorkflowStatusUpdate({
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         throw new Error("should not send");
       },

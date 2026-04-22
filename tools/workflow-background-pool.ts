@@ -78,7 +78,7 @@ export type BackgroundWorkflowSessionLease = {
   projectRoot: string | null;
 };
 
-type RuntimeSubagentWaitApi = WorkflowExecutionRuntimeLike;
+type WorkflowRuntimeWaitApi = WorkflowExecutionRuntimeLike;
 
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {
@@ -407,7 +407,7 @@ async function writeBackgroundRunRegistry(
 }
 
 async function pruneBackgroundRunRegistry(params: {
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
@@ -464,9 +464,9 @@ async function pruneBackgroundRunRegistry(params: {
         lastFinishedAt: checkedAt,
       };
     };
-    if (entry.status === "active" && params.runtimeSubagent?.waitForRun) {
+    if (entry.status === "active" && params.workflowRuntime?.waitForRun) {
       try {
-        const waited = await params.runtimeSubagent.waitForRun({
+        const waited = await params.workflowRuntime.waitForRun({
           runId: entry.runId,
           timeoutMs: 1,
         });
@@ -638,14 +638,14 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
 }): Promise<BackgroundRunRegistryEntry | null> {
   const queueKey = readString(params.queueKey);
   if (!queueKey) {
     return null;
   }
   const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
@@ -664,7 +664,7 @@ export async function getBackgroundWorkflowRunByQueueKey(params: {
 }
 
 export async function listBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -675,7 +675,7 @@ export async function listBackgroundWorkflowRuns(params: {
   entries: BackgroundRunRegistryViewEntry[];
 }> {
   const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
@@ -689,7 +689,7 @@ export async function listBackgroundWorkflowRuns(params: {
 }
 
 export async function pruneBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -703,7 +703,7 @@ export async function pruneBackgroundWorkflowRuns(params: {
   removed: BackgroundRunRegistryViewEntry[];
 }> {
   const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
@@ -752,9 +752,9 @@ export async function pruneBackgroundWorkflowRuns(params: {
   } else {
     await writeBackgroundRunRegistry(kept);
   }
-  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
+  if (params.deleteSessions === true && params.workflowRuntime?.deleteSession) {
     for (const entry of removed) {
-      await params.runtimeSubagent.deleteSession({
+      await params.workflowRuntime.deleteSession({
         sessionKey: entry.backgroundSessionKey,
         deleteTranscript: false,
       });
@@ -767,7 +767,7 @@ export async function pruneBackgroundWorkflowRuns(params: {
 }
 
 export async function retireBackgroundWorkflowRuns(params: {
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
   ownerAgent?: string | null;
   channelKey?: string | null;
   family?: string | null;
@@ -781,7 +781,7 @@ export async function retireBackgroundWorkflowRuns(params: {
   removed: BackgroundRunRegistryViewEntry[];
 }> {
   const refreshed = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
@@ -820,9 +820,9 @@ export async function retireBackgroundWorkflowRuns(params: {
   } else {
     await writeBackgroundRunRegistry(kept);
   }
-  if (params.deleteSessions === true && params.runtimeSubagent?.deleteSession) {
+  if (params.deleteSessions === true && params.workflowRuntime?.deleteSession) {
     for (const entry of removed) {
-      await params.runtimeSubagent.deleteSession({
+      await params.workflowRuntime.deleteSession({
         sessionKey: entry.backgroundSessionKey,
         deleteTranscript: false,
       });
@@ -835,7 +835,7 @@ export async function retireBackgroundWorkflowRuns(params: {
 }
 
 export async function acquireBackgroundWorkflowSession(params: {
-  runtimeSubagent?: RuntimeSubagentWaitApi;
+  workflowRuntime?: WorkflowRuntimeWaitApi;
   ownerAgent?: string | null;
   requesterSessionKey?: string | null;
   messageChannel?: string | null;
@@ -879,7 +879,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   }
 
   const registryEntries = await pruneBackgroundRunRegistry({
-    runtimeSubagent: params.runtimeSubagent,
+    workflowRuntime: params.workflowRuntime,
     projectId,
     projectRoot,
     projectsRoot: params.projectsRoot,

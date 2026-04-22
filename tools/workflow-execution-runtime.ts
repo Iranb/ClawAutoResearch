@@ -318,7 +318,7 @@ async function readSessionMessages(params: {
   }
 }
 
-function buildEmbeddedRuntimeSubagentFacade(params: {
+function buildEmbeddedWorkflowRuntimeFacade(params: {
   runtimeApi: WorkflowExecutionRuntimeApiLike;
   defaultWorkspaceDir?: string | null;
   defaultAgentId?: string | null;
@@ -623,7 +623,7 @@ export function createWorkflowExecutionRuntimeFromApi(params: {
   preferEmbedded?: boolean;
 }): WorkflowExecutionRuntime | undefined {
   const preferEmbedded = params.preferEmbedded !== false;
-  const embedded = buildEmbeddedRuntimeSubagentFacade({
+  const embedded = buildEmbeddedWorkflowRuntimeFacade({
     runtimeApi: params.api,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
     defaultAgentId: params.defaultAgentId,

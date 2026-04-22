@@ -48,7 +48,7 @@ test("workflow background pool lists and retires researcher sessions", async () 
     channelKey: "discord:channel:test-room",
     statuses: ["active"],
     deleteSessions: true,
-    runtimeSubagent: {
+    workflowRuntime: {
       async deleteSession(params) {
         deletedSessionKeys.push(params.sessionKey);
       },

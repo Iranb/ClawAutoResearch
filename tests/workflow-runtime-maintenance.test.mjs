@@ -129,7 +129,7 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
   const result = await runWorkflowRuntimeMaintenancePass({
     projectRoot,
     projectId: "alpha",
-    runtimeSubagent: {
+    workflowRuntime: {
       async run(params) {
         started.push(params);
         return { runId: "replayed-bg-run-1" };
@@ -580,7 +580,7 @@ test("runWorkflowRuntimeMaintenancePass consumes queued handoff queue entries an
   const result = await runWorkflowRuntimeMaintenancePass({
     projectRoot,
     projectId: "handoff-queue",
-    runtimeSubagent: {
+    workflowRuntime: {
       async run() {
         return { runId: "queued-handoff-run-1" };
       },
