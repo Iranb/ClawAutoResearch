@@ -126,6 +126,7 @@ import {
   releaseWorkflowTeamRoundSession,
 } from "./workflow-team/team-round";
 import { appendWorkflowRuntimeEvent } from "./workflow-execution/runtime-store";
+import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 import {
   getWorkflowTaskGraphPath,
   readWorkflowTaskGraphStore,
@@ -2454,9 +2455,60 @@ export async function maybeLaunchAutoStageForProject(params: {
     label: "workflow_auto_stage_launch",
     logger: params.logger,
     task: async (): Promise<AutoStageLaunchAttempt> => {
+      const finalizeAttempt = async (
+        attempt: AutoStageLaunchAttempt
+      ): Promise<AutoStageLaunchAttempt> => {
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId ?? null,
+          component: "service",
+          action: "auto_stage_launch",
+          status: attempt.launched
+            ? "completed"
+            : attempt.reason === "dispatch_failed"
+              ? "blocked"
+              : [
+                    "auto_mode_disabled",
+                    "risk_discussion_pending",
+                    "gate_blocked",
+                    "cooldown_active",
+                    "already_launched",
+                    "session_pool_full",
+                    "no_drive_stage_action",
+                  ].includes(attempt.reason)
+                ? "waiting"
+                : "failed",
+          stage: attempt.stage ?? null,
+          owner: attempt.owner ?? null,
+          summary: attempt.launched
+            ? `Service launched ${attempt.owner ?? "workflow"} for ${attempt.stage ?? "current stage"}.`
+            : `Service did not launch auto-stage work (${attempt.reason}).`,
+          details: {
+            reason: attempt.reason,
+            launchKey: attempt.launchKey,
+            sessionKey: attempt.sessionKey,
+            runId: attempt.runId,
+            dispatchStrategy: attempt.dispatchStrategy,
+            reusedServiceSession: attempt.reusedServiceSession,
+            activeResearcherSessionsInChannel:
+              attempt.activeResearcherSessionsInChannel,
+            error: attempt.error,
+            configuredAutoMode:
+              params.autoIteratorResult.configuredAutoMode ??
+              params.workflowPolicy.autoMode ??
+              null,
+            effectiveAutoMode:
+              params.autoIteratorResult.effectiveAutoMode ??
+              params.workflowPolicy.autoMode ??
+              null,
+            gateBlocking: params.autoIteratorResult.gateBlocking ?? false,
+          },
+        });
+        return attempt;
+      };
       if ((params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) === "off") {
         params.launchedStageKeys.delete(params.projectRoot);
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "auto_mode_disabled",
           projectId: params.projectId,
@@ -2470,7 +2522,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
       if (
         readString(params.autoIteratorResult.autoModeRiskLevel) &&
@@ -2479,7 +2531,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) ===
           (params.autoIteratorResult.configuredAutoMode ?? params.workflowPolicy.autoMode)
       ) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "risk_discussion_pending",
           projectId: params.projectId,
@@ -2493,10 +2545,10 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
       if (!params.runtimeSubagent) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "no_runtime_subagent",
           projectId: params.projectId,
@@ -2510,10 +2562,10 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
       if (params.autoIteratorResult.gateBlocking) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "gate_blocked",
           projectId: params.projectId,
@@ -2527,7 +2579,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
 
       const dispatchableAutoIteratorResult: Parameters<
@@ -2556,7 +2608,7 @@ export async function maybeLaunchAutoStageForProject(params: {
       });
       if (!action) {
         params.launchedStageKeys.delete(params.projectRoot);
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "no_drive_stage_action",
           projectId: params.projectId,
@@ -2570,10 +2622,10 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
       if ((action.cooldownRemainingSeconds ?? 0) > 0) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "cooldown_active",
           projectId: params.projectId,
@@ -2587,7 +2639,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
 
       const launchKey = buildAutoStageLaunchKey({
@@ -2610,7 +2662,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         lastLaunch?.key === launchKey &&
         Date.now() - lastLaunch.launchedAt < cooldownMs
       ) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "already_launched",
           projectId: params.projectId,
@@ -2624,7 +2676,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
       const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
         queueKey: launchKey,
@@ -2632,7 +2684,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         projectRoot: params.projectRoot,
       });
       if (pendingQueueState.active || pendingQueueState.queued) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: pendingQueueState.active ? "already_launched" : "session_pool_full",
           projectId: params.projectId,
@@ -2648,7 +2700,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             : null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
-        };
+        });
       }
 
       const requesterBinding = resolveWorkflowRequesterBinding({
@@ -2729,7 +2781,7 @@ export async function maybeLaunchAutoStageForProject(params: {
                   params.workflowPolicy.autoMode) !== "off",
             },
           });
-          return {
+          return finalizeAttempt({
             launched: false,
             reason: "session_pool_full",
             projectId: params.projectId,
@@ -2744,7 +2796,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
               pooledSessionLease.activeResearcherSessionsInChannel,
-          };
+          });
         }
       }
       const dispatchLaunch = await launchWorkflowDispatchTransition({
@@ -2787,7 +2839,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         logger: params.logger,
       });
       if (!dispatchLaunch.launched) {
-        return {
+        return finalizeAttempt({
           launched: false,
           reason: "dispatch_failed",
           projectId: params.projectId,
@@ -2802,7 +2854,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
-        };
+        });
       }
 
       if (
@@ -2898,7 +2950,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         toAgent: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
         channel: "sessions_spawn",
       });
-      return {
+      return finalizeAttempt({
         launched: true,
         reason: "started",
         projectId: params.projectId,
@@ -2913,7 +2965,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         reusedServiceSession: pooledSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
           pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
-      };
+      });
     },
   });
 }

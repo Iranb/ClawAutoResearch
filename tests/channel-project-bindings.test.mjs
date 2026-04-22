@@ -20,6 +20,8 @@ import {
 } from "../tools/workflow-subagent-sessions.ts";
 import {
   ensureProjectsBindingIndex,
+  readProjectBindingAuditTail,
+  readProjectsBindingAuditTail,
   getProjectBindingAuditPath,
   getProjectsBindingAuditPath,
   getProjectsBindingIndexPath,
@@ -350,6 +352,80 @@ test("binding updates append a queryable audit trail under the project and proje
   assert.deepEqual(rootAudit.map((entry) => entry.action), ["bind", "unbind"]);
   assert.equal(projectAudit[0].projectRoot, projectRoot);
   assert.equal(projectAudit[1].previousProjectRoot, projectRoot);
+});
+
+test("binding audit logs rotate and tails span archives", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "audit-rotation");
+  const previousMaxBytes = process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_BYTES;
+  const previousMaxArchives = process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES;
+  process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_BYTES = "320";
+  process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES = "8";
+
+  t.after(async () => {
+    if (previousMaxBytes === undefined) {
+      delete process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_BYTES;
+    } else {
+      process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_BYTES = previousMaxBytes;
+    }
+    if (previousMaxArchives === undefined) {
+      delete process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES;
+    } else {
+      process.env.OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES = previousMaxArchives;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  for (const suffix of ["1", "2", "3"]) {
+    const sessionKey = `agent:researcher:discord:group:audit-rotation-${suffix}`;
+    await bindChannelProjectForWorkflow({
+      policy: {
+        enableChannelProjectBindings: true,
+        projectsRoot,
+      },
+      workspaceDir: workspaceRoot,
+      projectRoot,
+      projectId: "audit-rotation",
+      sessionKey,
+      messageChannel: "discord",
+      agentId: "researcher",
+    });
+    await unbindChannelProjectForWorkflow({
+      policy: {
+        enableChannelProjectBindings: true,
+        projectsRoot,
+      },
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "discord",
+    });
+  }
+
+  await fs.access(getProjectBindingAuditPath(projectRoot).replace(/\.jsonl$/, ".1.jsonl"));
+  await fs.access(getProjectsBindingAuditPath(projectsRoot).replace(/\.jsonl$/, ".1.jsonl"));
+
+  const projectTail = await readProjectBindingAuditTail({
+    projectRoot,
+    tailLines: 6,
+  });
+  const rootTail = await readProjectsBindingAuditTail({
+    projectsRoot,
+    tailLines: 6,
+  });
+
+  assert.equal(projectTail.exists, true);
+  assert.equal(rootTail.exists, true);
+  assert.equal(projectTail.lineCount, 6);
+  assert.equal(rootTail.lineCount, 6);
+  assert.deepEqual(
+    projectTail.tail.map((line) => JSON.parse(line).action),
+    ["bind", "unbind", "bind", "unbind", "bind", "unbind"]
+  );
+  assert.deepEqual(
+    rootTail.tail.map((line) => JSON.parse(line).action),
+    ["bind", "unbind", "bind", "unbind", "bind", "unbind"]
+  );
 });
 
 test("explicit discord binding also persists a direct session-key alias for background continuations", async (t) => {

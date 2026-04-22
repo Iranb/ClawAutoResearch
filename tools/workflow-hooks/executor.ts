@@ -20,6 +20,7 @@ import {
   upsertWorkflowHookAggregateState,
   writeWorkflowHooksStateStore,
 } from "./state.js";
+import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type {
   WorkflowFileAuditHookPolicy,
   WorkflowFileAuditRoundState,
@@ -331,6 +332,29 @@ export async function evaluateWorkflowHooksForPoint(params: {
     attempt: WorkflowHookReviewerAttempt<ReturnType<typeof parseFileAuditResult>>;
   }) => ReturnType<typeof parseFileAuditResult> | null;
 }): Promise<WorkflowHookPointExecutionSummary> {
+  const emitDiagnostic = async (payload: {
+    status: "started" | "completed" | "waiting" | "blocked" | "degraded" | "failed";
+    summary: string;
+    details?: Record<string, unknown> | null;
+  }) =>
+    appendWorkflowDiagnosticEvent({
+      projectRoot: params.context.projectRoot,
+      projectId: params.context.projectId,
+      component: "hook",
+      action: params.context.hookPoint,
+      status: payload.status,
+      stage: params.context.targetStage ?? params.context.stage ?? null,
+      owner: params.context.targetRole ?? params.context.ownerRole ?? null,
+      summary: payload.summary,
+      details: {
+        hookPoint: params.context.hookPoint,
+        stage: params.context.stage,
+        targetStage: params.context.targetStage ?? null,
+        targetRole: params.context.targetRole ?? null,
+        taskId: params.context.taskId ?? null,
+        ...(payload.details ?? {}),
+      },
+    });
   const policy = await readWorkflowHooksPolicyForProject(params.context.projectRoot);
   const store =
     (await readWorkflowHooksStateStore(params.context.projectRoot).catch(() => null)) ??
@@ -344,6 +368,14 @@ export async function evaluateWorkflowHooksForPoint(params: {
     )
   );
   if (!policy.enabled || hooks.length === 0) {
+    await emitDiagnostic({
+      status: "completed",
+      summary: "No workflow hooks were eligible for this hook point.",
+      details: {
+        policyEnabled: policy.enabled,
+        eligibleHookCount: hooks.length,
+      },
+    });
     return {
       hookPoint: params.context.hookPoint,
       stage: params.context.stage,
@@ -800,6 +832,34 @@ export async function evaluateWorkflowHooksForPoint(params: {
     },
   });
   await writeWorkflowHooksStateStore(params.context.projectRoot, nextStore);
+  await emitDiagnostic({
+    status:
+      aggregate.aggregateStatus === "failed" ||
+      aggregate.aggregateVerdict === "block"
+        ? "blocked"
+        : aggregate.aggregateStatus === "auditing" ||
+            aggregate.aggregateStatus === "revise_requested"
+          ? "waiting"
+          : "completed",
+    summary: `Workflow hook evaluation finished with ${aggregate.aggregateVerdict}/${aggregate.aggregateStatus}.`,
+    details: {
+      eligibleHookCount: hooks.length,
+      hooksRun: executions.map((execution) => ({
+        hookId: execution.hookId,
+        verdict: execution.verdict,
+        status: execution.status,
+        launched: execution.launched,
+        pending: execution.pending,
+        revisedRequested: execution.revisedRequested,
+        escalated: execution.escalated,
+        blockingReason: execution.blockingReason,
+      })),
+      aggregateVerdict: aggregate.aggregateVerdict,
+      aggregateStatus: aggregate.aggregateStatus,
+      aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+      blockingReason: aggregate.blockingReason,
+    },
+  });
 
   return {
     hookPoint: params.context.hookPoint,

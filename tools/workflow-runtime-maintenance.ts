@@ -40,6 +40,7 @@ import {
 } from "./workflow-handoff/handoff-store";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
+import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 
 type RuntimeSubagentApi = {
   run: (params: {
@@ -493,6 +494,22 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     typeof params.maxRepairAttempts === "number" && Number.isFinite(params.maxRepairAttempts)
       ? Math.max(1, Math.floor(params.maxRepairAttempts))
       : 3;
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_maintenance",
+    action: "maintenance_started",
+    status: "started",
+    summary: "Runtime maintenance pass started.",
+    details: {
+      maxRepairAttempts,
+      staleSessionAgeMs:
+        typeof params.staleSessionAgeMs === "number" && Number.isFinite(params.staleSessionAgeMs)
+          ? params.staleSessionAgeMs
+          : null,
+      hasRuntimeSubagent: Boolean(params.runtimeSubagent),
+    },
+  });
 
   const recovery = await recoverWorkflowRuntimeState({
     projectRoot,
@@ -884,6 +901,30 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       queueRepairPending: watchdogSummary.queueRepairPending,
       sessionRepairPending: watchdogSummary.sessionRepairPending,
       incidentCount: watchdogSummary.incidentCount,
+      experimentMaintenance,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_maintenance",
+    action: "maintenance_completed",
+    status:
+      watchdogSummary.queueRepairPending > 0 || watchdogSummary.sessionRepairPending > 0
+        ? "waiting"
+        : incidents.length > 0 || exhaustedQueueKeys.length > 0 || exhaustedSessionKeys.length > 0
+          ? "degraded"
+          : "completed",
+    stage: currentStage,
+    owner: readString(manifest?.owner_agent),
+    summary: "Runtime maintenance pass completed.",
+    details: {
+      replayedQueueKeys,
+      exhaustedQueueKeys,
+      exhaustedSessionKeys,
+      repairedSessionKeys,
+      handoffMaintenance,
+      watchdogSummary,
       experimentMaintenance,
     },
   });

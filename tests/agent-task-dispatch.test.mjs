@@ -10,6 +10,7 @@ import {
   deriveWorkflowDispatchSessionCandidates,
   dispatchWorkflowTaskToAgent,
 } from "../tools/agent-task-dispatch.ts";
+import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
 import {
   downgradeWorkflowAgentCapability,
   upsertWorkflowAgentCapability,
@@ -95,6 +96,53 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
   assert.equal(calls[0].lane, "nested");
   assert.equal(calls[0].deliver, false);
   assert.match(calls[0].message, /Implement the current experiment plan/);
+});
+
+test("dispatchWorkflowTaskToAgent records structured diagnostics with candidate resolution and final attempts", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-diagnostics-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    runtimeSubagent: {
+      async run() {
+        return { runId: "run-diagnostic-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Implement the current experiment plan.",
+    command: "/implement-experiment",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "dispatch" &&
+        event.action === "dispatch_candidates_resolved" &&
+        Array.isArray(event.details?.candidates)
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "dispatch" &&
+        event.action === "dispatch_completed" &&
+        Array.isArray(event.details?.attempts)
+    )
+  );
 });
 
 test("dispatchWorkflowTaskToAgent reuses an already active owner session instead of spawning a fallback", async (t) => {

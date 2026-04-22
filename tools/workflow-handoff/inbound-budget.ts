@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { WORKFLOW_INBOUND_DEFAULT_BUDGET_MS } from "./handoff-defaults";
+import {
+  appendRotatingJsonlLine,
+  readRotatingJsonlTail,
+} from "../workflow-jsonl-log.js";
 
 export type WorkflowInboundTurnStatus =
   | "started"
@@ -40,6 +44,8 @@ export type WorkflowInboundBudgetContext = {
 };
 
 const INBOUND_TURNS_FILENAME = "workflow-inbound-turns.jsonl";
+const DEFAULT_WORKFLOW_INBOUND_TURNS_MAX_BYTES = 512 * 1024;
+const DEFAULT_WORKFLOW_INBOUND_TURNS_MAX_ARCHIVES = 5;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -47,6 +53,25 @@ function nowIso(): string {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getWorkflowInboundTurnsRotationConfig() {
+  return {
+    maxBytes: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_INBOUND_TURNS_MAX_BYTES",
+      DEFAULT_WORKFLOW_INBOUND_TURNS_MAX_BYTES
+    ),
+    maxArchives: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_INBOUND_TURNS_MAX_ARCHIVES",
+      DEFAULT_WORKFLOW_INBOUND_TURNS_MAX_ARCHIVES
+    ),
+  };
 }
 
 export function getWorkflowInboundTurnsPath(projectRoot: string): string {
@@ -61,8 +86,13 @@ async function appendWorkflowInboundTurnRecord(
   record: WorkflowInboundTurnRecord
 ): Promise<void> {
   const targetPath = getWorkflowInboundTurnsPath(record.projectRoot);
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.appendFile(targetPath, `${JSON.stringify(record)}\n`, "utf8");
+  const { maxBytes, maxArchives } = getWorkflowInboundTurnsRotationConfig();
+  await appendRotatingJsonlLine({
+    activeLogPath: targetPath,
+    serializedLine: `${JSON.stringify(record)}\n`,
+    maxBytes,
+    maxArchives,
+  });
 }
 
 export function createWorkflowInboundBudgetContext(params: {
@@ -179,6 +209,18 @@ export async function readWorkflowInboundTurnRecords(
   } catch {
     return [];
   }
+}
+
+export async function readWorkflowInboundTurnTail(params: {
+  projectRoot: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  const { maxArchives } = getWorkflowInboundTurnsRotationConfig();
+  return readRotatingJsonlTail({
+    activeLogPath: getWorkflowInboundTurnsPath(params.projectRoot),
+    maxArchives,
+    tailLines: params.tailLines,
+  });
 }
 
 export async function withWorkflowInboundBudget<T>(params: {

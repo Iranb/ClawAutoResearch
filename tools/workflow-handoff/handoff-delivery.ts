@@ -10,6 +10,7 @@ import {
   type ChannelProjectBindingPolicy,
 } from "../channel-project-bindings";
 import { checkHandoffHookFreshness } from "../workflow-hooks/handoff-gates.js";
+import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type {
   WorkflowHandoffDeliveryChannel,
   WorkflowHandoffIntent,
@@ -87,9 +88,44 @@ export async function deliverWorkflowHandoffIntent(params: {
   reason: string | null;
 }> {
   let intent = params.intent;
+  const emitDiagnostic = async (payload: {
+    action: string;
+    status: "started" | "completed" | "waiting" | "blocked" | "degraded" | "failed";
+    summary: string;
+    details?: Record<string, unknown> | null;
+  }) =>
+    appendWorkflowDiagnosticEvent({
+      projectRoot: intent.projectRoot,
+      projectId: intent.projectId,
+      component: "handoff",
+      action: payload.action,
+      status: payload.status,
+      stage: intent.stageAfter ?? intent.stage ?? null,
+      owner: intent.toRole ?? null,
+      summary: payload.summary,
+      details: {
+        intentId: intent.intentId,
+        idempotencyKey: intent.idempotencyKey,
+        fromRole: intent.fromRole,
+        toRole: intent.toRole,
+        handoffStatus: intent.status,
+        ...(payload.details ?? {}),
+      },
+    });
   if (isWorkflowHandoffTerminalStatus(intent.status)) {
+    await emitDiagnostic({
+      action: "delivery_skipped",
+      status: "waiting",
+      summary: "Skipped handoff delivery because the intent is already terminal.",
+      details: { terminalStatus: intent.status },
+    });
     return { delivered: false, intent, terminal: true, reason: "terminal_intent" };
   }
+  await emitDiagnostic({
+    action: "delivery_started",
+    status: "started",
+    summary: "Starting workflow handoff delivery.",
+  });
   if (!hasTotalBudget(intent) && intent.deliveryPlan.maxAttemptsTotal > 0) {
     const escalated =
       (await transitionWorkflowHandoffIntent({
@@ -98,6 +134,14 @@ export async function deliverWorkflowHandoffIntent(params: {
         toStatus: "escalated",
         terminalReason: "delivery_attempt_budget_exhausted",
       })) ?? intent;
+    await emitDiagnostic({
+      action: "delivery_completed",
+      status: "failed",
+      summary: "Handoff delivery budget was already exhausted.",
+      details: {
+        terminalReason: "delivery_attempt_budget_exhausted",
+      },
+    });
     return {
       delivered: false,
       intent: escalated,
@@ -121,6 +165,15 @@ export async function deliverWorkflowHandoffIntent(params: {
           hookFreshness.blockingReason ??
           "Suppressed stale handoff because hook gate freshness failed.",
       })) ?? intent;
+    await emitDiagnostic({
+      action: "delivery_completed",
+      status: "blocked",
+      summary: "Suppressed stale handoff because hook freshness failed.",
+      details: {
+        terminalReason: "hook_gate_stale",
+        blockingReason: hookFreshness.blockingReason ?? null,
+      },
+    });
     return {
       delivered: false,
       intent: superseded,
@@ -154,6 +207,16 @@ export async function deliverWorkflowHandoffIntent(params: {
         summary:
           "Suppressed stale handoff because the current channel binding no longer points at this project.",
       })) ?? intent;
+    await emitDiagnostic({
+      action: "delivery_completed",
+      status: "blocked",
+      summary: "Suppressed stale handoff because the channel binding no longer matches this project.",
+      details: {
+        terminalReason: "binding_mismatch",
+        bindingReason: deliveryGate.reason,
+        currentBindingProjectId: deliveryGate.currentBinding?.projectId ?? null,
+      },
+    });
     return {
       delivered: false,
       intent: superseded,
@@ -200,6 +263,16 @@ export async function deliverWorkflowHandoffIntent(params: {
             error: "lobster_disabled",
           },
         })) ?? intent;
+      await emitDiagnostic({
+        action: "delivery_attempt_completed",
+        status: "waiting",
+        summary: `Skipped handoff delivery via ${channel}.`,
+        details: {
+          channel,
+          attemptStatus: "skipped",
+          error: "lobster_disabled",
+        },
+      });
       continue;
     }
 
@@ -224,6 +297,19 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: result?.ok ? null : result?.error ?? "native_runtime_unavailable",
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_attempt_completed",
+          status: result?.ok ? "completed" : "failed",
+          summary: result?.ok
+            ? `Handoff delivered through ${channel}.`
+            : `Handoff attempt via ${channel} failed.`,
+          details: {
+            channel,
+            runId: result?.runId ?? null,
+            sessionKey: result?.sessionKey ?? null,
+            error: result?.ok ? null : result?.error ?? "native_runtime_unavailable",
+          },
+        });
         if (result?.ok) {
           const delivered =
             (await transitionWorkflowHandoffIntent({
@@ -259,6 +345,22 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: dryRun ? "lobster_dry_run" : result?.ok ? null : result?.error ?? "lobster_failed",
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_attempt_completed",
+          status: result?.ok && !dryRun ? "completed" : dryRun ? "waiting" : "failed",
+          summary:
+            result?.ok && !dryRun
+              ? `Handoff delivered through ${channel}.`
+              : dryRun
+                ? `Skipped handoff delivery via ${channel} because Lobster is in dry-run mode.`
+                : `Handoff attempt via ${channel} failed.`,
+          details: {
+            channel,
+            runId: result?.runId ?? null,
+            sessionKey: result?.sessionKey ?? null,
+            error: dryRun ? "lobster_dry_run" : result?.ok ? null : result?.error ?? "lobster_failed",
+          },
+        });
         if (result?.ok && !dryRun) {
           const delivered =
             (await transitionWorkflowHandoffIntent({
@@ -293,6 +395,19 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: result?.ok ? null : result?.error ?? "channel_broadcast_failed",
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_attempt_completed",
+          status: result?.ok ? "completed" : "failed",
+          summary: result?.ok
+            ? `Handoff delivered through ${channel}.`
+            : `Handoff attempt via ${channel} failed.`,
+          details: {
+            channel,
+            runId: result?.runId ?? null,
+            messageId: result?.messageId ?? null,
+            error: result?.ok ? null : result?.error ?? "channel_broadcast_failed",
+          },
+        });
         if (result?.ok) {
           const delivered =
             (await transitionWorkflowHandoffIntent({
@@ -326,6 +441,18 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: result?.ok ? null : result?.error ?? "runtime_queue_failed",
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_attempt_completed",
+          status: result?.ok ? "waiting" : "failed",
+          summary: result?.ok
+            ? `Handoff queued through ${channel}.`
+            : `Handoff attempt via ${channel} failed.`,
+          details: {
+            channel,
+            queueKey: result?.queueKey ?? null,
+            error: result?.ok ? null : result?.error ?? "runtime_queue_failed",
+          },
+        });
         if (result?.ok) {
           const delivered =
             (await transitionWorkflowHandoffIntent({
@@ -359,6 +486,18 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: result?.ok ? null : result?.error ?? "mailbox_compat_failed",
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_attempt_completed",
+          status: result?.ok ? "completed" : "failed",
+          summary: result?.ok
+            ? `Handoff delivered through ${channel}.`
+            : `Handoff attempt via ${channel} failed.`,
+          details: {
+            channel,
+            messageId: result?.messageId ?? null,
+            error: result?.ok ? null : result?.error ?? "mailbox_compat_failed",
+          },
+        });
         if (result?.ok) {
           const delivered =
             (await transitionWorkflowHandoffIntent({
@@ -391,6 +530,15 @@ export async function deliverWorkflowHandoffIntent(params: {
               error: null,
             },
           })) ?? intent;
+        await emitDiagnostic({
+          action: "delivery_completed",
+          status: "failed",
+          summary: "Workflow handoff escalated to human intervention.",
+          details: {
+            channel,
+            terminalReason: "human_escalation",
+          },
+        });
         const escalated =
           (await transitionWorkflowHandoffIntent({
             projectRoot: intent.projectRoot,
@@ -417,6 +565,15 @@ export async function deliverWorkflowHandoffIntent(params: {
             error: error instanceof Error ? error.message : String(error),
           },
         })) ?? intent;
+      await emitDiagnostic({
+        action: "delivery_attempt_completed",
+        status: "failed",
+        summary: `Handoff attempt via ${channel} threw an error.`,
+        details: {
+          channel,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 
@@ -427,6 +584,15 @@ export async function deliverWorkflowHandoffIntent(params: {
       toStatus: hasTotalBudget(intent) ? "failed" : "escalated",
       terminalReason: hasTotalBudget(intent) ? null : "delivery_attempt_budget_exhausted",
     })) ?? intent;
+  await emitDiagnostic({
+    action: "delivery_completed",
+    status: failed.status === "escalated" ? "failed" : "degraded",
+    summary: "Workflow handoff delivery exhausted automatic channels.",
+    details: {
+      terminalReason: failed.terminalReason ?? "delivery_failed",
+      attempts: failed.deliveryAttempts,
+    },
+  });
   return {
     delivered: false,
     intent: failed,
