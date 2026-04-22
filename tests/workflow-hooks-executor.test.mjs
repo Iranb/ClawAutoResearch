@@ -7,6 +7,7 @@ import path from "node:path";
 import { evaluateWorkflowHooksForPoint } from "../tools/workflow-hooks/executor.ts";
 import { buildWorkflowHookPointContext } from "../tools/workflow-hooks/point-context.ts";
 import { getFileAuditStateSummary } from "../tools/workflow-hooks/state.ts";
+import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -91,6 +92,15 @@ test("evaluateWorkflowHooksForPoint launches and then settles a file audit hook"
   });
   assert.equal(completed.aggregateVerdict, "pass");
   assert.equal(completed.aggregateStatus, "passed");
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "hook" &&
+        event.action === "before_stage_handoff" &&
+        event.details?.aggregateVerdict === "pass"
+    )
+  );
 });
 
 test("evaluateWorkflowHooksForPoint invalidates a cached pass when supporting artifacts drift", async (t) => {

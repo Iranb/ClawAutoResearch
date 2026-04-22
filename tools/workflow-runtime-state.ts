@@ -5,6 +5,10 @@ import {
   withAdvisoryLock,
   writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
+import {
+  appendRotatingJsonlLine,
+  readRotatingJsonlTail,
+} from "./workflow-jsonl-log.js";
 
 export const WORKFLOW_RUNTIME_SCHEMA_VERSION = 1;
 export const WORKFLOW_RUNTIME_FRAMEWORK = "sessions_spawn_v1";
@@ -239,6 +243,8 @@ const SESSIONS_FILENAME = "workflow-runtime-sessions.json";
 const ANNOUNCE_FILENAME = "workflow-announce-outbox.json";
 const BROADCAST_FILENAME = "workflow-broadcast-outbox.json";
 const EVENTS_FILENAME = "workflow-events.jsonl";
+const DEFAULT_WORKFLOW_RUNTIME_EVENTS_MAX_BYTES = 1024 * 1024;
+const DEFAULT_WORKFLOW_RUNTIME_EVENTS_MAX_ARCHIVES = 5;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -252,6 +258,25 @@ function readString(value: unknown): string | null {
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getWorkflowRuntimeEventsRotationConfig() {
+  return {
+    maxBytes: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_RUNTIME_EVENTS_MAX_BYTES",
+      DEFAULT_WORKFLOW_RUNTIME_EVENTS_MAX_BYTES
+    ),
+    maxArchives: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_RUNTIME_EVENTS_MAX_ARCHIVES",
+      DEFAULT_WORKFLOW_RUNTIME_EVENTS_MAX_ARCHIVES
+    ),
+  };
 }
 
 function normalizeProjectRoot(projectRoot: string): string {
@@ -1323,11 +1348,13 @@ export async function appendWorkflowRuntimeEvent(params: {
     summary: readString(params.summary) ?? null,
     details: params.details ?? null,
   };
-  await fs.appendFile(
-    getWorkflowRuntimeEventsPath(projectRoot),
-    `${JSON.stringify(event)}\n`,
-    "utf8"
-  );
+  const { maxBytes, maxArchives } = getWorkflowRuntimeEventsRotationConfig();
+  await appendRotatingJsonlLine({
+    activeLogPath: getWorkflowRuntimeEventsPath(projectRoot),
+    serializedLine: `${JSON.stringify(event)}\n`,
+    maxBytes,
+    maxArchives,
+  });
   return event;
 }
 
@@ -1351,6 +1378,18 @@ export async function readWorkflowRuntimeEvents(
     }
     throw error;
   }
+}
+
+export async function readWorkflowRuntimeEventTail(params: {
+  projectRoot: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  const { maxArchives } = getWorkflowRuntimeEventsRotationConfig();
+  return readRotatingJsonlTail({
+    activeLogPath: getWorkflowRuntimeEventsPath(params.projectRoot),
+    maxArchives,
+    tailLines: params.tailLines,
+  });
 }
 
 export async function listWorkflowRuntimeProjectRoots(params: {

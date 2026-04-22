@@ -13,6 +13,7 @@ import {
   consumeWorkflowAnnounceOutbox,
   replayWorkflowBroadcastOutbox,
 } from "./workflow-announce-runtime.js";
+import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 import type { ChannelProjectBindingPolicy } from "./channel-project-bindings";
 import type {
   WorkflowRuntimeBroadcastEntry,
@@ -206,6 +207,22 @@ export async function recoverWorkflowRuntimeState(params: {
 }): Promise<WorkflowRuntimeRecoveryResult> {
   const projectRoot = path.resolve(params.projectRoot);
   const projectId = resolveProjectId(projectRoot, params.projectId);
+  const staleSessionAgeMs =
+    typeof params.staleSessionAgeMs === "number" && Number.isFinite(params.staleSessionAgeMs)
+      ? Math.max(0, Math.floor(params.staleSessionAgeMs))
+      : 15 * 60 * 1000;
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_recovery",
+    action: "recovery_started",
+    status: "started",
+    summary: "Runtime recovery sweep started.",
+    details: {
+      staleSessionAgeMs,
+      hasBroadcastSender: Boolean(params.sendBroadcast),
+    },
+  });
   await migrateWorkflowRuntimeState({
     projectRoot,
     projectId,
@@ -216,6 +233,21 @@ export async function recoverWorkflowRuntimeState(params: {
     projectRoot,
     projectId,
     staleSessionAgeMs: params.staleSessionAgeMs,
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_recovery",
+    action: "recovery_plan_built",
+    status:
+      plan.announcePending.length > 0 ||
+      plan.broadcastPending.length > 0 ||
+      plan.staleQueueKeys.length > 0 ||
+      plan.staleSessionKeys.length > 0
+        ? "waiting"
+        : "completed",
+    summary: "Runtime recovery plan built.",
+    details: plan,
   });
 
   const announce = await consumeWorkflowAnnounceOutbox({
@@ -238,11 +270,6 @@ export async function recoverWorkflowRuntimeState(params: {
           failed: [],
           skipped: broadcastStore.entries,
         };
-
-  const staleSessionAgeMs =
-    typeof params.staleSessionAgeMs === "number" && Number.isFinite(params.staleSessionAgeMs)
-      ? Math.max(0, Math.floor(params.staleSessionAgeMs))
-      : 15 * 60 * 1000;
 
   const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
   const repairedQueue: WorkflowRuntimeQueueEntry[] = [];
@@ -351,6 +378,27 @@ export async function recoverWorkflowRuntimeState(params: {
       },
     });
   }
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_recovery",
+    action: "recovery_completed",
+    status:
+      repairedQueue.length > 0 || repairedSessions.length > 0
+        ? "degraded"
+        : announce.consumed.length > 0 || broadcast.delivered.length > 0
+          ? "completed"
+          : "waiting",
+    summary: "Runtime recovery sweep completed.",
+    details: {
+      repairedQueueKeys: repairedQueue.map((entry) => entry.queueKey),
+      repairedSessionKeys: repairedSessions.map((entry) => entry.sessionKey),
+      consumedAnnounceIds: announce.consumed.map((entry) => entry.announceId),
+      deliveredBroadcastIds: broadcast.delivered.map((entry) => entry.broadcastId),
+      failedBroadcastIds: broadcast.failed.map((entry) => entry.broadcastId),
+      recoveryBroadcastId: recoveryBroadcast?.broadcastId ?? null,
+    },
+  });
 
   return {
     projectId,

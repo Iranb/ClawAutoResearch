@@ -23,6 +23,7 @@ import {
   createGateReviewRound,
   saveGateReviewStore,
 } from "../tools/workflow-auto-gate.ts";
+import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
 import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import {
   aggregateCodeReviewRound,
@@ -52,6 +53,60 @@ async function writeText(filePath, text = "ok\n") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, text, "utf8");
 }
+
+test("runWorkflowAutoIterator writes structured diagnostics for stage evaluation", async (t) => {
+  const projectRoot = await makeTempProject();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "diagnostic-demo",
+    current_stage: "setup",
+    owner_agent: "researcher",
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "researcher",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+    },
+  });
+
+  assert.equal(result.projectId, "diagnostic-demo");
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "auto_iterator" && event.action === "tick_started"
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "stage_preflight" &&
+        event.action === "current_stage_prepared"
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "auto_iterator" &&
+        event.action === "auto_mode_evaluated"
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "auto_iterator" &&
+        event.action === "tick_completed" &&
+        typeof event.details?.nextAction === "string"
+    )
+  );
+});
 
 function buildCompliantFigureTableLatex({
   figures = 5,

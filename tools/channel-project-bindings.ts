@@ -31,6 +31,7 @@ import {
   withAdvisoryLock,
   writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
+import { readRotatingJsonlTail, appendRotatingJsonlLine } from "./workflow-jsonl-log.js";
 import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 
 export interface ChannelProjectBindingPolicy {
@@ -55,6 +56,9 @@ export interface ChannelProjectBindingContext {
   threadBindingKey?: string;
   depth?: number;
 }
+
+const DEFAULT_CHANNEL_BINDING_AUDIT_MAX_BYTES = 512 * 1024;
+const DEFAULT_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES = 5;
 
 export type InvalidEnvProjectRootMode = "throw" | "ignore";
 
@@ -164,6 +168,25 @@ const bindingIndexCache = new Map<
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getChannelBindingAuditRotationConfig() {
+  return {
+    maxBytes: readPositiveIntegerEnv(
+      "OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_BYTES",
+      DEFAULT_CHANNEL_BINDING_AUDIT_MAX_BYTES
+    ),
+    maxArchives: readPositiveIntegerEnv(
+      "OPENCLAW_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES",
+      DEFAULT_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES
+    ),
+  };
 }
 
 function resolveContextActorId(
@@ -404,6 +427,38 @@ export function getProjectsBindingAuditPath(projectsRoot: string): string {
     ".openclaw-research",
     "channel-project-binding-audit.jsonl"
   );
+}
+
+export async function readChannelProjectBindingAuditTail(params: {
+  auditPath: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  const { maxArchives } = getChannelBindingAuditRotationConfig();
+  return readRotatingJsonlTail({
+    activeLogPath: params.auditPath,
+    maxArchives,
+    tailLines: params.tailLines,
+  });
+}
+
+export async function readProjectBindingAuditTail(params: {
+  projectRoot: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  return readChannelProjectBindingAuditTail({
+    auditPath: getProjectBindingAuditPath(params.projectRoot),
+    tailLines: params.tailLines,
+  });
+}
+
+export async function readProjectsBindingAuditTail(params: {
+  projectsRoot: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  return readChannelProjectBindingAuditTail({
+    auditPath: getProjectsBindingAuditPath(params.projectsRoot),
+    tailLines: params.tailLines,
+  });
 }
 
 async function listCandidateProjectBindingStorePaths(
@@ -844,9 +899,14 @@ async function appendBindingAuditEvents(params: {
       .map((event) => JSON.stringify(event))
       .join("\n")
       .concat("\n");
+  const { maxBytes, maxArchives } = getChannelBindingAuditRotationConfig();
   for (const auditPath of auditTargets) {
-    await fsp.mkdir(path.dirname(auditPath), { recursive: true });
-    await fsp.appendFile(auditPath, payload, "utf8");
+    await appendRotatingJsonlLine({
+      activeLogPath: auditPath,
+      serializedLine: payload,
+      maxBytes,
+      maxArchives,
+    });
   }
 }
 

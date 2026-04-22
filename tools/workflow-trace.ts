@@ -2,6 +2,10 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import { appendWorkflowRuntimeEvent } from "./workflow-runtime-state.js";
+import {
+  appendRotatingJsonlLine,
+  readRotatingJsonlTail,
+} from "./workflow-jsonl-log.js";
 
 export type WorkflowTraceEventKind =
   | "tool_action"
@@ -26,6 +30,8 @@ export type WorkflowTraceEvent = {
 
 const TRACE_DIR_NAME = "openclaw-research-workflow-trace";
 const PROJECT_LOCAL_TRACE_FILENAME = "workflow-trace.jsonl";
+const DEFAULT_WORKFLOW_TRACE_MAX_BYTES = 1024 * 1024;
+const DEFAULT_WORKFLOW_TRACE_MAX_ARCHIVES = 5;
 
 function sanitizeTraceSegment(value: string | null | undefined): string {
   const normalized = String(value ?? "")
@@ -34,6 +40,25 @@ function sanitizeTraceSegment(value: string | null | undefined): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "workflow";
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getWorkflowTraceRotationConfig() {
+  return {
+    maxBytes: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_TRACE_MAX_BYTES",
+      DEFAULT_WORKFLOW_TRACE_MAX_BYTES
+    ),
+    maxArchives: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_TRACE_MAX_ARCHIVES",
+      DEFAULT_WORKFLOW_TRACE_MAX_ARCHIVES
+    ),
+  };
 }
 
 export function getWorkflowTraceLogPath(params: {
@@ -98,8 +123,13 @@ export async function appendWorkflowTraceEvent(params: {
     summary: params.summary ?? null,
     details: params.details ?? null,
   };
-  await fs.mkdir(path.dirname(logPath), { recursive: true });
-  await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, "utf8");
+  const { maxBytes, maxArchives } = getWorkflowTraceRotationConfig();
+  await appendRotatingJsonlLine({
+    activeLogPath: logPath,
+    serializedLine: `${JSON.stringify(event)}\n`,
+    maxBytes,
+    maxArchives,
+  });
   await fs.mkdir(path.dirname(tempMirrorPath), { recursive: true });
   await fs.appendFile(tempMirrorPath, `${JSON.stringify(event)}\n`, "utf8");
   await appendWorkflowRuntimeEvent({
@@ -120,4 +150,20 @@ export async function appendWorkflowTraceEvent(params: {
     },
   });
   return { logPath, event };
+}
+
+export async function readWorkflowTraceTail(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  const { maxArchives } = getWorkflowTraceRotationConfig();
+  return readRotatingJsonlTail({
+    activeLogPath: getWorkflowTraceLogPath({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+    }),
+    maxArchives,
+    tailLines: params.tailLines,
+  });
 }

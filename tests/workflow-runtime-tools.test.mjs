@@ -3781,11 +3781,15 @@ test("research_workflow capture_diagnostic_bundle materializes a bounded diagnos
   assert.match(result.bundleRelativeDir ?? "", /\.openclaw-research\/diagnostics\//);
   await fs.access(path.join(projectRoot, result.summaryRelativePath));
   await fs.access(path.join(projectRoot, result.indexRelativePath));
+  await fs.access(
+    path.join(projectRoot, result.bundleRelativeDir, "workflow-diagnostics.tail.json")
+  );
   const index = JSON.parse(
     await fs.readFile(path.join(projectRoot, result.indexRelativePath), "utf8")
   );
   assert.equal(index.projectId, "demo-project");
   assert.equal(index.reason, "discord_native_failure");
+  assert.equal(index.keyFiles.diagnosticsTail, "workflow-diagnostics.tail.json");
   const summaryText = await fs.readFile(
     path.join(projectRoot, result.summaryRelativePath),
     "utf8"

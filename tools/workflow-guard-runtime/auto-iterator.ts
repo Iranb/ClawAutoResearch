@@ -41,6 +41,7 @@ import { buildWorkflowStageTaskPreview } from "../workflow-team/stage-profiles";
 import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import { createStageOwnerHandoffIntent } from "../workflow-handoff/handoff-router";
+import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type {
   AutoIteratorAction,
@@ -876,6 +877,23 @@ export async function runWorkflowAutoIteratorImpl(
         manifest,
       }) ?? stageBefore;
   }
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "auto_iterator",
+    action: "tick_started",
+    status: "started",
+    stage: stageBefore,
+    owner: asString(manifest.owner_agent),
+    summary: `Auto iterator started for ${stageBefore}.`,
+    details: {
+      mode,
+      actorRole,
+      configuredAutoMode,
+      requesterSessionKey: asString(params.requesterSessionKey) ?? null,
+      sessionBindingKey: asString(params.sessionBindingKey) ?? null,
+    },
+  });
   const initialStagePreflight = await maybePrepareWorkflowStageContracts({
     projectRoot,
     manifest,
@@ -904,6 +922,24 @@ export async function runWorkflowAutoIteratorImpl(
     ...manifest,
     ...initialStagePreflight.manifest,
   };
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "stage_preflight",
+    action: "current_stage_prepared",
+    status:
+      initialStagePreflight.materializedArtifacts.length > 0 ||
+      initialStagePreflight.emittedHookEvents.length > 0
+        ? "completed"
+        : "waiting",
+    stage: stageBefore,
+    owner: asString(manifest.owner_agent),
+    summary: `Stage preflight prepared ${stageBefore}.`,
+    details: {
+      materializedArtifacts: initialStagePreflight.materializedArtifacts,
+      hookEvents: initialStagePreflight.emittedHookEvents,
+    },
+  });
   let revisionControlState = normalizeRevisionControlState(
     asRecord(manifest.revision_control_state)
   );
@@ -1084,6 +1120,32 @@ export async function runWorkflowAutoIteratorImpl(
     autoGate,
     now,
   });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "auto_iterator",
+    action: "auto_mode_evaluated",
+    status:
+      gateEvaluation.blocking
+        ? "blocked"
+        : effectiveMissingSignals.length > 0 || regressed
+          ? "waiting"
+          : "completed",
+    stage: stageEffective,
+    owner: asString(manifest.owner_agent),
+    summary: `Auto mode resolved to ${autoModeEvaluation.effectiveMode} for ${stageEffective}.`,
+    details: {
+      configuredAutoMode: autoModeEvaluation.configuredMode,
+      effectiveAutoMode: autoModeEvaluation.effectiveMode,
+      riskLevel: autoModeEvaluation.riskLevel,
+      riskFingerprint: autoModeEvaluation.riskFingerprint,
+      mitigationStatus: autoModeEvaluation.mitigationStatus,
+      gateBlocking: gateEvaluation.blocking,
+      gateReason: gateEvaluation.reason,
+      regressed,
+      effectiveMissingSignals,
+    },
+  });
 
   let stageAfter = stageEffective;
   let revisionDrivenRouting = false;
@@ -1154,6 +1216,36 @@ export async function runWorkflowAutoIteratorImpl(
       normalizeStage(experimentDecisionBeforeAdvance?.decision) ?? ""
     ) ||
       experimentRollbackStage != null);
+  if (stageEffective === "experiment" && experimentDecisionBeforeAdvance) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "experiment_decision",
+      action: "decision_evaluated",
+      status:
+        experimentRollbackStage != null
+          ? "blocked"
+          : experimentDecisionBlocksAdvance
+            ? "waiting"
+            : "completed",
+      stage: stageEffective,
+      owner: asString(manifest.owner_agent),
+      summary: `Experiment decision resolved to ${experimentDecisionBeforeAdvance.decision}.`,
+      details: {
+        decision: experimentDecisionBeforeAdvance.decision,
+        rationale: experimentDecisionBeforeAdvance.rationale,
+        validationStage: experimentDecisionBeforeAdvance.validationStage,
+        recommendedNextAction: experimentDecisionBeforeAdvance.recommendedNextAction,
+        baselineFairnessStatus:
+          experimentDecisionBeforeAdvance.baselineFairnessStatus,
+        implementationConfidence:
+          experimentDecisionBeforeAdvance.implementationConfidence,
+        searchExhaustionStatus:
+          experimentDecisionBeforeAdvance.searchExhaustionStatus,
+        rollbackStage: experimentRollbackStage,
+      },
+    });
+  }
   const criticalAnalyzeRollbackStage =
     stageEffective === "analyze" ? resolveCriticalAnalyzeRollbackStage(manifest) : null;
   const criticalSubmitRollbackStage =
@@ -1234,6 +1326,25 @@ export async function runWorkflowAutoIteratorImpl(
     revisionControlState = normalizeRevisionControlState(
       asRecord(manifest.revision_control_state)
     );
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "stage_preflight",
+      action: "target_stage_prepared",
+      status:
+        targetStagePreflight.materializedArtifacts.length > 0 ||
+        targetStagePreflight.emittedHookEvents.length > 0
+          ? "completed"
+          : "waiting",
+      stage: stageAfter,
+      owner: asString(manifest.owner_agent),
+      summary: `Prepared target stage ${stageAfter}.`,
+      details: {
+        fromStage: stageEffective,
+        materializedArtifacts: targetStagePreflight.materializedArtifacts,
+        hookEvents: targetStagePreflight.emittedHookEvents,
+      },
+    });
   }
 
   const activeStageSignals =
@@ -2104,6 +2215,45 @@ export async function runWorkflowAutoIteratorImpl(
       experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
       experimentDecisionRationale: experimentDecisionBeforeAdvance?.rationale ?? null,
       experimentRollbackStage,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "auto_iterator",
+    action: "tick_completed",
+    status:
+      gateEvaluation.blocking
+        ? "blocked"
+        : blockingReason
+          ? "waiting"
+          : "completed",
+    stage: stageAfter,
+    owner: ownerAfter,
+    summary: `Auto iterator settled on ${stageAfter} owned by ${ownerAfter ?? "workflow"}.`,
+    details: {
+      stageBefore,
+      stageEffective,
+      stageAfter,
+      regressed,
+      regressionDepth,
+      gateBlocking: gateEvaluation.blocking,
+      gateReason: gateEvaluation.reason,
+      blockingReason,
+      ownerBefore,
+      ownerAfter,
+      nextAction,
+      recommendedActions: recommendedActions.map((entry) => ({
+        kind: entry.kind,
+        owner: entry.owner,
+        stage: entry.stage,
+        blocking: entry.blocking,
+        command: entry.command,
+      })),
+      missingStageSignals: dispatchStageSignals,
+      experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
+      experimentRollbackStage,
+      auditPath: result.auditPath,
     },
   });
   return result;

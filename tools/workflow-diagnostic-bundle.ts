@@ -15,21 +15,23 @@ import {
   type WorkflowGuardPolicy,
 } from "./workflow-guard";
 import {
-  getProjectBindingAuditPath,
-  getProjectsBindingAuditPath,
+  readProjectBindingAuditTail,
+  readProjectsBindingAuditTail,
 } from "./channel-project-bindings";
 import { resolveWorkflowRuntimeHealth } from "./workflow-runtime-health";
 import {
   getWorkflowRuntimeQueuePath,
   getWorkflowRuntimeSessionsPath,
-  readWorkflowRuntimeEvents,
+  readWorkflowRuntimeEventTail,
 } from "./workflow-runtime-state.js";
 import { readWorkflowMailbox } from "./workflow-collaboration/mailbox";
 import { readWorkflowHandoffIntentStore } from "./workflow-handoff/handoff-store";
-import { readWorkflowHandoffEvents } from "./workflow-handoff/handoff-events";
+import { readWorkflowHandoffEventsTail } from "./workflow-handoff/handoff-events";
 import { readWorkflowTaskGraphStore } from "./workflow-team/task-graph";
 import { readWorkflowTeamRoundStore } from "./workflow-team/team-round";
-import { getWorkflowTraceLogPath } from "./workflow-trace";
+import { readWorkflowTraceTail } from "./workflow-trace";
+import { readWorkflowDiagnosticEventTail } from "./workflow-diagnostics.js";
+import { readWorkflowInboundTurnTail } from "./workflow-handoff/inbound-budget";
 
 type DiagnosticAgentContext = {
   agentId?: string | null;
@@ -189,40 +191,43 @@ export async function captureWorkflowDiagnosticBundle(params: {
     (await readJsonIfExists<Record<string, unknown>>(queuePath)) ?? null;
   const runtimeSessions =
     (await readJsonIfExists<Record<string, unknown>>(sessionsPath)) ?? null;
-  const runtimeEvents = await readWorkflowRuntimeEvents(projectRoot);
-  const traceTail = await readJsonlTail(getWorkflowTraceLogPath({ projectRoot, projectId }), params.tailLines ?? 200);
+  const runtimeEventsTail = await readWorkflowRuntimeEventTail({
+    projectRoot,
+    tailLines: params.tailLines ?? 200,
+  });
+  const traceTail = await readWorkflowTraceTail({
+    projectRoot,
+    projectId,
+    tailLines: params.tailLines ?? 200,
+  });
+  const diagnosticsTail = await readWorkflowDiagnosticEventTail({
+    projectRoot,
+    tailLines: params.tailLines ?? 200,
+  });
   const handoffIntents = await readWorkflowHandoffIntentStore(projectRoot).catch(() => null);
-  const handoffEvents = await readWorkflowHandoffEvents(projectRoot).catch(() => []);
+  const handoffEventsTail = await readWorkflowHandoffEventsTail({
+    projectRoot,
+    tailLines: params.tailLines ?? 200,
+  }).catch(() => ({
+    exists: false,
+    lineCount: 0,
+    tail: [] as string[],
+  }));
   const taskGraph = await readWorkflowTaskGraphStore(projectRoot).catch(() => null);
   const teamRound = await readWorkflowTeamRoundStore(projectRoot).catch(() => null);
-  const runtimeInboundTurns = await readJsonlTail(
-    path.join(projectRoot, ".openclaw-research", "workflow-inbound-turns.jsonl"),
-    params.tailLines ?? 200
-  );
+  const runtimeInboundTurns = await readWorkflowInboundTurnTail({
+    projectRoot,
+    tailLines: params.tailLines ?? 200,
+  });
 
   await writeJsonEnsured(path.join(bundleDir, "runtime-queue.json"), runtimeQueue ?? {});
   await writeJsonEnsured(path.join(bundleDir, "runtime-sessions.json"), runtimeSessions ?? {});
-  await writeJsonEnsured(
-    path.join(bundleDir, "runtime-events.tail.json"),
-    {
-      lineCount: Array.isArray(runtimeEvents) ? runtimeEvents.length : 0,
-      tail: Array.isArray(runtimeEvents)
-        ? runtimeEvents.slice(-Math.max(1, params.tailLines ?? 200))
-        : [],
-    }
-  );
+  await writeJsonEnsured(path.join(bundleDir, "runtime-events.tail.json"), runtimeEventsTail);
   await writeJsonEnsured(path.join(bundleDir, "workflow-trace.tail.json"), traceTail);
+  await writeJsonEnsured(path.join(bundleDir, "workflow-diagnostics.tail.json"), diagnosticsTail);
   await writeJsonEnsured(path.join(bundleDir, "workflow-inbound-turns.tail.json"), runtimeInboundTurns);
   await writeJsonEnsured(path.join(bundleDir, "handoff-intents.json"), handoffIntents ?? {});
-  await writeJsonEnsured(
-    path.join(bundleDir, "handoff-events.tail.json"),
-    {
-      lineCount: Array.isArray(handoffEvents) ? handoffEvents.length : 0,
-      tail: Array.isArray(handoffEvents)
-        ? handoffEvents.slice(-Math.max(1, params.tailLines ?? 200))
-        : [],
-    }
-  );
+  await writeJsonEnsured(path.join(bundleDir, "handoff-events.tail.json"), handoffEventsTail);
   await writeJsonEnsured(path.join(bundleDir, "task-graph.json"), taskGraph ?? {});
   await writeJsonEnsured(path.join(bundleDir, "team-round.json"), teamRound ?? {});
 
@@ -267,19 +272,27 @@ export async function captureWorkflowDiagnosticBundle(params: {
   });
   await writeJsonEnsured(path.join(bundleDir, "channel-binding.json"), binding);
   await writeJsonEnsured(path.join(bundleDir, "channel-bindings.json"), bindings);
-  const projectBindingAudit = await readTextIfExists(getProjectBindingAuditPath(projectRoot));
-  if (projectBindingAudit != null) {
-    await writeTextEnsured(
-      path.join(bundleDir, "channel-project-binding-audit.project.jsonl"),
+  const projectBindingAudit = await readProjectBindingAuditTail({
+    projectRoot,
+    tailLines: params.tailLines ?? 200,
+  });
+  if (projectBindingAudit.exists) {
+    await writeJsonEnsured(
+      path.join(bundleDir, "channel-project-binding-audit.project.tail.json"),
       projectBindingAudit
     );
   }
   const projectsRoot = readString(params.workflowPolicy?.projectsRoot);
+  let rootBindingAuditExists = false;
   if (projectsRoot) {
-    const rootBindingAudit = await readTextIfExists(getProjectsBindingAuditPath(projectsRoot));
-    if (rootBindingAudit != null) {
-      await writeTextEnsured(
-        path.join(bundleDir, "channel-project-binding-audit.projects-root.jsonl"),
+    const rootBindingAudit = await readProjectsBindingAuditTail({
+      projectsRoot,
+      tailLines: params.tailLines ?? 200,
+    });
+    if (rootBindingAudit.exists) {
+      rootBindingAuditExists = true;
+      await writeJsonEnsured(
+        path.join(bundleDir, "channel-project-binding-audit.projects-root.tail.json"),
         rootBindingAudit
       );
     }
@@ -429,6 +442,7 @@ export async function captureWorkflowDiagnosticBundle(params: {
     "- runtime-sessions.json",
     "- runtime-events.tail.json",
     "- workflow-trace.tail.json",
+    "- workflow-diagnostics.tail.json",
     "- workflow-inbound-turns.tail.json",
     "- handoff-intents.json",
     "- handoff-events.tail.json",
@@ -438,6 +452,12 @@ export async function captureWorkflowDiagnosticBundle(params: {
     "- papernexus-status.json",
     "- papernexus-progress.json",
     "- literature-coverage.json",
+    ...(projectBindingAudit.exists
+      ? ["- channel-project-binding-audit.project.tail.json"]
+      : []),
+    ...(rootBindingAuditExists
+      ? ["- channel-project-binding-audit.projects-root.tail.json"]
+      : []),
     ...(graphBuildReportText != null ? ["- GRAPH_BUILD_REPORT.md"] : []),
     ...extraArtifacts
       .filter((entry) => entry.exists && entry.outputPath)
@@ -466,6 +486,7 @@ export async function captureWorkflowDiagnosticBundle(params: {
       handoffIntents: "handoff-intents.json",
       handoffEventsTail: "handoff-events.tail.json",
       traceTail: "workflow-trace.tail.json",
+      diagnosticsTail: "workflow-diagnostics.tail.json",
       graphPresence: "graph-presence.json",
       papernexusStatus: "papernexus-status.json",
       papernexusProgress: "papernexus-progress.json",

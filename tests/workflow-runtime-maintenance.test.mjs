@@ -18,6 +18,7 @@ import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-inc
 import { runWorkflowRuntimeMaintenancePass } from "../tools/workflow-runtime-maintenance.ts";
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
+import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-"));
@@ -154,6 +155,29 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
       (entry) => entry.queueKey === queueKey && entry.status === "active"
     ),
     true
+  );
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "maintenance_started"
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "maintenance_completed" &&
+        event.details?.watchdogSummary
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_recovery" &&
+        event.action === "recovery_completed"
+    )
   );
 });
 

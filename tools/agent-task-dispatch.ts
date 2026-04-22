@@ -23,6 +23,7 @@ import {
   getPreferredWorkflowAgentSession,
   upsertWorkflowAgentSessionRegistryEntry,
 } from "./workflow-agent-session-registry";
+import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 
 export type DispatchableWorkflowRole =
   | "researcher"
@@ -482,8 +483,42 @@ export async function dispatchWorkflowTaskToAgent(params: {
   enableSpawnFallback?: boolean;
 }): Promise<WorkflowTaskDispatchResult> {
   const runtimeSubagent = params.runtimeSubagent;
+  const finalizeResult = async (
+    result: WorkflowTaskDispatchResult
+  ): Promise<WorkflowTaskDispatchResult> => {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+      component: "dispatch",
+      action: "dispatch_completed",
+      status: result.dispatched
+        ? "completed"
+        : result.attempts.length > 0
+          ? "blocked"
+          : "failed",
+      stage: params.stage ?? null,
+      owner: params.toRole,
+      summary: result.dispatched
+        ? `Workflow dispatch reached ${params.toRole}.`
+        : `Workflow dispatch to ${params.toRole} did not complete.`,
+      details: {
+        fromRole: params.fromRole ?? null,
+        toRole: params.toRole,
+        strategy: result.strategy,
+        channel: result.channel,
+        sessionKey: result.sessionKey,
+        runId: result.runId,
+        waitStatus: result.waitStatus,
+        fallbackSpawned: result.fallbackSpawned,
+        acknowledgedByMailbox: result.acknowledgedByMailbox,
+        error: result.error,
+        attempts: result.attempts,
+      },
+    });
+    return result;
+  };
   if (!runtimeSubagent) {
-    return {
+    return finalizeResult({
       dispatched: false,
       sessionKey: null,
       runId: null,
@@ -494,7 +529,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
       fallbackSpawned: false,
       acknowledgedByMailbox: false,
       error: "Plugin runtime subagent API is unavailable.",
-    };
+    });
   }
   const alreadyActiveSessionKey = await findActiveTargetOwnerSession({
     projectRoot: params.projectRoot,
@@ -512,7 +547,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
       status: "active",
       source: "recovery",
     }).catch(() => null);
-    return {
+    return finalizeResult({
       dispatched: true,
       sessionKey: alreadyActiveSessionKey,
       runId: null,
@@ -534,7 +569,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
       fallbackSpawned: false,
       acknowledgedByMailbox: false,
       error: null,
-    };
+    });
   }
   const requireMailboxAcknowledgement =
     params.requireMailboxAcknowledgement !== false;
@@ -626,6 +661,25 @@ export async function dispatchWorkflowTaskToAgent(params: {
     requesterSessionKey: params.requesterSessionKey,
     targetRole: params.toRole,
   });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId ?? null,
+    component: "dispatch",
+    action: "dispatch_candidates_resolved",
+    status: "started",
+    stage: params.stage ?? null,
+    owner: params.toRole,
+    summary: `Resolved ${candidates.length} dispatch candidate(s) for ${params.toRole}.`,
+    details: {
+      fromRole: params.fromRole ?? null,
+      preferredSessionKeys: preferredCandidates,
+      capableSessionKey: capableSession?.sessionKey ?? null,
+      canonicalMainSessionKey,
+      mailboxMessageId,
+      requireMailboxAcknowledgement,
+      candidates,
+    },
+  });
 
   for (const [index, sessionKey] of candidates.entries()) {
     const runtimeStatus = resolveRuntimeSessionStatus({
@@ -691,7 +745,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         status: "active",
         source: "dispatch",
       }).catch(() => null);
-      return {
+      return finalizeResult({
         dispatched: true,
         sessionKey,
         runId: attemptResult.attempt.runId,
@@ -702,7 +756,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         fallbackSpawned: false,
         acknowledgedByMailbox: attemptResult.attempt.acceptedByMailbox,
         error: null,
-      };
+      });
     }
   }
 
@@ -733,7 +787,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         status: "active",
         source: "dispatch",
       }).catch(() => null);
-      return {
+      return finalizeResult({
         dispatched: true,
         sessionKey: fallbackSessionKey,
         runId: attemptResult.attempt.runId,
@@ -744,7 +798,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
         fallbackSpawned: true,
         acknowledgedByMailbox: attemptResult.attempt.acceptedByMailbox,
         error: null,
-      };
+      });
     }
     if (!attemptResult.attempt.runId && runtimeSubagent.deleteSession) {
       try {
@@ -759,7 +813,7 @@ export async function dispatchWorkflowTaskToAgent(params: {
   }
 
   const lastAttempt = attempts.at(-1) ?? null;
-  return {
+  return finalizeResult({
     dispatched: false,
     sessionKey: lastAttempt?.sessionKey ?? null,
     runId: lastAttempt?.runId ?? null,
@@ -770,5 +824,5 @@ export async function dispatchWorkflowTaskToAgent(params: {
     fallbackSpawned: attempts.some((attempt) => attempt.strategy === "spawn_fallback"),
     acknowledgedByMailbox: attempts.some((attempt) => attempt.acceptedByMailbox),
     error: lastAttempt?.error ?? "Workflow agent dispatch failed.",
-  };
+  });
 }

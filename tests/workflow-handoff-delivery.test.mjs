@@ -9,6 +9,7 @@ import {
   readWorkflowHandoffIntentStore,
   upsertWorkflowHandoffIntent,
 } from "../tools/workflow-handoff/handoff-store.ts";
+import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
 import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 
 test("deliverWorkflowHandoffIntent records native delivery as dispatched instead of prematurely completing the handoff", async (t) => {
@@ -45,6 +46,15 @@ test("deliverWorkflowHandoffIntent records native delivery as dispatched instead
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].deliveryAttempts[0].channel, "native_runtime");
   assert.equal(store.intents[0].deliveryAttempts[0].status, "delivered");
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "handoff" &&
+        event.action === "delivery_attempt_completed" &&
+        event.details?.channel === "native_runtime"
+    )
+  );
 });
 
 test("deliverWorkflowHandoffIntent treats Lobster dry-run as non-delivery", async (t) => {

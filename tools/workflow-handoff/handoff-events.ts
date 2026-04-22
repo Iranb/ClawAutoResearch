@@ -5,8 +5,14 @@ import type {
   WorkflowHandoffEvent,
   WorkflowHandoffStatus,
 } from "./handoff-types";
+import {
+  appendRotatingJsonlLine,
+  readRotatingJsonlTail,
+} from "../workflow-jsonl-log.js";
 
 const HANDOFF_EVENTS_FILENAME = "workflow-handoff-events.jsonl";
+const DEFAULT_WORKFLOW_HANDOFF_EVENTS_MAX_BYTES = 1024 * 1024;
+const DEFAULT_WORKFLOW_HANDOFF_EVENTS_MAX_ARCHIVES = 5;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -14,6 +20,25 @@ function nowIso(): string {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getWorkflowHandoffEventsRotationConfig() {
+  return {
+    maxBytes: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_HANDOFF_EVENTS_MAX_BYTES",
+      DEFAULT_WORKFLOW_HANDOFF_EVENTS_MAX_BYTES
+    ),
+    maxArchives: readPositiveIntegerEnv(
+      "OPENCLAW_WORKFLOW_HANDOFF_EVENTS_MAX_ARCHIVES",
+      DEFAULT_WORKFLOW_HANDOFF_EVENTS_MAX_ARCHIVES
+    ),
+  };
 }
 
 export function getWorkflowHandoffEventsPath(projectRoot: string): string {
@@ -51,8 +76,13 @@ export async function appendWorkflowHandoffEvent(params: {
     recordedAt: nowIso(),
   };
   const eventsPath = getWorkflowHandoffEventsPath(projectRoot);
-  await fs.mkdir(path.dirname(eventsPath), { recursive: true });
-  await fs.appendFile(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
+  const { maxBytes, maxArchives } = getWorkflowHandoffEventsRotationConfig();
+  await appendRotatingJsonlLine({
+    activeLogPath: eventsPath,
+    serializedLine: `${JSON.stringify(event)}\n`,
+    maxBytes,
+    maxArchives,
+  });
   return event;
 }
 
@@ -77,4 +107,16 @@ export async function readWorkflowHandoffEvents(
   } catch {
     return [];
   }
+}
+
+export async function readWorkflowHandoffEventsTail(params: {
+  projectRoot: string;
+  tailLines: number;
+}): Promise<{ exists: boolean; lineCount: number; tail: string[] }> {
+  const { maxArchives } = getWorkflowHandoffEventsRotationConfig();
+  return readRotatingJsonlTail({
+    activeLogPath: getWorkflowHandoffEventsPath(params.projectRoot),
+    maxArchives,
+    tailLines: params.tailLines,
+  });
 }
