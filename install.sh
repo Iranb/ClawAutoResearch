@@ -920,6 +920,41 @@ workspace_for_agent() {
   fi
 }
 
+sync_existing_agent_model_catalogs() {
+  local config_path="${OPENCLAW_CONFIG_PATH:-$OC_DIR_EXPANDED/openclaw.json}"
+  local sync_script="$PLUGIN_DIR/scripts/sync_openclaw_agent_models.mjs"
+  local -a cmd
+  local output
+
+  if [[ ! -f "$sync_script" ]]; then
+    echo "  WARN: SKIP agent models sync (脚本不存在: $sync_script)"
+    return 0
+  fi
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  WARN: SKIP agent models sync (未找到 node)"
+    return 0
+  fi
+
+  cmd=(node "$sync_script" --openclaw-home "$OC_DIR_EXPANDED" --config-path "$config_path")
+  if $DRY_RUN; then
+    cmd+=(--dry-run)
+  fi
+  for agent in "${SELECTED_AGENT_IDS[@]}"; do
+    cmd+=(--agent "$agent")
+  done
+
+  if ! output=$("${cmd[@]}"); then
+    echo "  WARN: agent models sync 失败，保留现状"
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    echo "  -> $line"
+  done <<< "$output"
+}
+
 copy_role_bundle() {
   local role="$1"
   local ws_root="$2"
@@ -1140,6 +1175,11 @@ else
       echo "  WARN: $id 添加失败，请检查 openclaw 与当前配置后重试"
     fi
   done
+fi
+
+if $RUN_AGENT_PHASE; then
+  echo "  -> 对齐现有 agent 的本地 models.json 与 openclaw.json..."
+  sync_existing_agent_model_catalogs
 fi
 
 echo ""
