@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -278,6 +279,10 @@ import {
 } from "./workflow-hooks/state.js";
 import { materializeFileAuditPacket } from "./workflow-hooks/file-audit-runner.js";
 import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
+import {
+  DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+  resolveWorkflowSharedPapernexusCorpus,
+} from "./papernexus-shared-corpus";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -345,6 +350,363 @@ function resolveWorkflowLineFromManifestRecord(
     return "survey";
   }
   return "experiment";
+}
+
+type TypedPaperIngestionPaper = {
+  paperId: string | null;
+  canonicalId: string | null;
+  arxivId: string | null;
+  title: string | null;
+  role: string | null;
+  sourcePath: string | null;
+  sourceKind: "markdown" | "pdf" | "unknown";
+};
+
+function sanitizePaperIngestionRequestFragment(value: string | null | undefined): string {
+  const raw = readString(value)?.toLowerCase() ?? "request";
+  const normalized = raw.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized || "request";
+}
+
+function normalizePaperTitleForMatch(value: string | null | undefined): string | null {
+  const normalized = readString(value)
+    ?.toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || null;
+}
+
+function inferTypedPaperIngestionSourceKind(
+  sourcePath: string | null,
+  explicit: string | null | undefined
+): "markdown" | "pdf" | "unknown" {
+  const normalizedExplicit = readString(explicit)?.toLowerCase() ?? null;
+  if (normalizedExplicit === "markdown" || normalizedExplicit === "md") {
+    return "markdown";
+  }
+  if (normalizedExplicit === "pdf") {
+    return "pdf";
+  }
+  const normalizedPath = readString(sourcePath)?.toLowerCase() ?? null;
+  if (normalizedPath?.endsWith(".md")) {
+    return "markdown";
+  }
+  if (normalizedPath?.endsWith(".pdf")) {
+    return "pdf";
+  }
+  return "unknown";
+}
+
+function relativizeProjectPath(projectRoot: string, targetPath: string | null): string | null {
+  const normalizedTarget = readString(targetPath);
+  if (!normalizedTarget) {
+    return null;
+  }
+  if (!path.isAbsolute(normalizedTarget)) {
+    return normalizedTarget;
+  }
+  const relative = path.relative(path.resolve(projectRoot), path.resolve(normalizedTarget));
+  if (
+    relative &&
+    !relative.startsWith("..") &&
+    !path.isAbsolute(relative)
+  ) {
+    return relative;
+  }
+  return normalizedTarget;
+}
+
+function pickTypedPaperIngestionSourcePath(
+  record: Record<string, unknown> | null | undefined
+): string | null {
+  return (
+    readString(record?.local_md) ??
+    readString(record?.localMd) ??
+    readString(record?.local_pdf) ??
+    readString(record?.localPdf) ??
+    readString(record?.markdown_path) ??
+    readString(record?.markdownPath) ??
+    readString(record?.pdf_path) ??
+    readString(record?.pdfPath) ??
+    readString(record?.source_path) ??
+    readString(record?.sourcePath) ??
+    readString(record?.path) ??
+    readString(record?.file) ??
+    readString(record?.filePath) ??
+    null
+  );
+}
+
+function collectTypedPaperIngestionSourceIndexEntries(
+  raw: unknown
+): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((entry): entry is Record<string, unknown> => Boolean(asObject(entry)));
+  }
+  const record = asObject(raw);
+  if (!record) {
+    return [];
+  }
+  for (const key of ["papers", "entries", "items", "sources"]) {
+    const nested = record[key];
+    if (Array.isArray(nested)) {
+      return nested.filter((entry): entry is Record<string, unknown> => Boolean(asObject(entry)));
+    }
+  }
+  return Object.values(record).filter(
+    (entry): entry is Record<string, unknown> => Boolean(asObject(entry))
+  );
+}
+
+function normalizeTypedPaperIngestionPaper(
+  value: unknown
+): TypedPaperIngestionPaper | null {
+  const record = asObject(value);
+  if (!record) {
+    return null;
+  }
+  const arxivId = readString(record.arxiv_id) ?? readString(record.arxivId) ?? null;
+  const canonicalId =
+    readString(record.canonical_id) ??
+    readString(record.canonicalId) ??
+    readString(record.paper_id) ??
+    readString(record.paperId) ??
+    (arxivId ? `arxiv:${arxivId}` : null);
+  const title = readString(record.title) ?? readString(record.paper_title) ?? null;
+  const sourcePath = pickTypedPaperIngestionSourcePath(record);
+  if (!canonicalId && !arxivId && !title && !sourcePath) {
+    return null;
+  }
+  return {
+    paperId:
+      readString(record.paper_id) ??
+      readString(record.paperId) ??
+      canonicalId,
+    canonicalId,
+    arxivId,
+    title,
+    role: readString(record.role) ?? null,
+    sourcePath,
+    sourceKind: inferTypedPaperIngestionSourceKind(
+      sourcePath,
+      readString(record.source_kind) ?? readString(record.sourceKind)
+    ),
+  };
+}
+
+async function resolveTypedPaperIngestionSourcePath(params: {
+  projectRoot: string;
+  stagingDir: string | null;
+  requestPaper: TypedPaperIngestionPaper;
+  sourceIndexEntry: TypedPaperIngestionPaper | null;
+}): Promise<string | null> {
+  const preferred = params.requestPaper.sourcePath ?? params.sourceIndexEntry?.sourcePath ?? null;
+  const normalizedPreferred = readString(preferred);
+  if (normalizedPreferred) {
+    return path.isAbsolute(normalizedPreferred)
+      ? normalizedPreferred
+      : path.resolve(params.projectRoot, normalizedPreferred);
+  }
+  const stagingDir = readString(params.stagingDir);
+  if (!stagingDir) {
+    return null;
+  }
+  const candidateStem =
+    params.requestPaper.arxivId ??
+    params.sourceIndexEntry?.arxivId ??
+    params.requestPaper.paperId ??
+    params.sourceIndexEntry?.paperId ??
+    null;
+  if (!candidateStem) {
+    return null;
+  }
+  const stagingDirResolved = path.isAbsolute(stagingDir)
+    ? stagingDir
+    : path.resolve(params.projectRoot, stagingDir);
+  for (const extension of [".md", ".pdf"]) {
+    const candidate = path.join(stagingDirResolved, `${candidateStem}${extension}`);
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return path.join(stagingDirResolved, `${candidateStem}.md`);
+}
+
+async function maybeMaterializeTypedPaperIngestionRequest(params: {
+  projectRoot: string;
+  projectId: string | null;
+  requestPayload: Record<string, unknown>;
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+}): Promise<Record<string, unknown> | null> {
+  if (
+    readString(params.requestPayload.wrapper) ||
+    readString(params.requestPayload.command_text) ||
+    readString(params.requestPayload.commandText) ||
+    readString(params.requestPayload.manifest_path) ||
+    readString(params.requestPayload.manifestPath)
+  ) {
+    return null;
+  }
+  const requestedPapers = Array.isArray(params.requestPayload.papers)
+    ? params.requestPayload.papers
+        .map((entry) => normalizeTypedPaperIngestionPaper(entry))
+        .filter((entry): entry is TypedPaperIngestionPaper => Boolean(entry))
+    : [];
+  if (requestedPapers.length === 0) {
+    return null;
+  }
+
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const graphStatus =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(params.projectRoot, "graph/PAPERNEXUS_STATUS.json") ?? ""
+    )) ?? {};
+  const sourceIndexPath =
+    readString(params.requestPayload.source_index_path) ??
+    readString(params.requestPayload.sourceIndexPath) ??
+    "researcher/PAPER_SOURCE_INDEX.json";
+  const resolvedSourceIndexPath =
+    resolveProjectArtifactPath(params.projectRoot, sourceIndexPath) ??
+    path.resolve(params.projectRoot, sourceIndexPath);
+  const sourceIndexRaw = await readJsonIfExists<unknown>(resolvedSourceIndexPath);
+  const sourceIndexEntries = collectTypedPaperIngestionSourceIndexEntries(sourceIndexRaw)
+    .map((entry) => normalizeTypedPaperIngestionPaper(entry))
+    .filter((entry): entry is TypedPaperIngestionPaper => Boolean(entry));
+  const sourceIndexByKey = new Map<string, TypedPaperIngestionPaper>();
+  for (const entry of sourceIndexEntries) {
+    for (const key of [
+      entry.canonicalId,
+      entry.paperId,
+      entry.arxivId,
+      normalizePaperTitleForMatch(entry.title),
+    ]) {
+      if (key && !sourceIndexByKey.has(key)) {
+        sourceIndexByKey.set(key, entry);
+      }
+    }
+  }
+
+  const sharedCorpus =
+    resolveWorkflowSharedPapernexusCorpus({
+      candidates: [
+        readString(params.requestPayload.shared_corpus) ??
+          readString(params.requestPayload.sharedCorpus),
+        readString(asObject(manifest.paper_ingestion)?.repair_target_corpus) ??
+          readString(asObject(manifest.paper_ingestion)?.repairTargetCorpus),
+        params.workflowPolicy.papernexusSharedCorpus,
+        readString(graphStatus.corpus_name) ?? readString(graphStatus.corpusName),
+      ],
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      fallback:
+        params.workflowPolicy.papernexusSharedCorpus ??
+        DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+    }) ?? DEFAULT_SHARED_PAPERNEXUS_CORPUS;
+  const requestId =
+    readString(params.requestPayload.request_id) ??
+    readString(params.requestPayload.requestId) ??
+    randomUUID();
+  const stagingDir =
+    readString(params.requestPayload.staging_dir) ??
+    readString(params.requestPayload.stagingDir) ??
+    "researcher/paper-staging/md";
+  const batchManifestPath = path.join(
+    "researcher",
+    "paper-staging",
+    "queued-imports",
+    sanitizePaperIngestionRequestFragment(requestId),
+    "batch-import.json"
+  );
+  const resolvedBatchManifestPath =
+    resolveProjectArtifactPath(params.projectRoot, batchManifestPath) ??
+    path.resolve(params.projectRoot, batchManifestPath);
+
+  const batchManifestPapers: Record<string, unknown>[] = [];
+  for (const requestedPaper of requestedPapers) {
+    const matchedSourceIndexEntry =
+      sourceIndexByKey.get(requestedPaper.canonicalId ?? "") ??
+      sourceIndexByKey.get(requestedPaper.paperId ?? "") ??
+      sourceIndexByKey.get(requestedPaper.arxivId ?? "") ??
+      sourceIndexByKey.get(normalizePaperTitleForMatch(requestedPaper.title) ?? "") ??
+      null;
+    const sourcePath = await resolveTypedPaperIngestionSourcePath({
+      projectRoot: params.projectRoot,
+      stagingDir,
+      requestPaper: requestedPaper,
+      sourceIndexEntry: matchedSourceIndexEntry,
+    });
+    const sourceKind = inferTypedPaperIngestionSourceKind(
+      sourcePath,
+      requestedPaper.sourceKind !== "unknown"
+        ? requestedPaper.sourceKind
+        : matchedSourceIndexEntry?.sourceKind ?? null
+    );
+    batchManifestPapers.push({
+      paperId:
+        requestedPaper.paperId ??
+        matchedSourceIndexEntry?.paperId ??
+        requestedPaper.canonicalId ??
+        matchedSourceIndexEntry?.canonicalId,
+      canonical_id:
+        requestedPaper.canonicalId ?? matchedSourceIndexEntry?.canonicalId,
+      arxiv_id: requestedPaper.arxivId ?? matchedSourceIndexEntry?.arxivId,
+      title: requestedPaper.title ?? matchedSourceIndexEntry?.title,
+      role: requestedPaper.role,
+      source: sourcePath,
+      sourceKind,
+    });
+  }
+
+  await writeJsonAtomicEnsured(resolvedBatchManifestPath, {
+    version: 1,
+    defaults: {
+      corpus: sharedCorpus,
+    },
+    papers: batchManifestPapers,
+    queue_paper_ingestion: {
+      request_id: requestId,
+      source_index_path: relativizeProjectPath(params.projectRoot, resolvedSourceIndexPath),
+      staging_dir: stagingDir,
+      created_at: new Date().toISOString(),
+    },
+  });
+
+  const wrapperArgs = [];
+  if (readString(params.workflowPolicy.papernexusApiBaseUrl)) {
+    wrapperArgs.push("--api-base", String(params.workflowPolicy.papernexusApiBaseUrl));
+  }
+  if (sharedCorpus) {
+    wrapperArgs.push("--corpus", sharedCorpus);
+  }
+  wrapperArgs.push("--manifest", batchManifestPath, "submit");
+  const wrapperRun = buildPapernexusWrapperBackgroundRunRequest({
+    wrapper: "pn_batch_import.py",
+    args: wrapperArgs,
+    summary:
+      readString(params.requestPayload.summary) ??
+      `Queue shared-corpus batch import for ${requestedPapers.length} staged paper(s).`,
+    projectId: params.projectId ?? undefined,
+    projectRoot: params.projectRoot,
+  });
+
+  return {
+    request_id: requestId,
+    wrapper: wrapperRun.wrapper,
+    args: wrapperArgs,
+    command_text: wrapperRun.commandText,
+    manifest_path: batchManifestPath,
+    shared_corpus: sharedCorpus,
+    paper_count: requestedPapers.length,
+    summary:
+      readString(params.requestPayload.summary) ??
+      wrapperRun.summary,
+    detail:
+      `Typed paper ingestion request materialized into ${wrapperRun.wrapper} batch manifest.` +
+      ` Source index: ${relativizeProjectPath(params.projectRoot, resolvedSourceIndexPath) ?? sourceIndexPath}.`,
+  };
 }
 
 async function maybeAutoActivatePendingHandoffForToolAction(params: {
@@ -3044,10 +3406,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "queue_paper_ingestion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
-              const requestPayload = requireObject<Record<string, unknown>>(
+              const originalRequestPayload = requireObject<Record<string, unknown>>(
                 params.paperIngestionRequest ?? params.papernexusWrapper,
                 "paperIngestionRequest"
               );
+              const requestPayload =
+                (await maybeMaterializeTypedPaperIngestionRequest({
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId ?? null,
+                  requestPayload: originalRequestPayload,
+                  workflowPolicy,
+                })) ?? originalRequestPayload;
               const wrapperRun =
                 buildPapernexusWrapperBackgroundRunRequest(requestPayload);
               const queued = await queuePaperIngestionRequest({
