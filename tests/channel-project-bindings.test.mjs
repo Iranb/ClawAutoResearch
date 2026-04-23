@@ -308,6 +308,96 @@ test("binding updates maintain a projects-root binding index", async (t) => {
   assert.equal(lookup.binding?.projectRoot, projectRoot);
 });
 
+test("ensureProjectsBindingIndex recovers a stale projects-root binding index lock", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "stale-index-track");
+  const sessionKey = "agent:researcher:discord:group:stale-index-room";
+  const channelKey = "discord:group:stale-index-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const projectStorePath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "channel-project-bindings.json"
+  );
+  await fs.mkdir(path.dirname(projectStorePath), { recursive: true });
+  await fs.writeFile(
+    projectStorePath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-23T02:00:00.000Z",
+        bindings: [
+          {
+            channelKey,
+            projectRoot,
+            projectId: "stale-index-track",
+            messageChannel: "discord",
+            sessionKeySample: sessionKey,
+            boundAt: "2026-04-23T02:00:00.000Z",
+            updatedAt: "2026-04-23T02:00:00.000Z",
+            boundByAgent: "researcher",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const lockPath = `${getProjectsBindingIndexPath(projectsRoot)}.lock`;
+  await fs.mkdir(lockPath, { recursive: true });
+  const staleDate = new Date(Date.now() - 2 * 60_000);
+  await fs.utimes(lockPath, staleDate, staleDate);
+
+  const index = await ensureProjectsBindingIndex({
+    projectsRoot,
+    maxAgeMs: 0,
+  });
+
+  assert.equal(index.bindings.some((entry) => entry.projectRoot === projectRoot), true);
+  await assert.rejects(fs.access(lockPath));
+});
+
+test("binding updates recover a stale projects-root index lock before refreshing the index", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "stale-bind-track");
+  const sessionKey = "agent:researcher:discord:group:stale-bind-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const lockPath = `${getProjectsBindingIndexPath(projectsRoot)}.lock`;
+  await fs.mkdir(lockPath, { recursive: true });
+  const staleDate = new Date(Date.now() - 2 * 60_000);
+  await fs.utimes(lockPath, staleDate, staleDate);
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const index = JSON.parse(
+    await fs.readFile(getProjectsBindingIndexPath(projectsRoot), "utf8")
+  );
+  assert.equal(index.bindings.some((entry) => entry.projectRoot === projectRoot), true);
+  await assert.rejects(fs.access(lockPath));
+});
+
 test("binding updates append a queryable audit trail under the project and projects root", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

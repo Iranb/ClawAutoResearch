@@ -10,6 +10,7 @@
  * - 基于 mkdir 的 Advisory Lock（POSIX 原子性，无外部依赖）
  */
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -124,6 +125,114 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type AdvisoryLockMetadata = {
+  version: 1;
+  pid: number;
+  ppid: number;
+  hostname: string;
+  acquiredAt: string;
+};
+
+const ADVISORY_LOCK_METADATA_FILE = "owner.json";
+
+function advisoryLockMetadataPath(lockPath: string): string {
+  return path.join(lockPath, ADVISORY_LOCK_METADATA_FILE);
+}
+
+async function writeAdvisoryLockMetadata(lockPath: string): Promise<void> {
+  const metadata: AdvisoryLockMetadata = {
+    version: 1,
+    pid: process.pid,
+    ppid: process.ppid,
+    hostname: os.hostname(),
+    acquiredAt: new Date().toISOString(),
+  };
+  await fs.writeFile(
+    advisoryLockMetadataPath(lockPath),
+    `${JSON.stringify(metadata, null, 2)}\n`,
+    "utf8"
+  );
+}
+
+async function readAdvisoryLockMetadata(
+  lockPath: string
+): Promise<AdvisoryLockMetadata | null> {
+  try {
+    const raw = await fs.readFile(advisoryLockMetadataPath(lockPath), "utf8");
+    const parsed = JSON.parse(raw) as Partial<AdvisoryLockMetadata>;
+    if (
+      parsed &&
+      parsed.version === 1 &&
+      typeof parsed.pid === "number" &&
+      Number.isFinite(parsed.pid) &&
+      typeof parsed.ppid === "number" &&
+      Number.isFinite(parsed.ppid) &&
+      typeof parsed.hostname === "string" &&
+      parsed.hostname.trim() &&
+      typeof parsed.acquiredAt === "string" &&
+      parsed.acquiredAt.trim()
+    ) {
+      return {
+        version: 1,
+        pid: Math.floor(parsed.pid),
+        ppid: Math.floor(parsed.ppid),
+        hostname: parsed.hostname.trim(),
+        acquiredAt: parsed.acquiredAt.trim(),
+      };
+    }
+  } catch {}
+  return null;
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as NodeJS.ErrnoException).code)
+        : null;
+    return code === "EPERM";
+  }
+}
+
+async function maybeRecoverStaleAdvisoryLock(params: {
+  lockPath: string;
+  staleMs: number | null;
+}): Promise<boolean> {
+  const staleMs = params.staleMs;
+  const metadata = await readAdvisoryLockMetadata(params.lockPath);
+  if (metadata && metadata.hostname === os.hostname() && !isPidAlive(metadata.pid)) {
+    await fs.rm(params.lockPath, { recursive: true, force: true });
+    return true;
+  }
+  if (staleMs == null || staleMs <= 0) {
+    return false;
+  }
+  if (metadata && metadata.hostname === os.hostname() && isPidAlive(metadata.pid)) {
+    return false;
+  }
+  let stat: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  try {
+    stat = await fs.stat(params.lockPath);
+  } catch {
+    return false;
+  }
+  const metadataAgeMs = metadata ? Date.parse(metadata.acquiredAt) : NaN;
+  const ageMs = Number.isFinite(metadataAgeMs)
+    ? Date.now() - metadataAgeMs
+    : Date.now() - stat.mtimeMs;
+  if (ageMs < staleMs) {
+    return false;
+  }
+  await fs.rm(params.lockPath, { recursive: true, force: true });
+  return true;
+}
+
 /**
  * 原子写入 JSON 文件。
  *
@@ -172,6 +281,7 @@ export async function withAdvisoryLock<T>(params: {
   task: () => Promise<T>;
   timeoutMs?: number;
   retryMs?: number;
+  staleMs?: number | null;
 }): Promise<T> {
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -181,12 +291,17 @@ export async function withAdvisoryLock<T>(params: {
     typeof params.retryMs === "number" && Number.isFinite(params.retryMs)
       ? Math.max(10, Math.floor(params.retryMs))
       : 50;
+  const staleMs =
+    typeof params.staleMs === "number" && Number.isFinite(params.staleMs)
+      ? Math.max(0, Math.floor(params.staleMs))
+      : null;
   const startedAt = Date.now();
   await fs.mkdir(path.dirname(params.lockPath), { recursive: true });
 
   while (true) {
     try {
       await fs.mkdir(params.lockPath, { recursive: false });
+      await writeAdvisoryLockMetadata(params.lockPath).catch(() => null);
       break;
     } catch (error) {
       const code =
@@ -195,6 +310,13 @@ export async function withAdvisoryLock<T>(params: {
           : null;
       if (code !== "EEXIST") {
         throw error;
+      }
+      const recovered = await maybeRecoverStaleAdvisoryLock({
+        lockPath: params.lockPath,
+        staleMs,
+      }).catch(() => false);
+      if (recovered) {
+        continue;
       }
       if (Date.now() - startedAt >= timeoutMs) {
         throw new Error(`Timed out waiting for advisory lock: ${params.lockPath}`);

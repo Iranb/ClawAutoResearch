@@ -59,6 +59,8 @@ export interface ChannelProjectBindingContext {
 
 const DEFAULT_CHANNEL_BINDING_AUDIT_MAX_BYTES = 512 * 1024;
 const DEFAULT_CHANNEL_BINDING_AUDIT_MAX_ARCHIVES = 5;
+const PROJECTS_BINDING_INDEX_LOCK_TIMEOUT_MS = 5_000;
+const PROJECTS_BINDING_INDEX_LOCK_STALE_MS = 60_000;
 
 export type InvalidEnvProjectRootMode = "throw" | "ignore";
 
@@ -589,6 +591,30 @@ function readBindingIndex(projectsRoot: string): ChannelProjectBindingIndexStore
   return store;
 }
 
+function readBindingIndexFresh(indexPath: string): ChannelProjectBindingIndexStore {
+  try {
+    return normalizeBindingIndexStore(JSON.parse(fs.readFileSync(indexPath, "utf8")));
+  } catch {
+    return emptyBindingIndexStore();
+  }
+}
+
+function getProjectsBindingIndexLockPath(projectsRoot: string): string {
+  return `${getProjectsBindingIndexPath(projectsRoot)}.lock`;
+}
+
+async function withProjectsBindingIndexLock<T>(params: {
+  projectsRoot: string;
+  task: () => Promise<T>;
+}): Promise<T> {
+  return withAdvisoryLock({
+    lockPath: getProjectsBindingIndexLockPath(params.projectsRoot),
+    timeoutMs: PROJECTS_BINDING_INDEX_LOCK_TIMEOUT_MS,
+    staleMs: PROJECTS_BINDING_INDEX_LOCK_STALE_MS,
+    task: params.task,
+  });
+}
+
 async function readStoreAsync(storePath: string): Promise<ChannelProjectBindingsStore> {
   const parsed = await readJsonIfExists<{
     updatedAt?: string;
@@ -637,10 +663,10 @@ export async function rebuildProjectsBindingIndex(params: {
   projectsRoot: string;
 }): Promise<ChannelProjectBindingIndexStore> {
   const projectsRoot = path.resolve(expandHome(params.projectsRoot));
-  const indexPath = getProjectsBindingIndexPath(projectsRoot);
-  return withAdvisoryLock({
-    lockPath: `${indexPath}.lock`,
+  return withProjectsBindingIndexLock({
+    projectsRoot,
     task: async () => {
+      const indexPath = getProjectsBindingIndexPath(projectsRoot);
       let entries: Array<fs.Dirent<string>> = [];
       try {
         entries = (await fsp.readdir(projectsRoot, {
@@ -746,12 +772,13 @@ export function invalidateProjectsBindingIndexCache(projectsRoot: string): void 
   bindingIndexCache.delete(indexPath);
 }
 
-async function updateBindingIndexForProjectStore(params: {
+async function updateBindingIndexForProjectStoreUnlocked(params: {
   projectsRoot: string;
   storePath: string;
   store: ChannelProjectBindingsStore;
 }): Promise<void> {
-  const current = readBindingIndex(params.projectsRoot);
+  const indexPath = getProjectsBindingIndexPath(params.projectsRoot);
+  const current = readBindingIndexFresh(indexPath);
   const normalizedStorePath = path.resolve(expandHome(params.storePath));
   const nextBindings = current.bindings.filter(
     (entry) => entry.storePath !== normalizedStorePath
@@ -810,7 +837,7 @@ async function pruneCompetingBindingsAcrossProjects(params: {
         )
     );
     await saveStore(normalizedCandidatePath, candidateStore);
-    await updateBindingIndexForProjectStore({
+    await updateBindingIndexForProjectStoreUnlocked({
       projectsRoot: params.projectsRoot,
       storePath: normalizedCandidatePath,
       store: candidateStore,
@@ -1364,150 +1391,160 @@ export async function setChannelProjectBinding(params: {
     });
   }
 
-  const storePath = resolveChannelProjectBindingsPath({ policy, context });
-  const store = readStore(storePath);
-  const now = new Date().toISOString();
-  const aliasKeys = uniqueBindingKeys([
-    channelKey,
-    sessionKeyToChannelKey(asString(context.sessionKey)),
-  ]).filter(
-    (key) => key === channelKey || !isWeakWorkflowBindingChannelKey(key)
-  );
-  const existing =
-    store.bindings.find((entry) => aliasKeys.includes(entry.channelKey)) ?? null;
-  const workflowIsolationMode =
-    existing?.workflowIsolationMode ?? normalizeWorkflowIsolationMode(null);
-  const workflowAllowedRoles =
-    existing?.workflowAllowedRoles ?? normalizeWorkflowAllowedRoles(null);
-  const workflowAllowedAgentIds =
-    existing?.workflowAllowedAgentIds ?? normalizeWorkflowAllowedAgentIds(null);
-  const runtimeSession =
-    params.runtimeSession ??
-    buildWorkflowRuntimeSessionBinding({
-      projectRoot,
-      projectId: params.projectId,
-      role: resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null,
-      sessionKey: context.sessionKey,
-      sessionId: context.sessionId,
-      parentSessionKey: context.parentSessionKey,
-      threadBindingKey: context.threadBindingKey,
-      depth: context.depth,
-    });
-  const workflowActorId = resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null;
-  const actorMayOwnWorkflowBinding =
-    workflowIsolationMode === "channel_shared" ||
-    isProjectWorkflowAgentId(
-      workflowActorId,
-      workflowAllowedRoles,
-      workflowAllowedAgentIds
+  const mutate = async () => {
+    const storePath = resolveChannelProjectBindingsPath({ policy, context });
+    const store = readStore(storePath);
+    const now = new Date().toISOString();
+    const aliasKeys = uniqueBindingKeys([
+      channelKey,
+      sessionKeyToChannelKey(asString(context.sessionKey)),
+    ]).filter(
+      (key) => key === channelKey || !isWeakWorkflowBindingChannelKey(key)
     );
-  const workflowSessionKey = actorMayOwnWorkflowBinding
-    ? runtimeSession.sessionKey
-    : existing?.workflowSessionKey ?? null;
-  const workflowSessionId = actorMayOwnWorkflowBinding
-    ? runtimeSession.sessionId
-    : existing?.workflowSessionId ?? null;
-  const workflowRole = actorMayOwnWorkflowBinding
-    ? runtimeSession.role
-    : existing?.workflowRole ?? null;
-  const parentWorkflowSessionKey = actorMayOwnWorkflowBinding
-    ? runtimeSession.parentSessionKey
-    : existing?.parentWorkflowSessionKey ?? null;
-  const threadBindingKey = actorMayOwnWorkflowBinding
-    ? runtimeSession.threadBindingKey
-    : existing?.threadBindingKey ?? null;
-  const depth = actorMayOwnWorkflowBinding
-    ? runtimeSession.depth
-    : existing?.depth ?? null;
-  const lineageKey = actorMayOwnWorkflowBinding
-    ? runtimeSession.lineageKey
-    : existing?.lineageKey ?? null;
-  const workflowBindingMode = actorMayOwnWorkflowBinding
-    ? runtimeSession.bindingMode
-    : existing?.workflowBindingMode ?? "channel_only";
-  const baseBinding: ChannelProjectBindingRecord = {
-    channelKey,
-    projectRoot,
-    projectId: asString(params.projectId) ?? path.basename(projectRoot),
-    messageChannel:
-      normalizeChannelKey(asString(params.messageChannel) ?? null) ??
-      normalizeChannelKey(asString(context.messageChannel) ?? null),
-    sessionKeySample: asString(context.sessionKey),
-    sessionId: asString(context.sessionId),
-    boundAt: existing?.boundAt ?? now,
-    updatedAt: now,
-    boundByAgent:
-      normalizeChannelKey(asString(params.boundByAgent) ?? null) ??
-      existing?.boundByAgent ??
-      null,
-    notes: asString(params.notes) ?? existing?.notes ?? null,
-    workflowRole,
-    workflowSessionKey,
-    workflowSessionId,
-    parentWorkflowSessionKey,
-    threadBindingKey,
-    depth,
-    lineageKey,
-    workflowBindingMode,
-    workflowIsolationMode,
-    workflowAllowedRoles,
-    workflowAllowedAgentIds,
-    workflowBroadcastSessionKey: actorMayOwnWorkflowBinding
-      ? runtimeSession.sessionKey
-      : resolveWorkflowBroadcastSessionKey(existing),
-  };
-  const nextBindings = aliasKeys.map<ChannelProjectBindingRecord>((key) => ({
-    ...baseBinding,
-    channelKey: key,
-  }));
-  store.bindings = [
-    ...store.bindings.filter((entry) => !aliasKeys.includes(entry.channelKey)),
-    ...nextBindings,
-  ].sort((left, right) => left.channelKey.localeCompare(right.channelKey));
-  await saveStore(storePath, store);
-  if (projectsRoot) {
-    await pruneCompetingBindingsAcrossProjects({
-      projectsRoot,
-      keepStorePath: storePath,
-      keepProjectRoot: projectRoot,
-      aliasKeys,
-    });
-    await updateBindingIndexForProjectStore({
-      projectsRoot,
-      storePath,
-      store,
-    });
-  }
-  await appendBindingAuditEvents({
-    projectsRoot,
-    projectRoot,
-    events: [
-      {
-        schemaVersion: 1,
-        eventId: randomUUID(),
-        action: existing ? "rebind" : "bind",
-        recordedAt: now,
-        channelKey,
+    const existing =
+      store.bindings.find((entry) => aliasKeys.includes(entry.channelKey)) ?? null;
+    const workflowIsolationMode =
+      existing?.workflowIsolationMode ?? normalizeWorkflowIsolationMode(null);
+    const workflowAllowedRoles =
+      existing?.workflowAllowedRoles ?? normalizeWorkflowAllowedRoles(null);
+    const workflowAllowedAgentIds =
+      existing?.workflowAllowedAgentIds ?? normalizeWorkflowAllowedAgentIds(null);
+    const runtimeSession =
+      params.runtimeSession ??
+      buildWorkflowRuntimeSessionBinding({
         projectRoot,
-        projectId: baseBinding.projectId,
-        previousProjectRoot: existing?.projectRoot ?? null,
-        previousProjectId: existing?.projectId ?? null,
-        messageChannel: baseBinding.messageChannel,
-        sessionKey: baseBinding.sessionKeySample,
-        sessionId: baseBinding.sessionId,
-        workflowSessionKey: baseBinding.workflowSessionKey,
-        workflowRole: baseBinding.workflowRole,
-        actor: baseBinding.boundByAgent,
-        notes: baseBinding.notes,
+        projectId: params.projectId,
+        role: resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null,
+        sessionKey: context.sessionKey,
+        sessionId: context.sessionId,
+        parentSessionKey: context.parentSessionKey,
+        threadBindingKey: context.threadBindingKey,
+        depth: context.depth,
+      });
+    const workflowActorId =
+      resolveContextActorId(context) ?? asString(params.boundByAgent) ?? null;
+    const actorMayOwnWorkflowBinding =
+      workflowIsolationMode === "channel_shared" ||
+      isProjectWorkflowAgentId(
+        workflowActorId,
+        workflowAllowedRoles,
+        workflowAllowedAgentIds
+      );
+    const workflowSessionKey = actorMayOwnWorkflowBinding
+      ? runtimeSession.sessionKey
+      : existing?.workflowSessionKey ?? null;
+    const workflowSessionId = actorMayOwnWorkflowBinding
+      ? runtimeSession.sessionId
+      : existing?.workflowSessionId ?? null;
+    const workflowRole = actorMayOwnWorkflowBinding
+      ? runtimeSession.role
+      : existing?.workflowRole ?? null;
+    const parentWorkflowSessionKey = actorMayOwnWorkflowBinding
+      ? runtimeSession.parentSessionKey
+      : existing?.parentWorkflowSessionKey ?? null;
+    const threadBindingKey = actorMayOwnWorkflowBinding
+      ? runtimeSession.threadBindingKey
+      : existing?.threadBindingKey ?? null;
+    const depth = actorMayOwnWorkflowBinding
+      ? runtimeSession.depth
+      : existing?.depth ?? null;
+    const lineageKey = actorMayOwnWorkflowBinding
+      ? runtimeSession.lineageKey
+      : existing?.lineageKey ?? null;
+    const workflowBindingMode = actorMayOwnWorkflowBinding
+      ? runtimeSession.bindingMode
+      : existing?.workflowBindingMode ?? "channel_only";
+    const baseBinding: ChannelProjectBindingRecord = {
+      channelKey,
+      projectRoot,
+      projectId: asString(params.projectId) ?? path.basename(projectRoot),
+      messageChannel:
+        normalizeChannelKey(asString(params.messageChannel) ?? null) ??
+        normalizeChannelKey(asString(context.messageChannel) ?? null),
+      sessionKeySample: asString(context.sessionKey),
+      sessionId: asString(context.sessionId),
+      boundAt: existing?.boundAt ?? now,
+      updatedAt: now,
+      boundByAgent:
+        normalizeChannelKey(asString(params.boundByAgent) ?? null) ??
+        existing?.boundByAgent ??
+        null,
+      notes: asString(params.notes) ?? existing?.notes ?? null,
+      workflowRole,
+      workflowSessionKey,
+      workflowSessionId,
+      parentWorkflowSessionKey,
+      threadBindingKey,
+      depth,
+      lineageKey,
+      workflowBindingMode,
+      workflowIsolationMode,
+      workflowAllowedRoles,
+      workflowAllowedAgentIds,
+      workflowBroadcastSessionKey: actorMayOwnWorkflowBinding
+        ? runtimeSession.sessionKey
+        : resolveWorkflowBroadcastSessionKey(existing),
+    };
+    const nextBindings = aliasKeys.map<ChannelProjectBindingRecord>((key) => ({
+      ...baseBinding,
+      channelKey: key,
+    }));
+    store.bindings = [
+      ...store.bindings.filter((entry) => !aliasKeys.includes(entry.channelKey)),
+      ...nextBindings,
+    ].sort((left, right) => left.channelKey.localeCompare(right.channelKey));
+    await saveStore(storePath, store);
+    if (projectsRoot) {
+      await pruneCompetingBindingsAcrossProjects({
+        projectsRoot,
+        keepStorePath: storePath,
+        keepProjectRoot: projectRoot,
+        aliasKeys,
+      });
+      await updateBindingIndexForProjectStoreUnlocked({
+        projectsRoot,
         storePath,
-      },
-    ],
-  });
-  return {
-    enabled: true,
-    storePath,
-    binding: baseBinding,
+        store,
+      });
+    }
+    await appendBindingAuditEvents({
+      projectsRoot,
+      projectRoot,
+      events: [
+        {
+          schemaVersion: 1,
+          eventId: randomUUID(),
+          action: existing ? "rebind" : "bind",
+          recordedAt: now,
+          channelKey,
+          projectRoot,
+          projectId: baseBinding.projectId,
+          previousProjectRoot: existing?.projectRoot ?? null,
+          previousProjectId: existing?.projectId ?? null,
+          messageChannel: baseBinding.messageChannel,
+          sessionKey: baseBinding.sessionKeySample,
+          sessionId: baseBinding.sessionId,
+          workflowSessionKey: baseBinding.workflowSessionKey,
+          workflowRole: baseBinding.workflowRole,
+          actor: baseBinding.boundByAgent,
+          notes: baseBinding.notes,
+          storePath,
+        },
+      ],
+    });
+    return {
+      enabled: true,
+      storePath,
+      binding: baseBinding,
+    };
   };
+
+  return projectsRoot
+    ? withProjectsBindingIndexLock({
+        projectsRoot,
+        task: mutate,
+      })
+    : mutate();
 }
 
 export async function clearChannelProjectBinding(params: {
@@ -1534,79 +1571,88 @@ export async function clearChannelProjectBinding(params: {
   if (!lookup.primaryKey) {
     throw new Error("Unable to resolve the current channel key for project unbinding.");
   }
-  let effectiveStorePath = storePath;
-  let store = readStore(storePath);
-  if (
-    !findBindingByKeys(store.bindings, lookup.lookupKeys) &&
-    projectsRoot &&
-    lookup.projectScanKeys.length > 0
-  ) {
-    const indexMatch =
-      readBindingIndex(projectsRoot).bindings.find((entry) =>
-        lookup.projectScanKeys.includes(entry.channelKey)
-      ) ?? null;
-    if (indexMatch && indexMatch.storePath !== storePath) {
-      effectiveStorePath = indexMatch.storePath;
-      store = readStore(indexMatch.storePath);
-    } else {
-      const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
-      for (const candidatePath of candidateStorePaths) {
-        if (candidatePath === storePath) {
-          continue;
-        }
-        const candidateStore = readStore(candidatePath);
-        if (findBindingByKeys(candidateStore.bindings, lookup.projectScanKeys)) {
-          effectiveStorePath = candidatePath;
-          store = candidateStore;
-          break;
+  const mutate = async () => {
+    let effectiveStorePath = storePath;
+    let store = readStore(storePath);
+    if (
+      !findBindingByKeys(store.bindings, lookup.lookupKeys) &&
+      projectsRoot &&
+      lookup.projectScanKeys.length > 0
+    ) {
+      const indexMatch =
+        readBindingIndex(projectsRoot).bindings.find((entry) =>
+          lookup.projectScanKeys.includes(entry.channelKey)
+        ) ?? null;
+      if (indexMatch && indexMatch.storePath !== storePath) {
+        effectiveStorePath = indexMatch.storePath;
+        store = readStore(indexMatch.storePath);
+      } else {
+        const candidateStorePaths = await listCandidateProjectBindingStorePaths(projectsRoot);
+        for (const candidatePath of candidateStorePaths) {
+          if (candidatePath === storePath) {
+            continue;
+          }
+          const candidateStore = readStore(candidatePath);
+          if (findBindingByKeys(candidateStore.bindings, lookup.projectScanKeys)) {
+            effectiveStorePath = candidatePath;
+            store = candidateStore;
+            break;
+          }
         }
       }
     }
-  }
-  const removableKeys = new Set(lookup.lookupKeys);
-  const removedBindings = store.bindings.filter((entry) =>
-    removableKeys.has(entry.channelKey)
-  );
-  const nextBindings = store.bindings.filter((entry) => !removableKeys.has(entry.channelKey));
-  const removed = nextBindings.length !== store.bindings.length;
-  if (removed) {
-    store.bindings = nextBindings;
-    await saveStore(effectiveStorePath, store);
-    if (projectsRoot) {
-      await updateBindingIndexForProjectStore({
+    const removableKeys = new Set(lookup.lookupKeys);
+    const removedBindings = store.bindings.filter((entry) =>
+      removableKeys.has(entry.channelKey)
+    );
+    const nextBindings = store.bindings.filter((entry) => !removableKeys.has(entry.channelKey));
+    const removed = nextBindings.length !== store.bindings.length;
+    if (removed) {
+      store.bindings = nextBindings;
+      await saveStore(effectiveStorePath, store);
+      if (projectsRoot) {
+        await updateBindingIndexForProjectStoreUnlocked({
+          projectsRoot,
+          storePath: effectiveStorePath,
+          store,
+        });
+      }
+      await appendBindingAuditEvents({
         projectsRoot,
-        storePath: effectiveStorePath,
-        store,
+        projectRoot: removedBindings[0]?.projectRoot ?? null,
+        events: removedBindings.map((binding) => ({
+          schemaVersion: 1,
+          eventId: randomUUID(),
+          action: "unbind" as const,
+          recordedAt: new Date().toISOString(),
+          channelKey: binding.channelKey,
+          projectRoot: binding.projectRoot,
+          projectId: binding.projectId,
+          previousProjectRoot: binding.projectRoot,
+          previousProjectId: binding.projectId,
+          messageChannel: binding.messageChannel,
+          sessionKey: binding.sessionKeySample,
+          sessionId: binding.sessionId,
+          workflowSessionKey: binding.workflowSessionKey,
+          workflowRole: binding.workflowRole,
+          actor: normalizeChannelKey(asString(context.role) ?? null),
+          notes: binding.notes,
+          storePath: effectiveStorePath,
+        })),
       });
     }
-    await appendBindingAuditEvents({
-      projectsRoot,
-      projectRoot: removedBindings[0]?.projectRoot ?? null,
-      events: removedBindings.map((binding) => ({
-        schemaVersion: 1,
-        eventId: randomUUID(),
-        action: "unbind" as const,
-        recordedAt: new Date().toISOString(),
-        channelKey: binding.channelKey,
-        projectRoot: binding.projectRoot,
-        projectId: binding.projectId,
-        previousProjectRoot: binding.projectRoot,
-        previousProjectId: binding.projectId,
-        messageChannel: binding.messageChannel,
-        sessionKey: binding.sessionKeySample,
-        sessionId: binding.sessionId,
-        workflowSessionKey: binding.workflowSessionKey,
-        workflowRole: binding.workflowRole,
-        actor: normalizeChannelKey(asString(context.role) ?? null),
-        notes: binding.notes,
-        storePath: effectiveStorePath,
-      })),
-    });
-  }
-  return {
-    enabled: true,
-    storePath: effectiveStorePath,
-    channelKey: lookup.primaryKey,
-    removed,
+    return {
+      enabled: true,
+      storePath: effectiveStorePath,
+      channelKey: lookup.primaryKey,
+      removed,
+    };
   };
+
+  return projectsRoot
+    ? withProjectsBindingIndexLock({
+        projectsRoot,
+        task: mutate,
+      })
+    : mutate();
 }

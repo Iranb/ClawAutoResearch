@@ -952,6 +952,92 @@ test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.js
   assert.equal(progress.progress.percent, 0);
 });
 
+test("research_workflow queue_paper_ingestion materializes typed staged-paper requests into pn_batch_import.py", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const stagedDir = path.join(projectRoot, "researcher", "paper-staging", "md");
+  const firstPaperPath = path.join(stagedDir, "2201.02609.md");
+  const secondPaperPath = path.join(stagedDir, "2410.11206.md");
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    firstPaperPath,
+    "# Generalized Category Discovery\n\nThis is a sufficiently long markdown fixture for staged import validation. ".repeat(30)
+  );
+  await writeText(
+    secondPaperPath,
+    "# Theoretical Analysis of FixMatch-like Semi-Supervised Learning\n\nThis is a sufficiently long markdown fixture for staged import validation. ".repeat(30)
+  );
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      arxiv_id: "2201.02609",
+      title: "Generalized Category Discovery",
+      role: "baseline",
+      local_md: "researcher/paper-staging/md/2201.02609.md",
+    },
+    {
+      arxiv_id: "2410.11206",
+      title: "Theoretical Analysis of FixMatch-like Semi-Supervised Learning",
+      role: "inspiration",
+      local_md: "researcher/paper-staging/md/2410.11206.md",
+    },
+  ]);
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    channelKey: "discord:channel:paper-lab",
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      papers: [
+        {
+          arxiv_id: "2201.02609",
+          role: "baseline",
+          title: "Generalized Category Discovery",
+        },
+        {
+          arxiv_id: "2410.11206",
+          role: "inspiration",
+          title: "Theoretical Analysis of FixMatch-like Semi-Supervised Learning",
+        },
+      ],
+      source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+      staging_dir: "researcher/paper-staging/md",
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+  assert.equal(result.request.paperCount, 2);
+  assert.match(result.commandText ?? "", /python3 scripts\/pn_batch_import\.py/);
+  assert.match(result.commandText ?? "", /--manifest/);
+  assert.ok(result.request.manifestPath);
+
+  const batchManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, result.request.manifestPath), "utf8")
+  );
+  assert.equal(batchManifest.defaults.corpus, "shared-global-graph");
+  assert.equal(batchManifest.papers.length, 2);
+  assert.deepEqual(
+    batchManifest.papers.map((entry) => entry.source),
+    [
+      firstPaperPath,
+      secondPaperPath,
+    ]
+  );
+});
+
 test("research_workflow queue_paper_ingestion code-validates staged markdown and blocks invalid stubs", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
