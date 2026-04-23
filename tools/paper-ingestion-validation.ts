@@ -2,7 +2,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
 import { writeJsonEnsured } from "./workflow-guard-core/fs";
-import type { PaperIngestionQueuedRequest } from "./workflow-guard";
+import type {
+  PaperIngestionQueuedRequest,
+  PaperIngestionQueuedRequestKind,
+} from "./workflow-guard";
 
 export type PaperIngestionValidationStatus =
   | "unknown"
@@ -28,6 +31,7 @@ export type PaperIngestionValidationEntry = {
 
 export type PaperIngestionValidationReport = {
   requestId: string;
+  requestKind: PaperIngestionQueuedRequestKind | null;
   checkedAt: string;
   manifestPath: string | null;
   reportPath: string;
@@ -45,6 +49,14 @@ type StagedPaperReference = {
   sourcePath: string;
   resolvedPath: string;
   sourceKind: "markdown" | "pdf" | "unknown";
+};
+
+type ManifestInspection = {
+  requestKind: PaperIngestionQueuedRequestKind | null;
+  manifestPath: string | null;
+  manifestRecord: Record<string, unknown> | null;
+  references: StagedPaperReference[];
+  selectedPaperCount: number;
 };
 
 const HTML_STUB_PATTERNS = [
@@ -153,18 +165,101 @@ function extractFlagFromCommandText(commandText: string | null, flag: string): s
   return stripQuotedShellToken(match[1] ?? match[2] ?? match[3] ?? "");
 }
 
-async function collectManifestReferences(params: {
+function normalizeQueuedRequestKind(
+  value: unknown
+): PaperIngestionQueuedRequestKind | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "upload_manifest":
+    case "direct_source":
+    case "requisition":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function inferQueuedRequestKind(params: {
+  explicit?: unknown;
+  triggerKind?: string | null;
+  manifestPath?: string | null;
+  commandText?: string | null;
+  wrapper?: string | null;
+}): PaperIngestionQueuedRequestKind | null {
+  const explicit = normalizeQueuedRequestKind(params.explicit);
+  if (explicit) {
+    return explicit;
+  }
+  const triggerKind = String(params.triggerKind ?? "").trim().toLowerCase();
+  if (
+    triggerKind === "idea_catalyst_requisition" ||
+    triggerKind === "literature_discovery" ||
+    triggerKind.endsWith("literature_discovery")
+  ) {
+    return "requisition";
+  }
+  if (params.manifestPath) {
+    return "upload_manifest";
+  }
+  if (params.commandText || params.wrapper) {
+    return "direct_source";
+  }
+  return null;
+}
+
+function isRequisitionManifestRecord(record: Record<string, unknown> | null): boolean {
+  return Boolean(
+    record &&
+      (asRecord(record.literature_discovery) || asRecord(record.catalyst_requisition))
+  );
+}
+
+async function readManifestInspection(params: {
   projectRoot: string;
-  manifestPath: string;
-}): Promise<StagedPaperReference[]> {
+  request: PaperIngestionQueuedRequest;
+}): Promise<ManifestInspection | null> {
+  if (!params.request.manifestPath) {
+    return null;
+  }
   const manifestResolvedPath = resolveImportPath({
     projectRoot: params.projectRoot,
-    targetPath: params.manifestPath,
+    targetPath: params.request.manifestPath,
   });
   if (!manifestResolvedPath) {
-    return [];
+    return {
+      requestKind: inferQueuedRequestKind({
+        explicit: params.request.requestKind,
+        triggerKind: params.request.triggerKind,
+        manifestPath: params.request.manifestPath,
+        commandText: params.request.commandText,
+        wrapper: params.request.wrapper,
+      }),
+      manifestPath: null,
+      manifestRecord: null,
+      references: [],
+      selectedPaperCount: 0,
+    };
   }
-  const raw = JSON.parse(await fs.readFile(manifestResolvedPath, "utf8"));
+
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(await fs.readFile(manifestResolvedPath, "utf8"));
+  } catch {
+    return {
+      requestKind: inferQueuedRequestKind({
+        explicit: params.request.requestKind,
+        triggerKind: params.request.triggerKind,
+        manifestPath: params.request.manifestPath,
+        commandText: params.request.commandText,
+        wrapper: params.request.wrapper,
+      }),
+      manifestPath: manifestResolvedPath,
+      manifestRecord: null,
+      references: [],
+      selectedPaperCount: 0,
+    };
+  }
+
   const record = asRecord(raw) ?? {};
   const paperList = Array.isArray(record.papers)
     ? record.papers
@@ -174,7 +269,7 @@ async function collectManifestReferences(params: {
         ? raw
         : [];
   const manifestDir = path.dirname(manifestResolvedPath);
-  return paperList
+  const references = paperList
     .map((entry) => {
       const paperRecord = asRecord(entry);
       if (!paperRecord) {
@@ -210,6 +305,30 @@ async function collectManifestReferences(params: {
       } satisfies StagedPaperReference;
     })
     .filter((entry): entry is StagedPaperReference => Boolean(entry));
+
+  const requestKind = isRequisitionManifestRecord(record)
+    ? "requisition"
+    : inferQueuedRequestKind({
+        explicit: params.request.requestKind,
+        triggerKind: params.request.triggerKind,
+        manifestPath: params.request.manifestPath,
+        commandText: params.request.commandText,
+        wrapper: params.request.wrapper,
+      });
+  const selectedPaperCount = Array.isArray(record.selected_papers)
+    ? record.selected_papers.length
+    : Array.isArray(asRecord(record.literature_discovery)?.selected_papers)
+      ? (asRecord(record.literature_discovery)?.selected_papers as unknown[]).length
+      : Array.isArray(asRecord(record.catalyst_requisition)?.selected_papers)
+        ? (asRecord(record.catalyst_requisition)?.selected_papers as unknown[]).length
+        : 0;
+  return {
+    requestKind,
+    manifestPath: manifestResolvedPath,
+    manifestRecord: record,
+    references,
+    selectedPaperCount,
+  };
 }
 
 async function collectDirectSourceReferences(params: {
@@ -248,13 +367,9 @@ async function collectDirectSourceReferences(params: {
 async function collectStagedPaperReferences(params: {
   projectRoot: string;
   request: PaperIngestionQueuedRequest;
+  manifestInspection?: ManifestInspection | null;
 }): Promise<StagedPaperReference[]> {
-  const manifestRefs = params.request.manifestPath
-    ? await collectManifestReferences({
-        projectRoot: params.projectRoot,
-        manifestPath: params.request.manifestPath,
-      }).catch(() => [])
-    : [];
+  const manifestRefs = params.manifestInspection?.references ?? [];
   if (manifestRefs.length > 0) {
     return manifestRefs;
   }
@@ -338,6 +453,20 @@ function summarizeValidation(report: {
   return `Validated ${report.entryCount} staged paper source(s): ${report.validCount} valid, ${report.warningCount} warning, ${report.invalidCount} invalid.`;
 }
 
+function summarizeRequisitionValidation(params: {
+  request: PaperIngestionQueuedRequest;
+  selectedPaperCount: number;
+}): string {
+  const triggerKind = String(params.request.triggerKind ?? "").trim().toLowerCase();
+  const label =
+    triggerKind === "idea_catalyst_requisition"
+      ? "IDEA-CATALYST requisition"
+      : "Literature discovery requisition";
+  return params.selectedPaperCount > 0
+    ? `${label} is not an upload manifest yet; ${params.selectedPaperCount} selected paper(s) still need a real batch manifest with staged sources before PaperNexus import can launch.`
+    : `${label} is waiting for paper selection and staging; upload validation was skipped because no real batch manifest exists yet.`;
+}
+
 export function defaultPaperIngestionMaxAttempts(): number {
   return 3;
 }
@@ -387,6 +516,7 @@ export function applyPaperIngestionValidationToRequest(params: {
   const blocked = hasValidationErrors(params.report);
   return {
     ...params.request,
+    requestKind: params.report.requestKind ?? params.request.requestKind,
     status:
       blocked && params.request.status === "queued"
         ? "needs_repair"
@@ -510,13 +640,63 @@ export async function validateQueuedPaperIngestionRequest(params: {
     "paper-ingestion-validation",
     `${params.request.requestId}.json`
   );
-  const references = await collectStagedPaperReferences(params);
-  const entries: PaperIngestionValidationEntry[] = [];
-  if (params.request.manifestPath && references.length === 0) {
-    const resolvedManifestPath = resolveImportPath({
-      projectRoot: params.projectRoot,
-      targetPath: params.request.manifestPath,
+  const manifestInspection = await readManifestInspection(params);
+  const requestKind =
+    manifestInspection?.requestKind ??
+    inferQueuedRequestKind({
+      explicit: params.request.requestKind,
+      triggerKind: params.request.triggerKind,
+      manifestPath: params.request.manifestPath,
+      commandText: params.request.commandText,
+      wrapper: params.request.wrapper,
     });
+  const references = await collectStagedPaperReferences({
+    ...params,
+    manifestInspection,
+  });
+  const entries: PaperIngestionValidationEntry[] = [];
+  if (requestKind === "requisition") {
+    entries.push({
+      paperId: null,
+      sourcePath: params.request.manifestPath ?? params.request.commandText ?? "<requisition>",
+      resolvedPath:
+        manifestInspection?.manifestPath ??
+        params.request.manifestPath ??
+        params.request.commandText ??
+        "<requisition>",
+      sourceKind: "unknown",
+      status:
+        manifestInspection?.manifestRecord != null || !params.request.manifestPath
+          ? "warning"
+          : "invalid",
+      sizeBytes: null,
+      issues: [
+        {
+          code:
+            manifestInspection?.manifestRecord != null || !params.request.manifestPath
+              ? "requisition_not_upload_ready"
+              : "manifest_unreadable_or_empty",
+          severity:
+            manifestInspection?.manifestRecord != null || !params.request.manifestPath
+              ? "warning"
+              : "error",
+          message:
+            manifestInspection?.manifestRecord != null || !params.request.manifestPath
+              ? summarizeRequisitionValidation({
+                  request: params.request,
+                  selectedPaperCount: manifestInspection?.selectedPaperCount ?? 0,
+                })
+              : "Requisition file could not be read or parsed, so workflow-owned graph enrichment cannot continue yet.",
+        },
+      ],
+    });
+  } else if (params.request.manifestPath && references.length === 0) {
+    const resolvedManifestPath =
+      manifestInspection?.manifestPath ??
+      resolveImportPath({
+        projectRoot: params.projectRoot,
+        targetPath: params.request.manifestPath,
+      });
     entries.push({
       paperId: null,
       sourcePath: params.request.manifestPath,
@@ -601,16 +781,23 @@ export async function validateQueuedPaperIngestionRequest(params: {
           : "valid";
   const report: PaperIngestionValidationReport = {
     requestId: params.request.requestId,
+    requestKind,
     checkedAt,
     manifestPath: params.request.manifestPath,
     reportPath,
     status,
-    summary: summarizeValidation({
-      entryCount: entries.length,
-      validCount,
-      warningCount,
-      invalidCount,
-    }),
+    summary:
+      requestKind === "requisition"
+        ? summarizeRequisitionValidation({
+            request: params.request,
+            selectedPaperCount: manifestInspection?.selectedPaperCount ?? 0,
+          })
+        : summarizeValidation({
+            entryCount: entries.length,
+            validCount,
+            warningCount,
+            invalidCount,
+          }),
     entryCount: entries.length,
     validCount,
     warningCount,

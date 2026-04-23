@@ -41,6 +41,7 @@ import type {
   PaperIngestionQueueProgress,
   PaperIngestionPaperOperation,
   PaperIngestionQueuedRequest,
+  PaperIngestionQueuedRequestKind,
   PaperIngestionRetryPolicy,
   PaperIngestionRemoteTaskProgress,
   PaperIngestionState,
@@ -251,6 +252,74 @@ function normalizePaperIngestionQueuedRequestStatus(
     default:
       return "queued";
   }
+}
+
+export function normalizePaperIngestionQueuedRequestKind(
+  value: unknown
+): PaperIngestionQueuedRequestKind | null {
+  const normalized = normalizeStage(value);
+  switch (normalized) {
+    case "upload_manifest":
+    case "direct_source":
+    case "requisition":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+export function derivePaperIngestionQueuedRequestKind(params: {
+  explicit?: unknown;
+  triggerKind?: string | null;
+  manifestPath?: string | null;
+  commandText?: string | null;
+  wrapper?: string | null;
+}): PaperIngestionQueuedRequestKind | null {
+  const explicit = normalizePaperIngestionQueuedRequestKind(params.explicit);
+  if (explicit) {
+    return explicit;
+  }
+  const triggerKind = String(params.triggerKind ?? "").trim().toLowerCase();
+  if (
+    triggerKind === "idea_catalyst_requisition" ||
+    triggerKind === "literature_discovery" ||
+    triggerKind.endsWith("literature_discovery")
+  ) {
+    return "requisition";
+  }
+  if (params.manifestPath) {
+    return "upload_manifest";
+  }
+  if (params.commandText || params.wrapper) {
+    return "direct_source";
+  }
+  return null;
+}
+
+export function isPaperIngestionRequisitionRequest(
+  request: Pick<
+    PaperIngestionQueuedRequest,
+    "requestKind" | "triggerKind" | "manifestPath" | "commandText" | "wrapper"
+  >
+): boolean {
+  return (
+    derivePaperIngestionQueuedRequestKind({
+      explicit: request.requestKind,
+      triggerKind: request.triggerKind,
+      manifestPath: request.manifestPath,
+      commandText: request.commandText,
+      wrapper: request.wrapper,
+    }) === "requisition"
+  );
+}
+
+export function isPaperIngestionExecutableUploadRequest(
+  request: Pick<
+    PaperIngestionQueuedRequest,
+    "requestKind" | "triggerKind" | "manifestPath" | "commandText" | "wrapper"
+  >
+): boolean {
+  return !isPaperIngestionRequisitionRequest(request);
 }
 
 function normalizePaperIngestionRetryPolicy(value: unknown): PaperIngestionRetryPolicy | null {
@@ -537,8 +606,10 @@ export function hasActiveWorkflowOwnedPaperUpload(
     return true;
   }
   if (
-    state.queuedRequests.some((request) =>
-      ["queued", "launching", "running"].includes(normalizeStage(request.status) ?? "")
+    state.queuedRequests.some(
+      (request) =>
+        isPaperIngestionExecutableUploadRequest(request) &&
+        ["queued", "launching", "running"].includes(normalizeStage(request.status) ?? "")
     )
   ) {
     return true;
@@ -570,6 +641,7 @@ export type PaperIngestionWorkflowDecision = {
   blocking: boolean;
   reason: string | null;
   graphPresenceReady: boolean;
+  requisitionRequestCount: number;
   queuedRequestCount: number;
   launchingOrRunningRequestCount: number;
   dormantQueuedRequestCount: number;
@@ -583,6 +655,20 @@ export type PaperIngestionWorkflowDecision = {
 
 function isDormantQueuedRequest(request: PaperIngestionQueuedRequest): boolean {
   return (
+    isPaperIngestionExecutableUploadRequest(request) &&
+    request.status === "queued" &&
+    !request.startedAt &&
+    !request.lastRunId &&
+    !request.lastSessionKey &&
+    !request.progress &&
+    !request.queueProgress &&
+    request.attemptCount === 0
+  );
+}
+
+function isDormantRequisitionRequest(request: PaperIngestionQueuedRequest): boolean {
+  return (
+    isPaperIngestionRequisitionRequest(request) &&
     request.status === "queued" &&
     !request.startedAt &&
     !request.lastRunId &&
@@ -615,16 +701,25 @@ export function derivePaperIngestionWorkflowDecision(params: {
   );
   const runtimeActive =
     runtimeStatus === "waiting_import" || runtimeStatus === "reconciling";
-  const queuedRequests = params.state.queuedRequests.filter(
-    (request) => request.status === "queued"
+  const requisitionRequests = params.state.queuedRequests.filter(
+    (request) =>
+      isPaperIngestionRequisitionRequest(request) &&
+      ["queued", "launching", "running", "needs_repair"].includes(request.status)
   );
-  const launchingOrRunningRequests = params.state.queuedRequests.filter(
+  const dormantRequisitionRequests = requisitionRequests.filter(
+    isDormantRequisitionRequest
+  );
+  const uploadRequests = params.state.queuedRequests.filter((request) =>
+    isPaperIngestionExecutableUploadRequest(request)
+  );
+  const queuedRequests = uploadRequests.filter((request) => request.status === "queued");
+  const launchingOrRunningRequests = uploadRequests.filter(
     (request) => request.status === "launching" || request.status === "running"
   );
-  const needsRepairRequests = params.state.queuedRequests.filter(
+  const needsRepairRequests = uploadRequests.filter(
     (request) => request.status === "needs_repair"
   );
-  const failedRequests = params.state.queuedRequests.filter(
+  const failedRequests = uploadRequests.filter(
     (request) => request.status === "failed"
   );
   const dormantQueuedRequests = queuedRequests.filter(isDormantQueuedRequest);
@@ -652,6 +747,45 @@ export function derivePaperIngestionWorkflowDecision(params: {
     activeOperations.length +
     (runtimeActive ? 1 : 0);
 
+  if (requisitionRequests.length > 0) {
+    if (graphPresenceReady && dormantRequisitionRequests.length === requisitionRequests.length) {
+      return {
+        action: "continue",
+        blocking: false,
+        reason:
+          "graph presence is ready; ignoring dormant queued graph-enrichment requisitions that were never launched",
+        graphPresenceReady,
+        requisitionRequestCount: requisitionRequests.length,
+        queuedRequestCount: queuedRequests.length,
+        launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+        dormantQueuedRequestCount: dormantQueuedRequests.length,
+        ignoredDormantQueuedRequestCount: dormantQueuedRequests.length,
+        needsRepairRequestCount: needsRepairRequests.length,
+        failedRequestCount: failedRequests.length,
+        activeBatchCount: activeBatches.length,
+        activeOperationCount: activeOperations.length,
+        failedOperationCount: failedOperations.length + failedBatchItems.length,
+      };
+    }
+    return {
+      action: "wait",
+      blocking: true,
+      reason:
+        "workflow-owned graph enrichment requisition is still active; keep graph_build on bounded literature collection / staging before frontier mapping",
+      graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
   if (hardActiveCount > 0) {
     return {
       action: "wait",
@@ -659,6 +793,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
       reason:
         "workflow-owned PaperNexus ingestion is running; wait for upload / graph sync completion before frontier mapping",
       graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -681,6 +816,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
         reason:
           "graph presence is ready; ignoring dormant queued PaperNexus requests that were never launched",
         graphPresenceReady,
+        requisitionRequestCount: requisitionRequests.length,
         queuedRequestCount: queuedRequests.length,
         launchingOrRunningRequestCount: launchingOrRunningRequests.length,
         dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -698,6 +834,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
       reason:
         "workflow-owned PaperNexus ingestion is queued; wait for the background import worker to launch or clear the request",
       graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -718,6 +855,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
         reason:
           "graph presence is ready; ignoring terminal PaperNexus ingestion failures that no longer block the current stage",
         graphPresenceReady,
+        requisitionRequestCount: requisitionRequests.length,
         queuedRequestCount: queuedRequests.length,
         launchingOrRunningRequestCount: launchingOrRunningRequests.length,
         dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -735,6 +873,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
       reason:
         "workflow-owned PaperNexus ingestion failed or needs repair; rerun a bounded repair/import pass or mark the request terminal before frontier mapping",
       graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -752,6 +891,7 @@ export function derivePaperIngestionWorkflowDecision(params: {
     blocking: false,
     reason: null,
     graphPresenceReady,
+    requisitionRequestCount: requisitionRequests.length,
     queuedRequestCount: 0,
     launchingOrRunningRequestCount: 0,
     dormantQueuedRequestCount: 0,
@@ -1249,6 +1389,13 @@ export function normalizePaperIngestionQueuedRequest(
   }
   return {
     requestId,
+    requestKind: derivePaperIngestionQueuedRequestKind({
+      explicit: record.requestKind ?? record.request_kind,
+      triggerKind,
+      manifestPath,
+      commandText,
+      wrapper,
+    }),
     status,
     wrapper,
     args,
@@ -1330,6 +1477,7 @@ export function serializePaperIngestionQueuedRequest(
 ): Record<string, unknown> {
   return {
     request_id: value.requestId,
+    request_kind: value.requestKind,
     status: value.status,
     wrapper: value.wrapper,
     args: value.args,
@@ -1367,6 +1515,7 @@ function mergePaperIngestionQueuedRequestValues(
 ): PaperIngestionQueuedRequest {
   return {
     requestId: current.requestId,
+    requestKind: patch.requestKind ?? current.requestKind,
     status: patch.status ?? current.status,
     wrapper: patch.wrapper ?? current.wrapper,
     args: patch.args.length > 0 ? patch.args : current.args,

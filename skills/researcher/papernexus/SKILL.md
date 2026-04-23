@@ -25,6 +25,7 @@ Use local repo CLI stages only for isolated repository development or fixture de
 When you are inside the OpenClaw research workflow:
 
 - queue uploads with `research_workflow.queue_paper_ingestion`
+- keep discovery requisitions separate from upload manifests: a requisition may have `papers: []` and must not be treated as a broken batch import
 - read phase/progress/next-action through `research_workflow.get_papernexus_progress` or `{PROJ}/graph/PAPERNEXUS_PROGRESS.json`
 - let `/graph-build` or `/resume-pipeline` trigger upload work
 - use the remote HTTP MCP control plane for live graph reads, reasoning, and bounded queue inspection
@@ -55,6 +56,12 @@ For one local paper:
 For two or more local papers:
 
 - prefer one manifest-driven `pn_batch_import.py` flow
+
+For workflow-owned discovery gaps:
+
+- keep the requisition scaffold as a requisition packet until real staged sources exist
+- materialize a true upload manifest only after paper selection/staging is complete
+- do not point `pn_batch_import.py` at a requisition scaffold that contains no staged paper sources
 
 For explicit directory staging:
 

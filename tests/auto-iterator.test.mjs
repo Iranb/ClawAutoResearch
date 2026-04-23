@@ -2359,6 +2359,65 @@ test("graph presence check preserves source provider and retrieval providers fro
   ]);
 });
 
+test("graph presence check trusts explicit graph confirmation metadata from PAPER_SOURCE_INDEX", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    schema_version: 1,
+    project_id: "demo-project",
+    updated_at: "2026-04-23T02:25:00Z",
+    papers: [
+      {
+        canonical_id: "arxiv:2201.02609",
+        arxiv_id: "2201.02609",
+        title: "Generalized Category Discovery",
+        graph_paper_id: "paper:fa1750e4085d",
+        import_status: "deduped",
+        graph_presence: "confirmed_via_content_match",
+      },
+      {
+        canonical_id: "arxiv:2410.11206",
+        arxiv_id: "2410.11206",
+        title: "Theoretical Analysis of FixMatch-like SSL",
+        import_status: "deduped",
+        graph_presence: "confirmed_via_arxiv_id_in_graph",
+      },
+    ],
+    graph_presence_override: {
+      status: "ready",
+      reason: "All expected papers were already deduped into the shared graph.",
+      checked_at: "2026-04-23T02:25:00Z",
+    },
+  });
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.verificationMode, "paper_source_index_override");
+  assert.equal(result.expectedPaperCount, 2);
+  assert.equal(result.presentPaperCount, 2);
+  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.refreshRequired, false);
+
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.equal(report.status, "ready");
+  assert.equal(report.verification_mode, "paper_source_index_override");
+  assert.equal(report.present_paper_count, 2);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.graph_presence_status, "ready");
+  assert.equal(manifest.paper_ingestion.graph_presence_present_papers, 2);
+  assert.deepEqual(manifest.paper_ingestion.graph_presence_missing_papers, []);
+});
+
 test("graph presence check matches light title variants through title signatures", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

@@ -25,6 +25,9 @@ import {
   validateQueuedPaperIngestionRequest,
 } from "./paper-ingestion-validation";
 import {
+  isPaperIngestionExecutableUploadRequest,
+} from "./workflow-guard-state/paper-ingestion";
+import {
   buildWorkflowSubagentSessionKey,
   derivePapernexusTaskLabel,
   looksLikePapernexusHeavyCommand,
@@ -2582,12 +2585,15 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
   });
   const inFlight = isPaperIngestionStateInFlight(ingestion.state);
   const now = new Date().toISOString();
+  const executableRequests = ingestion.state.queuedRequests.filter((entry) =>
+    isPaperIngestionExecutableUploadRequest(entry)
+  );
   const queuedCandidate =
-    ingestion.state.queuedRequests.find((entry) =>
+    executableRequests.find((entry) =>
       isQueuedPaperIngestionRetryDue(entry, now)
     ) ??
     (!inFlight
-      ? ingestion.state.queuedRequests.find((entry) =>
+      ? executableRequests.find((entry) =>
           ["launching", "running"].includes(entry.status)
         ) ?? null
       : null);
@@ -2603,6 +2609,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
         queued_requests: [
           {
             request_id: queuedCandidate.requestId,
+            request_kind: queuedCandidate.requestKind,
             wrapper: queuedCandidate.wrapper,
             command_text: queuedCandidate.commandText,
             manifest_path: queuedCandidate.manifestPath,
@@ -2638,6 +2645,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
         queued_requests: [
           {
             request_id: blockedRequest.requestId,
+            request_kind: blockedRequest.requestKind,
             wrapper: blockedRequest.wrapper,
             command_text: blockedRequest.commandText,
             manifest_path: blockedRequest.manifestPath,
@@ -2711,6 +2719,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
       queued_requests: [
         {
           request_id: launchRequest.requestId,
+          request_kind: launchRequest.requestKind,
           wrapper: launchRequest.wrapper,
           command_text: launchRequest.commandText,
           manifest_path: launchRequest.manifestPath,

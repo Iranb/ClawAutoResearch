@@ -36,6 +36,7 @@ import {
   buildZoteroSyncBackgroundCommand,
   clearBackgroundWorkflowQueueForTests,
   drainQueuedBackgroundWorkflowRuns,
+  maybeTriggerQueuedPaperIngestionRequest,
   clearBackgroundWorkflowRunRegistryForTests,
   enqueueQueuedBackgroundWorkflowRun,
   listBackgroundWorkflowRuns,
@@ -1182,6 +1183,83 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   assert.match(runCalls[0].extraSystemPrompt ?? "", /queue_paper_ingestion|queued_requests/i);
   assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
   assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "bg-run-1");
+});
+
+test("maybeTriggerQueuedPaperIngestionRequest ignores requisition-only queued requests", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "projects", "paper-lab");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "paper-lab",
+        current_stage: "graph_build",
+        owner_agent: "researcher",
+        paper_ingestion: {
+          queued_requests: [
+            {
+              request_id: "req-discovery-1",
+              request_kind: "requisition",
+              status: "queued",
+              wrapper: "pn_batch_import.py",
+              command_text: "LITERATURE DISCOVERY WORKFLOW-OWNED REQUISITION EXECUTION",
+              manifest_path:
+                "researcher/literature-discovery/requisition/demo/DISCOVERY_REQUISITION.json",
+              trigger_kind: "literature_discovery",
+              summary: "Discovery requisition waiting for staged papers.",
+              created_at: "2026-04-23T03:00:00.000Z",
+              updated_at: "2026-04-23T03:00:00.000Z",
+              validation_status: "warning",
+              validation_summary:
+                "Literature discovery requisition is waiting for paper selection and staging.",
+            },
+          ],
+          graph_presence_status: "missing_papers",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowPolicy: {
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      sessionId: "session-ignore-requisition",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "paper-lab",
+      currentStage: "graph_build",
+      channelProjectBindingsEnabled: true,
+    },
+    triggerKind: "graph_build",
+    projectRoot,
+    projectId: "paper-lab",
+  });
+
+  assert.equal(result, null);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "queued");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].request_kind, "requisition");
 });
 
 test("startBackgroundWorkflowRun for resume-pipeline requeues stale running ingestion requests before triggering upload", async (t) => {

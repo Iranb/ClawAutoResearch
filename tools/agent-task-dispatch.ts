@@ -21,6 +21,7 @@ import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import {
   getPreferredWorkflowAgentSession,
+  readWorkflowAgentSessionRegistry,
   upsertWorkflowAgentSessionRegistryEntry,
 } from "./workflow-agent-session-registry";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
@@ -294,6 +295,84 @@ async function getMessageCount(
     return Array.isArray(result?.messages) ? result.messages.length : 0;
   } catch {
     return null;
+  }
+}
+
+function isWorkflowSubagentSessionKey(sessionKey: string): boolean {
+  return sessionKey.includes(":subagent:");
+}
+
+async function maybeResetSessionForFirstProjectDispatch(params: {
+  workflowRuntime: WorkflowRuntimeApi;
+  projectRoot: string;
+  projectId?: string | null;
+  stage?: string | null;
+  fromRole?: string | null;
+  toRole: DispatchableWorkflowRole;
+  requesterSessionKey?: string;
+  sessionKey: string;
+  shouldReset: boolean;
+}): Promise<boolean> {
+  if (!params.shouldReset || !params.workflowRuntime.deleteSession) {
+    return false;
+  }
+  if (params.sessionKey === params.requesterSessionKey?.trim()) {
+    return false;
+  }
+  if (isWorkflowSubagentSessionKey(params.sessionKey)) {
+    return false;
+  }
+
+  const messageCount = await getMessageCount(params.workflowRuntime, params.sessionKey);
+  if (messageCount === 0) {
+    return false;
+  }
+
+  try {
+    await params.workflowRuntime.deleteSession({
+      sessionKey: params.sessionKey,
+      deleteTranscript: true,
+    });
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+      component: "dispatch",
+      action: "dispatch_session_reset",
+      status: "completed",
+      stage: params.stage ?? null,
+      owner: params.toRole,
+      summary:
+        "Reset the target session before the first project handoff to avoid carrying old context forward.",
+      details: {
+        fromRole: params.fromRole ?? null,
+        toRole: params.toRole,
+        sessionKey: params.sessionKey,
+        reason: "first_project_role_dispatch",
+        priorMessageCount: messageCount,
+      },
+    });
+    return true;
+  } catch (error) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+      component: "dispatch",
+      action: "dispatch_session_reset",
+      status: "degraded",
+      stage: params.stage ?? null,
+      owner: params.toRole,
+      summary:
+        "Failed to reset the target session before the first project handoff; continuing with dispatch.",
+      details: {
+        fromRole: params.fromRole ?? null,
+        toRole: params.toRole,
+        sessionKey: params.sessionKey,
+        reason: "first_project_role_dispatch",
+        priorMessageCount: messageCount,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return false;
   }
 }
 
@@ -626,6 +705,11 @@ export async function dispatchWorkflowTaskToAgent(params: {
   const capabilityStore = await readWorkflowAgentCapabilityStore(params.projectRoot).catch(
     () => null
   );
+  const sessionRegistry = await readWorkflowAgentSessionRegistry(params.projectRoot).catch(
+    () => null
+  );
+  const roleHasRegistryHistory =
+    sessionRegistry?.entries.some((entry) => entry.role === params.toRole) ?? false;
   const roleCapabilityRecords =
     capabilityStore?.records.filter(
       (entry) => entry.role === params.toRole || entry.agentId === params.toRole
@@ -688,6 +772,15 @@ export async function dispatchWorkflowTaskToAgent(params: {
   const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot).catch(
     () => null
   );
+  const roleHasRuntimeHistory =
+    (runtimeSessionsStore?.entries ?? []).some(
+      (entry) =>
+        entry.ownerAgent === params.toRole ||
+        entry.role === params.toRole ||
+        entry.agentId === params.toRole
+    ) ?? false;
+  const shouldResetExistingSessionsBeforeFirstDispatch =
+    !roleHasRegistryHistory && !roleHasRuntimeHistory;
   const runtimeSessionStatuses = new Map<string, string>(
     (runtimeSessionsStore?.entries ?? []).map((entry) => [entry.sessionKey, entry.status])
   );
@@ -711,6 +804,10 @@ export async function dispatchWorkflowTaskToAgent(params: {
       canonicalMainSessionKey,
       mailboxMessageId,
       requireMailboxAcknowledgement,
+      roleHasRegistryHistory,
+      roleHasRuntimeHistory,
+      shouldResetExistingSessionsBeforeFirstDispatch,
+      resolvedCandidates: candidates,
       candidates: filteredCandidates,
     },
   });
@@ -754,6 +851,17 @@ export async function dispatchWorkflowTaskToAgent(params: {
         continue;
       }
     }
+    await maybeResetSessionForFirstProjectDispatch({
+      workflowRuntime,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId ?? null,
+      stage: params.stage ?? null,
+      fromRole: params.fromRole ?? null,
+      toRole: params.toRole,
+      requesterSessionKey: params.requesterSessionKey,
+      sessionKey,
+      shouldReset: shouldResetExistingSessionsBeforeFirstDispatch,
+    });
     const attemptResult = await runSingleDispatchAttempt({
       workflowRuntime,
       sessionKey,

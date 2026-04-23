@@ -1564,8 +1564,14 @@ export type PaperIngestionBatchItem = {
   updatedAt: string | null;
 };
 
+export type PaperIngestionQueuedRequestKind =
+  | "upload_manifest"
+  | "direct_source"
+  | "requisition";
+
 export type PaperIngestionQueuedRequest = {
   requestId: string;
+  requestKind: PaperIngestionQueuedRequestKind | null;
   status: "queued" | "launching" | "running" | "completed" | "needs_repair" | "failed";
   wrapper: string | null;
   args: string[];

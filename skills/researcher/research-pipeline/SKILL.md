@@ -172,9 +172,10 @@ Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
 - when the topic has many competing baselines, benchmark variants, or close prior work, insert `/literature-review` before trusting frontier or ideation outputs; use it to lock inclusion / exclusion criteria, SoTA coverage, and the gap packet
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
-- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper, queue the required upload through `research_workflow.queue_paper_ingestion` before innovation analysis
+- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper and there is no durable graph/index confirmation in `PAPER_SOURCE_INDEX.json`, queue the required upload through `research_workflow.queue_paper_ingestion` before innovation analysis
 - if new material arrives through the PaperNexus dashboard or Web/API, prefer durable queued upload requests plus wrapper task logs instead of touching any home-directory shared PaperNexus storage directly
 - for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; queue that manifest through `research_workflow.queue_paper_ingestion`, then let the workflow PaperNexus upload worker, `/graph-build`, or `/resume-pipeline` trigger it, track manifest progress, refresh Zotero `bot/<project-id>` collections, and run short readiness / brainstorm refresh passes
+- keep discovery requisitions separate from upload manifests: a requisition packet may legitimately have no staged paper sources yet, and it should drive collection/staging work rather than being validated as a failed batch import
 - treat `/graph-build` as a fixed workflow phase with these micro-stages:
   - `graph_build/uploading`
   - `graph_build/verifying`

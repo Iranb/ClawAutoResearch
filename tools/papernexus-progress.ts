@@ -8,6 +8,7 @@ import {
 import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
 import {
   derivePaperIngestionWorkflowDecision,
+  isPaperIngestionExecutableUploadRequest,
   normalizePaperIngestionState,
 } from "./workflow-guard-state/paper-ingestion";
 
@@ -325,7 +326,9 @@ function countBatchItems(
     state.lastBatchManifestPath ??
     state.activeBatches[state.activeBatches.length - 1]?.manifestPath ??
     state.batchItems[state.batchItems.length - 1]?.manifestPath ??
-    state.queuedRequests.find((entry) => entry.manifestPath)?.manifestPath ??
+    state.queuedRequests.find(
+      (entry) => isPaperIngestionExecutableUploadRequest(entry) && entry.manifestPath
+    )?.manifestPath ??
     null;
   if (state.batchItems.length > 0) {
     return {
@@ -356,11 +359,15 @@ function countBatchItems(
   }
 
   const activeRequest =
-    state.queuedRequests.find((entry) =>
-      ["launching", "running"].includes(entry.status)
+    state.queuedRequests.find(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["launching", "running"].includes(entry.status)
     ) ??
-    state.queuedRequests.find((entry) =>
-      ["queued", "needs_repair"].includes(entry.status)
+    state.queuedRequests.find(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["queued", "needs_repair"].includes(entry.status)
     ) ??
     null;
   const totalItems =
@@ -401,8 +408,10 @@ function countBatchItems(
 
 function hasActiveImportWork(state: ReturnType<typeof normalizePaperIngestionState>): boolean {
   if (
-    state.queuedRequests.some((entry) =>
-      ["queued", "launching", "running"].includes(entry.status)
+    state.queuedRequests.some(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["queued", "launching", "running"].includes(entry.status)
     )
   ) {
     return true;
@@ -433,7 +442,9 @@ function hasActiveImportWork(state: ReturnType<typeof normalizePaperIngestionSta
 
 function hasFailedImportWork(state: ReturnType<typeof normalizePaperIngestionState>): boolean {
   return (
-    state.queuedRequests.some((entry) => entry.status === "failed") ||
+    state.queuedRequests.some(
+      (entry) => isPaperIngestionExecutableUploadRequest(entry) && entry.status === "failed"
+    ) ||
     state.activeBatches.some((entry) =>
       ["failed", "timed_out"].includes(entry.status)
     ) ||
@@ -452,8 +463,10 @@ function buildOwnerRun(params: {
   override: OwnerRunOverride;
 }): PapernexusProgressOwnerRun | null {
   const activeRequest =
-    params.state.queuedRequests.find((entry) =>
-      ["launching", "running"].includes(entry.status)
+    params.state.queuedRequests.find(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["launching", "running"].includes(entry.status)
     ) ?? null;
   const base =
     activeRequest || params.previous?.owner_run
@@ -494,10 +507,14 @@ function buildRemoteTaskSnapshot(params: {
   previous: PapernexusProgressSnapshot | null;
 }): PapernexusProgressRemoteTask | null {
   const activeRequest =
-    params.state.queuedRequests.find((entry) =>
-      ["launching", "running"].includes(entry.status)
+    params.state.queuedRequests.find(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["launching", "running"].includes(entry.status)
     ) ??
-    params.state.queuedRequests.find((entry) => entry.status === "queued") ??
+    params.state.queuedRequests.find(
+      (entry) => isPaperIngestionExecutableUploadRequest(entry) && entry.status === "queued"
+    ) ??
     null;
   if (!activeRequest) {
     return null;
@@ -515,8 +532,10 @@ function buildQueueProgressSnapshot(params: {
   previous: PapernexusProgressSnapshot | null;
 }): PapernexusProgressQueue | null {
   const activeRequest =
-    params.state.queuedRequests.find((entry) =>
-      ["queued", "launching", "running"].includes(entry.status)
+    params.state.queuedRequests.find(
+      (entry) =>
+        isPaperIngestionExecutableUploadRequest(entry) &&
+        ["queued", "launching", "running"].includes(entry.status)
     ) ?? null;
   const fromRequest = normalizeQueueProgress(activeRequest?.queueProgress);
   if (fromRequest) {
@@ -577,8 +596,10 @@ function derivePhase(params: {
     state: params.state,
     graphPresenceStatus: graphStatus,
   });
-  const activeRequest = params.state.queuedRequests.find((entry) =>
-    ["launching", "running"].includes(entry.status)
+  const activeRequest = params.state.queuedRequests.find(
+    (entry) =>
+      isPaperIngestionExecutableUploadRequest(entry) &&
+      ["launching", "running"].includes(entry.status)
   );
   if (ingestionDecision.action === "continue" && graphStatus === "ready") {
     return "ready";
@@ -595,11 +616,17 @@ function derivePhase(params: {
   if (activeRequest?.status === "running" || activeRequest?.status === "launching") {
     return phaseFromWrapper(activeRequest.wrapper);
   }
-  if (params.state.queuedRequests.some((entry) => entry.status === "needs_repair")) {
+  if (
+    params.state.queuedRequests.some(
+      (entry) => isPaperIngestionExecutableUploadRequest(entry) && entry.status === "needs_repair"
+    )
+  ) {
     return "needs_repair";
   }
   if (
-    params.state.queuedRequests.some((entry) => entry.status === "queued")
+    params.state.queuedRequests.some(
+      (entry) => isPaperIngestionExecutableUploadRequest(entry) && entry.status === "queued"
+    )
   ) {
     return "staging";
   }

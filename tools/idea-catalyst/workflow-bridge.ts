@@ -147,7 +147,7 @@ function buildIdeaCatalystRequisitionCommandText(params: {
     `Project root: ${params.projectRoot}`,
     `Request id: ${params.requestId}`,
     `Requisition packet: {PROJ}/${params.requisitionPath}`,
-    `Batch manifest scaffold: {PROJ}/${params.batchManifestPath}`,
+    `Requisition scaffold: {PROJ}/${params.batchManifestPath}`,
     `Shared corpus: ${params.sharedCorpus ?? "unset"}`,
     `Target reentry path: ${reentry}`,
     "",
@@ -155,7 +155,7 @@ function buildIdeaCatalystRequisitionCommandText(params: {
     "1. Read the requisition packet and collect cross-domain papers that specifically close the listed coverage gaps.",
     `2. Aim for at least ${minimumSourcesPerDomain} staged papers per missing domain and at least ${minimumBridgeNodes} bridge-worthy candidates overall before stopping.`,
     "3. Use the existing project-local paper collection workflow to identify, retrieve, and stage candidate Markdown/PDF sources; update PAPER_SOURCE_INDEX.json and any project-local staging metadata durably.",
-    "4. Populate the batch manifest scaffold with the staged local sources that should be imported into the shared graph.",
+    "4. Once candidate papers are staged, materialize one real batch import manifest for the staged local sources that should be imported into the shared graph.",
     "5. Run one manifest-driven PaperNexus batch import for the collected sources and keep progress durable through research_workflow.set_paper_ingestion. Keep queued_requests synchronized with this exact request_id.",
     "6. After the import finishes or the retry budget is exhausted, rerun /graph-build so the workflow can verify graph presence, refresh frontier packets, and then resume IDEA-CATALYST.",
     "",
@@ -499,7 +499,7 @@ export async function queueIdeaCatalystRequisition(params: {
     "idea-catalyst",
     "requisition",
     sanitizeIdFragment(requisitionId),
-    "batch-import.json"
+    "CATALYST_REQUISITION.json"
   );
   const batchManifestResolvedPath = resolveProjectArtifactPath(
     projectRoot,
@@ -544,6 +544,7 @@ export async function queueIdeaCatalystRequisition(params: {
     updated_at: new Date().toISOString(),
     detail: `Structured requisition ${requisitionId} emitted by IDEA-CATALYST; route it through graph_build before rerunning IDEA.`,
     trigger_kind: "idea_catalyst_requisition",
+    request_kind: "requisition",
   });
   if (!normalizedRequest) {
     throw new Error("Failed to normalize the IDEA-CATALYST requisition queue request.");

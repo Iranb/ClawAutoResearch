@@ -156,8 +156,10 @@ Normal workflow-owned action:
 
 This should:
 - trigger any durable queued upload request first; `/graph-build` is allowed to launch queued `queue_paper_ingestion` work before it starts the readiness pass
+- treat discovery requisitions and upload manifests as different contracts; a requisition scaffold with no staged paper sources is not an upload failure and must not be launched as `pn_batch_import.py`
 - if a queued upload request is stuck in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and any dead-letter reason before blaming graph readiness itself
 - check whether the canonical papers recorded in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` are already present in the shared global graph
+- if `PAPER_SOURCE_INDEX.json` already records explicit graph-backed confirmation such as `graph_paper_id`, `graph_presence=confirmed_*`, `import_status=deduped|completed|indexed|graph_synced`, or a fresh `graph_presence_override.status=ready`, trust that durable evidence and skip duplicate import/re-index work
 - update project-local readiness metadata
 - record whether automatic shared-graph catch-up is still required
 - avoid rebuilding a project-specific corpus

@@ -178,7 +178,7 @@ function buildLiteratureDiscoveryCommandText(params: {
     `Project root: ${params.projectRoot}`,
     `Request id: ${params.requestId}`,
     `Discovery packet: {PROJ}/${params.packetPath}`,
-    `Batch manifest scaffold: {PROJ}/${params.batchManifestPath}`,
+    `Requisition scaffold: {PROJ}/${params.batchManifestPath}`,
     `Shared corpus: ${params.sharedCorpus ?? "unset"}`,
     `Origin stage: ${params.originStage ?? "unknown"}`,
     `Target reentry path: ${(reentry.length > 0 ? reentry : ["graph_build", "frontier_mapping", "idea"]).join(" -> ")}`,
@@ -186,7 +186,7 @@ function buildLiteratureDiscoveryCommandText(params: {
     "Execute this as a bounded workflow-owned literature discovery pass:",
     "1. Read the discovery packet and collect only the papers that close the stated evidence gaps.",
     "2. Use the project-local paper collection workflow to identify, retrieve, and stage candidate Markdown/PDF sources; update PAPER_SOURCE_INDEX.json and staging metadata durably.",
-    "3. Populate the batch manifest scaffold with the staged local sources that should be imported into the shared graph.",
+    "3. Once candidate papers are staged, materialize one real batch import manifest for the staged local sources that should be imported into the shared graph.",
     "4. Run one manifest-driven PaperNexus batch import for the collected sources and keep progress durable through research_workflow.set_paper_ingestion.",
     "5. After the import finishes, rerun /graph-build so the workflow can refresh graph presence, frontier packets, and then continue from the appropriate downstream stage.",
     "",
@@ -265,22 +265,22 @@ export async function queueLiteratureDiscoveryRequisition(params: {
     projectId,
     projectRoot,
   });
-  const batchManifestRelativePath = path.join(
+  const requisitionRelativePath = path.join(
     "researcher",
     "literature-discovery",
     "requisition",
     sanitizeIdFragment(discoveryId),
-    "batch-import.json"
+    "DISCOVERY_REQUISITION.json"
   );
-  const batchManifestResolvedPath = resolveProjectArtifactPath(
+  const requisitionResolvedPath = resolveProjectArtifactPath(
     projectRoot,
-    batchManifestRelativePath
+    requisitionRelativePath
   );
-  if (!batchManifestResolvedPath) {
-    throw new Error("Could not resolve the literature discovery batch manifest path.");
+  if (!requisitionResolvedPath) {
+    throw new Error("Could not resolve the literature discovery requisition path.");
   }
   await writeJsonEnsured(
-    batchManifestResolvedPath,
+    requisitionResolvedPath,
     buildLiteratureDiscoveryBatchManifest({
       packet,
       sharedCorpus,
@@ -298,13 +298,13 @@ export async function queueLiteratureDiscoveryRequisition(params: {
     command_text: buildLiteratureDiscoveryCommandText({
       projectRoot,
       packetPath: params.packetPath,
-      batchManifestPath: batchManifestRelativePath,
+      batchManifestPath: requisitionRelativePath,
       sharedCorpus,
       requestId,
       packet,
       originStage: params.originStage ?? null,
     }),
-    manifest_path: batchManifestRelativePath,
+    manifest_path: requisitionRelativePath,
     shared_corpus: sharedCorpus,
     paper_count: selectedPapers.length > 0 ? selectedPapers.length : null,
     summary:
@@ -319,6 +319,7 @@ export async function queueLiteratureDiscoveryRequisition(params: {
       (params.originStage ? ` triggered from ${params.originStage}` : "") +
       "; route it through graph_build before continuing downstream work.",
     trigger_kind: triggerKind,
+    request_kind: "requisition",
   });
   if (!normalizedRequest) {
     throw new Error("Failed to normalize the literature discovery queue request.");
@@ -337,6 +338,6 @@ export async function queueLiteratureDiscoveryRequisition(params: {
     state: nextPaperIngestion,
     request: normalizedRequest,
     packetPath: params.packetPath,
-    batchManifestPath: batchManifestRelativePath,
+    batchManifestPath: requisitionRelativePath,
   };
 }

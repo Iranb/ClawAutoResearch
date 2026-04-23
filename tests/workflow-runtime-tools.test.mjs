@@ -2396,10 +2396,12 @@ test("research_workflow queue_literature_discovery_requisition bridges a structu
 
   assert.equal(result.created ?? false, true);
   assert.equal(result.request.triggerKind, "literature_discovery");
+  assert.equal(result.request.requestKind, "requisition");
   assert.match(result.request.requestId, /^literature-discovery-/);
   assert.equal(result.request.sharedCorpus, "GCD");
   assert.match(result.request.commandText ?? "", /LITERATURE_DISCOVERY_PACKET\.json/);
   assert.match(result.request.commandText ?? "", /graph-build/i);
+  assert.match(result.request.manifestPath ?? "", /DISCOVERY_REQUISITION\.json$/);
   assert.match(result.request.detail ?? "", /review/i);
   assert.equal(result.state.queuedRequests.length >= 1, true);
 

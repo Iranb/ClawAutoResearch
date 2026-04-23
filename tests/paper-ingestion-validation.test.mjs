@@ -1,14 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   finalizeQueuedPaperIngestionAttempt,
   markQueuedPaperIngestionLaunchFailure,
+  validateQueuedPaperIngestionRequest,
 } from "../tools/paper-ingestion-validation.ts";
 
 function makeQueuedRequest(overrides = {}) {
   return {
     requestId: "req-1",
+    requestKind: "upload_manifest",
     status: "queued",
     wrapper: "pn_batch_import.py",
     args: [],
@@ -77,4 +82,64 @@ test("finalizeQueuedPaperIngestionAttempt requeues a failed background run for b
   assert.equal(updated.deadLetterAt, null);
   assert.equal(typeof updated.nextRetryAt, "string");
   assert.match(updated.detail ?? "", /bounded repair/i);
+});
+
+test("validateQueuedPaperIngestionRequest treats literature discovery scaffolds as requisitions instead of broken upload manifests", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-paper-ingestion-validation-")
+  );
+  const manifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "literature-discovery",
+    "requisition",
+    "demo",
+    "DISCOVERY_REQUISITION.json"
+  );
+  await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+  await fs.writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        defaults: {
+          corpus: "GCD",
+        },
+        papers: [],
+        literature_discovery: {
+          discovery_id: "demo",
+          selected_papers: [],
+          candidate_queries: [
+            {
+              domain: "current-domain",
+              query: "graph grounded gap repair",
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const report = await validateQueuedPaperIngestionRequest({
+    projectRoot,
+    request: makeQueuedRequest({
+      manifestPath: path.relative(projectRoot, manifestPath),
+      triggerKind: "literature_discovery",
+      requestKind: null,
+    }),
+  });
+
+  assert.equal(report.requestKind, "requisition");
+  assert.equal(report.status, "warning");
+  assert.equal(report.invalidCount, 0);
+  assert.equal(report.warningCount, 1);
+  assert.match(report.summary, /requisition/i);
+  assert.equal(report.entries[0]?.issues[0]?.code, "requisition_not_upload_ready");
 });

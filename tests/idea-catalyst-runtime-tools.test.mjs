@@ -977,10 +977,12 @@ test("research_workflow queue_idea_catalyst_requisition bridges a catalyst requi
 
   assert.equal(result.created ?? false, true);
   assert.equal(result.request.triggerKind, "idea_catalyst_requisition");
+  assert.equal(result.request.requestKind, "requisition");
   assert.match(result.request.requestId, /^idea-catalyst-/);
   assert.match(result.request.summary ?? "", /IDEA-CATALYST/i);
   assert.match(result.request.commandText ?? "", /INVESTIGATION_REQUISITION\.json/);
   assert.match(result.request.commandText ?? "", /graph-build/i);
+  assert.match(result.request.manifestPath ?? "", /CATALYST_REQUISITION\.json$/);
 
   const updatedManifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")

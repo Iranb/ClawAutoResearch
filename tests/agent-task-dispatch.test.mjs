@@ -98,6 +98,89 @@ test("dispatchWorkflowTaskToAgent sends a nested fire-and-forget run to the targ
   assert.match(calls[0].message, /Implement the current experiment plan/);
 });
 
+test("dispatchWorkflowTaskToAgent resets an existing target session on the first project handoff", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-first-reset-")
+  );
+  const events = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async getSessionMessages({ sessionKey }) {
+        if (sessionKey === "agent:coder:discord:group:paper-lab") {
+          return { messages: [{ id: "stale-msg" }] };
+        }
+        return { messages: [] };
+      },
+      async deleteSession({ sessionKey, deleteTranscript }) {
+        events.push(`delete:${sessionKey}:${deleteTranscript === true ? "full" : "partial"}`);
+      },
+      async run(params) {
+        events.push(`run:${params.sessionKey}`);
+        return { runId: "run-reset-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Implement the current experiment plan.",
+    command: "/implement-experiment",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.deepEqual(events, [
+    "delete:agent:coder:discord:group:paper-lab:full",
+    "run:agent:coder:discord:group:paper-lab",
+  ]);
+});
+
+test("dispatchWorkflowTaskToAgent does not reset the requester's own session on first same-role dispatch", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-same-role-")
+  );
+  let deleteCalls = 0;
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async getSessionMessages() {
+        return { messages: [{ id: "existing-msg" }] };
+      },
+      async deleteSession() {
+        deleteCalls += 1;
+      },
+      async run() {
+        return { runId: "run-same-role-1" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "researcher",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "research",
+    summary: "Continue the foreground researcher session.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.sessionKey, "agent:researcher:discord:group:paper-lab");
+  assert.equal(deleteCalls, 0);
+});
+
 test("dispatchWorkflowTaskToAgent records structured diagnostics with candidate resolution and final attempts", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-dispatch-diagnostics-")

@@ -6,6 +6,7 @@ import {
   inspectPapernexusRemoteAccess,
   type PapernexusRemoteAccessConfig,
 } from "./papernexus-secret";
+import { normalizeGraphPresenceStatus } from "./workflow-guard-core/coercion";
 import {
   buildCanonicalPaperRecordFromRecord,
   collectRetrievalProviders as collectRetrievalProvidersShared,
@@ -26,6 +27,11 @@ export type GraphPresenceStatus =
   | "missing_corpus"
   | "missing_sources";
 
+export type GraphPresenceVerificationMode =
+  | "canonical_paper_index"
+  | "remote_corpus_summary"
+  | "paper_source_index_override";
+
 type ManifestLike = Record<string, unknown>;
 
 type ExpectedPaper = {
@@ -39,6 +45,10 @@ type ExpectedPaper = {
   sourceKind: "markdown" | "pdf" | "unknown";
   sourceProvider: string | null;
   retrievalProviders: string[];
+  graphPaperId: string | null;
+  graphPresence: string | null;
+  importStatus: string | null;
+  graphNodeIds: string[];
 };
 
 type CorpusPaper = {
@@ -60,7 +70,7 @@ export type GraphPresenceMatch = {
   sourceKind: "markdown" | "pdf" | "unknown";
   sourceProvider: string | null;
   retrievalProviders: string[];
-  matchedBy: "arxiv" | "doi" | "source_path" | "title";
+  matchedBy: "arxiv" | "doi" | "source_path" | "title" | "paper_source_index";
   corpusPaperId: string | null;
   corpusPaperTitle: string | null;
   corpusSourceKey: string | null;
@@ -82,6 +92,7 @@ export type GraphPresenceCheckResult = {
   projectId: string | null;
   checkedAt: string;
   status: GraphPresenceStatus;
+  verificationMode: GraphPresenceVerificationMode;
   blockingReason: string | null;
   reportPath: string;
   paperSourceIndexPath: string | null;
@@ -109,6 +120,12 @@ type ResolvedExpectedPapers = {
   usedPaperSourceIndex: boolean;
   expectedPaperCountHint: number | null;
   summaryOnly: boolean;
+  graphPresenceOverride: {
+    status: GraphPresenceStatus | null;
+    reason: string | null;
+    checkedAt: string | null;
+  } | null;
+  sourceIndexUpdatedAt: string | null;
 };
 
 const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
@@ -542,6 +559,7 @@ function buildStatusRecordFromPresenceResult(params: {
   return {
     ...(params.existing ?? {}),
     mode: params.mode,
+    verification_mode: params.result.verificationMode,
     checked_at: params.result.checkedAt,
     status: params.result.status,
     corpus_root: params.result.corpusRoot,
@@ -566,6 +584,7 @@ function renderGraphBuildReport(result: GraphPresenceCheckResult): string {
     `Checked At: ${result.checkedAt}`,
     `Project: ${result.projectId ?? path.basename(result.projectRoot)}`,
     `Graph Presence Status: ${result.status}`,
+    `Verification Mode: ${result.verificationMode}`,
     `Corpus: ${result.corpusName ?? "unset"}`,
     `Corpus Root: ${result.corpusRoot ?? "unset"}`,
     `Expected Papers: ${result.expectedPaperCount}`,
@@ -690,6 +709,82 @@ function inferSourceKind(sourceHints: string[]): "markdown" | "pdf" | "unknown" 
   return "unknown";
 }
 
+function collectGraphNodeIds(record: Record<string, unknown> | null): string[] {
+  if (!record) {
+    return [];
+  }
+  return uniqueStrings([
+    pickString(record, ["graph_paper_id", "graphPaperId"]),
+    pickString(record, ["node_id", "nodeId"]),
+    ...asStringArray(record.graph_node_ids),
+    ...asStringArray(record.graphNodeIds),
+    ...asStringArray(record.graph_nodes),
+    ...asStringArray(record.graphNodes),
+    ...asStringArray(record.node_refs),
+    ...asStringArray(record.nodeRefs),
+    ...asStringArray(record.linked_graph_nodes),
+    ...asStringArray(record.linkedGraphNodes),
+  ].filter((item): item is string => Boolean(item)));
+}
+
+function normalizeExpectedGraphPresence(value: string | null | undefined): string | null {
+  return asString(value)?.trim().toLowerCase() ?? null;
+}
+
+function normalizeExpectedImportStatus(value: string | null | undefined): string | null {
+  return asString(value)?.trim().toLowerCase() ?? null;
+}
+
+function isExplicitGraphPresenceConfirmed(value: string | null | undefined): boolean {
+  const normalized = normalizeExpectedGraphPresence(value);
+  return Boolean(
+    normalized &&
+      (normalized === "ready" ||
+        normalized === "confirmed" ||
+        normalized.startsWith("confirmed_") ||
+        normalized === "present_in_graph" ||
+        normalized === "already_present")
+  );
+}
+
+function isExplicitImportStatusConfirmed(value: string | null | undefined): boolean {
+  const normalized = normalizeExpectedImportStatus(value);
+  return Boolean(
+    normalized &&
+      [
+        "deduped",
+        "completed",
+        "indexed",
+        "graph_synced",
+        "already_present",
+        "present_in_graph",
+      ].includes(normalized)
+  );
+}
+
+function isExpectedPaperExplicitlyConfirmed(paper: ExpectedPaper): boolean {
+  return (
+    Boolean(paper.graphPaperId) ||
+    paper.graphNodeIds.length > 0 ||
+    isExplicitGraphPresenceConfirmed(paper.graphPresence) ||
+    isExplicitImportStatusConfirmed(paper.importStatus)
+  );
+}
+
+function buildPaperSourceIndexMatch(expected: ExpectedPaper): GraphPresenceMatch {
+  return {
+    canonicalId: expected.canonicalId,
+    title: expected.title,
+    sourceKind: expected.sourceKind,
+    sourceProvider: expected.sourceProvider,
+    retrievalProviders: expected.retrievalProviders,
+    matchedBy: "paper_source_index",
+    corpusPaperId: expected.graphPaperId ?? expected.graphNodeIds[0] ?? null,
+    corpusPaperTitle: expected.title,
+    corpusSourceKey: expected.sourceHints[0] ?? null,
+  };
+}
+
 function buildExpectedPaperFromRecord(
   raw: Record<string, unknown>,
   fallbackCanonicalId?: string
@@ -709,6 +804,12 @@ function buildExpectedPaperFromRecord(
     sourceKind: paper.sourceKind,
     sourceProvider: paper.sourceProvider,
     retrievalProviders: paper.retrievalProviders,
+    graphPaperId:
+      pickString(raw, ["graph_paper_id", "graphPaperId"]) ??
+      pickString(raw, ["paper_id", "paperId"]),
+    graphPresence: pickString(raw, ["graph_presence", "graphPresence"]),
+    importStatus: pickString(raw, ["import_status", "importStatus"]),
+    graphNodeIds: collectGraphNodeIds(raw),
   };
 }
 
@@ -778,6 +879,10 @@ function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): Exp
     sourceKind: merged.sourceKind,
     sourceProvider: merged.sourceProvider,
     retrievalProviders: merged.retrievalProviders,
+    graphPaperId: target.graphPaperId ?? incoming.graphPaperId,
+    graphPresence: target.graphPresence ?? incoming.graphPresence,
+    importStatus: target.importStatus ?? incoming.importStatus,
+    graphNodeIds: uniqueStrings([...target.graphNodeIds, ...incoming.graphNodeIds]),
   };
 }
 
@@ -830,6 +935,25 @@ function parsePaperSourceIndex(raw: unknown): ExpectedPaper[] {
   return [...byCanonicalId.values()].sort((left, right) =>
     left.canonicalId.localeCompare(right.canonicalId)
   );
+}
+
+function resolvePaperSourceIndexGraphPresenceOverride(raw: unknown): {
+  status: GraphPresenceStatus | null;
+  reason: string | null;
+  checkedAt: string | null;
+} | null {
+  const record = asRecord(raw);
+  const override = asRecord(record?.graph_presence_override ?? record?.graphPresenceOverride);
+  const status = normalizeGraphPresenceStatus(override?.status ?? null);
+  const reason = pickString(override, ["reason"]);
+  const checkedAt = pickString(override, ["checked_at", "checkedAt"]);
+  return status || reason || checkedAt
+    ? {
+        status,
+        reason,
+        checkedAt,
+      }
+    : null;
 }
 
 async function collectPaperFiles(rootDir: string): Promise<string[]> {
@@ -930,6 +1054,10 @@ async function resolveExpectedPapers(params: {
       usedPaperSourceIndex: true,
       expectedPaperCountHint: indexedPapers.length,
       summaryOnly: false,
+      graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
+      sourceIndexUpdatedAt:
+        pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
+        pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
     };
   }
   const summaryCountHint = resolvePaperSourceIndexCountHint(paperSourceIndex);
@@ -943,6 +1071,10 @@ async function resolveExpectedPapers(params: {
     usedPaperSourceIndex: summaryCountHint !== null,
     expectedPaperCountHint,
     summaryOnly: expectedPaperCountHint !== null,
+    graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
+    sourceIndexUpdatedAt:
+      pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
+      pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
   };
 }
 
@@ -1262,6 +1394,140 @@ function buildBlockingReason(
     .map((paper) => paper.arxivId ?? paper.title ?? paper.canonicalId)
     .join("; ");
   return `PaperNexus corpus is missing ${missingPapers.length}/${expectedPaperCount} expected paper(s): ${preview}${missingPapers.length > 3 ? "; ..." : ""}. Refresh the graph before frontier mapping or ideation.`;
+}
+
+function isGraphPresenceOverrideFresh(params: {
+  expected: ResolvedExpectedPapers;
+}): boolean {
+  if (params.expected.graphPresenceOverride?.status !== "ready") {
+    return false;
+  }
+  const checkedAt = params.expected.graphPresenceOverride?.checkedAt;
+  const updatedAt = params.expected.sourceIndexUpdatedAt;
+  if (!checkedAt || !updatedAt) {
+    return true;
+  }
+  const checkedMs = Date.parse(checkedAt);
+  const updatedMs = Date.parse(updatedAt);
+  if (!Number.isFinite(checkedMs) || !Number.isFinite(updatedMs)) {
+    return true;
+  }
+  return checkedMs >= updatedMs;
+}
+
+function applyPaperSourceIndexGraphConfirmation(params: {
+  expected: ResolvedExpectedPapers;
+  presentPapers: GraphPresenceMatch[];
+  missingPapers: GraphPresenceMissingPaper[];
+  allowOverride: boolean;
+}): {
+  presentPapers: GraphPresenceMatch[];
+  missingPapers: GraphPresenceMissingPaper[];
+  verificationMode: GraphPresenceVerificationMode | null;
+} {
+  const expectedByCanonicalId = new Map(
+    params.expected.papers.map((paper) => [paper.canonicalId, paper])
+  );
+  const presentByCanonicalId = new Set(
+    params.presentPapers.map((paper) => paper.canonicalId)
+  );
+  const presentPapers = [...params.presentPapers];
+  const unresolvedMissing: GraphPresenceMissingPaper[] = [];
+  let usedExplicitConfirmation = false;
+
+  for (const missingPaper of params.missingPapers) {
+    const expectedPaper = expectedByCanonicalId.get(missingPaper.canonicalId);
+    if (expectedPaper && isExpectedPaperExplicitlyConfirmed(expectedPaper)) {
+      presentPapers.push(buildPaperSourceIndexMatch(expectedPaper));
+      presentByCanonicalId.add(expectedPaper.canonicalId);
+      usedExplicitConfirmation = true;
+      continue;
+    }
+    unresolvedMissing.push(missingPaper);
+  }
+
+  const canForceReady =
+    params.allowOverride && isGraphPresenceOverrideFresh({ expected: params.expected });
+  if (canForceReady && unresolvedMissing.length > 0) {
+    for (const expectedPaper of params.expected.papers) {
+      if (presentByCanonicalId.has(expectedPaper.canonicalId)) {
+        continue;
+      }
+      presentPapers.push(buildPaperSourceIndexMatch(expectedPaper));
+      presentByCanonicalId.add(expectedPaper.canonicalId);
+    }
+    return {
+      presentPapers,
+      missingPapers: [],
+      verificationMode: "paper_source_index_override",
+    };
+  }
+
+  return {
+    presentPapers,
+    missingPapers: unresolvedMissing,
+    verificationMode: usedExplicitConfirmation ? "paper_source_index_override" : null,
+  };
+}
+
+function applyPaperSourceIndexGraphPresenceOverride(params: {
+  result: GraphPresenceCheckResult;
+  expected: ResolvedExpectedPapers;
+  allowOverride: boolean;
+}): GraphPresenceCheckResult {
+  if (params.expected.papers.length === 0) {
+    return params.result;
+  }
+  const confirmation = applyPaperSourceIndexGraphConfirmation({
+    expected: params.expected,
+    presentPapers: params.result.presentPapers,
+    missingPapers: params.result.missingPapers,
+    allowOverride: params.allowOverride,
+  });
+  const changed =
+    confirmation.verificationMode !== null ||
+    confirmation.presentPapers.length !== params.result.presentPapers.length ||
+    confirmation.missingPapers.length !== params.result.missingPapers.length;
+  if (!changed) {
+    return params.result;
+  }
+
+  const status: GraphPresenceStatus =
+    params.result.expectedPaperCount === 0
+      ? params.result.status
+      : confirmation.missingPapers.length > 0
+        ? "missing_papers"
+        : "ready";
+  const refreshRequired = status === "missing_corpus" || status === "missing_papers";
+  const refreshReason =
+    status === "ready"
+      ? null
+      : buildBlockingReason(
+          status,
+          confirmation.missingPapers,
+          params.result.expectedPaperCount,
+          params.result.corpusRoot
+        );
+  return {
+    ...params.result,
+    status,
+    verificationMode: confirmation.verificationMode ?? params.result.verificationMode,
+    blockingReason: refreshReason,
+    presentPaperCount: confirmation.presentPapers.length,
+    missingPaperCount: confirmation.missingPapers.length,
+    refreshRequired,
+    refreshReason,
+    repairRequired:
+      refreshRequired && params.result.repairRequired ? params.result.repairRequired : false,
+    repairReason:
+      refreshRequired && params.result.repairRequired ? params.result.repairReason : null,
+    repairTargetCorpus:
+      refreshRequired && params.result.repairRequired
+        ? params.result.repairTargetCorpus
+        : null,
+    presentPapers: confirmation.presentPapers,
+    missingPapers: confirmation.missingPapers,
+  };
 }
 
 function summarizePaperIngestionProgress(
@@ -2136,6 +2402,14 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     projectId: params.projectId,
     checkedAt: params.checkedAt,
     status,
+    verificationMode:
+      params.expected.papers.length === 0 && expectedPaperCount > 0
+        ? "remote_corpus_summary"
+        : statusRecord &&
+            pickString(statusRecord, ["verification_mode", "verificationMode"]) ===
+              "paper_source_index_override"
+          ? "paper_source_index_override"
+          : "canonical_paper_index",
     blockingReason: refreshReason,
     reportPath: params.reportPath,
     paperSourceIndexPath: params.expected.paperSourceIndexPath,
@@ -2171,36 +2445,43 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     manifestUpdated: false,
   };
 
+  const finalizedResult = applyPaperSourceIndexGraphPresenceOverride({
+    result,
+    expected: params.expected,
+    allowOverride: !paperIngestionProgress.inFlight,
+  });
+
   await writeJsonEnsured(params.reportPath, {
     checked_at: params.checkedAt,
     project_id: params.projectId,
-    status: result.status,
-    blocking_reason: result.blockingReason,
-    corpus_root: result.corpusRoot,
-    corpus_name: result.corpusName,
-    paper_source_index_path: result.paperSourceIndexPath,
-    used_paper_source_index: result.usedPaperSourceIndex,
-    expected_paper_count: result.expectedPaperCount,
-    present_paper_count: result.presentPaperCount,
-    missing_paper_count: result.missingPaperCount,
-    refresh_required: result.refreshRequired,
-    refresh_reason: result.refreshReason,
-    repair_required: result.repairRequired,
-    repair_reason: result.repairReason,
-    repair_target_corpus: result.repairTargetCorpus,
-    missing_papers: serializeMissingPapers(result.missingPapers),
-    present_papers: serializePresentPapers(result.presentPapers),
+    status: finalizedResult.status,
+    verification_mode: finalizedResult.verificationMode,
+    blocking_reason: finalizedResult.blockingReason,
+    corpus_root: finalizedResult.corpusRoot,
+    corpus_name: finalizedResult.corpusName,
+    paper_source_index_path: finalizedResult.paperSourceIndexPath,
+    used_paper_source_index: finalizedResult.usedPaperSourceIndex,
+    expected_paper_count: finalizedResult.expectedPaperCount,
+    present_paper_count: finalizedResult.presentPaperCount,
+    missing_paper_count: finalizedResult.missingPaperCount,
+    refresh_required: finalizedResult.refreshRequired,
+    refresh_reason: finalizedResult.refreshReason,
+    repair_required: finalizedResult.repairRequired,
+    repair_reason: finalizedResult.repairReason,
+    repair_target_corpus: finalizedResult.repairTargetCorpus,
+    missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
+    present_papers: serializePresentPapers(finalizedResult.presentPapers),
   });
   await persistGraphPresenceArtifacts({
     projectRoot: params.projectRoot,
-    result,
+    result: finalizedResult,
     mode:
       pickString(statusRecord, ["mode"]) ??
       (remoteInspection.summary.mcpUrl ? "remote_mcp" : "remote_api"),
     existingStatusRecord: statusRecord,
   });
 
-  return result;
+  return finalizedResult;
 }
 
 export async function checkGraphPresenceForWorkflow(params: {
@@ -2371,6 +2652,7 @@ export async function checkGraphPresenceForWorkflow(params: {
     projectId,
     checkedAt,
     status,
+    verificationMode: "canonical_paper_index",
     blockingReason: refreshReason,
     reportPath,
     paperSourceIndexPath: expected.paperSourceIndexPath,
@@ -2394,29 +2676,36 @@ export async function checkGraphPresenceForWorkflow(params: {
     manifestUpdated: false,
   };
 
+  const finalizedResult = applyPaperSourceIndexGraphPresenceOverride({
+    result,
+    expected,
+    allowOverride: !paperIngestionProgress.inFlight,
+  });
+
   await writeJsonEnsured(reportPath, {
     checked_at: checkedAt,
     project_id: projectId,
-    status,
-    blocking_reason: result.blockingReason,
-    corpus_root: result.corpusRoot,
-    corpus_name: result.corpusName,
-    paper_source_index_path: result.paperSourceIndexPath,
-    used_paper_source_index: result.usedPaperSourceIndex,
-    expected_paper_count: result.expectedPaperCount,
-    present_paper_count: result.presentPaperCount,
-    missing_paper_count: result.missingPaperCount,
-    refresh_required: result.refreshRequired,
-    refresh_reason: result.refreshReason,
-    repair_required: result.repairRequired,
-    repair_reason: result.repairReason,
-    repair_target_corpus: result.repairTargetCorpus,
-    missing_papers: serializeMissingPapers(result.missingPapers),
-    present_papers: serializePresentPapers(result.presentPapers),
+    status: finalizedResult.status,
+    verification_mode: finalizedResult.verificationMode,
+    blocking_reason: finalizedResult.blockingReason,
+    corpus_root: finalizedResult.corpusRoot,
+    corpus_name: finalizedResult.corpusName,
+    paper_source_index_path: finalizedResult.paperSourceIndexPath,
+    used_paper_source_index: finalizedResult.usedPaperSourceIndex,
+    expected_paper_count: finalizedResult.expectedPaperCount,
+    present_paper_count: finalizedResult.presentPaperCount,
+    missing_paper_count: finalizedResult.missingPaperCount,
+    refresh_required: finalizedResult.refreshRequired,
+    refresh_reason: finalizedResult.refreshReason,
+    repair_required: finalizedResult.repairRequired,
+    repair_reason: finalizedResult.repairReason,
+    repair_target_corpus: finalizedResult.repairTargetCorpus,
+    missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
+    present_papers: serializePresentPapers(finalizedResult.presentPapers),
   });
   await persistGraphPresenceArtifacts({
     projectRoot,
-    result,
+    result: finalizedResult,
     mode: "local_corpus",
     existingStatusRecord: {
       manifest: {
@@ -2426,7 +2715,7 @@ export async function checkGraphPresenceForWorkflow(params: {
             : null,
         corpus_name:
           pickString(sourceManifest ?? {}, ["corpusName", "corpus_name"]) ??
-          result.corpusName,
+          finalizedResult.corpusName,
         indexed_at:
           pickString(sourceManifest ?? {}, ["indexedAt", "indexed_at"]) ??
           pickString(corpusMeta ?? {}, ["indexedAt", "indexed_at"]),
@@ -2440,16 +2729,16 @@ export async function checkGraphPresenceForWorkflow(params: {
     manifest.paper_ingestion = {
       ...paperIngestion,
       graph_presence_checked_at: checkedAt,
-      graph_presence_status: status,
+      graph_presence_status: finalizedResult.status,
       graph_presence_report_path: path.relative(projectRoot, reportPath),
-      graph_presence_expected_papers: result.expectedPaperCount,
-      graph_presence_present_papers: result.presentPaperCount,
-      graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
-      refresh_required: refreshRequired ? true : false,
-      refresh_reason: refreshRequired ? refreshReason : null,
-      repair_required: result.repairRequired ? true : false,
-      repair_reason: result.repairRequired ? result.repairReason : null,
-      repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
+      graph_presence_expected_papers: finalizedResult.expectedPaperCount,
+      graph_presence_present_papers: finalizedResult.presentPaperCount,
+      graph_presence_missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
+      refresh_required: finalizedResult.refreshRequired ? true : false,
+      refresh_reason: finalizedResult.refreshRequired ? finalizedResult.refreshReason : null,
+      repair_required: finalizedResult.repairRequired ? true : false,
+      repair_reason: finalizedResult.repairRequired ? finalizedResult.repairReason : null,
+      repair_target_corpus: finalizedResult.repairRequired ? finalizedResult.repairTargetCorpus : null,
     };
     await saveManifest(projectRoot, manifest);
     await writePapernexusProgressFromManifest({
@@ -2457,10 +2746,10 @@ export async function checkGraphPresenceForWorkflow(params: {
       manifest,
       updatedAt: checkedAt,
     });
-    result.manifestUpdated = true;
+    finalizedResult.manifestUpdated = true;
   }
 
-  return result;
+  return finalizedResult;
 }
 
 // ---------------------------------------------------------------------------
