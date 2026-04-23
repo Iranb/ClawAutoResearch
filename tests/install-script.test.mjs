@@ -305,3 +305,154 @@ exit 1
     /workspace-planner\/AGENTS\.md \(已存在；默认会覆盖，当前因 --preserve-role-files 保留\)/
   );
 });
+
+test("install.sh repairs existing agent models.json drift even when agent creation is skipped", async (t) => {
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-install-agent-model-sync-test-")
+  );
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const openclawHome = path.join(tempRoot, ".openclaw");
+  const agentDir = path.join(openclawHome, "agents", "academic_writer", "agent");
+  const workspaceDir = path.join(openclawHome, "workspace-academic_writer");
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(workspaceDir, { recursive: true });
+
+  await fs.writeFile(
+    path.join(openclawHome, "openclaw.json"),
+    `${JSON.stringify(
+      {
+        models: {
+          providers: {
+            bailian: {
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              apiKey: "test-key",
+              api: "openai-completions",
+              models: [
+                { id: "qwen3.5-plus", name: "qwen3.5-plus" },
+                { id: "qwen3.6-plus", name: "qwen3.6-plus" },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "bailian/qwen3.6-plus",
+              fallbacks: ["bailian/qwen3.5-plus"],
+            },
+          },
+          list: [
+            {
+              id: "academic_writer",
+              workspace: workspaceDir,
+              agentDir,
+              model: {
+                primary: "bailian/qwen3.6-plus",
+                fallbacks: ["bailian/qwen3.5-plus"],
+              },
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(agentDir, "models.json"),
+    `${JSON.stringify(
+      {
+        providers: {
+          bailian: {
+            baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+            apiKey: "test-key",
+            api: "openai-completions",
+            models: [{ id: "qwen3.5-plus", name: "qwen3.5-plus" }],
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const mockBin = path.join(tempRoot, "bin");
+  await writeExecutable(
+    path.join(mockBin, "openclaw"),
+    `#!/bin/sh
+if [ "$1" = "agents" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+  cat <<'EOF'
+[
+  {
+    "id": "academic_writer",
+    "workspace": "${workspaceDir}"
+  }
+]
+EOF
+  exit 0
+fi
+if [ "$1" = "gateway" ] && [ "$2" = "restart" ]; then
+  exit 0
+fi
+echo "unexpected openclaw invocation: $*" >&2
+exit 1
+`
+  );
+  await writeExecutable(
+    path.join(mockBin, "git"),
+    `#!/bin/sh
+if [ "$1" = "-C" ]; then
+  shift 2
+fi
+case "$1" in
+  rev-parse)
+    echo true
+    exit 0
+    ;;
+  pull)
+    exit 0
+    ;;
+esac
+echo "unexpected git invocation: $*" >&2
+exit 1
+`
+  );
+  await writeExecutable(
+    path.join(mockBin, "npm"),
+    `#!/bin/sh
+exit 0
+`
+  );
+
+  const repoRoot = process.cwd();
+  const { code, stdout, stderr } = await spawnInstallScript(
+    ["--yes", "--skip-build", "--skip-extra-agents"],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PATH: `${mockBin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_HOME: openclawHome,
+        PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
+        HOME: path.join(tempRoot, "home"),
+      },
+    }
+  );
+
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /REPAIR academic_writer added=bailian\/qwen3\.6-plus/);
+
+  const nextModels = JSON.parse(
+    await fs.readFile(path.join(agentDir, "models.json"), "utf8")
+  );
+  assert.deepEqual(
+    nextModels.providers.bailian.models.map((entry) => entry.id),
+    ["qwen3.5-plus", "qwen3.6-plus"]
+  );
+});
