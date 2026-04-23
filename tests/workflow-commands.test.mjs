@@ -108,6 +108,23 @@ test("resolveBindingConversationFromCommandContext maps Discord channels to conv
   });
 });
 
+test("resolveBindingConversationFromCommandContext keeps Discord thread ids", () => {
+  const conversation = resolveBindingConversationFromCommandContext({
+    channel: "discord",
+    from: "discord:channel:12345",
+    to: undefined,
+    accountId: "work",
+    messageThreadId: "98765",
+  });
+
+  assert.deepEqual(conversation, {
+    channel: "discord",
+    accountId: "work",
+    conversationId: "channel:12345",
+    threadId: "98765",
+  });
+});
+
 test("resolveBindingConversationFromCommandContext preserves Telegram topic threads", () => {
   const conversation = resolveBindingConversationFromCommandContext({
     channel: "telegram",

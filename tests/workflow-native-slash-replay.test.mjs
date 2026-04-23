@@ -80,6 +80,24 @@ test("resolveBindingConversationFromCommandContext supports native Discord DM co
   });
 });
 
+test("resolveBindingConversationFromCommandContext preserves native Discord thread contexts", () => {
+  const conversation = resolveBindingConversationFromCommandContext({
+    channel: "discord",
+    from: "discord:channel:gcd-lab",
+    to: "slash:owner",
+    originatingTo: "channel:gcd-lab",
+    accountId: "default",
+    messageThreadId: "thread-42",
+  });
+
+  assert.deepEqual(conversation, {
+    channel: "discord",
+    accountId: "default",
+    conversationId: "channel:gcd-lab",
+    threadId: "thread-42",
+  });
+});
+
 test("resolveWorkflowCommandSessionTarget prefers CommandTargetSessionKey for native slash", () => {
   const target = resolveWorkflowCommandSessionTarget(
     makeApi(),

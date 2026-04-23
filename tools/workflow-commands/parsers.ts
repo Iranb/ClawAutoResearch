@@ -238,6 +238,7 @@ export function resolveBindingConversationFromCommandContext(
         channel: "discord",
         accountId,
         conversationId,
+        ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
       };
     }
   }
@@ -286,9 +287,9 @@ export function resolveBindingChannelKeyFromContext(
     originatingTo: readString(ctx.originatingTo),
     accountId: readString(ctx.accountId),
     messageThreadId:
-      typeof ctx.messageThreadId === "number"
+      typeof ctx.messageThreadId === "number" || typeof ctx.messageThreadId === "string"
         ? ctx.messageThreadId
-        : typeof explicitThreadId === "number"
+        : typeof explicitThreadId === "number" || typeof explicitThreadId === "string"
           ? explicitThreadId
           : undefined,
   });
