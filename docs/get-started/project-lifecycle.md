@@ -14,6 +14,8 @@
 - `/auto-research "topic"`
 - `/auto-review "topic"`
 
+这两个入口不要求 Discord。Discord 只负责接收通知消息；本地启动、项目创建、后台运行和恢复都通过项目目录里的 durable state 完成。
+
 它的作用是生成最小项目骨架，例如：
 
 - `PROJECT_MANIFEST.json`
@@ -115,9 +117,55 @@ Orchestrator 的关键工作不再只是写一个 `PLAN.md`。真正的 source-o
 系统会做这些事：
 
 1. 创建一个轻量 survey workspace，而不是要求你先手工搭实验项目骨架。
-2. 绑定当前会话到该 survey 项目，后续 `/workflow-status` 和 `/resume-pipeline` 都能继续接上。
+2. 记录当前入口的 workflow context；如果入口是 Discord，只把它作为通知目标，不把 Discord channel 强制绑定成项目来源。
 3. 在 `PROJECT_MANIFEST.json.survey_review` 下维护 topic、phase、included/excluded counts、coverage、brief readiness 等 durable state。
 4. 当 `SURVEY_BRIEF.md` 和关键综述工件 ready 后，允许 handoff 到 `write`，并以 `paper_mode=survey` 进入写作。
+
+## 8. 脱离 Discord 启动自动研究与自动综述
+
+如果你只想在本机验证 `/auto-research` 或 `/auto-review`，不要走 Discord，也不要依赖某个 Discord 频道绑定。直接运行本地 command harness。
+
+实验论文主线：
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-research \
+  --args '"GCD confirmation bias mitigation"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local \
+  --conversation-id gcd-research-local
+```
+
+科研综述主线：
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-review \
+  --args '"GCD survey"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local \
+  --conversation-id gcd-survey-local
+```
+
+本地启动后的关键产物：
+
+- 项目目录：`$HOME/AutoResearchProjects/<project-id>/`
+- 项目事实：`PROJECT_MANIFEST.json`
+- runtime 状态：`.openclaw-research/`
+- 后台启动回执：`.openclaw-research/LOCAL_WORKFLOW_COMMAND_BACKGROUND_RUN.json`
+
+如果需要一次性验证 experiment 与 survey 两条线的确定性闭环：
+
+```bash
+node scripts/run_auto_command_end_to_end.mjs \
+  --topic "GCD" \
+  --lane full \
+  --mode fixture \
+  --bootstrap-transport local \
+  --projects-root "$HOME/AutoResearchProjects"
+```
+
+`fixture` 模式用于回归测试；`live` 模式会让真实 workflow runtime 接手后续阶段。两者都可以用 `--bootstrap-transport local` 脱离 Discord 启动。
 
 ## 8.5 现有项目如何迁移到最新 workflow/runtime
 

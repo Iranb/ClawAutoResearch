@@ -34,9 +34,27 @@
 - `/auto-review "topic"`
   适合综述 / review 主线，会直接创建 survey 项目并启动 `survey_review` 背景流程。
 
-它们会自动创建/绑定项目；其中 `/auto-research` 会写入 topic-only onboarding placeholders 并以 `AUTO_PROCEED: true` 后台启动主科研流水线，`/auto-review` 则直接启动 survey 背景主线。
+它们会自动创建项目并建立运行上下文；其中 `/auto-research` 会写入 topic-only onboarding placeholders 并以 `AUTO_PROCEED: true` 后台启动主科研流水线，`/auto-review` 则直接启动 survey 背景主线。
 
-注意：如果你是从内部调试脚本或 Gateway `chat.send` 手动发这些命令，而不是从真实 workflow-enabled channel surface 进入，仍可能被 workflow session gate 拒绝。那种情况下，优先参考运维文档里的真实 `chat.send` 测试记录，而不要把它误判成命令逻辑本身失效。
+注意：Discord 现在只是通知通道，不再是项目绑定来源。要脱离 Discord 使用这些入口，直接走本地 command harness：
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-research \
+  --args '"topic"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local
+```
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-review \
+  --args '"topic"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local
+```
+
+更完整的 no-Discord 用法见 [Commands 与 Tools](../reference/commands-and-tools.md#_1-1-不依赖-discord-启动-auto-research-与-auto-review)。如果你是从 Gateway `chat.send` 手动发这些命令，仍要确认 session/context resolution 是否完整；那属于 transport/context 调试，不应误判为 command handler 本身失效。
 
 ### 4. 想做科研综述，却沿用实验项目的默认启动路径
 

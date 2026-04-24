@@ -1,5 +1,5 @@
 /**
- * Peer and target parsers for Discord and Telegram channels.
+ * Peer and target parsers for Discord, Telegram, and local channels.
  */
 
 import type { ConversationRef } from "openclaw/plugin-sdk/conversation-runtime";
@@ -150,6 +150,29 @@ function resolveDiscordConversationCandidate(
   return null;
 }
 
+function stripLocalPrefix(raw: string): string {
+  return raw.startsWith("local:") ? raw.slice("local:".length) : raw;
+}
+
+function resolveLocalConversationCandidate(
+  ctx: Pick<WorkflowCommandContext, "from" | "to" | "originatingTo">
+): string | null {
+  const candidates = [
+    readString(ctx.originatingTo),
+    readString(ctx.from),
+    readString(ctx.to),
+  ].filter((value): value is string => Boolean(value));
+  for (const candidate of candidates) {
+    const normalized = stripLocalPrefix(candidate.trim())
+      .replace(/^(conversation|channel|user):/i, "")
+      .trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
 export function stripTelegramInternalPrefixes(raw: string): string {
   let trimmed = raw.trim();
   let strippedTelegramPrefix = false;
@@ -243,6 +266,18 @@ export function resolveBindingConversationFromCommandContext(
     }
   }
 
+  if (ctx.channel === "local") {
+    const conversationId = resolveLocalConversationCandidate(ctx);
+    if (conversationId) {
+      return {
+        channel: "local",
+        accountId,
+        conversationId,
+        ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
+      };
+    }
+  }
+
   return null;
 }
 
@@ -320,6 +355,16 @@ export function resolveRoutePeerFromCommandContext(
       if (parsed) {
         return parsed;
       }
+    }
+  }
+
+  if (ctx.channel === "local") {
+    const conversationId = resolveLocalConversationCandidate(ctx);
+    if (conversationId) {
+      return {
+        kind: "channel",
+        id: conversationId,
+      };
     }
   }
 

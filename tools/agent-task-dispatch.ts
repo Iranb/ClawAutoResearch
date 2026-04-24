@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   buildWorkflowSubagentSessionKey,
@@ -74,6 +74,29 @@ export type WorkflowTaskDispatchResult = {
   acknowledgedByMailbox: boolean;
   error: string | null;
 };
+
+export function resolveWorkflowDispatchLaunchRunId(
+  dispatch: Pick<
+    WorkflowTaskDispatchResult,
+    "dispatched" | "runId" | "sessionKey" | "strategy"
+  >
+): string | null {
+  if (dispatch.runId) {
+    return dispatch.runId;
+  }
+  if (
+    dispatch.dispatched &&
+    dispatch.strategy === "already_active" &&
+    dispatch.sessionKey
+  ) {
+    const fingerprint = createHash("sha1")
+      .update(dispatch.sessionKey)
+      .digest("hex")
+      .slice(0, 16);
+    return `already-active:${fingerprint}`;
+  }
+  return null;
+}
 
 function toAgentId(role: DispatchableWorkflowRole): string {
   return role;

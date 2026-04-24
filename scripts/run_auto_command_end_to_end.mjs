@@ -6,6 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
 import { dispatchWorkflowCommand } from "./workflow_command_harness_lib.mjs";
+import { buildWorkflowTransportContext } from "./workflow_transport_context.mjs";
 import { materializeSurveyReviewState, runWorkflowAutoIterator } from "../tools/workflow-guard.ts";
 import { reconcileAuthoringCloseout } from "../tools/authoring-closeout-reconcile.ts";
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
@@ -330,26 +331,30 @@ async function runHarness(projectRoot, lane) {
 }
 
 async function runFixtureLane(params) {
-  const { lane, topic, projectsRoot } = params;
+  const { lane, topic, projectsRoot, bootstrapTransport = "local" } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
-  const channelId = lane === "survey" ? "gcd-survey-lab" : "gcd-research-lab";
+  const transportContext = buildWorkflowTransportContext({
+    transport: bootstrapTransport,
+    lane,
+    conversationId:
+      lane === "survey"
+        ? bootstrapTransport === "discord"
+          ? "gcd-survey-lab"
+          : "gcd-survey-local"
+        : bootstrapTransport === "discord"
+          ? "gcd-research-lab"
+          : "gcd-research-local",
+  });
   const bootstrap = await dispatchWorkflowCommand({
     commandName,
     args: JSON.stringify(topic),
     projectsRoot,
-    sessionKey: "agent:researcher:discord:slash:owner",
-    channel: "discord",
-    from: `discord:channel:${channelId}`,
-    to: "slash:owner",
-    accountId: "default",
-    contextExtras: {
-      sessionKey: "agent:researcher:discord:slash:owner",
-      commandSource: "native",
-      commandAuthorized: true,
-      commandTargetSessionKey: `agent:researcher:discord:channel:${channelId}`,
-      originatingChannel: "discord",
-      originatingTo: `channel:${channelId}`,
-    },
+    sessionKey: transportContext.bootstrapSessionKey,
+    channel: transportContext.channel,
+    from: transportContext.from,
+    to: transportContext.to,
+    accountId: transportContext.accountId,
+    contextExtras: transportContext.commandContextExtras(),
     emitFallbackNote: true,
   });
 
@@ -370,7 +375,7 @@ async function runFixtureLane(params) {
         stageAfter: "write",
         ownerBefore: "researcher",
         ownerAfter: "academic_writer",
-        fromSessionKey: "agent:researcher:discord:channel:gcd-survey-lab",
+        fromSessionKey: transportContext.sessionKeyFor("researcher"),
         command: "/paper-phase",
         summary: "Survey review packet is complete; start survey writing.",
       })
@@ -390,13 +395,21 @@ async function runFixtureLane(params) {
         stageAfter: "review",
         ownerBefore: "academic_writer",
         ownerAfter: "reviewer",
-        fromSessionKey: "agent:academic_writer:discord:channel:gcd-survey-lab",
+        fromSessionKey: transportContext.sessionKeyFor("academic_writer"),
         command: "/review-phase",
         summary: "Survey draft is ready for review closeout.",
       })
     );
     const harness = await runHarness(projectRoot, "survey");
-    return { bootstrap, projectRoot, surveyState, closeout, handoffs, harness };
+    return {
+      transport: transportContext.transport,
+      bootstrap,
+      projectRoot,
+      surveyState,
+      closeout,
+      handoffs,
+      harness,
+    };
   }
 
   const handoffs = [];
@@ -408,7 +421,7 @@ async function runFixtureLane(params) {
       stageAfter: "plan",
       ownerBefore: "researcher",
       ownerAfter: "orchestrator",
-      fromSessionKey: "agent:researcher:discord:channel:gcd-research-lab",
+      fromSessionKey: transportContext.sessionKeyFor("researcher"),
       command: "/plan-research",
       summary: "Research evidence packet is ready for planning.",
     })
@@ -421,7 +434,7 @@ async function runFixtureLane(params) {
       stageAfter: "code",
       ownerBefore: "orchestrator",
       ownerAfter: "coder",
-      fromSessionKey: "agent:orchestrator:discord:channel:gcd-research-lab",
+      fromSessionKey: transportContext.sessionKeyFor("orchestrator"),
       command: "/run-experiment",
       summary: "Approved experiment plan is ready for implementation.",
     })
@@ -435,7 +448,7 @@ async function runFixtureLane(params) {
       stageAfter: "analyze",
       ownerBefore: "coder",
       ownerAfter: "analyzer",
-      fromSessionKey: "agent:coder:discord:channel:gcd-research-lab",
+      fromSessionKey: transportContext.sessionKeyFor("coder"),
       command: "/analyze-results",
       summary: "Experiment artifacts are ready for analysis.",
     })
@@ -449,7 +462,7 @@ async function runFixtureLane(params) {
       stageAfter: "write",
       ownerBefore: "analyzer",
       ownerAfter: "academic_writer",
-      fromSessionKey: "agent:analyzer:discord:channel:gcd-research-lab",
+      fromSessionKey: transportContext.sessionKeyFor("analyzer"),
       command: "/paper-phase",
       summary: "Analysis packet is ready for paper writing.",
     })
@@ -466,19 +479,27 @@ async function runFixtureLane(params) {
       stageAfter: "review",
       ownerBefore: "academic_writer",
       ownerAfter: "reviewer",
-      fromSessionKey: "agent:academic_writer:discord:channel:gcd-research-lab",
+      fromSessionKey: transportContext.sessionKeyFor("academic_writer"),
       command: "/review-phase",
       summary: "Conference draft is ready for review closeout.",
     })
   );
   const harness = await runHarness(projectRoot, "experiment");
-  return { bootstrap, projectRoot, closeout, handoffs, harness };
+  return {
+    transport: transportContext.transport,
+    bootstrap,
+    projectRoot,
+    closeout,
+    handoffs,
+    harness,
+  };
 }
 
 async function main() {
   const topic = argValue("--topic", "Generalized Category Discovery");
   const lane = argValue("--lane", "full");
   const mode = argValue("--mode", "live");
+  const bootstrapTransport = argValue("--bootstrap-transport", "local");
   const projectsRoot =
     argValue("--projects-root") ??
     (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-command-e2e-")));
@@ -493,6 +514,7 @@ async function main() {
         profile: argValue("--profile", null),
         gatewayUrl: argValue("--gateway-url", null),
         gatewayToken: argValue("--gateway-token", null),
+        bootstrapTransport,
       });
     }
     if (lane === "survey" || lane === "full") {
@@ -503,9 +525,12 @@ async function main() {
         profile: argValue("--profile", null),
         gatewayUrl: argValue("--gateway-url", null),
         gatewayToken: argValue("--gateway-token", null),
+        bootstrapTransport,
       });
     }
-    console.log(JSON.stringify({ topic, lane, mode, projectsRoot, result }, null, 2));
+    console.log(
+      JSON.stringify({ topic, lane, mode, bootstrapTransport, projectsRoot, result }, null, 2)
+    );
     return;
   }
 
@@ -515,6 +540,7 @@ async function main() {
       lane: "experiment",
       topic,
       projectsRoot,
+      bootstrapTransport,
     });
   }
   if (lane === "survey" || lane === "full") {
@@ -522,10 +548,13 @@ async function main() {
       lane: "survey",
       topic,
       projectsRoot,
+      bootstrapTransport,
     });
   }
 
-  console.log(JSON.stringify({ topic, lane, mode, projectsRoot, result }, null, 2));
+  console.log(
+    JSON.stringify({ topic, lane, mode, bootstrapTransport, projectsRoot, result }, null, 2)
+  );
 }
 
 await main();

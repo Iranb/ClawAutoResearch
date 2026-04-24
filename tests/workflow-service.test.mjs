@@ -61,6 +61,7 @@ import { readAutoModeDiscussionStore } from "../tools/workflow-auto-discussion.t
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 import { readWorkflowArtifactReceiptStore } from "../tools/workflow-handoff/artifact-receipts.ts";
 import { readWorkflowHooksStateStore } from "../tools/workflow-hooks/state.ts";
+import { recordWorkflowNotificationChannelForProject } from "../tools/workflow-notification-channels.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
@@ -180,6 +181,21 @@ async function makeProject(projectsRoot, projectId, stage = "setup") {
     current_stage: stage,
   });
   return projectRoot;
+}
+
+async function recordDiscordNotificationTarget(
+  projectRoot,
+  projectId = path.basename(projectRoot)
+) {
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot,
+    projectId,
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    source: "test",
+    notes: "Discord is a notification channel, not a project binding.",
+  });
 }
 
 async function seedProjectPapers(projectRoot, extraManifest = {}) {
@@ -760,6 +776,7 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
   const launch = await maybeLaunchAutoStageForProject({
     workflowRuntime: {
       async run(params) {
@@ -836,6 +853,7 @@ test("maybeLaunchAutoStageForProject claims the next matching task for the launc
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
   await materializeWorkflowTaskGraph({
     projectRoot,
     projectId: "alpha",
@@ -1059,6 +1077,7 @@ test("maybeLaunchAutoStageForProject keeps readiness-blocked stages on repair gu
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const launch = await maybeLaunchAutoStageForProject({
     workflowRuntime: {
@@ -1148,6 +1167,7 @@ test("maybeLaunchAutoStageForProject dispatches a prepared owner handoff even wh
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const launch = await maybeLaunchAutoStageForProject({
     workflowRuntime: {
@@ -1229,6 +1249,7 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const launch = await maybeLaunchAutoStageForProject({
     workflowRuntime: {
@@ -2757,6 +2778,7 @@ test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to t
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
   await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const dispatch = await maybeDispatchAutoModeMitigationForProject({
     workflowRuntime: {
@@ -3434,6 +3456,15 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
     policy: plugin.getWorkflowPolicy(),
     boundByAgent: "researcher",
   });
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot,
+    projectId: "alpha",
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    source: "test",
+    notes: "Discord is a notification target, not a project binding.",
+  });
 
   const service = createWorkflowCoordinatorService(plugin, {
     async listWorkflowCoordinatorProjects() {
@@ -3523,6 +3554,13 @@ test("workflow coordinator broadcasts visible handed-off status updates to the b
   assert.ok(runs.some((entry) => entry.deliver === false && /Immediate command: \/implement-experiment/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /\[Workflow Status\]/.test(entry.message)));
   assert.ok(runs.some((entry) => entry.deliver === true && /handed off/i.test(entry.message)));
+  assert.ok(
+    runs.some(
+      (entry) =>
+        entry.deliver === true &&
+        entry.sessionKey === "agent:researcher:discord:group:paper-lab"
+    )
+  );
 });
 
 test("workflow coordinator can launch the next stage owner through embedded runtime without gateway subagent access", async (t) => {

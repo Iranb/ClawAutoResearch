@@ -5,6 +5,7 @@ import path from "node:path";
 import { createResearchWorkflowCommands } from "../tools/workflow-commands.ts";
 import { getWorkflowGuardPolicy } from "../tools/workflow-guard.ts";
 import { startBackgroundWorkflowRun as startRealBackgroundWorkflowRun } from "../tools/workflow-fast-paths.ts";
+import { shouldUseChannelProjectBindingForWorkflow } from "../tools/workflow-message-channels.ts";
 
 export function argValue(argv, name, fallback = null) {
   const index = argv.indexOf(name);
@@ -190,7 +191,7 @@ export async function dispatchWorkflowCommand(options) {
       if (backgroundExecutionMode === "live") {
         const workflowPolicy = getWorkflowGuardPolicy(api.pluginConfig);
         const liveResult = await startRealBackgroundWorkflowRun({
-          runtimeSubagent,
+          workflowRuntime: params.workflowRuntime,
           workflowPolicy,
           agentCtx: {
             agentId,
@@ -206,7 +207,11 @@ export async function dispatchWorkflowCommand(options) {
             projectId: effectiveProjectId,
             currentStage: snapshot.currentStage ?? null,
             title: snapshot.title ?? null,
-            channelProjectBindingsEnabled: true,
+            channelProjectBindingsEnabled: shouldUseChannelProjectBindingForWorkflow({
+              messageChannel: channel,
+              channelKey: contextExtras.channelKey ?? null,
+              sessionKey: contextExtras.commandTargetSessionKey ?? sessionKey,
+            }),
           },
           backgroundRun: params.backgroundRun,
         });
@@ -271,6 +276,7 @@ export async function dispatchWorkflowCommand(options) {
     to,
     accountId,
     config: {},
+    sessionKey,
     ...contextExtras,
   });
 

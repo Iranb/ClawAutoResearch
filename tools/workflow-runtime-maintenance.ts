@@ -2,6 +2,7 @@ import path from "node:path";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import {
   dispatchWorkflowTaskToAgent,
+  resolveWorkflowDispatchLaunchRunId,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
@@ -41,7 +42,10 @@ import {
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
-import type { WorkflowExecutionRuntime } from "./workflow-execution-runtime.js";
+import type {
+  WorkflowExecutionRuntime,
+  WorkflowExecutionSessionInspection,
+} from "./workflow-execution-runtime.js";
 
 type WorkflowRuntimeApi = WorkflowExecutionRuntime;
 
@@ -105,6 +109,155 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
     ordered.push(normalized);
   }
   return ordered;
+}
+
+function describeInvalidRuntimeSessionInspection(
+  inspection: WorkflowExecutionSessionInspection | null | undefined
+): string | null {
+  if (!inspection) {
+    return "Workflow runtime session is missing from the underlying session store.";
+  }
+  const status = readString(inspection.status)?.toLowerCase() ?? null;
+  if (status && ["failed", "completed", "aborted", "done"].includes(status)) {
+    return `Workflow runtime session is already terminal in the underlying session store (status=${status}).`;
+  }
+  if (inspection.abortedLastRun) {
+    return "Workflow runtime session was aborted in the underlying session store.";
+  }
+  if (inspection.liveModelSwitchPending) {
+    return "Workflow runtime session has a pending live model switch and must be rotated.";
+  }
+  if (inspection.providerOverride || inspection.modelOverride) {
+    return "Workflow runtime session carries a persisted model/provider override and must be rotated.";
+  }
+  return null;
+}
+
+async function repairInvalidActiveRuntimeSessions(params: {
+  projectRoot: string;
+  projectId: string | null;
+  workflowRuntime?: WorkflowRuntimeApi;
+}): Promise<{
+  repairedSessionKeys: string[];
+  repairedQueueKeys: string[];
+}> {
+  if (!params.workflowRuntime?.inspectSession) {
+    return {
+      repairedSessionKeys: [],
+      repairedQueueKeys: [],
+    };
+  }
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot);
+  const invalidBySessionKey = new Map<string, string>();
+
+  for (const session of sessionsStore.entries) {
+    if (session.status !== "active") {
+      continue;
+    }
+    try {
+      const inspection = await params.workflowRuntime.inspectSession({
+        sessionKey: session.sessionKey,
+      });
+      const reason = describeInvalidRuntimeSessionInspection(inspection);
+      if (reason) {
+        invalidBySessionKey.set(session.sessionKey, reason);
+      }
+    } catch (error) {
+      invalidBySessionKey.set(
+        session.sessionKey,
+        `Workflow runtime session inspection failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  if (invalidBySessionKey.size === 0) {
+    return {
+      repairedSessionKeys: [],
+      repairedQueueKeys: [],
+    };
+  }
+
+  const currentAt = nowIso();
+  const invalidQueueKeys = uniqueStrings(
+    sessionsStore.entries
+      .filter((entry) => invalidBySessionKey.has(entry.sessionKey))
+      .map((entry) => readString(entry.queueKey))
+  );
+
+  await updateWorkflowRuntimeSessionsStore({
+    projectRoot: params.projectRoot,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        const reason = invalidBySessionKey.get(entry.sessionKey);
+        if (!reason) {
+          return entry;
+        }
+        return {
+          ...entry,
+          status: "needs_repair",
+          lastCheckedAt: currentAt,
+          lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+          lastError: [entry.lastError, reason].filter(Boolean).join(" "),
+        };
+      }),
+  });
+
+  if (invalidQueueKeys.length > 0) {
+    await updateWorkflowRuntimeQueueStore({
+      projectRoot: params.projectRoot,
+      updater: (store) =>
+        store.entries.map((entry) => {
+          if (
+            !invalidQueueKeys.includes(entry.queueKey) ||
+            (entry.status !== "running" && entry.status !== "launching")
+          ) {
+            return entry;
+          }
+          return {
+            ...entry,
+            status: "needs_repair",
+            lastCheckedAt: currentAt,
+            lastError:
+              entry.lastError ??
+              "Linked runtime session is not active in the underlying session store and needs repair.",
+          };
+        }),
+    });
+  }
+
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "runtime_session_inspection_repair",
+    summary:
+      `Marked ${invalidBySessionKey.size} runtime session(s) and ` +
+      `${invalidQueueKeys.length} linked queue entry(s) as needs_repair after session inspection.`,
+    details: {
+      repairedSessionKeys: [...invalidBySessionKey.keys()],
+      repairedQueueKeys: invalidQueueKeys,
+    },
+  });
+
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "session_inspection_repair",
+    status: "waiting",
+    summary: "Runtime maintenance marked invalid active sessions as needs_repair after inspecting session liveness.",
+    details: {
+      repairedSessionKeys: [...invalidBySessionKey.keys()],
+      repairedQueueKeys: invalidQueueKeys,
+    },
+  });
+
+  return {
+    repairedSessionKeys: [...invalidBySessionKey.keys()],
+    repairedQueueKeys: invalidQueueKeys,
+  };
 }
 
 function toDispatchableRole(value: unknown): DispatchableWorkflowRole {
@@ -366,11 +519,12 @@ async function replayQueueEntry(params: {
             retryOnTimeout: dispatchPayload.retryOnTimeout,
             enableSpawnFallback: dispatchPayload.enableSpawnFallback,
           });
-      if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+      const dispatchRunId = resolveWorkflowDispatchLaunchRunId(dispatch);
+      if (!dispatch.dispatched || !dispatchRunId || !dispatch.sessionKey) {
         throw new Error(dispatch.error ?? "Workflow repair dispatch did not start.");
       }
       return {
-        runId: dispatch.runId,
+        runId: dispatchRunId,
         sessionKey: dispatch.sessionKey,
         runtime:
           dispatch.channel === "sessions_spawn" || dispatch.channel === "sessions_send"
@@ -553,6 +707,12 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     projectRoot,
     projectId,
     failedBroadcasts: recovery.broadcast.failed,
+  });
+
+  const sessionInspectionRepair = await repairInvalidActiveRuntimeSessions({
+    projectRoot,
+    projectId,
+    workflowRuntime: params.workflowRuntime,
   });
 
   const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
@@ -856,11 +1016,15 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     }
   }
 
-  const repairedSessionKeys = (
+  const replayActivatedSessionKeys = (
     await readWorkflowRuntimeSessionsStore(projectRoot)
   ).entries
     .filter((entry) => replayedQueueKeys.includes(entry.queueKey ?? "") && entry.status === "active")
     .map((entry) => entry.sessionKey);
+  const repairedSessionKeys = uniqueStrings([
+    ...sessionInspectionRepair.repairedSessionKeys,
+    ...replayActivatedSessionKeys,
+  ]);
 
   const finalQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
   const finalSessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);

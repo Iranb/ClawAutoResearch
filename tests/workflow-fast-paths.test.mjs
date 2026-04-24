@@ -45,6 +45,7 @@ import {
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
 import { createWorkflowExecutionRuntimeFromApi } from "../tools/workflow-execution-runtime.ts";
+import { listWorkflowNotificationChannelsForProject } from "../tools/workflow-notification-channels.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-fast-paths-"));
@@ -911,7 +912,7 @@ test("startBackgroundWorkflowRun keeps survey continuations on the survey line a
   assert.equal(manifest.writing_contract.paper_mode, "survey");
 });
 
-test("startBackgroundWorkflowRun binds the channel back to the manifest owner instead of the invoking orchestrator", async (t) => {
+test("startBackgroundWorkflowRun binds a non-Discord channel back to the manifest owner instead of the invoking orchestrator", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = path.join(projectsRoot, "survey-omnimodel");
@@ -944,10 +945,10 @@ test("startBackgroundWorkflowRun binds the channel back to the manifest owner in
     agentCtx: {
       agentId: "orchestrator",
       workspaceDir: workspaceRoot,
-      sessionKey: "agent:orchestrator:discord:channel:1493115797856452619",
+      sessionKey: "agent:orchestrator:local:channel:1493115797856452619",
       sessionId: "session-bg-owner-fix",
-      messageChannel: "discord",
-      channelKey: "binding:discord:researcher:channel:1493115797856452619",
+      messageChannel: "local",
+      channelKey: "binding:local:researcher:channel:1493115797856452619",
     },
     snapshot: {
       role: "orchestrator",
@@ -971,12 +972,12 @@ test("startBackgroundWorkflowRun binds the channel back to the manifest owner in
       projectsRoot,
       enableChannelProjectBindings: true,
     },
-    channelKey: "binding:discord:researcher:channel:1493115797856452619",
+    channelKey: "binding:local:researcher:channel:1493115797856452619",
   });
   assert.equal(bound.binding?.workflowRole, "researcher");
   assert.equal(
     bound.binding?.workflowSessionKey,
-    "agent:researcher:discord:channel:1493115797856452619"
+    "agent:researcher:local:channel:1493115797856452619"
   );
   assert.equal(bound.binding?.boundByAgent, "researcher");
 });
@@ -1357,7 +1358,7 @@ test("startBackgroundWorkflowRun for resume-pipeline requeues stale running inge
   );
 });
 
-test("startBackgroundWorkflowRun launches a dedicated subagent continuation and binds the project", async (t) => {
+test("startBackgroundWorkflowRun launches a dedicated Discord continuation and records a notification target", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const runCalls = [];
@@ -1384,6 +1385,7 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
       sessionKey,
       sessionId: "session-bg-1",
       messageChannel: "discord",
+      channelKey: "binding:discord:default:group:birds-room",
     },
     snapshot: {
       role: "researcher",
@@ -1412,9 +1414,21 @@ test("startBackgroundWorkflowRun launches a dedicated subagent continuation and 
   assert.equal(result.sessionKey, runCalls[0].sessionKey);
 
   await fs.access(path.join(result.projectRoot, "PROJECT_MANIFEST.json"));
-  await fs.access(
-    path.join(result.projectRoot, ".openclaw-research", "channel-project-bindings.json")
+  await assert.rejects(
+    () =>
+      fs.access(
+        path.join(result.projectRoot, ".openclaw-research", "channel-project-bindings.json")
+      ),
+    /ENOENT/
   );
+  const notifications = await listWorkflowNotificationChannelsForProject(
+    result.projectRoot
+  );
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].messageChannel, "discord");
+  assert.equal(notifications[0].channelKey, "binding:discord:default:group:birds-room");
+  assert.equal(notifications[0].sessionKey, sessionKey);
+  assert.equal(notifications[0].projectId, "bird-species-discovery-with-semantic-shi");
   const runtimeQueue = await readWorkflowRuntimeQueueStore(result.projectRoot);
   assert.equal(runtimeQueue.entries.length, 1);
   assert.equal(runtimeQueue.entries[0].status, "running");
@@ -1983,6 +1997,98 @@ test("queued researcher background runs persist and auto-replay when a pooled se
   );
   assert.equal(
     queuedQueue.entries.find((entry) => entry.queueKey === queued.queueKey)?.status,
+    "running"
+  );
+});
+
+test("queued dispatch replay accepts already-active owner sessions without a fresh run id", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "already-active-project");
+  const sessionKey = "agent:researcher:discord:group:already-active-room";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "already-active-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "workflow_auto_mitigation",
+    ownerAgent: "researcher",
+    requesterSessionKey: sessionKey,
+    messageChannel: "discord",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_mitigation_dispatch",
+    projectId: "already-active-project",
+    projectRoot,
+    projectsRoot,
+    queueKey: "already-active-dispatch",
+    summary: "Continue the already active idea-stage owner.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "already-active-project",
+      stage: "idea",
+      summary: "Continue the already active idea-stage owner.",
+      command: "/idea-phase",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: null,
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    workflowRuntime: {
+      async run() {
+        throw new Error("already-active dispatch should not start a fresh run");
+      },
+    },
+    projectsRoot,
+    handoffWorkflowTaskToAgent: async () => ({
+      dispatched: true,
+      sessionKey,
+      runId: null,
+      waitStatus: null,
+      channel: "sessions_send",
+      strategy: "already_active",
+      attempts: [],
+      fallbackSpawned: false,
+      acknowledgedByMailbox: false,
+      error: null,
+      backend: "native",
+      lobsterStatus: null,
+      fallbackReason: null,
+    }),
+  });
+
+  assert.equal(drained.started.length, 1);
+  assert.equal(drained.remaining.length, 0);
+  assert.match(drained.started[0].runId, /^already-active:/);
+  assert.equal(drained.started[0].sessionKey, sessionKey);
+
+  const sessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(sessions.entries.length, 1);
+  assert.equal(sessions.entries[0].sessionKey, sessionKey);
+  assert.match(sessions.entries[0].runId, /^already-active:/);
+
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    queue.entries.find((entry) => entry.queueKey === "already-active-dispatch")?.status,
     "running"
   );
 });

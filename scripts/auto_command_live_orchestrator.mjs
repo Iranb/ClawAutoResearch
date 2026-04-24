@@ -4,6 +4,7 @@ import path from "node:path";
 import { dispatchWorkflowCommand } from "./workflow_command_harness_lib.mjs";
 import { createGatewayRuntimeSubagent } from "./gateway_runtime_subagent.mjs";
 import { startIsolatedGateway } from "./isolated_gateway_server.mjs";
+import { buildWorkflowTransportContext } from "./workflow_transport_context.mjs";
 import { runWorkflowAutoIterator } from "../tools/workflow-guard.ts";
 import { handoffWorkflowTaskToAgent } from "../tools/workflow-execution/delivery-adapter.ts";
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
@@ -67,10 +68,6 @@ function slugifyTopic(topic) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "research-topic";
-}
-
-function buildChannelSessionKey(role, channelId) {
-  return `agent:${role}:discord:channel:${channelId}`;
 }
 
 function ensureSlashCommandText(text, fallback) {
@@ -229,7 +226,7 @@ async function runLiveStageTurn(params) {
     manifest,
     iterator,
     topic,
-    channelId,
+    transportContext,
     previousRole,
   } = params;
   const owner = String(iterator.ownerAfter ?? manifest.owner_agent ?? "researcher");
@@ -239,12 +236,12 @@ async function runLiveStageTurn(params) {
     lane === "survey" ? `/survey-pipeline ${JSON.stringify(topic)}` : `/research-pipeline ${JSON.stringify(topic)}`
   );
   const fromRole = previousRole ?? "researcher";
-  const fromSessionKey = buildChannelSessionKey(fromRole, channelId);
+  const fromSessionKey = transportContext.sessionKeyFor(fromRole);
   const sameOwner = owner === fromRole;
 
   if (sameOwner) {
     const started = await runtimeSubagent.run({
-      sessionKey: buildChannelSessionKey(owner, channelId),
+      sessionKey: transportContext.sessionKeyFor(owner),
       message: [
         `Complete workflow stage ${stage} for project ${projectId}.`,
         `Suggested command context: ${command}`,
@@ -253,6 +250,9 @@ async function runLiveStageTurn(params) {
       lane: "nested",
       deliver: false,
       idempotencyKey: `live-stage:${projectId}:${stage}:${Date.now()}`,
+      originatingChannel: transportContext.originatingChannel,
+      originatingTo: transportContext.originatingTo,
+      originatingAccountId: transportContext.accountId,
     });
     const waited = await runtimeSubagent.waitForRun?.({
       runId: started.runId,
@@ -308,7 +308,7 @@ async function runLiveStageTurn(params) {
         const dispatch = await handoffWorkflowTaskToAgent({
           runtimeSubagent,
           requesterSessionKey: fromSessionKey,
-          requesterChannel: "discord",
+          requesterChannel: transportContext.requesterChannel,
           fromRole,
           toRole: owner,
           projectRoot,
@@ -390,25 +390,37 @@ async function runLiveStageTurn(params) {
   };
 }
 
-async function runHarness(projectRoot, lane) {
+async function runHarness(projectRoot, lane, options = {}) {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileAsync = promisify(execFile);
-  const { stdout } = await execFileAsync(process.execPath, [
+  const args = [
     path.join(process.cwd(), "scripts", "run-e2e-paper-generation.mjs"),
     "--project-root",
     projectRoot,
     "--lane",
     lane,
-  ]);
+  ];
+  if (options.strictContent) {
+    args.push("--strict-content");
+  }
+  const { stdout } = await execFileAsync(process.execPath, args);
   return JSON.parse(stdout);
 }
 
 export async function runAutoCommandEndToEndLive(params) {
   const { lane, topic, projectsRoot } = params;
-  const channelId = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
-  const slashSessionKey = "agent:researcher:discord:slash:owner";
+  const bootstrapTransport = params.bootstrapTransport === "discord" ? "discord" : "local";
+  const transportContext = buildWorkflowTransportContext({
+    transport: bootstrapTransport,
+    lane,
+    conversationId:
+      params.conversationId ??
+      (lane === "survey" ? "gcd-survey-live" : "gcd-research-live"),
+    accountId: "default",
+    userId: "owner",
+  });
   const isolatedGateway =
     params.isolatedGateway === false
       ? null
@@ -421,47 +433,66 @@ export async function runAutoCommandEndToEndLive(params) {
     profile: params.profile,
     url: isolatedGateway?.url ?? params.gatewayUrl,
     token: isolatedGateway?.token ?? params.gatewayToken,
-    originatingChannel: "discord",
-    originatingTo: `channel:${channelId}`,
-    originatingAccountId: "default",
+    originatingChannel: transportContext.originatingChannel,
+    originatingTo: transportContext.originatingTo,
+    originatingAccountId: transportContext.accountId,
   });
   const runtimeSubagent = gateway.runtimeSubagent;
   try {
-    const started = await gateway.client.chatSend({
-      sessionKey: slashSessionKey,
-      message: `/${commandName} ${JSON.stringify(topic)}`,
-      idempotencyKey: `native-bootstrap:${commandName}:${Date.now()}`,
-      originatingChannel: "discord",
-      originatingTo: `channel:${channelId}`,
-      originatingAccountId: "default",
-      timeoutMs: 30_000,
-    });
-    if (started?.status !== "started" || typeof started?.runId !== "string") {
-      throw new Error(`Native slash bootstrap did not start correctly: ${JSON.stringify(started)}`);
-    }
-    await gateway.client.agentWait({
-      runId: started.runId,
-      timeoutMs: 120_000,
-    });
-    const slashHistory = await gateway.client.chatHistory({
-      sessionKey: slashSessionKey,
-      limit: 20,
-      timeoutMs: 30_000,
-    });
-    const assistantTexts = extractAssistantTexts(slashHistory.messages);
-    const bootstrap = {
-      command: `/${commandName}`,
-      args: JSON.stringify(topic),
-      projectRoot: null,
-      projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
-      sessionKey: slashSessionKey,
-      result: {
-        text: assistantTexts.at(-1) ?? "",
-      },
-      backgroundRuns: [],
-      fallbackTransport: "Executed through isolated native slash bootstrap.",
-      runId: started.runId,
-    };
+    const bootstrap =
+      bootstrapTransport === "local"
+        ? await dispatchWorkflowCommand({
+            commandName,
+            args: JSON.stringify(topic),
+            projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
+            workspaceDir: isolatedGateway?.projectsRoot ?? projectsRoot,
+            sessionKey: transportContext.bootstrapSessionKey,
+            channel: transportContext.channel,
+            from: transportContext.from,
+            to: transportContext.to,
+            accountId: transportContext.accountId,
+            contextExtras: transportContext.commandContextExtras(),
+            emitFallbackNote: true,
+            runtimeSubagent,
+            backgroundExecutionMode: "live",
+          })
+        : await (async () => {
+            const started = await gateway.client.chatSend({
+              sessionKey: transportContext.bootstrapSessionKey,
+              message: `/${commandName} ${JSON.stringify(topic)}`,
+              idempotencyKey: `native-bootstrap:${commandName}:${Date.now()}`,
+              originatingChannel: transportContext.originatingChannel,
+              originatingTo: transportContext.originatingTo,
+              originatingAccountId: transportContext.accountId,
+              timeoutMs: 30_000,
+            });
+            if (started?.status !== "started" || typeof started?.runId !== "string") {
+              throw new Error(`Native slash bootstrap did not start correctly: ${JSON.stringify(started)}`);
+            }
+            await gateway.client.agentWait({
+              runId: started.runId,
+              timeoutMs: 120_000,
+            });
+            const slashHistory = await gateway.client.chatHistory({
+              sessionKey: transportContext.bootstrapSessionKey,
+              limit: 20,
+              timeoutMs: 30_000,
+            });
+            const assistantTexts = extractAssistantTexts(slashHistory.messages);
+            return {
+              command: `/${commandName}`,
+              args: JSON.stringify(topic),
+              projectRoot: null,
+              projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
+              sessionKey: transportContext.bootstrapSessionKey,
+              result: {
+                text: assistantTexts.at(-1) ?? "",
+              },
+              backgroundRuns: [],
+              fallbackTransport: "Executed through isolated native slash bootstrap.",
+              runId: started.runId,
+            };
+          })();
 
     const projectRoot =
       deriveProjectRootFromBootstrap(bootstrap) ??
@@ -501,7 +532,7 @@ export async function runAutoCommandEndToEndLive(params) {
         topic,
         manifest,
         iterator,
-        channelId,
+        transportContext,
         previousRole,
       });
       turns.push(turn);
@@ -511,8 +542,9 @@ export async function runAutoCommandEndToEndLive(params) {
       }
     }
 
-    const harness = await runHarness(projectRoot, lane);
+    const harness = await runHarness(projectRoot, lane, { strictContent: true });
     return {
+      transport: bootstrapTransport,
       bootstrap,
       projectRoot,
       turns,

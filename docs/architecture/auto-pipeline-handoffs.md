@@ -267,9 +267,11 @@ owner 技能现在都允许一条安全恢复路径：
 
 ## 当前最重要的两条实现事实
 
-### 1. 同频道新项目优先新绑定
+### 1. Discord 是通知通道，不是项目绑定来源
 
-现在同一个 Discord channel 启动新的 `auto-review` / `auto-research` 时，新的显式 rebind 会 supersede 同频道旧项目绑定，避免旧项目继续污染 channel resolution。
+`auto-review` / `auto-research` 现在不会把 Discord channel 强制写成项目绑定。Discord 只记录为通知目标，用于接收 stage/status/handoff 摘要；项目解析由项目目录、local command context 或非 Discord 的 channel-project binding 负责。
+
+这避免同一个 Discord channel 启动多个项目时互相污染 channel resolution。旧的 Discord binding 如果存在，也不再作为 coordinator requester fallback。
 
 ### 2. reviewer submit 现在要求真实 PDF 和真实引用验证
 

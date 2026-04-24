@@ -12,6 +12,7 @@ import {
   evaluateChannelProjectBindingGate,
   type ChannelProjectBindingPolicy,
 } from "./channel-project-bindings";
+import { isWorkflowNotificationOnlySessionKey } from "./workflow-message-channels.js";
 
 export type StageBroadcastRuntime = {
   run: (params: {
@@ -89,6 +90,9 @@ async function maybeSuppressBindingMismatchedBroadcast(params: {
   reason: string | null;
 }> {
   if (!params.projectRoot || !params.bindingPolicy || !params.sessionKey) {
+    return { suppressed: false, reason: null };
+  }
+  if (isWorkflowNotificationOnlySessionKey(params.sessionKey)) {
     return { suppressed: false, reason: null };
   }
   const gate = await evaluateChannelProjectBindingGate({

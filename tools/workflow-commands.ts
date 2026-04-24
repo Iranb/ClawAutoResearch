@@ -55,6 +55,8 @@ import {
 } from "./workflow-auto-discussion.js";
 import { enqueueWorkflowTask, resolveWorkflowQueueKey } from "./workflow-coordination.js";
 import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
+import { recordWorkflowNotificationChannelForProject } from "./workflow-notification-channels.js";
 
 // Import types and utilities from decoupled modules
 import {
@@ -147,6 +149,44 @@ function deriveWorkflowRoleSessionKey(params: {
         targetRole: params.role,
       })
     : null;
+}
+
+function resolveChannelProjectBindingPolicy<T extends { enableChannelProjectBindings?: boolean }>(
+  policy: T,
+  params: {
+    messageChannel?: unknown;
+    channelKey?: unknown;
+    sessionKey?: unknown;
+  }
+): T {
+  return shouldUseChannelProjectBindingForWorkflow(params)
+    ? policy
+    : {
+        ...policy,
+        enableChannelProjectBindings: false,
+      };
+}
+
+async function recordCommandNotificationChannel(params: {
+  projectRoot: string;
+  projectId: string | null;
+  ctx: Pick<PluginCommandContext, "channel">;
+  target: ResolvedWorkflowCommandTarget;
+  sessionKey: string | null;
+  source: string;
+  notes: string;
+}): Promise<void> {
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    messageChannel: params.ctx.channel,
+    channelKey: params.target.bindingChannelKey,
+    sessionKey: params.sessionKey,
+    accountId: params.target.bindingConversation?.accountId,
+    conversationId: params.target.bindingConversation?.conversationId,
+    source: params.source,
+    notes: params.notes,
+  });
 }
 
 const DEFAULT_DEPS: _WorkflowCommandDependencies = {
@@ -526,8 +566,13 @@ async function resolveProjectRootForProjectBoundCommand(params: {
   if (!targetSessionKey) {
     throw new Error("This slash command requires a workflow-bound conversation or an explicit project path/project id.");
   }
+  const projectBindingPolicy = resolveChannelProjectBindingPolicy(workflowPolicy, {
+    messageChannel: params.ctx.channel,
+    channelKey: target.bindingChannelKey,
+    sessionKey: targetSessionKey,
+  });
   const snapshot = await params.deps.buildWorkflowSnapshot({
-    policy: workflowPolicy,
+    policy: projectBindingPolicy,
     agentId: target.agentId ?? undefined,
     workspaceDir: target.workspaceDir ?? undefined,
     sessionKey: targetSessionKey,
@@ -643,7 +688,7 @@ function createBackgroundWorkflowCommandHandler(
     const commandLabel = COMMAND_LABELS[kind];
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
-      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
       let target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -702,8 +747,13 @@ function createBackgroundWorkflowCommandHandler(
         };
       }
 
+      const projectBindingPolicy = resolveChannelProjectBindingPolicy(workflowPolicy, {
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: targetSessionKey,
+      });
       const snapshot = await deps.buildWorkflowSnapshot({
-        policy: workflowPolicy,
+        policy: projectBindingPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: targetSessionKey ?? undefined,
@@ -752,7 +802,7 @@ function createBackgroundWorkflowCommandHandler(
         logger: api.logger,
         task: async () => {
           const currentSnapshot = await deps.buildWorkflowSnapshot({
-            policy: workflowPolicy,
+            policy: projectBindingPolicy,
             agentId: target.agentId ?? undefined,
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: targetSessionKey ?? undefined,
@@ -863,9 +913,14 @@ function createProjectInitCommandHandler(
         sessionKey: target.sessionKey,
       });
       const topic = extractQuotedSegment(ctx.args);
+      const projectBindingPolicy = resolveChannelProjectBindingPolicy(workflowPolicy, {
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: target.sessionKey,
+      });
       const snapshot = target.sessionKey && targetRole
         ? await deps.buildWorkflowSnapshot({
-            policy: workflowPolicy,
+            policy: projectBindingPolicy,
             agentId: target.agentId ?? undefined,
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: target.sessionKey,
@@ -1181,7 +1236,7 @@ function createAutoResearchCommandHandler(
       const commandLabel = COMMAND_LABELS.auto_research;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
-      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
       const intent = parseAutoBootstrapIntent({
         sourceCommand: "auto_research",
         args: readString(ctx.args) ?? "",
@@ -1209,34 +1264,58 @@ function createAutoResearchCommandHandler(
         sessionKey: targetSessionKey,
         role: "researcher",
       });
+      const workflowSessionKey = researcherSessionKey ?? targetSessionKey;
+      const shouldBindProjectChannel = shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: workflowSessionKey,
+      });
 
       const ensuredProject = await ensureWorkflowProjectRoot({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: researcherSessionKey ?? targetSessionKey,
+        sessionKey: workflowSessionKey,
         messageChannel: ctx.channel,
-        channelKey: target.bindingChannelKey ?? undefined,
+        channelKey: shouldBindProjectChannel
+          ? target.bindingChannelKey ?? undefined
+          : undefined,
         title: topic,
         topic,
       });
       await persistBootstrapRequest(ensuredProject.projectRoot, intent);
 
-      await deps.bindChannelProjectForWorkflow({
-        policy: workflowPolicy,
-        workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: researcherSessionKey ?? targetSessionKey,
-        messageChannel: ctx.channel,
-        channelKey: target.bindingChannelKey ?? undefined,
-        projectRoot: ensuredProject.projectRoot,
-        projectId: ensuredProject.projectId,
-        title: ensuredProject.title,
-        topic,
-        boundByAgent: "researcher",
-        notes:
-          intent.rawRequest === intent.cleanTopic
-            ? "Auto-bound during /auto-research bootstrap."
-            : `Auto-bound during /auto-research bootstrap. Full request: ${intent.rawRequest}`,
-      });
+      const bindingNotes =
+        intent.rawRequest === intent.cleanTopic
+          ? "Auto-bound during /auto-research bootstrap."
+          : `Auto-bound during /auto-research bootstrap. Full request: ${intent.rawRequest}`;
+      if (shouldBindProjectChannel) {
+        await deps.bindChannelProjectForWorkflow({
+          policy: workflowPolicy,
+          workspaceDir: target.workspaceDir ?? undefined,
+          sessionKey: workflowSessionKey,
+          messageChannel: ctx.channel,
+          channelKey: target.bindingChannelKey ?? undefined,
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          title: ensuredProject.title,
+          topic,
+          boundByAgent: "researcher",
+          notes: bindingNotes,
+        });
+      } else {
+        await recordCommandNotificationChannel({
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          ctx,
+          target,
+          sessionKey: workflowSessionKey,
+          source: "auto_research_command",
+          notes:
+            intent.rawRequest === intent.cleanTopic
+              ? "Recorded Discord notification channel during /auto-research bootstrap."
+              : `Recorded Discord notification channel during /auto-research bootstrap. Full request: ${intent.rawRequest}`,
+        });
+      }
 
       const currentSummary = await getResearchProgramStateSummary({
         projectRoot: ensuredProject.projectRoot,
@@ -1271,7 +1350,7 @@ function createAutoResearchCommandHandler(
         agentCtx: {
           agentId: "researcher",
           workspaceDir: target.workspaceDir ?? undefined,
-          sessionKey: researcherSessionKey ?? targetSessionKey,
+          sessionKey: workflowSessionKey,
           sessionId: undefined,
           messageChannel: ctx.channel,
           channelKey: target.bindingChannelKey ?? undefined,
@@ -1280,7 +1359,7 @@ function createAutoResearchCommandHandler(
           role: "researcher",
           projectRoot: ensuredProject.projectRoot,
           projectId: ensuredProject.projectId,
-          channelProjectBindingsEnabled: true,
+          channelProjectBindingsEnabled: shouldBindProjectChannel,
         },
         backgroundRun: {
           kind: "research_pipeline",
@@ -1328,7 +1407,7 @@ function createAutoReviewCommandHandler(
       const commandLabel = COMMAND_LABELS.auto_review;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
-      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
       const intent = parseAutoBootstrapIntent({
         sourceCommand: "auto_review",
         args: readString(ctx.args) ?? "",
@@ -1356,13 +1435,21 @@ function createAutoReviewCommandHandler(
         sessionKey: targetSessionKey,
         role: "researcher",
       });
+      const workflowSessionKey = researcherSessionKey ?? targetSessionKey;
+      const shouldBindProjectChannel = shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: workflowSessionKey,
+      });
 
       const ensuredProject = await ensureWorkflowProjectRoot({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: researcherSessionKey ?? targetSessionKey,
+        sessionKey: workflowSessionKey,
         messageChannel: ctx.channel,
-        channelKey: target.bindingChannelKey ?? undefined,
+        channelKey: shouldBindProjectChannel
+          ? target.bindingChannelKey ?? undefined
+          : undefined,
         projectId: `survey-${sanitizeProjectIdFragment(topic)}`,
         title: topic,
         topic,
@@ -1370,22 +1457,38 @@ function createAutoReviewCommandHandler(
       });
       await persistBootstrapRequest(ensuredProject.projectRoot, intent);
 
-      await deps.bindChannelProjectForWorkflow({
-        policy: workflowPolicy,
-        workspaceDir: target.workspaceDir ?? undefined,
-        sessionKey: researcherSessionKey ?? targetSessionKey,
-        messageChannel: ctx.channel,
-        channelKey: target.bindingChannelKey ?? undefined,
-        projectRoot: ensuredProject.projectRoot,
-        projectId: ensuredProject.projectId,
-        title: ensuredProject.title,
-        topic,
-        boundByAgent: "researcher",
-        notes:
-          intent.rawRequest === intent.cleanTopic
-            ? "Auto-bound during /auto-review bootstrap."
-            : `Auto-bound during /auto-review bootstrap. Full request: ${intent.rawRequest}`,
-      });
+      const bindingNotes =
+        intent.rawRequest === intent.cleanTopic
+          ? "Auto-bound during /auto-review bootstrap."
+          : `Auto-bound during /auto-review bootstrap. Full request: ${intent.rawRequest}`;
+      if (shouldBindProjectChannel) {
+        await deps.bindChannelProjectForWorkflow({
+          policy: workflowPolicy,
+          workspaceDir: target.workspaceDir ?? undefined,
+          sessionKey: workflowSessionKey,
+          messageChannel: ctx.channel,
+          channelKey: target.bindingChannelKey ?? undefined,
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          title: ensuredProject.title,
+          topic,
+          boundByAgent: "researcher",
+          notes: bindingNotes,
+        });
+      } else {
+        await recordCommandNotificationChannel({
+          projectRoot: ensuredProject.projectRoot,
+          projectId: ensuredProject.projectId,
+          ctx,
+          target,
+          sessionKey: workflowSessionKey,
+          source: "auto_review_command",
+          notes:
+            intent.rawRequest === intent.cleanTopic
+              ? "Recorded Discord notification channel during /auto-review bootstrap."
+              : `Recorded Discord notification channel during /auto-review bootstrap. Full request: ${intent.rawRequest}`,
+        });
+      }
       await deps.setWritingContractState({
         projectRoot: ensuredProject.projectRoot,
         policy: workflowPolicy,
@@ -1407,7 +1510,7 @@ function createAutoReviewCommandHandler(
         agentCtx: {
           agentId: "researcher",
           workspaceDir: target.workspaceDir ?? undefined,
-          sessionKey: researcherSessionKey ?? targetSessionKey,
+          sessionKey: workflowSessionKey,
           sessionId: undefined,
           messageChannel: ctx.channel,
           channelKey: target.bindingChannelKey ?? undefined,
@@ -1416,7 +1519,7 @@ function createAutoReviewCommandHandler(
           role: "researcher",
           projectRoot: ensuredProject.projectRoot,
           projectId: ensuredProject.projectId,
-          channelProjectBindingsEnabled: true,
+          channelProjectBindingsEnabled: shouldBindProjectChannel,
         },
         backgroundRun: {
           kind: "survey_review",
@@ -1564,6 +1667,29 @@ function createBindProjectCommandHandler(
         };
       }
 
+      const shouldBindProjectChannel = shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: ctx.channel,
+        channelKey,
+        sessionKey: target.sessionKey,
+      });
+      if (!shouldBindProjectChannel) {
+        await recordCommandNotificationChannel({
+          projectRoot,
+          projectId,
+          ctx,
+          target,
+          sessionKey: target.sessionKey,
+          source: "bind_project_command",
+          notes: `Recorded notification-only channel via ${commandLabel}.`,
+        });
+        return {
+          text:
+            `Recorded this channel as a notification target for workflow project ${projectId}.\n` +
+            `project_root=${projectRoot}\n` +
+            "project_binding=skipped_notification_only",
+        };
+      }
+
       const result = await deps.bindChannelProjectForWorkflow({
         policy: workflowPolicy,
         workspaceDir: target.workspaceDir ?? undefined,
@@ -1605,7 +1731,7 @@ function createWorkflowStatusCommandHandler(
     const commandLabel = COMMAND_LABELS.workflow_status;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
-      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -1621,8 +1747,13 @@ function createWorkflowStatusCommandHandler(
         };
       }
 
+      const projectBindingPolicy = resolveChannelProjectBindingPolicy(workflowPolicy, {
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: targetSessionKey,
+      });
       const previewSnapshot = await deps.buildWorkflowSnapshot({
-        policy: workflowPolicy,
+        policy: projectBindingPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: targetSessionKey ?? undefined,
@@ -1642,7 +1773,7 @@ function createWorkflowStatusCommandHandler(
         logger: api.logger,
         task: async () => {
           const snapshot = await deps.buildWorkflowSnapshot({
-            policy: workflowPolicy,
+            policy: projectBindingPolicy,
             agentId: target.agentId ?? undefined,
             workspaceDir: target.workspaceDir ?? undefined,
             sessionKey: targetSessionKey,
@@ -1750,7 +1881,7 @@ function createSurveyGraphBuildCommandHandler(
     const commandLabel = COMMAND_LABELS.survey_graph_build;
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
-      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy);
+      await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
       let target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -1786,8 +1917,13 @@ function createSurveyGraphBuildCommandHandler(
         targetRole = "researcher";
       }
 
+      const projectBindingPolicy = resolveChannelProjectBindingPolicy(workflowPolicy, {
+        messageChannel: ctx.channel,
+        channelKey: target.bindingChannelKey,
+        sessionKey: targetSessionKey,
+      });
       const snapshot = await deps.buildWorkflowSnapshot({
-        policy: workflowPolicy,
+        policy: projectBindingPolicy,
         agentId: target.agentId ?? undefined,
         workspaceDir: target.workspaceDir ?? undefined,
         sessionKey: targetSessionKey ?? undefined,
@@ -2094,7 +2230,8 @@ function createCaptureDiagnosticsCommandHandler(
 
 async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
   api: WorkflowCommandApi,
-  workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>
+  workflowPolicy: ReturnType<typeof getWorkflowGuardPolicy>,
+  messageChannel = "discord"
 ): Promise<void> {
   if (!workflowPolicy.projectsRoot) {
     return;
@@ -2105,7 +2242,7 @@ async function maybeReplayQueuedWorkflowRunsFromCommandRuntime(
         workflowRuntime: createWorkflowCommandRuntime({
           api,
           workspaceDir: workflowPolicy.projectsRoot,
-          messageChannel: "discord",
+          messageChannel,
         }),
         workflowPolicy,
         projectsRoot: workflowPolicy.projectsRoot,

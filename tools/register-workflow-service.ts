@@ -43,6 +43,8 @@ import {
   runWorkflowAutoIterator,
   type AutoIteratorResult,
 } from "./workflow-guard";
+import { resolveWorkflowNotificationTargetForProjectSync } from "./workflow-notification-channels.js";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
 import { ensureProjectsBindingIndex } from "./channel-project-bindings";
 import {
   selectDispatchableAutoStageAction,
@@ -50,6 +52,7 @@ import {
 import { listActiveProjectsFromRegistry } from "./workflow-project-registry";
 import {
   deriveAgentSessionKeyForRole,
+  resolveWorkflowDispatchLaunchRunId,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import { handoffWorkflowTaskToAgent } from "./workflow-execution/delivery-adapter";
@@ -999,6 +1002,16 @@ function resolveWorkflowRequesterBinding(params: {
   messageChannel: string | null;
   channelKey: string | null;
 } {
+  const notificationTarget = resolveWorkflowNotificationTargetForProjectSync(
+    params.projectRoot
+  );
+  if (notificationTarget?.sessionKey) {
+    return {
+      sessionKey: notificationTarget.sessionKey,
+      messageChannel: notificationTarget.messageChannel,
+      channelKey: notificationTarget.channelKey,
+    };
+  }
   const deps = resolveWorkflowCoordinatorDependencies(params.deps);
   const bindings = deps.listChannelProjectBindingsForWorkflow({
     policy: params.workflowPolicy,
@@ -1006,6 +1019,13 @@ function resolveWorkflowRequesterBinding(params: {
   const binding = bindings.bindings
     .filter(
       (entry) => path.resolve(entry.projectRoot) === path.resolve(params.projectRoot)
+    )
+    .filter((entry) =>
+      shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: entry.messageChannel,
+        channelKey: entry.channelKey,
+        sessionKey: resolveWorkflowBroadcastSessionKey(entry) ?? entry.sessionKeySample,
+      })
     )
     .sort(
       (left, right) =>
@@ -2314,14 +2334,15 @@ async function launchWorkflowDispatchTransition(params: {
         autoModeActive: params.autoModeActive,
         logger: params.logger,
       });
-      if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+      const dispatchRunId = resolveWorkflowDispatchLaunchRunId(dispatch);
+      if (!dispatch.dispatched || !dispatchRunId || !dispatch.sessionKey) {
         throw new Error(
           dispatch.error ??
             `Failed to dispatch workflow transition ${params.queueKey}.`
         );
       }
       return {
-        runId: dispatch.runId,
+        runId: dispatchRunId,
         sessionKey: dispatch.sessionKey,
         runtime:
           dispatch.channel === "sessions_spawn" || dispatch.channel === "sessions_send"
@@ -3838,7 +3859,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           ),
         }),
         requesterSessionKey,
-        requesterChannel: requesterBinding.channelKey ? "discord" : null,
+        requesterChannel: requesterBinding.messageChannel,
         launchReviewerRun: workflowRuntime
           ? async (launchParams) => {
               const reviewerRole = normalizeHookReviewerRole(launchParams.reviewerRole);

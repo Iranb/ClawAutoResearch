@@ -22,6 +22,69 @@
 | `/capture-diagnostics` | 抓取当前项目的诊断包 | Discord 流水线卡住、handoff 丢失、graph/review 状态异常时一键留存现场 |
 | `/survey-graph-build` | 运行后台 survey 图谱候选构建 | 主题相关、强去重、graph-missing 优先 |
 
+### 1.1 不依赖 Discord 启动 `/auto-research` 与 `/auto-review`
+
+`/auto-research` 和 `/auto-review` 现在不要求 Discord 作为项目绑定来源。Discord 只是一种通知通道；项目解析、项目创建、后台运行和恢复都应依赖 durable state 与本地 command context。
+
+官方命令名带连字符：
+
+- `/auto-research "topic"`
+- `/auto-review "topic"`
+
+如果你在文档或口头说明里看到 `/autoresearch`、`/autoreview`，在当前实现中应写成上面两个带连字符的命令。
+
+本地 no-Discord 启动实验论文主线：
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-research \
+  --args '"Generalized Category Discovery"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local \
+  --conversation-id gcd-research-local
+```
+
+本地 no-Discord 启动综述主线：
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-review \
+  --args '"Generalized Category Discovery"' \
+  --projects-root "$HOME/AutoResearchProjects" \
+  --channel local \
+  --conversation-id gcd-survey-local
+```
+
+这两个命令会直接走插件 command handler，而不是通过 Discord gateway。预期结果是：
+
+- 在 `--projects-root` 下创建或复用项目目录
+- 写入 `PROJECT_MANIFEST.json` 和 `.openclaw-research/` runtime state
+- 启动对应后台 workflow run
+- 输出 JSON，里面包含命令返回文本、项目路径和 background run receipt
+
+如果你需要验证完整论文生成闭环，而不只是验证命令能启动，可以跑 deterministic E2E：
+
+```bash
+node scripts/run_auto_command_end_to_end.mjs \
+  --topic "Generalized Category Discovery" \
+  --lane full \
+  --mode fixture \
+  --bootstrap-transport local \
+  --projects-root "$HOME/AutoResearchProjects"
+```
+
+如果需要真实 agent runtime 参与，把 `--mode fixture` 改成 `--mode live`。`--bootstrap-transport local` 仍然表示启动入口不依赖 Discord。
+
+### 1.2 Discord 的新边界：通知通道，不是项目绑定
+
+当前实现把 Discord 与项目绑定拆开：
+
+- Discord 可以记录为项目的通知目标，用来接收 stage/status/handoff 摘要。
+- Discord 不再由 `/auto-research`、`/auto-review` 或后台 fast-path 自动写入 channel-project binding。
+- 协调服务优先读取项目内的 `.openclaw-research/workflow-notification-channels.json` 来找通知目标。
+- 旧的 Discord channel-project binding 不再作为 requester fallback；这避免同一个 Discord channel 启动多个项目时互相污染项目解析。
+- 非 Discord 通道仍可使用 channel-project binding，当你确实需要“从当前通道解析当前项目”时继续适用。
+
 ## 2. `research_memory`
 
 这是结构化研究记忆工具，常见动作包括：

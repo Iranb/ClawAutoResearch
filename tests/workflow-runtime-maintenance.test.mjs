@@ -136,7 +136,7 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
       },
     },
     maxRepairAttempts: 3,
-    staleSessionAgeMs: 0,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
   });
 
   assert.deepEqual(result.replayedQueueKeys, [queueKey]);
@@ -297,7 +297,7 @@ test("runWorkflowRuntimeMaintenancePass escalates exhausted transitions and orph
     projectRoot,
     projectId: "beta",
     maxRepairAttempts: 3,
-    staleSessionAgeMs: 0,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
   });
 
   assert.deepEqual(result.exhaustedQueueKeys, [queueKey]);
@@ -321,6 +321,149 @@ test("runWorkflowRuntimeMaintenancePass escalates exhausted transitions and orph
   );
   assert.equal(
     incidents.entries.some((entry) => entry.kind === "repair_orphan_session"),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass repairs active sessions whose underlying session store is already terminal", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:dispatch:terminal-inspection";
+  const sessionKey = "agent:researcher:discord:group:paper-lab:subagent:stale-terminal";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "beta-inspection");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "beta-inspection",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "beta-inspection",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay the stale stage dispatch.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "beta-inspection",
+      stage: "idea",
+      summary: "Replay the stale stage dispatch.",
+      command: "/idea-phase",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "beta-inspection",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 1,
+            lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+            lastCheckedAt: "2026-04-10T09:00:00.000Z",
+          }
+        : entry
+    ),
+  });
+
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "beta-inspection",
+    sessionKey,
+    sessionId: "runtime-session-terminal",
+    runtime: "subagent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    projectRoot,
+    status: "active",
+    runId: "runtime-run-terminal",
+    queueKey,
+    startedAt: "2026-04-10T09:00:00.000Z",
+    lastHeartbeatAt: "2026-04-10T09:00:00.000Z",
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "beta-inspection",
+    maxRepairAttempts: 1,
+    workflowRuntime: {
+      async run() {
+        throw new Error("terminal inspected sessions should exhaust before replay");
+      },
+      async inspectSession(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          sessionKey,
+          sessionId: "runtime-session-terminal",
+          sessionFile: "/tmp/runtime-session-terminal.jsonl",
+          status: "done",
+          startedAt: Date.parse("2026-04-10T09:00:00.000Z"),
+          endedAt: Date.parse("2026-04-10T09:05:00.000Z"),
+          updatedAt: Date.parse("2026-04-10T09:05:00.000Z"),
+          abortedLastRun: false,
+          providerOverride: null,
+          modelOverride: null,
+          liveModelSwitchPending: false,
+        };
+      },
+    },
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.equal(result.repairedSessionKeys.includes(sessionKey), true);
+  assert.deepEqual(result.exhaustedQueueKeys, [queueKey]);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "failed"
+  );
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    refreshedSessions.entries.find((entry) => entry.sessionKey === sessionKey)?.status,
+    "failed"
+  );
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "session_inspection_repair"
+    ),
     true
   );
 });

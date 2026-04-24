@@ -321,6 +321,35 @@ node scripts/run_discord_native_slash_replay_test.mjs \
 - **Discord 真实点击 slash command** 视为外部集成真测
 - **Gateway `chat.send`** 视为中间层 transport / route 注入验证
 
+### 7.6 no-Discord 本地启动
+
+如果目标是脱离 Discord 使用 `/auto-research` 或 `/auto-review`，直接用本地 harness。这个路径不会连接 Discord，也不会把 Discord channel 写成项目绑定。
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-research \
+  --args '"Generalized Category Discovery"' \
+  --projects-root "/tmp/openclaw-local-command-tests" \
+  --channel local \
+  --conversation-id gcd-research-local
+```
+
+```bash
+node scripts/run_local_workflow_command.mjs \
+  --command auto-review \
+  --args '"Generalized Category Discovery"' \
+  --projects-root "/tmp/openclaw-local-command-tests" \
+  --channel local \
+  --conversation-id gcd-survey-local
+```
+
+检查点：
+
+- stdout 是 JSON，包含 command result 和 background run receipt。
+- 项目目录出现在 `--projects-root` 下。
+- `.openclaw-research/LOCAL_WORKFLOW_COMMAND_BACKGROUND_RUN.json` 存在。
+- 如果使用 `--channel discord` 做兼容测试，Discord 只会被记录到 `.openclaw-research/workflow-notification-channels.json`，不会被自动写入 `channel-project-bindings.json`。
+
 ## 8. `/auto-research` 和 `/auto-review` 的 deterministic E2E
 
 如果你要验证的不只是“命令能不能启动”，而是：

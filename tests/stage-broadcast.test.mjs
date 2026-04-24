@@ -319,7 +319,71 @@ test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcas
   const projectsRoot = path.join(workspaceRoot, "projects");
   const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
   const boundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
+  const sessionKey = "agent:researcher:local:channel:1491811255814586530";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(staleProjectRoot, { recursive: true });
+  await fs.mkdir(boundProjectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(staleProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "generalized-category-discovery" }, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(boundProjectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "gcd-survey-tpami-2026" }, null, 2)}\n`,
+    "utf8"
+  );
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "local",
+    projectRoot: boundProjectRoot,
+    boundByAgent: "researcher",
+  });
+
+  const result = await maybeBroadcastWorkflowStatusUpdate({
+    workflowRuntime: {
+      async run() {
+        throw new Error("should not send");
+      },
+    },
+    bindingPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    sessionKey,
+    projectId: "generalized-category-discovery",
+    projectRoot: staleProjectRoot,
+    status: "waiting",
+    stage: "plan",
+    summary: "A stale test broadcast should not leak into the rebound channel.",
+    idempotencyKeySuffix: "binding-mismatch",
+  });
+
+  assert.equal(result.broadcasted, false);
+  assert.equal(result.reasonSkipped, "binding_mismatch");
+  const outbox = await readWorkflowBroadcastOutboxStore(staleProjectRoot);
+  assert.equal(outbox.entries.length, 1);
+  assert.equal(outbox.entries[0].deliveryStatus, "superseded");
+});
+
+test("maybeBroadcastWorkflowStatusUpdate treats Discord sessions as notification-only even when legacy bindings moved", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-discord-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const staleProjectRoot = path.join(projectsRoot, "generalized-category-discovery");
+  const boundProjectRoot = path.join(projectsRoot, "gcd-survey-tpami-2026");
   const sessionKey = "agent:researcher:discord:channel:1491811255814586530";
+  const calls = [];
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -351,8 +415,9 @@ test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcas
 
   const result = await maybeBroadcastWorkflowStatusUpdate({
     workflowRuntime: {
-      async run() {
-        throw new Error("should not send");
+      async run(params) {
+        calls.push(params);
+        return { runId: "discord-notify-run-1" };
       },
     },
     bindingPolicy: {
@@ -364,13 +429,14 @@ test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcas
     projectRoot: staleProjectRoot,
     status: "waiting",
     stage: "plan",
-    summary: "A stale test broadcast should not leak into the rebound channel.",
-    idempotencyKeySuffix: "binding-mismatch",
+    summary: "Discord should remain a notification target, not a project binding gate.",
+    idempotencyKeySuffix: "discord-notification-only",
   });
 
-  assert.equal(result.broadcasted, false);
-  assert.equal(result.reasonSkipped, "binding_mismatch");
+  assert.equal(result.broadcasted, true);
+  assert.equal(result.reasonSkipped, null);
+  assert.equal(calls.length, 1);
   const outbox = await readWorkflowBroadcastOutboxStore(staleProjectRoot);
   assert.equal(outbox.entries.length, 1);
-  assert.equal(outbox.entries[0].deliveryStatus, "superseded");
+  assert.equal(outbox.entries[0].deliveryStatus, "delivered");
 });

@@ -20,15 +20,21 @@ test("auto-research and auto-review can bootstrap to a passing deterministic E2E
     "full",
     "--mode",
     "fixture",
+    "--bootstrap-transport",
+    "local",
     "--projects-root",
     projectsRoot,
   ]);
   const payload = JSON.parse(stdout);
 
+  assert.equal(payload.bootstrapTransport, "local");
+  assert.equal(payload.result.experiment.transport, "local");
+  assert.equal(payload.result.survey.transport, "local");
   assert.equal(payload.result.experiment.harness.finalVerdict, "pass");
   assert.equal(payload.result.survey.harness.finalVerdict, "pass");
   assert.ok((payload.result.experiment.handoffs ?? []).length >= 5);
   assert.ok((payload.result.survey.handoffs ?? []).length >= 2);
+  assert.doesNotMatch(JSON.stringify(payload), /agent:[^"]*:discord:/);
 
   const experimentReport = await fs.readFile(
     path.join(payload.result.experiment.projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"),

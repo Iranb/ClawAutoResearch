@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   dispatchWorkflowTaskToAgent,
   deriveAgentSessionKeyForRole,
+  resolveWorkflowDispatchLaunchRunId,
   type DispatchableWorkflowRole,
 } from "./agent-task-dispatch";
 import {
@@ -62,6 +63,8 @@ import {
   readJsonIfExists,
   writeJsonAtomicEnsured,
 } from "./workflow-guard-core/fs";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
+import { recordWorkflowNotificationChannelForProject } from "./workflow-notification-channels.js";
 import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
@@ -1941,13 +1944,14 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
                       enableSpawnFallback:
                         dispatchPayload.enableSpawnFallback,
                     });
-                if (!dispatch.dispatched || !dispatch.runId || !dispatch.sessionKey) {
+                const dispatchRunId = resolveWorkflowDispatchLaunchRunId(dispatch);
+                if (!dispatch.dispatched || !dispatchRunId || !dispatch.sessionKey) {
                   throw new Error(
                     dispatch.error ?? "Queued workflow dispatch did not start."
                   );
                 }
                 return {
-                  runId: dispatch.runId,
+                  runId: dispatchRunId,
                   sessionKey: dispatch.sessionKey ?? sessionLease.sessionKey,
                   runtime:
                     dispatch.channel === "sessions_spawn" ||
@@ -2029,7 +2033,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
               });
           if (
             !legacyDispatch.dispatched ||
-            !legacyDispatch.runId ||
+            !resolveWorkflowDispatchLaunchRunId(legacyDispatch) ||
             !legacyDispatch.sessionKey
           ) {
             await touchBackgroundWorkflowQueueEntry({
@@ -2042,7 +2046,7 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
           }
           dispatchResult = {
             dispatched: legacyDispatch.dispatched,
-            runId: legacyDispatch.runId,
+            runId: resolveWorkflowDispatchLaunchRunId(legacyDispatch),
             sessionKey: legacyDispatch.sessionKey,
             strategy: legacyDispatch.strategy,
             error: legacyDispatch.error,
@@ -2870,6 +2874,11 @@ export async function startBackgroundWorkflowRun(params: {
       requesterSessionKey: params.agentCtx.sessionKey,
       ownerAgent,
     }) ?? params.agentCtx.sessionKey;
+  const shouldBindProjectChannel = shouldUseChannelProjectBindingForWorkflow({
+    messageChannel: params.agentCtx.messageChannel,
+    channelKey: params.agentCtx.channelKey,
+    sessionKey: requesterSessionKeyForOwner,
+  });
 
   let ensuredProject:
     | Awaited<ReturnType<typeof ensureWorkflowProjectRoot>>
@@ -2881,14 +2890,26 @@ export async function startBackgroundWorkflowRun(params: {
       sessionKey: requesterSessionKeyForOwner,
       sessionId: params.agentCtx.sessionId,
       messageChannel: params.agentCtx.messageChannel,
-      channelKey: params.agentCtx.channelKey,
+      channelKey: shouldBindProjectChannel ? params.agentCtx.channelKey : undefined,
       projectRoot: readString(params.backgroundRun.projectRoot) ?? params.snapshot.projectRoot,
       projectId: resolvedBackgroundProjectId,
       title: resolvedBackgroundTitle,
       topic,
       workflowLine: normalizedKind === "survey_review" ? "survey" : undefined,
     });
+    if (!shouldBindProjectChannel) {
+      await recordWorkflowNotificationChannelForProject({
+        projectRoot: ensuredProject.projectRoot,
+        projectId: ensuredProject.projectId,
+        messageChannel: params.agentCtx.messageChannel,
+        channelKey: params.agentCtx.channelKey,
+        sessionKey: requesterSessionKeyForOwner,
+        source: "start_background_run",
+        notes: "Recorded notification-only channel during workflow startup.",
+      });
+    }
     if (
+      shouldBindProjectChannel &&
       params.snapshot.channelProjectBindingsEnabled &&
       (params.agentCtx.sessionKey || params.agentCtx.sessionId)
     ) {

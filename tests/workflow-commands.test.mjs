@@ -19,6 +19,7 @@ import {
   createAutoModeDiscussionRound,
   saveAutoModeDiscussionStore,
 } from "../tools/workflow-auto-discussion.ts";
+import { listWorkflowNotificationChannelsForProject } from "../tools/workflow-notification-channels.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-command-"));
@@ -139,6 +140,23 @@ test("resolveBindingConversationFromCommandContext preserves Telegram topic thre
     accountId: "default",
     conversationId: "-100220011",
     threadId: 77,
+  });
+});
+
+test("resolveBindingConversationFromCommandContext supports local command conversations", () => {
+  const conversation = resolveBindingConversationFromCommandContext({
+    channel: "local",
+    from: "local:conversation:auto-research-lab",
+    to: undefined,
+    originatingTo: "conversation:auto-research-lab",
+    accountId: "default",
+    messageThreadId: undefined,
+  });
+
+  assert.deepEqual(conversation, {
+    channel: "local",
+    accountId: "default",
+    conversationId: "auto-research-lab",
   });
 });
 
@@ -1000,7 +1018,7 @@ test("clear-project-binding command removes the workflow project binding for the
   );
 });
 
-test("bind-project command binds the current channel to an existing workflow project", async (t) => {
+test("bind-project command records Discord as a notification target instead of a project binding", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = await makeProject(projectsRoot, "alpha", "code");
   let captured = null;
@@ -1052,13 +1070,19 @@ test("bind-project command binds the current channel to an existing workflow pro
     getCurrentConversationBinding: async () => null,
   });
 
-  assert.match(result.text, /Bound this channel to workflow project alpha\./);
-  assert.equal(captured.projectId, "alpha");
-  assert.equal(captured.projectRoot, projectRoot);
-  assert.equal(captured.messageChannel, "discord");
+  assert.match(result.text, /notification target for workflow project alpha/i);
+  assert.equal(captured, null);
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].projectId, "alpha");
+  assert.equal(notifications[0].messageChannel, "discord");
   assert.equal(
-    captured.channelKey,
+    notifications[0].channelKey,
     "binding:discord:default:channel:paper-lab"
+  );
+  assert.equal(
+    notifications[0].sessionKey,
+    "agent:researcher:discord:group:paper-lab"
   );
 });
 
@@ -1316,7 +1340,19 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
       "literature-grounded baseline"
     )
   );
-  assert.equal(captured.boundProject.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(captured.boundProject, undefined);
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(notifications[0].messageChannel, "discord");
+  assert.equal(
+    notifications[0].channelKey,
+    "binding:discord:default:channel:gcd-lab"
+  );
+  assert.equal(
+    notifications[0].sessionKey,
+    "agent:researcher:discord:channel:paper-lab"
+  );
   assert.equal(manifest.writing_contract.paper_mode, "conference");
   assert.equal(manifest.writing_contract.storyline_source, "idea_catalyst");
   assert.equal(manifest.writing_contract.kg_storyline_required, true);
@@ -1324,6 +1360,10 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
   assert.equal(manifest.graph_guided_writing.status, "pending");
   assert.equal(manifest.graph_guided_writing.citation_source_mode, "graph_only");
   assert.equal(captured.backgroundParams.backgroundRun.kind, "research_pipeline");
+  assert.equal(
+    captured.backgroundParams.snapshot.channelProjectBindingsEnabled,
+    false
+  );
   assert.match(
     captured.backgroundParams.backgroundRun.commandText,
     /AUTO_PROCEED:\s*true/i
@@ -1391,7 +1431,7 @@ test("auto-review command bootstraps a survey project and starts the background 
     getCurrentConversationBinding: async () => null,
   });
 
-  const projectRoot = captured.boundProject.projectRoot;
+  const projectRoot = path.join(projectsRoot, "survey-graph-reasoning-survey");
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
@@ -1408,8 +1448,20 @@ test("auto-review command bootstraps a survey project and starts the background 
   assert.equal(manifest.writing_contract.kg_storyline_required, false);
   assert.equal(manifest.graph_guided_writing.enabled, false);
   assert.equal(manifest.graph_guided_writing.status, "optional");
-  assert.equal(captured.boundProject.projectId, "survey-graph-reasoning-survey");
+  assert.equal(captured.boundProject, undefined);
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].projectId, "survey-graph-reasoning-survey");
+  assert.equal(notifications[0].messageChannel, "discord");
+  assert.equal(
+    notifications[0].channelKey,
+    "binding:discord:default:channel:survey-lab"
+  );
   assert.equal(captured.backgroundParams.backgroundRun.kind, "survey_review");
+  assert.equal(
+    captured.backgroundParams.snapshot.channelProjectBindingsEnabled,
+    false
+  );
   assert.match(
     captured.backgroundParams.backgroundRun.commandText,
     /^\/survey-pipeline\b/
@@ -1485,8 +1537,16 @@ test("auto-research keeps project naming clean while preserving richer request c
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
 
-  assert.equal(captured.boundProject.projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(captured.boundProject, undefined);
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].projectId, "gcd-confirmation-bias-mitigation");
+  assert.equal(notifications[0].messageChannel, "discord");
   assert.equal(captured.backgroundParams.backgroundRun.topic, "gcd confirmation bias mitigation");
+  assert.equal(
+    captured.backgroundParams.snapshot.channelProjectBindingsEnabled,
+    false
+  );
   assert.match(result.text ?? "", /preserved_request=/i);
   assert.equal(manifest.bootstrap_request.clean_topic, "gcd confirmation bias mitigation");
   assert.match(manifest.bootstrap_request.raw_request, /SimGCD/);
@@ -1498,7 +1558,7 @@ test("auto-research keeps project naming clean while preserving richer request c
     manifest.research_program.constraints.some((entry) => /SimGCD|Uno|baseline fairness|CUB-200/i.test(entry)),
     true
   );
-  assert.match(captured.boundProject.notes ?? "", /Full request:/i);
+  assert.match(notifications[0].notes ?? "", /Full request:/i);
   assert.match(
     captured.backgroundParams.backgroundRun.extraSystemPrompt ?? "",
     /Paper \/ method references to consider:/i
@@ -1572,19 +1632,27 @@ test("auto-review can derive a clean survey project name from an unquoted rich r
     getCurrentConversationBinding: async () => null,
   });
 
-  const projectRoot = captured.boundProject.projectRoot;
+  const projectRoot = path.join(projectsRoot, "survey-graph-reasoning-survey");
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
 
-  assert.equal(captured.boundProject.projectId, "survey-graph-reasoning-survey");
+  assert.equal(captured.boundProject, undefined);
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].projectId, "survey-graph-reasoning-survey");
+  assert.equal(notifications[0].messageChannel, "discord");
   assert.equal(captured.backgroundParams.backgroundRun.topic, "graph reasoning survey");
+  assert.equal(
+    captured.backgroundParams.snapshot.channelProjectBindingsEnabled,
+    false
+  );
   assert.equal(manifest.bootstrap_request.clean_topic, "graph reasoning survey");
   assert.match(manifest.bootstrap_request.raw_request, /GraphRAG Survey 2024/i);
   assert.equal(manifest.bootstrap_request.reference_hints.length >= 1, true);
   assert.equal(manifest.bootstrap_request.explicit_requirements.length >= 1, true);
   assert.match(result.text ?? "", /preserved_request=/i);
-  assert.match(captured.boundProject.notes ?? "", /Full request:/i);
+  assert.match(notifications[0].notes ?? "", /Full request:/i);
   assert.match(
     captured.backgroundParams.backgroundRun.extraSystemPrompt ?? "",
     /GraphRAG Survey 2024/i
