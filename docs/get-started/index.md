@@ -56,6 +56,15 @@ node scripts/run_local_workflow_command.mjs \
 
 更完整的 no-Discord 用法见 [Commands 与 Tools](../reference/commands-and-tools.md#_1-1-不依赖-discord-启动-auto-research-与-auto-review)。如果你是从 Gateway `chat.send` 手动发这些命令，仍要确认 session/context resolution 是否完整；那属于 transport/context 调试，不应误判为 command handler 本身失效。
 
+要直接跑完整 E2E 测试，使用新的测试入口：
+
+```bash
+npm run test:autoresearch:real -- --topic "GCD"
+npm run test:autoreview:real -- --topic "GCD"
+```
+
+这两个入口接受 `/autoresearch`、`/autoreview` 的无连字符叫法，但会在 harness 内规范到正式命令 `/auto-research`、`/auto-review`。运行摘要保存在 `.openclaw-research/e2e-runs/`。
+
 ### 4. 想做科研综述，却沿用实验项目的默认启动路径
 
 如果目标是综述，不需要先走 `idea -> plan -> code -> experiment`。最短入口是直接运行 `/survey-pipeline "topic"`，让系统创建轻量 survey workspace，并围绕 `survey_review` durable state 推进到 survey-mode writing。

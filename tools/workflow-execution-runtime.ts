@@ -412,36 +412,30 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
         ) ?? path.join(workspaceDir, `${sessionId}.jsonl`);
       const runId = randomUUID();
 
-      const runPromise = (async () => {
-        try {
-          return await runEmbeddedAgent({
-            sessionId,
-            sessionKey,
-            agentId,
-            trigger: runParams.trigger ?? "manual",
-            spawnedBy: readString(runParams.requesterSessionKey) ?? undefined,
-            messageChannel:
-              readString(runParams.messageChannel) ??
-              readString(params.defaultMessageChannel) ??
-              undefined,
-            disableMessageTool: true,
-            forceMessageTool: false,
-            allowGatewaySubagentBinding: false,
-            sessionFile,
-            workspaceDir,
-            agentDir,
-            config: params.runtimeApi.config,
-            prompt: runParams.message,
-            lane: readString(runParams.lane) ?? "nested",
-            extraSystemPrompt:
-              readString(runParams.extraSystemPrompt) ?? undefined,
-            timeoutMs,
-            runId,
-          });
-        } catch (error) {
-          throw error;
-        }
-      })();
+      const runPromise = runEmbeddedAgent({
+        sessionId,
+        sessionKey,
+        agentId,
+        trigger: runParams.trigger ?? "manual",
+        spawnedBy: readString(runParams.requesterSessionKey) ?? undefined,
+        messageChannel:
+          readString(runParams.messageChannel) ??
+          readString(params.defaultMessageChannel) ??
+          undefined,
+        disableMessageTool: true,
+        forceMessageTool: false,
+        allowGatewaySubagentBinding: false,
+        sessionFile,
+        workspaceDir,
+        agentDir,
+        config: params.runtimeApi.config,
+        prompt: runParams.message,
+        lane: readString(runParams.lane) ?? "nested",
+        extraSystemPrompt:
+          readString(runParams.extraSystemPrompt) ?? undefined,
+        timeoutMs,
+        runId,
+      });
 
       const state: EmbeddedRunState = {
         runId,

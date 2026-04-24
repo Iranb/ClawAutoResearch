@@ -477,7 +477,7 @@ export async function setWritingContractState(params: {
   let proofAppendixPath =
     pickString(patch, ["proofAppendixPath", "proof_appendix_path"]) ??
     current.proofAppendixPath;
-  let proofAppendixStatus =
+  const proofAppendixStatus =
     normalizeStage(patch.proofAppendixStatus ?? patch.proof_appendix_status) ??
     current.proofAppendixStatus;
   let theoryNotePath =

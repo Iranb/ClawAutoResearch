@@ -399,7 +399,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
         hookPoint: hook.hookPoint,
         stage: hook.stage,
       });
-    let liveInputs = await inspectFileAuditPacketInputs({
+    const liveInputs = await inspectFileAuditPacketInputs({
       projectRoot: params.context.projectRoot,
       projectId: params.context.projectId,
       policy: hook,

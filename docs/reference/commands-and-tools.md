@@ -31,7 +31,7 @@
 - `/auto-research "topic"`
 - `/auto-review "topic"`
 
-如果你在文档或口头说明里看到 `/autoresearch`、`/autoreview`，在当前实现中应写成上面两个带连字符的命令。
+测试 harness 也接受 `/autoresearch`、`/autoreview` 这两个常见简写，并会自动规范到上面两个正式命令名。
 
 本地 no-Discord 启动实验论文主线：
 
@@ -65,15 +65,44 @@ node scripts/run_local_workflow_command.mjs \
 如果你需要验证完整论文生成闭环，而不只是验证命令能启动，可以跑 deterministic E2E：
 
 ```bash
-node scripts/run_auto_command_end_to_end.mjs \
-  --topic "Generalized Category Discovery" \
-  --lane full \
-  --mode fixture \
-  --bootstrap-transport local \
-  --projects-root "$HOME/AutoResearchProjects"
+npm run test:auto:fixture -- \
+  --topic "Generalized Category Discovery"
 ```
 
-如果需要真实 agent runtime 参与，把 `--mode fixture` 改成 `--mode live`。`--bootstrap-transport local` 仍然表示启动入口不依赖 Discord。
+如果需要真实 agent runtime 参与，使用真实 E2E runner：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "Generalized Category Discovery"
+```
+
+```bash
+npm run test:autoreview:real -- \
+  --topic "Generalized Category Discovery"
+```
+
+也可以一次跑两条线：
+
+```bash
+npm run test:auto:real -- \
+  --topic "Generalized Category Discovery"
+```
+
+这些 npm scripts 底层调用 `scripts/run_auto_workflow_e2e_test.mjs`，默认 `--bootstrap-transport local`，因此入口不依赖 Discord。每次运行会在 `.openclaw-research/e2e-runs/<timestamp>-.../` 下写入：
+
+- `AUTO_WORKFLOW_E2E_SUMMARY.md`
+- `AUTO_WORKFLOW_E2E_SUMMARY.json`
+- `payload.json`
+- `stdout.log`
+- `stderr.log`
+
+真实模式需要本机可启动 OpenClaw gateway，并能读取 OpenClaw 配置。默认读取 `$HOME/.openclaw/openclaw.json`；如果要用 dev 配置：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "GCD" \
+  --profile dev
+```
 
 ### 1.2 Discord 的新边界：通知通道，不是项目绑定
 

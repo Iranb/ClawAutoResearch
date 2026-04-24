@@ -19,6 +19,21 @@ export function hasFlag(argv, name) {
   return argv.includes(name);
 }
 
+export function normalizeWorkflowCommandName(commandName) {
+  const normalized = String(commandName ?? "")
+    .trim()
+    .replace(/^\/+/, "")
+    .toLowerCase()
+    .replaceAll("_", "-");
+  const aliases = {
+    autoresearch: "auto-research",
+    "auto-research": "auto-research",
+    autoreview: "auto-review",
+    "auto-review": "auto-review",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
 async function readJson(filePath) {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -121,6 +136,7 @@ export async function dispatchWorkflowCommand(options) {
     contextExtras.commandTargetSessionKey ?? contextExtras.sessionKey ?? sessionKey,
     "researcher"
   );
+  const normalizedCommandName = normalizeWorkflowCommandName(commandName);
   const projectId = projectRoot ? path.basename(projectRoot) : null;
   const backgroundRuns = [];
 
@@ -258,7 +274,7 @@ export async function dispatchWorkflowCommand(options) {
     },
   });
 
-  const command = commands.find((entry) => entry.name === commandName);
+  const command = commands.find((entry) => entry.name === normalizedCommandName);
   if (!command) {
     throw new Error(`Unknown workflow command: ${commandName}`);
   }
@@ -267,7 +283,7 @@ export async function dispatchWorkflowCommand(options) {
     throw new Error(`Project root does not exist: ${projectRoot}`);
   }
 
-  const commandBody = `/${commandName}${args ? ` ${args}` : ""}`;
+  const commandBody = `/${normalizedCommandName}${args ? ` ${args}` : ""}`;
   const result = await command.handler({
     args,
     commandBody,
@@ -281,7 +297,8 @@ export async function dispatchWorkflowCommand(options) {
   });
 
   return {
-    command: `/${commandName}`,
+    command: `/${normalizedCommandName}`,
+    requestedCommand: `/${String(commandName ?? "").trim().replace(/^\/+/, "")}`,
     args,
     projectRoot,
     projectsRoot,

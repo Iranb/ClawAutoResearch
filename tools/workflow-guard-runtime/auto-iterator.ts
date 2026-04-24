@@ -1520,7 +1520,7 @@ export async function runWorkflowAutoIteratorImpl(
     Boolean(ownerAfter) &&
     Boolean(ownerBefore) &&
     ownerAfter !== ownerBefore;
-  let dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
+  const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
   let stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
   const revisionControlCommand =

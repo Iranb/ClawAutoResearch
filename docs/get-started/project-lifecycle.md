@@ -157,15 +157,19 @@ node scripts/run_local_workflow_command.mjs \
 如果需要一次性验证 experiment 与 survey 两条线的确定性闭环：
 
 ```bash
-node scripts/run_auto_command_end_to_end.mjs \
+npm run test:auto:fixture -- \
   --topic "GCD" \
-  --lane full \
-  --mode fixture \
-  --bootstrap-transport local \
   --projects-root "$HOME/AutoResearchProjects"
 ```
 
-`fixture` 模式用于回归测试；`live` 模式会让真实 workflow runtime 接手后续阶段。两者都可以用 `--bootstrap-transport local` 脱离 Discord 启动。
+真实 agent runtime 闭环用这些入口：
+
+```bash
+npm run test:autoresearch:real -- --topic "GCD"
+npm run test:autoreview:real -- --topic "GCD"
+```
+
+`fixture` 模式用于回归测试；`real`/`live` 模式会让真实 workflow runtime 接手后续阶段。两者默认都用 local bootstrap 脱离 Discord 启动。每次 E2E 运行都会在 `.openclaw-research/e2e-runs/` 里保存摘要、payload、stdout/stderr 和项目路径，方便复盘失败现场。
 
 ## 8.5 现有项目如何迁移到最新 workflow/runtime
 

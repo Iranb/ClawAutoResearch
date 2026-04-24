@@ -24,6 +24,10 @@
     "prepare": "npm run build",
     "lint": "eslint index.ts tools/",
     "test": "node --test tests/*.test.mjs",
+    "test:auto:fixture": "node scripts/run_auto_workflow_e2e_test.mjs --mode fixture --command full",
+    "test:auto:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command full",
+    "test:autoresearch:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoresearch",
+    "test:autoreview:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoreview",
     "install:plugin": "bash install.sh"
   },
   "keywords": [
@@ -61,8 +65,11 @@
     "CONFIG.md"
   ],
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^20.0.0",
+    "eslint": "^9.39.4",
     "typescript": "^5.0.0",
+    "typescript-eslint": "^8.58.2",
     "vitepress": "^1.6.3"
   },
   "peerDependencies": {
@@ -77,7 +84,9 @@
     "node": ">=18.0.0"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "pluginId": "ClawAutoResearch"
   }
 }

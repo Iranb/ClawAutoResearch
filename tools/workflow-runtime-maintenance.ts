@@ -901,7 +901,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     }
   }
 
-  let experimentMaintenance: WorkflowRuntimeMaintenanceResult["experimentMaintenance"] = {
+  const experimentMaintenance: WorkflowRuntimeMaintenanceResult["experimentMaintenance"] = {
     attempted: false,
     monitorRefreshed: false,
     decisionPersisted: false,

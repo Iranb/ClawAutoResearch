@@ -357,7 +357,39 @@ node scripts/run_local_workflow_command.mjs \
 - `/auto-research` 是否真的能把 experiment 线带到 review-closed 的终态
 - `/auto-review` 是否真的能把 survey 线带到 review-closed 的终态
 
-可以直接运行：
+优先使用统一 E2E runner。它会自动创建 run root、保存 payload/stdout/stderr、抽取每条 lane 的项目路径和最终 verdict。
+
+真实 agent runtime：
+
+```bash
+npm run test:autoresearch:real -- --topic "Generalized Category Discovery"
+npm run test:autoreview:real -- --topic "Generalized Category Discovery"
+```
+
+一次跑 experiment 和 survey 两条线：
+
+```bash
+npm run test:auto:real -- --topic "Generalized Category Discovery"
+```
+
+回归型 deterministic fixture：
+
+```bash
+npm run test:auto:fixture -- --topic "Generalized Category Discovery"
+```
+
+这些入口底层调用：
+
+```bash
+node scripts/run_auto_workflow_e2e_test.mjs \
+  --command /autoresearch \
+  --topic "Generalized Category Discovery" \
+  --mode live
+```
+
+`--command` 可以写 `/autoresearch`、`/auto-research`、`/autoreview`、`/auto-review` 或 `full`。真实模式默认使用 `--bootstrap-transport local`，所以不会连接 Discord，也不会把 Discord channel 写成项目绑定。
+
+如果要直接调用底层脚本，也可以运行：
 
 ```bash
 node scripts/run_auto_command_end_to_end.mjs \
@@ -385,7 +417,25 @@ node scripts/run_auto_command_end_to_end.mjs \
    - 用 deterministic fixture 工件做受控回归
    - 仍然生成 PDF 并验证终态，但不代表真实 agent 写作质量
 
-### 8.1 已验证结果
+### 8.1 E2E runner 输出
+
+每次运行都会写入：
+
+- `.openclaw-research/e2e-runs/<timestamp>-.../AUTO_WORKFLOW_E2E_SUMMARY.md`
+- `.openclaw-research/e2e-runs/<timestamp>-.../AUTO_WORKFLOW_E2E_SUMMARY.json`
+- `.openclaw-research/e2e-runs/<timestamp>-.../payload.json`
+- `.openclaw-research/e2e-runs/<timestamp>-.../stdout.log`
+- `.openclaw-research/e2e-runs/<timestamp>-.../stderr.log`
+
+如果最终 `E2E_RUN_REPORT.md` 不是 `final_verdict: pass`，runner 会以失败退出；这让它适合直接放进本地验证或 CI-like smoke check。
+
+真实模式的前置条件：
+
+- 本机有 `openclaw` CLI
+- 默认配置 `$HOME/.openclaw/openclaw.json` 可读，或通过 `--profile dev` / `--source-config-path <path>` 指定
+- 对应 agent auth 已配置，否则真实 agent 阶段会在运行中失败
+
+### 8.2 已验证结果
 
 主题：`Generalized Category Discovery`
 
@@ -405,7 +455,7 @@ node scripts/run_auto_command_end_to_end.mjs \
   - `academic_writer/paper/main.pdf` 存在
   - `E2E_RUN_REPORT.md` 最终为 `final_verdict: pass`
 
-### 8.2 对应测试
+### 8.3 对应测试
 
 仓库里还有一条可重复执行的回归测试：
 

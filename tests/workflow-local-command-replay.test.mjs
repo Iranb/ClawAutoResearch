@@ -21,7 +21,7 @@ test("local workflow harness starts /auto-research without discord context", asy
   const { stdout } = await execFile(process.execPath, [
     scriptPath,
     "--command",
-    "auto-research",
+    "/autoresearch",
     "--args",
     '"Generalized Category Discovery"',
     "--projects-root",
@@ -34,6 +34,8 @@ test("local workflow harness starts /auto-research without discord context", asy
   const output = JSON.parse(stdout);
 
   assert.match(output.result.text, /Full-auto research pipeline started/);
+  assert.equal(output.command, "/auto-research");
+  assert.equal(output.requestedCommand, "/autoresearch");
   assert.equal(output.sessionKey, "agent:researcher:local:gcd-local-research");
   const entries = await fs.readdir(projectsRoot);
   const projectDir = entries.find((entry) =>

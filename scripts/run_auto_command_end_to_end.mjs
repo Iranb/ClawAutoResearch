@@ -31,6 +31,19 @@ function argValue(name, fallback = null) {
   return fallback;
 }
 
+function hasFlag(name) {
+  return process.argv.includes(name);
+}
+
+function numericArgValue(name, fallback = null) {
+  const raw = argValue(name, null);
+  if (raw === null) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 async function writeText(filePath, content) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
@@ -506,15 +519,22 @@ async function main() {
 
   if (mode === "live") {
     const result = {};
+    const liveOptions = {
+      profile: argValue("--profile", null),
+      gatewayUrl: argValue("--gateway-url", null),
+      gatewayToken: argValue("--gateway-token", null),
+      bootstrapTransport,
+      sourceConfigPath: argValue("--source-config-path", null),
+      gatewayStartupTimeoutMs: numericArgValue("--gateway-startup-timeout-ms", null),
+      maxIterations: numericArgValue("--max-iterations", null),
+      isolatedGateway: !hasFlag("--no-isolated-gateway"),
+    };
     if (lane === "experiment" || lane === "full") {
       result.experiment = await runAutoCommandEndToEndLive({
         lane: "experiment",
         topic,
         projectsRoot,
-        profile: argValue("--profile", null),
-        gatewayUrl: argValue("--gateway-url", null),
-        gatewayToken: argValue("--gateway-token", null),
-        bootstrapTransport,
+        ...liveOptions,
       });
     }
     if (lane === "survey" || lane === "full") {
@@ -522,10 +542,7 @@ async function main() {
         lane: "survey",
         topic,
         projectsRoot,
-        profile: argValue("--profile", null),
-        gatewayUrl: argValue("--gateway-url", null),
-        gatewayToken: argValue("--gateway-token", null),
-        bootstrapTransport,
+        ...liveOptions,
       });
     }
     console.log(

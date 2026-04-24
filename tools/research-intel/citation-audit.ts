@@ -231,7 +231,7 @@ function parseBibEntries(source: string | null): ParsedBibEntry[] {
     return [];
   }
   const entries: ParsedBibEntry[] = [];
-  const entryStartPattern = /@\w+\s*[\{\(]/g;
+  const entryStartPattern = /@\w+\s*[{(]/g;
   let match: RegExpExecArray | null;
   while ((match = entryStartPattern.exec(source)) !== null) {
     const openChar = match[0].trim().endsWith("(") ? "(" : "{";

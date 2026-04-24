@@ -180,7 +180,9 @@ async function readAdvisoryLockMetadata(
         acquiredAt: parsed.acquiredAt.trim(),
       };
     }
-  } catch {}
+  } catch {
+    // Malformed or unreadable lock files are treated as absent.
+  }
   return null;
 }
 
