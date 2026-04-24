@@ -95,7 +95,7 @@ export function buildPapernexusGuidance(
         `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus HTTP MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for live graph operations. Authenticate with the configured bearer token source at runtime and do not print or persist the raw token.`
       );
       prepend.push(
-        "Remote MCP rule: the MCP-first tool mapping is `research_lookup` for query/context/impact/ideas/brainstorm, `research_briefing` for research-brief/brainstorm-brief/path-trace/evidence-chain/reflection-chain/theory-brief/storyline-brief, `idea_catalyst` for cross-domain ideation packets, and `import_workflow` for queued import/status/wait flows. Prefer those remote HTTP MCP tools or their thin wrappers, and do not treat `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane."
+        "Remote MCP rule: the MCP-first tool mapping is `research_lookup` for query/context/impact/ideas/brainstorm/paper_index, `research_briefing` for research-brief/brainstorm-brief/path-trace/evidence-chain/reflection-chain/theory-brief/storyline-brief, `idea_catalyst` for cross-domain ideation packets, `import_workflow` for queued import/status/progress/log/wait flows, and `refresh_paper_graph` for one already-indexed paper or duplicate group. Prefer those remote HTTP MCP tools or their thin wrappers, and do not treat `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane."
       );
       prepend.push(
         "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the configured remote MCP endpoint instead."
@@ -133,7 +133,7 @@ export function buildPapernexusGuidance(
       "Brainstorm cycle rule: you may run multiple brainstorm rounds with competing options, but in aggressive auto mode you must persist every candidate and let the highest-scoring option become the selected durable bundle."
     );
     prepend.push(
-      "If new PDFs or Markdown arrive through a UI/API upload, queue the PaperNexus import wrappers from project-local staging through `research_workflow.queue_paper_ingestion`: one paper may use `pn_stage_sync.py` -> `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. The workflow PaperNexus upload worker owns launching and retrying queued requests; agents should not run upload wrappers inline or clear queued_requests by hand."
+      "If new PDFs or Markdown arrive through a UI/API upload, schedule the PaperNexus import from project-local staging through `research_workflow.schedule_papernexus_import` (legacy alias: `queue_paper_ingestion`): one paper may use `pn_import_submit.py` -> `pn_import_queue.py`, while 2+ papers should use `pn_batch_import.py` with one manifest. The workflow PaperNexus upload worker owns launching and retrying queued requests; agents should not run upload wrappers inline or clear queued_requests by hand."
     );
     if (resolvedAccessMode === "remote_mcp") {
       prepend.push(

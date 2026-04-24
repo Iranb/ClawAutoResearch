@@ -1507,7 +1507,7 @@ export async function runWorkflowAutoIteratorImpl(
     stageAfter === "idea" &&
     (ideaCatalystStateForActions.requisitionRequired ||
       ideaCatalystStateForActions.status === "requisition")
-      ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, queueing imports with research_workflow.queue_paper_ingestion, then rerunning /graph-build before resuming IDEA.`
+      ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, scheduling imports with research_workflow.schedule_papernexus_import, then rerunning /graph-build before resuming IDEA.`
       : null;
   let ownerAfter =
     (experimentReviewCommand ? experimentReviewOwner : null) ??

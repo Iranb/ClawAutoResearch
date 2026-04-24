@@ -57,7 +57,10 @@ import {
   orchestrateWorkflowTransition,
   resumeWorkflowTransition,
 } from "./workflow-session-orchestrator.js";
-import { reconcileBackgroundRunTerminalState } from "./workflow-background-run-reconcile.js";
+import {
+  isWorkflowRuntimeTrackingMissError,
+  reconcileBackgroundRunTerminalState,
+} from "./workflow-background-run-reconcile.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
   readJsonIfExists,
@@ -208,6 +211,10 @@ export type PapernexusWrapperScript =
   | "pn_import_submit.py"
   | "pn_import_queue.py"
   | "pn_batch_import.py"
+  | "pn_paper_index.py"
+  | "pn_paper_refresh.py"
+  | "pn_main_graph_name.py"
+  | "pn_idea_catalyst.py"
   | "pn_graph_query.py"
   | "pn_research_chains.py";
 
@@ -385,10 +392,31 @@ const PAPERNEXUS_WRAPPER_SCRIPT_MAP: Record<string, PapernexusWrapperScript> = {
   "pn_import_queue.py": "pn_import_queue.py",
   "pn_batch_import": "pn_batch_import.py",
   "pn_batch_import.py": "pn_batch_import.py",
+  "pn_paper_index": "pn_paper_index.py",
+  "pn_paper_index.py": "pn_paper_index.py",
+  "pn_paper_refresh": "pn_paper_refresh.py",
+  "pn_paper_refresh.py": "pn_paper_refresh.py",
+  "pn_main_graph_name": "pn_main_graph_name.py",
+  "pn_main_graph_name.py": "pn_main_graph_name.py",
+  "pn_idea_catalyst": "pn_idea_catalyst.py",
+  "pn_idea_catalyst.py": "pn_idea_catalyst.py",
   "pn_graph_query": "pn_graph_query.py",
   "pn_graph_query.py": "pn_graph_query.py",
   "pn_research_chains": "pn_research_chains.py",
   "pn_research_chains.py": "pn_research_chains.py",
+};
+
+const PAPERNEXUS_WRAPPER_SCRIPT_PATHS: Record<PapernexusWrapperScript, string> = {
+  "pn_stage_sync.py": "skills/papernexus/scripts/pn_stage_sync.py",
+  "pn_import_submit.py": "skills/papernexus/scripts/pn_import_submit.py",
+  "pn_import_queue.py": "skills/papernexus/scripts/pn_import_queue.py",
+  "pn_batch_import.py": "skills/papernexus/scripts/pn_batch_import.py",
+  "pn_paper_index.py": "skills/papernexus/scripts/pn_paper_index.py",
+  "pn_graph_query.py": "skills/papernexus/scripts/pn_graph_query.py",
+  "pn_research_chains.py": "skills/papernexus/scripts/pn_research_chains.py",
+  "pn_paper_refresh.py": "skills/papernexus-paper-refresh/scripts/pn_paper_refresh.py",
+  "pn_main_graph_name.py": "skills/papernexus-main-graph-name/scripts/pn_main_graph_name.py",
+  "pn_idea_catalyst.py": "skills/papernexus-idea-catalyst/scripts/pn_idea_catalyst.py",
 };
 
 const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
@@ -405,6 +433,10 @@ const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
   "theory-brief",
   "storyline-brief",
   "paper-enhancement",
+  "paper-index",
+  "refresh",
+  "queue_progress",
+  "progress",
   "list",
   "status",
   "log",
@@ -441,7 +473,7 @@ export function resolvePapernexusWrapperScript(
   const resolved = normalized ? PAPERNEXUS_WRAPPER_SCRIPT_MAP[normalized] : null;
   if (!resolved) {
     throw new Error(
-      "Unsupported PaperNexus wrapper. Use one of pn_stage_sync.py, pn_import_submit.py, pn_import_queue.py, pn_batch_import.py, pn_graph_query.py, or pn_research_chains.py."
+      "Unsupported PaperNexus wrapper. Use one of pn_stage_sync.py, pn_import_submit.py, pn_import_queue.py, pn_batch_import.py, pn_paper_index.py, pn_paper_refresh.py, pn_graph_query.py, pn_research_chains.py, pn_main_graph_name.py, or pn_idea_catalyst.py."
     );
   }
   return resolved;
@@ -459,7 +491,7 @@ export function buildPapernexusWrapperCommand(params: {
     : [];
   const parts = [
     "python3",
-    `scripts/${script}`,
+    PAPERNEXUS_WRAPPER_SCRIPT_PATHS[script],
     ...args.map((value) =>
       value.startsWith("-") || PAPERNEXUS_WRAPPER_SUBCOMMANDS.has(value.toLowerCase())
         ? value
@@ -1466,6 +1498,10 @@ async function pruneBackgroundRunRegistry(params: {
           runId: entry.runId,
           timeoutMs: 1,
         });
+        if (isWorkflowRuntimeTrackingMissError(waited)) {
+          kept.push(nextEntry);
+          continue;
+        }
         if (waited.status === "ok" || waited.status === "error") {
           await reconcileBackgroundRunTerminalState({
             entry,
@@ -2351,11 +2387,11 @@ export function buildPapernexusSkillBackgroundCommand(commandText: string): stri
 function isPapernexusImportLifecycleCommand(text: string | null | undefined): boolean {
   const normalized = (text ?? "").toLowerCase();
   return (
-    /\bscripts\/pn_stage_sync\.py\b/.test(normalized) ||
-    /\bscripts\/pn_import_submit\.py\b/.test(normalized) ||
-    (/\bscripts\/pn_batch_import\.py\b/.test(normalized) &&
+    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_stage_sync\.py\b/.test(normalized) ||
+    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_import_submit\.py\b/.test(normalized) ||
+    (/(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
       /\b(submit|status|wait)\b/.test(normalized)) ||
-    (/\bscripts\/pn_import_queue\.py\b/.test(normalized) &&
+    (/(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_import_queue\.py\b/.test(normalized) &&
       /\b(status|log|wait)\b/.test(normalized))
   );
 }
@@ -2363,7 +2399,7 @@ function isPapernexusImportLifecycleCommand(text: string | null | undefined): bo
 function isPapernexusBatchImportCommand(text: string | null | undefined): boolean {
   const normalized = (text ?? "").toLowerCase();
   return (
-    /\bscripts\/pn_batch_import\.py\b/.test(normalized) &&
+    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
     /\b(submit|status|wait)\b/.test(normalized)
   );
 }
@@ -2408,7 +2444,7 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
   ];
   if (papernexusBackground) {
     lines.push(
-      "PaperNexus workflow rule: stay wrapper-first. Use the authenticated Python wrappers and do not fall back to local PaperNexus live-graph CLI work or hand-written REST calls."
+      "PaperNexus workflow rule: stay MCP-first. Use remote PaperNexus MCP tools (`research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`, `refresh_paper_graph`) directly when available; use the authenticated Python wrappers only as MCP-backed adapters for local file staging, shell-only execution, or bounded import/status work. Do not fall back to local live-graph CLI work or hand-written REST calls."
     );
   }
   if (graphBuildContinuation) {

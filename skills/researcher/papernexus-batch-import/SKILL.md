@@ -1,39 +1,43 @@
 ---
 name: papernexus-batch-import
-description: Use when an agent needs to upload or track multiple local PDF or Markdown papers into a live PaperNexus corpus through a fixed JSON manifest and Python wrapper.
+description: Use when an agent needs to upload or track multiple local PDF or Markdown papers into a live PaperNexus corpus through a fixed JSON manifest and remote HTTP MCP wrappers.
 ---
 
 # PaperNexus Batch Import
 
-Use this skill when the task is to ingest many local papers into a running PaperNexus server and keep queue tracking stable.
+Use this skill when the task is to ingest many local papers into a running PaperNexus server.
+Assume OpenClaw already exposes PaperNexus as MCP server `papernexus-remote`.
+Do not repeat IPs, MCP URLs, or bearer tokens in the skill.
 
 ## Default Rule
 
-For 2 or more files, prefer:
+For two or more files, prefer:
 
-- `python3 scripts/pn_batch_import.py`
+- `python3 skills/papernexus-batch-import/scripts/pn_batch_import.py`
 
-Do not write ad-hoc shell loops over `pn_import_submit.py`, `curl`, or mixed `rsync + curl` snippets for batch jobs. The batch wrapper is the default control plane because it keeps one fixed manifest format, one status surface, and one local task registry.
+Do not write ad-hoc shell loops. The batch wrapper is the default control plane because it keeps one manifest format, one task registry, and one `summary/items` response shape.
+It also uses one remote `queue_progress` snapshot for status reads, so agents do not need to infer progress from elapsed time.
+For live graph status reads on already-staged files, `import_workflow` on `papernexus-remote` remains the authoritative MCP surface.
 
-## Fixed Manifest Format
-
-Use one JSON file with this shape:
+## Manifest Format
 
 ```json
 {
   "version": 1,
   "defaults": {
-    "apiBase": "http://211.71.76.29:4821",
     "corpus": "GCD",
-    "sshTarget": "hyq@211.71.76.29",
     "remoteStagingRoot": "/tmp/papernexus-import-staging",
-    "trigger": "api"
+    "trigger": "mcp"
   },
   "papers": [
     {
       "paperId": "iclr2025-oral-data-shapley",
       "source": "/absolute/local/path/to/paper.pdf",
-      "sourceKind": "pdf"
+      "sourceKind": "pdf",
+      "identifiers": {
+        "doi": "10.48550/arXiv.2401.12345"
+      },
+      "sourceProvider": "filesystem"
     }
   ]
 }
@@ -42,99 +46,69 @@ Use one JSON file with this shape:
 Rules:
 
 - `version` must be `1`
-- `papers` must be a non-empty array
+- `papers` must be non-empty
 - each paper must include `source`
-- `source` should be an absolute local file path when uploading from the agent machine
-- `paperId` is strongly recommended because queue lookup is more reliable than filename-only matching
-- `sourceKind` may be `pdf` or `markdown`; if omitted, the wrapper infers it from the suffix
+- each paper must include at least one precise identifier through an `identifiers` object or equivalent per-paper fields
+- strong paper identity prefers `doi`, `arxivId`, `pmid`, or `pmcid`
+- `isbn` and `issn` are stored as metadata but are not preferred article identity keys
+- `paperId` is strongly recommended
+- only add manifest-scoped connection overrides when one batch truly needs different staging behavior from the default environment
 - optional per-paper overrides: `remoteDir`, `serverFilePath`, `taskId`
+- recommended per-paper metadata: `identifiers.doi`, `identifiers.arxivId`, `identifiers.pmid`, `identifiers.pmcid`, `identifiers.isbn`, `identifiers.issn`, `sourceProvider`
+- `source` is the local file path on the agent machine
+- `serverFilePath` is only for files that already exist on the remote PaperNexus server
+- if a server-home path is known, store it as `~/...`, not `/home/<user>/...`
+- do not copy a local `/Users/...` path into `serverFilePath`
 
-## Default Workflow
-
-1. Generate a template:
-
-```bash
-python3 scripts/pn_batch_import.py template
-```
-
-2. Fill one manifest file with local paper paths.
-
-3. Submit the whole batch:
+## Shell Fallback Workflow
 
 ```bash
-python3 scripts/pn_batch_import.py \
-  --api-base "http://<host>:4821" \
-  --token "<token>" \
+python3 skills/papernexus-batch-import/scripts/pn_batch_import.py template
+
+python3 skills/papernexus-batch-import/scripts/pn_batch_import.py \
   --manifest "/absolute/path/batch-import.json" \
   submit
-```
 
-4. Check batch status:
-
-```bash
-python3 scripts/pn_batch_import.py \
-  --api-base "http://<host>:4821" \
-  --token "<token>" \
+python3 skills/papernexus-batch-import/scripts/pn_batch_import.py \
   --manifest "/absolute/path/batch-import.json" \
   status
-```
 
-5. Wait until all tracked tasks finish:
-
-```bash
-python3 scripts/pn_batch_import.py \
-  --api-base "http://<host>:4821" \
-  --token "<token>" \
+python3 skills/papernexus-batch-import/scripts/pn_batch_import.py \
   --manifest "/absolute/path/batch-import.json" \
   wait --timeout 1800 --interval 15
 ```
 
-## What The Wrapper Does
+`submit` behavior:
 
-- stages local PDF or Markdown files to the remote server when needed
-- submits each file through the authenticated import API
-- stores `paperId/source -> taskId/status/stage` in the local temp registry
-- supports batch `submit`, `status`, and `wait` without manually copying task ids
-- returns one JSON response with `summary` and per-paper `items`
+- if a paper already has `serverFilePath`, the wrapper submits that remote file directly
+- if a paper only has local `source`, the wrapper stages it with `ssh`/`rsync` first
+- the remote MCP submit step always receives a server-side `serverFilePath`, never the raw local path
+- `remoteDir` may be `/tmp/...` or `~/...`; for server-home paths prefer `~/...`
 
 ## Status Rules
 
-Read the batch result like this:
-
-- `summary.total`: papers in the manifest
-- `summary.submitted`: tasks accepted by the API
-- `summary.completed`: tasks that finished with `status=completed`
-- `summary.running`: tasks still executing
-- `summary.pending`: tasks still queued
+- `summary.submitted`: tasks accepted by the server
+- `summary.completed`: tasks with `status=completed`
 - `summary.failed`: tasks that failed after submission
-- `summary.submitFailed`: items that never reached a remote task
+- `summary.submitFailed`: items that never became remote tasks
+- `summary.remaining`: tasks still `pending` or `running`
+- `summary.overallPercent`: aggregate progress across the returned batch items
 
 Per paper:
 
-- `submitted=true` means the server accepted an import task
-- `synced=true` means the import task reached `status=completed` and `stage=completed`
-- `registry.matchedBy` explains whether lookup came from `paper-id`, `source`, `task-id`, or `remote-scan`
+- `submitted=true` means the server accepted a task
+- `synced=true` means the task reached `completed`
+- `progress.percent` is the per-task overall progress
+- `progress.stagePercent` is the current-stage progress
+- `progress.queuePosition` shows where the task sits among unfinished queue entries
+- `registry.matchedBy` explains whether task resolution came from `paper-id`, `source`, `task-id`, or `remote-scan`
 
-Do not claim a paper is in the graph when only `submitted=true`. Only call it synchronized when `synced=true`.
+Do not claim a paper is in the graph when only `submitted=true`.
 
-## Failure Policy
+## Batch Tracking Rules
 
-- if one item fails, report `paperId`, `status`, `stage`, and `error`
-- prefer `status` or `wait` over resubmitting blindly
-- if the same manifest is re-run, let the registry and remote task lookup resolve the task first
-- use `--fail-fast` only when the operator explicitly wants the batch to stop on the first submit error
-
-## Minimal Agent Policy
-
-For batch ingestion:
-
-- create one manifest file
-- call `pn_batch_import.py submit`
-- call `pn_batch_import.py status` or `wait`
-- summarize from returned `summary` and `items`
-
-Do not:
-
-- hand-roll shell loops
-- manually track task ids in prose
-- say "uploaded but not synchronized" without citing returned task state
+- Use `status` during uploads to read a live batch snapshot.
+- Use `wait` when you need a terminal batch result; it polls all tasks round-robin instead of waiting one paper at a time.
+- Prefer `paperId` in the manifest so registry matching stays stable across retries.
+- During uploads, read `summary.remaining`, `summary.overallPercent`, and each paper's `progress.percent`.
+- If one paper is stuck, inspect it with `python3 skills/papernexus-batch-import/scripts/pn_import_queue.py status --paper-id "<paperId>"` or `log --paper-id "<paperId>"`.

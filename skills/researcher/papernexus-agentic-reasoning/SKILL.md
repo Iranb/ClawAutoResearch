@@ -1,46 +1,60 @@
 ---
 name: papernexus-agentic-reasoning
-description: Use this skill when an agent needs stepwise graph-grounded reasoning on top of a live PaperNexus corpus while keeping uploads wrapper-backed and live graph reads MCP-first.
+description: Use this skill when an agent needs stepwise reasoning over an existing PaperNexus graph. Live graph reads must go through the configured PaperNexus MCP server, not the legacy HTTP API.
 ---
 
 # PaperNexus Agentic Reasoning
 
-Use this skill when the goal is not just retrieval, but disciplined reasoning over a live PaperNexus graph.
+Use this skill when the goal is to reason through a research problem step by step on top of a live PaperNexus graph.
 
-## Control Plane
+## Live Graph Policy
 
-For workflow-owned reasoning, prefer the remote HTTP MCP control plane:
+- use remote HTTP MCP only
+- do not call raw `/api/*`
+- do not use stdio/local MCP for a live graph
+- do not use local CLI graph commands against the live graph
+- assume OpenClaw already exposes PaperNexus as MCP server `papernexus-remote`
+
+Preferred MCP tools:
 
 - `research_lookup`
 - `research_briefing`
-- `idea_catalyst`
+- `import_workflow`
 
-When a thin adapter layer is still useful, the wrappers remain valid because they are MCP-backed:
+Shell fallback wrappers:
 
-- `python3 scripts/pn_graph_query.py`
-- `python3 scripts/pn_research_chains.py`
+- `python3 skills/papernexus-agentic-reasoning/scripts/pn_graph_query.py`
+- `python3 skills/papernexus-agentic-reasoning/scripts/pn_research_chains.py`
+- `python3 skills/papernexus-agentic-reasoning/scripts/pn_import_submit.py`
+- `python3 skills/papernexus-agentic-reasoning/scripts/pn_import_queue.py`
+- `python3 skills/papernexus-agentic-reasoning/scripts/pn_batch_import.py`
 
-If fresh papers must be added first, use:
+## Tool Policy
 
-- `research_workflow.queue_paper_ingestion`
-- `python3 scripts/pn_stage_sync.py`
-- `python3 scripts/pn_import_submit.py`
-- `python3 scripts/pn_import_queue.py`
-- `python3 scripts/pn_batch_import.py`
+Use this order:
 
-Do not use local live-graph CLI commands or raw `/api/*` calls as the primary reasoning path for a shared corpus.
+1. `research_lookup` for anchor resolution and graph lookup
+2. `research_briefing` for typed chains and briefs
+3. import wrappers only when local files must be staged before `import_workflow submit`
+4. local repo commands only for isolated development
+
+Default MCP mapping:
+
+- `pn_graph_query.py` -> `research_lookup`
+- `pn_research_chains.py` -> `research_briefing`
+- import wrappers -> `import_workflow`
+
+## Import Boundary Rules
+
+- `import_workflow submit` expects a remote `serverFilePath`, not a local `/Users/...` path.
+- If a server path lives under the PaperNexus server user's home directory, keep it as `~/...` instead of guessing a concrete `/home/...` prefix.
+- If the paper is local to the agent machine, use `pn_import_submit.py --source ...` or `pn_batch_import.py submit`.
+- Only use `--server-file-path` when the file is already on the PaperNexus server.
+- During reasoning tasks, do not tell the user a paper is in the graph right after submit; check queue status first.
 
 ## Reasoning Loop
 
-For any non-trivial task, use this loop:
-
-1. Define the objective in one sentence.
-2. Start with the narrowest typed wrapper that matches the question.
-3. Record the current anchor, support, limitation, and next action.
-4. Expand only if the previous step leaves a structural gap.
-5. Stop when the remaining uncertainty is no longer graph-resolvable.
-
-Use this compact state format:
+For non-trivial research tasks, keep this compact state:
 
 ```text
 Objective:
@@ -51,74 +65,48 @@ Open gap:
 Next action:
 ```
 
-## Preferred MCP Operations
+Each step should end with one of:
 
-For topic understanding:
+- confirmed
+- uncertain
+- contradicted
+- needs external evidence
 
-- `research_lookup`
-- `research_briefing`
-
-For ideation:
-
-- `research_lookup`
-- `research_briefing`
-- `idea_catalyst`
-
-For theory and reflection:
-
-- `research_briefing`
-
-For causal or support traversal:
-
-- `research_briefing`
-
-For paper-local overlays:
-
-- `research_briefing`
-
-## Example Sequences
+## Recommended Shell Fallback Commands
 
 Understand a topic:
 
 ```bash
-research_lookup "<topic>"
-research_briefing evidence-chain "<topic>"
+python3 skills/papernexus-agentic-reasoning/scripts/pn_graph_query.py --corpus "<corpus>" query "<topic>" --limit 8
+python3 skills/papernexus-agentic-reasoning/scripts/pn_graph_query.py --corpus "<corpus>" context "<topic>" --node-view brainstorm
+python3 skills/papernexus-agentic-reasoning/scripts/pn_research_chains.py --corpus "<corpus>" evidence-chain "<topic>" --limit 5
 ```
 
-Generate candidate directions:
+Generate a direction:
 
 ```bash
-research_lookup ideas "<topic>"
-research_briefing brainstorm-brief "<topic>"
-idea_catalyst "<topic>"
+python3 skills/papernexus-agentic-reasoning/scripts/pn_graph_query.py --corpus "<corpus>" ideas "<topic>" --limit 6
+python3 skills/papernexus-agentic-reasoning/scripts/pn_graph_query.py --corpus "<corpus>" brainstorm "<topic>" --mode converge --limit 6
+python3 skills/papernexus-agentic-reasoning/scripts/pn_research_chains.py --corpus "<corpus>" brainstorm-brief "<topic>" --limit 6
 ```
 
-Evaluate support and risks:
+Check import progress:
 
 ```bash
-research_briefing evidence-chain "<topic>"
-research_briefing theory-brief "<topic>"
-research_briefing reflection-chain "<topic>"
+python3 skills/papernexus-agentic-reasoning/scripts/pn_import_queue.py --corpus "<corpus>" status --paper-id "<paperId>"
+python3 skills/papernexus-agentic-reasoning/scripts/pn_batch_import.py --corpus "<corpus>" --manifest "/absolute/path/batch-import.json" status
 ```
 
-## Upload Prerequisite Rules
+Read:
 
-If reasoning depends on papers not yet in the graph:
+- `task.progress.percent`
+- `task.progress.stagePercent`
+- `task.progress.queuePosition`
+- `summary.remaining`
+- `summary.overallPercent`
 
-- for one paper, use `pn_import_submit.py`
-- for multiple papers, use one `pn_batch_import.py` manifest
-- check or wait through `pn_import_queue.py`
+## Graph Thinking Rules
 
-Do not:
-
-- write ad-hoc upload loops
-- manually drive the shared graph with local stage commands
-- switch to raw route examples when wrappers already exist
-
-## When To Stop
-
-Stop the reasoning loop when:
-
-- the typed wrappers already show enough support and limitation structure
-- the remaining question needs new data rather than more traversal
-- the graph is stale and must be refreshed before trustworthy reasoning can continue
+- prefer typed chains and briefs over raw graph dumps
+- keep graph fact, overlay fact, inference, and open risk separate
+- when the graph cannot answer a question, report the gap instead of silently falling back to local CLI

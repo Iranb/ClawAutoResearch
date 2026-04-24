@@ -132,6 +132,7 @@ type EmbeddedRunState = {
   runtimeKind: "embedded_agent";
   sessionKey: string;
   sessionId: string;
+  sessionFile: string | null;
   agentId: string;
   startedAt: number;
   finishedAt: number | null;
@@ -151,6 +152,20 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const normalized = readString(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
 function pruneFinishedEmbeddedRuns() {
   const cutoff = nowMs() - EMBEDDED_RUN_ENTRY_TTL_MS;
   for (const [runId, state] of embeddedWorkflowRuns.entries()) {
@@ -162,6 +177,10 @@ function pruneFinishedEmbeddedRuns() {
     }
     embeddedWorkflowRuns.delete(runId);
   }
+}
+
+function isSyntheticAlreadyActiveRunId(runId: string): boolean {
+  return /^already-active:/i.test(runId.trim());
 }
 
 function parseAgentIdFromSessionKey(sessionKey: string): string | null {
@@ -180,8 +199,82 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const record = asRecord(entry);
+        return record ? [record] : [];
+      })
+    : [];
+}
+
+function splitModelRef(
+  modelRef: unknown
+): { provider: string; model: string; ref: string } | null {
+  const ref = readString(modelRef);
+  if (!ref) {
+    return null;
+  }
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) {
+    return null;
+  }
+  const provider = ref.slice(0, slash).trim();
+  const model = ref.slice(slash + 1).trim();
+  return provider && model ? { provider, model, ref } : null;
+}
+
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function resolveAgentConfigRecord(params: {
+  config: unknown;
+  agentId: string;
+}): Record<string, unknown> | null {
+  const agents = asRecord(asRecord(params.config)?.agents);
+  const list = asRecordArray(agents?.list);
+  const exact = list.find((entry) => readString(entry.id) === params.agentId);
+  if (exact) {
+    return exact;
+  }
+  const expected = params.agentId.toLowerCase();
+  return (
+    list.find((entry) => readString(entry.id)?.toLowerCase() === expected) ?? null
+  );
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const text = readString(entry);
+        return text ? [text] : [];
+      })
+    : [];
+}
+
+function resolveEmbeddedAgentModelSelection(params: {
+  config: unknown;
+  agentId: string;
+}): { provider: string; model: string; ref: string } | null {
+  const agents = asRecord(asRecord(params.config)?.agents);
+  const defaultsModel = asRecord(asRecord(agents?.defaults)?.model);
+  const agentModel = asRecord(
+    resolveAgentConfigRecord(params)?.model
+  );
+  const candidates = uniqueStrings([
+    readString(agentModel?.primary),
+    readString(defaultsModel?.primary),
+    ...readStringArray(agentModel?.fallbacks),
+    ...readStringArray(defaultsModel?.fallbacks),
+  ]);
+  for (const candidate of candidates) {
+    const parsed = splitModelRef(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 function resolveEmbeddedWorkspaceDir(params: {
@@ -342,22 +435,46 @@ async function readSessionMessages(params: {
 function inspectPersistedSessionEntry(params: {
   entry: Record<string, unknown> | null;
   sessionKey: string;
+  fallbackState?: EmbeddedRunState | null;
 }): WorkflowExecutionSessionInspection | null {
-  if (!params.entry) {
+  const fallbackStatus = params.fallbackState
+    ? params.fallbackState.status === "running"
+      ? "running"
+      : params.fallbackState.status === "ok"
+        ? "completed"
+        : "failed"
+    : null;
+  if (!params.entry && !params.fallbackState) {
     return null;
   }
   return {
     sessionKey: params.sessionKey,
-    sessionId: readString(params.entry.sessionId),
-    sessionFile: readString(params.entry.sessionFile),
-    status: readString(params.entry.status),
-    startedAt: readNumber(params.entry.startedAt),
-    endedAt: readNumber(params.entry.endedAt),
-    updatedAt: readNumber(params.entry.updatedAt),
-    abortedLastRun: params.entry.abortedLastRun === true,
-    providerOverride: readString(params.entry.providerOverride),
-    modelOverride: readString(params.entry.modelOverride),
-    liveModelSwitchPending: params.entry.liveModelSwitchPending === true,
+    sessionId:
+      readString(params.entry?.sessionId) ??
+      params.fallbackState?.sessionId ??
+      null,
+    sessionFile:
+      readString(params.entry?.sessionFile) ??
+      params.fallbackState?.sessionFile ??
+      null,
+    status: readString(params.entry?.status) ?? fallbackStatus,
+    startedAt:
+      readNumber(params.entry?.startedAt) ??
+      params.fallbackState?.startedAt ??
+      null,
+    endedAt:
+      readNumber(params.entry?.endedAt) ??
+      params.fallbackState?.finishedAt ??
+      null,
+    updatedAt:
+      readNumber(params.entry?.updatedAt) ??
+      params.fallbackState?.finishedAt ??
+      params.fallbackState?.startedAt ??
+      null,
+    abortedLastRun: params.entry?.abortedLastRun === true,
+    providerOverride: readString(params.entry?.providerOverride),
+    modelOverride: readString(params.entry?.modelOverride),
+    liveModelSwitchPending: params.entry?.liveModelSwitchPending === true,
   };
 }
 
@@ -411,6 +528,21 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
           }
         ) ?? path.join(workspaceDir, `${sessionId}.jsonl`);
       const runId = randomUUID();
+      const modelSelection = resolveEmbeddedAgentModelSelection({
+        config: params.runtimeApi.config,
+        agentId,
+      });
+      if (!modelSelection) {
+        params.runtimeApi.logger?.warn?.(
+          "workflow.embedded_agent.model_selection_missing",
+          {
+            agentId,
+            sessionKey,
+            reason:
+              "no usable agents.<agent>.model.primary or agents.defaults.model.primary provider/model ref",
+          }
+        );
+      }
 
       const runPromise = runEmbeddedAgent({
         sessionId,
@@ -429,6 +561,8 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
         workspaceDir,
         agentDir,
         config: params.runtimeApi.config,
+        provider: modelSelection?.provider,
+        model: modelSelection?.model,
         prompt: runParams.message,
         lane: readString(runParams.lane) ?? "nested",
         extraSystemPrompt:
@@ -442,6 +576,7 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
         runtimeKind: "embedded_agent",
         sessionKey,
         sessionId,
+        sessionFile,
         agentId,
         startedAt: nowMs(),
         finishedAt: null,
@@ -469,6 +604,9 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
     },
     async waitForRun(waitParams) {
       pruneFinishedEmbeddedRuns();
+      if (isSyntheticAlreadyActiveRunId(waitParams.runId)) {
+        return { status: "timeout" };
+      }
       const state = embeddedWorkflowRuns.get(waitParams.runId);
       if (!state) {
         return {
@@ -549,6 +687,7 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
       return inspectPersistedSessionEntry({
         entry: storeState?.entry ?? null,
         sessionKey,
+        fallbackState: state,
       });
     },
     async deleteSession(deleteParams) {

@@ -30,19 +30,19 @@ Use PaperNexus graph traversal over the shared global graph, constrained by this
 
 ## Query Passes
 
-For the current topic, run a minimum of these PaperNexus passes against the shared global graph through the remote HTTP MCP control plane or the thin wrappers backed by it:
+For the current topic, run a minimum of these PaperNexus passes against the shared global graph through the configured `papernexus-remote` MCP server. Use the shell wrappers only when this skill is executed in a shell-only fallback context:
 
 ```bash
-python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" query "<topic>" --limit 8
-python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" brainstorm "<topic>" --mode diverge --limit 8
-python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" ideas "<topic>" --limit 8
+research_lookup query "<topic>"
+research_lookup brainstorm "<topic>"
+research_lookup ideas "<topic>"
 ```
 
 Then inspect at least one neighborhood for each promising anchor:
 
 ```bash
-python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" context "<anchor>"
-python3 scripts/pn_graph_query.py --api-base "https://<host>" --corpus "<corpus>" impact "<anchor>"
+research_lookup context "<anchor>"
+research_lookup impact "<anchor>"
 ```
 
 Use `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` and `{PROJ}/graph/PAPERNEXUS_STATUS.json` to constrain which anchors and papers are treated as in-scope for this project.

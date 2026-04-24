@@ -124,7 +124,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
 - `{PROJECTS_ROOT}` = configured project root (see `CONFIG.md`), `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 - `{PMEM}` = `{PROJ}/memory`
 - project-local paper staging root = `{PROJ}/researcher/paper-staging`
-- remote PaperNexus graph = configured remote HTTP MCP plus MCP-backed wrappers in `scripts/` (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`); workflow-owned uploads should be queued through `research_workflow.queue_paper_ingestion`, while graph reads / brainstorm reads should prefer `research_lookup`, `research_briefing`, and `idea_catalyst`
+- remote PaperNexus graph = configured remote HTTP MCP plus MCP-backed wrappers in `skills/papernexus/scripts/` (`pn_import_submit.py`, `pn_import_queue.py`, `pn_batch_import.py`, `pn_graph_query.py`, `pn_research_chains.py`, `pn_paper_index.py`); workflow-owned uploads should be scheduled through `research_workflow.schedule_papernexus_import`, while graph reads / brainstorm reads should prefer `research_lookup`, `research_briefing`, `idea_catalyst`, and one-paper refreshes should use `refresh_paper_graph`
 
 Each agent writes ONLY to its designated subfolder under `{PROJ}/`. See `WORKSPACE.md` for full ownership rules.
 
@@ -172,9 +172,9 @@ Rules:
 - `/research-lit` is not only abstract survey; it must ingest full-paper markdown/PDF for the key papers
 - when the topic has many competing baselines, benchmark variants, or close prior work, insert `/literature-review` before trusting frontier or ideation outputs; use it to lock inclusion / exclusion criteria, SoTA coverage, and the gap packet
 - `/research-lit` must already produce a preliminary brainstorm scaffold grounded in the literature and current graph view; brainstorming must begin during research, not only during IDEA
-- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper and there is no durable graph/index confirmation in `PAPER_SOURCE_INDEX.json`, queue the required upload through `research_workflow.queue_paper_ingestion` before innovation analysis
+- after `/papers-cool` finds key papers, Researcher must verify graph presence against the shared global graph; if the graph lacks a key paper and there is no durable graph/index confirmation in `PAPER_SOURCE_INDEX.json`, schedule the required upload through `research_workflow.schedule_papernexus_import` before innovation analysis
 - if new material arrives through the PaperNexus dashboard or Web/API, prefer durable queued upload requests plus wrapper task logs instead of touching any home-directory shared PaperNexus storage directly
-- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; queue that manifest through `research_workflow.queue_paper_ingestion`, then let the workflow PaperNexus upload worker, `/graph-build`, or `/resume-pipeline` trigger it, track manifest progress, refresh Zotero `bot/<project-id>` collections, and run short readiness / brainstorm refresh passes
+- for 2 or more staged papers, prefer one `pn_batch_import.py` manifest over repeated one-paper submit loops; schedule that manifest through `research_workflow.schedule_papernexus_import`, then let the workflow PaperNexus upload worker, `/graph-build`, or `/resume-pipeline` trigger it, track manifest progress, refresh Zotero `bot/<project-id>` collections, and run short readiness / brainstorm refresh passes
 - keep discovery requisitions separate from upload manifests: a requisition packet may legitimately have no staged paper sources yet, and it should drive collection/staging work rather than being validated as a failed batch import
 - treat `/graph-build` as a fixed workflow phase with these micro-stages:
   - `graph_build/uploading`

@@ -670,7 +670,7 @@ export function formatWorkflowSnapshotForPromptImpl(
           );
         }
         lines.push(
-          "Remote MCP rule: use the PaperNexus MCP tools through the MCP-first mapping for graph reads and writes: `research_lookup` for query/context/impact/ideas/brainstorm, `research_briefing` for brief and chain outputs, `idea_catalyst` for cross-domain ideation packets, and `import_workflow` for queued import/status/wait flows. Do not use `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane in this mode."
+          "Remote MCP rule: use the PaperNexus MCP tools through the MCP-first mapping for graph reads and writes: `research_lookup` for query/context/impact/ideas/brainstorm/paper_index, `research_briefing` for brief and chain outputs, `idea_catalyst` for cross-domain ideation packets, `import_workflow` for queued import/status/progress/log/wait flows, and `refresh_paper_graph` for one already-indexed paper or duplicate group. Do not use `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane in this mode."
         );
       } else {
         lines.push(
@@ -1090,10 +1090,10 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
   }
   lines.push(
-    "Preferred paper-ingestion order: run the workflow-owned broad retrieval backbone first when breadth matters, keep /papers-cool search as the guaranteed baseline (optionally merge /pasa-paper-search when it succeeds), then once paper identity is confirmed call /hugging-face-paper-pages for arXiv papers -> if needed call /arxiv2md-api -> if needed call /markxiv -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, use PDF fallback -> preserve metadata-only canonical entries for important unresolved papers -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> queue one PaperNexus upload request through `research_workflow.queue_paper_ingestion` (`pn_stage_sync.py` + `pn_import_submit.py` + `pn_import_queue.py` for one paper, `pn_batch_import.py` with one manifest for 2+ staged papers, or the dedicated /papernexus-batch-import skill) -> /graph-build readiness + brainstorm bundle refresh."
+    "Preferred paper-ingestion order: run the workflow-owned broad retrieval backbone first when breadth matters, keep /papers-cool search as the guaranteed baseline (optionally merge /pasa-paper-search when it succeeds), then once paper identity is confirmed call /hugging-face-paper-pages for arXiv papers -> if needed call /arxiv2md-api -> if needed call /markxiv -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, use PDF fallback -> preserve metadata-only canonical entries for important unresolved papers -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> schedule one PaperNexus import request through `research_workflow.schedule_papernexus_import` (legacy alias: `queue_paper_ingestion`; `pn_import_submit.py` + `pn_import_queue.py` for one paper, `pn_batch_import.py` with one manifest for 2+ staged papers, or the dedicated /papernexus-batch-import skill) -> /graph-build readiness + brainstorm bundle refresh."
   );
   lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the queued wrapper path (`pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) by recording it through `research_workflow.queue_paper_ingestion`. The workflow PaperNexus upload worker owns launching, retrying, and reporting queued requests; agents should not run upload wrappers inline or clear `queued_requests` by hand. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
+    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the MCP-backed queued wrapper path (`pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) by recording it through `research_workflow.schedule_papernexus_import`. The legacy `queue_paper_ingestion` action remains a compatibility alias, not a PaperNexus wrapper name. The workflow PaperNexus upload worker owns launching, retrying, and reporting queued requests; agents should not run upload wrappers inline or clear `queued_requests` by hand. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
   );
   lines.push(
     "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
@@ -1109,7 +1109,7 @@ export function formatWorkflowSnapshotForPromptImpl(
   }
   if (resolvedPapernexusAccessMode === "remote_mcp") {
     lines.push(
-      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) before trusting raw full-graph prominence. Keep `import_workflow` and the queued wrappers for staged import/status work."
+      "PaperNexus brainstorm rule: during frontier mapping, innovation reflection, and idea divergence, prefer the remote HTTP MCP control plane (`research_lookup`, `research_briefing`, `idea_catalyst`) before trusting raw full-graph prominence. Keep `import_workflow`, `refresh_paper_graph`, and the queued wrappers for staged import/status/one-paper refresh work."
     );
   } else {
     lines.push(

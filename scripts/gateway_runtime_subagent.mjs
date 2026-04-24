@@ -23,6 +23,10 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function isLocalRegistryTrackingMiss(result) {
+  return /not tracked in the local registry/i.test(String(result?.error ?? ""));
+}
+
 export function buildGatewayRuntimeMessage(runParams = {}) {
   const task = readString(runParams.message) ?? "";
   const projectRoot = readString(runParams.projectRoot);
@@ -44,7 +48,7 @@ export function buildGatewayRuntimeMessage(runParams = {}) {
       ? "Before calling project-bound workflow tools, bind or resolve this exact project if the workflow state is unbound."
       : null,
     projectRoot
-      ? `If binding is needed, call research_workflow.bind_channel_project with projectRoot="${projectRoot}"${projectId ? ` and projectId="${projectId}"` : ""}.`
+      ? `If a generic session context must be resolved, call research_workflow.bind_channel_project with projectRoot="${projectRoot}"${projectId ? ` and projectId="${projectId}"` : ""}; this is project context resolution, not a transport binding.`
       : null,
     projectRoot
       ? "Do not create or use a sibling/default project directory; all durable artifacts for this run belong under the Project root above."
@@ -104,6 +108,75 @@ async function waitForOpen(ws, timeoutMs) {
       { once: true }
     );
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function healthUrlForGateway(wsUrl) {
+  try {
+    const target = new URL(wsUrl);
+    target.protocol = target.protocol === "wss:" ? "https:" : "http:";
+    target.pathname = "/health";
+    target.search = "";
+    target.hash = "";
+    return target.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function waitForGatewayHealth(wsUrl, timeoutMs) {
+  const healthUrl = healthUrlForGateway(wsUrl);
+  if (!healthUrl || timeoutMs <= 0) {
+    return;
+  }
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
+      if (response.ok) {
+        return;
+      }
+      lastError = new Error(`gateway health returned HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `Timed out waiting for gateway health at ${healthUrl}: ${
+      lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")
+    }`
+  );
+}
+
+async function openGatewayWebSocketWithRetry(resolved, params) {
+  const startupTimeoutMs = params.startupTimeoutMs ?? params.gatewayStartupTimeoutMs ?? 15_000;
+  await waitForGatewayHealth(resolved.url, startupTimeoutMs);
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < startupTimeoutMs) {
+    const ws = new WebSocket(resolved.url);
+    ws.addEventListener("error", () => {});
+    try {
+      await waitForOpen(ws, params.openTimeoutMs ?? 10_000);
+      return ws;
+    } catch (error) {
+      lastError = error;
+      try {
+        ws.close();
+      } catch {}
+      await sleep(500);
+    }
+  }
+  throw new Error(
+    `Timed out opening gateway websocket at ${resolved.url}: ${
+      lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")
+    }`
+  );
 }
 
 async function waitForFrame(ws, predicate, timeoutMs, label) {
@@ -186,8 +259,7 @@ export async function createGatewayHarnessClient(params = {}) {
     throw new Error(`No gateway token found in ${resolved.configPath} or OPENCLAW_GATEWAY_TOKEN.`);
   }
 
-  const ws = new WebSocket(resolved.url);
-  await waitForOpen(ws, params.openTimeoutMs ?? 10_000);
+  const ws = await openGatewayWebSocketWithRetry(resolved, params);
 
   const challenge = await waitForFrame(
     ws,
@@ -333,6 +405,12 @@ export async function createGatewayRuntimeSubagent(params = {}) {
       },
       async waitForRun(waitParams) {
         const result = await client.agentWait(waitParams);
+        if (result?.status === "error" && isLocalRegistryTrackingMiss(result)) {
+          return {
+            status: "timeout",
+            error: result.error ?? null,
+          };
+        }
         return {
           status: result?.status ?? "error",
           error: result?.error ?? null,

@@ -70,7 +70,7 @@ test("syncOpenClawAgentModels restores missing configured provider models from o
         providers: {
           bailian: {
             baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-            apiKey: "test-key",
+            apiKey: "",
             api: "openai-completions",
             models: [{ id: "qwen3.5-plus", name: "qwen3.5-plus" }],
           },
@@ -91,8 +91,10 @@ test("syncOpenClawAgentModels restores missing configured provider models from o
   assert.equal(summary.counts.repaired, 1);
   assert.equal(summary.results[0]?.status, "repaired");
   assert.deepEqual(summary.results[0]?.addedModelRefs, ["bailian/qwen3.6-plus"]);
+  assert.deepEqual(summary.results[0]?.filledFields, ["bailian.apiKey"]);
 
   const nextModels = await readJson(modelsPath);
+  assert.equal(nextModels.providers.bailian.apiKey, "test-key");
   assert.deepEqual(
     nextModels.providers.bailian.models.map((entry) => entry.id),
     ["qwen3.5-plus", "qwen3.6-plus"]

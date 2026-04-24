@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { syncOpenClawAgentModels } from "./sync_openclaw_agent_models.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -51,6 +52,17 @@ function slugify(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "topic";
+}
+
+function expandHomePath(value) {
+  const raw = String(value ?? "").trim();
+  if (raw === "~") {
+    return os.homedir();
+  }
+  if (raw.startsWith("~/")) {
+    return path.join(os.homedir(), raw.slice(2));
+  }
+  return raw;
 }
 
 function timestampSlug(date = new Date()) {
@@ -107,6 +119,40 @@ export function normalizeAutoWorkflowMode(value) {
   throw new Error(`Unknown E2E mode "${value}". Use live/real or fixture/deterministic.`);
 }
 
+export function configuredProjectsRootFromOpenClawConfig(config) {
+  const candidates = [
+    config?.projectsRoot,
+    config?.projects_root,
+    config?.workflow?.projectsRoot,
+    config?.workflow?.projects_root,
+    config?.plugins?.entries?.ClawAutoResearch?.config?.projectsRoot,
+    config?.plugins?.entries?.ClawAutoResearch?.config?.projects_root,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+async function readConfiguredProjectsRoot(configPath) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
+    return configuredProjectsRootFromOpenClawConfig(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function readJson(filePath, fallback = null) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
 async function pathExists(filePath) {
   try {
     await fs.access(filePath);
@@ -134,6 +180,213 @@ async function findExecutable(name) {
     }
   }
   return null;
+}
+
+function splitListArg(value) {
+  return String(value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const ordered = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
+function splitModelRef(modelRef) {
+  if (typeof modelRef !== "string") {
+    return null;
+  }
+  const trimmed = modelRef.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return null;
+  }
+  return {
+    provider: trimmed.slice(0, slash),
+    modelId: trimmed.slice(slash + 1),
+    ref: trimmed,
+  };
+}
+
+function resolveOpenClawHome(configPath) {
+  const expanded = expandHomePath(configPath);
+  return path.dirname(path.resolve(expanded));
+}
+
+function resolveAgentConfig(config, agentId) {
+  const list = Array.isArray(config?.agents?.list) ? config.agents.list : [];
+  return list.find((entry) => entry && entry.id === agentId) ?? null;
+}
+
+function resolveAgentDir(config, openclawHome, agentId) {
+  const configured = resolveAgentConfig(config, agentId);
+  if (typeof configured?.agentDir === "string" && configured.agentDir.trim()) {
+    return expandHomePath(configured.agentDir.trim());
+  }
+  return path.join(openclawHome, "agents", agentId, "agent");
+}
+
+export function configuredModelRefsForAgent(config, agentId) {
+  const defaultsModel = config?.agents?.defaults?.model ?? {};
+  const agentModel = resolveAgentConfig(config, agentId)?.model ?? {};
+  const primary =
+    typeof agentModel.primary === "string" && agentModel.primary.trim()
+      ? agentModel.primary
+      : defaultsModel.primary;
+  const fallbacks = Array.isArray(agentModel.fallbacks)
+    ? agentModel.fallbacks
+    : Array.isArray(defaultsModel.fallbacks)
+      ? defaultsModel.fallbacks
+      : [];
+  return uniqueStrings([primary, ...fallbacks]);
+}
+
+function modelCatalogHasRef(modelsCatalog, parsedRef) {
+  const provider = modelsCatalog?.providers?.[parsedRef.provider];
+  if (!provider || typeof provider !== "object") {
+    return false;
+  }
+  return Array.isArray(provider.models)
+    ? provider.models.some((entry) => entry && entry.id === parsedRef.modelId)
+    : false;
+}
+
+function providerHasInlineCredential(provider) {
+  if (!provider || typeof provider !== "object") {
+    return false;
+  }
+  return ["apiKey", "api_key", "token", "bearerToken", "bearer_token"].some(
+    (key) => typeof provider[key] === "string" && provider[key].trim().length > 0
+  );
+}
+
+function valueContainsProvider(value, provider) {
+  const expected = String(provider).toLowerCase();
+  if (typeof value === "string") {
+    return value.trim().toLowerCase() === expected;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsProvider(entry, provider));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key.toLowerCase() === expected) {
+      return true;
+    }
+    if (
+      ["provider", "provider_id", "providerId", "type", "name"].includes(key) &&
+      valueContainsProvider(entry, provider)
+    ) {
+      return true;
+    }
+    if (valueContainsProvider(entry, provider)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function credentialStatusForProvider(params) {
+  const provider = params.modelsCatalog?.providers?.[params.providerId];
+  if (providerHasInlineCredential(provider)) {
+    return "inline";
+  }
+  if (params.authProfile && valueContainsProvider(params.authProfile, params.providerId)) {
+    return "auth-profile";
+  }
+  for (const acceptedProvider of params.acceptedAuthProviders ?? []) {
+    if (params.authProfile && valueContainsProvider(params.authProfile, acceptedProvider)) {
+      return `auth-profile:${acceptedProvider}`;
+    }
+  }
+  return "missing";
+}
+
+export function verifyAgentRuntimeModelConfig(params) {
+  const modelRefs = configuredModelRefsForAgent(params.config, params.agentId);
+  if (modelRefs.length === 0) {
+    return {
+      ok: false,
+      detail: `${params.agentId}: no configured model refs in openclaw.json`,
+    };
+  }
+
+  const missingModels = [];
+  const missingCredentials = [];
+  const credentialStatuses = [];
+
+  for (const modelRef of modelRefs) {
+    const parsed = splitModelRef(modelRef);
+    if (!parsed) {
+      missingModels.push(modelRef);
+      continue;
+    }
+    if (!modelCatalogHasRef(params.modelsCatalog, parsed)) {
+      missingModels.push(modelRef);
+      continue;
+    }
+    const credentialStatus = credentialStatusForProvider({
+      modelsCatalog: params.modelsCatalog,
+      authProfile: params.authProfile,
+      providerId: parsed.provider,
+      acceptedAuthProviders: params.acceptedAuthProviders,
+    });
+    credentialStatuses.push(`${parsed.provider}:${credentialStatus}`);
+    if (credentialStatus === "missing") {
+      missingCredentials.push(parsed.provider);
+    }
+  }
+
+  const ok = missingModels.length === 0 && missingCredentials.length === 0;
+  const parts = [
+    `${params.agentId}: configured=${modelRefs.join(",")}`,
+    `agentDir=${params.agentDir}`,
+  ];
+  if (credentialStatuses.length > 0) {
+    parts.push(`credentials=${uniqueStrings(credentialStatuses).join(",")}`);
+  }
+  if (missingModels.length > 0) {
+    parts.push(`missing_models=${missingModels.join(",")}`);
+  }
+  if (missingCredentials.length > 0) {
+    parts.push(`missing_credentials=${uniqueStrings(missingCredentials).join(",")}`);
+  }
+  return { ok, detail: parts.join(" ") };
+}
+
+export function shouldRestartGatewayAfterAgentModelSync(params) {
+  return Boolean(
+    params?.mode === "live" &&
+      !params?.isolatedGateway &&
+      !params?.skipAgentModelSync &&
+      !params?.skipGatewayRestartAfterAgentSync &&
+      Number(params?.repairedCount ?? 0) > 0
+  );
+}
+
+export function shouldEnableAgentModelSyncWatchdog(params) {
+  return Boolean(
+    params?.mode === "live" &&
+      !params?.isolatedGateway &&
+      !params?.skipAgentModelSync &&
+      !params?.noPreflight &&
+      Number(params?.intervalMs ?? 0) > 0 &&
+      Array.isArray(params?.agentIds) &&
+      params.agentIds.length > 0
+  );
 }
 
 async function runProcess(command, args, options = {}) {
@@ -183,6 +436,150 @@ async function runProcess(command, args, options = {}) {
     stdout: stdout.join(""),
     stderr: stderr.join(""),
     timedOut,
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function gatewayHealthUrlFromOpenClawConfig(config) {
+  const gateway = config?.gateway ?? {};
+  const host = gateway.bind === "loopback" ? "127.0.0.1" : gateway.host ?? "127.0.0.1";
+  const port = gateway.port ?? 18789;
+  return `http://${host}:${port}/health`;
+}
+
+async function waitForGatewayHealthFromConfig(config, timeoutMs = 30_000) {
+  const healthUrl = gatewayHealthUrlFromOpenClawConfig(config);
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
+      if (response.ok) {
+        return { ok: true, detail: healthUrl };
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(500);
+  }
+  return {
+    ok: false,
+    detail: `${healthUrl}: ${lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")}`,
+  };
+}
+
+async function restartOpenClawGatewayAfterAgentSync(params) {
+  if (!params.openclawPath) {
+    return { ok: false, detail: "openclaw CLI not found" };
+  }
+  const restarted = await runProcess(params.openclawPath, ["gateway", "restart"], {
+    timeoutMs: params.restartTimeoutMs ?? 90_000,
+  });
+  if (restarted.code !== 0) {
+    const detail = (restarted.stderr || restarted.stdout || restarted.error?.message || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 500);
+    return {
+      ok: false,
+      detail: `openclaw gateway restart failed exit=${restarted.code}${detail ? ` ${detail}` : ""}`,
+    };
+  }
+  const health = await waitForGatewayHealthFromConfig(
+    params.config,
+    params.healthTimeoutMs ?? 30_000
+  );
+  return {
+    ok: health.ok,
+    detail: health.ok
+      ? `openclaw gateway restart ok; health=${health.detail}`
+      : `openclaw gateway restart ok; health failed ${health.detail}`,
+  };
+}
+
+function startAgentModelSyncWatchdog(params) {
+  const intervalMs = Math.max(0, Math.floor(Number(params.intervalMs ?? 0)));
+  const status = {
+    enabled: shouldEnableAgentModelSyncWatchdog({
+      mode: params.mode,
+      isolatedGateway: params.isolatedGateway,
+      skipAgentModelSync: params.skipAgentModelSync,
+      noPreflight: params.noPreflight,
+      intervalMs,
+      agentIds: params.agentIds,
+    }),
+    intervalMs,
+    runs: 0,
+    repaired: 0,
+    noop: 0,
+    skipped: 0,
+    errors: [],
+  };
+  if (!status.enabled) {
+    return {
+      status,
+      stop: async () => status,
+    };
+  }
+
+  let stopped = false;
+  let timer = null;
+  let running = null;
+  const openclawHome = resolveOpenClawHome(params.configPath);
+  const recordError = (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    status.errors.push(message.slice(0, 500));
+    if (status.errors.length > 5) {
+      status.errors.shift();
+    }
+  };
+  const runOnce = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = (async () => {
+      try {
+        const summary = await syncOpenClawAgentModels({
+          openclawHome,
+          configPath: params.configPath,
+          agentIds: params.agentIds,
+        });
+        status.runs += 1;
+        status.repaired += summary.counts.repaired;
+        status.noop += summary.counts.noop;
+        status.skipped += summary.counts.skipped;
+      } catch (error) {
+        status.runs += 1;
+        recordError(error);
+      } finally {
+        running = null;
+        if (!stopped) {
+          timer = setTimeout(() => {
+            void runOnce();
+          }, intervalMs);
+        }
+      }
+    })();
+    await running;
+  };
+
+  void runOnce();
+  return {
+    status,
+    stop: async () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      while (running) {
+        await running;
+      }
+      return status;
+    },
   };
 }
 
@@ -239,6 +636,7 @@ function summarizePayload(payload) {
   ].filter(Boolean);
   return {
     topic: payload?.topic ?? null,
+    projectId: payload?.projectId ?? payload?.project_id ?? null,
     lane: payload?.lane ?? null,
     mode: payload?.mode ?? null,
     bootstrapTransport: payload?.bootstrapTransport ?? null,
@@ -265,6 +663,52 @@ function verdictStatus(summary, allowPartial) {
 async function writeText(filePath, content) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
+}
+
+async function copyIfExists(sourcePath, destinationPath) {
+  if (!(await pathExists(sourcePath))) {
+    return false;
+  }
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  await fs.copyFile(sourcePath, destinationPath);
+  return true;
+}
+
+async function collectProjectSnapshots(params) {
+  const snapshots = [];
+  const snapshotSpecs = [
+    "PROJECT_MANIFEST.json",
+    path.join("graph", "GRAPH_PRESENCE_CHECK.json"),
+    path.join("graph", "PAPERNEXUS_STATUS.json"),
+    path.join("graph", "PAPERNEXUS_PROGRESS.json"),
+    path.join(".openclaw-research", "workflow-runtime-queue.json"),
+    path.join(".openclaw-research", "workflow-runtime-sessions.json"),
+    path.join(".openclaw-research", "workflow-mailbox.json"),
+    path.join(".openclaw-research", "workflow-handoff-intents.json"),
+    path.join(".openclaw-research", "workflow-diagnostics.jsonl"),
+    path.join(".openclaw-research", "workflow-events.jsonl"),
+  ];
+  for (const lane of params.resultSummary.lanes ?? []) {
+    if (!lane.projectRoot) {
+      continue;
+    }
+    const laneSnapshotRoot = path.join(params.runRoot, "snapshots", lane.lane);
+    const copied = [];
+    for (const relativePath of snapshotSpecs) {
+      const sourcePath = path.join(lane.projectRoot, relativePath);
+      const destinationPath = path.join(laneSnapshotRoot, relativePath);
+      if (await copyIfExists(sourcePath, destinationPath)) {
+        copied.push(destinationPath);
+      }
+    }
+    snapshots.push({
+      lane: lane.lane,
+      projectRoot: lane.projectRoot,
+      snapshotRoot: laneSnapshotRoot,
+      copied,
+    });
+  }
+  return snapshots;
 }
 
 async function preflight(params) {
@@ -296,6 +740,106 @@ async function preflight(params) {
         detail: params.sourceConfigPath,
       });
     }
+    if (!params.skipAgentAuthPreflight) {
+      const openclawHome = resolveOpenClawHome(params.sourceConfigPath);
+      const config = await readJson(params.sourceConfigPath, null);
+      if (!config || typeof config !== "object") {
+        checks.push({
+          name: "openclaw_runtime_config",
+          ok: false,
+          detail: `failed to read ${params.sourceConfigPath}`,
+        });
+        return checks;
+      }
+
+      let syncSummary = null;
+      if (!params.skipAgentModelSync) {
+        try {
+          syncSummary = await syncOpenClawAgentModels({
+            openclawHome,
+            configPath: params.sourceConfigPath,
+            agentIds: params.agentAuthRoles,
+          });
+          const blocked = syncSummary.results.filter(
+            (entry) => entry.status === "skipped" && entry.missingRefs?.length > 0
+          );
+          checks.push({
+            name: "agent_model_sync",
+            ok: blocked.length === 0,
+            detail: `total=${syncSummary.counts.total} repaired=${syncSummary.counts.repaired} noop=${syncSummary.counts.noop} skipped=${syncSummary.counts.skipped}${blocked.length > 0 ? ` missing=${blocked.map((entry) => `${entry.agentId}:${entry.missingRefs.join(",")}`).join(";")}` : ""}`,
+          });
+        } catch (error) {
+          checks.push({
+            name: "agent_model_sync",
+            ok: false,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (
+        shouldRestartGatewayAfterAgentModelSync({
+          mode: params.mode,
+          isolatedGateway: params.isolatedGateway,
+          skipAgentModelSync: params.skipAgentModelSync,
+          skipGatewayRestartAfterAgentSync: params.skipGatewayRestartAfterAgentSync,
+          repairedCount: syncSummary?.counts?.repaired ?? 0,
+        })
+      ) {
+        const restart = await restartOpenClawGatewayAfterAgentSync({
+          openclawPath,
+          config,
+        });
+        checks.push({
+          name: "gateway_restart_after_agent_model_sync",
+          ok: restart.ok,
+          detail: restart.detail,
+        });
+        if (restart.ok) {
+          try {
+            const postRestartSync = await syncOpenClawAgentModels({
+              openclawHome,
+              configPath: params.sourceConfigPath,
+              agentIds: params.agentAuthRoles,
+            });
+            const blocked = postRestartSync.results.filter(
+              (entry) => entry.status === "skipped" && entry.missingRefs?.length > 0
+            );
+            checks.push({
+              name: "agent_model_sync_after_gateway_restart",
+              ok: blocked.length === 0,
+              detail: `total=${postRestartSync.counts.total} repaired=${postRestartSync.counts.repaired} noop=${postRestartSync.counts.noop} skipped=${postRestartSync.counts.skipped}${blocked.length > 0 ? ` missing=${blocked.map((entry) => `${entry.agentId}:${entry.missingRefs.join(",")}`).join(";")}` : ""}`,
+            });
+          } catch (error) {
+            checks.push({
+              name: "agent_model_sync_after_gateway_restart",
+              ok: false,
+              detail: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+
+      for (const role of params.agentAuthRoles ?? []) {
+        const agentDir = resolveAgentDir(config, openclawHome, role);
+        const authProfilePath = path.join(agentDir, "auth-profiles.json");
+        const modelsPath = path.join(agentDir, "models.json");
+        const modelsCatalog = await readJson(modelsPath, null);
+        const authProfile = await readJson(authProfilePath, null);
+        const runtimeCheck = verifyAgentRuntimeModelConfig({
+          config,
+          agentId: role,
+          agentDir,
+          modelsCatalog,
+          authProfile,
+          acceptedAuthProviders: params.agentAuthProviders,
+        });
+        checks.push({
+          name: `agent_runtime_model:${role}`,
+          ok: runtimeCheck.ok,
+          detail: runtimeCheck.detail,
+        });
+      }
+    }
   }
 
   return checks;
@@ -306,6 +850,7 @@ function formatHumanSummary(summary) {
     `Auto workflow E2E: ${summary.status}`,
     `command: ${summary.command.displayCommand}`,
     `topic: ${summary.topic}`,
+    `project id: ${summary.projectId ?? "auto"}`,
     `mode: ${summary.mode}`,
     `conversation: ${summary.conversationId}`,
     `run root: ${summary.runRoot}`,
@@ -326,6 +871,19 @@ function formatHumanSummary(summary) {
       lines.push(`handoffs: ${lane.handoffCount}`);
     }
   }
+  const failedPreflight = summary.preflight.filter((entry) => !entry.ok);
+  if (failedPreflight.length > 0) {
+    lines.push("", "preflight failures:");
+    for (const check of failedPreflight) {
+      lines.push(`- ${check.name}: ${check.detail}`);
+    }
+  }
+  if (summary.snapshots?.length) {
+    lines.push("", "snapshots:");
+    for (const snapshot of summary.snapshots) {
+      lines.push(`- ${snapshot.lane}: ${snapshot.snapshotRoot}`);
+    }
+  }
   if (summary.failureReason) {
     lines.push("", `failure: ${summary.failureReason}`);
   }
@@ -339,12 +897,20 @@ async function main(argv = process.argv) {
   const topic = argValue(argv, "--topic", "Generalized Category Discovery");
   const mode = normalizeAutoWorkflowMode(argValue(argv, "--mode", "live"));
   const bootstrapTransport = argValue(argv, "--bootstrap-transport", "local");
+  const explicitProjectId = argValue(argv, "--project-id", null);
   const profile = argValue(argv, "--profile", null);
   const sourceConfigPath =
     argValue(argv, "--source-config-path", null) ??
     (profile === "dev"
       ? path.join(os.homedir(), ".openclaw-dev", "openclaw.json")
       : path.join(os.homedir(), ".openclaw", "openclaw.json"));
+  const jsonOutput = hasFlag(argv, "--json");
+  const quiet = hasFlag(argv, "--quiet") || jsonOutput;
+  const allowPartial = hasFlag(argv, "--allow-partial");
+  const noPreflight = hasFlag(argv, "--no-preflight");
+  const isolatedGateway = !hasFlag(argv, "--no-isolated-gateway");
+  const configuredProjectsRoot =
+    mode === "live" && !isolatedGateway ? await readConfiguredProjectsRoot(sourceConfigPath) : null;
   const timestamp = timestampSlug();
   const runRoot = path.resolve(
     argValue(
@@ -353,27 +919,53 @@ async function main(argv = process.argv) {
       path.join(repoRoot, ".openclaw-research", "e2e-runs", `${timestamp}-${command.lane}-${slugify(topic)}`)
     )
   );
-  const projectsRoot = path.resolve(argValue(argv, "--projects-root", path.join(runRoot, "projects")));
+  const projectsRoot = path.resolve(
+    expandHomePath(argValue(argv, "--projects-root", configuredProjectsRoot ?? path.join(runRoot, "projects")))
+  );
   const conversationId = argValue(
     argv,
     "--conversation-id",
     `e2e-${timestamp}-${command.lane}-${slugify(topic)}`
   );
-  const jsonOutput = hasFlag(argv, "--json");
-  const quiet = hasFlag(argv, "--quiet") || jsonOutput;
-  const allowPartial = hasFlag(argv, "--allow-partial");
-  const noPreflight = hasFlag(argv, "--no-preflight");
-  const isolatedGateway = !hasFlag(argv, "--no-isolated-gateway");
   const timeoutMs = numberArgValue(argv, "--timeout-ms", mode === "live" ? 45 * 60_000 : 5 * 60_000);
   const maxIterations = numberArgValue(argv, "--max-iterations", null);
   const gatewayStartupTimeoutMs = numberArgValue(argv, "--gateway-startup-timeout-ms", null);
+  const stageTimeoutMs = numberArgValue(argv, "--stage-timeout-ms", null);
+  const agentWaitTimeoutMs = numberArgValue(argv, "--agent-wait-timeout-ms", null);
+  const progressPollMs = numberArgValue(argv, "--progress-poll-ms", null);
+  const skipAgentAuthPreflight = hasFlag(argv, "--skip-agent-auth-preflight");
+  const skipAgentModelSync = hasFlag(argv, "--skip-agent-model-sync");
+  const skipGatewayRestartAfterAgentSync = hasFlag(
+    argv,
+    "--skip-gateway-restart-after-agent-sync"
+  );
+  const agentModelSyncIntervalMs = numberArgValue(
+    argv,
+    "--agent-model-sync-interval-ms",
+    mode === "live" && !isolatedGateway ? 1_000 : 0
+  );
+  const agentAuthRoles = splitListArg(
+    argValue(argv, "--agent-auth-roles", "researcher,analyzer,reviewer,academic_writer")
+  );
+  const agentAuthProviders = splitListArg(
+    argValue(argv, "--agent-auth-providers", "")
+  );
 
   await fs.mkdir(runRoot, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
 
   const preflightChecks = noPreflight
     ? [{ name: "preflight", ok: true, detail: "skipped" }]
-    : await preflight({ mode, sourceConfigPath, isolatedGateway });
+    : await preflight({
+        mode,
+        sourceConfigPath,
+        isolatedGateway,
+        skipAgentAuthPreflight,
+        skipAgentModelSync,
+        skipGatewayRestartAfterAgentSync,
+        agentAuthRoles,
+        agentAuthProviders,
+      });
   const preflightOk = preflightChecks.every((entry) => entry.ok);
 
   const childArgs = [
@@ -391,6 +983,9 @@ async function main(argv = process.argv) {
     "--projects-root",
     projectsRoot,
   ];
+  if (explicitProjectId) {
+    childArgs.push("--project-id", explicitProjectId);
+  }
   if (profile) {
     childArgs.push("--profile", profile);
   }
@@ -410,6 +1005,15 @@ async function main(argv = process.argv) {
   }
   if (gatewayStartupTimeoutMs !== null) {
     childArgs.push("--gateway-startup-timeout-ms", String(gatewayStartupTimeoutMs));
+  }
+  if (stageTimeoutMs !== null) {
+    childArgs.push("--stage-timeout-ms", String(stageTimeoutMs));
+  }
+  if (agentWaitTimeoutMs !== null) {
+    childArgs.push("--agent-wait-timeout-ms", String(agentWaitTimeoutMs));
+  }
+  if (progressPollMs !== null) {
+    childArgs.push("--progress-poll-ms", String(progressPollMs));
   }
   if (!isolatedGateway) {
     childArgs.push("--no-isolated-gateway");
@@ -433,25 +1037,51 @@ async function main(argv = process.argv) {
     topic,
     lane: command.lane,
     mode,
+    projectId: explicitProjectId,
     bootstrapTransport,
     conversationId,
     projectsRoot,
     lanes: [],
   };
   let failureReason = null;
+  let agentModelSyncWatchdog = {
+    enabled: false,
+    intervalMs: agentModelSyncIntervalMs,
+    runs: 0,
+    repaired: 0,
+    noop: 0,
+    skipped: 0,
+    errors: [],
+  };
 
   if (!preflightOk) {
     failureReason = "preflight_failed";
   } else {
-    child = await runProcess(process.execPath, childArgs, {
-      cwd: repoRoot,
-      timeoutMs,
-      onStdout: quiet ? null : (text) => process.stdout.write(text),
-      onStderr: quiet ? null : (text) => process.stderr.write(text),
+    const watchdog = startAgentModelSyncWatchdog({
+      mode,
+      isolatedGateway,
+      skipAgentModelSync,
+      noPreflight,
+      intervalMs: agentModelSyncIntervalMs,
+      configPath: sourceConfigPath,
+      agentIds: agentAuthRoles,
     });
+    try {
+      child = await runProcess(process.execPath, childArgs, {
+        cwd: repoRoot,
+        timeoutMs,
+        onStdout: quiet ? null : (text) => process.stdout.write(text),
+        onStderr: quiet ? null : (text) => process.stderr.write(text),
+      });
+    } finally {
+      agentModelSyncWatchdog = await watchdog.stop();
+    }
     payload = parseJsonPayload(child.stdout);
     if (payload) {
       resultSummary = summarizePayload(payload);
+      if (!resultSummary.projectId && explicitProjectId) {
+        resultSummary.projectId = explicitProjectId;
+      }
     }
     if (child.timedOut) {
       failureReason = "timeout";
@@ -475,6 +1105,7 @@ async function main(argv = process.argv) {
   const finishedAt = new Date().toISOString();
   const summaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.json");
   const markdownSummaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.md");
+  const snapshots = await collectProjectSnapshots({ runRoot, resultSummary });
   const summary = {
     status,
     failureReason,
@@ -482,18 +1113,22 @@ async function main(argv = process.argv) {
     finishedAt,
     command,
     topic,
+    projectId: resultSummary.projectId ?? explicitProjectId,
     mode,
     bootstrapTransport,
     conversationId,
     runRoot,
     projectsRoot,
     preflight: preflightChecks,
+    agentModelSyncWatchdog,
     child: {
       code: child.code,
       signal: child.signal ?? null,
       timedOut: child.timedOut,
     },
     result: resultSummary,
+    snapshots,
+    snapshotRoot: path.join(runRoot, "snapshots"),
     summaryPath,
     markdownSummaryPath,
     stdoutPath: path.join(runRoot, "stdout.log"),

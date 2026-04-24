@@ -4,6 +4,7 @@ import { normalizeWorkflowSubagentParentSessionKey } from "./workflow-subagent-s
 import { normalizeWorkflowBindingChannelKey } from "./workflow-commands/parsers.js";
 import {
   inferBackgroundRunTerminalStateFromDurableState,
+  isWorkflowRuntimeTrackingMissError,
   reconcileBackgroundRunTerminalState,
 } from "./workflow-background-run-reconcile.js";
 import {
@@ -25,6 +26,11 @@ import type {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseTimestampMs(value: string | null | undefined): number | null {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizeAgentId(value: unknown): string | null {
@@ -80,6 +86,14 @@ export type BackgroundWorkflowSessionLease = {
 
 type WorkflowRuntimeWaitApi = WorkflowExecutionRuntimeLike;
 
+function isWorkflowRuntimeTrackingMiss(value: {
+  status?: string;
+  error?: string | null;
+  message?: string | null;
+} | null | undefined): boolean {
+  return isWorkflowRuntimeTrackingMissError(value);
+}
+
 function deriveBackgroundRunFamily(kind: string): string {
   switch (kind) {
     case "research_pipeline":
@@ -97,6 +111,10 @@ function deriveBackgroundRunFamily(kind: string): string {
   }
 }
 
+function normalizeBackgroundRunKind(value: unknown): string {
+  return readString(value)?.toLowerCase() ?? "generic";
+}
+
 function backgroundRunRegistryEntryMatchesProject(
   entry: BackgroundRunRegistryEntry,
   projectId: string | null,
@@ -111,6 +129,93 @@ function backgroundRunRegistryEntryMatchesProject(
     return path.normalize(normalizedProjectRoot) === path.normalize(entry.projectRoot);
   }
   return normalizedProjectId == null && normalizedProjectRoot == null;
+}
+
+function backgroundRunRegistryEntryMatchesLease(
+  entry: BackgroundRunRegistryEntry,
+  params: {
+    ownerAgent: string;
+    channelKey: string;
+    family: string;
+    kind: string;
+    projectId: string | null;
+    projectRoot: string | null;
+  }
+): boolean {
+  return (
+    entry.ownerAgent === params.ownerAgent &&
+    entry.channelKey === params.channelKey &&
+    entry.family === params.family &&
+    normalizeBackgroundRunKind(entry.kind) === params.kind &&
+    backgroundRunRegistryEntryMatchesProject(
+      entry,
+      params.projectId,
+      params.projectRoot
+    )
+  );
+}
+
+function sanitizeBackgroundSessionSegment(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "generic"
+  );
+}
+
+function resolveNonCollidingBackgroundSessionKey(params: {
+  registryEntries: BackgroundRunRegistryEntry[];
+  preferredSessionKey: string | null;
+  requesterSessionKey: string | null;
+  ownerAgent: string;
+  channelKey: string;
+  family: string;
+  kind: string;
+  projectId: string | null;
+  projectRoot: string | null;
+}): string | null {
+  const candidate =
+    readString(params.preferredSessionKey) ??
+    readString(params.requesterSessionKey) ??
+    null;
+  if (!candidate) {
+    return null;
+  }
+  const collidingEntries = params.registryEntries.filter(
+    (entry) => entry.backgroundSessionKey === candidate
+  );
+  if (
+    collidingEntries.length === 0 ||
+    collidingEntries.every((entry) =>
+      backgroundRunRegistryEntryMatchesLease(entry, {
+        ownerAgent: params.ownerAgent,
+        channelKey: params.channelKey,
+        family: params.family,
+        kind: params.kind,
+        projectId: params.projectId,
+        projectRoot: params.projectRoot,
+      })
+    )
+  ) {
+    return candidate;
+  }
+
+  const base = `${candidate}:workflow-${sanitizeBackgroundSessionSegment(params.kind)}`;
+  const used = new Set(
+    params.registryEntries.map((entry) => entry.backgroundSessionKey)
+  );
+  if (!used.has(base)) {
+    return base;
+  }
+  for (let index = 2; index < 100; index += 1) {
+    const next = `${base}-${index}`;
+    if (!used.has(next)) {
+      return next;
+    }
+  }
+  return `${base}-${Date.now()}`;
 }
 
 function getBackgroundRunRegistryPath(): string {
@@ -421,13 +526,15 @@ async function pruneBackgroundRunRegistry(params: {
   const kept: BackgroundRunRegistryEntry[] = [];
   for (const entry of current) {
     const checkedAt = new Date(now).toISOString();
-    const freshnessReference =
-      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
-    const freshnessMs = Date.parse(freshnessReference);
+    const startedAtMs = parseTimestampMs(entry.startedAt);
+    const freshnessMs =
+      entry.status === "active"
+        ? startedAtMs
+        : parseTimestampMs(entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt);
     const canAttemptDurableReconcile =
-      Number.isFinite(freshnessMs) &&
-      now - freshnessMs >= BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS;
-    if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
+      startedAtMs != null &&
+      now - startedAtMs >= BACKGROUND_RUN_DURABLE_RECONCILE_GRACE_MS;
+    if (freshnessMs == null || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
       if (entry.status === "active") {
         await reconcileBackgroundRunTerminalState({
           entry,
@@ -470,7 +577,20 @@ async function pruneBackgroundRunRegistry(params: {
           runId: entry.runId,
           timeoutMs: 1,
         });
-        if (waited.status === "ok" || waited.status === "error") {
+        if (isWorkflowRuntimeTrackingMiss(waited)) {
+          if (canAttemptDurableReconcile) {
+            const durableState = await inferBackgroundRunTerminalStateFromDurableState({
+              entry,
+              allowNeedsRepair: false,
+            });
+            if (durableState) {
+              nextEntry = await markEntryTerminal(
+                durableState.terminalStatus,
+                durableState.error
+              );
+            }
+          }
+        } else if (waited.status === "ok" || waited.status === "error") {
           nextEntry = await markEntryTerminal(
             waited.status === "ok" ? "completed" : "failed",
             waited.status === "error" ? waited.error ?? "Background workflow run failed." : null
@@ -478,6 +598,7 @@ async function pruneBackgroundRunRegistry(params: {
         } else if (canAttemptDurableReconcile) {
           const durableState = await inferBackgroundRunTerminalStateFromDurableState({
             entry,
+            allowNeedsRepair: false,
           });
           if (durableState) {
             nextEntry = await markEntryTerminal(
@@ -487,16 +608,13 @@ async function pruneBackgroundRunRegistry(params: {
           }
         }
       } catch {
-        nextEntry = await markEntryTerminal(
-          "needs_repair",
-          "Background workflow runtime state could not be refreshed and needs repair."
-        );
         kept.push(nextEntry);
         continue;
       }
     } else if (entry.status === "active" && canAttemptDurableReconcile) {
       const durableState = await inferBackgroundRunTerminalStateFromDurableState({
         entry,
+        allowNeedsRepair: false,
       });
       if (durableState) {
         nextEntry = await markEntryTerminal(
@@ -851,6 +969,7 @@ export async function acquireBackgroundWorkflowSession(params: {
   const family =
     readString(params.family) ??
     deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic");
+  const kind = normalizeBackgroundRunKind(params.kind);
   const projectId = readString(params.projectId) ?? null;
   const projectRoot = readString(params.projectRoot) ?? null;
   const channelKey = deriveBackgroundRunChannelKey({
@@ -887,11 +1006,15 @@ export async function acquireBackgroundWorkflowSession(params: {
   const reusableBackgroundSessionKey =
     registryEntries.find(
       (entry) =>
-        entry.ownerAgent === ownerAgent &&
-        entry.channelKey === channelKey &&
         entry.status === "idle" &&
-        entry.family === family &&
-        backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot)
+        backgroundRunRegistryEntryMatchesLease(entry, {
+          ownerAgent,
+          channelKey,
+          family,
+          kind,
+          projectId,
+          projectRoot,
+        })
     )?.backgroundSessionKey ?? null;
   const activeScopeEntries = registryEntries.filter(
     (entry) =>
@@ -901,10 +1024,14 @@ export async function acquireBackgroundWorkflowSession(params: {
       backgroundRunRegistryEntryMatchesProject(entry, projectId, projectRoot) &&
       entry.backgroundSessionKey !== reusableBackgroundSessionKey
   );
+  const activeFamilyScopeEntries = activeScopeEntries.filter(
+    (entry) => entry.family === family
+  );
   const activeOwnerSessionsInChannel = activeScopeEntries.length;
   if (
     !reusableBackgroundSessionKey &&
-    activeScopeEntries.length >= MAX_POOLED_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE
+    activeFamilyScopeEntries.length >=
+      MAX_POOLED_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE
   ) {
     return {
       acquired: false,
@@ -926,9 +1053,17 @@ export async function acquireBackgroundWorkflowSession(params: {
     reason: "acquired",
     sessionKey:
       reusableBackgroundSessionKey ??
-      readString(params.preferredSessionKey) ??
-      readString(params.requesterSessionKey) ??
-      null,
+      resolveNonCollidingBackgroundSessionKey({
+        registryEntries,
+        preferredSessionKey: readString(params.preferredSessionKey) ?? null,
+        requesterSessionKey: readString(params.requesterSessionKey) ?? null,
+        ownerAgent,
+        channelKey,
+        family,
+        kind,
+        projectId,
+        projectRoot,
+      }),
     reusedIdleSession: Boolean(reusableBackgroundSessionKey),
     activeOwnerSessionsInChannel,
     activeResearcherSessionsInChannel: activeOwnerSessionsInChannel,

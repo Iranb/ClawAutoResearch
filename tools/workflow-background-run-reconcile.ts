@@ -32,6 +32,26 @@ type BackgroundRunTerminalStatus = "completed" | "failed" | "needs_repair";
 const PAPERNEXUS_IMPORT_WRAPPER_PATTERN =
   /\bpn_(?:stage_sync|import_submit|import_queue|batch_import)\.py\b/i;
 
+export function isWorkflowRuntimeTrackingMissError(value: unknown): boolean {
+  const parts: string[] = [];
+  const direct = readString(value);
+  if (direct) {
+    parts.push(direct);
+  }
+  const record = asRecord(value);
+  if (record) {
+    for (const key of ["error", "message", "lastError", "reason", "detail"]) {
+      const text = readString(record[key]);
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return /(?:embedded workflow run is )?not tracked in the local registry/i.test(
+    parts.join(" ")
+  );
+}
+
 export type BackgroundRunTerminalEntry = {
   backgroundSessionKey: string;
   runId: string;
@@ -145,6 +165,12 @@ async function reconcileQueueTerminalState(params: {
   if (!params.entry.projectRoot || !params.entry.queueKey) {
     return false;
   }
+  if (
+    params.terminalStatus === "failed" &&
+    isWorkflowRuntimeTrackingMissError(params.error)
+  ) {
+    return false;
+  }
   const queueStatus: WorkflowRuntimeQueueEntryStatus =
     params.terminalStatus === "completed"
       ? "completed"
@@ -250,7 +276,9 @@ async function readManifestRecordIfPresent(
 
 export async function inferBackgroundRunTerminalStateFromDurableState(params: {
   entry: BackgroundRunTerminalEntry;
+  allowNeedsRepair?: boolean;
 }): Promise<BackgroundRunDurableTerminalState | null> {
+  const allowNeedsRepair = params.allowNeedsRepair !== false;
   const entry = {
     ...params.entry,
     projectRoot: readString(params.entry.projectRoot),
@@ -268,10 +296,20 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
     );
     const queueTerminalStatus = deriveTerminalStatusFromQueueStatus(queueEntry?.status);
     if (queueTerminalStatus) {
+      if (queueTerminalStatus === "needs_repair" && !allowNeedsRepair) {
+        return null;
+      }
+      const error =
+        queueTerminalStatus === "completed" ? null : readString(queueEntry?.lastError);
+      if (
+        queueTerminalStatus === "failed" &&
+        isWorkflowRuntimeTrackingMissError(error)
+      ) {
+        return null;
+      }
       return {
         terminalStatus: queueTerminalStatus,
-        error:
-          queueTerminalStatus === "completed" ? null : readString(queueEntry?.lastError),
+        error,
         source: "runtime_queue",
       };
     }
@@ -298,6 +336,9 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
     matchedRequest?.status
   );
   if (requestTerminalStatus) {
+    if (requestTerminalStatus === "needs_repair" && !allowNeedsRepair) {
+      return null;
+    }
     return {
       terminalStatus: requestTerminalStatus,
       error:
@@ -325,6 +366,9 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
       };
     }
     if (papernexusProgress.phase === "needs_repair") {
+      if (!allowNeedsRepair) {
+        return null;
+      }
       return {
         terminalStatus: "needs_repair",
         error: papernexusProgress.blocking_reason,
@@ -471,6 +515,15 @@ export async function reconcileBackgroundRunTerminalState(params: {
     };
   }
   const error = readString(params.error) ?? null;
+  if (
+    params.terminalStatus === "failed" &&
+    isWorkflowRuntimeTrackingMissError(error)
+  ) {
+    return {
+      queuePatched: false,
+      manifestPatched: false,
+    };
+  }
   const [queuePatched, manifestPatched] = await Promise.all([
     reconcileQueueTerminalState({
       entry,

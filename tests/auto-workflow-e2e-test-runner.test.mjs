@@ -7,8 +7,13 @@ import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
 import {
+  configuredProjectsRootFromOpenClawConfig,
+  configuredModelRefsForAgent,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
+  shouldEnableAgentModelSyncWatchdog,
+  shouldRestartGatewayAfterAgentModelSync,
+  verifyAgentRuntimeModelConfig,
 } from "../scripts/run_auto_workflow_e2e_test.mjs";
 
 const execFile = promisify(execFileCb);
@@ -29,6 +34,154 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
   assert.equal(normalizeAutoWorkflowCommand("full").lane, "full");
   assert.equal(normalizeAutoWorkflowMode("real"), "live");
   assert.equal(normalizeAutoWorkflowMode("deterministic"), "fixture");
+  assert.equal(
+    configuredProjectsRootFromOpenClawConfig({
+      plugins: {
+        entries: {
+          ClawAutoResearch: {
+            config: {
+              projectsRoot: "/tmp/openclaw-projects",
+            },
+          },
+        },
+      },
+    }),
+    "/tmp/openclaw-projects"
+  );
+});
+
+test("auto workflow E2E runner validates exact runtime model provider state", () => {
+  const config = {
+    models: {
+      providers: {
+        bailian: {
+          models: [{ id: "qwen3.6-plus" }],
+        },
+      },
+    },
+    agents: {
+      defaults: {
+        model: {
+          primary: "bailian/qwen3.6-plus",
+        },
+      },
+      list: [{ id: "researcher" }],
+    },
+  };
+
+  assert.deepEqual(configuredModelRefsForAgent(config, "researcher"), [
+    "bailian/qwen3.6-plus",
+  ]);
+
+  assert.equal(
+    verifyAgentRuntimeModelConfig({
+      config,
+      agentId: "researcher",
+      agentDir: "/tmp/agent",
+      modelsCatalog: {
+        providers: {
+          bailian: {
+            apiKey: "test-key",
+            models: [{ id: "qwen3.6-plus" }],
+          },
+        },
+      },
+      authProfile: null,
+      acceptedAuthProviders: [],
+    }).ok,
+    true
+  );
+
+  const missing = verifyAgentRuntimeModelConfig({
+    config,
+    agentId: "researcher",
+    agentDir: "/tmp/agent",
+    modelsCatalog: {
+      providers: {
+        bailian: {
+          apiKey: "test-key",
+          models: [{ id: "qwen3.5-plus" }],
+        },
+      },
+    },
+    authProfile: {
+      providers: {
+        openai: {},
+      },
+    },
+    acceptedAuthProviders: [],
+  });
+  assert.equal(missing.ok, false);
+  assert.match(missing.detail, /missing_models=bailian\/qwen3\.6-plus/);
+});
+
+test("auto workflow E2E runner restarts live gateway after model catalog repair", () => {
+  assert.equal(
+    shouldRestartGatewayAfterAgentModelSync({
+      mode: "live",
+      isolatedGateway: false,
+      skipAgentModelSync: false,
+      skipGatewayRestartAfterAgentSync: false,
+      repairedCount: 1,
+    }),
+    true
+  );
+  assert.equal(
+    shouldRestartGatewayAfterAgentModelSync({
+      mode: "live",
+      isolatedGateway: true,
+      skipAgentModelSync: false,
+      skipGatewayRestartAfterAgentSync: false,
+      repairedCount: 1,
+    }),
+    false
+  );
+  assert.equal(
+    shouldRestartGatewayAfterAgentModelSync({
+      mode: "live",
+      isolatedGateway: false,
+      skipAgentModelSync: false,
+      skipGatewayRestartAfterAgentSync: false,
+      repairedCount: 0,
+    }),
+    false
+  );
+});
+
+test("auto workflow E2E runner enables live agent model watchdog only for shared gateway runs", () => {
+  assert.equal(
+    shouldEnableAgentModelSyncWatchdog({
+      mode: "live",
+      isolatedGateway: false,
+      skipAgentModelSync: false,
+      noPreflight: false,
+      intervalMs: 1000,
+      agentIds: ["researcher"],
+    }),
+    true
+  );
+  assert.equal(
+    shouldEnableAgentModelSyncWatchdog({
+      mode: "live",
+      isolatedGateway: true,
+      skipAgentModelSync: false,
+      noPreflight: false,
+      intervalMs: 1000,
+      agentIds: ["researcher"],
+    }),
+    false
+  );
+  assert.equal(
+    shouldEnableAgentModelSyncWatchdog({
+      mode: "fixture",
+      isolatedGateway: false,
+      skipAgentModelSync: false,
+      noPreflight: false,
+      intervalMs: 1000,
+      agentIds: ["researcher"],
+    }),
+    false
+  );
 });
 
 test("auto workflow E2E runner creates a durable local summary for /autoresearch", async (t) => {
@@ -43,6 +196,8 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
       "/autoresearch",
       "--topic",
       "Generalized Category Discovery",
+      "--project-id",
+      "gcd-explicit-e2e",
       "--mode",
       "fixture",
       "--bootstrap-transport",
@@ -60,13 +215,14 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
   assert.equal(payload.command.lane, "experiment");
   assert.equal(payload.mode, "fixture");
   assert.equal(payload.bootstrapTransport, "local");
+  assert.equal(payload.projectId, "gcd-explicit-e2e");
   assert.match(payload.conversationId, /^e2e-/);
   assert.equal(payload.result.conversationId, payload.conversationId);
   assert.equal(payload.result.lanes.length, 1);
   assert.equal(payload.result.lanes[0].lane, "experiment");
   assert.equal(payload.result.lanes[0].conversationId, payload.conversationId);
   assert.equal(payload.result.lanes[0].finalVerdict, "pass");
-  assert.match(payload.result.lanes[0].projectRoot, /generalized-category-discovery/);
+  assert.match(payload.result.lanes[0].projectRoot, /gcd-explicit-e2e$/);
 
   await fs.access(payload.summaryPath);
   await fs.access(payload.markdownSummaryPath);

@@ -63,7 +63,7 @@ PaperNexus access rules:
 - `remote_api`: compatibility mode only. Use queued wrappers and workflow-owned helpers instead of hand-written REST.
 - `local_mcp`: use PaperNexus MCP tools only when the workflow explicitly routes that way.
 - `auto`: prefer `remote_mcp`, then `remote_api`, then `local_mcp`.
-- Queue uploads through `research_workflow.queue_paper_ingestion`. Let `/graph-build` or `/resume-pipeline` launch `pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, or `pn_batch_import.py` later.
+- Queue uploads through `research_workflow.schedule_papernexus_import` (`queue_paper_ingestion` is only a compatibility alias). Let `/graph-build` or `/resume-pipeline` launch `pn_stage_sync.py`, `pn_import_submit.py`, `pn_import_queue.py`, or `pn_batch_import.py` later.
 - Never treat `~/.papernexus/papers` or `~/.papernexus/index-store` as workflow-owned storage.
 
 ## Core Responsibilities

@@ -7,6 +7,8 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+__pycache__/
+*.pyc
 
 # Logs
 logs/
@@ -48,6 +50,10 @@ yarn-error.log*
 # OpenClaw generated files
 *.suggested-changes.txt
 openclaw-research-suggested-changes.txt
+.openclaw-research/
+
+# macOS/iCloud conflict copies
+* 2.*
 
 # Project data (if accidentally created in repo root)
 /projects/

@@ -153,7 +153,7 @@ function ensureProviderEntry(targetProviders, providerId, sourceProvider) {
     if (key === "models") {
       continue;
     }
-    if (!(key in existing)) {
+    if (!(key in existing) || existing[key] === null || existing[key] === "") {
       existing[key] = clone(value);
       filledFields.push(key);
     }

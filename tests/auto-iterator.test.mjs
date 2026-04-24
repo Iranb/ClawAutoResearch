@@ -2366,16 +2366,24 @@ test("graph presence check accepts researcher paper-staging PAPER_SOURCE_INDEX",
   });
 
   await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await fs.mkdir(path.join(projectRoot, "researcher", "paper-staging", "md"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "paper-staging", "md", "2410.11206.md"),
+    "# Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning\n",
+    "utf8"
+  );
   await writeJson(path.join(projectRoot, "researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"), {
+    paper_source_dir: path.join(projectRoot, "researcher", "paper-staging"),
     papers: [
       {
         canonical_id: "arxiv:2410.11206",
         arxiv_id: "2410.11206",
         title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
-        source_kind: "markdown",
         source_provider: "arxiv2md",
         retrieval_providers: ["papers-cool"],
-        source_path: "researcher/paper-staging/md/2410.11206.md",
+        local_md_path: "md/2410.11206.md",
       },
     ],
   });
@@ -2386,6 +2394,7 @@ test("graph presence check accepts researcher paper-staging PAPER_SOURCE_INDEX",
   assert.equal(result.status, "missing_papers");
   assert.equal(result.expectedPaperCount, 1);
   assert.match(result.paperSourceIndexPath ?? "", /researcher\/paper-staging\/PAPER_SOURCE_INDEX\.json$/);
+  assert.equal(result.missingPapers[0].sourceKind, "markdown");
   assert.equal(result.missingPapers[0].sourceProvider, "arxiv2md");
   assert.deepEqual(result.missingPapers[0].retrievalProviders, ["papers-cool"]);
 
@@ -3928,6 +3937,95 @@ test("auto iterator points graph_build at a repair import pass when remote graph
   assert.equal(manifest.paper_ingestion.repair_required, true);
   assert.equal(manifest.paper_ingestion.repair_target_corpus, "GCD");
   assert.match(manifest.paper_ingestion.repair_reason ?? "", /missing|repair/i);
+});
+
+test("remote graph presence reports metadata-only paper indexes as missing sources instead of import-ready repair", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    assert.equal(url.pathname, "/api/corpus-sources");
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        rootPath: "/remote/corpora/GCD",
+        meta: {
+          name: "GCD",
+          paperCount: 37,
+          sourceCount: 37,
+        },
+        manifest: {
+          corpusName: "GCD",
+          activePaperCount: 37,
+          activeSourceCount: 37,
+        },
+        sources: [],
+      })
+    );
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    server.closeAllConnections?.();
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.papernexus_corpus = "GCD";
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    project_id: "demo-project",
+    papers: [
+      {
+        canonical_id: "crossref:paper-1",
+        title: "Metadata Only Paper One",
+        source_provider: "crossref",
+        retrieval_providers: ["crossref"],
+        pdf_path: null,
+        markdown_path: null,
+        source_path: null,
+      },
+      {
+        canonical_id: "crossref:paper-2",
+        title: "Metadata Only Paper Two",
+        source_provider: "crossref",
+        retrieval_providers: ["crossref"],
+        pdf_path: null,
+        markdown_path: null,
+        source_path: null,
+      },
+    ],
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      apiBaseUrl: `http://127.0.0.1:${address.port}`,
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.status, "missing_sources");
+  assert.equal(result.repairRequired, false);
+  assert.match(result.refreshReason ?? "", /PDF\/Markdown source/i);
+  assert.equal(refreshedManifest.paper_ingestion.graph_presence_status, "missing_sources");
+  assert.equal(refreshedManifest.paper_ingestion.repair_required, false);
 });
 
 test("auto iterator marks graph_build as uploading while workflow-owned ingestion is still active", async (t) => {

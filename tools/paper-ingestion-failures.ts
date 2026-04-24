@@ -284,7 +284,7 @@ export async function materializePaperIngestionRetry(params: {
     retryableFailures,
     nonRetryableFailures,
     commandText: [
-      "python3 scripts/pn_batch_import.py",
+      "python3 skills/papernexus/scripts/pn_batch_import.py",
       `--manifest ${retryManifestPath}`,
       "submit",
       "--sequential",

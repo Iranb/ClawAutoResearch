@@ -81,7 +81,7 @@ Read the remote access settings from the plugin-level workflow config:
 Rules:
 
 - when using remote PaperNexus, let the MCP-first tool families or their thin wrappers resolve auth from the configured token source
-- for workflow-owned background graph work, queue upload wrappers through `research_workflow.queue_paper_ingestion`; use remote HTTP MCP (`research_lookup`, `research_briefing`, `idea_catalyst`) for the live graph / brainstorm work that `/graph-build` still needs after upload
+- for workflow-owned background graph work, schedule upload wrappers through `research_workflow.schedule_papernexus_import`; use remote HTTP MCP (`research_lookup`, `research_briefing`, `idea_catalyst`, `refresh_paper_graph`) for the live graph / brainstorm work that `/graph-build` still needs after upload
 - `auto` means: env first, then native OS keychain
 - native keychain means:
   - macOS Keychain on `darwin`
@@ -90,7 +90,7 @@ Rules:
 - never paste the raw token into chat, prompts, or project files
 - if PDF materialization is needed and `papernexusMineruHttpUrl` is configured, prefer remote MinerU before local Docling or Marker fallbacks
 - do not fall back to local `papernexus` CLI graph-processing commands for workflow-owned graph readiness or brainstorm refresh
-- prefer remote HTTP MCP for graph reads and brainstorm refresh, and keep `python3 scripts/pn_stage_sync.py`, `python3 scripts/pn_import_submit.py`, `python3 scripts/pn_import_queue.py`, `python3 scripts/pn_batch_import.py`, `python3 scripts/pn_graph_query.py`, and `python3 scripts/pn_research_chains.py` as queued import or thin-MCP adapter paths instead of hand-written REST
+- prefer remote HTTP MCP for graph reads and brainstorm refresh, and keep `python3 skills/papernexus/scripts/pn_import_submit.py`, `python3 skills/papernexus/scripts/pn_import_queue.py`, `python3 skills/papernexus/scripts/pn_batch_import.py`, `python3 skills/papernexus/scripts/pn_graph_query.py`, `python3 skills/papernexus/scripts/pn_research_chains.py`, and `python3 skills/papernexus-paper-refresh/scripts/pn_paper_refresh.py` as queued import or thin-MCP adapter paths instead of hand-written REST
 - if the wrapper-resolved remote PaperNexus session is unavailable or unauthenticated, stop and report that remote access must be fixed before graph work can continue
 
 ## Choose Paper Selection Input
@@ -155,7 +155,7 @@ Normal workflow-owned action:
 ```
 
 This should:
-- trigger any durable queued upload request first; `/graph-build` is allowed to launch queued `queue_paper_ingestion` work before it starts the readiness pass
+- trigger any durable queued upload request first; `/graph-build` is allowed to launch queued `schedule_papernexus_import` / legacy `queue_paper_ingestion` work before it starts the readiness pass
 - treat discovery requisitions and upload manifests as different contracts; a requisition scaffold with no staged paper sources is not an upload failure and must not be launched as `pn_batch_import.py`
 - if a queued upload request is stuck in `needs_repair` or `failed`, inspect `validation_status`, `validation_summary`, retry budget fields, and any dead-letter reason before blaming graph readiness itself
 - check whether the canonical papers recorded in `{PROJ}/researcher/PAPER_SOURCE_INDEX.json` are already present in the shared global graph
