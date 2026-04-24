@@ -137,6 +137,12 @@ const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
   "canonicalPapers",
 ];
 
+const PAPER_SOURCE_INDEX_RELATIVE_PATHS = [
+  path.join("researcher", "PAPER_SOURCE_INDEX.json"),
+  path.join("researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"),
+  path.join("graph", "PAPER_SOURCE_INDEX.json"),
+] as const;
+
 const ARXIV_ID_REGEX = /\b(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b/gi;
 const DOI_REGEX = /\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/gi;
 const TITLE_SIGNATURE_STOPWORDS = new Set([
@@ -1040,41 +1046,47 @@ async function resolveExpectedPapers(params: {
   manifest: ManifestLike;
   projectId: string | null;
 }): Promise<ResolvedExpectedPapers> {
-  const paperSourceIndexPath = path.join(
-    params.projectRoot,
-    "researcher",
-    "PAPER_SOURCE_INDEX.json"
-  );
-  const paperSourceIndex = await readJsonIfExists<unknown>(paperSourceIndexPath);
-  const indexedPapers = parsePaperSourceIndex(paperSourceIndex);
-  if (indexedPapers.length > 0) {
-    return {
-      papers: indexedPapers,
-      paperSourceIndexPath,
-      usedPaperSourceIndex: true,
-      expectedPaperCountHint: indexedPapers.length,
-      summaryOnly: false,
-      graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
-      sourceIndexUpdatedAt:
-        pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
-        pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
-    };
+  let fallbackPaperSourceIndexPath: string | null = null;
+  let fallbackPaperSourceIndex: unknown = null;
+  for (const relativePath of PAPER_SOURCE_INDEX_RELATIVE_PATHS) {
+    const paperSourceIndexPath = path.join(params.projectRoot, relativePath);
+    const paperSourceIndex = await readJsonIfExists<unknown>(paperSourceIndexPath);
+    const exists = paperSourceIndex !== null || (await pathExists(paperSourceIndexPath));
+    if (exists && !fallbackPaperSourceIndexPath) {
+      fallbackPaperSourceIndexPath = paperSourceIndexPath;
+      fallbackPaperSourceIndex = paperSourceIndex;
+    }
+    if (paperSourceIndex === null) {
+      continue;
+    }
+    const indexedPapers = parsePaperSourceIndex(paperSourceIndex);
+    if (indexedPapers.length > 0) {
+      return {
+        papers: indexedPapers,
+        paperSourceIndexPath,
+        usedPaperSourceIndex: true,
+        expectedPaperCountHint: indexedPapers.length,
+        summaryOnly: false,
+        graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
+        sourceIndexUpdatedAt:
+          pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
+          pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
+      };
+    }
   }
-  const summaryCountHint = resolvePaperSourceIndexCountHint(paperSourceIndex);
+  const summaryCountHint = resolvePaperSourceIndexCountHint(fallbackPaperSourceIndex);
   const manifestCountHint = resolveManifestGraphPresenceCountHint(params.manifest);
   const expectedPaperCountHint = summaryCountHint ?? manifestCountHint;
   return {
     papers: [],
-    paperSourceIndexPath: await pathExists(paperSourceIndexPath)
-      ? paperSourceIndexPath
-      : null,
+    paperSourceIndexPath: fallbackPaperSourceIndexPath,
     usedPaperSourceIndex: summaryCountHint !== null,
     expectedPaperCountHint,
     summaryOnly: expectedPaperCountHint !== null,
-    graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
+    graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(fallbackPaperSourceIndex),
     sourceIndexUpdatedAt:
-      pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
-      pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
+      pickString(asRecord(fallbackPaperSourceIndex), ["updated_at", "updatedAt"]) ??
+      pickString(asRecord(fallbackPaperSourceIndex), ["created_at", "createdAt"]),
   };
 }
 

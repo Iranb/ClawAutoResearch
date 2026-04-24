@@ -211,6 +211,7 @@ function summarizeLane(name, value) {
   return {
     lane: name,
     transport: value.transport ?? null,
+    conversationId: value.conversationId ?? null,
     projectRoot: value.projectRoot ?? null,
     finalVerdict: value.harness?.finalVerdict ?? null,
     strictContent: value.harness?.strictContent ?? null,
@@ -241,6 +242,7 @@ function summarizePayload(payload) {
     lane: payload?.lane ?? null,
     mode: payload?.mode ?? null,
     bootstrapTransport: payload?.bootstrapTransport ?? null,
+    conversationId: payload?.conversationId ?? null,
     projectsRoot: payload?.projectsRoot ?? null,
     lanes,
   };
@@ -305,6 +307,7 @@ function formatHumanSummary(summary) {
     `command: ${summary.command.displayCommand}`,
     `topic: ${summary.topic}`,
     `mode: ${summary.mode}`,
+    `conversation: ${summary.conversationId}`,
     `run root: ${summary.runRoot}`,
     `projects root: ${summary.projectsRoot}`,
     `summary: ${summary.summaryPath}`,
@@ -351,6 +354,11 @@ async function main(argv = process.argv) {
     )
   );
   const projectsRoot = path.resolve(argValue(argv, "--projects-root", path.join(runRoot, "projects")));
+  const conversationId = argValue(
+    argv,
+    "--conversation-id",
+    `e2e-${timestamp}-${command.lane}-${slugify(topic)}`
+  );
   const jsonOutput = hasFlag(argv, "--json");
   const quiet = hasFlag(argv, "--quiet") || jsonOutput;
   const allowPartial = hasFlag(argv, "--allow-partial");
@@ -378,6 +386,8 @@ async function main(argv = process.argv) {
     mode,
     "--bootstrap-transport",
     bootstrapTransport,
+    "--conversation-id",
+    conversationId,
     "--projects-root",
     projectsRoot,
   ];
@@ -419,7 +429,15 @@ async function main(argv = process.argv) {
     error: null,
   };
   let payload = null;
-  let resultSummary = { topic, lane: command.lane, mode, bootstrapTransport, projectsRoot, lanes: [] };
+  let resultSummary = {
+    topic,
+    lane: command.lane,
+    mode,
+    bootstrapTransport,
+    conversationId,
+    projectsRoot,
+    lanes: [],
+  };
   let failureReason = null;
 
   if (!preflightOk) {
@@ -466,6 +484,7 @@ async function main(argv = process.argv) {
     topic,
     mode,
     bootstrapTransport,
+    conversationId,
     runRoot,
     projectsRoot,
     preflight: preflightChecks,

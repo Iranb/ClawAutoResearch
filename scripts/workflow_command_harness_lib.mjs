@@ -211,7 +211,7 @@ export async function dispatchWorkflowCommand(options) {
           workflowPolicy,
           agentCtx: {
             agentId,
-            workspaceDir,
+            workspaceDir: effectiveProjectRoot ?? workspaceDir,
             sessionKey: contextExtras.commandTargetSessionKey ?? sessionKey,
             sessionId: undefined,
             messageChannel: channel,

@@ -458,6 +458,12 @@ function collectTypedPaperIngestionSourceIndexEntries(
   );
 }
 
+const TYPED_PAPER_SOURCE_INDEX_RELATIVE_PATHS = [
+  "researcher/PAPER_SOURCE_INDEX.json",
+  "researcher/paper-staging/PAPER_SOURCE_INDEX.json",
+  "graph/PAPER_SOURCE_INDEX.json",
+] as const;
+
 function normalizeTypedPaperIngestionPaper(
   value: unknown
 ): TypedPaperIngestionPaper | null {
@@ -532,6 +538,38 @@ async function resolveTypedPaperIngestionSourcePath(params: {
   return path.join(stagingDirResolved, `${candidateStem}.md`);
 }
 
+async function resolvePaperSourceIndexPathForTypedIngestion(params: {
+  projectRoot: string;
+  requestPayload: Record<string, unknown>;
+}): Promise<{ relativePath: string; resolvedPath: string }> {
+  const explicitSourceIndexPath =
+    readString(params.requestPayload.source_index_path) ??
+    readString(params.requestPayload.sourceIndexPath);
+  if (explicitSourceIndexPath) {
+    return {
+      relativePath: explicitSourceIndexPath,
+      resolvedPath:
+        resolveProjectArtifactPath(params.projectRoot, explicitSourceIndexPath) ??
+        path.resolve(params.projectRoot, explicitSourceIndexPath),
+    };
+  }
+  for (const relativePath of TYPED_PAPER_SOURCE_INDEX_RELATIVE_PATHS) {
+    const resolvedPath =
+      resolveProjectArtifactPath(params.projectRoot, relativePath) ??
+      path.resolve(params.projectRoot, relativePath);
+    if (await pathExists(resolvedPath)) {
+      return { relativePath, resolvedPath };
+    }
+  }
+  const relativePath = TYPED_PAPER_SOURCE_INDEX_RELATIVE_PATHS[0];
+  return {
+    relativePath,
+    resolvedPath:
+      resolveProjectArtifactPath(params.projectRoot, relativePath) ??
+      path.resolve(params.projectRoot, relativePath),
+  };
+}
+
 async function maybeMaterializeTypedPaperIngestionRequest(params: {
   projectRoot: string;
   projectId: string | null;
@@ -564,13 +602,11 @@ async function maybeMaterializeTypedPaperIngestionRequest(params: {
     (await readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(params.projectRoot, "graph/PAPERNEXUS_STATUS.json") ?? ""
     )) ?? {};
-  const sourceIndexPath =
-    readString(params.requestPayload.source_index_path) ??
-    readString(params.requestPayload.sourceIndexPath) ??
-    "researcher/PAPER_SOURCE_INDEX.json";
-  const resolvedSourceIndexPath =
-    resolveProjectArtifactPath(params.projectRoot, sourceIndexPath) ??
-    path.resolve(params.projectRoot, sourceIndexPath);
+  const sourceIndexSelection = await resolvePaperSourceIndexPathForTypedIngestion({
+    projectRoot: params.projectRoot,
+    requestPayload: params.requestPayload,
+  });
+  const resolvedSourceIndexPath = sourceIndexSelection.resolvedPath;
   const sourceIndexRaw = await readJsonIfExists<unknown>(resolvedSourceIndexPath);
   const sourceIndexEntries = collectTypedPaperIngestionSourceIndexEntries(sourceIndexRaw)
     .map((entry) => normalizeTypedPaperIngestionPaper(entry))
@@ -705,7 +741,7 @@ async function maybeMaterializeTypedPaperIngestionRequest(params: {
       wrapperRun.summary,
     detail:
       `Typed paper ingestion request materialized into ${wrapperRun.wrapper} batch manifest.` +
-      ` Source index: ${relativizeProjectPath(params.projectRoot, resolvedSourceIndexPath) ?? sourceIndexPath}.`,
+      ` Source index: ${relativizeProjectPath(params.projectRoot, resolvedSourceIndexPath) ?? sourceIndexSelection.relativePath}.`,
   };
 }
 

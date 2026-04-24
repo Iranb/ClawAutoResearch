@@ -19,6 +19,49 @@ async function readJson(filePath) {
   }
 }
 
+function readString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function buildGatewayRuntimeMessage(runParams = {}) {
+  const task = readString(runParams.message) ?? "";
+  const projectRoot = readString(runParams.projectRoot);
+  const projectId = readString(runParams.projectId);
+  const workspaceDir = readString(runParams.workspaceDir);
+  const ownerAgent = readString(runParams.ownerAgent);
+  const requesterSessionKey = readString(runParams.requesterSessionKey);
+  const messageChannel = readString(runParams.messageChannel);
+  const extraSystemPrompt = readString(runParams.extraSystemPrompt);
+  const contextLines = [
+    "Workflow runtime context (authoritative; resolve this before workflow tool calls):",
+    projectRoot ? `Project root: ${projectRoot}` : null,
+    projectId ? `Project ID: ${projectId}` : null,
+    workspaceDir ? `Workspace dir: ${workspaceDir}` : null,
+    ownerAgent ? `Owner agent: ${ownerAgent}` : null,
+    requesterSessionKey ? `Requester session: ${requesterSessionKey}` : null,
+    messageChannel ? `Message channel: ${messageChannel}` : null,
+    projectRoot
+      ? "Before calling project-bound workflow tools, bind or resolve this exact project if the workflow state is unbound."
+      : null,
+    projectRoot
+      ? `If binding is needed, call research_workflow.bind_channel_project with projectRoot="${projectRoot}"${projectId ? ` and projectId="${projectId}"` : ""}.`
+      : null,
+    projectRoot
+      ? "Do not create or use a sibling/default project directory; all durable artifacts for this run belong under the Project root above."
+      : null,
+  ].filter(Boolean);
+  if (contextLines.length === 1 && !extraSystemPrompt) {
+    return task;
+  }
+  return [
+    contextLines.length > 1 ? contextLines.join("\n") : null,
+    extraSystemPrompt ? `Continuation instructions:\n${extraSystemPrompt}` : null,
+    task ? `Task:\n${task}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export async function resolveGatewayHarnessConfig(params = {}) {
   const profile = params.profile ?? process.env.OPENCLAW_PROFILE ?? "default";
   const configPath =
@@ -275,7 +318,7 @@ export async function createGatewayRuntimeSubagent(params = {}) {
       async run(runParams) {
         const started = await client.chatSend({
           sessionKey: runParams.sessionKey,
-          message: runParams.message,
+          message: buildGatewayRuntimeMessage(runParams),
           idempotencyKey: runParams.idempotencyKey,
           originatingChannel: runParams.originatingChannel ?? defaultOriginatingChannel,
           originatingTo: runParams.originatingTo ?? defaultOriginatingTo,

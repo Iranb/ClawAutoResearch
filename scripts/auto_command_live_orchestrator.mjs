@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { dispatchWorkflowCommand } from "./workflow_command_harness_lib.mjs";
 import { createGatewayRuntimeSubagent } from "./gateway_runtime_subagent.mjs";
@@ -68,6 +69,12 @@ function slugifyTopic(topic) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "research-topic";
+}
+
+export function buildLiveConversationId(lane, date = new Date()) {
+  const prefix = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
+  const timestamp = date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
+  return `${prefix}-${timestamp}-${randomUUID().slice(0, 8)}`;
 }
 
 function ensureSlashCommandText(text, fallback) {
@@ -247,6 +254,12 @@ async function runLiveStageTurn(params) {
         `Suggested command context: ${command}`,
         buildStageExtraBody({ lane, stage, topic }),
       ].join("\n"),
+      projectRoot,
+      projectId,
+      workspaceDir: projectRoot,
+      ownerAgent: owner,
+      requesterSessionKey: fromSessionKey,
+      messageChannel: transportContext.requesterChannel,
       lane: "nested",
       deliver: false,
       idempotencyKey: `live-stage:${projectId}:${stage}:${Date.now()}`,
@@ -412,12 +425,11 @@ export async function runAutoCommandEndToEndLive(params) {
   const { lane, topic, projectsRoot } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
   const bootstrapTransport = params.bootstrapTransport === "discord" ? "discord" : "local";
+  const conversationId = params.conversationId ?? buildLiveConversationId(lane);
   const transportContext = buildWorkflowTransportContext({
     transport: bootstrapTransport,
     lane,
-    conversationId:
-      params.conversationId ??
-      (lane === "survey" ? "gcd-survey-live" : "gcd-research-live"),
+    conversationId,
     accountId: "default",
     userId: "owner",
   });
@@ -545,6 +557,7 @@ export async function runAutoCommandEndToEndLive(params) {
     const harness = await runHarness(projectRoot, lane, { strictContent: true });
     return {
       transport: bootstrapTransport,
+      conversationId,
       bootstrap,
       projectRoot,
       turns,

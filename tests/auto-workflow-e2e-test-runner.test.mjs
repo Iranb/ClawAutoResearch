@@ -60,8 +60,11 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
   assert.equal(payload.command.lane, "experiment");
   assert.equal(payload.mode, "fixture");
   assert.equal(payload.bootstrapTransport, "local");
+  assert.match(payload.conversationId, /^e2e-/);
+  assert.equal(payload.result.conversationId, payload.conversationId);
   assert.equal(payload.result.lanes.length, 1);
   assert.equal(payload.result.lanes[0].lane, "experiment");
+  assert.equal(payload.result.lanes[0].conversationId, payload.conversationId);
   assert.equal(payload.result.lanes[0].finalVerdict, "pass");
   assert.match(payload.result.lanes[0].projectRoot, /generalized-category-discovery/);
 

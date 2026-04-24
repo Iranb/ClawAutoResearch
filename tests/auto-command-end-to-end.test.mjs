@@ -22,19 +22,27 @@ test("auto-research and auto-review can bootstrap to a passing deterministic E2E
     "fixture",
     "--bootstrap-transport",
     "local",
+    "--conversation-id",
+    "e2e-unit-conversation",
     "--projects-root",
     projectsRoot,
   ]);
   const payload = JSON.parse(stdout);
 
   assert.equal(payload.bootstrapTransport, "local");
+  assert.equal(payload.conversationId, "e2e-unit-conversation");
   assert.equal(payload.result.experiment.transport, "local");
   assert.equal(payload.result.survey.transport, "local");
+  assert.equal(payload.result.experiment.conversationId, "e2e-unit-conversation-experiment");
+  assert.equal(payload.result.survey.conversationId, "e2e-unit-conversation-survey");
+  assert.match(payload.result.experiment.bootstrap.sessionKey, /e2e-unit-conversation-experiment/);
+  assert.match(payload.result.survey.bootstrap.sessionKey, /e2e-unit-conversation-survey/);
   assert.equal(payload.result.experiment.harness.finalVerdict, "pass");
   assert.equal(payload.result.survey.harness.finalVerdict, "pass");
   assert.ok((payload.result.experiment.handoffs ?? []).length >= 5);
   assert.ok((payload.result.survey.handoffs ?? []).length >= 2);
   assert.doesNotMatch(JSON.stringify(payload), /agent:[^"]*:discord:/);
+  assert.doesNotMatch(JSON.stringify(payload), /gcd-research-local|gcd-survey-local/);
 
   const experimentReport = await fs.readFile(
     path.join(payload.result.experiment.projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"),

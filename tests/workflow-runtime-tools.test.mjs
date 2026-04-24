@@ -1038,6 +1038,70 @@ test("research_workflow queue_paper_ingestion materializes typed staged-paper re
   );
 });
 
+test("research_workflow queue_paper_ingestion discovers paper-staging source index by default", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const stagedDir = path.join(projectRoot, "researcher", "paper-staging", "md");
+  const stagedPaperPath = path.join(stagedDir, "2410.11206.md");
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedPaperPath,
+    "# Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning\n\nThis staged markdown fixture is long enough for import validation. ".repeat(30)
+  );
+  await writeJson(path.join(projectRoot, "researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        arxiv_id: "2410.11206",
+        title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+        role: "inspiration",
+        local_md: "researcher/paper-staging/md/2410.11206.md",
+      },
+    ],
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    channelKey: "local:conversation:e2e",
+    messageChannel: "local",
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      papers: [
+        {
+          arxiv_id: "2410.11206",
+          role: "inspiration",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+        },
+      ],
+      staging_dir: "researcher/paper-staging/md",
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+
+  const batchManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, result.request.manifestPath), "utf8")
+  );
+  assert.equal(
+    batchManifest.queue_paper_ingestion.source_index_path,
+    "researcher/paper-staging/PAPER_SOURCE_INDEX.json"
+  );
+  assert.deepEqual(batchManifest.papers.map((entry) => entry.source), [stagedPaperPath]);
+});
+
 test("research_workflow queue_paper_ingestion code-validates staged markdown and blocks invalid stubs", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

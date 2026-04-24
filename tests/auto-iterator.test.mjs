@@ -2359,6 +2359,42 @@ test("graph presence check preserves source provider and retrieval providers fro
   ]);
 });
 
+test("graph presence check accepts researcher paper-staging PAPER_SOURCE_INDEX", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedSetupCompleteProject(projectRoot, "frontier_mapping");
+  await writeJson(path.join(projectRoot, "researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2410.11206",
+        arxiv_id: "2410.11206",
+        title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+        source_kind: "markdown",
+        source_provider: "arxiv2md",
+        retrieval_providers: ["papers-cool"],
+        source_path: "researcher/paper-staging/md/2410.11206.md",
+      },
+    ],
+  });
+  await seedGraphCorpus(projectRoot, []);
+
+  const result = await checkGraphPresenceForWorkflow({ projectRoot });
+
+  assert.equal(result.status, "missing_papers");
+  assert.equal(result.expectedPaperCount, 1);
+  assert.match(result.paperSourceIndexPath ?? "", /researcher\/paper-staging\/PAPER_SOURCE_INDEX\.json$/);
+  assert.equal(result.missingPapers[0].sourceProvider, "arxiv2md");
+  assert.deepEqual(result.missingPapers[0].retrievalProviders, ["papers-cool"]);
+
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
+  );
+  assert.match(report.paper_source_index_path, /researcher\/paper-staging\/PAPER_SOURCE_INDEX\.json$/);
+});
+
 test("graph presence check trusts explicit graph confirmation metadata from PAPER_SOURCE_INDEX", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
