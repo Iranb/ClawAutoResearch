@@ -871,7 +871,7 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   assert.equal(result.request.wrapper, "pn_batch_import.py");
   assert.equal(result.request.sharedCorpus, "GCD");
   assert.equal(result.request.paperCount, 1);
-  assert.match(result.request.commandText ?? "", /python3 scripts\/pn_batch_import\.py/);
+  assert.match(result.request.commandText ?? "", /python3 skills\/papernexus\/scripts\/pn_batch_import\.py/);
   assert.equal(result.state.queuedRequests.length, 1);
 
   const snapshot = await executeWorkflowTool(tool, {
@@ -879,6 +879,206 @@ test("research_workflow queue_paper_ingestion persists a durable workflow-owned 
   });
   assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
+});
+
+test("research_workflow schedule_papernexus_import accepts installed skill-path wrapper commands", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "skill-path-batch.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "skill-path-paper.md"
+  );
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedMarkdownPath,
+    "# Skill Path Paper\n\nThis markdown fixture is long enough to pass staged import validation. ".repeat(30)
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "skill-path-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "schedule_papernexus_import",
+    paperIngestionRequest: {
+      command_text: `python3 skills/papernexus/scripts/pn_batch_import.py --manifest ${manifestPath} submit`,
+      args: ["--manifest", manifestPath, "submit"],
+      summary: "Schedule PaperNexus batch import using the installed skill wrapper path.",
+      manifest_path: manifestPath,
+      shared_corpus: "GCD",
+      paper_count: 1,
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+  assert.deepEqual(result.request.args, ["--manifest", manifestPath, "submit"]);
+  assert.match(result.commandText ?? "", /python3 skills\/papernexus\/scripts\/pn_batch_import\.py/);
+  assert.equal(result.state.queuedRequests.length, 1);
+});
+
+test("research_workflow queue_paper_ingestion maps legacy manifest payloads to pn_batch_import.py", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "legacy-batch.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "legacy-paper.md"
+  );
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedMarkdownPath,
+    "# Legacy Paper\n\nThis is a sufficiently long markdown fixture for legacy manifest import validation. ".repeat(30)
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "legacy-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      papernexusApiBaseUrl: "https://papernexus.example/api",
+      papernexusSharedCorpus: "GCD",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      mode: "batch_import",
+      request_id: "legacy-manifest-1",
+      manifest_path: manifestPath,
+      shared_corpus: "GCD",
+      paper_count: 1,
+      summary: "Queue legacy manifest-only PaperNexus import.",
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+  assert.deepEqual(result.request.args, [
+    "--api-base",
+    "https://papernexus.example/api",
+    "--corpus",
+    "GCD",
+    "--manifest",
+    manifestPath,
+    "submit",
+  ]);
+  assert.match(result.commandText ?? "", /python3 skills\/papernexus\/scripts\/pn_batch_import\.py/);
+  assert.match(result.commandText ?? "", /--manifest/);
+  assert.notEqual(result.request.validationStatus, "invalid");
+});
+
+test("research_workflow queue_paper_ingestion accepts PaperNexus queue_type manifest aliases", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const manifestPath = path.join(projectRoot, "researcher", "paper-staging", "queue-type-batch.json");
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "queue-type-paper.md"
+  );
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    stagedMarkdownPath,
+    "# Queue Type Paper\n\nThis is a sufficiently long markdown fixture for queue type manifest validation. ".repeat(30)
+  );
+  await writeJson(manifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "queue-type-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    pluginConfig: {
+      papernexusMcpUrl: "http://127.0.0.1:8765/mcp",
+      papernexusSharedCorpus: "GCD",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "queue_paper_ingestion",
+    paperIngestionRequest: {
+      queue_type: "batch_import",
+      request_id: "queue-type-manifest-1",
+      batch_manifest_path: manifestPath,
+      shared_corpus: "GCD",
+      paper_count: 1,
+      summary: "Queue PaperNexus import using latest skill queue_type fields.",
+    },
+  });
+
+  assert.equal(result.request.status, "queued");
+  assert.equal(result.request.wrapper, "pn_batch_import.py");
+  assert.deepEqual(result.request.args, [
+    "--mcp-url",
+    "http://127.0.0.1:8765/mcp",
+    "--corpus",
+    "GCD",
+    "--manifest",
+    manifestPath,
+    "submit",
+  ]);
+  assert.equal(result.request.manifestPath, manifestPath);
+  assert.match(result.commandText ?? "", /python3 skills\/papernexus\/scripts\/pn_batch_import\.py/);
 });
 
 test("research_workflow queue_paper_ingestion initializes PAPERNEXUS_PROGRESS.json with staging progress", async (t) => {
@@ -1020,7 +1220,7 @@ test("research_workflow queue_paper_ingestion materializes typed staged-paper re
   assert.equal(result.request.status, "queued");
   assert.equal(result.request.wrapper, "pn_batch_import.py");
   assert.equal(result.request.paperCount, 2);
-  assert.match(result.commandText ?? "", /python3 scripts\/pn_batch_import\.py/);
+  assert.match(result.commandText ?? "", /python3 skills\/papernexus\/scripts\/pn_batch_import\.py/);
   assert.match(result.commandText ?? "", /--manifest/);
   assert.ok(result.request.manifestPath);
 
@@ -1036,6 +1236,99 @@ test("research_workflow queue_paper_ingestion materializes typed staged-paper re
       secondPaperPath,
     ]
   );
+});
+
+test("research_workflow run_broad_paper_search queues staged PDFs for PaperNexus import", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const originalFetch = globalThis.fetch;
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.startsWith("https://api.openalex.org/works")) {
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: "https://openalex.org/W123",
+              display_name: "Generalized Category Discovery",
+              publication_year: 2022,
+              publication_date: "2022-06-01",
+              doi: "https://doi.org/10.1109/cvpr52688.2022.00734",
+              primary_location: {
+                landing_page_url: "https://example.org/gcd",
+                pdf_url: "https://example.org/gcd.pdf",
+                source: {
+                  display_name: "Computer Vision and Pattern Recognition",
+                  type: "conference",
+                },
+              },
+              authorships: [{ author: { display_name: "Kai Vaze" } }],
+              cited_by_count: 150,
+              type_crossref: "proceedings-article",
+              relevance_score: 100,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (target === "https://example.org/gcd.pdf") {
+      return new Response(Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(2048, "G")]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    throw new Error(`Unhandled fetch URL in test: ${target}`);
+  };
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    channelKey: "local:conversation:e2e",
+    messageChannel: "local",
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_broad_paper_search",
+    broadPaperSearch: {
+      topic: "Generalized Category Discovery",
+      providers: ["openalex"],
+      maxQueries: 1,
+      maxResultsPerQuery: 5,
+      maxResolutionAttempts: 1,
+      maxIndexEntries: 5,
+    },
+  });
+
+  assert.equal(result.autoPaperIngestion.queued, true);
+  assert.equal(result.autoPaperIngestion.importable_paper_count, 1);
+  assert.equal(result.autoPaperIngestion.request.wrapper, "pn_batch_import.py");
+  assert.match(result.autoPaperIngestion.commandText, /pn_batch_import\.py/);
+
+  const manifestPath = path.join(
+    projectRoot,
+    result.autoPaperIngestion.request.manifestPath
+  );
+  const batchManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(batchManifest.papers.length, 1);
+  assert.match(batchManifest.papers[0].source, /paper-staging\/pdf\/doi-10\.1109-cvpr52688\.2022\.00734\.pdf$/);
+
+  const projectManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(projectManifest.paper_ingestion.queued_requests.length, 1);
+  assert.equal(projectManifest.paper_ingestion.queued_requests[0].status, "queued");
 });
 
 test("research_workflow queue_paper_ingestion discovers paper-staging source index by default", async (t) => {
@@ -1063,7 +1356,7 @@ test("research_workflow queue_paper_ingestion discovers paper-staging source ind
         arxiv_id: "2410.11206",
         title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
         role: "inspiration",
-        local_md: "researcher/paper-staging/md/2410.11206.md",
+        local_md_path: "md/2410.11206.md",
       },
     ],
   });
@@ -5997,14 +6290,14 @@ test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first 
   assert.equal(result.started, true);
   assert.equal(result.reason, "started");
   assert.equal(result.wrapper, "pn_graph_query.py");
-  assert.match(result.commandText, /^python3 scripts\/pn_graph_query\.py\b/);
+  assert.match(result.commandText, /^python3 skills\/papernexus\/scripts\/pn_graph_query\.py\b/);
   assert.match(result.commandText, /query 'causal abstraction'/);
   assert.equal(result.statusBroadcast.broadcasted, true);
   assert.ok(
     runtimeCalls.some(
       (entry) =>
         entry.deliver === false &&
-        /^python3 scripts\/pn_graph_query\.py\b/.test(entry.message) &&
+        /^python3 skills\/papernexus\/scripts\/pn_graph_query\.py\b/.test(entry.message) &&
         /__BACKGROUND_CONTINUATION__:\s*true/i.test(entry.message)
     )
   );

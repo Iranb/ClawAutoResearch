@@ -40,7 +40,11 @@
     "./researcher/crawl4ai-search",
     "./researcher/theory-phase",
     "./researcher/research-queue",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./researcher/papernexus-idea-catalyst",
+    "./researcher/papernexus-main-graph-name",
+    "./researcher/papernexus-paper-refresh",
+    "./researcher/papernexus-precise-paper-index"
   ],
   "planner": [
     "./planner/experiment-plan",

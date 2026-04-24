@@ -4,8 +4,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  buildCanonicalPaperRecordFromRecord,
+  normalizeArxivId,
+} from "../tools/paper-source-contract.ts";
 import { upsertPaperSourceIndexEntries } from "../tools/paper-source-index-writer.ts";
 import { readWorkflowPaperSourceIndex } from "../tools/paper-source-index.ts";
+
+test("paper source contract does not extract fake arXiv ids from non-arXiv DOI suffixes", () => {
+  assert.equal(normalizeArxivId("10.1109/cvpr52729.2023.00732"), null);
+  assert.equal(normalizeArxivId("https://doi.org/10.1109/iccv51070.2023.01524"), null);
+  assert.equal(normalizeArxivId("10.48550/arxiv.2301.10921"), "2301.10921");
+  assert.equal(normalizeArxivId("https://arxiv.org/abs/2410.11206"), "2410.11206");
+
+  const record = buildCanonicalPaperRecordFromRecord({
+    title: "Dynamic Conceptional Contrastive Learning for Generalized Category Discovery",
+    doi: "10.1109/cvpr52729.2023.00732",
+  });
+  assert.equal(record.arxivId, null);
+  assert.equal(record.canonicalId, "doi:10.1109/cvpr52729.2023.00732");
+});
 
 test("paper source index writer preserves metadata-only entries and upgrades them when full text resolves", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paper-source-index-writer-"));

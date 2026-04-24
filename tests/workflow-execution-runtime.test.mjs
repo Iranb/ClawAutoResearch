@@ -6,8 +6,9 @@ import path from "node:path";
 
 import { createWorkflowExecutionRuntimeFromApi } from "../tools/workflow-execution-runtime.ts";
 
-function createEmbeddedRuntimeHarness(rootDir) {
+function createEmbeddedRuntimeHarness(rootDir, options = {}) {
   const sessionStores = new Map();
+  const embeddedRuns = [];
 
   const resolveStorePath = (_store, opts = {}) =>
     path.join(rootDir, "agents", opts.agentId ?? "main", "sessions", "sessions.json");
@@ -21,10 +22,19 @@ function createEmbeddedRuntimeHarness(rootDir) {
       session: {
         store: path.join(rootDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
+      ...(options.config ?? {}),
     },
     runtime: {
       agent: {
         async runEmbeddedAgent(params) {
+          embeddedRuns.push({ ...params });
+          if (typeof options.runEmbeddedAgent === "function") {
+            return options.runEmbeddedAgent(params, {
+              sessionStores,
+              resolveStorePath,
+              resolveSessionFilePath,
+            });
+          }
           const storePath = resolveStorePath(undefined, { agentId: params.agentId });
           const sessionFile = resolveSessionFilePath(
             params.sessionId,
@@ -90,7 +100,7 @@ function createEmbeddedRuntimeHarness(rootDir) {
     },
   };
 
-  return { api, sessionStores };
+  return { api, sessionStores, embeddedRuns };
 }
 
 test("embedded workflow runtime launches local agent runs and reads transcript state", async (t) => {
@@ -153,6 +163,123 @@ test("embedded workflow runtime launches local agent runs and reads transcript s
     "sessions.json"
   );
   assert.deepEqual(harness.sessionStores.get(storePath) ?? {}, {});
+});
+
+test("embedded workflow runtime treats already-active synthetic run ids as non-terminal", async (t) => {
+  const rootDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-workflow-runtime-already-active-")
+  );
+  t.after(async () => {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  const harness = createEmbeddedRuntimeHarness(rootDir);
+  const runtime = createWorkflowExecutionRuntimeFromApi({
+    api: harness.api,
+    defaultWorkspaceDir: rootDir,
+    defaultAgentId: "researcher",
+    defaultMessageChannel: "local",
+  });
+
+  const waited = await runtime.waitForRun({
+    runId: "already-active:abc123",
+    timeoutMs: 1,
+  });
+
+  assert.equal(waited.status, "timeout");
+});
+
+test("embedded workflow runtime passes the configured agent primary model to embedded runs", async (t) => {
+  const rootDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-workflow-runtime-model-")
+  );
+  t.after(async () => {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  const harness = createEmbeddedRuntimeHarness(rootDir, {
+    config: {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+          },
+        },
+        list: [
+          {
+            id: "researcher",
+            model: {
+              primary: "bailian/qwen3.6-plus",
+            },
+          },
+        ],
+      },
+    },
+  });
+  const runtime = createWorkflowExecutionRuntimeFromApi({
+    api: harness.api,
+    defaultWorkspaceDir: rootDir,
+    defaultAgentId: "researcher",
+    defaultMessageChannel: "local",
+  });
+
+  await runtime.run({
+    sessionKey: "agent:researcher:local:group:model-room",
+    message: "Run /graph-build for the current project.",
+    ownerAgent: "researcher",
+  });
+
+  assert.equal(harness.embeddedRuns[0]?.provider, "bailian");
+  assert.equal(harness.embeddedRuns[0]?.model, "qwen3.6-plus");
+});
+
+test("embedded workflow runtime reports in-memory active runs before session store persistence", async (t) => {
+  const rootDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-workflow-runtime-active-inspect-")
+  );
+  t.after(async () => {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  let releaseRun;
+  const runBlocked = new Promise((resolve) => {
+    releaseRun = resolve;
+  });
+  const harness = createEmbeddedRuntimeHarness(rootDir, {
+    async runEmbeddedAgent() {
+      await runBlocked;
+      return { ok: true };
+    },
+  });
+  const runtime = createWorkflowExecutionRuntimeFromApi({
+    api: harness.api,
+    defaultWorkspaceDir: rootDir,
+    defaultAgentId: "researcher",
+    defaultMessageChannel: "local",
+  });
+  const sessionKey = "agent:researcher:local:group:active-room";
+
+  const started = await runtime.run({
+    sessionKey,
+    message: "Run /research-pipeline for the current project.",
+    ownerAgent: "researcher",
+  });
+  const inspection = await runtime.inspectSession({
+    sessionKey,
+  });
+
+  assert.equal(inspection?.sessionKey, sessionKey);
+  assert.equal(inspection?.sessionId, started.sessionId);
+  assert.equal(inspection?.status, "running");
+  assert.equal(typeof inspection?.startedAt, "number");
+  assert.equal(inspection?.endedAt, null);
+
+  releaseRun();
+  const waited = await runtime.waitForRun({
+    runId: started.runId,
+    timeoutMs: 500,
+  });
+  assert.equal(waited.status, "ok");
 });
 
 test("embedded workflow runtime can inspect persisted session metadata", async (t) => {

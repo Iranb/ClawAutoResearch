@@ -71,6 +71,35 @@ function slugifyTopic(topic) {
   return normalized || "research-topic";
 }
 
+function workflowProgressFingerprint(manifest) {
+  const paperIngestion =
+    manifest?.paper_ingestion && typeof manifest.paper_ingestion === "object"
+      ? manifest.paper_ingestion
+      : {};
+  return JSON.stringify({
+    stage: manifest?.current_stage ?? null,
+    owner: manifest?.owner_agent ?? null,
+    nextAction: manifest?.next_action ?? manifest?.resume_action ?? null,
+    workflowStatus: manifest?.workflow_status ?? manifest?.status ?? null,
+    blockingReason:
+      manifest?.blocking_reason ??
+      manifest?.last_blocking_reason ??
+      paperIngestion.blocking_reason ??
+      paperIngestion.waiting_reason ??
+      null,
+    graphPresenceStatus:
+      paperIngestion.graph_presence_status ?? paperIngestion.graphPresenceStatus ?? null,
+    paperRuntimeStatus:
+      paperIngestion.runtime_status ?? paperIngestion.runtimeStatus ?? null,
+    activeBatchCount: Array.isArray(paperIngestion.active_batches)
+      ? paperIngestion.active_batches.length
+      : null,
+    paperOperationCount: Array.isArray(paperIngestion.paper_operations)
+      ? paperIngestion.paper_operations.length
+      : null,
+  });
+}
+
 export function buildLiveConversationId(lane, date = new Date()) {
   const prefix = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
   const timestamp = date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
@@ -203,6 +232,7 @@ async function waitForProjectRoot(projectRoot, timeoutMs = 60_000) {
 async function waitForProgress(params) {
   const startedAt = Date.now();
   let latestManifest = params.baselineManifest;
+  const baselineFingerprint = workflowProgressFingerprint(params.baselineManifest);
   while (Date.now() - startedAt < params.timeoutMs) {
     latestManifest = await readManifest(params.projectRoot);
     const currentStage = String(latestManifest.current_stage ?? "");
@@ -218,6 +248,9 @@ async function waitForProgress(params) {
       currentOwner !== String(params.baselineManifest.owner_agent ?? "")
     ) {
       return { progressed: true, manifest: latestManifest, reason: "stage_or_owner_changed" };
+    }
+    if (workflowProgressFingerprint(latestManifest) !== baselineFingerprint) {
+      return { progressed: true, manifest: latestManifest, reason: "workflow_state_changed" };
     }
     await sleep(params.pollMs);
   }
@@ -235,6 +268,9 @@ async function runLiveStageTurn(params) {
     topic,
     transportContext,
     previousRole,
+    agentWaitTimeoutMs,
+    stageTimeoutMs,
+    progressPollMs,
   } = params;
   const owner = String(iterator.ownerAfter ?? manifest.owner_agent ?? "researcher");
   const stage = String(iterator.stageAfter ?? manifest.current_stage ?? "setup");
@@ -269,13 +305,13 @@ async function runLiveStageTurn(params) {
     });
     const waited = await runtimeSubagent.waitForRun?.({
       runId: started.runId,
-      timeoutMs: 120_000,
+      timeoutMs: agentWaitTimeoutMs ?? 120_000,
     });
     const progress = await waitForProgress({
       projectRoot,
       baselineManifest: manifest,
-      timeoutMs: 180_000,
-      pollMs: 5_000,
+      timeoutMs: stageTimeoutMs ?? 180_000,
+      pollMs: progressPollMs ?? 5_000,
     });
     return {
       owner,
@@ -309,8 +345,8 @@ async function runLiveStageTurn(params) {
       maxAttemptsTotal: 1,
       maxAttemptsByChannel: { native_runtime: 1 },
       fallbackAfterMs: 0,
-      staleClaimAfterMs: 120_000,
-      ackDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+      staleClaimAfterMs: agentWaitTimeoutMs ?? 120_000,
+      ackDeadlineAt: new Date(Date.now() + (agentWaitTimeoutMs ?? 120_000)).toISOString(),
     },
   });
 
@@ -332,7 +368,7 @@ async function runLiveStageTurn(params) {
           command,
           requireMailboxAcknowledgement: true,
           extraBody: buildStageExtraBody({ lane, stage, topic }),
-          waitTimeoutMs: 90_000,
+          waitTimeoutMs: agentWaitTimeoutMs ?? 90_000,
           retryOnTimeout: true,
           enableSpawnFallback: true,
           autoModeActive: true,
@@ -364,15 +400,15 @@ async function runLiveStageTurn(params) {
     summary: `${owner} claimed ${stage} handoff.`,
     patch: {
       claimedAt: new Date().toISOString(),
-      claimLeaseExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+      claimLeaseExpiresAt: new Date(Date.now() + (agentWaitTimeoutMs ?? 120_000)).toISOString(),
     },
   });
 
   const progress = await waitForProgress({
     projectRoot,
     baselineManifest: manifest,
-    timeoutMs: 180_000,
-    pollMs: 5_000,
+    timeoutMs: stageTimeoutMs ?? 180_000,
+    pollMs: progressPollMs ?? 5_000,
   });
 
   if (progress.progressed) {
@@ -424,6 +460,7 @@ async function runHarness(projectRoot, lane, options = {}) {
 export async function runAutoCommandEndToEndLive(params) {
   const { lane, topic, projectsRoot } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
+  const explicitProjectId = params.projectId ?? null;
   const bootstrapTransport = params.bootstrapTransport === "discord" ? "discord" : "local";
   const conversationId = params.conversationId ?? buildLiveConversationId(lane);
   const transportContext = buildWorkflowTransportContext({
@@ -445,6 +482,7 @@ export async function runAutoCommandEndToEndLive(params) {
     profile: params.profile,
     url: isolatedGateway?.url ?? params.gatewayUrl,
     token: isolatedGateway?.token ?? params.gatewayToken,
+    startupTimeoutMs: params.gatewayStartupTimeoutMs ?? 30_000,
     originatingChannel: transportContext.originatingChannel,
     originatingTo: transportContext.originatingTo,
     originatingAccountId: transportContext.accountId,
@@ -463,7 +501,10 @@ export async function runAutoCommandEndToEndLive(params) {
             from: transportContext.from,
             to: transportContext.to,
             accountId: transportContext.accountId,
-            contextExtras: transportContext.commandContextExtras(),
+            contextExtras: {
+              ...transportContext.commandContextExtras(),
+              ...(explicitProjectId ? { projectId: explicitProjectId } : {}),
+            },
             emitFallbackNote: true,
             runtimeSubagent,
             backgroundExecutionMode: "live",
@@ -510,7 +551,8 @@ export async function runAutoCommandEndToEndLive(params) {
       deriveProjectRootFromBootstrap(bootstrap) ??
       path.join(
         isolatedGateway?.projectsRoot ?? projectsRoot,
-        lane === "survey" ? `survey-${slugifyTopic(topic)}` : slugifyTopic(topic)
+        explicitProjectId ??
+          (lane === "survey" ? `survey-${slugifyTopic(topic)}` : slugifyTopic(topic))
       );
     if (!projectRoot) {
       throw new Error(`Failed to derive project root from ${commandName} bootstrap.`);
@@ -539,13 +581,16 @@ export async function runAutoCommandEndToEndLive(params) {
       const turn = await runLiveStageTurn({
         runtimeSubagent,
         projectRoot,
-        projectId: path.basename(projectRoot),
+        projectId: explicitProjectId ?? path.basename(projectRoot),
         lane,
         topic,
         manifest,
         iterator,
         transportContext,
         previousRole,
+        agentWaitTimeoutMs: params.agentWaitTimeoutMs ?? null,
+        stageTimeoutMs: params.stageTimeoutMs ?? null,
+        progressPollMs: params.progressPollMs ?? null,
       });
       turns.push(turn);
       previousRole = turn.owner;
@@ -559,6 +604,7 @@ export async function runAutoCommandEndToEndLive(params) {
       transport: bootstrapTransport,
       conversationId,
       bootstrap,
+      projectId: explicitProjectId ?? path.basename(projectRoot),
       projectRoot,
       turns,
       harness,

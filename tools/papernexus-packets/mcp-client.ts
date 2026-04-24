@@ -7,6 +7,12 @@ import path from "node:path";
 
 export type PapernexusMcpToolName =
   | "list_corpora"
+  | "research_lookup"
+  | "research_briefing"
+  | "idea_catalyst"
+  | "import_workflow"
+  | "refresh_paper_graph"
+  | "paper_index"
   | "corpus_status"
   | "query"
   | "context"

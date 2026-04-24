@@ -80,7 +80,7 @@ function buildCandidateFromHit(params: {
     venue_pack_hits: venueMatch.venuePackHits,
     venue_aliases_matched: venueMatch.venueAliasesMatched,
     source_provider: params.hit.provider,
-    source_path: params.hit.pdfUrl,
+    source_path: null,
     retrieval_providers: [params.hit.provider],
     citation_count: params.hit.citationCount,
     best_oa_url: params.hit.bestOaUrl,

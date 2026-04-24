@@ -361,21 +361,50 @@ function normalizeArxivId(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
-  const match = value.match(ARXIV_ID_REGEX);
-  if (!match || match.length === 0) {
+  const raw = value.trim();
+  if (!raw) {
     return null;
   }
-  return match[0].toLowerCase().replace(/v\d+$/, "");
+  const containsDoi = new RegExp(DOI_REGEX.source, "i").test(raw);
+  const containsArxivContext = /\barxiv\b|arxiv\.org/i.test(raw);
+  if (containsDoi && !containsArxivContext) {
+    return null;
+  }
+  for (const match of raw.matchAll(ARXIV_ID_REGEX)) {
+    const candidate = normalizeArxivCandidate(match[0]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function normalizeArxivCandidate(value: string): string | null {
+  const normalized = value.toLowerCase().replace(/v\d+$/, "");
+  const modern = normalized.match(/^(\d{4})\.\d{4,5}$/);
+  if (modern) {
+    const month = Number(modern[1].slice(2));
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return null;
+    }
+  }
+  return normalized;
 }
 
 function extractArxivIds(value: string | null | undefined): string[] {
   if (!value) {
     return [];
   }
+  const raw = value.trim();
+  const containsDoi = new RegExp(DOI_REGEX.source, "i").test(raw);
+  const containsArxivContext = /\barxiv\b|arxiv\.org/i.test(raw);
+  if (containsDoi && !containsArxivContext) {
+    return [];
+  }
   return Array.from(
     new Set(
-      Array.from(value.matchAll(ARXIV_ID_REGEX))
-        .map((match) => normalizeArxivId(match[0]))
+      Array.from(raw.matchAll(ARXIV_ID_REGEX))
+        .map((match) => normalizeArxivCandidate(match[0]))
         .filter((item): item is string => Boolean(item))
     )
   );
@@ -484,6 +513,68 @@ function normalizeProvider(value: string | null | undefined): string | null {
   }
   const normalized = value.trim().toLowerCase();
   return normalized || null;
+}
+
+const METADATA_ONLY_SOURCE_PROVIDERS = new Set([
+  "crossref",
+  "openalex",
+  "semantic-scholar",
+  "semanticscholar",
+  "pubmed",
+  "pubmedcentral",
+  "pasa",
+  "pasa-paper-search",
+]);
+
+const IMPORTABLE_SOURCE_PROVIDERS = new Set([
+  "arxiv2md",
+  "arxiv2md-api",
+  "markxiv",
+  "papers-cool",
+  "pdf",
+  "unpaywall",
+  "core",
+  "hf",
+  "huggingface",
+  "hugging-face-paper-pages",
+]);
+
+function isImportableSourceHint(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      (
+        /\.(?:md|pdf)(?:$|[?#])/i.test(normalized) ||
+        /(?:^|\/)arxiv\.org\/pdf\//i.test(normalized) ||
+        /papers\.cool/i.test(normalized) ||
+        /huggingface\.co\/papers/i.test(normalized)
+      )
+  );
+}
+
+function hasImportableSourceSignal(paper: ExpectedPaper): boolean {
+  if (isExpectedPaperExplicitlyConfirmed(paper)) {
+    return true;
+  }
+  if (paper.sourceHints.some((hint) => isImportableSourceHint(hint))) {
+    return true;
+  }
+  const provider = normalizeProvider(paper.sourceProvider);
+  if (provider && IMPORTABLE_SOURCE_PROVIDERS.has(provider)) {
+    return true;
+  }
+  if (
+    provider &&
+    !METADATA_ONLY_SOURCE_PROVIDERS.has(provider) &&
+    paper.sourceHints.length > 0
+  ) {
+    return true;
+  }
+  return paper.sourceKind !== "unknown";
+}
+
+function expectedPapersAreMetadataOnly(papers: ExpectedPaper[]): boolean {
+  return papers.length > 0 && papers.every((paper) => !hasImportableSourceSignal(paper));
 }
 
 function collectRetrievalProviders(record: Record<string, unknown> | null): string[] {
@@ -694,10 +785,13 @@ function collectSourceHints(record: Record<string, unknown> | null): string[] {
     pickString(record, ["source_path", "sourcePath"]),
     pickString(record, ["canonical_source_path", "canonicalSourcePath"]),
     pickString(record, ["markdown_path", "markdownPath", "source_markdown_path", "sourceMarkdownPath"]),
+    pickString(record, ["local_md_path", "localMdPath", "local_md", "localMd"]),
     pickString(record, ["pdf_path", "pdfPath", "source_pdf_path", "sourcePdfPath"]),
+    pickString(record, ["local_pdf_path", "localPdfPath", "local_pdf", "localPdf"]),
     pickString(record, ["input_path", "inputPath"]),
     pickString(record, ["source_key", "sourceKey"]),
     pickString(record, ["path", "file", "filePath"]),
+    pickString(record, ["url", "best_oa_url", "bestOaUrl", "pdf_url", "pdfUrl"]),
     ...asStringArray(record.source_variants),
     ...asStringArray(record.sourceVariants),
   ].filter((item): item is string => Boolean(item)));
@@ -1406,6 +1500,17 @@ function buildBlockingReason(
     .map((paper) => paper.arxivId ?? paper.title ?? paper.canonicalId)
     .join("; ");
   return `PaperNexus corpus is missing ${missingPapers.length}/${expectedPaperCount} expected paper(s): ${preview}${missingPapers.length > 3 ? "; ..." : ""}. Refresh the graph before frontier mapping or ideation.`;
+}
+
+function buildMetadataOnlyMissingSourcesReason(params: {
+  expectedPaperCount: number;
+  paperSourceIndexPath: string | null;
+}): string {
+  return (
+    `${params.paperSourceIndexPath ?? "PAPER_SOURCE_INDEX.json"} records ${params.expectedPaperCount} canonical paper(s), ` +
+    "but none has a project-local PDF/Markdown source or an importable source reference. " +
+    "Materialize paper sources and generate a PaperNexus batch manifest before graph import/repair."
+  );
 }
 
 function isGraphPresenceOverrideFresh(params: {
@@ -2386,6 +2491,22 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     }
   }
 
+  if (
+    remoteInspection.tokenAvailable &&
+    status !== "ready" &&
+    params.expected.papers.length > 0 &&
+    expectedPapersAreMetadataOnly(params.expected.papers) &&
+    !paperIngestionProgress.inFlight
+  ) {
+    status = "missing_sources";
+    refreshReason = buildMetadataOnlyMissingSourcesReason({
+      expectedPaperCount,
+      paperSourceIndexPath: params.expected.paperSourceIndexPath,
+    });
+    presentPaperCount = Math.min(presentPaperCount, expectedPaperCount);
+    missingPapers = params.expected.papers.map((paper) => toMissingPaper(paper));
+  }
+
   const repairTargetCorpus = resolveGraphRepairTargetCorpus({
     manifest: params.manifest,
     corpusName: preferredCorpusName,
@@ -2549,7 +2670,7 @@ export async function checkGraphPresenceForWorkflow(params: {
         graph_presence_present_papers: result.presentPaperCount,
         graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
         refresh_required: result.refreshRequired ? true : false,
-        refresh_reason: result.refreshRequired ? result.refreshReason : null,
+        refresh_reason: result.status === "ready" ? null : result.refreshReason,
         repair_required: result.repairRequired ? true : false,
         repair_reason: result.repairRequired ? result.repairReason : null,
         repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
@@ -2623,16 +2744,35 @@ export async function checkGraphPresenceForWorkflow(params: {
     status = "ready";
   }
 
+  if (
+    status !== "ready" &&
+    expected.papers.length > 0 &&
+    expectedPapersAreMetadataOnly(expected.papers) &&
+    !summarizePaperIngestionProgress(manifest).inFlight
+  ) {
+    status = "missing_sources";
+    missingPapers.splice(
+      0,
+      missingPapers.length,
+      ...expected.papers.map((paper) => toMissingPaper(paper))
+    );
+  }
+
   const refreshRequired = status === "missing_corpus" || status === "missing_papers";
   const refreshReason =
     status === "ready"
       ? null
-      : buildBlockingReason(
-          status,
-          missingPapers,
-          expected.papers.length,
-          corpusResolution.corpusRoot
-        );
+      : status === "missing_sources" && expected.papers.length > 0
+        ? buildMetadataOnlyMissingSourcesReason({
+            expectedPaperCount: expected.papers.length,
+            paperSourceIndexPath: expected.paperSourceIndexPath,
+          })
+        : buildBlockingReason(
+            status,
+            missingPapers,
+            expected.papers.length,
+            corpusResolution.corpusRoot
+          );
   const paperIngestionProgress = summarizePaperIngestionProgress(manifest);
   const repairTargetCorpus = resolveGraphRepairTargetCorpus({
     manifest,
@@ -2747,7 +2887,7 @@ export async function checkGraphPresenceForWorkflow(params: {
       graph_presence_present_papers: finalizedResult.presentPaperCount,
       graph_presence_missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
       refresh_required: finalizedResult.refreshRequired ? true : false,
-      refresh_reason: finalizedResult.refreshRequired ? finalizedResult.refreshReason : null,
+      refresh_reason: finalizedResult.status === "ready" ? null : finalizedResult.refreshReason,
       repair_required: finalizedResult.repairRequired ? true : false,
       repair_reason: finalizedResult.repairRequired ? finalizedResult.repairReason : null,
       repair_target_corpus: finalizedResult.repairRequired ? finalizedResult.repairTargetCorpus : null,

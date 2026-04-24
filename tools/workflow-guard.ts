@@ -61,7 +61,10 @@ import {
   type CitationExpansionPacket,
   type LiteratureCoverageAudit,
 } from "./paper-discovery-diagnostics";
-import { runBroadPaperSearch } from "./research30/workflow-bridge";
+import {
+  runBroadPaperSearch,
+} from "./research30/workflow-bridge";
+import type { BroadPaperProviderName } from "./research30/provider-contract";
 import {
   applyPaperIngestionValidationToRequest,
   defaultPaperIngestionMaxAttempts,
@@ -8466,6 +8469,7 @@ export async function runBroadPaperSearchForWorkflow(params: {
   maxResultsPerQuery?: number | null;
   maxIndexEntries?: number | null;
   maxResolutionAttempts?: number | null;
+  providers?: BroadPaperProviderName[] | null;
 }): Promise<Awaited<ReturnType<typeof runBroadPaperSearch>>> {
   return runBroadPaperSearch({
     projectRoot: params.projectRoot,
@@ -8489,6 +8493,7 @@ export async function runBroadPaperSearchForWorkflow(params: {
       Number.isFinite(params.maxResolutionAttempts)
         ? Math.floor(params.maxResolutionAttempts)
         : undefined,
+    providers: params.providers?.length ? params.providers : undefined,
   });
 }
 

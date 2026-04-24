@@ -560,7 +560,7 @@ test("buildPapernexusSkillBackgroundCommand appends the continuation marker once
   assert.equal(buildPapernexusSkillBackgroundCommand(command), command);
 });
 
-test("buildPapernexusWrapperCommand renders a wrapper-first python command", () => {
+test("buildPapernexusWrapperCommand renders an MCP-backed skill wrapper command", () => {
   const command = buildPapernexusWrapperCommand({
     wrapper: "pn_graph_query",
     args: [
@@ -575,7 +575,7 @@ test("buildPapernexusWrapperCommand renders a wrapper-first python command", () 
     ],
   });
 
-  assert.match(command, /^python3 scripts\/pn_graph_query\.py\b/);
+  assert.match(command, /^python3 skills\/papernexus\/scripts\/pn_graph_query\.py\b/);
   assert.match(command, /--api-base 'https:\/\/papernexus\.example\/api'/);
   assert.match(command, /--corpus 'demo'/);
   assert.match(command, /query 'graph topic'/);
@@ -596,7 +596,7 @@ test("buildPapernexusWrapperCommand renders a batch-import wrapper command", () 
     ],
   });
 
-  assert.match(command, /^python3 scripts\/pn_batch_import\.py\b/);
+  assert.match(command, /^python3 skills\/papernexus\/scripts\/pn_batch_import\.py\b/);
   assert.match(command, /--manifest '\/tmp\/demo\/batch-import\.json'/);
   assert.match(command, /\bsubmit\b/);
 });
@@ -2383,7 +2383,7 @@ test("startBackgroundWorkflowRun scopes the researcher subagent cap per project 
   assert.equal(runCalls.length, 3);
 });
 
-test("startBackgroundWorkflowRun reuses an idle researcher subagent session for the same channel and project family", async (t) => {
+test("startBackgroundWorkflowRun reuses an idle researcher subagent session for the same channel, project, and workflow kind", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const runCalls = [];
@@ -2438,7 +2438,7 @@ test("startBackgroundWorkflowRun reuses an idle researcher subagent session for 
   const second = await startBackgroundWorkflowRun({
     ...baseParams,
     backgroundRun: {
-      kind: "research_queue",
+      kind: "research_pipeline",
       projectId: "bird-graph",
       topic: "bird shortlist refresh",
     },

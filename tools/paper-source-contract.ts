@@ -58,6 +58,7 @@ export type CanonicalPaperRecord = {
 };
 
 const ARXIV_ID_REGEX = /\b(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b/i;
+const ARXIV_ID_EXTRACT_REGEX = /\b(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b/gi;
 const DOI_REGEX = /\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/i;
 const PMID_REGEX = /\bpmid[:\s]*([0-9]{5,})\b/i;
 const PMCID_REGEX = /\bpmc[:\s]*([0-9]{5,})\b/i;
@@ -116,11 +117,34 @@ export function normalizeArxivId(value: string | null | undefined): string | nul
   if (!value) {
     return null;
   }
-  const match = value.match(ARXIV_ID_REGEX);
-  if (!match?.[0]) {
+  const raw = value.trim();
+  if (!raw) {
     return null;
   }
-  return match[0].toLowerCase().replace(/v\d+$/i, "");
+  const containsDoi = DOI_REGEX.test(raw);
+  const containsArxivContext = /\barxiv\b|arxiv\.org/i.test(raw);
+  if (containsDoi && !containsArxivContext) {
+    return null;
+  }
+  for (const match of raw.matchAll(ARXIV_ID_EXTRACT_REGEX)) {
+    const candidate = normalizeArxivCandidate(match[0]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function normalizeArxivCandidate(value: string): string | null {
+  const normalized = value.toLowerCase().replace(/v\d+$/i, "");
+  const modern = normalized.match(/^(\d{4})\.\d{4,5}$/);
+  if (modern) {
+    const month = Number(modern[1].slice(2));
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return null;
+    }
+  }
+  return normalized;
 }
 
 export function normalizeDoi(value: string | null | undefined): string | null {
@@ -184,7 +208,9 @@ export function collectSourceHints(record: Record<string, unknown> | null): stri
     pickString(record, ["source_path", "sourcePath"]),
     pickString(record, ["canonical_source_path", "canonicalSourcePath"]),
     pickString(record, ["markdown_path", "markdownPath", "source_markdown_path", "sourceMarkdownPath"]),
+    pickString(record, ["local_md_path", "localMdPath", "local_md", "localMd"]),
     pickString(record, ["pdf_path", "pdfPath", "source_pdf_path", "sourcePdfPath"]),
+    pickString(record, ["local_pdf_path", "localPdfPath", "local_pdf", "localPdf"]),
     pickString(record, ["input_path", "inputPath"]),
     pickString(record, ["source_key", "sourceKey"]),
     pickString(record, ["path", "file", "filePath"]),
@@ -427,8 +453,16 @@ export function buildCanonicalPaperRecordFromRecord(
       "canonicalSourcePath",
       "markdown_path",
       "markdownPath",
+      "local_md_path",
+      "localMdPath",
+      "local_md",
+      "localMd",
       "pdf_path",
       "pdfPath",
+      "local_pdf_path",
+      "localPdfPath",
+      "local_pdf",
+      "localPdf",
       "path",
       "file",
       "filePath",

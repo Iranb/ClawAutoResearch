@@ -285,3 +285,165 @@ test("broad paper search keeps high-relevance papers and drops noisy high-citati
   assert.equal(sourceIndex.papers.some((entry) => /Generalized Category Discovery/i.test(entry.title)), true);
   assert.equal(sourceIndex.papers.some((entry) => /Anchors:/i.test(entry.title)), false);
 });
+
+test("broad paper search materializes arXiv pdf URLs without a .pdf suffix", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broad-paper-search-arxiv-pdf-"));
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    JSON.stringify(
+      {
+        project_id: "gcd-arxiv-pdf",
+        research_program: {
+          topic: "Generalized Category Discovery",
+        },
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  const originalFetch = globalThis.fetch;
+  const fetchedUrls = [];
+
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    fetchedUrls.push(target);
+    if (target.startsWith("https://api.semanticscholar.org/graph/v1/paper/search")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              paperId: "s2:gcd",
+              title: "Generalized Category Discovery",
+              venue: "CVPR",
+              year: 2022,
+              authors: [{ name: "Kai Vaze" }],
+              externalIds: {
+                DOI: "10.1109/cvpr52688.2022.00734",
+                ArXiv: "2201.02609",
+              },
+              openAccessPdf: { url: "http://arxiv.org/pdf/2201.02609" },
+              citationCount: 298,
+              publicationTypes: ["Conference"],
+              url: "https://semanticscholar.org/paper/gcd",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (target === "http://arxiv.org/pdf/2201.02609") {
+      return new Response(Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(2048, "G")]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    throw new Error(`Unhandled fetch URL in test: ${target}`);
+  };
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await runBroadPaperSearch({
+    projectRoot,
+    topic: "Generalized Category Discovery",
+    providers: ["semanticscholar"],
+    maxQueries: 1,
+    maxResultsPerQuery: 5,
+    maxResolutionAttempts: 2,
+  });
+
+  assert.equal(result.mergedCandidates.length, 1);
+  assert.equal(result.mergedCandidates[0].resolutionStatus, "resolved_pdf");
+  assert.equal(fetchedUrls.includes("http://arxiv.org/pdf/2201.02609"), true);
+
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.equal(sourceIndex.papers.length, 1);
+  assert.equal(sourceIndex.papers[0].source_kind, "pdf");
+  assert.match(sourceIndex.papers[0].source_path, /paper-staging\/pdf\/arxiv-2201\.02609\.pdf$/);
+});
+
+test("broad paper search synthesizes an arXiv pdf URL when only an arXiv id is available", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broad-paper-search-arxiv-id-"));
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    JSON.stringify(
+      {
+        project_id: "gcd-arxiv-id",
+        research_program: {
+          topic: "SoftMatch semi-supervised learning",
+        },
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.startsWith("https://api.semanticscholar.org/graph/v1/paper/search")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              paperId: "s2:softmatch",
+              title: "SoftMatch: Addressing the Quantity-Quality Trade-off in Semi-supervised Learning",
+              venue: "ICLR",
+              year: 2023,
+              authors: [{ name: "Example Author" }],
+              externalIds: {
+                ArXiv: "2301.10921",
+              },
+              citationCount: 89,
+              publicationTypes: ["Conference"],
+              url: "https://semanticscholar.org/paper/softmatch",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (target === "https://arxiv.org/pdf/2301.10921.pdf") {
+      return new Response(Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(2048, "S")]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    throw new Error(`Unhandled fetch URL in test: ${target}`);
+  };
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await runBroadPaperSearch({
+    projectRoot,
+    topic: "SoftMatch semi-supervised learning",
+    providers: ["semanticscholar"],
+    maxQueries: 1,
+    maxResultsPerQuery: 5,
+    maxResolutionAttempts: 1,
+  });
+
+  assert.equal(result.mergedCandidates.length, 1);
+  assert.equal(result.mergedCandidates[0].resolutionStatus, "resolved_pdf");
+  assert.equal(result.mergedCandidates[0].pdfUrl, null);
+
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.equal(sourceIndex.papers[0].source_kind, "pdf");
+  assert.match(sourceIndex.papers[0].source_path, /paper-staging\/pdf\/arxiv-2301\.10921\.pdf$/);
+  assert.equal(sourceIndex.papers[0].resolution_attempts[0].url, "https://arxiv.org/pdf/2301.10921.pdf");
+});

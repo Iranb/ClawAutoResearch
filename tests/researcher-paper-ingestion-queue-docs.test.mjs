@@ -21,8 +21,8 @@ test("workflow-owned upload docs teach queued ingestion requests instead of dire
     const content = await fs.readFile(filePath, "utf8");
     assert.match(
       content,
-      /queue_paper_ingestion/i,
-      `Expected ${filePath} to teach workflow-owned queued paper ingestion.`
+      /schedule_papernexus_import/i,
+      `Expected ${filePath} to teach workflow-owned PaperNexus import scheduling.`
     );
   }
 });

@@ -409,7 +409,7 @@ collect_selected_agent_ids() {
     fi
   done
 
-  if $INSTALL_EXTRA_AGENTS; then
+  if $INSTALL_EXTRA_AGENTS && [[ ${#AVAILABLE_AGENT_IDS[@]} -gt 0 ]]; then
     for agent in "${AVAILABLE_AGENT_IDS[@]}"; do
       if ! is_core_agent "$agent"; then
         OPTIONAL_AGENT_IDS+=("$agent")
@@ -417,6 +417,23 @@ collect_selected_agent_ids() {
       fi
     done
   fi
+}
+
+add_selected_agent_id_once() {
+  local candidate="$1"
+  local existing
+
+  [[ -n "$candidate" ]] || return 0
+
+  if [[ ${#SELECTED_AGENT_IDS[@]} -gt 0 ]]; then
+    for existing in "${SELECTED_AGENT_IDS[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        return 0
+      fi
+    done
+  fi
+
+  SELECTED_AGENT_IDS+=("$candidate")
 }
 
 ensure_dir() {
@@ -438,6 +455,10 @@ path_exists() {
 
 is_git_repo() {
   git -C "$PLUGIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+git_has_upstream() {
+  git -C "$PLUGIN_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1
 }
 
 copy_file() {
@@ -686,6 +707,129 @@ NODE
   rm -f "$entries_tmp" "$next_index_tmp"
 }
 
+normalize_papernexus_skill_paths_for_openclaw() {
+  local skill_dir="$1"
+  local target_agent="${2:-researcher}"
+
+  [[ -d "$skill_dir" ]] || return 0
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  WARN: 未找到 node，跳过 $skill_dir 中的 OpenClaw skill 路径规范化"
+    return 0
+  fi
+
+  node - "$skill_dir" "$target_agent" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const [skillDir] = process.argv.slice(2);
+const pathReplacements = new Map([
+  ["SKILL/PaperNexusMainGraphName/", "skills/papernexus-main-graph-name/"],
+  ["SKILL/PaperNexusPaperRefresh/", "skills/papernexus-paper-refresh/"],
+  ["SKILL/PaperNexusPrecisePaperIndex/", "skills/papernexus-precise-paper-index/"],
+  ["SKILL/PaperNexusIdeaCatalyst/", "skills/papernexus-idea-catalyst/"],
+  ["SKILL/PaperNexusAgenticReasoning/", "skills/papernexus-agentic-reasoning/"],
+  ["SKILL/PaperNexusBatchImport/", "skills/papernexus-batch-import/"],
+  ["SKILL/PaperNexusResearchChains/", "skills/papernexus-research-chains/"],
+  ["SKILL/PaperNexusReflection/", "skills/papernexus-reflection/"],
+  ["SKILL/PaperNexus/", "skills/papernexus/"],
+]);
+
+function listFiles(root) {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__pycache__") {
+        continue;
+      }
+      files.push(...listFiles(fullPath));
+    } else if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function normalizeTextPaths(content) {
+  let next = content;
+  for (const [from, to] of pathReplacements) {
+    next = next.split(from).join(to);
+  }
+  return next;
+}
+
+function scriptResolverBlock(scriptName) {
+  return `def _resolve_papernexus_script(script_name: str) -> Path:
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "papernexus" / "scripts" / script_name,
+        here.parents[3] / "researcher" / "papernexus" / "scripts" / script_name if len(here.parents) > 3 else None,
+        here.parents[3].parent / "workspace-researcher" / "skills" / "papernexus" / "scripts" / script_name if len(here.parents) > 3 else None,
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists() and candidate.resolve() != here:
+            return candidate
+    raise FileNotFoundError(f"Could not locate PaperNexus script: {script_name}")
+
+
+TARGET = _resolve_papernexus_script("${scriptName}")
+sys.path.insert(0, str(TARGET.parent))
+runpy.run_path(str(TARGET), run_name="__main__")`;
+}
+
+function scriptsResolverBlock() {
+  return `def _resolve_papernexus_scripts() -> Path:
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "papernexus" / "scripts",
+        here.parents[3] / "researcher" / "papernexus" / "scripts" if len(here.parents) > 3 else None,
+        here.parents[3].parent / "workspace-researcher" / "skills" / "papernexus" / "scripts" if len(here.parents) > 3 else None,
+    ]
+    for candidate in candidates:
+        if candidate and (candidate / "pn_common.py").exists():
+            return candidate
+    raise FileNotFoundError("Could not locate PaperNexus shared scripts")
+
+
+_SKILL_SCRIPTS = _resolve_papernexus_scripts()`;
+}
+
+function normalizePythonShim(content) {
+  let next = content;
+  next = next.replace(
+    /TARGET = Path\(__file__\)\.resolve\(\)\.parents\[2\]\s*\/\s*["']PaperNexus["']\s*\/\s*["']scripts["']\s*\/\s*["']([^"']+\.py)["']\nsys\.path\.insert\(0, str\(TARGET\.parent\)\)\nrunpy\.run_path\(str\(TARGET\), run_name=["']__main__["']\)/g,
+    (_match, scriptName) => scriptResolverBlock(scriptName)
+  );
+  next = next.replace(
+    /_SKILL_SCRIPTS = Path\(__file__\)\.resolve\(\)\.parents\[2\]\s*\/\s*["']PaperNexus["']\s*\/\s*["']scripts["']/g,
+    scriptsResolverBlock()
+  );
+  return next;
+}
+
+for (const filePath of listFiles(skillDir)) {
+  if (!/\.(md|py|txt|json)$/i.test(filePath)) {
+    continue;
+  }
+  let content;
+  try {
+    content = fs.readFileSync(filePath, "utf8");
+  } catch {
+    continue;
+  }
+  let next = normalizeTextPaths(content);
+  if (filePath.endsWith(".py")) {
+    next = normalizePythonShim(next);
+  }
+  if (next !== content) {
+    fs.writeFileSync(filePath, next);
+  }
+}
+NODE
+}
+
 sync_papernexus_skills() {
   local papernexus_skill_root="$PAPERNEXUS_DIR/SKILL"
   local skill_md
@@ -718,9 +862,11 @@ sync_papernexus_skills() {
     fi
 
     target_agent=$(papernexus_skill_target_agent "$slug")
+    add_selected_agent_id_once "$target_agent"
     target_dir="$PLUGIN_DIR/skills/$target_agent/$slug"
     ensure_dir "$PLUGIN_DIR/skills/$target_agent"
     sync_skill_dir "$skill_dir" "$target_dir" "$target_agent/$slug"
+    normalize_papernexus_skill_paths_for_openclaw "$target_dir" "$target_agent"
     PAPERNEXUS_SYNCED_SKILL_ENTRIES+=("$target_agent|$slug")
   done
 
@@ -730,6 +876,25 @@ sync_papernexus_skills() {
   fi
 
   update_skills_index_for_papernexus_skills
+}
+
+is_papernexus_synced_skill() {
+  local agent="$1"
+  local slug="$2"
+  local entry
+
+  [[ ${#PAPERNEXUS_SYNCED_SKILL_ENTRIES[@]} -gt 0 ]] || return 1
+
+  for entry in "${PAPERNEXUS_SYNCED_SKILL_ENTRIES[@]}"; do
+    local synced_agent
+    local synced_slug
+    IFS='|' read -r synced_agent synced_slug <<< "$entry"
+    if [[ "$synced_agent" == "$agent" && "$synced_slug" == "$slug" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 load_openclaw_agents_json_cache() {
@@ -1010,6 +1175,89 @@ sync_plugin_link() {
   fi
 }
 
+configured_plugin_load_paths() {
+  local config_path="$1"
+  [[ -f "$config_path" ]] || return 0
+  OPENCLAW_CONFIG_PATH_FOR_PLUGIN_SYNC="$config_path" node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+function expandHome(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === "~" || trimmed.startsWith("~/")
+    ? path.join(os.homedir(), trimmed.slice(2))
+    : trimmed;
+}
+
+try {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH_FOR_PLUGIN_SYNC;
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const rawPaths = Array.isArray(config?.plugins?.load?.paths)
+    ? config.plugins.load.paths
+    : [];
+  const seen = new Set();
+  for (const rawPath of rawPaths) {
+    const expanded = expandHome(rawPath);
+    if (!expanded) {
+      continue;
+    }
+    const normalized = path.resolve(expanded);
+    if (path.basename(normalized) !== "ClawAutoResearch" || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    console.log(normalized);
+  }
+} catch {
+  process.exit(0);
+}
+NODE
+}
+
+sync_configured_plugin_load_paths() {
+  local config_path="$1"
+  local configured_path
+  local source_real
+  local target_real
+  local synced=false
+
+  source_real=$(cd "$PLUGIN_DIR" && pwd -P)
+  while IFS= read -r configured_path; do
+    [[ -n "$configured_path" ]] || continue
+    if [[ -e "$configured_path" ]]; then
+      target_real=$(cd "$configured_path" && pwd -P)
+    else
+      target_real="$configured_path"
+    fi
+    if [[ "$target_real" == "$source_real" ]]; then
+      echo "  -> KEEP configured plugin load path $configured_path"
+      continue
+    fi
+    synced=true
+    echo "  -> SYNC configured plugin load path $configured_path"
+    if $DRY_RUN; then
+      echo "  [dry-run] rsync source repo to configured plugin load path"
+      continue
+    fi
+    mkdir -p "$configured_path"
+    rsync -a --delete \
+      --exclude '.git/' \
+      --exclude 'node_modules/' \
+      --exclude '.openclaw-research/' \
+      --exclude '.DS_Store' \
+      --exclude '* 2.*' \
+      "$PLUGIN_DIR/" "$configured_path/"
+  done < <(configured_plugin_load_paths "$config_path")
+
+  if ! $synced; then
+    echo "  -> No separate configured plugin load path needs source sync"
+  fi
+}
+
 if is_truthy "$FORCE_MENU_INPUT" && ! $ASSUME_YES; then
   prompt_install_mode
 elif (( ORIGINAL_ARG_COUNT == 0 )) && [[ -t 0 ]] && ! $ASSUME_YES; then
@@ -1079,7 +1327,11 @@ if is_git_repo; then
   if ! command -v git >/dev/null 2>&1; then
     die "当前插件目录是 Git 仓库，但未找到 git；无法同步最新代码。请先安装 git。"
   fi
-  echo "  -> 将通过 git pull --ff-only 同步当前分支最新代码"
+  if git_has_upstream; then
+    echo "  -> 将通过 git pull --ff-only 同步当前分支最新代码"
+  else
+    echo "  -> 当前分支未设置 upstream；将跳过 git pull，继续本地同步"
+  fi
 else
   echo "  -> 当前插件目录不是 Git 仓库；将跳过 git pull"
 fi
@@ -1109,7 +1361,7 @@ echo "  -> 配置目录就绪"
 echo ""
 
 echo "[1/8] 同步最新 Git 代码..."
-if is_git_repo; then
+if is_git_repo && git_has_upstream; then
   if $DRY_RUN; then
     echo "  [dry-run] (cd $PLUGIN_DIR && git pull --ff-only)"
   else
@@ -1119,6 +1371,8 @@ if is_git_repo; then
     )
     echo "  -> PULL 最新代码"
   fi
+elif is_git_repo; then
+  echo "  -> SKIP Git 同步（当前分支未设置 upstream）"
 else
   echo "  -> SKIP Git 同步（当前插件目录不是 Git 仓库）"
 fi
@@ -1177,9 +1431,11 @@ else
   done
 fi
 
-if $RUN_AGENT_PHASE; then
+if [[ -f "$OPENCLAW_CONFIG_PATH" && ${#SELECTED_AGENT_IDS[@]} -gt 0 ]]; then
   echo "  -> 对齐现有 agent 的本地 models.json 与 openclaw.json..."
   sync_existing_agent_model_catalogs
+else
+  echo "  -> SKIP agent models sync（未找到 openclaw.json 或没有选中 agent）"
 fi
 
 echo ""
@@ -1211,6 +1467,10 @@ if $RUN_SKILL_PHASE; then
       skill_name=$(basename "$skill_dir")
       dst="$ws_skills/$skill_name"
       if [[ -d "$dst" && "$skill_name" != "self-improving-agent" ]]; then
+        if is_papernexus_synced_skill "$agent" "$skill_name"; then
+          echo "    - $agent/$skill_name -> $dst (PaperNexus source will refresh automatically)"
+          continue
+        fi
         DUPLICATES+=("$agent|$skill_name|$dst")
       fi
     done
@@ -1253,19 +1513,27 @@ if $RUN_SKILL_PHASE; then
       [[ -d "$skill_dir" ]] || continue
       skill_name=$(basename "$skill_dir")
       dst="$ws_skills/$skill_name"
+      force_skill_replace=false
+      if is_papernexus_synced_skill "$agent" "$skill_name"; then
+        force_skill_replace=true
+      fi
 
       if [[ -L "$skill_dir" ]]; then
         if [[ -L "$dst" || -d "$dst" ]]; then
           if [[ "$skill_name" == "self-improving-agent" ]]; then
             echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
           else
-            if $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
+            if $force_skill_replace || $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
               remove_path "$dst"
               if $DRY_RUN; then
                 echo "  [dry-run] 将创建符号链接：$dst -> $(readlink "$skill_dir")"
               else
                 ln -s "$(readlink "$skill_dir")" "$dst"
-                echo "  -> RELINK $agent/$skill_name"
+                if $force_skill_replace; then
+                  echo "  -> REFRESH $agent/$skill_name (PaperNexus source)"
+                else
+                  echo "  -> RELINK $agent/$skill_name"
+                fi
               fi
             else
               echo "  -> SKIP $agent/$skill_name (保留现有版本)"
@@ -1283,10 +1551,14 @@ if $RUN_SKILL_PHASE; then
         if [[ -d "$dst" ]]; then
           if [[ "$skill_name" == "self-improving-agent" ]]; then
             echo "  -> KEEP $agent/$skill_name (按规则保留现有 self-improving-agent)"
-          elif $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
+          elif $force_skill_replace || $DELETE_DUPLICATES || [[ ! -d "$dst" ]]; then
             remove_path "$dst"
             run cp -R "$skill_dir" "$dst"
-            echo "  -> REPLACE $agent/$skill_name"
+            if $force_skill_replace; then
+              echo "  -> REFRESH $agent/$skill_name (PaperNexus source)"
+            else
+              echo "  -> REPLACE $agent/$skill_name"
+            fi
           else
             echo "  -> SKIP $agent/$skill_name (保留现有版本)"
           fi
@@ -1306,6 +1578,7 @@ echo "[7/8] 创建插件链接..."
 
 if $RUN_PLUGIN_LINK_PHASE; then
   sync_plugin_link "$PLUGIN_LINK"
+  sync_configured_plugin_load_paths "$OPENCLAW_CONFIG_PATH"
   if [[ -e "$PLUGIN_LINK" && ! -L "$PLUGIN_LINK" ]]; then
     PLUGIN_REFERENCE_PATH="$PLUGIN_DIR"
   fi
@@ -1373,8 +1646,12 @@ if ! command -v openclaw >/dev/null 2>&1; then
 elif $DRY_RUN; then
   echo "  [dry-run] openclaw gateway restart"
 else
-  if openclaw gateway restart; then
+ if openclaw gateway restart; then
     echo "  -> RESTART openclaw gateway"
+    if [[ -f "$OPENCLAW_CONFIG_PATH" && ${#SELECTED_AGENT_IDS[@]} -gt 0 ]]; then
+      echo "  -> 重启后再次对齐 agent models.json（防止 gateway 启动时覆盖本地模型目录）..."
+      sync_existing_agent_model_catalogs
+    fi
   else
     echo "  WARN: openclaw gateway restart 失败，请手动执行 `openclaw gateway restart`"
   fi
@@ -1386,7 +1663,9 @@ echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete      
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 if is_git_repo; then
-  if $DRY_RUN; then
+  if ! git_has_upstream; then
+    echo "  1. Git: 当前分支未设置 upstream，已跳过 git pull"
+  elif $DRY_RUN; then
     echo "  1. Git: 将执行 git pull --ff-only 同步当前分支最新代码"
   else
     echo "  1. Git: 已通过 git pull --ff-only 同步当前分支最新代码"

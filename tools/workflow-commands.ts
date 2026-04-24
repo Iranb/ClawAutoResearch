@@ -369,19 +369,19 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
   },
   {
     label: COMMAND_LABELS.auto_research,
-    intro: "只输入主题就启动全自动科研主线：自动建项目、补最小 onboarding、绑定频道并后台启动主 pipeline。",
+    intro: "只输入主题就启动全自动科研主线：自动建项目、补最小 onboarding、记录通知渠道并后台启动主 pipeline。",
   },
   {
     label: COMMAND_LABELS.auto_review,
-    intro: "只输入主题就启动全自动综述主线：自动建 survey 项目、绑定频道并后台启动 survey pipeline。",
+    intro: "只输入主题就启动全自动综述主线：自动建 survey 项目、记录通知渠道并后台启动 survey pipeline。",
   },
   {
     label: COMMAND_LABELS.bind_project,
-    intro: "把当前频道显式绑定到一个已有 workflow project，适合 Discord 里切换或修正项目上下文。",
+    intro: "把当前消息渠道显式绑定到一个已有 workflow project，适合需要手动切换或修正项目上下文的通知入口。",
   },
   {
     label: COMMAND_LABELS.clear_project_binding,
-    intro: "清空当前频道的 workflow 项目绑定，适合频道绑错项目时在原频道内执行。",
+    intro: "清空当前消息渠道的 workflow 项目绑定，适合渠道上下文指向错误项目时执行。",
   },
   {
     label: COMMAND_LABELS.research_pipeline,
@@ -525,6 +525,20 @@ function readFlagValue(commandText: string | undefined, flag: string): string | 
     new RegExp(`${escaped}\\s+(?:"([^"]+)"|'([^']+)'|(\\S+))`, "i")
   );
   return readString(match?.[1] ?? match?.[2] ?? match?.[3]) ?? null;
+}
+
+function readWorkflowProjectIdOverrideFromContext(
+  ctx: WorkflowCommandContext,
+  args?: string | null
+): string | null {
+  const record = ctx as WorkflowCommandContext & Record<string, unknown>;
+  return (
+    readString(record.projectId) ??
+    readString(record.project_id) ??
+    readString(record.projectIdOverride) ??
+    readString(record.project_id_override) ??
+    readFlagValue(args ?? undefined, "--project-id")
+  );
 }
 
 async function resolveProjectRootForProjectBoundCommand(params: {
@@ -1247,6 +1261,10 @@ function createAutoResearchCommandHandler(
         };
       }
       const topic = intent.cleanTopic;
+      const projectIdOverride = readWorkflowProjectIdOverrideFromContext(
+        ctx,
+        readString(ctx.args) ?? null
+      );
       const target = resolveWorkflowCommandSessionTarget(
         api,
         ctx,
@@ -1279,6 +1297,7 @@ function createAutoResearchCommandHandler(
         channelKey: shouldBindProjectChannel
           ? target.bindingChannelKey ?? undefined
           : undefined,
+        projectId: projectIdOverride ?? undefined,
         title: topic,
         topic,
       });
@@ -1312,8 +1331,8 @@ function createAutoResearchCommandHandler(
           source: "auto_research_command",
           notes:
             intent.rawRequest === intent.cleanTopic
-              ? "Recorded Discord notification channel during /auto-research bootstrap."
-              : `Recorded Discord notification channel during /auto-research bootstrap. Full request: ${intent.rawRequest}`,
+              ? "Recorded notification channel during /auto-research bootstrap."
+              : `Recorded notification channel during /auto-research bootstrap. Full request: ${intent.rawRequest}`,
         });
       }
 
@@ -1431,6 +1450,10 @@ function createAutoReviewCommandHandler(
             "Run it from a workflow-enabled channel or restore gateway routing first.",
         };
       }
+      const projectIdOverride = readWorkflowProjectIdOverrideFromContext(
+        ctx,
+        readString(ctx.args) ?? null
+      );
       const researcherSessionKey = deriveWorkflowRoleSessionKey({
         sessionKey: targetSessionKey,
         role: "researcher",
@@ -1450,7 +1473,7 @@ function createAutoReviewCommandHandler(
         channelKey: shouldBindProjectChannel
           ? target.bindingChannelKey ?? undefined
           : undefined,
-        projectId: `survey-${sanitizeProjectIdFragment(topic)}`,
+        projectId: projectIdOverride ?? `survey-${sanitizeProjectIdFragment(topic)}`,
         title: topic,
         topic,
         workflowLine: "survey",
@@ -1485,8 +1508,8 @@ function createAutoReviewCommandHandler(
           source: "auto_review_command",
           notes:
             intent.rawRequest === intent.cleanTopic
-              ? "Recorded Discord notification channel during /auto-review bootstrap."
-              : `Recorded Discord notification channel during /auto-review bootstrap. Full request: ${intent.rawRequest}`,
+              ? "Recorded notification channel during /auto-review bootstrap."
+              : `Recorded notification channel during /auto-review bootstrap. Full request: ${intent.rawRequest}`,
         });
       }
       await deps.setWritingContractState({
@@ -1976,7 +1999,7 @@ function createSurveyGraphBuildCommandHandler(
             "- {PROJ}/researcher/SURVEY_GRAPH_BUILD_MISSING_IN_GRAPH.json",
             "Execution guidance:",
             "- Reuse the current literature-review and graph-grounding workflow rather than inventing a parallel state machine.",
-            "- If strong candidates are staged locally, queue imports through research_workflow.queue_paper_ingestion instead of running wrappers inline.",
+            "- If strong candidates are staged locally, schedule imports through research_workflow.schedule_papernexus_import instead of running wrappers inline.",
             "- If remote graph checks are available, prefer graph-aware checks before staging imports so the packet can prioritize graph-missing papers.",
             "- Keep the pass bounded and report the strongest non-duplicate missing papers first.",
           ].join("\n"),

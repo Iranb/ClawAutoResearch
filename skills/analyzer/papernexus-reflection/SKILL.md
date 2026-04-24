@@ -1,70 +1,74 @@
 ---
 name: papernexus-reflection
-description: Use this skill when an Analyzer or Coder agent needs reflection-overlay evidence from a live PaperNexus corpus through remote HTTP MCP instead of local live-graph CLI operations.
+description: Use this skill when a Coder or Analyzer agent needs to inspect, summarize, or update PaperNexus experiment-reflection overlays through remote HTTP MCP workflows instead of local live-graph CLI operations.
 ---
 
 # PaperNexus Reflection
 
-Use this skill when the task is about innovation-to-experiment-to-outcome reflection in a live PaperNexus corpus.
+Use this skill when the task is about experiment reflection in a live PaperNexus corpus.
 
-## Primary Interface
+## Live Graph Policy
 
-For workflow-owned work, prefer the remote HTTP MCP control plane:
+- use the configured `papernexus-remote` MCP server first
+- do not call raw `/api/*`
+- do not use stdio/local MCP for live graph work
+- do not run local live-graph CLI commands as the default path
 
-- `research_lookup`
+Preferred MCP tools:
+
+- `import_workflow`
 - `research_briefing`
-- `idea_catalyst`
 
-If a thin adapter layer is still needed, the wrappers remain valid because they are backed by MCP:
+Shell fallback wrappers:
 
-- `python3 scripts/pn_research_chains.py`
-- `python3 scripts/pn_graph_query.py`
+- `python3 skills/papernexus-reflection/scripts/pn_import_submit.py`
+- `python3 skills/papernexus-reflection/scripts/pn_import_queue.py`
+- `python3 skills/papernexus-reflection/scripts/pn_batch_import.py`
+- `python3 skills/papernexus-reflection/scripts/pn_research_chains.py`
 
-If new papers must be added first, use:
+Wrapper mapping:
 
-- `research_workflow.queue_paper_ingestion`
-- `python3 scripts/pn_stage_sync.py`
-- `python3 scripts/pn_import_submit.py`
-- `python3 scripts/pn_import_queue.py`
-- `python3 scripts/pn_batch_import.py`
+- import wrappers -> `import_workflow`
+- chain/brief wrappers -> `research_briefing`
 
-Do not use local live-graph CLI rebuilds as the normal reflection path for a shared corpus.
+## Import Boundary Rules
 
-## What This Skill Covers
+- Remote `import_workflow` runs on the PaperNexus server.
+- `serverFilePath` must therefore be a file path on the server, not a local `/Users/...` path on the agent machine.
+- If that server path is under the server user's home directory, keep it in `~/...` form.
+- For local PDFs or Markdown files, use `pn_import_submit.py --source ...` or `pn_batch_import.py submit`.
+- Only read reflection overlays after the import task reaches `completed`.
 
-This skill is for reflection overlays such as:
+## Typical Workflow
 
-- innovation summaries
-- experiment chains
-- outcome verdicts
-- reflection notes
-- evidence-backed storyline or theory support
+1. If needed, import a new source through the remote queue.
+2. Check upload progress with `status` or `wait` instead of guessing by time.
+3. Wait until the task reaches `completed`.
+4. Read `reflection-chain` for typed `Innovation -> Experiment -> Outcome -> Reflection`.
+5. Read `paper-enhancement` when you need raw overlay cards for one paper.
+6. Use `research-brief` or `evidence-chain` if you also need supporting claims and limitations.
 
-## Recommended Workflow
-
-1. Confirm the relevant paper set is already present or queued.
-2. If new sources are needed, queue ingestion and let workflow-owned graph passes trigger upload.
-3. Read reflection-oriented graph outputs through MCP-first tools or their thin wrappers.
-4. Summarize findings in a compact, evidence-backed form.
-
-Preferred wrapper sequence:
+Shell fallback examples:
 
 ```bash
-research_briefing reflection-chain "<topic>"
-research_briefing evidence-chain "<topic>"
-research_briefing research-brief "<topic>"
-research_briefing storyline-brief "<topic>"
+python3 skills/papernexus-reflection/scripts/pn_import_submit.py --corpus "<corpus>" --source "/absolute/path/paper.pdf"
+python3 skills/papernexus-reflection/scripts/pn_import_queue.py --corpus "<corpus>" status --paper-id "<paperId>"
+python3 skills/papernexus-reflection/scripts/pn_import_queue.py --corpus "<corpus>" wait --paper-id "<paperId>" --timeout 1800 --interval 15
+python3 skills/papernexus-reflection/scripts/pn_research_chains.py --corpus "<corpus>" reflection-chain "<topic>" --limit 5
+python3 skills/papernexus-reflection/scripts/pn_research_chains.py --corpus "<corpus>" paper-enhancement --paper-id "<paperId>"
 ```
 
-When paper-local overlay detail is still needed:
+When checking queue state, read:
 
-```bash
-research_briefing paper-enhancement --paper-id "<paper-id>"
-```
+- `task.progress.percent`
+- `task.progress.stagePercent`
+- `task.progress.queuePosition`
+- `task.stage`
+- `task.error`
 
 ## Output Style
 
-Prefer this compact structure:
+When summarizing reflection, prefer:
 
 ```text
 Innovation:
@@ -74,16 +78,8 @@ Reflection:
 Open risk:
 ```
 
-## Safety Rules
+Keep extracted evidence, inference, and uncertainty separate.
 
-- keep claims tied to extracted evidence
-- distinguish clear wins from mixed or inconclusive outcomes
-- surface failure modes and open risks explicitly
-- if the graph is stale, refresh it before trusting the reflection
-- if support is thin, record uncertainty instead of promoting a weak takeaway into a hard conclusion
+## Repo-Local Exception
 
-## Do Not Do
-
-- do not use local stage-by-stage graph rebuild commands as the default live reflection path
-- do not rebuild the shared graph locally just to inspect one reflection overlay
-- do not bypass the remote HTTP MCP control plane when the task belongs to workflow-owned graph reasoning
+Repo-local staged commands are for isolated development only. They are not the live-graph control plane for reflection work.

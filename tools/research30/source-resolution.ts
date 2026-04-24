@@ -1,6 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { normalizeProviderName, serializeCanonicalPaperRecord } from "../paper-source-contract";
+import {
+  normalizeArxivId,
+  normalizeProviderName,
+  serializeCanonicalPaperRecord,
+} from "../paper-source-contract";
 import type { MergedPaperCandidate } from "./merge";
 import { resolveWithUnpaywall } from "./provider-unpaywall";
 
@@ -68,20 +72,104 @@ async function downloadPdf(params: {
   return { success: true, reason: validation.reason };
 }
 
-function looksLikePdfUrl(value: string | null | undefined): boolean {
+function isRemoteHttpUrl(value: string | null | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+  try {
+    const target = new URL(value);
+    return target.protocol === "http:" || target.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function arxivPdfUrlFromId(value: string | null | undefined): string | null {
+  const arxivId = normalizeArxivId(value);
+  return arxivId ? `https://arxiv.org/pdf/${arxivId}.pdf` : null;
+}
+
+function arxivPdfUrlFromRemoteUrl(value: string | null | undefined): string | null {
+  if (!isRemoteHttpUrl(value)) {
+    return null;
+  }
+  const target = new URL(value);
+  if (!/(^|\.)arxiv\.org$/i.test(target.hostname)) {
+    return null;
+  }
+  const parts = target.pathname.split("/").filter(Boolean);
+  if (parts.length < 2 || (parts[0] !== "abs" && parts[0] !== "pdf")) {
+    return null;
+  }
+  return arxivPdfUrlFromId(parts.slice(1).join("/").replace(/\.pdf$/i, ""));
+}
+
+function looksLikePdfDownloadUrl(value: string | null | undefined): boolean {
   if (!value) {
     return false;
   }
   try {
     const target = new URL(value);
     const pathname = target.pathname.toLowerCase();
-    if (pathname.endsWith(".pdf")) {
-      return true;
-    }
+    return (
+      pathname.endsWith(".pdf") ||
+      (/(\.|^)arxiv\.org$/i.test(target.hostname) && pathname.startsWith("/pdf/"))
+    );
   } catch {
     return value.toLowerCase().includes(".pdf");
   }
-  return false;
+}
+
+function uniqueUrls(urls: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of urls) {
+    if (!isRemoteHttpUrl(raw)) {
+      continue;
+    }
+    const normalized = raw.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function collectDownloadCandidates(candidate: MergedPaperCandidate): string[] {
+  const directPdfUrls = [candidate.pdfUrl, candidate.sourcePath].filter((value) =>
+    isRemoteHttpUrl(value)
+  );
+  const pdfLikeHints = [
+    candidate.bestOaUrl,
+    ...candidate.sourceHints,
+  ].filter((value) => looksLikePdfDownloadUrl(value));
+  const arxivDerivedUrls = [
+    arxivPdfUrlFromId(candidate.arxivId),
+    arxivPdfUrlFromRemoteUrl(candidate.pdfUrl),
+    arxivPdfUrlFromRemoteUrl(candidate.bestOaUrl),
+    ...candidate.sourceHints.map((hint) => arxivPdfUrlFromRemoteUrl(hint)),
+  ];
+  return uniqueUrls([
+    ...directPdfUrls,
+    ...pdfLikeHints,
+    ...arxivDerivedUrls,
+  ]);
+}
+
+function shouldMarkUnresolved(candidate: MergedPaperCandidate): boolean {
+  return !candidate.sourcePath || isRemoteHttpUrl(candidate.sourcePath);
+}
+
+function unresolvedStatus(
+  candidate: MergedPaperCandidate,
+  attempted: boolean
+): MergedPaperCandidate["resolutionStatus"] {
+  if (!shouldMarkUnresolved(candidate)) {
+    return candidate.resolutionStatus;
+  }
+  return attempted ? "resolution_failed" : "metadata_only_unresolved";
 }
 
 export async function resolveMergedCandidatesToStaging(params: {
@@ -99,28 +187,24 @@ export async function resolveMergedCandidatesToStaging(params: {
       : 12;
   const stagingRoot = path.join(params.projectRoot, "researcher", "paper-staging", "pdf");
   const resolvedCandidates: MergedPaperCandidate[] = [];
+  let attemptedCandidateCount = 0;
 
   for (const candidate of params.candidates) {
     const next: MergedPaperCandidate = {
       ...candidate,
       resolutionAttempts: [...candidate.resolutionAttempts],
     };
-    if (candidate.arxivId) {
+    if (candidate.sourcePath && !isRemoteHttpUrl(candidate.sourcePath)) {
       resolvedCandidates.push(next);
       continue;
     }
-    const shouldAttempt =
-      resolvedCandidates.filter((entry) => entry.sourcePath || entry.pdfUrl || entry.bestOaUrl).length <
-      maxCandidates;
-    if (!shouldAttempt) {
-      resolvedCandidates.push(next);
-      continue;
+    const downloadCandidates = collectDownloadCandidates(candidate);
+    const shouldAttempt = downloadCandidates.length > 0 && attemptedCandidateCount < maxCandidates;
+    if (shouldAttempt) {
+      attemptedCandidateCount += 1;
     }
-    const directCandidates = [candidate.pdfUrl, candidate.bestOaUrl].filter(
-      (value): value is string => Boolean(value)
-    ).filter((value) => looksLikePdfUrl(value));
     let resolved = false;
-    for (const url of directCandidates) {
+    for (const url of shouldAttempt ? downloadCandidates : []) {
       const outputPath = path.join(stagingRoot, `${slugifyCanonicalId(candidate.canonicalId)}.pdf`);
       const outcome = await downloadPdf({
         url,
@@ -144,7 +228,8 @@ export async function resolveMergedCandidatesToStaging(params: {
         break;
       }
     }
-    if (!resolved && candidate.doi) {
+    if (!resolved && candidate.doi && attemptedCandidateCount < maxCandidates) {
+      attemptedCandidateCount += 1;
       const unpaywall = await resolveWithUnpaywall({
         doi: candidate.doi,
         signal: params.signal,
@@ -184,8 +269,11 @@ export async function resolveMergedCandidatesToStaging(params: {
         }
       }
     }
-    if (!resolved && next.resolutionStatus === "unknown") {
-      next.resolutionStatus = "metadata_only_unresolved";
+    if (!resolved && shouldMarkUnresolved(next)) {
+      next.resolutionStatus = unresolvedStatus(
+        next,
+        next.resolutionAttempts.some((attempt) => attempt.status === "failed")
+      );
       next.metadataOnly = true;
     }
     resolvedCandidates.push(next);
@@ -194,7 +282,9 @@ export async function resolveMergedCandidatesToStaging(params: {
   return {
     candidates: resolvedCandidates,
     unresolved: resolvedCandidates.filter(
-      (entry) => entry.resolutionStatus === "metadata_only_unresolved"
+      (entry) =>
+        entry.resolutionStatus === "metadata_only_unresolved" ||
+        entry.resolutionStatus === "resolution_failed"
     ),
   };
 }

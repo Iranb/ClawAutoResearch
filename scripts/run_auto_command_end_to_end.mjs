@@ -51,6 +51,13 @@ function conversationIdForLane(baseConversationId, lane, requestedLane) {
   return requestedLane === "full" ? `${baseConversationId}-${lane}` : baseConversationId;
 }
 
+function projectIdForLane(baseProjectId, lane, requestedLane) {
+  if (!baseProjectId) {
+    return null;
+  }
+  return requestedLane === "full" ? `${baseProjectId}-${lane}` : baseProjectId;
+}
+
 async function writeText(filePath, content) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
@@ -351,7 +358,7 @@ async function runHarness(projectRoot, lane) {
 }
 
 async function runFixtureLane(params) {
-  const { lane, topic, projectsRoot, bootstrapTransport = "local" } = params;
+  const { lane, topic, projectsRoot, bootstrapTransport = "local", projectId = null } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
   const transportContext = buildWorkflowTransportContext({
     transport: bootstrapTransport,
@@ -375,7 +382,10 @@ async function runFixtureLane(params) {
     from: transportContext.from,
     to: transportContext.to,
     accountId: transportContext.accountId,
-    contextExtras: transportContext.commandContextExtras(),
+    contextExtras: {
+      ...transportContext.commandContextExtras(),
+      ...(projectId ? { projectId } : {}),
+    },
     emitFallbackNote: true,
   });
 
@@ -524,6 +534,7 @@ async function main() {
   const mode = argValue("--mode", "live");
   const bootstrapTransport = argValue("--bootstrap-transport", "local");
   const conversationId = argValue("--conversation-id", null);
+  const projectId = argValue("--project-id", null);
   const projectsRoot =
     argValue("--projects-root") ??
     (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-command-e2e-")));
@@ -538,6 +549,9 @@ async function main() {
       sourceConfigPath: argValue("--source-config-path", null),
       gatewayStartupTimeoutMs: numericArgValue("--gateway-startup-timeout-ms", null),
       maxIterations: numericArgValue("--max-iterations", null),
+      stageTimeoutMs: numericArgValue("--stage-timeout-ms", null),
+      agentWaitTimeoutMs: numericArgValue("--agent-wait-timeout-ms", null),
+      progressPollMs: numericArgValue("--progress-poll-ms", null),
       isolatedGateway: !hasFlag("--no-isolated-gateway"),
     };
     if (lane === "experiment" || lane === "full") {
@@ -546,6 +560,7 @@ async function main() {
         topic,
         projectsRoot,
         conversationId: conversationIdForLane(conversationId, "experiment", lane),
+        projectId: projectIdForLane(projectId, "experiment", lane),
         ...liveOptions,
       });
     }
@@ -555,11 +570,12 @@ async function main() {
         topic,
         projectsRoot,
         conversationId: conversationIdForLane(conversationId, "survey", lane),
+        projectId: projectIdForLane(projectId, "survey", lane),
         ...liveOptions,
       });
     }
     console.log(
-      JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectsRoot, result }, null, 2)
+      JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectId, projectsRoot, result }, null, 2)
     );
     return;
   }
@@ -572,6 +588,7 @@ async function main() {
       projectsRoot,
       bootstrapTransport,
       conversationId: conversationIdForLane(conversationId, "experiment", lane),
+      projectId: projectIdForLane(projectId, "experiment", lane),
     });
   }
   if (lane === "survey" || lane === "full") {
@@ -581,11 +598,12 @@ async function main() {
       projectsRoot,
       bootstrapTransport,
       conversationId: conversationIdForLane(conversationId, "survey", lane),
+      projectId: projectIdForLane(projectId, "survey", lane),
     });
   }
 
   console.log(
-    JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectsRoot, result }, null, 2)
+    JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectId, projectsRoot, result }, null, 2)
   );
 }
 
