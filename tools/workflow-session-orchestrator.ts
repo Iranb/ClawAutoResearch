@@ -187,6 +187,7 @@ export async function reconcileWorkflowAnnounceRuntimeState(params: {
         ...queueEntry,
         status: terminal.status === "completed" ? "completed" : "failed",
         lastAttemptedAt: terminal.finishedAt ?? announceAt,
+        nextRetryAt: null,
         lastError:
           terminal.status === "failed"
             ? terminal.error ?? queueEntry.lastError
@@ -279,6 +280,7 @@ async function executePersistedWorkflowTransition(params: {
         status: "launching",
         attemptCount: params.transition.attemptCount + 1,
         lastAttemptedAt: nowIso(),
+        nextRetryAt: null,
       },
     })) ?? params.transition;
 
@@ -292,6 +294,7 @@ async function executePersistedWorkflowTransition(params: {
           status: "running",
           lastError: null,
           fallbackMode: null,
+          nextRetryAt: null,
         },
       })) ?? transition;
     await recordWorkflowRuntimeSession({
@@ -553,6 +556,7 @@ export async function createWorkflowTransitionIntent(
     queuedAt: nowIso(),
     lastAttemptedAt: null,
     lastCheckedAt: null,
+    nextRetryAt: null,
     attemptCount: 0,
     summary: readString(params.summary),
     status: "queued",

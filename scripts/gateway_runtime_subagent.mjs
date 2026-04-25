@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import crypto from "node:crypto";
 
@@ -23,8 +25,213 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
 function isLocalRegistryTrackingMiss(result) {
   return /not tracked in the local registry/i.test(String(result?.error ?? ""));
+}
+
+function parseAgentIdFromSessionKey(sessionKey) {
+  const match = /^agent:([^:]+):/.exec(sessionKey);
+  return readString(match?.[1])?.toLowerCase() ?? null;
+}
+
+function resolveOpenClawHome(params = {}) {
+  const explicit = readString(params.openclawHome);
+  if (explicit) {
+    return path.resolve(explicit.replace(/^~(?=$|\/)/, os.homedir()));
+  }
+  const configPath = readString(params.configPath);
+  if (configPath) {
+    return path.dirname(path.resolve(configPath.replace(/^~(?=$|\/)/, os.homedir())));
+  }
+  const profile = params.profile ?? process.env.OPENCLAW_PROFILE ?? "default";
+  return path.join(os.homedir(), profile === "dev" ? ".openclaw-dev" : ".openclaw");
+}
+
+function resolveAgentSessionsStorePath(params = {}) {
+  const sessionKey = readString(params.sessionKey);
+  const agentId =
+    readString(params.agentId)?.toLowerCase() ??
+    (sessionKey ? parseAgentIdFromSessionKey(sessionKey) : null) ??
+    "researcher";
+  return path.join(resolveOpenClawHome(params), "agents", agentId, "sessions", "sessions.json");
+}
+
+function lookupSessionStoreEntry(store, sessionKey) {
+  if (!store || typeof store !== "object" || !sessionKey) {
+    return null;
+  }
+  const exact = asRecord(store[sessionKey]);
+  if (exact) {
+    return { key: sessionKey, entry: exact };
+  }
+  const normalized = sessionKey.toLowerCase();
+  for (const [key, value] of Object.entries(store)) {
+    if (key.toLowerCase() === normalized) {
+      const entry = asRecord(value);
+      if (entry) {
+        return { key, entry };
+      }
+    }
+  }
+  return null;
+}
+
+async function readLastSessionTranscriptError(sessionFile) {
+  const filePath = readString(sessionFile);
+  if (!filePath) {
+    return null;
+  }
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const lines = raw.trim().split(/\n/).filter(Boolean).slice(-80);
+    for (const line of lines.reverse()) {
+      const event = parseJson(line);
+      const message = asRecord(event?.message);
+      const errorMessage = readString(message?.errorMessage);
+      if (errorMessage) {
+        return errorMessage;
+      }
+      const stopReason = readString(message?.stopReason);
+      if (stopReason && stopReason.toLowerCase() === "error") {
+        return "Agent session stopped with an error.";
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export async function inspectGatewayAgentSessionFromStore(params = {}) {
+  const sessionKey = readString(params.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const storePath = resolveAgentSessionsStorePath(params);
+  const store = await readJson(storePath);
+  const matched = lookupSessionStoreEntry(store, sessionKey);
+  if (!matched) {
+    return null;
+  }
+  const sessionId = readString(matched.entry.sessionId);
+  const sessionFile =
+    readString(matched.entry.sessionFile) ??
+    (sessionId ? path.join(path.dirname(storePath), `${sessionId}.jsonl`) : null);
+  const endedAt = readNumber(matched.entry.endedAt);
+  const transcriptError = await readLastSessionTranscriptError(sessionFile);
+  const storedStatus = readString(matched.entry.status);
+  const inferredStatus =
+    storedStatus ?? (transcriptError && endedAt != null ? "failed" : null);
+  return {
+    sessionKey: matched.key,
+    sessionId,
+    sessionFile,
+    status: inferredStatus,
+    startedAt: readNumber(matched.entry.startedAt),
+    endedAt,
+    updatedAt: readNumber(matched.entry.updatedAt),
+    abortedLastRun: matched.entry.abortedLastRun === true,
+    providerOverride: readString(matched.entry.providerOverride),
+    modelOverride: readString(matched.entry.modelOverride),
+    liveModelSwitchPending: matched.entry.liveModelSwitchPending === true,
+    error: transcriptError,
+    lastError: transcriptError,
+  };
+}
+
+function terminalWaitResultFromSessionInspection(inspection) {
+  const status = readString(inspection?.status)?.toLowerCase() ?? null;
+  if (status && ["failed", "aborted"].includes(status)) {
+    return {
+      status: "error",
+      error:
+        readString(inspection?.lastError) ??
+        readString(inspection?.error) ??
+        `Gateway agent session is terminal in the local session store (status=${status}).`,
+    };
+  }
+  if (inspection?.abortedLastRun === true) {
+    return {
+      status: "error",
+      error: "Gateway agent session was aborted in the local session store.",
+    };
+  }
+  if (status && ["completed", "done"].includes(status)) {
+    return { status: "ok", error: null };
+  }
+  return null;
+}
+
+export function reconcileGatewayWaitResultWithSessionInspection(waitResult, inspection) {
+  const terminal = terminalWaitResultFromSessionInspection(inspection);
+  if (!terminal) {
+    return waitResult;
+  }
+  if (waitResult?.status === "timeout" || waitResult?.status === "ok") {
+    return terminal;
+  }
+  return waitResult;
+}
+
+async function deleteGatewayAgentSessionFromStore(params = {}) {
+  const sessionKey = readString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const storePath = resolveAgentSessionsStorePath(params);
+  const store = await readJson(storePath);
+  const matched = lookupSessionStoreEntry(store, sessionKey);
+  if (!matched) {
+    return;
+  }
+  const sessionFile = readString(matched.entry.sessionFile);
+  delete store[matched.key];
+  await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  if (params.deleteTranscript === true && sessionFile) {
+    await fs.rm(sessionFile, { force: true });
+  }
+}
+
+export function isGatewayTransientAgentWaitFailure(error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String(error?.message ?? error ?? "");
+  return /(?:socket closed while waiting for|timeout waiting for) agent\.wait response/i.test(
+    message
+  );
+}
+
+export function isGatewayConnectHandshakeFailure(error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String(error?.message ?? error ?? "");
+  return /(?:timeout waiting for|socket closed while waiting for) connect(?:\.challenge| response)?/i.test(
+    message
+  );
+}
+
+export function isGatewayProviderCapacityFailure(error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String(error?.message ?? error?.error ?? error ?? "");
+  return /(?:\b429\b|rate[_ -]?limit|quota exceeded|allocated quota|insufficient[_ -]?quota|billing hard limit)/i.test(
+    message
+  );
 }
 
 export function buildGatewayRuntimeMessage(runParams = {}) {
@@ -179,6 +386,88 @@ async function openGatewayWebSocketWithRetry(resolved, params) {
   );
 }
 
+async function connectGatewayWebSocket(resolved, params) {
+  const ws = await openGatewayWebSocketWithRetry(resolved, params);
+  try {
+    const connectTimeoutMs = params.connectTimeoutMs ?? 15_000;
+    const challenge = await waitForFrame(
+      ws,
+      (payload) => payload?.type === "event" && payload?.event === "connect.challenge",
+      connectTimeoutMs,
+      "connect.challenge"
+    );
+    const signed = buildSignedDevice({
+      token: resolved.token,
+      nonce: challenge?.payload?.nonce ?? null,
+      scopes: params.scopes,
+    });
+    const connectId = `connect-${randomUUID()}`;
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: connectId,
+        method: "connect",
+        params: {
+          minProtocol: resolved.protocolVersion,
+          maxProtocol: resolved.protocolVersion,
+          client: {
+            id: "test",
+            displayName: "vitest",
+            version: "1.0.0",
+            platform: "test",
+            mode: "test",
+          },
+          caps: [],
+          role: "operator",
+          scopes: signed.scopes,
+          auth: { token: resolved.token },
+          device: signed.device,
+        },
+      })
+    );
+    await waitForFrame(
+      ws,
+      (payload) => payload?.type === "res" && payload?.id === connectId && payload?.ok === true,
+      connectTimeoutMs,
+      "connect response"
+    );
+    return ws;
+  } catch (error) {
+    try {
+      ws.close();
+    } catch {}
+    throw error;
+  }
+}
+
+async function connectGatewayWebSocketWithHandshakeRetry(resolved, params) {
+  const startupTimeoutMs = params.startupTimeoutMs ?? params.gatewayStartupTimeoutMs ?? 45_000;
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < startupTimeoutMs) {
+    const remainingMs = Math.max(1_000, startupTimeoutMs - (Date.now() - startedAt));
+    try {
+      return await connectGatewayWebSocket(resolved, {
+        ...params,
+        startupTimeoutMs: remainingMs,
+        openTimeoutMs: Math.min(params.openTimeoutMs ?? 10_000, remainingMs),
+        connectTimeoutMs: Math.min(params.connectTimeoutMs ?? 15_000, remainingMs),
+      });
+    } catch (error) {
+      lastError = error;
+      if (!isGatewayConnectHandshakeFailure(error)) {
+        throw error;
+      }
+      await sleep(750);
+    }
+  }
+  throw new Error(
+    `Timed out completing gateway websocket connect handshake at ${resolved.url}: ${
+      lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")
+    }`
+  );
+}
+
 async function waitForFrame(ws, predicate, timeoutMs, label) {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -259,49 +548,7 @@ export async function createGatewayHarnessClient(params = {}) {
     throw new Error(`No gateway token found in ${resolved.configPath} or OPENCLAW_GATEWAY_TOKEN.`);
   }
 
-  const ws = await openGatewayWebSocketWithRetry(resolved, params);
-
-  const challenge = await waitForFrame(
-    ws,
-    (payload) => payload?.type === "event" && payload?.event === "connect.challenge",
-    params.connectTimeoutMs ?? 10_000,
-    "connect.challenge"
-  );
-  const signed = buildSignedDevice({
-    token: resolved.token,
-    nonce: challenge?.payload?.nonce ?? null,
-    scopes: params.scopes,
-  });
-  const connectId = `connect-${randomUUID()}`;
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id: connectId,
-      method: "connect",
-      params: {
-        minProtocol: resolved.protocolVersion,
-        maxProtocol: resolved.protocolVersion,
-        client: {
-          id: "test",
-          displayName: "vitest",
-          version: "1.0.0",
-          platform: "test",
-          mode: "test",
-        },
-        caps: [],
-        role: "operator",
-        scopes: signed.scopes,
-        auth: { token: resolved.token },
-        device: signed.device,
-      },
-    })
-  );
-  await waitForFrame(
-    ws,
-    (payload) => payload?.type === "res" && payload?.id === connectId && payload?.ok === true,
-    params.connectTimeoutMs ?? 10_000,
-    "connect response"
-  );
+  const ws = await connectGatewayWebSocketWithHandshakeRetry(resolved, params);
 
   async function request(method, requestParams, options = {}) {
     const id = `${method}-${randomUUID()}`;
@@ -354,16 +601,29 @@ export async function createGatewayHarnessClient(params = {}) {
       );
     },
     async agentWait(params) {
-      return await request(
-        "agent.wait",
-        {
-          runId: params.runId,
-          timeoutMs: params.timeoutMs ?? 120_000,
-        },
-        {
-          timeoutMs: (params.timeoutMs ?? 120_000) + 5_000,
+      try {
+        return await request(
+          "agent.wait",
+          {
+            runId: params.runId,
+            timeoutMs: params.timeoutMs ?? 120_000,
+          },
+          {
+            timeoutMs: (params.timeoutMs ?? 120_000) + 5_000,
+          }
+        );
+      } catch (error) {
+        if (isGatewayTransientAgentWaitFailure(error)) {
+          return {
+            status: "timeout",
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error ?? "agent.wait gateway connection closed"),
+          };
         }
-      );
+        throw error;
+      }
     },
     async chatHistory(params) {
       return await request(
@@ -384,6 +644,14 @@ export async function createGatewayRuntimeSubagent(params = {}) {
   const defaultOriginatingChannel = params.originatingChannel ?? "discord";
   const defaultOriginatingTo = params.originatingTo ?? null;
   const defaultOriginatingAccountId = params.originatingAccountId ?? "default";
+  const runSessionKeys = new Map();
+  const inspectSession = async (inspectParams) =>
+    await inspectGatewayAgentSessionFromStore({
+      ...params,
+      configPath: client.config?.configPath,
+      profile: client.config?.profile,
+      sessionKey: inspectParams.sessionKey,
+    });
   return {
     client,
     runtimeSubagent: {
@@ -401,24 +669,48 @@ export async function createGatewayRuntimeSubagent(params = {}) {
         if (started?.status !== "started" || typeof started?.runId !== "string") {
           throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
         }
+        runSessionKeys.set(started.runId, runParams.sessionKey);
         return { runId: started.runId };
       },
       async waitForRun(waitParams) {
         const result = await client.agentWait(waitParams);
-        if (result?.status === "error" && isLocalRegistryTrackingMiss(result)) {
+        const sessionKey = runSessionKeys.get(waitParams.runId);
+        const inspection = sessionKey
+          ? await inspectSession({ sessionKey })
+          : null;
+        const reconciled = reconcileGatewayWaitResultWithSessionInspection(
+          result,
+          inspection
+        );
+        if (
+          result?.status === "error" &&
+          isLocalRegistryTrackingMiss(result) &&
+          reconciled?.status === "error" &&
+          reconciled?.error === result.error
+        ) {
           return {
             status: "timeout",
             error: result.error ?? null,
           };
         }
         return {
-          status: result?.status ?? "error",
-          error: result?.error ?? null,
+          status: reconciled?.status ?? "error",
+          error: reconciled?.error ?? null,
         };
       },
       async getSessionMessages(historyParams) {
         const result = await client.chatHistory(historyParams);
         return { messages: Array.isArray(result?.messages) ? result.messages : [] };
+      },
+      inspectSession,
+      async deleteSession(deleteParams) {
+        await deleteGatewayAgentSessionFromStore({
+          ...params,
+          configPath: client.config?.configPath,
+          profile: client.config?.profile,
+          sessionKey: deleteParams.sessionKey,
+          deleteTranscript: deleteParams.deleteTranscript === true,
+        });
       },
     },
     async stop() {

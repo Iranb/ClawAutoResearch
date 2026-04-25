@@ -19,6 +19,7 @@ export type WorkflowDiagnosticComponent =
   | "service"
   | "auto_iterator"
   | "stage_preflight"
+  | "graph_build_source_catchup"
   | "experiment_decision"
   | "dispatch"
   | "runtime_maintenance"

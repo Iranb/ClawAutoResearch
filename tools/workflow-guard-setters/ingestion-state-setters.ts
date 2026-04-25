@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 
 import { randomUUID } from "node:crypto";
 
@@ -51,6 +52,8 @@ import {
   normalizePaperIngestionState,
   serializePaperIngestionQueuedRequest,
   serializePaperIngestionState,
+  isWorkflowOwnedLiteratureRequisitionRequest,
+  INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
 } from "../workflow-guard-state/paper-ingestion";
 
 type ExperimentSearchState = ReturnType<typeof normalizeExperimentSearchState>;
@@ -79,6 +82,13 @@ async function saveProjectManifest(
   await writeJsonEnsured(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
 }
 
+function hasAnyOwnProperty(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): boolean {
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(record, key));
+}
+
 async function upsertJsonArtifact(
   targetPath: string | null,
   patch: Record<string, unknown>
@@ -91,6 +101,62 @@ async function upsertJsonArtifact(
     ...current,
     ...patch,
   });
+}
+
+async function hasNonEmptyProjectArtifact(
+  projectRoot: string,
+  artifactPath: string | null
+): Promise<boolean> {
+  if (!artifactPath) {
+    return false;
+  }
+  const resolvedPath =
+    resolveProjectArtifactPath(projectRoot, artifactPath) ??
+    path.resolve(projectRoot, artifactPath);
+  if (!(await pathExists(resolvedPath))) {
+    return false;
+  }
+  try {
+    const text = await fs.readFile(resolvedPath, "utf8");
+    return text.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function inferQueuedRequestValidationEvidence(params: {
+  projectRoot: string;
+  queuedRequests: PaperIngestionQueuedRequest[];
+}): Promise<PaperIngestionQueuedRequest[]> {
+  const next: PaperIngestionQueuedRequest[] = [];
+  for (const request of params.queuedRequests) {
+    if (
+      request.status !== "completed" ||
+      !isWorkflowOwnedLiteratureRequisitionRequest(request) ||
+      !(await hasNonEmptyProjectArtifact(
+        params.projectRoot,
+        request.validationReportPath
+      ))
+    ) {
+      next.push(request);
+      continue;
+    }
+    next.push({
+      ...request,
+      validationStatus:
+        request.validationStatus && request.validationStatus !== "unknown"
+          ? request.validationStatus
+          : "valid",
+      validationSummary:
+        request.validationSummary ??
+        "Workflow-owned literature requisition was satisfied by a saved requisition report.",
+      lastError:
+        request.lastError === INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON
+          ? null
+          : request.lastError,
+    });
+  }
+  return next;
 }
 
 function isRuntimeReadyStatus(
@@ -584,6 +650,10 @@ export async function setPaperIngestionState(params: {
   const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
   const batchItemsRaw = patch.batch_items ?? patch.batchItems;
   const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
+  const hasRepairTargetCorpusPatch = hasAnyOwnProperty(patch, [
+    "repairTargetCorpus",
+    "repair_target_corpus",
+  ]);
   const patchState = normalizePaperIngestionState(patch);
   const hasFailedPapersPatch =
     Object.prototype.hasOwnProperty.call(patch, "failed_papers") ||
@@ -614,6 +684,10 @@ export async function setPaperIngestionState(params: {
     current: current.queuedRequests,
     patch: queuedRequestsRaw,
   });
+  const queuedRequests = await inferQueuedRequestValidationEvidence({
+    projectRoot: params.projectRoot,
+    queuedRequests: queuedRequestUpdate.queuedRequests,
+  });
   const next: PaperIngestionState = {
     ...current,
     runtimeStatus: normalizePaperIngestionRuntimeStatus(
@@ -636,7 +710,7 @@ export async function setPaperIngestionState(params: {
     paperOperations: paperOperationUpdate.paperOperations,
     activeBatches: batchRunUpdate.activeBatches,
     batchItems: batchItemUpdate.batchItems,
-    queuedRequests: queuedRequestUpdate.queuedRequests,
+    queuedRequests,
     failedPapers: hasFailedPapersPatch ? patchState.failedPapers : current.failedPapers,
     retryableFailedPapers: hasRetryableFailedPapersPatch
       ? patchState.retryableFailedPapers
@@ -689,10 +763,11 @@ export async function setPaperIngestionState(params: {
         ? null
         : current.repairReason),
     repairTargetCorpus:
-      pickString(patch, ["repairTargetCorpus", "repair_target_corpus"]) ??
-      (patch.repairRequired === false || patch.repair_required === false
-        ? null
-        : current.repairTargetCorpus),
+      hasRepairTargetCorpusPatch
+        ? pickString(patch, ["repairTargetCorpus", "repair_target_corpus"])
+        : patch.repairRequired === false || patch.repair_required === false
+          ? null
+          : current.repairTargetCorpus,
     lastUpdatedAt:
       pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
       new Date().toISOString(),

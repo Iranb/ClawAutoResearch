@@ -56,6 +56,83 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeFakePapernexusBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, sys",
+      "args = sys.argv[1:]",
+      "def opt(name):",
+      "    if name in args:",
+      "        index = args.index(name)",
+      "        return args[index + 1] if index + 1 < len(args) else None",
+      "    prefix = name + '='",
+      "    for arg in args:",
+      "        if arg.startswith(prefix):",
+      "            return arg[len(prefix):]",
+      "    return None",
+      "payload = {",
+      "    'manifest': opt('--manifest'),",
+      "    'corpus': opt('--corpus'),",
+      "    'summary': {'total': 2, 'submitted': 2, 'completed': 2, 'running': 0, 'pending': 0, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'queueSummary': {'total': 2, 'pending': 0, 'running': 0, 'completed': 2, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'items': [",
+      "        {'paperId': 'paper-a', 'canonicalId': 'paper-a', 'title': 'Paper A', 'taskId': 'task-a', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True},",
+      "        {'paperId': 'paper-b', 'canonicalId': 'paper-b', 'title': 'Paper B', 'taskId': 'task-b', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True},",
+      "    ],",
+      "}",
+      "print(json.dumps(payload))",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+  return scriptPath;
+}
+
+async function writeTokenCheckingPapernexusBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, os, sys",
+      "args = sys.argv[1:]",
+      "expected_token = os.environ.get('WORKFLOW_TEST_EXPECTED_PAPERNEXUS_TOKEN')",
+      "if not expected_token or os.environ.get('PAPERNEXUS_API_TOKEN') != expected_token:",
+      "    print(json.dumps({'error': 'missing expected child token env'}))",
+      "    sys.exit(2)",
+      "def opt(name):",
+      "    if name in args:",
+      "        index = args.index(name)",
+      "        return args[index + 1] if index + 1 < len(args) else None",
+      "    prefix = name + '='",
+      "    for arg in args:",
+      "        if arg.startswith(prefix):",
+      "            return arg[len(prefix):]",
+      "    return None",
+      "payload = {",
+      "    'manifest': opt('--manifest'),",
+      "    'corpus': opt('--corpus'),",
+      "    'summary': {'total': 1, 'submitted': 1, 'completed': 1, 'running': 0, 'pending': 0, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'queueSummary': {'total': 1, 'pending': 0, 'running': 0, 'completed': 1, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'items': [",
+      "        {'paperId': 'paper-token', 'canonicalId': 'paper-token', 'title': 'Token Paper', 'taskId': 'task-token', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True},",
+      "    ],",
+      "}",
+      "print(json.dumps(payload))",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+  return scriptPath;
+}
+
 function createEmbeddedRuntimeHarness(rootDir) {
   const sessionStores = new Map();
   const resolveStorePath = (_store, opts = {}) =>
@@ -286,11 +363,11 @@ test("finished papernexus wrapper runs reconcile runtime queue and durable paper
   assert.equal(queueEntry?.status, "completed");
 
   const ingestionSummary = await getPaperIngestionStateSummary({ projectRoot });
-  assert.equal(ingestionSummary.state.queuedRequests[0]?.status, "completed");
-  assert.equal(ingestionSummary.state.runtimeStatus, "waiting_graph");
+  assert.equal(ingestionSummary.state.queuedRequests[0]?.status, "queued");
+  assert.equal(ingestionSummary.state.runtimeStatus, "waiting_import");
   assert.match(
     ingestionSummary.state.waitingReason ?? "",
-    /waiting for graph presence verification/i
+    /remote import completion is not implied|bounded wait\/status/i
   );
 });
 
@@ -575,7 +652,7 @@ test("buildPapernexusWrapperCommand renders an MCP-backed skill wrapper command"
     ],
   });
 
-  assert.match(command, /^python3 skills\/papernexus\/scripts\/pn_graph_query\.py\b/);
+  assert.match(command, /^python3 skills\/researcher\/papernexus\/scripts\/pn_graph_query\.py\b/);
   assert.match(command, /--api-base 'https:\/\/papernexus\.example\/api'/);
   assert.match(command, /--corpus 'demo'/);
   assert.match(command, /query 'graph topic'/);
@@ -596,7 +673,7 @@ test("buildPapernexusWrapperCommand renders a batch-import wrapper command", () 
     ],
   });
 
-  assert.match(command, /^python3 skills\/papernexus\/scripts\/pn_batch_import\.py\b/);
+  assert.match(command, /^python3 skills\/researcher\/papernexus\/scripts\/pn_batch_import\.py\b/);
   assert.match(command, /--manifest '\/tmp\/demo\/batch-import\.json'/);
   assert.match(command, /\bsubmit\b/);
 });
@@ -746,6 +823,248 @@ test("startBackgroundWorkflowRun gives PaperNexus batch continuations explicit m
   assert.match(runCalls[0].extraSystemPrompt ?? "", /summary\/items|summary and items/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /completed_papers/i);
   assert.match(runCalls[0].extraSystemPrompt ?? "", /60s|60 seconds/i);
+});
+
+test("startBackgroundWorkflowRun executes workflow-owned PaperNexus batch imports directly", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "project");
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const runCalls = [];
+
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  await writeFakePapernexusBatchScript(fakeScriptDir);
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-batch-1/batch-import.json";
+  await writeJson(path.join(projectRoot, batchManifestPath), {
+    papers: [{ id: "paper-a" }, { id: "paper-b" }],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "direct-batch-project",
+    title: "Direct batch project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      queued_requests: [
+        {
+          request_id: "req-batch-1",
+          request_kind: "upload_manifest",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus demo --manifest ${batchManifestPath} submit`,
+          manifest_path: batchManifestPath,
+          shared_corpus: "demo",
+          paper_count: 2,
+          summary: "Queue test batch import.",
+          validation_status: "valid",
+        },
+      ],
+    },
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "unexpected-subagent-run" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      enableChannelProjectBindings: false,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:direct-batch",
+      messageChannel: "local",
+      channelKey: "local:direct-batch",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "direct-batch-project",
+      channelProjectBindingsEnabled: false,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      projectId: "direct-batch-project",
+      projectRoot,
+      ensureProjectBinding: false,
+      commandText:
+        `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus demo --manifest ${batchManifestPath} submit -- __BACKGROUND_CONTINUATION__: true`,
+      summary: "Queue test batch import.",
+      extraSystemPrompt:
+        "WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=req-batch-1\nUse the locked shared corpus demo.",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.sessionKey, "local:papernexus:direct-batch-import");
+  assert.equal(runCalls.length, 0);
+
+  const ingestion = await getPaperIngestionStateSummary({ projectRoot });
+  assert.equal(ingestion.state.runtimeStatus, "waiting_graph");
+  assert.equal(ingestion.state.queuedRequests[0].status, "completed");
+  assert.equal(ingestion.state.completedPapers.length, 2);
+  assert.equal(ingestion.state.activeBatches[0].status, "completed");
+  assert.equal(ingestion.state.queuedRequests[0].queueProgress?.completed, 2);
+
+  const events = await readWorkflowRuntimeEvents(projectRoot);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.kind === "paper_ingestion_direct_batch_import" &&
+        event.details?.source === "start_background_run" &&
+        event.details?.requestId === "req-batch-1"
+    )
+  );
+});
+
+test("maybeTriggerQueuedPaperIngestionRequest injects configured PaperNexus token into direct batch child env", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "projects", "token-batch-project");
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-token-1/batch-import.json";
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "token-paper.md"
+  );
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const previousApiToken = process.env.PAPERNEXUS_API_TOKEN;
+  const previousConfiguredToken = process.env.WORKFLOW_TEST_PAPERNEXUS_TOKEN;
+  const previousExpectedToken = process.env.WORKFLOW_TEST_EXPECTED_PAPERNEXUS_TOKEN;
+  const fakeToken = "unit-token-for-direct-papernexus-child-env";
+
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    if (previousApiToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousApiToken;
+    }
+    if (previousConfiguredToken === undefined) {
+      delete process.env.WORKFLOW_TEST_PAPERNEXUS_TOKEN;
+    } else {
+      process.env.WORKFLOW_TEST_PAPERNEXUS_TOKEN = previousConfiguredToken;
+    }
+    if (previousExpectedToken === undefined) {
+      delete process.env.WORKFLOW_TEST_EXPECTED_PAPERNEXUS_TOKEN;
+    } else {
+      process.env.WORKFLOW_TEST_EXPECTED_PAPERNEXUS_TOKEN = previousExpectedToken;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  delete process.env.PAPERNEXUS_API_TOKEN;
+  process.env.WORKFLOW_TEST_PAPERNEXUS_TOKEN = fakeToken;
+  process.env.WORKFLOW_TEST_EXPECTED_PAPERNEXUS_TOKEN = fakeToken;
+  await writeTokenCheckingPapernexusBatchScript(fakeScriptDir);
+  await fs.mkdir(path.dirname(stagedMarkdownPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Token Paper\n\nThis staged markdown fixture is long enough for upload validation. ".repeat(30),
+    "utf8"
+  );
+  await writeJson(path.join(projectRoot, batchManifestPath), {
+    version: 1,
+    papers: [
+      {
+        paperId: "paper-token",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "token-batch-project",
+    title: "Token batch project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      queued_requests: [
+        {
+          request_id: "req-token-1",
+          request_kind: "upload_manifest",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus demo --manifest ${batchManifestPath} submit`,
+          manifest_path: batchManifestPath,
+          shared_corpus: "demo",
+          paper_count: 1,
+          summary: "Queue token batch import.",
+          validation_status: "valid",
+        },
+      ],
+    },
+  });
+
+  const result = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowPolicy: {
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      enableChannelProjectBindings: false,
+      papernexusMcpUrl: "http://papernexus.test/mcp",
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "WORKFLOW_TEST_PAPERNEXUS_TOKEN",
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:direct-token",
+      messageChannel: "local",
+      channelKey: "local:direct-token",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "token-batch-project",
+      currentStage: "graph_build",
+      channelProjectBindingsEnabled: false,
+    },
+    triggerKind: "graph_build",
+    projectRoot,
+    projectId: "token-batch-project",
+  });
+
+  assert.equal(result?.started, true);
+  assert.equal(result?.sessionKey, "local:papernexus:direct-batch-import");
+
+  const manifestText = await fs.readFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    "utf8"
+  );
+  assert.doesNotMatch(manifestText, new RegExp(fakeToken));
+
+  const manifest = JSON.parse(manifestText);
+  assert.equal(manifest.paper_ingestion.runtime_status, "waiting_graph");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(manifest.paper_ingestion.completed_papers.length, 1);
+  assert.doesNotMatch(
+    manifest.paper_ingestion.queued_requests[0].command_text,
+    new RegExp(fakeToken)
+  );
 });
 
 test("startBackgroundWorkflowRun gives graph-build continuations explicit Zotero bot sync instructions", async (t) => {
@@ -1070,6 +1389,8 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
     "paper-staging",
     "batch-import.json"
   );
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
   const stagedMarkdownPath = path.join(
     projectRoot,
     "researcher",
@@ -1079,9 +1400,16 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   const runCalls = [];
 
   t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   });
 
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  await writeFakePapernexusBatchScript(fakeScriptDir);
   await fs.mkdir(projectRoot, { recursive: true });
   await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
   await fs.writeFile(
@@ -1177,18 +1505,20 @@ test("startBackgroundWorkflowRun for graph-build triggers queued workflow-owned 
   );
 
   assert.equal(result.started, true);
-  assert.equal(runCalls.length, 2);
-  assert.match(runCalls[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
-  assert.match(runCalls[1].message, /^\/graph-build\b/);
-  assert.match(runCalls[0].extraSystemPrompt ?? "", /req-batch-1/);
-  assert.match(runCalls[0].extraSystemPrompt ?? "", /queue_paper_ingestion|queued_requests/i);
-  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
-  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "bg-run-1");
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^\/graph-build\b/);
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].last_session_key,
+    "local:papernexus:direct-batch-import"
+  );
+  assert.equal(manifest.paper_ingestion.completed_papers.length, 2);
 });
 
-test("maybeTriggerQueuedPaperIngestionRequest ignores requisition-only queued requests", async (t) => {
+test("maybeTriggerQueuedPaperIngestionRequest launches queued literature discovery requisitions", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = path.join(workspaceRoot, "projects", "paper-lab");
+  const runCalls = [];
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -1231,6 +1561,12 @@ test("maybeTriggerQueuedPaperIngestionRequest ignores requisition-only queued re
   );
 
   const result = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: `lit-run-${runCalls.length}` };
+      },
+    },
     workflowPolicy: {
       projectsRoot: path.join(workspaceRoot, "projects"),
       enableChannelProjectBindings: true,
@@ -1254,26 +1590,87 @@ test("maybeTriggerQueuedPaperIngestionRequest ignores requisition-only queued re
     projectId: "paper-lab",
   });
 
-  assert.equal(result, null);
+  assert.equal(result?.started, true);
+  assert.equal(result?.runId, "lit-run-1");
+  assert.equal(runCalls.length, 1);
+  assert.match(
+    runCalls[0].message,
+    /LITERATURE DISCOVERY WORKFLOW-OWNED REQUISITION EXECUTION/
+  );
+  assert.match(runCalls[0].message, /__BACKGROUND_CONTINUATION__:\s*true/);
+  assert.match(
+    runCalls[0].extraSystemPrompt ?? "",
+    /WORKFLOW_OWNED_LITERATURE_REQUISITION_REQUEST_ID=req-discovery-1/
+  );
 
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
-  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "queued");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
   assert.equal(manifest.paper_ingestion.queued_requests[0].request_kind, "requisition");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "lit-run-1");
+  assert.match(
+    manifest.paper_ingestion.queued_requests[0].last_session_key,
+    /:workflow-research-queue:paper-lab$/
+  );
 });
 
 test("startBackgroundWorkflowRun for resume-pipeline requeues stale running ingestion requests before triggering upload", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = path.join(projectsRoot, "paper-lab");
+  const batchManifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "batch-import.json"
+  );
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
   const runCalls = [];
 
   t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   });
 
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  await writeFakePapernexusBatchScript(fakeScriptDir);
   await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis markdown fixture is long enough for staged validation. ".repeat(30),
+    "utf8"
+  );
+  await fs.writeFile(
+    batchManifestPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        papers: [
+          {
+            paperId: "demo-paper",
+            source: stagedMarkdownPath,
+            sourceKind: "markdown",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
   await fs.writeFile(
     path.join(projectRoot, "PROJECT_MANIFEST.json"),
     `${JSON.stringify(
@@ -1290,10 +1687,10 @@ test("startBackgroundWorkflowRun for resume-pipeline requeues stale running inge
               status: "running",
               wrapper: "pn_batch_import.py",
               command_text:
-                "python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest /tmp/demo/batch-import.json submit",
-              manifest_path: "/tmp/demo/batch-import.json",
+                `python3 scripts/pn_batch_import.py --api-base https://papernexus.example/api --corpus GCD --manifest ${batchManifestPath} submit`,
+              manifest_path: batchManifestPath,
               shared_corpus: "GCD",
-              paper_count: 4,
+              paper_count: 1,
               summary: "Queued corpus upload",
               created_at: "2026-04-02T00:00:00.000Z",
               updated_at: "2026-04-02T00:00:00.000Z",
@@ -1347,14 +1744,16 @@ test("startBackgroundWorkflowRun for resume-pipeline requeues stale running inge
   );
 
   assert.equal(result.started, true);
-  assert.equal(runCalls.length, 2);
-  assert.match(runCalls[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
-  assert.match(runCalls[1].message, /^\/resume-pipeline\b/);
-  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
-  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "bg-run-1");
+  assert.equal(runCalls.length, 1);
+  assert.match(runCalls[0].message, /^\/resume-pipeline\b/);
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].last_session_key,
+    "local:papernexus:direct-batch-import"
+  );
   assert.match(
     manifest.paper_ingestion.queued_requests[0].detail ?? "",
-    /resumed|workflow-triggered|repair/i
+    /completed remotely|graph presence/i
   );
 });
 

@@ -54,6 +54,25 @@ async function writeText(filePath, text = "ok\n") {
   await fs.writeFile(filePath, text, "utf8");
 }
 
+function makePaperMarkdownFetch(markdown) {
+  return async () => ({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: {
+      get(name) {
+        return name.toLowerCase() === "content-type" ? "text/markdown" : null;
+      },
+    },
+    async text() {
+      return markdown;
+    },
+    async arrayBuffer() {
+      return new TextEncoder().encode(markdown).buffer;
+    },
+  });
+}
+
 test("runWorkflowAutoIterator writes structured diagnostics for stage evaluation", async (t) => {
   const projectRoot = await makeTempProject();
 
@@ -2636,7 +2655,7 @@ test("graph presence check accepts corpus_root values that point directly at the
   assert.equal(result.corpusRoot, sourceRoot);
 });
 
-test("remote graph presence ignores project-scoped corpus hints and falls back to the shared default graph", async (t) => {
+test("remote graph presence ignores project-scoped corpus hints and lets the remote endpoint resolve corpus", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
   const requests = [];
@@ -2725,7 +2744,7 @@ test("remote graph presence ignores project-scoped corpus hints and falls back t
 
   assert.equal(requests.length, 1);
   assert.equal(requests[0].method, "GET");
-  assert.match(requests[0].url ?? "", /\/api\/corpus-sources\?name=shared-global-graph$/);
+  assert.equal(requests[0].url, "/api/corpus-sources");
   assert.equal(result.status, "ready");
   assert.equal(result.corpusName, "shared-global-graph");
   assert.equal(result.repairTargetCorpus, null);
@@ -3412,7 +3431,7 @@ test("graph presence check does not fall back to local corpus files when remote 
   assert.deepEqual(requests[0], {
     method: "GET",
     pathname: "/api/corpus-sources",
-    corpus: "shared-global-graph",
+    corpus: null,
     authorization: "Bearer test-token",
   });
 
@@ -3540,7 +3559,7 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
   assert.equal(requests[0].authorization, "Bearer test-token");
   assert.equal(requests[0].body?.method, "tools/call");
   assert.equal(requests[0].body?.params?.name, "corpus_sources");
-  assert.equal(requests[0].body?.params?.arguments?.corpus, "shared-global-graph");
+  assert.deepEqual(requests[0].body?.params?.arguments, {});
 
   const refreshedStatus = JSON.parse(
     await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
@@ -4101,6 +4120,78 @@ test("auto iterator marks graph_build as uploading while workflow-owned ingestio
   assert.equal(updatedManifest.current_micro_stage, "uploading");
 });
 
+test("auto iterator materializes planned graph_build arXiv sources before graph presence checks", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousFetch = globalThis.fetch;
+  t.after(async () => {
+    globalThis.fetch = previousFetch;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  globalThis.fetch = makePaperMarkdownFetch(`# Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning
+
+## Abstract
+
+This is a substantive markdown paper fixture for graph-build source catch-up.
+
+## Introduction
+
+${"FixMatch generalization and generalized category discovery need enough paper text for import. ".repeat(24)}
+
+## Method
+
+${"The runtime catch-up fetches a real arXiv source and queues PaperNexus import before graph verification. ".repeat(24)}
+`);
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2410.11206",
+        arxiv_id: "2410.11206",
+        title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+        source_provider: "arxiv_api",
+        retrieval_providers: ["arxiv_api"],
+        staging_path: "researcher/paper-staging/md/2410.11206.md",
+        import_status: "pending",
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: "http://127.0.0.1:9123/mcp",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(manifest.current_micro_stage, "uploading");
+  assert.equal(manifest.paper_ingestion.queued_requests.length, 1);
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].trigger_kind,
+    "graph_build_source_catchup"
+  );
+  assert.equal(sourceIndex.papers[0].source_path, "researcher/paper-staging/md/2410.11206.md");
+  assert.equal(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "paper-staging", "md", "2410.11206.md"),
+      "utf8"
+    ).then((value) => value.includes("## Method")),
+    true
+  );
+});
+
 test("auto iterator marks graph_build as verifying when uploads are idle but graph presence is not ready", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
@@ -4411,6 +4502,16 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
       ...entry,
       status: "completed",
     }));
+  queuedManifest.paper_ingestion.completed_papers = [
+    {
+      canonical_id: "arxiv:2604.00001",
+      title: "Catalyst Bridge Paper",
+      import_task_id: "task-catalyst-bridge",
+    },
+  ];
+  queuedManifest.paper_ingestion.import_task_ids = ["task-catalyst-bridge"];
+  queuedManifest.paper_ingestion.last_import_task_id = "task-catalyst-bridge";
+  queuedManifest.paper_ingestion.last_import_status = "completed";
   await writeJson(manifestPath, queuedManifest);
   await seedPaperSourceIndex(projectRoot, [
     {
@@ -4678,7 +4779,7 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
   assert.equal(result.graphPresenceCheck?.status, "ready");
 });
 
-test("auto iterator ignores dormant queued PaperNexus requests after graph presence is ready", async (t) => {
+test("auto iterator waits on queued literature discovery requisitions after graph presence is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -4733,10 +4834,83 @@ test("auto iterator ignores dormant queued PaperNexus requests after graph prese
   });
 
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "frontier_mapping");
+  assert.equal(result.stageAfter, "graph_build");
   assert.ok(
-    !result.missingStageSignals.some((signal) =>
-      /workflow-owned PaperNexus ingestion is still active|ingestion is queued/i.test(signal)
+    result.missingStageSignals.some((signal) =>
+      /workflow-owned graph enrichment requisition is still active/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator rejects completed literature requisitions without import evidence", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "GCD",
+    expected_paper_count: 111,
+    present_paper_count: 111,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 111,
+    present_paper_count: 111,
+    missing_paper_count: 0,
+  });
+  await seedReadyBrainstormCycle(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    runtime_status: "ready",
+    queued_requests: [
+      {
+        request_id: "idea-track-graph-evidence-gap",
+        request_kind: "requisition",
+        status: "completed",
+        wrapper: "pn_batch_import.py",
+        command_text: "research queue requisition",
+        trigger_kind: "idea_literature_discovery",
+        summary: "Graph already contains the requested evidence.",
+        created_at: "2026-04-10T08:29:10.804Z",
+        updated_at: "2026-04-10T08:29:10.804Z",
+        finished_at: "2026-04-10T08:35:10.804Z",
+        attempt_count: 1,
+      },
+    ],
+    completed_papers: [],
+    batch_items: [],
+    active_batches: [],
+    paper_operations: [],
+    import_task_ids: [],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 111,
+    graph_presence_present_papers: 111,
+    graph_presence_missing_papers: [],
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /marked completed without durable import or requisition-satisfaction evidence/i.test(
+        signal
+      )
     )
   );
 });

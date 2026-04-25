@@ -69,6 +69,28 @@ function timestampSlug(date = new Date()) {
   return date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
 }
 
+function runIdSuffixFromTimestamp(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+}
+
+export function defaultProjectIdForAutoWorkflowRun(params) {
+  const command =
+    typeof params?.command === "object" && params.command
+      ? params.command
+      : normalizeAutoWorkflowCommand(params?.command ?? "full");
+  const topicSlug = slugify(params?.topic ?? "topic");
+  const suffix = runIdSuffixFromTimestamp(params?.timestamp ?? timestampSlug());
+  const lanePrefix = command.lane === "survey" ? "survey" : "research";
+  return `${lanePrefix}-${suffix}-${topicSlug}`
+    .replace(/-+/g, "-")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+}
+
 function normalizeToken(value) {
   return String(value ?? "")
     .trim()
@@ -117,6 +139,21 @@ export function normalizeAutoWorkflowMode(value) {
     return "fixture";
   }
   throw new Error(`Unknown E2E mode "${value}". Use live/real or fixture/deterministic.`);
+}
+
+export function deriveAutoWorkflowChildMaxIterations(params) {
+  const explicit = Number(params?.maxIterations);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.floor(explicit);
+  }
+  if (params?.mode !== "live") {
+    return null;
+  }
+  const timeoutMs = Number(params?.timeoutMs);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return 90;
+  }
+  return Math.min(240, Math.max(24, Math.ceil(timeoutMs / 30_000)));
 }
 
 export function configuredProjectsRootFromOpenClawConfig(config) {
@@ -237,19 +274,29 @@ function resolveAgentDir(config, openclawHome, agentId) {
   return path.join(openclawHome, "agents", agentId, "agent");
 }
 
+function readModelPrimaryRef(modelConfig) {
+  if (typeof modelConfig === "string" && modelConfig.trim()) {
+    return modelConfig;
+  }
+  return typeof modelConfig?.primary === "string" && modelConfig.primary.trim()
+    ? modelConfig.primary
+    : null;
+}
+
+function readModelFallbackRefs(modelConfig) {
+  return Array.isArray(modelConfig?.fallbacks) ? modelConfig.fallbacks : [];
+}
+
 export function configuredModelRefsForAgent(config, agentId) {
-  const defaultsModel = config?.agents?.defaults?.model ?? {};
-  const agentModel = resolveAgentConfig(config, agentId)?.model ?? {};
+  const defaultsModel = config?.agents?.defaults?.model ?? null;
+  const agentModel = resolveAgentConfig(config, agentId)?.model ?? null;
   const primary =
-    typeof agentModel.primary === "string" && agentModel.primary.trim()
-      ? agentModel.primary
-      : defaultsModel.primary;
-  const fallbacks = Array.isArray(agentModel.fallbacks)
-    ? agentModel.fallbacks
-    : Array.isArray(defaultsModel.fallbacks)
-      ? defaultsModel.fallbacks
-      : [];
-  return uniqueStrings([primary, ...fallbacks]);
+    readModelPrimaryRef(agentModel) ?? readModelPrimaryRef(defaultsModel);
+  return uniqueStrings([
+    primary,
+    ...readModelFallbackRefs(agentModel),
+    ...readModelFallbackRefs(defaultsModel),
+  ]);
 }
 
 function modelCatalogHasRef(modelsCatalog, parsedRef) {
@@ -612,6 +659,7 @@ function summarizeLane(name, value) {
     projectRoot: value.projectRoot ?? null,
     finalVerdict: value.harness?.finalVerdict ?? null,
     strictContent: value.harness?.strictContent ?? null,
+    failureReason: value.failureReason ?? value.harness?.failureReason ?? value.harness?.error ?? null,
     reportPath: value.harness?.reportPath ?? null,
     checklistPath: value.harness?.checklistPath ?? null,
     timelinePath: value.harness?.timelinePath ?? null,
@@ -870,6 +918,9 @@ function formatHumanSummary(summary) {
     if (lane.handoffCount !== null) {
       lines.push(`handoffs: ${lane.handoffCount}`);
     }
+    if (lane.failureReason) {
+      lines.push(`lane failure: ${lane.failureReason}`);
+    }
   }
   const failedPreflight = summary.preflight.filter((entry) => !entry.ok);
   if (failedPreflight.length > 0) {
@@ -897,7 +948,7 @@ async function main(argv = process.argv) {
   const topic = argValue(argv, "--topic", "Generalized Category Discovery");
   const mode = normalizeAutoWorkflowMode(argValue(argv, "--mode", "live"));
   const bootstrapTransport = argValue(argv, "--bootstrap-transport", "local");
-  const explicitProjectId = argValue(argv, "--project-id", null);
+  const projectIdArg = argValue(argv, "--project-id", null);
   const profile = argValue(argv, "--profile", null);
   const sourceConfigPath =
     argValue(argv, "--source-config-path", null) ??
@@ -912,6 +963,12 @@ async function main(argv = process.argv) {
   const configuredProjectsRoot =
     mode === "live" && !isolatedGateway ? await readConfiguredProjectsRoot(sourceConfigPath) : null;
   const timestamp = timestampSlug();
+  const reuseProject = hasFlag(argv, "--reuse-project");
+  const generatedProjectId =
+    mode === "live" && !reuseProject && !projectIdArg
+      ? defaultProjectIdForAutoWorkflowRun({ command, topic, timestamp })
+      : null;
+  const explicitProjectId = projectIdArg ?? generatedProjectId;
   const runRoot = path.resolve(
     argValue(
       argv,
@@ -929,10 +986,18 @@ async function main(argv = process.argv) {
   );
   const timeoutMs = numberArgValue(argv, "--timeout-ms", mode === "live" ? 45 * 60_000 : 5 * 60_000);
   const maxIterations = numberArgValue(argv, "--max-iterations", null);
+  const childMaxIterations = deriveAutoWorkflowChildMaxIterations({
+    mode,
+    timeoutMs,
+    maxIterations,
+  });
   const gatewayStartupTimeoutMs = numberArgValue(argv, "--gateway-startup-timeout-ms", null);
+  const bootstrapTimeoutMs = numberArgValue(argv, "--bootstrap-timeout-ms", null);
+  const projectRootTimeoutMs = numberArgValue(argv, "--project-root-timeout-ms", null);
   const stageTimeoutMs = numberArgValue(argv, "--stage-timeout-ms", null);
   const agentWaitTimeoutMs = numberArgValue(argv, "--agent-wait-timeout-ms", null);
   const progressPollMs = numberArgValue(argv, "--progress-poll-ms", null);
+  const maxNoProgressTurns = numberArgValue(argv, "--max-no-progress-turns", null);
   const skipAgentAuthPreflight = hasFlag(argv, "--skip-agent-auth-preflight");
   const skipAgentModelSync = hasFlag(argv, "--skip-agent-model-sync");
   const skipGatewayRestartAfterAgentSync = hasFlag(
@@ -1000,11 +1065,17 @@ async function main(argv = process.argv) {
   if (gatewayToken) {
     childArgs.push("--gateway-token", gatewayToken);
   }
-  if (maxIterations !== null) {
-    childArgs.push("--max-iterations", String(maxIterations));
+  if (childMaxIterations !== null) {
+    childArgs.push("--max-iterations", String(childMaxIterations));
   }
   if (gatewayStartupTimeoutMs !== null) {
     childArgs.push("--gateway-startup-timeout-ms", String(gatewayStartupTimeoutMs));
+  }
+  if (bootstrapTimeoutMs !== null) {
+    childArgs.push("--bootstrap-timeout-ms", String(bootstrapTimeoutMs));
+  }
+  if (projectRootTimeoutMs !== null) {
+    childArgs.push("--project-root-timeout-ms", String(projectRootTimeoutMs));
   }
   if (stageTimeoutMs !== null) {
     childArgs.push("--stage-timeout-ms", String(stageTimeoutMs));
@@ -1014,6 +1085,9 @@ async function main(argv = process.argv) {
   }
   if (progressPollMs !== null) {
     childArgs.push("--progress-poll-ms", String(progressPollMs));
+  }
+  if (maxNoProgressTurns !== null) {
+    childArgs.push("--max-no-progress-turns", String(maxNoProgressTurns));
   }
   if (!isolatedGateway) {
     childArgs.push("--no-isolated-gateway");
@@ -1099,7 +1173,12 @@ async function main(argv = process.argv) {
       ? verdictStatus(resultSummary, allowPartial)
       : "fail";
   if (status === "fail" && failureReason === null) {
-    failureReason = "final_verdict_not_pass";
+    const laneFailures = resultSummary.lanes
+      .map((lane) => lane.failureReason)
+      .filter(Boolean);
+    failureReason = laneFailures.length > 0
+      ? laneFailures.join("; ")
+      : "final_verdict_not_pass";
   }
 
   const finishedAt = new Date().toISOString();

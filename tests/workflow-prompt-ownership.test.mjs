@@ -437,7 +437,7 @@ test("formatWorkflowSnapshotForPrompt teaches researcher MCP-first graph work wi
 
   assert.match(prompt, /queued wrapper path|queued PaperNexus wrapper tasks/i);
   assert.match(prompt, /remote MCP|remote PaperNexus MCP|HTTP MCP/i);
-  assert.match(prompt, /PaperNexus MCP tools/i);
+  assert.match(prompt, /MCP tool names, not shell commands/i);
   assert.match(prompt, /research_lookup|research_briefing|idea_catalyst|import_workflow/i);
   assert.match(prompt, /pn_import_submit\.py/i);
   assert.match(prompt, /backup-export[\s\S]*backup-unpack[\s\S]*backup-load/i);
@@ -570,8 +570,9 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
   assert.match(prompt, /mineru_http=http:\/\/mineru\.example:30000/);
   assert.match(
     prompt,
-    /Resolve the PaperNexus bearer token in auto mode/i
+    /authenticated wrappers must resolve auth internally/i
   );
+  assert.doesNotMatch(prompt, /Resolve the PaperNexus bearer token/i);
   assert.match(
     prompt,
     /never use local PaperNexus live-graph CLI reads/i
@@ -662,7 +663,8 @@ test("formatWorkflowSnapshotForPrompt teaches Researcher to use configured remot
   assert.match(prompt, /mcp=https:\/\/papernexus\.example\/mcp/);
   assert.match(prompt, /mcp_transport=streamable-http/);
   assert.match(prompt, /Remote MCP rule:/);
-  assert.match(prompt, /Use Authorization: Bearer from env PAPERNEXUS_API_TOKEN|Resolve the PaperNexus bearer token in auto mode/i);
-  assert.match(prompt, /PaperNexus MCP tools/i);
-  assert.match(prompt, /Do not use .*pn_graph_query\.py.*pn_research_chains\.py/i);
+  assert.match(prompt, /resolve auth internally from env PAPERNEXUS_API_TOKEN/i);
+  assert.doesNotMatch(prompt, /Resolve the PaperNexus bearer token/i);
+  assert.match(prompt, /MCP tool names, not shell commands/i);
+  assert.match(prompt, /pn_graph_query\.py.*pn_research_chains\.py/i);
 });

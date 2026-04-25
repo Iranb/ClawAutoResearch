@@ -202,6 +202,21 @@ npm run test:autoresearch:real -- --topic "GCD"
 npm run test:autoreview:real -- --topic "GCD"
 ```
 
+live E2E 默认创建带时间戳的隔离项目；需要复用旧项目时加 `--reuse-project` 或 `--project-id <id>`。如果外部 provider quota、gateway bootstrap 或项目目录创建失败，runner 会写出 `.openclaw-research/e2e-runs/.../AUTO_WORKFLOW_E2E_SUMMARY.*` 供复盘。
+
+topic-only 的 no-Discord 项目不会再等待 Discord 研究员消息先补 `PAPER_SOURCE_INDEX.json`。`graph_build` 会从 `PROJECT_MANIFEST.json` / `research_program.goal` 中提取 arXiv ID 或论文题名，解析成 workflow-owned source seed，抓取 Markdown/PDF 后继续排 PaperNexus batch import。
+
+如果真实运行中触发 provider quota / 429，embedded runtime 会先尝试 OpenClaw agent 配置里的 `model.fallbacks`。如果 fallback 仍失败，runtime maintenance 会把对应 queue 写入 `.openclaw-research/workflow-local-operator-relay.jsonl`，并设置 `nextRetryAt`，避免 background pool 立即反复重放。读取最新本地接管任务：
+
+```bash
+node scripts/workflow_local_operator_relay.mjs \
+  --project-root "$HOME/AutoResearchProjects/<project-id>" \
+  --latest
+```
+
+PaperNexus 上传/构图在本地模式下由 workflow worker 直接执行 batch wrapper：
+`pn_batch_import.py submit` 只代表远端 import task 已提交；系统会继续跑 bounded `wait/status`，并把 `active_batches`、`batch_items`、`completed_papers` 和 `queued_requests` 写回 `PROJECT_MANIFEST.json`。只有远端任务完成且 graph presence 验证通过后，`graph_build` 才会进入 `frontier_mapping`。
+
 更多背景请继续看：
 
 - [Project Lifecycle](./docs/get-started/project-lifecycle.md)

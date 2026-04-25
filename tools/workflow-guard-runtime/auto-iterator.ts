@@ -43,6 +43,7 @@ import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import { createStageOwnerHandoffIntent } from "../workflow-handoff/handoff-router";
 import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type { GraphPresenceCheckResult } from "../graph-presence";
+import type { GraphBuildSourceCatchupResult } from "../graph-build-source-catchup";
 import type {
   AutoIteratorAction,
   AutoIteratorResult,
@@ -572,6 +573,16 @@ type AutoIteratorDeps = {
       tokenLookupTimeoutMs?: number;
     };
   }) => Promise<GraphPresenceCheckResult>;
+  materializeGraphBuildPaperSources?: (params: {
+    projectRoot: string;
+    projectId?: string | null;
+    workflowPolicy?: {
+      papernexusSharedCorpus?: string | null;
+      papernexusMcpUrl?: string | null;
+      papernexusApiBaseUrl?: string | null;
+    } | null;
+    now?: string;
+  }) => Promise<GraphBuildSourceCatchupResult>;
   getPreviousStagesForRegression: (params: {
     currentStage: string | null;
     manifest: ManifestLike;
@@ -967,14 +978,108 @@ export async function runWorkflowAutoIteratorImpl(
   }
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
-  if (
-    shouldRefreshWorkflowGraphPresence({
-      manifest,
-      stage: stageBefore,
-      nowIso: now,
-      minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
-    })
-  ) {
+  const shouldRefreshGraphPresenceNow = shouldRefreshWorkflowGraphPresence({
+    manifest,
+    stage: stageBefore,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+  });
+  if (stageBefore === "graph_build" && shouldRefreshGraphPresenceNow) {
+    graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
+      projectRoot,
+      updateManifest: true,
+      sharedCorpus: workflowPolicy.papernexusSharedCorpus,
+      remoteAccess: {
+        apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+        mcpUrl: workflowPolicy.papernexusMcpUrl,
+        mcpTransport: workflowPolicy.papernexusMcpTransport,
+        mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
+        tokenSource: workflowPolicy.papernexusApiTokenSource,
+        tokenEnv: workflowPolicy.papernexusApiTokenEnv,
+        tokenService: workflowPolicy.papernexusApiTokenService,
+        tokenAccount: workflowPolicy.papernexusApiTokenAccount,
+        mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
+        tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+      },
+    });
+    manifest =
+      (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
+      manifest;
+  }
+  if (stageBefore === "graph_build" && deps.materializeGraphBuildPaperSources) {
+    try {
+      const graphPresenceReady =
+        normalizeStage(graphPresenceCheck?.status) === "ready" ||
+        normalizeStage(asRecord(manifest.paper_ingestion)?.graph_presence_status) ===
+          "ready";
+      const sourceCatchup: GraphBuildSourceCatchupResult = graphPresenceReady
+        ? {
+            attempted: false,
+            queued: false,
+            skippedReason:
+              "Graph presence is already ready; source catch-up skipped.",
+            sourceIndexPath: null,
+            materializedPaperCount: 0,
+            requestId: null,
+            batchManifestPath: null,
+            errors: [],
+            attempts: [],
+          }
+        : await deps.materializeGraphBuildPaperSources({
+            projectRoot,
+            projectId,
+            workflowPolicy,
+            now,
+          });
+      await appendWorkflowDiagnosticEvent({
+        projectRoot,
+        projectId,
+        component: "graph_build_source_catchup",
+        action: "materialize_missing_sources",
+        status: sourceCatchup.queued
+          ? "completed"
+          : sourceCatchup.attempted
+            ? "waiting"
+            : "waiting",
+        stage: stageBefore,
+        owner: asString(manifest.owner_agent),
+        summary: sourceCatchup.queued
+          ? `Queued PaperNexus import for ${sourceCatchup.materializedPaperCount} materialized graph-build source(s).`
+          : sourceCatchup.skippedReason ?? "Graph-build source catch-up did not queue work.",
+        details: {
+          queued: sourceCatchup.queued,
+          attempted: sourceCatchup.attempted,
+          skippedReason: sourceCatchup.skippedReason,
+          sourceIndexPath: sourceCatchup.sourceIndexPath,
+          materializedPaperCount: sourceCatchup.materializedPaperCount,
+          requestId: sourceCatchup.requestId,
+          batchManifestPath: sourceCatchup.batchManifestPath,
+          errors: sourceCatchup.errors,
+        },
+      });
+      if (sourceCatchup.queued) {
+        manifest =
+          (await readJsonIfExists<ManifestLike>(
+            path.join(projectRoot, "PROJECT_MANIFEST.json")
+          )) ?? manifest;
+      }
+    } catch (error) {
+      await appendWorkflowDiagnosticEvent({
+        projectRoot,
+        projectId,
+        component: "graph_build_source_catchup",
+        action: "materialize_missing_sources",
+        status: "failed",
+        stage: stageBefore,
+        owner: asString(manifest.owner_agent),
+        summary: "Graph-build source catch-up failed before graph presence verification.",
+        details: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+  if (graphPresenceCheck === null && shouldRefreshGraphPresenceNow) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
       projectRoot,
       updateManifest: true,

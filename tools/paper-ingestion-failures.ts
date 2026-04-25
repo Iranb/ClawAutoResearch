@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { writeJsonAtomicEnsured, writeTextEnsured } from "./workflow-guard-core/fs";
 import { normalizePaperIngestionState } from "./workflow-guard-state/paper-ingestion";
+import { buildPapernexusBatchImportCommandText } from "./papernexus-batch-executor.js";
 import type {
   PaperIngestionFailedPaper,
   PaperIngestionState,
@@ -283,13 +284,14 @@ export async function materializePaperIngestionRetry(params: {
     failures,
     retryableFailures,
     nonRetryableFailures,
-    commandText: [
-      "python3 skills/papernexus/scripts/pn_batch_import.py",
-      `--manifest ${retryManifestPath}`,
+    commandText: buildPapernexusBatchImportCommandText([
+      "--manifest",
+      retryManifestPath,
       "submit",
       "--sequential",
-      `--interval ${intervalSeconds}`,
-    ].join(" "),
+      "--interval",
+      String(intervalSeconds),
+    ]),
   };
 }
 

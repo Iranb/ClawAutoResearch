@@ -7,6 +7,8 @@ import {
   isWorkflowRuntimeTrackingMissError,
   reconcileBackgroundRunTerminalState,
 } from "./workflow-background-run-reconcile.js";
+import { isProviderCapacityFailure } from "./provider-capacity.js";
+import { inspectRecentSessionProviderCapacity } from "./workflow-session-provider-capacity.js";
 import {
   appendWorkflowRuntimeEvent,
   listWorkflowRuntimeProjectRoots,
@@ -63,6 +65,7 @@ export type BackgroundRunRegistryEntry = {
   startedAt: string;
   lastCheckedAt: string | null;
   lastFinishedAt: string | null;
+  lastError: string | null;
 };
 
 export type BackgroundRunRegistryViewEntry = BackgroundRunRegistryEntry & {
@@ -302,10 +305,7 @@ function toPersistedSessionEntry(
     lastAnnounceAt: null,
     lastCheckedAt: entry.lastCheckedAt,
     lastFinishedAt: entry.lastFinishedAt,
-    lastError:
-      entry.status === "needs_repair"
-        ? "Background workflow session needs repair after runtime recovery."
-        : null,
+    lastError: readString(entry.lastError) ?? null,
   };
 }
 
@@ -351,6 +351,7 @@ function fromPersistedSessionEntry(
     startedAt,
     lastCheckedAt: readString(entry.lastCheckedAt ?? entry.lastHeartbeatAt) ?? null,
     lastFinishedAt: readString(entry.lastFinishedAt) ?? null,
+    lastError: readString(entry.lastError) ?? null,
   };
 }
 
@@ -438,6 +439,7 @@ async function readBackgroundRunRegistry(
         const startedAt = readString(record.startedAt);
         const lastCheckedAt = readString(record.lastCheckedAt) ?? null;
         const lastFinishedAt = readString(record.lastFinishedAt) ?? null;
+        const lastError = readString(record.lastError) ?? null;
         if (
           !ownerAgent ||
           !channelKey ||
@@ -463,6 +465,7 @@ async function readBackgroundRunRegistry(
           startedAt,
           lastCheckedAt,
           lastFinishedAt,
+          lastError,
         } satisfies BackgroundRunRegistryEntry;
       })
       .filter((entry): entry is BackgroundRunRegistryEntry => Boolean(entry));
@@ -511,6 +514,72 @@ async function writeBackgroundRunRegistry(
   await writeJsonAtomicEnsured(registryPath, entries);
 }
 
+async function inspectBackgroundRunTerminalState(params: {
+  workflowRuntime?: WorkflowRuntimeWaitApi;
+  entry: BackgroundRunRegistryEntry;
+}): Promise<{
+  terminalStatus: "completed" | "failed" | "needs_repair";
+  error: string | null;
+} | null> {
+  if (!params.workflowRuntime?.inspectSession) {
+    return null;
+  }
+  try {
+    const inspection = await params.workflowRuntime.inspectSession({
+      sessionKey: params.entry.backgroundSessionKey,
+    });
+    if (!inspection) {
+      return null;
+    }
+    const status = readString(inspection.status)?.toLowerCase() ?? null;
+    const inspectionError = readString(inspection.lastError);
+    if (status && ["failed", "aborted"].includes(status)) {
+      const error = [
+        `Background workflow session is terminal in the runtime session store (status=${status}).`,
+        inspectionError,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return {
+        terminalStatus: isProviderCapacityFailure(error) ? "needs_repair" : "failed",
+        error,
+      };
+    }
+    if (inspection.abortedLastRun) {
+      const error = [
+        "Background workflow session was aborted in the runtime session store.",
+        inspectionError,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return {
+        terminalStatus: isProviderCapacityFailure(error) ? "needs_repair" : "failed",
+        error,
+      };
+    }
+    if (status && ["completed", "done"].includes(status)) {
+      return {
+        terminalStatus: "completed",
+        error: null,
+      };
+    }
+    const transcriptCapacityFailure =
+      await inspectRecentSessionProviderCapacity({
+        workflowRuntime: params.workflowRuntime,
+        sessionKey: params.entry.backgroundSessionKey,
+      });
+    if (transcriptCapacityFailure) {
+      return {
+        terminalStatus: "needs_repair",
+        error: `Background workflow session hit provider capacity while still marked active: ${transcriptCapacityFailure}`,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 async function pruneBackgroundRunRegistry(params: {
   workflowRuntime?: WorkflowRuntimeWaitApi;
   projectId?: string | null;
@@ -547,6 +616,9 @@ async function pruneBackgroundRunRegistry(params: {
           status: "needs_repair",
           lastCheckedAt: checkedAt,
           lastFinishedAt: checkedAt,
+          lastError:
+            entry.lastError ??
+            "Background workflow session exceeded the stale runtime threshold and needs repair.",
         });
       }
       continue;
@@ -569,10 +641,23 @@ async function pruneBackgroundRunRegistry(params: {
         ...nextEntry,
         status: terminalStatus === "needs_repair" ? "needs_repair" : "idle",
         lastFinishedAt: checkedAt,
+        lastError: terminalStatus === "completed" ? null : error ?? nextEntry.lastError,
       };
     };
     if (entry.status === "active" && params.workflowRuntime?.waitForRun) {
       try {
+        const inspectedTerminal = await inspectBackgroundRunTerminalState({
+          workflowRuntime: params.workflowRuntime,
+          entry,
+        });
+        if (inspectedTerminal) {
+          nextEntry = await markEntryTerminal(
+            inspectedTerminal.terminalStatus,
+            inspectedTerminal.error
+          );
+          kept.push(nextEntry);
+          continue;
+        }
         const waited = await params.workflowRuntime.waitForRun({
           runId: entry.runId,
           timeoutMs: 1,
@@ -591,9 +676,23 @@ async function pruneBackgroundRunRegistry(params: {
             }
           }
         } else if (waited.status === "ok" || waited.status === "error") {
+          const postWaitTerminal = await inspectBackgroundRunTerminalState({
+            workflowRuntime: params.workflowRuntime,
+            entry,
+          });
+          const terminalStatus =
+            postWaitTerminal?.terminalStatus ??
+            (waited.status === "ok"
+              ? "completed"
+              : isProviderCapacityFailure(waited.error)
+                ? "needs_repair"
+                : "failed");
           nextEntry = await markEntryTerminal(
-            waited.status === "ok" ? "completed" : "failed",
-            waited.status === "error" ? waited.error ?? "Background workflow run failed." : null
+            terminalStatus,
+            postWaitTerminal?.error ??
+              (waited.status === "error"
+                ? waited.error ?? "Background workflow run failed."
+                : null)
           );
         } else if (canAttemptDurableReconcile) {
           const durableState = await inferBackgroundRunTerminalStateFromDurableState({
@@ -612,6 +711,18 @@ async function pruneBackgroundRunRegistry(params: {
         continue;
       }
     } else if (entry.status === "active" && canAttemptDurableReconcile) {
+      const inspectedTerminal = await inspectBackgroundRunTerminalState({
+        workflowRuntime: params.workflowRuntime,
+        entry,
+      });
+      if (inspectedTerminal) {
+        nextEntry = await markEntryTerminal(
+          inspectedTerminal.terminalStatus,
+          inspectedTerminal.error
+        );
+        kept.push(nextEntry);
+        continue;
+      }
       const durableState = await inferBackgroundRunTerminalStateFromDurableState({
         entry,
         allowNeedsRepair: false,
@@ -660,7 +771,7 @@ function toBackgroundRunRegistryViewEntry(
       : null;
   return {
     ...entry,
-    deleteEligible: entry.status === "idle",
+    deleteEligible: entry.status === "idle" || entry.status === "needs_repair",
     idleForMs,
   };
 }
@@ -718,13 +829,25 @@ function normalizeStageLike(value: unknown): string | null {
 
 async function upsertBackgroundRunRegistryEntry(
   entry: BackgroundRunRegistryEntry
-): Promise<void> {
-  const persistedEntry = toPersistedSessionEntry(entry);
+): Promise<BackgroundRunRegistryEntry> {
+  let persistedQueueKey: string | null = readString(entry.queueKey) ?? null;
   if (readString(entry.projectRoot)) {
     await updateWorkflowRuntimeSessionsStore({
       projectRoot: String(entry.projectRoot),
       projectId: entry.projectId,
       updater: (store) => {
+        const existing = store.entries.find(
+          (candidate) => candidate.sessionKey === entry.backgroundSessionKey
+        );
+        persistedQueueKey =
+          readString(entry.queueKey) ??
+          (existing?.runId === entry.runId
+            ? readString(existing.queueKey) ?? null
+            : null);
+        const persistedEntry = toPersistedSessionEntry({
+          ...entry,
+          queueKey: persistedQueueKey,
+        });
         const nextEntries = store.entries.filter(
           (existing) => existing.sessionKey !== persistedEntry.sessionKey
         );
@@ -732,23 +855,39 @@ async function upsertBackgroundRunRegistryEntry(
         return nextEntries;
       },
     });
-    return;
+    return {
+      ...entry,
+      queueKey: persistedQueueKey,
+    };
   }
   const targetScope = {
     projectId: entry.projectId,
     projectRoot: entry.projectRoot,
   };
+  let storedEntry = entry;
   await withAdvisoryLock({
     lockPath: getBackgroundRunRegistryLockPath(),
     task: async () => {
       const current = await readBackgroundRunRegistry(targetScope);
+      const existing = current.find(
+        (candidate) => candidate.backgroundSessionKey === entry.backgroundSessionKey
+      );
+      storedEntry = {
+        ...entry,
+        queueKey:
+          readString(entry.queueKey) ??
+          (existing?.runId === entry.runId
+            ? readString(existing.queueKey) ?? null
+            : null),
+      };
       const next = current.filter(
         (existing) => existing.backgroundSessionKey !== entry.backgroundSessionKey
       );
-      next.push(entry);
+      next.push(storedEntry);
       await writeBackgroundRunRegistry(next, targetScope);
     },
   });
+  return storedEntry;
 }
 
 export async function getBackgroundWorkflowRunByQueueKey(params: {
@@ -841,11 +980,15 @@ export async function pruneBackgroundWorkflowRuns(params: {
     const idleReference =
       entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
     const idleReferenceMs = Date.parse(idleReference);
-    const idleForMs =
-      entry.status === "idle" && Number.isFinite(idleReferenceMs)
+    const inactiveForMs =
+      (entry.status === "idle" || entry.status === "needs_repair") &&
+      Number.isFinite(idleReferenceMs)
         ? Math.max(0, nowMs - idleReferenceMs)
         : 0;
-    if (entry.status === "idle" && idleForMs >= idleOlderThanMs) {
+    if (
+      (entry.status === "idle" || entry.status === "needs_repair") &&
+      inactiveForMs >= idleOlderThanMs
+    ) {
       removed.push(entry);
       continue;
     }
@@ -1096,7 +1239,7 @@ export async function recordBackgroundWorkflowRun(params: {
   if (!ownerAgent || !channelKey || !requesterSessionKey || !backgroundSessionKey || !runId) {
     return;
   }
-  await upsertBackgroundRunRegistryEntry({
+  const persistedEntry = await upsertBackgroundRunRegistryEntry({
     ownerAgent,
     channelKey,
     requesterSessionKey,
@@ -1113,6 +1256,7 @@ export async function recordBackgroundWorkflowRun(params: {
     startedAt: new Date().toISOString(),
     lastCheckedAt: null,
     lastFinishedAt: null,
+    lastError: null,
   });
   await appendBackgroundWorkflowRuntimeEvent({
     projectRoot: readString(params.projectRoot) ?? null,
@@ -1125,7 +1269,7 @@ export async function recordBackgroundWorkflowRun(params: {
       requesterSessionKey,
       backgroundSessionKey,
       runId,
-      queueKey: readString(params.queueKey) ?? null,
+      queueKey: persistedEntry.queueKey,
       family:
         readString(params.family) ??
         deriveBackgroundRunFamily(readString(params.kind)?.toLowerCase() ?? "generic"),

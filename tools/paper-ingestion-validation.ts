@@ -6,6 +6,12 @@ import type {
   PaperIngestionQueuedRequest,
   PaperIngestionQueuedRequestKind,
 } from "./workflow-guard";
+import {
+  buildPapernexusBatchImportCommandText,
+  buildPapernexusBatchImportWaitArgs,
+  getPapernexusBatchImportArgs,
+  isPapernexusBatchImportLifecycleRequest,
+} from "./papernexus-batch-executor.js";
 
 export type PaperIngestionValidationStatus =
   | "unknown"
@@ -592,6 +598,29 @@ export function finalizeQueuedPaperIngestionAttempt(params: {
   error: string | null;
 }): PaperIngestionQueuedRequest {
   if (params.terminalStatus === "completed") {
+    if (isPapernexusBatchImportLifecycleRequest(params.request)) {
+      const waitArgs = buildPapernexusBatchImportWaitArgs(
+        getPapernexusBatchImportArgs(params.request),
+        {
+          timeoutSeconds: 60,
+          intervalSeconds: 5,
+        }
+      );
+      return {
+        ...params.request,
+        status: "queued",
+        args: waitArgs,
+        commandText: buildPapernexusBatchImportCommandText(waitArgs),
+        updatedAt: params.finishedAt,
+        finishedAt: params.request.finishedAt,
+        nextRetryAt: null,
+        deadLetterAt: null,
+        deadLetterReason: null,
+        lastError: null,
+        detail:
+          "PaperNexus wrapper process finished, but remote import completion is not implied by process exit; workflow requeued a bounded wait/status pass.",
+      };
+    }
     return {
       ...params.request,
       status: "completed",

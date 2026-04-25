@@ -230,6 +230,14 @@ test("install.sh refreshes PaperNexus-sourced workspace skills without duplicate
     "---\nname: papernexus\n---\nold plugin skill\n",
     "utf8"
   );
+  await fs.mkdir(path.join(pluginDir, "skills", "researcher", "papernexus 2"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(pluginDir, "skills", "researcher", "papernexus 2", "SKILL.md"),
+    "---\nname: papernexus-duplicate\n---\ncloud duplicate\n",
+    "utf8"
+  );
   await fs.mkdir(path.join(pluginDir, "skills"), { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "skills", "index.json"),
@@ -319,6 +327,7 @@ exit 1
   assert.equal(code, 0, stderr);
   assert.match(stdout, /PaperNexus source will refresh automatically/);
   assert.match(stdout, /REFRESH researcher\/papernexus \(PaperNexus source\)/);
+  assert.match(stdout, /SKIP researcher\/papernexus 2 \(iCloud duplicate skill path\)/);
 
   const refreshedSkill = await fs.readFile(
     path.join(workspaceSkillDir, "SKILL.md"),
@@ -352,6 +361,10 @@ exit 1
   assert.doesNotMatch(refreshedAgenticWrapper, /"PaperNexus" \/ "scripts"/);
   assert.match(refreshedAgenticWrapper, /_resolve_papernexus_script/);
   assert.match(refreshedAgenticWrapper, /"papernexus" \/ "scripts"/);
+  await assert.rejects(
+    () => fs.access(path.join(workspaceDir, "skills", "papernexus 2")),
+    /ENOENT/
+  );
 });
 
 test("install.sh defaults to no agent creation, previews build, and syncs optional agent markdown", async (t) => {

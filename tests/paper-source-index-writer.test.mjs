@@ -25,6 +25,18 @@ test("paper source contract does not extract fake arXiv ids from non-arXiv DOI s
   assert.equal(record.canonicalId, "doi:10.1109/cvpr52729.2023.00732");
 });
 
+test("paper source contract recognizes planned staging paths as source paths", () => {
+  const record = buildCanonicalPaperRecordFromRecord({
+    arxiv_id: "2410.11206",
+    title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+    staging_path: "researcher/paper-staging/md/2410.11206.md",
+  });
+
+  assert.equal(record.sourcePath, "researcher/paper-staging/md/2410.11206.md");
+  assert.equal(record.sourceKind, "markdown");
+  assert.equal(record.resolutionStatus, "resolved_markdown");
+});
+
 test("paper source index writer preserves metadata-only entries and upgrades them when full text resolves", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paper-source-index-writer-"));
   await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });

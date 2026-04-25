@@ -25,6 +25,8 @@ import {
 import {
   readWorkflowAnnounceOutboxStore,
   readWorkflowRuntimeSessionsStore,
+  updateWorkflowRuntimeQueueStore,
+  updateWorkflowRuntimeSessionsStore,
 } from "./workflow-execution/runtime-store";
 import {
   orchestrateWorkflowTransition,
@@ -1305,6 +1307,219 @@ function buildResearcherWorkflowSubagentSessionKey(params: {
   );
 }
 
+const ACTIVE_AUTO_DISCUSSION_QUEUE_STATUSES = new Set([
+  "queued",
+  "launching",
+  "running",
+  "degraded",
+  "needs_repair",
+]);
+
+function extractAutoModeDiscussionFingerprint(queueKey: string): string | null {
+  const parts = queueKey.split(":");
+  if (parts.length >= 6 && parts[0] === "openclaw-research" && parts[1] === "auto-discussion") {
+    return parts[3] || null;
+  }
+  if (parts.length >= 5 && parts[0] === "auto-discussion") {
+    return parts[2] || null;
+  }
+  return null;
+}
+
+function buildAutoModeDiscussionQueueKey(params: {
+  projectRoot: string;
+  projectId: string | null;
+  fingerprint: string;
+  reviewerRole: AutoModeDiscussionReviewerRole;
+  roundNumber: number;
+}) {
+  return slugifyForIdempotency(
+    `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${params.fingerprint}:${params.reviewerRole}:${params.roundNumber}`
+  );
+}
+
+function readAutoModeDiscussionProjectSegment(queueKey: string): string | null {
+  const parts = queueKey.split(":");
+  if (parts.length >= 6 && parts[0] === "openclaw-research" && parts[1] === "auto-discussion") {
+    return parts[2] || null;
+  }
+  if (parts.length >= 5 && parts[0] === "auto-discussion") {
+    return parts[1] || null;
+  }
+  return null;
+}
+
+function autoModeDiscussionQueueBelongsToProject(params: {
+  queueKey: string;
+  projectRoot: string;
+  projectId: string | null;
+}) {
+  const projectSegment = readAutoModeDiscussionProjectSegment(params.queueKey);
+  if (!projectSegment) {
+    return false;
+  }
+  const acceptedProjectSegments = new Set([
+    params.projectId,
+    path.basename(path.resolve(params.projectRoot)),
+  ].filter((entry): entry is string => Boolean(entry)));
+  return acceptedProjectSegments.has(projectSegment);
+}
+
+function buildAutoModeDiscussionReviewerSessionKey(params: {
+  requesterSessionKey?: string | null;
+  reviewerRole: AutoModeDiscussionReviewerRole;
+  projectRoot: string;
+  stage: string | null;
+  riskLevel: string | null;
+  fingerprint: string;
+  roundNumber: number;
+}) {
+  const baseSessionKey = deriveAgentSessionKeyForRole({
+    requesterSessionKey: params.requesterSessionKey ?? undefined,
+    targetRole: params.reviewerRole,
+  });
+  return (
+    buildWorkflowSubagentSessionKey({
+      parentSessionKey: baseSessionKey,
+      purpose: "workflow-auto-discussion",
+      segments: [
+        path.basename(path.resolve(params.projectRoot)),
+        params.fingerprint.slice(0, 12),
+        params.reviewerRole,
+        params.stage,
+        params.riskLevel,
+        `${params.roundNumber}`,
+      ],
+    }) ?? baseSessionKey
+  );
+}
+
+async function retireSupersededAutoModeDiscussionRuntimeState(params: {
+  projectRoot: string;
+  projectId: string | null;
+  activeFingerprint: string;
+  logger?: WorkflowCoordinatorLogger;
+}) {
+  const currentAt = nowIso();
+  const retiredQueueKeys = new Set<string>();
+  const supersededReason =
+    `Auto discussion round was superseded by newer risk fingerprint ${params.activeFingerprint}.`;
+
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        if (
+          entry.source !== "workflow_auto_discussion" &&
+          entry.kind !== "workflow_auto_discussion"
+        ) {
+          return entry;
+        }
+        if (
+          !autoModeDiscussionQueueBelongsToProject({
+            queueKey: entry.queueKey,
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+          })
+        ) {
+          return entry;
+        }
+        const fingerprint = extractAutoModeDiscussionFingerprint(entry.queueKey);
+        if (
+          fingerprint === params.activeFingerprint ||
+          !ACTIVE_AUTO_DISCUSSION_QUEUE_STATUSES.has(entry.status)
+        ) {
+          return entry;
+        }
+        retiredQueueKeys.add(entry.queueKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          nextRetryAt: null,
+          lastError: entry.lastError ?? supersededReason,
+        };
+      }),
+  });
+
+  if (retiredQueueKeys.size === 0) {
+    return {
+      retiredQueueKeys: [],
+      retiredSessionKeys: [],
+    };
+  }
+
+  const retiredSessionKeys: string[] = [];
+  await updateWorkflowRuntimeSessionsStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        if (!entry.queueKey || !retiredQueueKeys.has(entry.queueKey)) {
+          return entry;
+        }
+        if (
+          entry.status === "completed" ||
+          entry.status === "failed" ||
+          entry.status === "idle"
+        ) {
+          return entry;
+        }
+        retiredSessionKeys.push(entry.sessionKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+          lastError: entry.lastError ?? supersededReason,
+        };
+      }),
+  });
+
+  const retiredQueueKeyList = [...retiredQueueKeys];
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "auto_discussion_superseded",
+    summary:
+      `Retired ${retiredQueueKeyList.length} superseded auto discussion queue entry(s).`,
+    details: {
+      activeFingerprint: params.activeFingerprint,
+      retiredQueueKeys: retiredQueueKeyList,
+      retiredSessionKeys,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "service",
+    action: "superseded_runtime_state_retired",
+    status: "completed",
+    summary:
+      "Retired stale auto discussion runtime state before launching or polling the current risk fingerprint.",
+    details: {
+      activeFingerprint: params.activeFingerprint,
+      retiredQueueKeys: retiredQueueKeyList,
+      retiredSessionKeys,
+    },
+  });
+  params.logger?.debug?.(
+    "Retired superseded auto discussion runtime state.",
+    {
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      activeFingerprint: params.activeFingerprint,
+      retiredQueueKeys: retiredQueueKeyList,
+      retiredSessionKeys,
+    }
+  );
+  return {
+    retiredQueueKeys: retiredQueueKeyList,
+    retiredSessionKeys,
+  };
+}
+
 function buildWorkflowCoordinatorDispatchSessionKeys(params: {
   requesterSessionKey?: string | null;
   owner: DispatchableWorkflowRole;
@@ -2100,20 +2315,6 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
     label: "workflow_papernexus_upload_worker",
     logger: params.logger,
     task: async (): Promise<PaperIngestionWorkerAttempt> => {
-      if (!params.workflowRuntime) {
-        return {
-          launched: false,
-          queued: false,
-          reason: "no_runtime_subagent",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          sessionKey: null,
-          runId: null,
-          summary: null,
-          queueKey: null,
-        };
-      }
-
       const requesterBinding = resolveWorkflowRequesterBinding({
         projectRoot: params.projectRoot,
         workflowPolicy: params.workflowPolicy,
@@ -3765,6 +3966,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
     stageAfter?: string | null;
     ownerAfter?: string | null;
     ownerBefore?: string | null;
+    missingStageSignals?: string[];
     materializedArtifacts?: Array<{
       contract: string;
       artifactPath: string | null;
@@ -3801,6 +4003,45 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
           hookPoint: params.hookPoint,
           stage: params.autoIteratorResult.stageAfter ?? null,
           status: null,
+          hookCount: 0,
+          approved: true,
+          aggregateVerdict: "pass",
+          blockingReason: null,
+          aggregateRevisionPacketPath: null,
+        };
+      }
+      const missingStageSignals = (params.autoIteratorResult.missingStageSignals ?? []).filter(
+        (entry) => typeof entry === "string" && entry.trim().length > 0
+      );
+      if (params.hookPoint === "before_stage_handoff" && missingStageSignals.length > 0) {
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId ?? null,
+          component: "hook",
+          action: params.hookPoint,
+          status: "waiting",
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner:
+            params.autoIteratorResult.ownerAfter ??
+            params.autoIteratorResult.ownerBefore ??
+            null,
+          summary:
+            "Skipped before-stage handoff hooks because stage readiness signals are still missing.",
+          details: {
+            hookPoint: params.hookPoint,
+            stage: params.autoIteratorResult.stageAfter ?? null,
+            missingStageSignalCount: missingStageSignals.length,
+            missingStageSignals,
+          },
+        });
+        return {
+          launched: false,
+          reason: "no_hooks",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          hookPoint: params.hookPoint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          status: "skipped_stage_not_ready",
           hookCount: 0,
           approved: true,
           aggregateVerdict: "pass",
@@ -4613,6 +4854,12 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
       const store = await readAutoModeDiscussionStore(params.projectRoot);
       const currentRound = store.currentRound;
       const roundsStarted = store.roundsStartedByFingerprint[packet.packetFingerprint] ?? 0;
+      await retireSupersededAutoModeDiscussionRuntimeState({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        activeFingerprint: packet.packetFingerprint,
+        logger: params.logger,
+      });
 
       if (
         currentRound?.packetFingerprint === packet.packetFingerprint &&
@@ -4758,33 +5005,28 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
       });
       const requesterSessionKey = requesterBinding.sessionKey;
       const attempts: AutoModeDiscussionReviewAttempt[] = [];
+      const roundNumber = roundsStarted + 1;
       for (const reviewerRole of defaultAutoModeDiscussionPanel()) {
-        let sessionKey: string | null =
-          reviewerRole === "researcher"
-            ? buildResearcherWorkflowSubagentSessionKey({
-                requesterSessionKey: requesterSessionKey ?? undefined,
-                projectRoot: params.projectRoot,
-                purpose: "workflow-auto-discussion",
-                segments: [
-                  params.autoIteratorResult.stageAfter ?? null,
-                  riskLevel,
-                  `${roundsStarted + 1}`,
-                ],
-              })
-            : deriveAgentSessionKeyForRole({
-                requesterSessionKey: requesterSessionKey ?? undefined,
-                targetRole: reviewerRole,
-              });
-        const pooledDiscussionQueueKey =
-          shouldUsePooledServiceSession(reviewerRole)
-            ? [
-                "auto-discussion",
-                params.projectId ?? path.basename(params.projectRoot),
-                packet.packetFingerprint,
-                `${roundsStarted + 1}`,
-                reviewerRole,
-              ].join(":")
-            : null;
+        let sessionKey: string | null = buildAutoModeDiscussionReviewerSessionKey({
+          requesterSessionKey: requesterSessionKey ?? undefined,
+          reviewerRole,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel,
+          fingerprint: packet.packetFingerprint,
+          roundNumber,
+        });
+        const preferredDiscussionSessionKey = sessionKey;
+        const discussionQueueKey = buildAutoModeDiscussionQueueKey({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          fingerprint: packet.packetFingerprint,
+          reviewerRole,
+          roundNumber,
+        });
+        const pooledDiscussionQueueKey = shouldUsePooledServiceSession(reviewerRole)
+          ? discussionQueueKey
+          : null;
         let pooledSessionLease:
           | Awaited<ReturnType<typeof acquireBackgroundWorkflowSession>>
           | null = null;
@@ -4828,9 +5070,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
                 }),
                 lane: "nested",
                 deliver: false,
-                idempotencyKey: slugifyForIdempotency(
-                  `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
-                ),
+                idempotencyKey: discussionQueueKey,
                 extraSystemPrompt:
                   "Workflow auto risk discussion reviewer.\n" +
                   "Review only the supplied risk packet and return the required JSON schema.",
@@ -4857,12 +5097,12 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             });
             continue;
           }
-          sessionKey = pooledSessionLease.sessionKey;
+          sessionKey = pooledSessionLease.reusedIdleSession
+            ? preferredDiscussionSessionKey
+            : pooledSessionLease.sessionKey;
         }
         try {
-          const queueKey = slugifyForIdempotency(
-            `openclaw-research:auto-discussion:${params.projectId ?? path.basename(params.projectRoot)}:${packet.packetFingerprint}:${reviewerRole}:${roundsStarted + 1}`
-          );
+          const queueKey = discussionQueueKey;
           const started = await launchWorkflowNestedRunTransition({
             workflowRuntime: params.workflowRuntime,
             source: "workflow_auto_discussion",
@@ -4902,6 +5142,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
               requesterSessionKey: requesterSessionKey ?? "agent:researcher:main",
               backgroundSessionKey: sessionKey,
               runId: started.runId,
+              queueKey,
               kind: "workflow_auto_discussion",
               family: "review",
               projectId: params.projectId ?? undefined,
@@ -4913,7 +5154,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             reviewerRole,
             sessionKey,
             runId: started.runId,
-            queueKey: pooledDiscussionQueueKey,
+            queueKey,
             status: "pending",
             launchedAt: nowIso(),
             completedAt: null,

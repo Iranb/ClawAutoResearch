@@ -42,6 +42,7 @@ import {
   maybeAdvanceSurveyBriefRefinementForProject,
   maybeAdvanceWorkflowPanelDiscussionForProject,
   maybeAdvanceAutoGateReviewForProject,
+  maybeAdvanceWorkflowHookPointForProject,
   maybeDispatchAutoModeMitigationForProject,
   maybeLaunchAutoStageForProject,
   maybeLaunchAutoZoteroSyncForProject,
@@ -80,6 +81,42 @@ test.afterEach(async () => {
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeFakePapernexusBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, sys",
+      "args = sys.argv[1:]",
+      "def opt(name):",
+      "    if name in args:",
+      "        index = args.index(name)",
+      "        return args[index + 1] if index + 1 < len(args) else None",
+      "    prefix = name + '='",
+      "    for arg in args:",
+      "        if arg.startswith(prefix):",
+      "            return arg[len(prefix):]",
+      "    return None",
+      "payload = {",
+      "    'manifest': opt('--manifest'),",
+      "    'corpus': opt('--corpus'),",
+      "    'summary': {'total': 1, 'submitted': 1, 'completed': 1, 'running': 0, 'pending': 0, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'queueSummary': {'total': 1, 'pending': 0, 'running': 0, 'completed': 1, 'failed': 0, 'remaining': 0, 'overallPercent': 100},",
+      "    'items': [",
+      "        {'paperId': 'demo-paper', 'canonicalId': 'demo-paper', 'title': 'Demo Paper', 'taskId': 'task-demo', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True},",
+      "    ],",
+      "}",
+      "print(json.dumps(payload))",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+  return scriptPath;
 }
 
 function createEmbeddedAgentRuntime(rootDir, runs) {
@@ -255,6 +292,49 @@ test("selectDispatchableAutoStageAction withholds drive_stage when stage signals
   });
 
   assert.equal(action, null);
+});
+
+test("maybeAdvanceWorkflowHookPointForProject skips before-handoff audits while stage signals are missing", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  let reviewerRuns = 0;
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const attempt = await maybeAdvanceWorkflowHookPointForProject({
+    workflowRuntime: {
+      async run() {
+        reviewerRuns += 1;
+        return { runId: "unexpected-review-run" };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: false,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    hookPoint: "before_stage_handoff",
+    autoIteratorResult: {
+      effectiveAutoMode: "aggressive",
+      stageAfter: "frontier_mapping",
+      ownerAfter: "researcher",
+      missingStageSignals: ["{PROJ}/researcher/FRONTIER_REPORT.md"],
+      materializedArtifacts: [],
+      hookEvents: [],
+    },
+  });
+
+  assert.equal(attempt.approved, true);
+  assert.equal(attempt.status, "skipped_stage_not_ready");
+  assert.equal(reviewerRuns, 0);
 });
 
 test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STATE", async (t) => {
@@ -1696,6 +1776,8 @@ test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway 
 test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads without a graph-build agent turn", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
+  const fakeScriptDir = path.join(projectsRoot, "fake-papernexus-scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
   const batchManifestPath = path.join(
     projectRoot,
     "researcher",
@@ -1711,9 +1793,16 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
   const runs = [];
 
   t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
     await fs.rm(projectsRoot, { recursive: true, force: true });
   });
 
+  await writeFakePapernexusBatchScript(fakeScriptDir);
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
   await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
   await fs.writeFile(
     stagedMarkdownPath,
@@ -1799,15 +1888,22 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
   );
   assert.equal(launch.launched, true);
   assert.equal(launch.reason, "started");
-  assert.equal(runs.length, 1);
-  assert.match(runs[0].message, /^python3 scripts\/pn_batch_import\.py\b/);
-  assert.match(runs[0].extraSystemPrompt ?? "", /WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=req-batch-1/);
-  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "running");
-  assert.equal(manifest.paper_ingestion.queued_requests[0].last_run_id, "upload-run-1");
+  assert.equal(runs.length, 0);
+  assert.equal(manifest.paper_ingestion.runtime_status, "waiting_graph");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].last_run_id,
+    "direct-papernexus-batch-req-batch-1"
+  );
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].last_session_key,
+    "local:papernexus:direct-batch-import"
+  );
   assert.equal(
     manifest.paper_ingestion.queued_requests[0].trigger_kind,
     "coordinator_heartbeat"
   );
+  assert.equal(manifest.paper_ingestion.completed_papers.length, 1);
 });
 
 test("maybeLaunchAutoStageForProject keeps the researcher service session pool isolated per project", async (t) => {
@@ -2376,6 +2472,141 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
   assert.equal(resolvedStore.currentRound?.aggregate?.reviewCount, 3);
 });
 
+test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state when risk fingerprint changes", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "idea");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "idea",
+    citation_integrity: {
+      verification_status: "ready",
+    },
+    writing_contract: {
+      template_status: "pending",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [],
+      };
+    },
+  };
+  const workflowRuntime = {
+    async run(params) {
+      runtimeCalls.push(params);
+      return { runId: `discussion-run-${runtimeCalls.length}` };
+    },
+    async waitForRun() {
+      return { status: "timeout" };
+    },
+    async getSessionMessages() {
+      return { messages: [] };
+    },
+  };
+  const buildAutoIteratorResult = (riskReason) => ({
+    configuredAutoMode: "aggressive",
+    autoModeRiskLevel: "caution",
+    autoModeRiskFingerprint: riskReason,
+    autoModeReasons: [riskReason],
+    stageAfter: "idea",
+    ownerAfter: "researcher",
+    nextAction: "/idea-phase",
+    blockingReason: riskReason,
+    missingStageSignals: [],
+  });
+
+  const first = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime,
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: buildAutoIteratorResult("first graph-backed evidence risk"),
+    deps,
+  });
+
+  assert.equal(first.launched, true);
+  const firstStore = await readAutoModeDiscussionStore(projectRoot);
+  const firstQueueKeys = new Set(
+    firstStore.currentRound?.attempts.map((attempt) => attempt.queueKey) ?? []
+  );
+  const firstSessionKeys = new Set(
+    firstStore.currentRound?.attempts.map((attempt) => attempt.sessionKey) ?? []
+  );
+  assert.equal(firstQueueKeys.size, 3);
+  assert.equal(firstSessionKeys.size, 3);
+
+  const second = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime,
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: buildAutoIteratorResult("second innovation evidence risk"),
+    deps,
+  });
+
+  assert.equal(second.launched, true);
+  assert.equal(runtimeCalls.length, 6);
+  const secondStore = await readAutoModeDiscussionStore(projectRoot);
+  const secondQueueKeys = new Set(
+    secondStore.currentRound?.attempts.map((attempt) => attempt.queueKey) ?? []
+  );
+  assert.equal(secondQueueKeys.size, 3);
+  assert.deepEqual(
+    [...firstQueueKeys].filter((queueKey) => secondQueueKeys.has(queueKey)),
+    []
+  );
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const firstQueueEntries = queueStore.entries.filter((entry) =>
+    firstQueueKeys.has(entry.queueKey)
+  );
+  const secondQueueEntries = queueStore.entries.filter((entry) =>
+    secondQueueKeys.has(entry.queueKey)
+  );
+  assert.equal(firstQueueEntries.length, 3);
+  assert.equal(secondQueueEntries.length, 3);
+  assert.deepEqual(
+    firstQueueEntries.map((entry) => entry.status).sort(),
+    ["completed", "completed", "completed"]
+  );
+  assert.deepEqual(
+    secondQueueEntries.map((entry) => entry.status).sort(),
+    ["running", "running", "running"]
+  );
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const firstSessions = sessionsStore.entries.filter((entry) =>
+    firstSessionKeys.has(entry.sessionKey)
+  );
+  const activeDiscussionSessions = sessionsStore.entries.filter(
+    (entry) => entry.kind === "workflow_auto_discussion" && entry.status === "active"
+  );
+  assert.equal(firstSessions.length, 3);
+  assert.equal(firstSessions.every((entry) => entry.status !== "active"), true);
+  assert.equal(activeDiscussionSessions.length, 3);
+});
+
 test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher reviewer for another project on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
@@ -2542,7 +2773,16 @@ test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher r
   );
   assert.equal(typeof queuedResearcherAttempt?.runId, "string");
   assert.equal(typeof queuedResearcherAttempt?.queueKey, "string");
+  assert.match(
+    queuedResearcherAttempt?.queueKey ?? "",
+    /^openclaw-research:auto-discussion:/
+  );
   assert.equal(queuedResearcherAttempt?.status, "pending");
+  const gammaSessions = await readWorkflowRuntimeSessionsStore(gammaRoot);
+  const researcherSession = gammaSessions.entries.find(
+    (entry) => entry.runId === queuedResearcherAttempt?.runId
+  );
+  assert.equal(researcherSession?.queueKey, queuedResearcherAttempt?.queueKey);
 
   const updated = await maybeAdvanceAutoModeDiscussionForProject({
     workflowRuntime: discussionWorkflowRuntime,

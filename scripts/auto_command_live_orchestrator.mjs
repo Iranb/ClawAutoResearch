@@ -2,15 +2,33 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { dispatchWorkflowCommand } from "./workflow_command_harness_lib.mjs";
+import {
+  dispatchWorkflowCommand,
+  loadWorkflowHarnessPluginConfig,
+} from "./workflow_command_harness_lib.mjs";
 import { createGatewayRuntimeSubagent } from "./gateway_runtime_subagent.mjs";
 import { startIsolatedGateway } from "./isolated_gateway_server.mjs";
 import { buildWorkflowTransportContext } from "./workflow_transport_context.mjs";
-import { runWorkflowAutoIterator } from "../tools/workflow-guard.ts";
+import {
+  getWorkflowGuardPolicy,
+  runWorkflowAutoIterator,
+} from "../tools/workflow-guard.ts";
 import { handoffWorkflowTaskToAgent } from "../tools/workflow-execution/delivery-adapter.ts";
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
 import { deliverWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-delivery.ts";
 import { transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
+
+const ACTIVE_LOCAL_HANDOFF_STATUSES = new Set([
+  "prepared",
+  "pending",
+  "queued",
+  "dispatching",
+  "dispatched",
+  "delivered",
+  "acknowledged",
+  "claimed",
+  "activated",
+]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,6 +66,149 @@ async function readManifest(projectRoot) {
   );
 }
 
+function readString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function sameProjectRoot(left, right) {
+  const normalizedLeft = readString(left);
+  const normalizedRight = readString(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  return path.resolve(normalizedLeft) === path.resolve(normalizedRight);
+}
+
+function projectIdMatches(entryProjectId, projectId) {
+  const expected = readString(projectId);
+  if (!expected) {
+    return true;
+  }
+  const actual = readString(entryProjectId);
+  return !actual || actual === expected;
+}
+
+function roleMatches(entry, owner) {
+  const expected = readString(owner);
+  if (!expected || !entry || typeof entry !== "object") {
+    return false;
+  }
+  return [
+    entry.role,
+    entry.ownerAgent,
+    entry.owner_agent,
+    entry.agentId,
+    entry.agent_id,
+    entry.toRole,
+    entry.to_role,
+  ]
+    .map(readString)
+    .includes(expected);
+}
+
+function stageMatches(entry, stage) {
+  const expected = readString(stage);
+  if (!expected || !entry || typeof entry !== "object") {
+    return false;
+  }
+  return [
+    entry.currentStage,
+    entry.current_stage,
+    entry.stageAfter,
+    entry.stage_after,
+    entry.stage,
+  ]
+    .map(readString)
+    .includes(expected);
+}
+
+function entryProjectMatches(entry, projectRoot, projectId) {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const root = readString(entry.projectRoot ?? entry.project_root);
+  if (root && !sameProjectRoot(root, projectRoot)) {
+    return false;
+  }
+  return projectIdMatches(entry.projectId ?? entry.project_id, projectId);
+}
+
+function isActiveRuntimeSession(entry, params) {
+  if (!entryProjectMatches(entry, params.projectRoot, params.projectId)) {
+    return false;
+  }
+  if (readString(entry.status) !== "active") {
+    return false;
+  }
+  return roleMatches(entry, params.owner);
+}
+
+function isActiveAgentSession(entry, params) {
+  if (!entryProjectMatches(entry, params.projectRoot, params.projectId)) {
+    return false;
+  }
+  if (readString(entry.status) !== "active") {
+    return false;
+  }
+  if (!roleMatches(entry, params.owner)) {
+    return false;
+  }
+  const currentStage = readString(entry.currentStage ?? entry.current_stage);
+  return !currentStage || stageMatches(entry, params.stage);
+}
+
+function isActiveHandoffIntent(entry, params) {
+  if (!entryProjectMatches(entry, params.projectRoot, params.projectId)) {
+    return false;
+  }
+  if (!ACTIVE_LOCAL_HANDOFF_STATUSES.has(readString(entry.status))) {
+    return false;
+  }
+  return roleMatches(entry, params.owner) && stageMatches(entry, params.stage);
+}
+
+export async function readLiveWorkflowActivation(params) {
+  const manifest = params.manifest ?? (await readManifest(params.projectRoot));
+  if (
+    readString(manifest.current_stage) === readString(params.stage) &&
+    readString(manifest.owner_agent) === readString(params.owner)
+  ) {
+    return { active: true, reason: "manifest_owner_stage_assigned" };
+  }
+
+  const runtimeSessions = await readJsonIfExists(
+    path.join(params.projectRoot, ".openclaw-research", "workflow-runtime-sessions.json")
+  );
+  if (
+    Array.isArray(runtimeSessions?.entries) &&
+    runtimeSessions.entries.some((entry) => isActiveRuntimeSession(entry, params))
+  ) {
+    return { active: true, reason: "runtime_session_active" };
+  }
+
+  const agentSessions = await readJsonIfExists(
+    path.join(params.projectRoot, ".openclaw-research", "workflow-agent-sessions.json")
+  );
+  if (
+    Array.isArray(agentSessions?.entries) &&
+    agentSessions.entries.some((entry) => isActiveAgentSession(entry, params))
+  ) {
+    return { active: true, reason: "agent_session_active" };
+  }
+
+  const handoffIntents = await readJsonIfExists(
+    path.join(params.projectRoot, ".openclaw-research", "workflow-handoff-intents.json")
+  );
+  if (
+    Array.isArray(handoffIntents?.intents) &&
+    handoffIntents.intents.some((entry) => isActiveHandoffIntent(entry, params))
+  ) {
+    return { active: true, reason: "handoff_intent_active" };
+  }
+
+  return { active: false, reason: null };
+}
+
 function parseProjectRootFromCommandText(text) {
   const match = /project_root=(.+)$/m.exec(text ?? "");
   return match?.[1]?.trim() ?? null;
@@ -76,6 +237,31 @@ function workflowProgressFingerprint(manifest) {
     manifest?.paper_ingestion && typeof manifest.paper_ingestion === "object"
       ? manifest.paper_ingestion
       : {};
+  const queuedRequests = Array.isArray(paperIngestion.queued_requests)
+    ? paperIngestion.queued_requests
+    : Array.isArray(paperIngestion.queuedRequests)
+      ? paperIngestion.queuedRequests
+      : [];
+  const activeBatches = Array.isArray(paperIngestion.active_batches)
+    ? paperIngestion.active_batches
+    : Array.isArray(paperIngestion.activeBatches)
+      ? paperIngestion.activeBatches
+      : [];
+  const paperOperations = Array.isArray(paperIngestion.paper_operations)
+    ? paperIngestion.paper_operations
+    : Array.isArray(paperIngestion.paperOperations)
+      ? paperIngestion.paperOperations
+      : [];
+  const batchItems = Array.isArray(paperIngestion.batch_items)
+    ? paperIngestion.batch_items
+    : Array.isArray(paperIngestion.batchItems)
+      ? paperIngestion.batchItems
+      : [];
+  const completedPapers = Array.isArray(paperIngestion.completed_papers)
+    ? paperIngestion.completed_papers
+    : Array.isArray(paperIngestion.completedPapers)
+      ? paperIngestion.completedPapers
+      : [];
   return JSON.stringify({
     stage: manifest?.current_stage ?? null,
     owner: manifest?.owner_agent ?? null,
@@ -89,14 +275,38 @@ function workflowProgressFingerprint(manifest) {
       null,
     graphPresenceStatus:
       paperIngestion.graph_presence_status ?? paperIngestion.graphPresenceStatus ?? null,
+    graphPresenceExpected:
+      paperIngestion.graph_presence_expected_papers ??
+      paperIngestion.graphPresenceExpectedPapers ??
+      null,
+    graphPresencePresent:
+      paperIngestion.graph_presence_present_papers ??
+      paperIngestion.graphPresencePresentPapers ??
+      null,
+    graphPresenceMissing:
+      paperIngestion.graph_presence_missing_papers ??
+      paperIngestion.graphPresenceMissingPapers ??
+      null,
     paperRuntimeStatus:
       paperIngestion.runtime_status ?? paperIngestion.runtimeStatus ?? null,
-    activeBatchCount: Array.isArray(paperIngestion.active_batches)
-      ? paperIngestion.active_batches.length
-      : null,
-    paperOperationCount: Array.isArray(paperIngestion.paper_operations)
-      ? paperIngestion.paper_operations.length
-      : null,
+    queuedRequests: queuedRequests.map((request) => ({
+      requestId: request?.request_id ?? request?.requestId ?? null,
+      status: request?.status ?? null,
+      wrapper: request?.wrapper ?? null,
+      paperCount: request?.paper_count ?? request?.paperCount ?? null,
+      attemptCount: request?.attempt_count ?? request?.attemptCount ?? null,
+      lastRunId: request?.last_run_id ?? request?.lastRunId ?? null,
+      validationStatus:
+        request?.validation_status ?? request?.validationStatus ?? null,
+    })),
+    activeBatchCount: activeBatches.length,
+    paperOperationCount: paperOperations.length,
+    batchItemCount: batchItems.length,
+    completedPaperCount: completedPapers.length,
+    repairRequired:
+      paperIngestion.repair_required ?? paperIngestion.repairRequired ?? null,
+    retryStatus:
+      paperIngestion.retry_status ?? paperIngestion.retryStatus ?? null,
   });
 }
 
@@ -104,6 +314,20 @@ export function buildLiveConversationId(lane, date = new Date()) {
   const prefix = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
   const timestamp = date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
   return `${prefix}-${timestamp}-${randomUUID().slice(0, 8)}`;
+}
+
+export function buildLiveAutoIteratorParams({
+  projectRoot,
+  workflowPolicy,
+  mode = "test",
+  queueMailbox = false,
+}) {
+  return {
+    projectRoot,
+    mode,
+    queueMailbox,
+    policy: workflowPolicy,
+  };
 }
 
 function ensureSlashCommandText(text, fallback) {
@@ -227,6 +451,34 @@ async function waitForProjectRoot(projectRoot, timeoutMs = 60_000) {
     await sleep(1_000);
   }
   return false;
+}
+
+function positiveNumber(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error ?? "unknown error");
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timeout = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function waitForProgress(params) {
@@ -384,7 +636,48 @@ async function runLiveStageTurn(params) {
   });
 
   if (!delivered.delivered) {
-    throw new Error(`Failed to dispatch live stage ${stage}: ${delivered.reason ?? "unknown"}`);
+    const activation = await readLiveWorkflowActivation({
+      projectRoot,
+      projectId,
+      stage,
+      owner,
+      manifest,
+    });
+    const shouldObserveLocalRuntime =
+      activation.active ||
+      delivered.reason === "delivery_attempt_budget_exhausted" ||
+      delivered.reason === "handoff_ack_timeout";
+    if (!shouldObserveLocalRuntime) {
+      throw new Error(`Failed to dispatch live stage ${stage}: ${delivered.reason ?? "unknown"}`);
+    }
+    const progress = await waitForProgress({
+      projectRoot,
+      baselineManifest: manifest,
+      timeoutMs: stageTimeoutMs ?? 180_000,
+      pollMs: progressPollMs ?? 5_000,
+    });
+    await transitionWorkflowHandoffIntent({
+      projectRoot,
+      intentId: delivered.intent.intentId,
+      toStatus: progress.progressed ? "superseded" : "failed",
+      summary: progress.progressed
+        ? `${owner} made progress on ${stage} through local workflow runtime after live dispatch did not receive an acknowledgement.`
+        : `${owner} did not make observable progress on ${stage} after live dispatch did not receive an acknowledgement.`,
+      terminalReason: progress.progressed ? "local_runtime_superseded_live_dispatch" : "live_stage_timeout",
+    }).catch(() => null);
+    return {
+      owner,
+      stage,
+      command,
+      intentId: delivered.intent.intentId,
+      progressed: progress.progressed,
+      progressReason: progress.progressed
+        ? progress.reason
+        : activation.active
+          ? `local_runtime_${activation.reason}`
+          : delivered.reason ?? "dispatch_not_acknowledged",
+      manifest: progress.manifest,
+    };
   }
 
   await transitionWorkflowHandoffIntent({
@@ -457,6 +750,74 @@ async function runHarness(projectRoot, lane, options = {}) {
   return JSON.parse(stdout);
 }
 
+async function runHarnessOrFailure(projectRoot, lane, options = {}) {
+  try {
+    return await runHarness(projectRoot, lane, options);
+  } catch (error) {
+    return {
+      finalVerdict: "fail",
+      strictContent: Boolean(options.strictContent),
+      reportPath: null,
+      checklistPath: null,
+      timelinePath: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function liveNoProgressFailureReason(params) {
+  const blockingReason =
+    params.turn?.manifest?.blocking_reason ??
+    params.turn?.manifest?.orchestration_state?.blocking_reason ??
+    params.manifest?.blocking_reason ??
+    null;
+  return [
+    "live_no_progress",
+    `stage=${params.turn?.stage ?? params.stage ?? "unknown"}`,
+    `owner=${params.turn?.owner ?? params.owner ?? "unknown"}`,
+    `reason=${params.turn?.progressReason ?? "unknown"}`,
+    blockingReason ? `blocking=${String(blockingReason).slice(0, 500)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function liveBootstrapFailureReason(params) {
+  return [
+    params.phase ?? "live_bootstrap_failed",
+    `command=${params.commandName ?? "unknown"}`,
+    `project=${params.projectId ?? path.basename(params.projectRoot ?? "") ?? "unknown"}`,
+    params.error ? `error=${errorMessage(params.error).slice(0, 800)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function failedLiveHarness(failureReason) {
+  return {
+    finalVerdict: "fail",
+    strictContent: true,
+    reportPath: null,
+    checklistPath: null,
+    timelinePath: null,
+    error: failureReason,
+  };
+}
+
+function buildLiveBootstrapFailureResult(params) {
+  const failureReason = liveBootstrapFailureReason(params);
+  return {
+    transport: params.bootstrapTransport,
+    conversationId: params.conversationId,
+    bootstrap: params.bootstrap ?? null,
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    turns: [],
+    harness: failedLiveHarness(failureReason),
+    failureReason,
+  };
+}
+
 export async function runAutoCommandEndToEndLive(params) {
   const { lane, topic, projectsRoot } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
@@ -477,7 +838,19 @@ export async function runAutoCommandEndToEndLive(params) {
           projectsRoot,
           sourceConfigPath: params.sourceConfigPath,
           timeoutMs: params.gatewayStartupTimeoutMs ?? 90_000,
-        });
+  });
+  const pluginConfig = await loadWorkflowHarnessPluginConfig({
+    sourceConfigPath: isolatedGateway?.configPath ?? params.sourceConfigPath,
+    projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
+  });
+  const effectiveProjectsRoot = isolatedGateway?.projectsRoot ?? projectsRoot;
+  const expectedProjectId =
+    explicitProjectId ??
+    (lane === "survey" ? `survey-${slugifyTopic(topic)}` : slugifyTopic(topic));
+  const expectedProjectRoot = path.join(effectiveProjectsRoot, expectedProjectId);
+  const bootstrapTimeoutMs = positiveNumber(params.bootstrapTimeoutMs, 180_000);
+  const projectRootTimeoutMs = positiveNumber(params.projectRootTimeoutMs, 60_000);
+  const workflowPolicy = getWorkflowGuardPolicy(pluginConfig);
   const gateway = await createGatewayRuntimeSubagent({
     profile: params.profile,
     url: isolatedGateway?.url ?? params.gatewayUrl,
@@ -489,82 +862,130 @@ export async function runAutoCommandEndToEndLive(params) {
   });
   const runtimeSubagent = gateway.runtimeSubagent;
   try {
-    const bootstrap =
-      bootstrapTransport === "local"
-        ? await dispatchWorkflowCommand({
-            commandName,
-            args: JSON.stringify(topic),
-            projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
-            workspaceDir: isolatedGateway?.projectsRoot ?? projectsRoot,
-            sessionKey: transportContext.bootstrapSessionKey,
-            channel: transportContext.channel,
-            from: transportContext.from,
-            to: transportContext.to,
-            accountId: transportContext.accountId,
-            contextExtras: {
-              ...transportContext.commandContextExtras(),
-              ...(explicitProjectId ? { projectId: explicitProjectId } : {}),
-            },
-            emitFallbackNote: true,
-            runtimeSubagent,
-            backgroundExecutionMode: "live",
-          })
-        : await (async () => {
-            const started = await gateway.client.chatSend({
-              sessionKey: transportContext.bootstrapSessionKey,
-              message: `/${commandName} ${JSON.stringify(topic)}`,
-              idempotencyKey: `native-bootstrap:${commandName}:${Date.now()}`,
-              originatingChannel: transportContext.originatingChannel,
-              originatingTo: transportContext.originatingTo,
-              originatingAccountId: transportContext.accountId,
-              timeoutMs: 30_000,
-            });
-            if (started?.status !== "started" || typeof started?.runId !== "string") {
-              throw new Error(`Native slash bootstrap did not start correctly: ${JSON.stringify(started)}`);
-            }
-            await gateway.client.agentWait({
-              runId: started.runId,
-              timeoutMs: 120_000,
-            });
-            const slashHistory = await gateway.client.chatHistory({
-              sessionKey: transportContext.bootstrapSessionKey,
-              limit: 20,
-              timeoutMs: 30_000,
-            });
-            const assistantTexts = extractAssistantTexts(slashHistory.messages);
-            return {
-              command: `/${commandName}`,
+    let bootstrap = null;
+    try {
+      const bootstrapPromise =
+        bootstrapTransport === "local"
+          ? dispatchWorkflowCommand({
+              commandName,
               args: JSON.stringify(topic),
-              projectRoot: null,
-              projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
+              projectsRoot: effectiveProjectsRoot,
+              workspaceDir: effectiveProjectsRoot,
               sessionKey: transportContext.bootstrapSessionKey,
-              result: {
-                text: assistantTexts.at(-1) ?? "",
+              channel: transportContext.channel,
+              from: transportContext.from,
+              to: transportContext.to,
+              accountId: transportContext.accountId,
+              contextExtras: {
+                ...transportContext.commandContextExtras(),
+                ...(explicitProjectId ? { projectId: explicitProjectId } : {}),
               },
-              backgroundRuns: [],
-              fallbackTransport: "Executed through isolated native slash bootstrap.",
-              runId: started.runId,
-            };
-          })();
+              emitFallbackNote: true,
+              runtimeSubagent,
+              backgroundExecutionMode: "live",
+              pluginConfig,
+            })
+          : (async () => {
+              const started = await gateway.client.chatSend({
+                sessionKey: transportContext.bootstrapSessionKey,
+                message: `/${commandName} ${JSON.stringify(topic)}`,
+                idempotencyKey: `native-bootstrap:${commandName}:${Date.now()}`,
+                originatingChannel: transportContext.originatingChannel,
+                originatingTo: transportContext.originatingTo,
+                originatingAccountId: transportContext.accountId,
+                timeoutMs: 30_000,
+              });
+              if (started?.status !== "started" || typeof started?.runId !== "string") {
+                throw new Error(`Native slash bootstrap did not start correctly: ${JSON.stringify(started)}`);
+              }
+              const waited = await gateway.client.agentWait({
+                runId: started.runId,
+                timeoutMs: Math.min(bootstrapTimeoutMs, 120_000),
+              });
+              if (waited?.status === "error") {
+                throw new Error(`Native slash bootstrap failed: ${waited.error ?? "agent.wait returned error"}`);
+              }
+              const slashHistory = await gateway.client.chatHistory({
+                sessionKey: transportContext.bootstrapSessionKey,
+                limit: 20,
+                timeoutMs: 30_000,
+              });
+              const assistantTexts = extractAssistantTexts(slashHistory.messages);
+              return {
+                command: `/${commandName}`,
+                args: JSON.stringify(topic),
+                projectRoot: null,
+                projectsRoot: effectiveProjectsRoot,
+                sessionKey: transportContext.bootstrapSessionKey,
+                result: {
+                  text: assistantTexts.at(-1) ?? "",
+                },
+                backgroundRuns: [],
+                fallbackTransport: "Executed through isolated native slash bootstrap.",
+                runId: started.runId,
+              };
+            })();
+      bootstrap = await withTimeout(
+        bootstrapPromise,
+        bootstrapTimeoutMs,
+        `${commandName} live bootstrap`
+      );
+    } catch (error) {
+      return buildLiveBootstrapFailureResult({
+        phase: "live_bootstrap_failed",
+        bootstrapTransport,
+        conversationId,
+        commandName,
+        projectId: expectedProjectId,
+        projectRoot: expectedProjectRoot,
+        error,
+      });
+    }
 
     const projectRoot =
       deriveProjectRootFromBootstrap(bootstrap) ??
-      path.join(
-        isolatedGateway?.projectsRoot ?? projectsRoot,
-        explicitProjectId ??
-          (lane === "survey" ? `survey-${slugifyTopic(topic)}` : slugifyTopic(topic))
-      );
+      expectedProjectRoot;
     if (!projectRoot) {
-      throw new Error(`Failed to derive project root from ${commandName} bootstrap.`);
+      return buildLiveBootstrapFailureResult({
+        phase: "live_project_root_missing",
+        bootstrapTransport,
+        conversationId,
+        commandName,
+        bootstrap,
+        projectId: expectedProjectId,
+        projectRoot: expectedProjectRoot,
+        error: new Error(`Failed to derive project root from ${commandName} bootstrap.`),
+      });
     }
-    const ready = await waitForProjectRoot(projectRoot);
+    const ready = await waitForProjectRoot(projectRoot, projectRootTimeoutMs);
     if (!ready) {
-      throw new Error(`Project root did not materialize in time: ${projectRoot}`);
+      return buildLiveBootstrapFailureResult({
+        phase: "live_project_root_missing",
+        bootstrapTransport,
+        conversationId,
+        commandName,
+        bootstrap,
+        projectId: explicitProjectId ?? path.basename(projectRoot),
+        projectRoot,
+        error: new Error(
+          `Project root did not materialize within ${projectRootTimeoutMs}ms: ${projectRoot}`
+        ),
+      });
     }
+    const actualProjectId = path.basename(projectRoot);
 
     const turns = [];
     let previousRole = "researcher";
     const maxIterations = params.maxIterations ?? 12;
+    const maxNoProgressTurns = Math.max(
+      1,
+      Math.floor(
+        typeof params.maxNoProgressTurns === "number" && Number.isFinite(params.maxNoProgressTurns)
+          ? params.maxNoProgressTurns
+          : 1
+      )
+    );
+    let noProgressTurns = 0;
     for (let index = 0; index < maxIterations; index += 1) {
       const manifest = await readManifest(projectRoot);
       const pdfExists = await pathExists(
@@ -573,15 +994,14 @@ export async function runAutoCommandEndToEndLive(params) {
       if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
         break;
       }
-      const iterator = await runWorkflowAutoIterator({
+      const iterator = await runWorkflowAutoIterator(buildLiveAutoIteratorParams({
         projectRoot,
-        mode: "test",
-        queueMailbox: false,
-      });
+        workflowPolicy,
+      }));
       const turn = await runLiveStageTurn({
         runtimeSubagent,
         projectRoot,
-        projectId: explicitProjectId ?? path.basename(projectRoot),
+        projectId: actualProjectId,
         lane,
         topic,
         manifest,
@@ -594,6 +1014,28 @@ export async function runAutoCommandEndToEndLive(params) {
       });
       turns.push(turn);
       previousRole = turn.owner;
+      if (turn.progressed) {
+        noProgressTurns = 0;
+      } else {
+        noProgressTurns += 1;
+        if (noProgressTurns >= maxNoProgressTurns) {
+          const failureReason = liveNoProgressFailureReason({
+            turn,
+            manifest,
+          });
+          const harness = await runHarnessOrFailure(projectRoot, lane, { strictContent: true });
+          return {
+            transport: bootstrapTransport,
+            conversationId,
+            bootstrap,
+            projectId: actualProjectId,
+            projectRoot,
+            turns,
+            harness,
+            failureReason,
+          };
+        }
+      }
       if (["submit", "done"].includes(String(turn.manifest.current_stage ?? ""))) {
         break;
       }
@@ -604,7 +1046,7 @@ export async function runAutoCommandEndToEndLive(params) {
       transport: bootstrapTransport,
       conversationId,
       bootstrap,
-      projectId: explicitProjectId ?? path.basename(projectRoot),
+      projectId: actualProjectId,
       projectRoot,
       turns,
       harness,

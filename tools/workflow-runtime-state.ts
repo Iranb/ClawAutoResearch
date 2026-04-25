@@ -122,6 +122,7 @@ export type WorkflowRuntimeQueueEntry = {
   queuedAt: string;
   lastAttemptedAt: string | null;
   lastCheckedAt: string | null;
+  nextRetryAt?: string | null;
   attemptCount: number;
   summary: string | null;
   status: WorkflowRuntimeQueueEntryStatus;
@@ -601,6 +602,7 @@ function normalizeQueueEntry(value: unknown): WorkflowRuntimeQueueEntry | null {
     queuedAt,
     lastAttemptedAt: readString(record.lastAttemptedAt ?? record.last_attempted_at),
     lastCheckedAt: readString(record.lastCheckedAt ?? record.last_checked_at),
+    nextRetryAt: readString(record.nextRetryAt ?? record.next_retry_at),
     attemptCount: Math.max(
       0,
       Math.floor(readNumber(record.attemptCount ?? record.attempt_count) ?? 0)
