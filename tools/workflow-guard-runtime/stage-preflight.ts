@@ -37,6 +37,10 @@ import { materializeWritingSupportArtifacts } from "../research-writing/material
 import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
 import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
 import { materializeIntermediateArtifactHookPolicies } from "../workflow-intermediate-artifact-hook-policies";
+import {
+  materializeFrontierMappingState,
+  shouldMaterializeFrontierMappingState,
+} from "../workflow-guard-materializers/frontier-mapping-materializer";
 import { materializeRevisionControlState } from "../research-writing/revision-control";
 import { materializeSurveyVisualCompiler } from "../research-writing/survey-visual-compiler";
 import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
@@ -129,6 +133,10 @@ type StagePreflightDeps = {
     projectRoot: string;
     stage: string | null;
     paperMode?: "conference" | "journal" | "survey" | null;
+  }) => Promise<unknown>;
+  materializeFrontierMappingState?: (params: {
+    projectRoot: string;
+    manifest?: ManifestLike | null;
   }) => Promise<unknown>;
   materializeRevisionControlState?: (params: {
     projectRoot: string;
@@ -1371,12 +1379,18 @@ export async function maybePrepareWorkflowStageContracts(params: {
     shouldMaterializeTitleAbstractIntroWorkbench,
     () =>
       (
-        params.deps.materializeTitleAbstractIntroWorkbench ??
+      params.deps.materializeTitleAbstractIntroWorkbench ??
         materializeTitleAbstractIntroWorkbench
       )({
         projectRoot,
         stage: params.stage,
       })
+  );
+  await runStep("frontier_mapping_state", shouldMaterializeFrontierMappingState, () =>
+    (params.deps.materializeFrontierMappingState ?? materializeFrontierMappingState)({
+      projectRoot,
+      manifest,
+    })
   );
   await runStep("writing_hook_policies", shouldMaterializeWritingSupport, async () => {
     const writingContract =

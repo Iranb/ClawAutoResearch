@@ -6,9 +6,57 @@ import path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
-import { dispatchWorkflowCommand } from "../scripts/workflow_command_harness_lib.mjs";
+import {
+  dispatchWorkflowCommand,
+  loadWorkflowHarnessPluginConfig,
+} from "../scripts/workflow_command_harness_lib.mjs";
 
 const execFile = promisify(execFileCb);
+
+test("local workflow harness loads ClawAutoResearch policy from OpenClaw config", async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-harness-config-"));
+  const sourceConfigPath = path.join(tempRoot, "openclaw.json");
+  const projectsRoot = path.join(tempRoot, "projects");
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    sourceConfigPath,
+    `${JSON.stringify(
+      {
+        plugins: {
+          entries: {
+            ClawAutoResearch: {
+              config: {
+                projectsRoot: "/stale/config/projects",
+                papernexusMcpUrl: "http://127.0.0.1:4821/mcp",
+                papernexusSharedCorpus: "shared-global-graph",
+                papernexusApiTokenSource: "env",
+                autoMode: "supervised",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const pluginConfig = await loadWorkflowHarnessPluginConfig({
+    sourceConfigPath,
+    projectsRoot,
+  });
+
+  assert.equal(pluginConfig.projectsRoot, path.resolve(projectsRoot));
+  assert.equal(pluginConfig.papernexusMcpUrl, "http://127.0.0.1:4821/mcp");
+  assert.equal(pluginConfig.papernexusSharedCorpus, "shared-global-graph");
+  assert.equal(pluginConfig.papernexusApiTokenSource, "env");
+  assert.equal(pluginConfig.enableWorkflowMailbox, true);
+});
 
 test("local workflow harness starts /auto-research without discord context", async (t) => {
   const projectsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-local-research-"));

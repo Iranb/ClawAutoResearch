@@ -84,6 +84,26 @@ test("finalizeQueuedPaperIngestionAttempt requeues a failed background run for b
   assert.match(updated.detail ?? "", /bounded repair/i);
 });
 
+test("finalizeQueuedPaperIngestionAttempt requeues completed batch wrapper exits for remote wait", () => {
+  const request = makeQueuedRequest({
+    status: "running",
+    attemptCount: 1,
+    args: ["--manifest", "graph/batch-import.json", "submit"],
+    commandText:
+      "python3 skills/researcher/papernexus/scripts/pn_batch_import.py --manifest graph/batch-import.json submit",
+  });
+  const updated = finalizeQueuedPaperIngestionAttempt({
+    request,
+    terminalStatus: "completed",
+    finishedAt: "2026-04-10T02:15:00.000Z",
+    error: null,
+  });
+
+  assert.equal(updated.status, "queued");
+  assert.match(updated.commandText ?? "", /\bwait\b/);
+  assert.match(updated.detail ?? "", /remote import completion is not implied/i);
+});
+
 test("validateQueuedPaperIngestionRequest treats literature discovery scaffolds as requisitions instead of broken upload manifests", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-paper-ingestion-validation-")

@@ -118,19 +118,29 @@ function resolveAgentConfig(config, agentId) {
   return list.find((entry) => entry && entry.id === agentId) ?? null;
 }
 
+function readModelPrimaryRef(modelConfig) {
+  if (typeof modelConfig === "string" && modelConfig.trim()) {
+    return modelConfig;
+  }
+  return typeof modelConfig?.primary === "string" && modelConfig.primary.trim()
+    ? modelConfig.primary
+    : null;
+}
+
+function readModelFallbackRefs(modelConfig) {
+  return Array.isArray(modelConfig?.fallbacks) ? modelConfig.fallbacks : [];
+}
+
 function resolveConfiguredModelRefs(config, agentId) {
-  const defaultsModel = config?.agents?.defaults?.model ?? {};
-  const agentModel = resolveAgentConfig(config, agentId)?.model ?? {};
+  const defaultsModel = config?.agents?.defaults?.model ?? null;
+  const agentModel = resolveAgentConfig(config, agentId)?.model ?? null;
   const primary =
-    typeof agentModel.primary === "string" && agentModel.primary.trim()
-      ? agentModel.primary
-      : defaultsModel.primary;
-  const fallbacks = Array.isArray(agentModel.fallbacks)
-    ? agentModel.fallbacks
-    : Array.isArray(defaultsModel.fallbacks)
-      ? defaultsModel.fallbacks
-      : [];
-  return uniqueStrings([primary, ...fallbacks]);
+    readModelPrimaryRef(agentModel) ?? readModelPrimaryRef(defaultsModel);
+  return uniqueStrings([
+    primary,
+    ...readModelFallbackRefs(agentModel),
+    ...readModelFallbackRefs(defaultsModel),
+  ]);
 }
 
 function resolveAgentDir(params) {

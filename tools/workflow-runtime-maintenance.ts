@@ -1,5 +1,8 @@
 import path from "node:path";
-import { readJsonIfExists } from "./workflow-guard-core/fs";
+import {
+  readJsonIfExists,
+  writeJsonAtomicEnsured,
+} from "./workflow-guard-core/fs";
 import {
   dispatchWorkflowTaskToAgent,
   resolveWorkflowDispatchLaunchRunId,
@@ -42,6 +45,20 @@ import {
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
 import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
+import { writePapernexusProgressFromManifest } from "./papernexus-progress";
+import {
+  buildPapernexusBatchImportCommandText,
+  buildPapernexusBatchImportWaitArgs,
+  getPapernexusBatchImportArgs,
+  isPapernexusBatchImportLifecycleRequest,
+} from "./papernexus-batch-executor.js";
+import {
+  DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS,
+  isProviderCapacityFailure,
+} from "./provider-capacity.js";
+import { appendWorkflowLocalOperatorRelay } from "./workflow-local-operator-relay.js";
+import { isWorkflowRuntimeTrackingMissError } from "./workflow-background-run-reconcile.js";
+import { inspectRecentSessionProviderCapacity } from "./workflow-session-provider-capacity.js";
 import type {
   WorkflowExecutionRuntime,
   WorkflowExecutionSessionInspection,
@@ -63,6 +80,36 @@ type WorkflowPolicyLike = {
 } | null;
 
 const ACTIVE_SESSION_INSPECTION_GRACE_MS = 30 * 1000;
+const ACTIVE_RUN_FAILURE_PROBE_TIMEOUT_MS = 25;
+const ACTIVE_PAPER_INGESTION_REQUEST_STATUSES = new Set([
+  "launching",
+  "running",
+]);
+const ACTIVE_RUNTIME_QUEUE_STATUSES = new Set([
+  "queued",
+  "launching",
+  "running",
+  "degraded",
+  "needs_repair",
+]);
+const TERMINAL_RUNTIME_QUEUE_STATUSES = new Set([
+  "completed",
+  "failed",
+]);
+const ACTIVE_UNDERLYING_SESSION_STATUSES = new Set([
+  "active",
+  "busy",
+  "launching",
+  "queued",
+  "running",
+  "starting",
+]);
+
+type InvalidRuntimeSessionRepair = {
+  reason: string;
+  capacityFailure: boolean;
+  cooldownUntil: string | null;
+};
 
 export type WorkflowRuntimeMaintenanceResult = {
   projectId: string | null;
@@ -71,6 +118,7 @@ export type WorkflowRuntimeMaintenanceResult = {
   replayedQueueKeys: string[];
   exhaustedQueueKeys: string[];
   repairedSessionKeys: string[];
+  repairedPaperIngestionRequestIds: string[];
   exhaustedSessionKeys: string[];
   incidents: WorkflowRuntimeIncidentEntry[];
   handoffMaintenance: WorkflowHandoffMaintenanceResult;
@@ -130,12 +178,493 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return ordered;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => readRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+}
+
+function pickRecordString(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): string | null {
+  for (const key of keys) {
+    const value = readString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function normalizeRuntimeLikeStatus(value: unknown): string | null {
+  return readString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, "_") ?? null;
+}
+
+function isPaperNexusQueuedRequest(record: Record<string, unknown>): boolean {
+  const wrapper = pickRecordString(record, ["wrapper"]);
+  const commandText = pickRecordString(record, ["command_text", "commandText"]);
+  const requestKind = normalizeRuntimeLikeStatus(
+    record.request_kind ?? record.requestKind
+  );
+  const triggerKind = normalizeRuntimeLikeStatus(
+    record.trigger_kind ?? record.triggerKind
+  );
+  const searchable = [wrapper, commandText].filter(Boolean).join(" ");
+  return (
+    requestKind === "upload_manifest" ||
+    triggerKind === "graph_build_source_catchup" ||
+    /(?:^|\/)pn_(?:batch_import|import_submit|import_queue|stage_sync|paper_refresh)\.py\b/.test(
+      searchable
+    )
+  );
+}
+
+function paperRequestRuntimeRefs(record: Record<string, unknown>): {
+  requestId: string | null;
+  runId: string | null;
+  sessionKey: string | null;
+  queueKey: string | null;
+  commandText: string | null;
+} {
+  return {
+    requestId: pickRecordString(record, ["request_id", "requestId"]),
+    runId: pickRecordString(record, ["last_run_id", "lastRunId", "run_id", "runId"]),
+    sessionKey: pickRecordString(record, [
+      "last_session_key",
+      "lastSessionKey",
+      "session_key",
+      "sessionKey",
+    ]),
+    queueKey: pickRecordString(record, ["queue_key", "queueKey"]),
+    commandText: pickRecordString(record, ["command_text", "commandText"]),
+  };
+}
+
+function paperRequestTimestampMs(record: Record<string, unknown>): number | null {
+  return (
+    parseTimeMs(record.updated_at) ??
+    parseTimeMs(record.updatedAt) ??
+    parseTimeMs(record.started_at) ??
+    parseTimeMs(record.startedAt) ??
+    parseTimeMs(record.created_at) ??
+    parseTimeMs(record.createdAt)
+  );
+}
+
+function runtimeQueueMatchesPaperRequest(
+  entry: WorkflowRuntimeQueueEntry,
+  refs: ReturnType<typeof paperRequestRuntimeRefs>
+): boolean {
+  const values = [
+    entry.queueKey,
+    entry.requesterSessionKey,
+    entry.preferredSessionKey,
+    entry.parentSessionKey,
+    entry.runPayload?.idempotencyKey,
+    entry.runPayload?.message,
+    entry.summary,
+  ].filter((value): value is string => Boolean(value));
+  if (refs.queueKey && entry.queueKey === refs.queueKey) {
+    return true;
+  }
+  if (
+    refs.sessionKey &&
+    values.some((value) => value === refs.sessionKey || value.includes(refs.sessionKey ?? ""))
+  ) {
+    return true;
+  }
+  if (refs.requestId && values.some((value) => value.includes(refs.requestId ?? ""))) {
+    return true;
+  }
+  if (refs.runId && values.some((value) => value.includes(refs.runId ?? ""))) {
+    return true;
+  }
+  if (refs.commandText && values.some((value) => value.includes(refs.commandText ?? ""))) {
+    return true;
+  }
+  return false;
+}
+
+function terminalRuntimeQueueTimestamp(
+  entry: WorkflowRuntimeQueueEntry
+): string {
+  return entry.lastCheckedAt ?? entry.lastAttemptedAt ?? nowIso();
+}
+
+function rawPaperIngestionRequestForBatchImport(
+  request: Record<string, unknown>
+) {
+  const argsRaw = Array.isArray(request.args) ? request.args : [];
+  return {
+    wrapper: pickRecordString(request, ["wrapper"]),
+    args: argsRaw
+      .map((entry) => (typeof entry === "string" ? entry : null))
+      .filter((entry): entry is string => Boolean(entry)),
+    commandText: pickRecordString(request, ["command_text", "commandText"]),
+  };
+}
+
+async function reconcileTerminalPaperIngestionRequestsWithRuntimeQueue(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<{
+  completedRequestIds: string[];
+  failedRequestIds: string[];
+}> {
+  const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = await readJsonIfExists<Record<string, unknown>>(manifestPath);
+  if (!manifest) {
+    return { completedRequestIds: [], failedRequestIds: [] };
+  }
+  const paperIngestion = readRecord(manifest.paper_ingestion);
+  if (!paperIngestion) {
+    return { completedRequestIds: [], failedRequestIds: [] };
+  }
+  const queuedRequests = readRecordArray(
+    paperIngestion.queued_requests ?? paperIngestion.queuedRequests
+  );
+  if (queuedRequests.length === 0) {
+    return { completedRequestIds: [], failedRequestIds: [] };
+  }
+
+  const queueStore = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const activeQueueEntries = queueStore.entries.filter((entry) =>
+    ACTIVE_RUNTIME_QUEUE_STATUSES.has(entry.status)
+  );
+  const terminalQueueEntries = queueStore.entries.filter((entry) =>
+    TERMINAL_RUNTIME_QUEUE_STATUSES.has(entry.status)
+  );
+  if (terminalQueueEntries.length === 0) {
+    return { completedRequestIds: [], failedRequestIds: [] };
+  }
+
+  const currentAt = nowIso();
+  const completedRequestIds: string[] = [];
+  const requeuedImportRequestIds: string[] = [];
+  const failedRequestIds: string[] = [];
+  const nextRequests = queuedRequests.map((request) => {
+    const status = normalizeRuntimeLikeStatus(request.status);
+    if (
+      !status ||
+      !ACTIVE_PAPER_INGESTION_REQUEST_STATUSES.has(status) ||
+      !isPaperNexusQueuedRequest(request)
+    ) {
+      return request;
+    }
+    const refs = paperRequestRuntimeRefs(request);
+    const hasActiveQueue = activeQueueEntries.some((entry) =>
+      runtimeQueueMatchesPaperRequest(entry, refs)
+    );
+    if (hasActiveQueue) {
+      return request;
+    }
+    const terminalQueue = terminalQueueEntries
+      .filter((entry) => runtimeQueueMatchesPaperRequest(entry, refs))
+      .sort((left, right) =>
+        terminalRuntimeQueueTimestamp(right).localeCompare(
+          terminalRuntimeQueueTimestamp(left)
+        )
+      )[0];
+    if (!terminalQueue) {
+      return request;
+    }
+    const requestId =
+      refs.requestId ?? refs.runId ?? refs.sessionKey ?? `request-${completedRequestIds.length + failedRequestIds.length + 1}`;
+    const finishedAt = terminalRuntimeQueueTimestamp(terminalQueue);
+    if (terminalQueue.status === "completed") {
+      const batchRequest = rawPaperIngestionRequestForBatchImport(request);
+      if (isPapernexusBatchImportLifecycleRequest(batchRequest)) {
+        const waitArgs = buildPapernexusBatchImportWaitArgs(
+          getPapernexusBatchImportArgs(batchRequest),
+          {
+            timeoutSeconds: 60,
+            intervalSeconds: 5,
+          }
+        );
+        requeuedImportRequestIds.push(requestId);
+        return {
+          ...request,
+          status: "queued",
+          args: waitArgs,
+          command_text: buildPapernexusBatchImportCommandText(waitArgs),
+          updated_at: currentAt,
+          finished_at: pickRecordString(request, ["finished_at", "finishedAt"]),
+          next_retry_at: null,
+          last_error: null,
+          detail:
+            "PaperNexus wrapper process completed, but remote import completion still requires a bounded wait/status pass.",
+        };
+      }
+      completedRequestIds.push(requestId);
+      return {
+        ...request,
+        status: "completed",
+        updated_at: currentAt,
+        finished_at: pickRecordString(request, ["finished_at", "finishedAt"]) ?? finishedAt,
+        last_error: null,
+        detail:
+          "PaperNexus wrapper runtime completed; graph presence verification remains authoritative for downstream readiness.",
+      };
+    }
+    failedRequestIds.push(requestId);
+    const error =
+      terminalQueue.lastError ??
+      "PaperNexus wrapper runtime failed before synchronizing queued request state.";
+    return {
+      ...request,
+      status: "failed",
+      updated_at: currentAt,
+      finished_at: pickRecordString(request, ["finished_at", "finishedAt"]) ?? finishedAt,
+      last_error: pickRecordString(request, ["last_error", "lastError"]) ?? error,
+      detail: error,
+    };
+  });
+
+  if (
+    completedRequestIds.length === 0 &&
+    requeuedImportRequestIds.length === 0 &&
+    failedRequestIds.length === 0
+  ) {
+    return { completedRequestIds: [], failedRequestIds: [] };
+  }
+
+  const summaryParts = [
+    completedRequestIds.length > 0
+      ? `${completedRequestIds.length} PaperNexus queued request(s) completed in the runtime queue`
+      : null,
+    requeuedImportRequestIds.length > 0
+      ? `${requeuedImportRequestIds.length} PaperNexus queued request(s) requeued for remote import wait/status`
+      : null,
+    failedRequestIds.length > 0
+      ? `${failedRequestIds.length} PaperNexus queued request(s) failed in the runtime queue`
+      : null,
+  ].filter(Boolean);
+  const summary = `${summaryParts.join("; ")}; reconciled queued_requests before stale-runtime repair.`;
+  const nextPaperIngestion = {
+    ...paperIngestion,
+    queued_requests: nextRequests,
+    runtime_status:
+      failedRequestIds.length > 0
+        ? "blocked"
+        : requeuedImportRequestIds.length > 0
+          ? "waiting_import"
+          : "waiting_graph",
+    waiting_reason:
+      failedRequestIds.length > 0
+        ? "PaperNexus wrapper runtime failed; repair is required before graph readiness can advance."
+        : requeuedImportRequestIds.length > 0
+          ? "PaperNexus wrapper process completed; remote import still requires bounded wait/status verification."
+        : "PaperNexus wrapper runtime completed; waiting for graph presence verification.",
+    repair_required:
+      failedRequestIds.length > 0 ? true : paperIngestion.repair_required,
+    repair_reason:
+      failedRequestIds.length > 0
+        ? "PaperNexus wrapper runtime failed before queued request completion."
+        : paperIngestion.repair_reason,
+    last_updated_at: currentAt,
+  } as Record<string, unknown>;
+  delete nextPaperIngestion.queuedRequests;
+  manifest.paper_ingestion = nextPaperIngestion;
+  manifest.updated_at = currentAt;
+
+  await writeJsonAtomicEnsured(manifestPath, manifest);
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.projectRoot,
+    manifest,
+    updatedAt: currentAt,
+  });
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "paper_ingestion_request_runtime_reconciled",
+    summary,
+    details: {
+      completedRequestIds,
+      requeuedImportRequestIds,
+      failedRequestIds,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "paper_ingestion_request_runtime_reconciled",
+    status:
+      failedRequestIds.length > 0 || requeuedImportRequestIds.length > 0
+        ? "waiting"
+        : "completed",
+    summary,
+    details: {
+      completedRequestIds,
+      requeuedImportRequestIds,
+      failedRequestIds,
+    },
+  });
+  return { completedRequestIds, failedRequestIds };
+}
+
+async function markStalePaperIngestionRequestsNeedsRepair(params: {
+  projectRoot: string;
+  projectId: string | null;
+  activeSessionInspectionGraceMs?: number;
+  currentMs?: number;
+}): Promise<{
+  repairedRequestIds: string[];
+}> {
+  const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = await readJsonIfExists<Record<string, unknown>>(manifestPath);
+  if (!manifest) {
+    return { repairedRequestIds: [] };
+  }
+  const paperIngestion = readRecord(manifest.paper_ingestion);
+  if (!paperIngestion) {
+    return { repairedRequestIds: [] };
+  }
+  const queuedRequests = readRecordArray(
+    paperIngestion.queued_requests ?? paperIngestion.queuedRequests
+  );
+  if (queuedRequests.length === 0) {
+    return { repairedRequestIds: [] };
+  }
+
+  const [sessionsStore, queueStore] = await Promise.all([
+    readWorkflowRuntimeSessionsStore(params.projectRoot),
+    readWorkflowRuntimeQueueStore(params.projectRoot),
+  ]);
+  const activeSessionKeys = new Set(
+    sessionsStore.entries
+      .filter((entry) => entry.status === "active")
+      .map((entry) => entry.sessionKey)
+  );
+  const activeRunIds = new Set(
+    sessionsStore.entries
+      .filter((entry) => entry.status === "active" && readString(entry.runId))
+      .map((entry) => entry.runId as string)
+  );
+  const activeQueueEntries = queueStore.entries.filter((entry) =>
+    ACTIVE_RUNTIME_QUEUE_STATUSES.has(entry.status)
+  );
+  const currentMs = params.currentMs ?? Date.now();
+  const graceMs =
+    typeof params.activeSessionInspectionGraceMs === "number" &&
+    Number.isFinite(params.activeSessionInspectionGraceMs)
+      ? Math.max(0, Math.floor(params.activeSessionInspectionGraceMs))
+      : ACTIVE_SESSION_INSPECTION_GRACE_MS;
+  const now = new Date(currentMs).toISOString();
+  const repairedRequestIds: string[] = [];
+  const repairedRefs: Array<ReturnType<typeof paperRequestRuntimeRefs>> = [];
+  const nextRequests = queuedRequests.map((request) => {
+    const status = normalizeRuntimeLikeStatus(request.status);
+    if (
+      !status ||
+      !ACTIVE_PAPER_INGESTION_REQUEST_STATUSES.has(status) ||
+      !isPaperNexusQueuedRequest(request)
+    ) {
+      return request;
+    }
+    const refs = paperRequestRuntimeRefs(request);
+    const hasActiveSession =
+      (refs.sessionKey ? activeSessionKeys.has(refs.sessionKey) : false) ||
+      (refs.runId ? activeRunIds.has(refs.runId) : false);
+    const hasActiveQueue = activeQueueEntries.some((entry) =>
+      runtimeQueueMatchesPaperRequest(entry, refs)
+    );
+    if (hasActiveSession || hasActiveQueue) {
+      return request;
+    }
+    const updatedMs = paperRequestTimestampMs(request);
+    if (updatedMs != null && currentMs - updatedMs < graceMs) {
+      return request;
+    }
+    const requestId =
+      refs.requestId ?? refs.runId ?? refs.sessionKey ?? `request-${repairedRequestIds.length + 1}`;
+    const reason =
+      "PaperNexus upload request lost its active runtime session/queue linkage and needs repair.";
+    repairedRequestIds.push(requestId);
+    repairedRefs.push(refs);
+    return {
+      ...request,
+      status: "needs_repair",
+      updated_at: now,
+      last_error: pickRecordString(request, ["last_error", "lastError"]) ?? reason,
+      detail: reason,
+    };
+  });
+
+  if (repairedRequestIds.length === 0) {
+    return { repairedRequestIds: [] };
+  }
+
+  const repairReason =
+    repairedRequestIds.length === 1
+      ? `PaperNexus queued request ${repairedRequestIds[0]} lost runtime tracking and needs repair.`
+      : `${repairedRequestIds.length} PaperNexus queued requests lost runtime tracking and need repair.`;
+  const nextPaperIngestion = {
+    ...paperIngestion,
+    queued_requests: nextRequests,
+    runtime_status: "blocked",
+    waiting_reason: repairReason,
+    repair_required: true,
+    repair_reason: repairReason,
+    last_updated_at: now,
+  } as Record<string, unknown>;
+  delete nextPaperIngestion.queuedRequests;
+  manifest.paper_ingestion = nextPaperIngestion;
+  manifest.updated_at = now;
+  await writeJsonAtomicEnsured(manifestPath, manifest);
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.projectRoot,
+    manifest,
+    updatedAt: now,
+  });
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "paper_ingestion_request_repair",
+    summary: repairReason,
+    details: {
+      repairedRequestIds,
+      repairedRefs,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "paper_ingestion_request_repair",
+    status: "waiting",
+    summary: repairReason,
+    details: {
+      repairedRequestIds,
+      repairedRefs,
+    },
+  });
+  return { repairedRequestIds };
+}
+
 function describeInvalidRuntimeSessionInspection(
   inspection: WorkflowExecutionSessionInspection
 ): string | null {
   const status = readString(inspection.status)?.toLowerCase() ?? null;
+  const legacyInspection = inspection as unknown as { error?: unknown };
+  const lastError =
+    readString(inspection.lastError) ?? readString(legacyInspection.error);
   if (status && ["failed", "completed", "aborted", "done"].includes(status)) {
-    return `Workflow runtime session is already terminal in the underlying session store (status=${status}).`;
+    return [
+      `Workflow runtime session is already terminal in the underlying session store (status=${status}).`,
+      lastError ? `last_error=${lastError}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
   if (inspection.abortedLastRun) {
     return "Workflow runtime session was aborted in the underlying session store.";
@@ -147,6 +676,19 @@ function describeInvalidRuntimeSessionInspection(
     return "Workflow runtime session carries a persisted model/provider override and must be rotated.";
   }
   return null;
+}
+
+function isUnderlyingRuntimeSessionActive(
+  inspection: WorkflowExecutionSessionInspection | null | undefined
+): boolean {
+  if (!inspection) {
+    return false;
+  }
+  const status = readString(inspection.status)?.toLowerCase() ?? null;
+  if (!status || !ACTIVE_UNDERLYING_SESSION_STATUSES.has(status)) {
+    return false;
+  }
+  return inspection.endedAt == null;
 }
 
 function resolveRuntimeSessionFreshnessMs(
@@ -171,6 +713,71 @@ function isRuntimeSessionStaleForInspection(params: {
   return params.currentMs - freshnessMs > params.staleSessionAgeMs;
 }
 
+function getQueueRetryDelayMs(entry: WorkflowRuntimeQueueEntry, currentMs: number): number {
+  const nextRetryMs = parseTimeMs(entry.nextRetryAt);
+  if (nextRetryMs == null) {
+    return 0;
+  }
+  return Math.max(0, nextRetryMs - currentMs);
+}
+
+function buildProviderCapacityCooldownUntil(): string {
+  return new Date(Date.now() + DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS).toISOString();
+}
+
+async function probeActiveRuntimeRun(params: {
+  workflowRuntime: WorkflowRuntimeApi;
+  session: WorkflowRuntimeSessionEntry;
+  inspection: WorkflowExecutionSessionInspection | null;
+}): Promise<InvalidRuntimeSessionRepair | null> {
+  const transcriptCapacityFailure =
+    await inspectRecentSessionProviderCapacity({
+      workflowRuntime: params.workflowRuntime,
+      sessionKey: params.session.sessionKey,
+    });
+  if (transcriptCapacityFailure) {
+    return {
+      reason: `Workflow runtime session hit provider capacity while still marked active: ${transcriptCapacityFailure}`,
+      capacityFailure: true,
+      cooldownUntil: new Date(
+        Date.now() + DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS
+      ).toISOString(),
+    };
+  }
+  const runId = readString(params.session.runId);
+  if (!runId || !params.workflowRuntime.waitForRun) {
+    return null;
+  }
+  const waited = await params.workflowRuntime.waitForRun({
+    runId,
+    timeoutMs: ACTIVE_RUN_FAILURE_PROBE_TIMEOUT_MS,
+  });
+  if (waited.status === "timeout") {
+    return null;
+  }
+  if (
+    waited.status === "error" &&
+    isWorkflowRuntimeTrackingMissError(waited) &&
+    isUnderlyingRuntimeSessionActive(params.inspection)
+  ) {
+    return null;
+  }
+  const reason =
+    waited.status === "ok"
+      ? "Workflow runtime run has already completed but the runtime session is still marked active."
+      : `Workflow runtime run failed while the session was still marked active: ${
+          readString(waited.error) ?? "unknown error"
+        }`;
+  const capacityFailure = isProviderCapacityFailure(waited.error ?? reason);
+  return {
+    reason,
+    capacityFailure,
+    cooldownUntil: capacityFailure
+      ? new Date(Date.now() + DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS).toISOString()
+      : null,
+  };
+}
+
 async function repairInvalidActiveRuntimeSessions(params: {
   projectRoot: string;
   projectId: string | null;
@@ -189,7 +796,7 @@ async function repairInvalidActiveRuntimeSessions(params: {
   }
 
   const sessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot);
-  const invalidBySessionKey = new Map<string, string>();
+  const invalidBySessionKey = new Map<string, InvalidRuntimeSessionRepair>();
   const deferredBySessionKey = new Map<string, string>();
   const inspectionGraceMs =
     typeof params.activeSessionInspectionGraceMs === "number" &&
@@ -202,6 +809,21 @@ async function repairInvalidActiveRuntimeSessions(params: {
       ? Math.max(0, Math.floor(params.staleSessionAgeMs))
       : 15 * 60 * 1000;
   const currentMs = Date.now();
+  const providerCapacityCooldownUntil = new Date(
+    currentMs + DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS
+  ).toISOString();
+
+  const buildRepair = (
+    reason: string,
+    evidence?: unknown
+  ): InvalidRuntimeSessionRepair => {
+    const capacityFailure = isProviderCapacityFailure(evidence ?? reason);
+    return {
+      reason,
+      capacityFailure,
+      cooldownUntil: capacityFailure ? providerCapacityCooldownUntil : null,
+    };
+  };
 
   for (const session of sessionsStore.entries) {
     if (session.status !== "active") {
@@ -225,25 +847,48 @@ async function repairInvalidActiveRuntimeSessions(params: {
         sessionKey: session.sessionKey,
       });
       if (!inspection) {
+        const transcriptCapacityFailure =
+          await inspectRecentSessionProviderCapacity({
+            workflowRuntime: params.workflowRuntime,
+            sessionKey: session.sessionKey,
+          });
+        if (transcriptCapacityFailure) {
+          invalidBySessionKey.set(
+            session.sessionKey,
+            buildRepair(
+              `Workflow runtime session hit provider capacity but is missing from the underlying session store: ${transcriptCapacityFailure}`,
+              transcriptCapacityFailure
+            )
+          );
+          continue;
+        }
         const reason =
           "Workflow runtime session is missing from the underlying session store.";
-        if (isStaleForInspection) {
-          invalidBySessionKey.set(session.sessionKey, reason);
-        } else {
-          deferredBySessionKey.set(session.sessionKey, reason);
-        }
+        invalidBySessionKey.set(session.sessionKey, buildRepair(reason));
         continue;
       }
       const reason = describeInvalidRuntimeSessionInspection(inspection);
       if (reason) {
-        invalidBySessionKey.set(session.sessionKey, reason);
+        invalidBySessionKey.set(
+          session.sessionKey,
+          buildRepair(reason, inspection.lastError ?? reason)
+        );
+        continue;
+      }
+      const activeRunRepair = await probeActiveRuntimeRun({
+        workflowRuntime: params.workflowRuntime,
+        session,
+        inspection,
+      });
+      if (activeRunRepair) {
+        invalidBySessionKey.set(session.sessionKey, activeRunRepair);
       }
     } catch (error) {
       const reason = `Workflow runtime session inspection failed: ${
         error instanceof Error ? error.message : String(error)
       }`;
       if (isStaleForInspection) {
-        invalidBySessionKey.set(session.sessionKey, reason);
+        invalidBySessionKey.set(session.sessionKey, buildRepair(reason, error));
       } else {
         deferredBySessionKey.set(session.sessionKey, reason);
       }
@@ -276,18 +921,27 @@ async function repairInvalidActiveRuntimeSessions(params: {
   }
 
   const currentAt = nowIso();
-  const invalidQueueKeys = uniqueStrings(
-    sessionsStore.entries
-      .filter((entry) => invalidBySessionKey.has(entry.sessionKey))
-      .map((entry) => readString(entry.queueKey))
-  );
+  const queueStoreBeforeRepair = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const queueRepairByQueueKey = new Map<string, InvalidRuntimeSessionRepair>();
+  for (const entry of sessionsStore.entries) {
+    const repair = invalidBySessionKey.get(entry.sessionKey);
+    const queueKey = readString(entry.queueKey);
+    if (!repair || !queueKey) {
+      continue;
+    }
+    const existing = queueRepairByQueueKey.get(queueKey);
+    if (!existing || (!existing.capacityFailure && repair.capacityFailure)) {
+      queueRepairByQueueKey.set(queueKey, repair);
+    }
+  }
+  const invalidQueueKeys = uniqueStrings([...queueRepairByQueueKey.keys()]);
 
   await updateWorkflowRuntimeSessionsStore({
     projectRoot: params.projectRoot,
     updater: (store) =>
       store.entries.map((entry) => {
-        const reason = invalidBySessionKey.get(entry.sessionKey);
-        if (!reason) {
+        const repair = invalidBySessionKey.get(entry.sessionKey);
+        if (!repair) {
           return entry;
         }
         return {
@@ -295,7 +949,7 @@ async function repairInvalidActiveRuntimeSessions(params: {
           status: "needs_repair",
           lastCheckedAt: currentAt,
           lastFinishedAt: entry.lastFinishedAt ?? currentAt,
-          lastError: [entry.lastError, reason].filter(Boolean).join(" "),
+          lastError: [entry.lastError, repair.reason].filter(Boolean).join(" "),
         };
       }),
   });
@@ -311,15 +965,61 @@ async function repairInvalidActiveRuntimeSessions(params: {
           ) {
             return entry;
           }
+          const repair = queueRepairByQueueKey.get(entry.queueKey);
           return {
             ...entry,
             status: "needs_repair",
             lastCheckedAt: currentAt,
+            nextRetryAt: repair?.cooldownUntil ?? entry.nextRetryAt ?? null,
             lastError:
               entry.lastError ??
+              repair?.reason ??
               "Linked runtime session is not active in the underlying session store and needs repair.",
           };
         }),
+    });
+  }
+
+  const capacityRelayQueueKeys: string[] = [];
+  for (const [queueKey, repair] of queueRepairByQueueKey.entries()) {
+    if (!repair.capacityFailure) {
+      continue;
+    }
+    const queueEntry =
+      queueStoreBeforeRepair.entries.find((entry) => entry.queueKey === queueKey) ?? null;
+    const sessionEntry =
+      sessionsStore.entries.find((entry) => entry.queueKey === queueKey) ?? null;
+    capacityRelayQueueKeys.push(queueKey);
+    await appendWorkflowLocalOperatorRelay({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      idempotencyKey: `provider-capacity:${queueKey}:${repair.cooldownUntil ?? "unknown"}`,
+      queueKey,
+      sessionKey: sessionEntry?.sessionKey ?? null,
+      ownerAgent: queueEntry?.ownerAgent ?? sessionEntry?.ownerAgent ?? null,
+      stage: queueEntry?.dispatchPayload?.stage ?? null,
+      kind: "provider_capacity_cooldown",
+      summary:
+        "Workflow runtime hit provider capacity limits and needs local operator follow-up.",
+      reason: repair.reason,
+      cooldownUntil: repair.cooldownUntil,
+      operatorPrompt: [
+        "Continue this AutoResearch workflow locally without Discord.",
+        `Project root: ${params.projectRoot}`,
+        params.projectId ? `Project id: ${params.projectId}` : null,
+        `Queue key: ${queueKey}`,
+        sessionEntry?.sessionKey ? `Session key: ${sessionEntry.sessionKey}` : null,
+        queueEntry?.summary ? `Transition summary: ${queueEntry.summary}` : null,
+        "The provider returned a capacity/quota error. Use configured agent model fallbacks when available; otherwise wait until cooldownUntil before replaying the queued transition.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      details: {
+        source: queueEntry?.source ?? null,
+        entryType: queueEntry?.entryType ?? null,
+        kind: queueEntry?.kind ?? null,
+        family: queueEntry?.family ?? null,
+      },
     });
   }
 
@@ -333,6 +1033,8 @@ async function repairInvalidActiveRuntimeSessions(params: {
     details: {
       repairedSessionKeys: [...invalidBySessionKey.keys()],
       repairedQueueKeys: invalidQueueKeys,
+      providerCapacityCooldownQueueKeys: capacityRelayQueueKeys,
+      providerCapacityCooldownUntil,
     },
   });
 
@@ -346,6 +1048,8 @@ async function repairInvalidActiveRuntimeSessions(params: {
     details: {
       repairedSessionKeys: [...invalidBySessionKey.keys()],
       repairedQueueKeys: invalidQueueKeys,
+      providerCapacityCooldownQueueKeys: capacityRelayQueueKeys,
+      providerCapacityCooldownUntil,
     },
   });
 
@@ -353,6 +1057,109 @@ async function repairInvalidActiveRuntimeSessions(params: {
     repairedSessionKeys: [...invalidBySessionKey.keys()],
     repairedQueueKeys: invalidQueueKeys,
   };
+}
+
+async function reactivateRepairSessionsWithLiveRuntime(params: {
+  projectRoot: string;
+  projectId: string | null;
+  workflowRuntime?: WorkflowRuntimeApi;
+}): Promise<string[]> {
+  if (!params.workflowRuntime?.inspectSession) {
+    return [];
+  }
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(params.projectRoot);
+  const queueStore = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const queueByKey = new Map(
+    queueStore.entries.map((entry) => [entry.queueKey, entry] as const)
+  );
+  const reactivatedBySessionKey = new Map<
+    string,
+    WorkflowExecutionSessionInspection
+  >();
+
+  for (const session of sessionsStore.entries) {
+    if (session.status !== "needs_repair") {
+      continue;
+    }
+    const queueKey = readString(session.queueKey);
+    if (!queueKey) {
+      continue;
+    }
+    const queue = queueByKey.get(queueKey);
+    if (!queue || (queue.status !== "running" && queue.status !== "launching")) {
+      continue;
+    }
+    if (isProviderCapacityFailure(session.lastError)) {
+      continue;
+    }
+    try {
+      const inspection = await params.workflowRuntime.inspectSession({
+        sessionKey: session.sessionKey,
+      });
+      if (
+        !inspection ||
+        describeInvalidRuntimeSessionInspection(inspection) ||
+        !isUnderlyingRuntimeSessionActive(inspection)
+      ) {
+        continue;
+      }
+      reactivatedBySessionKey.set(session.sessionKey, inspection);
+    } catch {
+      continue;
+    }
+  }
+
+  if (reactivatedBySessionKey.size === 0) {
+    return [];
+  }
+
+  const currentAt = nowIso();
+  await updateWorkflowRuntimeSessionsStore({
+    projectRoot: params.projectRoot,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        const inspection = reactivatedBySessionKey.get(entry.sessionKey);
+        if (!inspection) {
+          return entry;
+        }
+        return {
+          ...entry,
+          sessionId: inspection.sessionId ?? entry.sessionId,
+          status: "active",
+          lastHeartbeatAt: currentAt,
+          lastCheckedAt: currentAt,
+          lastFinishedAt: null,
+          lastError: null,
+        };
+      }),
+  });
+
+  const reactivatedSessionKeys = [...reactivatedBySessionKey.keys()];
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "repair_session_reactivated_from_live_runtime",
+    status: "completed",
+    summary:
+      "Runtime maintenance reactivated repair-marked sessions because the underlying runtime session is still active.",
+    details: {
+      reactivatedSessionKeys,
+    },
+  });
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "runtime_repair_session_reactivated",
+    summary:
+      `Reactivated ${reactivatedSessionKeys.length} repair-marked runtime session(s) ` +
+      "after confirming live runtime activity.",
+    details: {
+      reactivatedSessionKeys,
+    },
+  });
+
+  return reactivatedSessionKeys;
 }
 
 async function markLinkedQueuesNeedsRepairForRepairSessions(params: {
@@ -420,6 +1227,189 @@ async function markLinkedQueuesNeedsRepairForRepairSessions(params: {
   return uniqueQueueKeys;
 }
 
+async function readProjectRepairTopic(projectRoot: string): Promise<string> {
+  const manifest = await readJsonIfExists<Record<string, unknown>>(
+    path.join(projectRoot, "PROJECT_MANIFEST.json")
+  );
+  return (
+    readString(manifest?.title) ??
+    readString(manifest?.topic) ??
+    readString(manifest?.research_topic) ??
+    path.basename(path.resolve(projectRoot))
+  );
+}
+
+function buildBackgroundRepairCommand(params: {
+  session: WorkflowRuntimeSessionEntry;
+  projectRoot: string;
+  projectId: string | null;
+  topic: string;
+}): string | null {
+  const kind = readString(params.session.kind) ?? "generic";
+  const quotedTopic = JSON.stringify(params.topic);
+  const header =
+    kind === "research_pipeline"
+      ? `/research-pipeline ${quotedTopic}`
+      : kind === "research_queue"
+        ? `/research-queue ${quotedTopic}`
+        : kind === "graph_build"
+          ? "/graph-build"
+          : kind === "idle_research"
+            ? `/idle-research ${quotedTopic}`
+            : null;
+  if (!header) {
+    return null;
+  }
+  return [
+    header,
+    "",
+    "Workflow runtime repair replay.",
+    params.projectId ? `Project ID: ${params.projectId}` : null,
+    `Project root: ${params.projectRoot}`,
+    "Continue this no-Discord AutoResearch project from the durable workflow state.",
+    "Read PROJECT_MANIFEST.json and .openclaw-research runtime files first; do not create a new project.",
+    "Resolve the current missing workflow stage signals and persist progress through research_workflow tools.",
+    "__BACKGROUND_CONTINUATION__: true",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function restoreMissingQueueEntriesForRepairSessions(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<string[]> {
+  const [sessionsStore, queueStore] = await Promise.all([
+    readWorkflowRuntimeSessionsStore(params.projectRoot),
+    readWorkflowRuntimeQueueStore(params.projectRoot),
+  ]);
+  const existingQueueKeys = new Set(
+    queueStore.entries.map((entry) => entry.queueKey)
+  );
+  const topic = await readProjectRepairTopic(params.projectRoot);
+  const currentAt = nowIso();
+  const restoredEntries: WorkflowRuntimeQueueEntry[] = [];
+
+  for (const session of sessionsStore.entries) {
+    if (session.status !== "needs_repair") {
+      continue;
+    }
+    const queueKey = readString(session.queueKey);
+    if (!queueKey || existingQueueKeys.has(queueKey)) {
+      continue;
+    }
+    const ownerAgent =
+      readString(session.ownerAgent) ??
+      readString(session.agentId) ??
+      readString(session.role) ??
+      "researcher";
+    const requesterSessionKey =
+      readString(session.requesterSessionKey) ??
+      readString(session.parentSessionKey) ??
+      `agent:${ownerAgent}:main`;
+    const channelKey =
+      readString(session.channelKey) ??
+      readString(session.threadBindingKey) ??
+      requesterSessionKey;
+    const message = buildBackgroundRepairCommand({
+      session,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      topic,
+    });
+    if (!message) {
+      continue;
+    }
+    restoredEntries.push({
+      transitionId: `${queueKey}:restored`,
+      queueId: `${queueKey}:restored`,
+      queueKey,
+      source: "runtime_orphan_repair",
+      entryType: "background_run",
+      ownerAgent,
+      channelKey,
+      requesterSessionKey,
+      messageChannel: null,
+      preferredSessionKey: requesterSessionKey,
+      family: readString(session.family) ?? "research",
+      kind: readString(session.kind) ?? "generic",
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      queuedAt: readString(session.startedAt) ?? currentAt,
+      lastAttemptedAt:
+        readString(session.lastCheckedAt) ??
+        readString(session.lastHeartbeatAt) ??
+        readString(session.startedAt),
+      lastCheckedAt: currentAt,
+      nextRetryAt: null,
+      attemptCount: 1,
+      summary:
+        session.lastError ??
+        `Restored missing workflow transition ${queueKey} from repair session metadata.`,
+      status: "needs_repair",
+      fallbackMode: null,
+      lastError:
+        session.lastError ??
+        "Linked runtime session needed repair after its queue transition was missing.",
+      parentSessionKey: requesterSessionKey,
+      threadBindingKey: readString(session.threadBindingKey),
+      depth: Math.max(0, session.depth ?? 0),
+      runPayload: {
+        message,
+        lane: "nested",
+        deliver: false,
+        idempotencyKey: `workflow-orphan-repair:${queueKey}`,
+        extraSystemPrompt:
+          "This is an automatic local recovery replay. Stay bounded to the current project and update durable workflow state before finishing.",
+      },
+      dispatchPayload: null,
+    });
+    existingQueueKeys.add(queueKey);
+  }
+
+  if (restoredEntries.length === 0) {
+    return [];
+  }
+
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) => {
+      const currentKeys = new Set(store.entries.map((entry) => entry.queueKey));
+      return [
+        ...store.entries,
+        ...restoredEntries.filter((entry) => !currentKeys.has(entry.queueKey)),
+      ];
+    },
+  });
+
+  const restoredQueueKeys = restoredEntries.map((entry) => entry.queueKey);
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "runtime_missing_queue_restored",
+    summary:
+      `Restored ${restoredQueueKeys.length} missing workflow transition(s) ` +
+      "from repair session metadata.",
+    details: {
+      restoredQueueKeys,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "missing_queue_restored",
+    status: "waiting",
+    summary:
+      "Runtime maintenance restored missing queue entries from repair session metadata.",
+    details: {
+      restoredQueueKeys,
+    },
+  });
+  return restoredQueueKeys;
+}
+
 function toDispatchableRole(value: unknown): DispatchableWorkflowRole {
   const normalized = readString(value)?.toLowerCase();
   switch (normalized) {
@@ -485,8 +1475,103 @@ async function markQueueFailed(params: {
     status: "failed",
     lastAttemptedAt: nowIso(),
     lastCheckedAt: nowIso(),
+    nextRetryAt: null,
     lastError: params.error,
   }));
+}
+
+async function markQueueProviderCapacityCooldown(params: {
+  projectRoot: string;
+  projectId: string | null;
+  entry: WorkflowRuntimeQueueEntry;
+  error: string;
+  nextRetryAt?: string | null;
+  relaySummary: string;
+  relayPromptTail: string;
+}): Promise<string> {
+  const nextRetryAt = params.nextRetryAt ?? buildProviderCapacityCooldownUntil();
+  await updateQueueEntry(params.projectRoot, params.entry.queueKey, (entry) => ({
+    ...entry,
+    status: "needs_repair",
+    lastCheckedAt: nowIso(),
+    nextRetryAt,
+    lastError: params.error,
+  }));
+  await appendWorkflowLocalOperatorRelay({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    idempotencyKey: `provider-capacity:${params.entry.queueKey}:${nextRetryAt}`,
+    queueKey: params.entry.queueKey,
+    sessionKey:
+      params.entry.preferredSessionKey ?? params.entry.requesterSessionKey,
+    ownerAgent: params.entry.ownerAgent,
+    stage: params.entry.dispatchPayload?.stage ?? null,
+    kind: "provider_capacity_cooldown",
+    summary: params.relaySummary,
+    reason: params.error,
+    cooldownUntil: nextRetryAt,
+    operatorPrompt: [
+      "Continue this AutoResearch workflow locally without Discord.",
+      `Project root: ${params.projectRoot}`,
+      params.projectId ? `Project id: ${params.projectId}` : null,
+      `Queue key: ${params.entry.queueKey}`,
+      params.entry.summary ? `Transition summary: ${params.entry.summary}` : null,
+      params.relayPromptTail,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    details: {
+      source: params.entry.source,
+      entryType: params.entry.entryType,
+      kind: params.entry.kind,
+      family: params.entry.family,
+    },
+  });
+  return nextRetryAt;
+}
+
+async function normalizeProviderCapacityQueueFailures(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<string[]> {
+  const queueStore = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const capacityFailures = queueStore.entries.filter(
+    (entry) =>
+      entry.status === "failed" && isProviderCapacityFailure(entry.lastError)
+  );
+  const cooledDownQueueKeys: string[] = [];
+  for (const entry of capacityFailures) {
+    const error =
+      entry.lastError ??
+      "Workflow runtime repair hit provider capacity limits.";
+    await markQueueProviderCapacityCooldown({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      entry,
+      error,
+      nextRetryAt: entry.nextRetryAt ?? null,
+      relaySummary:
+        "Workflow runtime failure was converted to a provider capacity cooldown.",
+      relayPromptTail:
+        "The provider returned a capacity/quota error before this queue entry reached a durable terminal state. Wait until cooldownUntil, then let runtime maintenance replay the queued transition.",
+    });
+    cooledDownQueueKeys.push(entry.queueKey);
+  }
+  if (cooledDownQueueKeys.length > 0) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      component: "runtime_maintenance",
+      action: "provider_capacity_failed_queue_recovered",
+      status: "waiting",
+      summary:
+        "Runtime maintenance converted failed provider-capacity queue entries back to cooldown repair state.",
+      details: {
+        queueKeys: cooledDownQueueKeys,
+      },
+    });
+  }
+  return cooledDownQueueKeys;
 }
 
 async function markLinkedSessionsFailed(params: {
@@ -882,10 +1967,34 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     activeSessionInspectionGraceMs: params.activeSessionInspectionGraceMs,
     staleSessionAgeMs: params.staleSessionAgeMs,
   });
+  await reactivateRepairSessionsWithLiveRuntime({
+    projectRoot,
+    projectId,
+    workflowRuntime: params.workflowRuntime,
+  });
   await markLinkedQueuesNeedsRepairForRepairSessions({
     projectRoot,
     projectId,
   });
+  await restoreMissingQueueEntriesForRepairSessions({
+    projectRoot,
+    projectId,
+  });
+  await reconcileTerminalPaperIngestionRequestsWithRuntimeQueue({
+    projectRoot,
+    projectId,
+  });
+  const recoveredProviderCapacityQueueKeys =
+    await normalizeProviderCapacityQueueFailures({
+      projectRoot,
+      projectId,
+    });
+  const paperIngestionMaintenance =
+    await markStalePaperIngestionRequestsNeedsRepair({
+      projectRoot,
+      projectId,
+      activeSessionInspectionGraceMs: params.activeSessionInspectionGraceMs,
+    });
 
   const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
   const replayCandidates = queueStore.entries.filter(
@@ -898,8 +2007,29 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
   );
   const replayedQueueKeys: string[] = [];
   const exhaustedQueueKeys: string[] = [];
+  const cooldownQueueKeys: string[] = [...recoveredProviderCapacityQueueKeys];
 
   for (const entry of replayCandidates) {
+    const retryDelayMs = getQueueRetryDelayMs(entry, Date.now());
+    if (retryDelayMs > 0) {
+      cooldownQueueKeys.push(entry.queueKey);
+      await appendWorkflowDiagnosticEvent({
+        projectRoot,
+        projectId,
+        component: "runtime_maintenance",
+        action: "repair_replay_deferred_until_retry_at",
+        status: "waiting",
+        summary:
+          "Runtime maintenance deferred workflow repair replay until the queue retry cooldown expires.",
+        details: {
+          queueKey: entry.queueKey,
+          nextRetryAt: entry.nextRetryAt ?? null,
+          retryDelayMs,
+          lastError: entry.lastError ?? null,
+        },
+      });
+      continue;
+    }
     const bindingGate = await evaluateChannelProjectBindingGate({
       policy: params.workflowPolicy ?? undefined,
       context: {
@@ -966,7 +2096,25 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       continue;
     }
 
-    if (entry.attemptCount >= maxRepairAttempts) {
+    const entryCapacityFailure = isProviderCapacityFailure(entry.lastError);
+    if (entryCapacityFailure && parseTimeMs(entry.nextRetryAt) == null) {
+      await markQueueProviderCapacityCooldown({
+        projectRoot,
+        projectId,
+        entry,
+        error:
+          entry.lastError ??
+          "Workflow runtime repair hit provider capacity limits.",
+        relaySummary:
+          "Workflow runtime repair is waiting for provider capacity cooldown.",
+        relayPromptTail:
+          "The provider returned a capacity/quota error. Use configured agent model fallbacks when available; otherwise wait until cooldownUntil before replaying the queued transition.",
+      });
+      cooldownQueueKeys.push(entry.queueKey);
+      continue;
+    }
+
+    if (entry.attemptCount >= maxRepairAttempts && !entryCapacityFailure) {
       const error =
         entry.lastError ??
         `Workflow transition exhausted the repair budget (${maxRepairAttempts}).`;
@@ -1032,7 +2180,20 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       readString(replay.error) ??
       refreshedEntry.lastError ??
       "Workflow runtime repair replay failed.";
-    if (exhausted) {
+    const capacityReplayFailure = isProviderCapacityFailure(error);
+    if (capacityReplayFailure) {
+      await markQueueProviderCapacityCooldown({
+        projectRoot,
+        projectId,
+        entry: refreshedEntry,
+        error,
+        relaySummary:
+          "Workflow repair replay hit provider capacity limits and needs local operator follow-up.",
+        relayPromptTail:
+          "The repair replay failed with a provider capacity/quota error. Use configured agent model fallbacks when available; otherwise wait until cooldownUntil before replaying this queued transition.",
+      });
+      cooldownQueueKeys.push(refreshedEntry.queueKey);
+    } else if (exhausted) {
       await markQueueFailed({
         projectRoot,
         projectId,
@@ -1069,6 +2230,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
         status: "needs_repair",
         lastCheckedAt: nowIso(),
         lastError: error,
+        nextRetryAt: refreshedEntry.nextRetryAt ?? null,
       }));
     }
   }
@@ -1224,10 +2386,13 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     details: {
       replayedQueueKeys,
       exhaustedQueueKeys,
+      cooldownQueueKeys,
       exhaustedSessionKeys,
       handoffMaintenance,
       queueRepairPending: watchdogSummary.queueRepairPending,
       sessionRepairPending: watchdogSummary.sessionRepairPending,
+      repairedPaperIngestionRequestIds:
+        paperIngestionMaintenance.repairedRequestIds,
       incidentCount: watchdogSummary.incidentCount,
       experimentMaintenance,
     },
@@ -1249,8 +2414,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     details: {
       replayedQueueKeys,
       exhaustedQueueKeys,
+      cooldownQueueKeys,
       exhaustedSessionKeys,
       repairedSessionKeys,
+      repairedPaperIngestionRequestIds:
+        paperIngestionMaintenance.repairedRequestIds,
       handoffMaintenance,
       watchdogSummary,
       experimentMaintenance,
@@ -1264,6 +2432,8 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     replayedQueueKeys,
     exhaustedQueueKeys,
     repairedSessionKeys,
+    repairedPaperIngestionRequestIds:
+      paperIngestionMaintenance.repairedRequestIds,
     exhaustedSessionKeys,
     incidents,
     handoffMaintenance,

@@ -9,12 +9,18 @@ import { promisify } from "node:util";
 import {
   configuredProjectsRootFromOpenClawConfig,
   configuredModelRefsForAgent,
+  deriveAutoWorkflowChildMaxIterations,
+  defaultProjectIdForAutoWorkflowRun,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
   verifyAgentRuntimeModelConfig,
 } from "../scripts/run_auto_workflow_e2e_test.mjs";
+import {
+  buildLiveAutoIteratorParams,
+  readLiveWorkflowActivation,
+} from "../scripts/auto_command_live_orchestrator.mjs";
 
 const execFile = promisify(execFileCb);
 
@@ -47,6 +53,60 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
       },
     }),
     "/tmp/openclaw-projects"
+  );
+});
+
+test("auto workflow E2E runner generates isolated live project ids by default", () => {
+  assert.equal(
+    defaultProjectIdForAutoWorkflowRun({
+      command: normalizeAutoWorkflowCommand("/autoresearch"),
+      topic: "Generalized Category Discovery",
+      timestamp: "2026-04-24T09:34:12Z",
+    }),
+    "research-2026-04-24t09-34-12z-generalize"
+  );
+  assert.equal(
+    defaultProjectIdForAutoWorkflowRun({
+      command: normalizeAutoWorkflowCommand("/autoreview"),
+      topic: "Generalized Category Discovery",
+      timestamp: "2026-04-24T09:34:12Z",
+    }),
+    "survey-2026-04-24t09-34-12z-generalized"
+  );
+});
+
+test("auto workflow E2E runner derives live iteration budget from timeout", () => {
+  assert.equal(
+    deriveAutoWorkflowChildMaxIterations({
+      mode: "live",
+      timeoutMs: 15 * 60_000,
+      maxIterations: null,
+    }),
+    30
+  );
+  assert.equal(
+    deriveAutoWorkflowChildMaxIterations({
+      mode: "live",
+      timeoutMs: 45 * 60_000,
+      maxIterations: null,
+    }),
+    90
+  );
+  assert.equal(
+    deriveAutoWorkflowChildMaxIterations({
+      mode: "live",
+      timeoutMs: 45 * 60_000,
+      maxIterations: 7,
+    }),
+    7
+  );
+  assert.equal(
+    deriveAutoWorkflowChildMaxIterations({
+      mode: "fixture",
+      timeoutMs: 15 * 60_000,
+      maxIterations: null,
+    }),
+    null
   );
 });
 
@@ -113,6 +173,120 @@ test("auto workflow E2E runner validates exact runtime model provider state", ()
   });
   assert.equal(missing.ok, false);
   assert.match(missing.detail, /missing_models=bailian\/qwen3\.6-plus/);
+});
+
+test("live E2E harness detects local workflow activation without Discord acknowledgement", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-activation-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "activation-project",
+        current_stage: "idea",
+        owner_agent: "researcher",
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-agent-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-25T00:00:00.000Z",
+        entries: [
+          {
+            role: "orchestrator",
+            sessionKey: "agent:orchestrator:local:e2e",
+            sessionId: "workflow.orchestrator.1",
+            projectId: "activation-project",
+            projectRoot,
+            currentStage: "plan",
+            status: "active",
+            source: "workflow_tool",
+            updatedAt: "2026-04-25T00:00:00.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  assert.deepEqual(
+    await readLiveWorkflowActivation({
+      projectRoot,
+      projectId: "activation-project",
+      stage: "plan",
+      owner: "orchestrator",
+    }),
+    {
+      active: true,
+      reason: "agent_session_active",
+    }
+  );
+});
+
+test("auto workflow E2E runner merges default model fallbacks into agent-specific model config", () => {
+  const config = {
+    models: {
+      providers: {
+        bailian: {
+          models: [{ id: "qwen3.5-plus" }, { id: "qwen3.6-plus" }],
+        },
+      },
+    },
+    agents: {
+      defaults: {
+        model: {
+          primary: "bailian/qwen3.6-plus",
+          fallbacks: ["bailian/qwen3.5-plus"],
+        },
+      },
+      list: [
+        {
+          id: "researcher",
+          model: {
+            primary: "bailian/qwen3.6-plus",
+            fallbacks: [],
+          },
+        },
+      ],
+    },
+  };
+
+  assert.deepEqual(configuredModelRefsForAgent(config, "researcher"), [
+    "bailian/qwen3.6-plus",
+    "bailian/qwen3.5-plus",
+  ]);
+  assert.equal(
+    verifyAgentRuntimeModelConfig({
+      config,
+      agentId: "researcher",
+      agentDir: "/tmp/agent",
+      modelsCatalog: {
+        providers: {
+          bailian: {
+            apiKey: "test-key",
+            models: [{ id: "qwen3.6-plus" }],
+          },
+        },
+      },
+      authProfile: null,
+      acceptedAuthProviders: [],
+    }).ok,
+    false
+  );
 });
 
 test("auto workflow E2E runner restarts live gateway after model catalog repair", () => {
@@ -184,6 +358,30 @@ test("auto workflow E2E runner enables live agent model watchdog only for shared
   );
 });
 
+test("live no-Discord orchestrator injects workflow policy into auto iterator", () => {
+  const workflowPolicy = {
+    autoMode: "aggressive",
+    autoGate: {
+      enabled: true,
+      maxReviewRounds: 4,
+      maxMitigationRounds: 3,
+    },
+  };
+
+  assert.deepEqual(
+    buildLiveAutoIteratorParams({
+      projectRoot: "/tmp/openclaw-project",
+      workflowPolicy,
+    }),
+    {
+      projectRoot: "/tmp/openclaw-project",
+      mode: "test",
+      queueMailbox: false,
+      policy: workflowPolicy,
+    }
+  );
+});
+
 test("auto workflow E2E runner creates a durable local summary for /autoresearch", async (t) => {
   const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-workflow-runner-"));
   t.after(() => fs.rm(runRoot, { recursive: true, force: true }));
@@ -202,6 +400,12 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
       "fixture",
       "--bootstrap-transport",
       "local",
+      "--bootstrap-timeout-ms",
+      "1234",
+      "--project-root-timeout-ms",
+      "2345",
+      "--max-no-progress-turns",
+      "2",
       "--run-root",
       runRoot,
       "--json",
@@ -230,4 +434,9 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
   await fs.access(payload.stderrPath);
   await fs.access(payload.payloadPath);
   await fs.access(path.join(payload.result.lanes[0].projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"));
+
+  const commandText = await fs.readFile(path.join(runRoot, "command.txt"), "utf8");
+  assert.match(commandText, /"--bootstrap-timeout-ms" "1234"/);
+  assert.match(commandText, /"--project-root-timeout-ms" "2345"/);
+  assert.match(commandText, /"--max-no-progress-turns" "2"/);
 });

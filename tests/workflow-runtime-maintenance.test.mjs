@@ -19,6 +19,7 @@ import { runWorkflowRuntimeMaintenancePass } from "../tools/workflow-runtime-mai
 import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
 import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
+import { readWorkflowLocalOperatorRelayEntries } from "../tools/workflow-local-operator-relay.ts";
 
 async function makeProjectRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-runtime-maintenance-"));
@@ -177,6 +178,92 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
       (event) =>
         event.component === "runtime_recovery" &&
         event.action === "recovery_completed"
+    )
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass restores missing background queue entries from repair sessions", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:bg:missing-queue";
+  const requesterSessionKey = "agent:researcher:local:conversation:gcd";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "missing-queue-alpha",
+    current_stage: "frontier_mapping",
+    owner_agent: "researcher",
+    title: "Use FixMatch insights to improve GCD",
+  });
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "missing-queue-alpha",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "missing-queue-alpha",
+    entries: [],
+  });
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "missing-queue-alpha",
+    sessionKey: "agent:researcher:local:conversation:gcd:subagent:lost-research-pipeline",
+    sessionId: "runtime-session-lost",
+    runtime: "subagent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "research_pipeline",
+    channelKey: "local:conversation:gcd",
+    requesterSessionKey,
+    projectRoot,
+    status: "needs_repair",
+    runId: "runtime-run-lost",
+    queueKey,
+    startedAt: "2026-04-10T09:00:00.000Z",
+    lastHeartbeatAt: "2026-04-10T09:00:00.000Z",
+    lastError: "Workflow runtime session is missing from the underlying session store.",
+  });
+
+  const started = [];
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "missing-queue-alpha",
+    workflowRuntime: {
+      async run(params) {
+        started.push(params);
+        return { runId: "replayed-missing-queue-run" };
+      },
+    },
+    maxRepairAttempts: 3,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, [queueKey]);
+  assert.deepEqual(result.exhaustedSessionKeys, []);
+  assert.equal(started.length, 1);
+  assert.equal(started[0].sessionKey, requesterSessionKey);
+  assert.match(started[0].message, /\/research-pipeline/);
+  assert.match(started[0].message, /Use FixMatch insights to improve GCD/);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const restoredEntry = refreshedQueue.entries.find(
+    (entry) => entry.queueKey === queueKey
+  );
+  assert.equal(restoredEntry?.status, "running");
+  assert.equal(restoredEntry?.source, "runtime_orphan_repair");
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "missing_queue_restored"
     )
   );
 });
@@ -596,7 +683,7 @@ test("runWorkflowRuntimeMaintenancePass does not repair newly launched active se
   );
 });
 
-test("runWorkflowRuntimeMaintenancePass defers missing active embedded session inspection until stale", async (t) => {
+test("runWorkflowRuntimeMaintenancePass repairs missing active embedded session after inspection grace", async (t) => {
   const projectRoot = await makeProjectRoot();
   const queueKey = "repair:dispatch:embedded-deferred-inspection";
   const sessionKey = "agent:researcher:local:group:paper-lab:subagent:embedded-deferred";
@@ -625,7 +712,7 @@ test("runWorkflowRuntimeMaintenancePass defers missing active embedded session i
     preferredSessionKey: sessionKey,
     family: "research",
     kind: "workflow_stage_dispatch",
-    summary: "Keep the embedded dispatch running while session metadata catches up.",
+    summary: "Repair the embedded dispatch when the underlying session is missing.",
     dispatchPayload: {
       requesterChannel: "local",
       requesterAccountId: null,
@@ -635,7 +722,7 @@ test("runWorkflowRuntimeMaintenancePass defers missing active embedded session i
       projectRoot,
       projectId: "embedded-deferred-inspection",
       stage: "graph_build",
-      summary: "Keep the embedded dispatch running while session metadata catches up.",
+      summary: "Repair the embedded dispatch when the underlying session is missing.",
       command: "/graph-build",
       mailboxMessageId: null,
       requireMailboxAcknowledgement: false,
@@ -701,9 +788,161 @@ test("runWorkflowRuntimeMaintenancePass defers missing active embedded session i
     staleSessionAgeMs: 15 * 60 * 1000,
   });
 
-  assert.equal(inspectCalls, 1);
-  assert.deepEqual(result.repairedSessionKeys, []);
+  assert.ok(inspectCalls >= 1);
+  assert.deepEqual(result.repairedSessionKeys, [sessionKey]);
   assert.deepEqual(result.replayedQueueKeys, []);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "needs_repair"
+  );
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    refreshedSessions.entries.find((entry) => entry.sessionKey === sessionKey)?.status,
+    "needs_repair"
+  );
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "session_inspection_repair"
+    ),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass keeps active sessions when only local run tracking is missing", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:dispatch:embedded-tracking-miss";
+  const sessionKey = "agent:researcher:local:group:paper-lab:subagent:tracking-miss";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "embedded-tracking-miss");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "embedded-tracking-miss",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "embedded-tracking-miss",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Keep the live embedded dispatch running.",
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "embedded-tracking-miss",
+      stage: "frontier_mapping",
+      summary: "Keep the live embedded dispatch running.",
+      command: "/frontier-mapping",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: false,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: false,
+      autoModeActive: true,
+    },
+  });
+  const startedAt = new Date(Date.now() - 60_000).toISOString();
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "embedded-tracking-miss",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 1,
+            lastAttemptedAt: startedAt,
+            lastCheckedAt: startedAt,
+          }
+        : entry
+    ),
+  });
+
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "embedded-tracking-miss",
+    sessionKey,
+    sessionId: "workflow.researcher.tracking-miss",
+    runtime: "embedded_agent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    projectRoot,
+    status: "active",
+    runId: "runtime-run-tracking-miss",
+    queueKey,
+    startedAt,
+    lastHeartbeatAt: startedAt,
+  });
+
+  let waited = 0;
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "embedded-tracking-miss",
+    workflowRuntime: {
+      async waitForRun(params) {
+        waited += 1;
+        assert.equal(params.runId, "runtime-run-tracking-miss");
+        return {
+          status: "error",
+          error: "Embedded workflow run is not tracked in the local registry.",
+        };
+      },
+      async inspectSession(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          sessionKey,
+          sessionId: "workflow.researcher.tracking-miss",
+          sessionFile: null,
+          status: "running",
+          startedAt: Date.now() - 60_000,
+          endedAt: null,
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          providerOverride: null,
+          modelOverride: null,
+          liveModelSwitchPending: false,
+          lastError: null,
+        };
+      },
+    },
+    activeSessionInspectionGraceMs: 0,
+    staleSessionAgeMs: 15 * 60 * 1000,
+    maxRepairAttempts: 3,
+  });
+
+  assert.equal(waited, 1);
+  assert.deepEqual(result.replayedQueueKeys, []);
+  assert.deepEqual(result.exhaustedQueueKeys, []);
+  assert.deepEqual(result.repairedSessionKeys, []);
 
   const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(
@@ -720,10 +959,574 @@ test("runWorkflowRuntimeMaintenancePass defers missing active embedded session i
     diagnostics.some(
       (event) =>
         event.component === "runtime_maintenance" &&
-        event.action === "session_inspection_deferred"
+        event.action === "session_inspection_repair"
+    ),
+    false
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass reactivates repair sessions that are still live", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:dispatch:live-needs-repair";
+  const sessionKey = "agent:researcher:local:group:paper-lab:subagent:live-needs-repair";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "live-needs-repair");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "live-needs-repair",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "live-needs-repair",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Do not replay while the original runtime is still live.",
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "live-needs-repair",
+      stage: "idea",
+      summary: "Do not replay while the original runtime is still live.",
+      command: "/idea-phase",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: false,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: false,
+      autoModeActive: true,
+    },
+  });
+  const startedAt = new Date(Date.now() - 60_000).toISOString();
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "live-needs-repair",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 2,
+            lastAttemptedAt: startedAt,
+            lastCheckedAt: startedAt,
+          }
+        : entry
+    ),
+  });
+
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "live-needs-repair",
+    sessionKey,
+    sessionId: "workflow.researcher.live-needs-repair",
+    runtime: "embedded_agent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    projectRoot,
+    status: "needs_repair",
+    runId: "runtime-run-live-needs-repair",
+    queueKey,
+    startedAt,
+    lastHeartbeatAt: startedAt,
+    lastError: "Background workflow session needs repair after runtime recovery.",
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "live-needs-repair",
+    workflowRuntime: {
+      async run() {
+        throw new Error("live repair-marked sessions should not be replayed");
+      },
+      async inspectSession(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          sessionKey,
+          sessionId: "workflow.researcher.live-needs-repair",
+          sessionFile: null,
+          status: "running",
+          startedAt: Date.now() - 60_000,
+          endedAt: null,
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          providerOverride: null,
+          modelOverride: null,
+          liveModelSwitchPending: false,
+          lastError: null,
+        };
+      },
+    },
+    activeSessionInspectionGraceMs: 0,
+    staleSessionAgeMs: 15 * 60 * 1000,
+    maxRepairAttempts: 3,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, []);
+  assert.deepEqual(result.exhaustedQueueKeys, []);
+  assert.deepEqual(result.repairedSessionKeys, []);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "running"
+  );
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const refreshedSession = refreshedSessions.entries.find(
+    (entry) => entry.sessionKey === sessionKey
+  );
+  assert.equal(refreshedSession?.status, "active");
+  assert.equal(refreshedSession?.lastError, null);
+  assert.equal(refreshedSession?.lastFinishedAt, null);
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "repair_session_reactivated_from_live_runtime"
     ),
     true
   );
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "linked_queue_repair_marked"
+    ),
+    false
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass cools down provider capacity failures and writes local relay", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:dispatch:provider-capacity";
+  const sessionKey = "agent:researcher:local:group:paper-lab:subagent:capacity";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "provider-capacity");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "provider-capacity",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "provider-capacity",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay should wait when the provider quota is exhausted.",
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "provider-capacity",
+      stage: "graph_build",
+      summary: "Replay should wait when the provider quota is exhausted.",
+      command: "/graph-build",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: false,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: false,
+      autoModeActive: true,
+    },
+  });
+  const staleStarted = new Date(Date.now() - 60_000).toISOString();
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "provider-capacity",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 1,
+            lastAttemptedAt: staleStarted,
+            lastCheckedAt: staleStarted,
+          }
+        : entry
+    ),
+  });
+
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "provider-capacity",
+    sessionKey,
+    sessionId: "workflow.researcher.capacity",
+    runtime: "embedded_agent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    projectRoot,
+    status: "active",
+    runId: "runtime-run-capacity",
+    queueKey,
+    startedAt: staleStarted,
+    lastHeartbeatAt: staleStarted,
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "provider-capacity",
+    workflowRuntime: {
+      async run() {
+        throw new Error("capacity failures should not replay before cooldown");
+      },
+      async waitForRun(params) {
+        assert.equal(params.runId, "runtime-run-capacity");
+        return {
+          status: "error",
+          error: "429 usage allocated quota exceeded. please try again later.",
+        };
+      },
+      async inspectSession(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          sessionKey,
+          sessionId: "workflow.researcher.capacity",
+          sessionFile: null,
+          status: "running",
+          startedAt: Date.now() - 60_000,
+          endedAt: null,
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          providerOverride: null,
+          modelOverride: null,
+          liveModelSwitchPending: false,
+          lastError: null,
+        };
+      },
+    },
+    activeSessionInspectionGraceMs: 0,
+    staleSessionAgeMs: 15 * 60 * 1000,
+    maxRepairAttempts: 3,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, []);
+  assert.deepEqual(result.exhaustedQueueKeys, []);
+  assert.deepEqual(result.repairedSessionKeys, [sessionKey]);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const refreshedEntry = refreshedQueue.entries.find(
+    (entry) => entry.queueKey === queueKey
+  );
+  assert.equal(refreshedEntry?.status, "needs_repair");
+  assert.match(refreshedEntry?.lastError ?? "", /allocated quota exceeded/);
+  assert.ok(Date.parse(refreshedEntry?.nextRetryAt ?? "") > Date.now());
+
+  const relays = await readWorkflowLocalOperatorRelayEntries(projectRoot);
+  assert.equal(relays.length, 1);
+  assert.equal(relays[0]?.queueKey, queueKey);
+  assert.match(relays[0]?.operatorPrompt ?? "", /without Discord/);
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "repair_replay_deferred_until_retry_at"
+    ),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass restores failed provider capacity queues to cooldown", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:bg:failed-provider-capacity";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "failed-provider-capacity");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "failed-provider-capacity",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "failed-provider-capacity",
+    queueKey,
+    source: "workflow_auto_discussion",
+    entryType: "background_run",
+    ownerAgent: "reviewer",
+    channelKey: "local:conversation:capacity",
+    requesterSessionKey: "agent:researcher:local:conversation:capacity",
+    preferredSessionKey:
+      "agent:reviewer:local:conversation:capacity:subagent:auto-discussion",
+    family: "review",
+    kind: "workflow_auto_discussion",
+    summary: "Review round should wait when the provider quota is exhausted.",
+    runPayload: {
+      message: "Continue the auto discussion review task.",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "failed-provider-capacity",
+      extraSystemPrompt: "Stay bounded.",
+    },
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "failed-provider-capacity",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "failed",
+            attemptCount: 5,
+            lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+            lastCheckedAt: "2026-04-10T09:00:00.000Z",
+            nextRetryAt: null,
+            lastError:
+              "Background workflow session hit provider capacity while still marked active: 429 usage allocated quota exceeded. please try again later.",
+          }
+        : entry
+    ),
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "failed-provider-capacity",
+    workflowRuntime: {
+      async run() {
+        throw new Error("provider capacity failures must not replay before cooldown");
+      },
+    },
+    maxRepairAttempts: 3,
+    staleSessionAgeMs: 15 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, []);
+  assert.deepEqual(result.exhaustedQueueKeys, []);
+  assert.deepEqual(result.watchdogSummary.queueRepairPending, 1);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const refreshedEntry = refreshedQueue.entries.find(
+    (entry) => entry.queueKey === queueKey
+  );
+  assert.equal(refreshedEntry?.status, "needs_repair");
+  assert.match(refreshedEntry?.lastError ?? "", /allocated quota exceeded/);
+  assert.ok(Date.parse(refreshedEntry?.nextRetryAt ?? "") > Date.now());
+
+  const relays = await readWorkflowLocalOperatorRelayEntries(projectRoot);
+  assert.equal(relays.length, 1);
+  assert.equal(relays[0]?.queueKey, queueKey);
+  assert.match(relays[0]?.operatorPrompt ?? "", /without Discord/);
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "provider_capacity_failed_queue_recovered"
+    ),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass cools down active sessions whose transcript ends in provider capacity errors", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:dispatch:transcript-capacity";
+  const sessionKey = "agent:researcher:local:group:paper-lab:subagent:transcript-capacity";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "transcript-capacity");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "transcript-capacity",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "transcript-capacity",
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    preferredSessionKey: sessionKey,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay should wait when transcript shows provider capacity.",
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [sessionKey],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "transcript-capacity",
+      stage: "frontier_mapping",
+      summary: "Replay should wait when transcript shows provider capacity.",
+      command: "/frontier-mapping",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: false,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: false,
+      autoModeActive: true,
+    },
+  });
+  const staleStarted = new Date(Date.now() - 60_000).toISOString();
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "transcript-capacity",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 1,
+            lastAttemptedAt: staleStarted,
+            lastCheckedAt: staleStarted,
+          }
+        : entry
+    ),
+  });
+
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "transcript-capacity",
+    sessionKey,
+    sessionId: "workflow.researcher.transcript-capacity",
+    runtime: "embedded_agent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    channelKey: "local:group:paper-lab",
+    requesterSessionKey: "agent:researcher:local:group:paper-lab",
+    projectRoot,
+    status: "active",
+    runId: "runtime-run-transcript-capacity",
+    queueKey,
+    startedAt: staleStarted,
+    lastHeartbeatAt: staleStarted,
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "transcript-capacity",
+    workflowRuntime: {
+      async run() {
+        throw new Error("capacity transcript failures should not replay before cooldown");
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+      async getSessionMessages(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", name: "exec" }],
+            },
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "429 usage allocated quota exceeded. please try again later.",
+            },
+          ],
+        };
+      },
+      async inspectSession(params) {
+        assert.equal(params.sessionKey, sessionKey);
+        return {
+          sessionKey,
+          sessionId: "workflow.researcher.transcript-capacity",
+          sessionFile: null,
+          status: "running",
+          startedAt: Date.now() - 60_000,
+          endedAt: null,
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          providerOverride: null,
+          modelOverride: null,
+          liveModelSwitchPending: false,
+          lastError: null,
+        };
+      },
+    },
+    activeSessionInspectionGraceMs: 0,
+    staleSessionAgeMs: 15 * 60 * 1000,
+    maxRepairAttempts: 3,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, []);
+  assert.deepEqual(result.exhaustedQueueKeys, []);
+  assert.deepEqual(result.repairedSessionKeys, [sessionKey]);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const refreshedEntry = refreshedQueue.entries.find(
+    (entry) => entry.queueKey === queueKey
+  );
+  assert.equal(refreshedEntry?.status, "needs_repair");
+  assert.match(refreshedEntry?.lastError ?? "", /allocated quota exceeded/);
+  assert.ok(Date.parse(refreshedEntry?.nextRetryAt ?? "") > Date.now());
 });
 
 test("runWorkflowRuntimeMaintenancePass lets stale recovery repair missing active embedded sessions after stale", async (t) => {
@@ -982,6 +1785,186 @@ test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failure
   const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(
     handoffs.intents.some((intent) => intent.reason === "paper_ingestion_failed"),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass marks PaperNexus requests without runtime linkage as needs-repair", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await makeProject(projectRoot, "stale-papernexus");
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "graph_build";
+  manifest.paper_ingestion = {
+    runtime_status: "waiting_import",
+    graph_presence_status: "missing_corpus",
+    queued_requests: [
+      {
+        request_id: "stale-upload",
+        request_kind: "upload_manifest",
+        status: "running",
+        wrapper: "pn_batch_import.py",
+        command_text:
+          "python3 skills/papernexus/scripts/pn_batch_import.py --manifest batch.json submit",
+        updated_at: "2026-04-20T00:00:00.000Z",
+        last_run_id: "run:missing-upload",
+        last_session_key: "agent:researcher:local:subagent:missing-papernexus",
+      },
+    ],
+    active_batches: [],
+    batch_items: [],
+    paper_operations: [],
+    import_task_ids: [],
+    completed_papers: [],
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "stale-papernexus",
+    activeSessionInspectionGraceMs: 0,
+  });
+
+  assert.deepEqual(result.repairedPaperIngestionRequestIds, ["stale-upload"]);
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests[0].status,
+    "needs_repair"
+  );
+  assert.equal(updatedManifest.paper_ingestion.runtime_status, "blocked");
+  assert.match(
+    updatedManifest.paper_ingestion.repair_reason,
+    /lost runtime tracking/
+  );
+  const progress = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"), "utf8")
+  );
+  assert.equal(progress.phase, "needs_repair");
+  const diagnostics = (await readWorkflowDiagnosticEvents(projectRoot)).filter(
+    (entry) => entry.component === "runtime_maintenance"
+  );
+  assert.equal(
+    diagnostics.some(
+      (entry) => entry.action === "paper_ingestion_request_repair"
+    ),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass reconciles terminal PaperNexus queue entries before stale repair", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey =
+    "background-run:agent:researcher:local:papernexus:pn_batch_import";
+  const sessionKey =
+    "agent:researcher:local:subagent:papernexus-skill:batch-submit";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "terminal-papernexus");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "terminal-papernexus",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "graph_build";
+  manifest.paper_ingestion = {
+    runtime_status: "waiting_import",
+    graph_presence_status: "missing_corpus",
+    queued_requests: [
+      {
+        request_id: "submitted-upload",
+        request_kind: "upload_manifest",
+        status: "running",
+        wrapper: "pn_batch_import.py",
+        command_text:
+          "python3 skills/papernexus/scripts/pn_batch_import.py --manifest batch.json submit",
+        updated_at: "2026-04-20T00:00:00.000Z",
+        last_run_id: "run:submitted-upload",
+        last_session_key: sessionKey,
+      },
+    ],
+    active_batches: [],
+    batch_items: [],
+    paper_operations: [],
+    import_task_ids: [],
+    completed_papers: [],
+  };
+  await writeJson(manifestPath, manifest);
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "terminal-papernexus",
+    queueKey,
+    source: "start_background_run",
+    entryType: "background_run",
+    ownerAgent: "researcher",
+    channelKey: "local:conversation:terminal-papernexus",
+    requesterSessionKey: "agent:researcher:local:conversation:terminal-papernexus",
+    preferredSessionKey: sessionKey,
+    family: "papernexus",
+    kind: "papernexus_wrapper",
+    summary: "Queue PaperNexus batch import.",
+    runPayload: {
+      message:
+        "python3 skills/papernexus/scripts/pn_batch_import.py --manifest batch.json submit",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "terminal-papernexus-submit",
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "terminal-papernexus",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "completed",
+            lastAttemptedAt: "2026-04-20T00:01:00.000Z",
+            lastCheckedAt: "2026-04-20T00:02:00.000Z",
+          }
+        : entry
+    ),
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "terminal-papernexus",
+    activeSessionInspectionGraceMs: 0,
+  });
+
+  assert.deepEqual(result.repairedPaperIngestionRequestIds, []);
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    updatedManifest.paper_ingestion.queued_requests[0].status,
+    "queued"
+  );
+  assert.match(
+    updatedManifest.paper_ingestion.queued_requests[0].command_text,
+    /\bwait\b/
+  );
+  assert.equal(updatedManifest.paper_ingestion.runtime_status, "waiting_import");
+  assert.match(
+    updatedManifest.paper_ingestion.waiting_reason,
+    /remote import still requires bounded wait\/status verification/
+  );
+  const diagnostics = (await readWorkflowDiagnosticEvents(projectRoot)).filter(
+    (entry) => entry.component === "runtime_maintenance"
+  );
+  assert.equal(
+    diagnostics.some(
+      (entry) =>
+        entry.action === "paper_ingestion_request_runtime_reconciled"
+    ),
     true
   );
 });

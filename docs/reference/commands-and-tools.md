@@ -96,6 +96,28 @@ npm run test:auto:real -- \
 - `stdout.log`
 - `stderr.log`
 
+真实模式默认每次生成隔离 project id，避免复用同一个 topic 产生的旧项目状态；需要复用时显式加 `--reuse-project` 或 `--project-id <id>`。常用调试参数：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "GCD" \
+  --bootstrap-timeout-ms 180000 \
+  --project-root-timeout-ms 60000 \
+  --max-no-progress-turns 1
+```
+
+如果 provider quota、rate limit 或 gateway bootstrap 失败，runner 仍会写出 summary，并在 `failure`/`lane failure` 字段说明失败阶段，而不是无限等待。embedded runtime 会先尝试 OpenClaw agent 配置里的 `model.fallbacks`；如果 fallback 仍失败，maintenance 会给关联 queue 写入 `nextRetryAt`，并将本地接管任务追加到 `.openclaw-research/workflow-local-operator-relay.jsonl`。
+
+当 `/auto-research` 只有 topic、还没有 researcher 写出的 `PAPER_SOURCE_INDEX.json` 时，`graph_build` 会自动从 manifest / `research_program.goal` 里解析 arXiv ID 或论文题名，补一个 workflow-owned source seed，随后抓取 Markdown/PDF 并通过 `pn_batch_import.py` 排 PaperNexus 导入。这个 source bootstrap 不依赖 Discord channel，也不会创建 Discord 项目绑定。
+
+读取最新本地接管任务：
+
+```bash
+node scripts/workflow_local_operator_relay.mjs \
+  --project-root "/path/to/AutoResearchProjects/<project-id>" \
+  --latest
+```
+
 真实模式需要本机可启动 OpenClaw gateway，并能读取 OpenClaw 配置。默认读取 `$HOME/.openclaw/openclaw.json`；如果要用 dev 配置：
 
 ```bash
@@ -146,6 +168,8 @@ npm run test:autoresearch:real -- \
 - `get_papernexus_progress`
 - `check_graph_presence`
 - `queue_paper_ingestion`
+
+`queue_paper_ingestion` 是兼容别名；新代码里推荐把语义理解为 `schedule_papernexus_import`。Discord 不参与项目绑定或上传执行。对于多论文导入，workflow 会使用 `skills/researcher/papernexus/scripts/pn_batch_import.py`，并把 `submit` 和远端 `wait/status` 分开处理：wrapper 进程退出不等于 graph ready，后续状态必须来自 PaperNexus `import_workflow` 返回的 batch/items 进度以及 `check_graph_presence`。
 
 ### Contracts 与 materializers
 

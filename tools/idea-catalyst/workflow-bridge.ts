@@ -62,9 +62,7 @@ function buildIdeaCatalystRequisitionBatchManifest(params: {
 }) {
   return {
     version: 1,
-    defaults: {
-      corpus: params.sharedCorpus,
-    },
+    defaults: params.sharedCorpus ? { corpus: params.sharedCorpus } : {},
     papers: [],
     catalyst_requisition: {
       requisition_id:

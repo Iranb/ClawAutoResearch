@@ -168,3 +168,94 @@ test("syncOpenClawAgentModels supports dry-run without mutating models.json", as
   assert.deepEqual(summary.results[0]?.addedModelRefs, ["bailian/qwen3.6-plus"]);
   assert.deepEqual(await readJson(modelsPath), original);
 });
+
+test("syncOpenClawAgentModels keeps default fallbacks when an agent declares an empty fallback list", async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-model-sync-default-fallback-"));
+  const openclawHome = path.join(tempRoot, ".openclaw");
+  const agentDir = path.join(openclawHome, "agents", "researcher", "agent");
+  const configPath = path.join(openclawHome, "openclaw.json");
+  const modelsPath = path.join(agentDir, "models.json");
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        models: {
+          providers: {
+            bailian: {
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              apiKey: "test-key",
+              api: "openai-completions",
+              models: [
+                { id: "qwen3.5-plus", name: "qwen3.5-plus" },
+                { id: "qwen3.6-plus", name: "qwen3.6-plus" },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "bailian/qwen3.6-plus",
+              fallbacks: ["bailian/qwen3.5-plus"],
+            },
+          },
+          list: [
+            {
+              id: "researcher",
+              agentDir,
+              model: {
+                primary: "bailian/qwen3.6-plus",
+                fallbacks: [],
+              },
+            },
+          ],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    modelsPath,
+    `${JSON.stringify(
+      {
+        providers: {
+          bailian: {
+            baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+            apiKey: "test-key",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const summary = await syncOpenClawAgentModels({
+    openclawHome,
+    configPath,
+    agentIds: ["researcher"],
+  });
+
+  assert.equal(summary.counts.repaired, 1);
+  assert.deepEqual(summary.results[0]?.addedModelRefs, [
+    "bailian/qwen3.6-plus",
+    "bailian/qwen3.5-plus",
+  ]);
+
+  const nextModels = await readJson(modelsPath);
+  assert.deepEqual(
+    nextModels.providers.bailian.models.map((entry) => entry.id),
+    ["qwen3.6-plus", "qwen3.5-plus"]
+  );
+});

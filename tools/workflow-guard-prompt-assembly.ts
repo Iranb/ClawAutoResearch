@@ -658,19 +658,19 @@ export function formatWorkflowSnapshotForPromptImpl(
         );
         if (snapshot.papernexusApiTokenSource === "env" && snapshot.papernexusApiTokenEnv) {
           lines.push(
-            `Remote MCP rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for the PaperNexus MCP endpoint at ${snapshot.papernexusMcpUrl ?? "unset"}. Never print the raw token in chat, prompts, logs, or project files.`
+            `Remote MCP rule: use the configured PaperNexus MCP endpoint at ${snapshot.papernexusMcpUrl ?? "unset"}; the runtime or MCP-backed wrappers must read env ${snapshot.papernexusApiTokenEnv} internally. Do not echo, print, log, store, or pass the raw token through shell output.`
           );
         } else if (snapshot.papernexusApiTokenSource === "os_keychain") {
           lines.push(
-            `Remote MCP rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusMcpUrl ?? "unset"}. Never print or persist the raw token.`
+            `Remote MCP rule: use the configured PaperNexus MCP endpoint at ${snapshot.papernexusMcpUrl ?? "unset"}; the runtime or MCP-backed wrappers must resolve keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} internally. Do not run keychain commands yourself. For shell wrapper fallback, set only non-secret auth metadata (PAPERNEXUS_API_TOKEN_SOURCE=os_keychain, PAPERNEXUS_API_TOKEN_SERVICE=${snapshot.papernexusApiTokenService ?? "unset"}, PAPERNEXUS_API_TOKEN_ACCOUNT=${snapshot.papernexusApiTokenAccount ?? "unset"}) and let the wrapper resolve the token without printing it. Do not echo, log, or persist the token.`
           );
         } else {
           lines.push(
-            `Remote MCP rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusMcpUrl ?? "unset"}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
+            `Remote MCP rule: use the configured PaperNexus MCP endpoint at ${snapshot.papernexusMcpUrl ?? "unset"}; the runtime or MCP-backed wrappers must resolve auth internally from env ${snapshot.papernexusApiTokenEnv ?? "unset"} or keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Do not run token lookup commands yourself. For shell wrapper fallback, set only non-secret auth metadata and let the wrapper resolve the token without printing it. Do not echo, log, or persist the token.`
           );
         }
         lines.push(
-          "Remote MCP rule: use the PaperNexus MCP tools through the MCP-first mapping for graph reads and writes: `research_lookup` for query/context/impact/ideas/brainstorm/paper_index, `research_briefing` for brief and chain outputs, `idea_catalyst` for cross-domain ideation packets, `import_workflow` for queued import/status/progress/log/wait flows, and `refresh_paper_graph` for one already-indexed paper or duplicate group. Do not use `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane in this mode."
+          "Remote MCP rule: `research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`, and `refresh_paper_graph` are MCP tool names, not shell commands to locate with `which`. Call them through the configured PaperNexus MCP server when the agent runtime exposes MCP tools; use MCP-backed wrappers such as `pn_graph_query.py` / `pn_research_chains.py` only for shell-only fallback or local file staging."
         );
       } else {
         lines.push(
@@ -682,21 +682,21 @@ export function formatWorkflowSnapshotForPromptImpl(
           snapshot.papernexusApiTokenEnv
         ) {
           lines.push(
-            `Remote API rule: Use Authorization: Bearer from env ${snapshot.papernexusApiTokenEnv} for PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}. Never print the raw token in chat, prompts, logs, or project files.`
+            `Remote API rule: use PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}; the authenticated wrappers must read env ${snapshot.papernexusApiTokenEnv} internally. Do not echo, print, log, store, or pass the raw token through shell output.`
           );
         } else if (
           snapshot.papernexusApiBaseUrl &&
           snapshot.papernexusApiTokenSource === "os_keychain"
         ) {
           lines.push(
-            `Remote API rule: Resolve the PaperNexus bearer token from the native OS keychain entry service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} before calling ${snapshot.papernexusApiBaseUrl}. Never print or persist the raw token.`
+            `Remote API rule: use PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}; the authenticated wrappers must resolve keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"} internally. Do not run keychain commands yourself. For shell wrapper fallback, set only non-secret auth metadata (PAPERNEXUS_API_TOKEN_SOURCE=os_keychain, PAPERNEXUS_API_TOKEN_SERVICE=${snapshot.papernexusApiTokenService ?? "unset"}, PAPERNEXUS_API_TOKEN_ACCOUNT=${snapshot.papernexusApiTokenAccount ?? "unset"}) and let the wrapper resolve the token without printing it. Do not echo, log, or persist the token.`
           );
         } else if (
           snapshot.papernexusApiBaseUrl &&
           snapshot.papernexusApiTokenSource === "auto"
         ) {
           lines.push(
-            `Remote API rule: Resolve the PaperNexus bearer token in auto mode for ${snapshot.papernexusApiBaseUrl}: prefer env ${snapshot.papernexusApiTokenEnv ?? "unset"}, then fall back to native keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Never print or persist the raw token.`
+            `Remote API rule: use PaperNexus Web/API access at ${snapshot.papernexusApiBaseUrl}; the authenticated wrappers must resolve auth internally from env ${snapshot.papernexusApiTokenEnv ?? "unset"} or keychain service=${snapshot.papernexusApiTokenService ?? "unset"} account=${snapshot.papernexusApiTokenAccount ?? "unset"}. Do not run token lookup commands yourself. For shell wrapper fallback, set only non-secret auth metadata and let the wrapper resolve the token without printing it. Do not echo, log, or persist the token.`
           );
           lines.push(
             "Live graph rule: never use local PaperNexus live-graph CLI reads or hand-written curl calls against the running shared graph; use `pn_graph_query.py` / `pn_research_chains.py` instead."

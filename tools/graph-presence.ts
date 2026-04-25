@@ -12,13 +12,17 @@ import {
   collectRetrievalProviders as collectRetrievalProvidersShared,
   inferPaperSourceProvider as inferSourceProviderShared,
   mergeCanonicalPaperRecords,
+  PAPER_SOURCE_PATH_KEYS,
+  resolvePaperSourcePathCandidates,
   sourceKindRank as sourceKindRankShared,
   sourceProviderRank as sourceProviderRankShared,
 } from "./paper-source-contract";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
   DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+  resolvePapernexusSharedCorpusFallback,
   resolveWorkflowSharedPapernexusCorpus,
+  shouldAutodiscoverRemotePapernexusCorpus,
 } from "./papernexus-shared-corpus";
 
 export type GraphPresenceStatus =
@@ -42,6 +46,7 @@ type ExpectedPaper = {
   arxivId: string | null;
   doi: string | null;
   sourceHints: string[];
+  plannedStagingPath: string | null;
   sourceKind: "markdown" | "pdf" | "unknown";
   sourceProvider: string | null;
   retrievalProviders: string[];
@@ -782,15 +787,7 @@ function collectSourceHints(record: Record<string, unknown> | null): string[] {
     return [];
   }
   return uniqueStrings([
-    pickString(record, ["source_path", "sourcePath"]),
-    pickString(record, ["canonical_source_path", "canonicalSourcePath"]),
-    pickString(record, ["markdown_path", "markdownPath", "source_markdown_path", "sourceMarkdownPath"]),
-    pickString(record, ["local_md_path", "localMdPath", "local_md", "localMd"]),
-    pickString(record, ["pdf_path", "pdfPath", "source_pdf_path", "sourcePdfPath"]),
-    pickString(record, ["local_pdf_path", "localPdfPath", "local_pdf", "localPdf"]),
-    pickString(record, ["input_path", "inputPath"]),
-    pickString(record, ["source_key", "sourceKey"]),
-    pickString(record, ["path", "file", "filePath"]),
+    ...PAPER_SOURCE_PATH_KEYS.map((key) => pickString(record, [key])),
     pickString(record, ["url", "best_oa_url", "bestOaUrl", "pdf_url", "pdfUrl"]),
     ...asStringArray(record.source_variants),
     ...asStringArray(record.sourceVariants),
@@ -901,6 +898,34 @@ function buildExpectedPaperFromRecord(
     arxivId: paper.arxivId,
     doi: paper.doi,
     sourceHints: paper.sourceHints,
+    plannedStagingPath: pickString(raw, [
+      "staging_path",
+      "stagingPath",
+      "staged_path",
+      "stagedPath",
+      "source_staging_path",
+      "sourceStagingPath",
+      "markdown_path",
+      "markdownPath",
+      "source_markdown_path",
+      "sourceMarkdownPath",
+      "md_path",
+      "mdPath",
+      "source_md_path",
+      "sourceMdPath",
+      "local_md_path",
+      "localMdPath",
+      "local_md",
+      "localMd",
+      "pdf_path",
+      "pdfPath",
+      "source_pdf_path",
+      "sourcePdfPath",
+      "local_pdf_path",
+      "localPdfPath",
+      "local_pdf",
+      "localPdf",
+    ]),
     sourceKind: paper.sourceKind,
     sourceProvider: paper.sourceProvider,
     retrievalProviders: paper.retrievalProviders,
@@ -976,6 +1001,7 @@ function mergeExpectedPaper(target: ExpectedPaper, incoming: ExpectedPaper): Exp
     arxivId: merged.arxivId,
     doi: merged.doi,
     sourceHints: merged.sourceHints,
+    plannedStagingPath: target.plannedStagingPath ?? incoming.plannedStagingPath,
     sourceKind: merged.sourceKind,
     sourceProvider: merged.sourceProvider,
     retrievalProviders: merged.retrievalProviders,
@@ -1034,6 +1060,60 @@ function parsePaperSourceIndex(raw: unknown): ExpectedPaper[] {
   }
   return [...byCanonicalId.values()].sort((left, right) =>
     left.canonicalId.localeCompare(right.canonicalId)
+  );
+}
+
+function isRemoteSourceHint(value: string): boolean {
+  return /^[a-z]+:\/\//i.test(value.trim());
+}
+
+function isLocalPaperSourceHint(value: string): boolean {
+  return !isRemoteSourceHint(value) && /\.(?:md|pdf)(?:$|[?#])/i.test(value.trim());
+}
+
+function resolveLocalPaperSourceHint(projectRoot: string, value: string): string {
+  return (
+    resolvePaperSourcePathCandidates({
+      projectRoot,
+      sourcePath: value,
+    })[0] ?? path.normalize(path.join(projectRoot, value.trim().replace(/[?#].*$/, "")))
+  );
+}
+
+async function normalizeExpectedPaperAvailableSources(params: {
+  projectRoot: string;
+  paper: ExpectedPaper;
+}): Promise<ExpectedPaper> {
+  const plannedPath = params.paper.plannedStagingPath;
+  if (!plannedPath || !isLocalPaperSourceHint(plannedPath)) {
+    return params.paper;
+  }
+  const resolved = resolveLocalPaperSourceHint(params.projectRoot, plannedPath);
+  if (await pathExists(resolved)) {
+    return params.paper;
+  }
+  const sourceHints = uniqueStrings(
+    params.paper.sourceHints.filter((hint) => hint !== plannedPath)
+  );
+  const inferredKind = inferSourceKind(sourceHints);
+  return {
+    ...params.paper,
+    sourceHints,
+    sourceKind: inferredKind !== "unknown" ? inferredKind : "unknown",
+  };
+}
+
+async function normalizeExpectedPapersAvailableSources(params: {
+  projectRoot: string;
+  papers: ExpectedPaper[];
+}): Promise<ExpectedPaper[]> {
+  return Promise.all(
+    params.papers.map((paper) =>
+      normalizeExpectedPaperAvailableSources({
+        projectRoot: params.projectRoot,
+        paper,
+      })
+    )
   );
 }
 
@@ -1153,13 +1233,32 @@ async function resolveExpectedPapers(params: {
     if (paperSourceIndex === null) {
       continue;
     }
-    const indexedPapers = parsePaperSourceIndex(paperSourceIndex);
+    const indexedPapers = await normalizeExpectedPapersAvailableSources({
+      projectRoot: params.projectRoot,
+      papers: parsePaperSourceIndex(paperSourceIndex),
+    });
     if (indexedPapers.length > 0) {
+      const importablePapers = indexedPapers.filter((paper) =>
+        hasImportableSourceSignal(paper)
+      );
+      if (importablePapers.length === 0) {
+        return {
+          papers: indexedPapers,
+          paperSourceIndexPath,
+          usedPaperSourceIndex: true,
+          expectedPaperCountHint: indexedPapers.length,
+          summaryOnly: false,
+          graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
+          sourceIndexUpdatedAt:
+            pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
+            pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
+        };
+      }
       return {
-        papers: indexedPapers,
+        papers: importablePapers,
         paperSourceIndexPath,
         usedPaperSourceIndex: true,
-        expectedPaperCountHint: indexedPapers.length,
+        expectedPaperCountHint: importablePapers.length,
         summaryOnly: false,
         graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
         sourceIndexUpdatedAt:
@@ -1262,8 +1361,15 @@ function resolvePreferredPapernexusCorpusName(params: {
   projectId: string | null;
   projectRoot: string;
   sharedCorpus: string | null;
+  remoteMcpUrl?: string | null;
+  remoteApiBaseUrl?: string | null;
 }): string | null {
   const paperIngestion = asRecord(params.manifest.paper_ingestion);
+  const shouldAutodiscover = shouldAutodiscoverRemotePapernexusCorpus({
+    configuredSharedCorpus: params.sharedCorpus,
+    mcpUrl: params.remoteMcpUrl,
+    apiBaseUrl: params.remoteApiBaseUrl,
+  });
   return resolveWorkflowSharedPapernexusCorpus({
     candidates: [
       pickString(paperIngestion, [
@@ -1278,7 +1384,15 @@ function resolvePreferredPapernexusCorpusName(params: {
     ],
     projectId: params.projectId,
     projectRoot: params.projectRoot,
-    fallback: DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+    fallback: shouldAutodiscover
+      ? null
+      : resolvePapernexusSharedCorpusFallback({
+          configuredSharedCorpus: params.sharedCorpus,
+          mcpUrl: params.remoteMcpUrl,
+          apiBaseUrl: params.remoteApiBaseUrl,
+          fallback: DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+        }),
+    ignoreLegacyDefault: shouldAutodiscover,
   });
 }
 
@@ -1792,6 +1906,8 @@ function resolveGraphRepairTargetCorpus(params: {
   projectId: string | null;
   projectRoot: string;
   sharedCorpus: string | null;
+  remoteMcpUrl?: string | null;
+  remoteApiBaseUrl?: string | null;
 }): string | null {
   return resolvePreferredPapernexusCorpusName({
     manifest: params.manifest,
@@ -1799,6 +1915,8 @@ function resolveGraphRepairTargetCorpus(params: {
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     sharedCorpus: params.sharedCorpus,
+    remoteMcpUrl: params.remoteMcpUrl,
+    remoteApiBaseUrl: params.remoteApiBaseUrl,
   });
 }
 
@@ -2218,6 +2336,8 @@ async function refreshRemoteStatusRecord(params: {
     projectId: pickString(params.manifest, ["project_id", "projectId"]),
     projectRoot: params.projectRoot,
     sharedCorpus: params.sharedCorpus,
+    remoteMcpUrl: params.remoteInspection.summary.mcpUrl,
+    remoteApiBaseUrl: params.remoteInspection.summary.apiBaseUrl,
   });
   const preferredCorpusRoot = resolvePreferredPapernexusCorpusRoot({
     manifest: params.manifest,
@@ -2308,6 +2428,8 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     sharedCorpus: params.sharedCorpus,
+    remoteMcpUrl: remoteInspection.summary.mcpUrl,
+    remoteApiBaseUrl: remoteInspection.summary.apiBaseUrl,
   });
   const preferredCorpusRoot = resolvePreferredPapernexusCorpusRoot({
     manifest: params.manifest,
@@ -2513,6 +2635,8 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     sharedCorpus: params.sharedCorpus,
+    remoteMcpUrl: remoteInspection.summary.mcpUrl,
+    remoteApiBaseUrl: remoteInspection.summary.apiBaseUrl,
   });
   const repairRequired = shouldRequireGraphImportRepair({
     status,

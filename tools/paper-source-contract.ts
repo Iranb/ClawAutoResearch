@@ -62,6 +62,49 @@ const ARXIV_ID_EXTRACT_REGEX = /\b(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b/g
 const DOI_REGEX = /\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/i;
 const PMID_REGEX = /\bpmid[:\s]*([0-9]{5,})\b/i;
 const PMCID_REGEX = /\bpmc[:\s]*([0-9]{5,})\b/i;
+const DEFAULT_RESEARCHER_PAPER_STAGING_DIR = path.join(
+  "researcher",
+  "paper-staging"
+);
+export const PAPER_SOURCE_PATH_KEYS = [
+  "source_path",
+  "sourcePath",
+  "canonical_source_path",
+  "canonicalSourcePath",
+  "staging_path",
+  "stagingPath",
+  "staged_path",
+  "stagedPath",
+  "source_staging_path",
+  "sourceStagingPath",
+  "markdown_path",
+  "markdownPath",
+  "source_markdown_path",
+  "sourceMarkdownPath",
+  "md_path",
+  "mdPath",
+  "source_md_path",
+  "sourceMdPath",
+  "local_md_path",
+  "localMdPath",
+  "local_md",
+  "localMd",
+  "pdf_path",
+  "pdfPath",
+  "source_pdf_path",
+  "sourcePdfPath",
+  "local_pdf_path",
+  "localPdfPath",
+  "local_pdf",
+  "localPdf",
+  "input_path",
+  "inputPath",
+  "source_key",
+  "sourceKey",
+  "path",
+  "file",
+  "filePath",
+] as const;
 
 const TITLE_SIGNATURE_STOPWORDS = new Set([
   "a",
@@ -103,6 +146,66 @@ function normalizeTitleToken(value: string): string {
 
 function isRemoteEndpointLike(value: string | null | undefined): boolean {
   return Boolean(value && /^[a-z]+:\/\//i.test(value));
+}
+
+function addUniquePathCandidate(candidates: string[], value: string | null): void {
+  if (!value) {
+    return;
+  }
+  const normalized = path.normalize(value);
+  if (!candidates.includes(normalized)) {
+    candidates.push(normalized);
+  }
+}
+
+export function resolvePaperSourcePathCandidates(params: {
+  projectRoot: string;
+  sourcePath: string | null | undefined;
+  sourceIndexPath?: string | null;
+  stagingDir?: string | null;
+}): string[] {
+  const sourcePath = params.sourcePath?.trim();
+  if (!sourcePath || isRemoteEndpointLike(sourcePath)) {
+    return [];
+  }
+  const stripped = sourcePath.replace(/[?#].*$/, "");
+  if (path.isAbsolute(stripped)) {
+    return [path.normalize(stripped)];
+  }
+  const projectRoot = path.resolve(params.projectRoot);
+  const normalizedRelative = stripped.replace(/\\/g, "/").replace(/^\/+/, "");
+  const candidates: string[] = [];
+  const sourceIndexDir = params.sourceIndexPath
+    ? path.dirname(path.resolve(params.sourceIndexPath))
+    : null;
+  const stagingDir = params.stagingDir
+    ? path.resolve(projectRoot, params.stagingDir)
+    : null;
+  const defaultStagingDir = path.join(projectRoot, DEFAULT_RESEARCHER_PAPER_STAGING_DIR);
+
+  if (/^(?:md|pdf)\//i.test(normalizedRelative)) {
+    addUniquePathCandidate(candidates, path.join(defaultStagingDir, normalizedRelative));
+    if (sourceIndexDir && path.basename(sourceIndexDir) === "paper-staging") {
+      addUniquePathCandidate(candidates, path.join(sourceIndexDir, normalizedRelative));
+    }
+    if (sourceIndexDir && path.basename(sourceIndexDir) === "researcher") {
+      addUniquePathCandidate(
+        candidates,
+        path.join(sourceIndexDir, "paper-staging", normalizedRelative)
+      );
+    }
+  }
+  if (/^paper-staging\//i.test(normalizedRelative)) {
+    addUniquePathCandidate(candidates, path.join(projectRoot, "researcher", normalizedRelative));
+  }
+  if (stagingDir && !/^(?:md|pdf)\//i.test(normalizedRelative)) {
+    addUniquePathCandidate(candidates, path.join(stagingDir, normalizedRelative));
+  }
+  if (sourceIndexDir) {
+    addUniquePathCandidate(candidates, path.join(sourceIndexDir, normalizedRelative));
+  }
+  addUniquePathCandidate(candidates, path.join(projectRoot, normalizedRelative));
+  return candidates;
 }
 
 export function normalizeProviderName(value: string | null | undefined): string | null {
@@ -205,15 +308,7 @@ export function collectSourceHints(record: Record<string, unknown> | null): stri
     return [];
   }
   return uniqueStrings([
-    pickString(record, ["source_path", "sourcePath"]),
-    pickString(record, ["canonical_source_path", "canonicalSourcePath"]),
-    pickString(record, ["markdown_path", "markdownPath", "source_markdown_path", "sourceMarkdownPath"]),
-    pickString(record, ["local_md_path", "localMdPath", "local_md", "localMd"]),
-    pickString(record, ["pdf_path", "pdfPath", "source_pdf_path", "sourcePdfPath"]),
-    pickString(record, ["local_pdf_path", "localPdfPath", "local_pdf", "localPdf"]),
-    pickString(record, ["input_path", "inputPath"]),
-    pickString(record, ["source_key", "sourceKey"]),
-    pickString(record, ["path", "file", "filePath"]),
+    ...PAPER_SOURCE_PATH_KEYS.map((key) => pickString(record, [key])),
     pickString(record, ["url", "best_oa_url", "bestOaUrl", "pdf_url", "pdfUrl"]),
     ...asStringArray(record.source_variants),
     ...asStringArray(record.sourceVariants),
@@ -445,28 +540,7 @@ export function buildCanonicalPaperRecordFromRecord(
     return null;
   }
   const sourceHints = collectSourceHints(raw);
-  const sourcePath =
-    pickString(raw, [
-      "source_path",
-      "sourcePath",
-      "canonical_source_path",
-      "canonicalSourcePath",
-      "markdown_path",
-      "markdownPath",
-      "local_md_path",
-      "localMdPath",
-      "local_md",
-      "localMd",
-      "pdf_path",
-      "pdfPath",
-      "local_pdf_path",
-      "localPdfPath",
-      "local_pdf",
-      "localPdf",
-      "path",
-      "file",
-      "filePath",
-    ]) ?? null;
+  const sourcePath = pickString(raw, [...PAPER_SOURCE_PATH_KEYS]) ?? null;
   const resolvedLocalSourcePath = sourcePath && !isRemoteEndpointLike(sourcePath) ? sourcePath : null;
   const title =
     pickString(raw, ["title", "paper_title", "paperTitle", "name"]) ??

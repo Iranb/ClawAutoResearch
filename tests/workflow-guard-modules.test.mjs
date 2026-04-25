@@ -289,7 +289,9 @@ test("buildPapernexusGuidance teaches researcher to use remote MCP when remote_m
   );
   assert.ok(
     guidance.prepend.some(
-      (entry) => /Do not use .*pn_graph_query\.py.*pn_research_chains\.py|non-MCP control plane/i.test(entry)
+      (entry) =>
+        /MCP tool names, not shell commands/i.test(entry) &&
+        /pn_graph_query\.py.*pn_research_chains\.py/i.test(entry)
     )
   );
 });

@@ -349,6 +349,7 @@ node scripts/run_local_workflow_command.mjs \
 - 项目目录出现在 `--projects-root` 下。
 - `.openclaw-research/LOCAL_WORKFLOW_COMMAND_BACKGROUND_RUN.json` 存在。
 - 如果使用 `--channel discord` 做兼容测试，Discord 只会被记录到 `.openclaw-research/workflow-notification-channels.json`，不会被自动写入 `channel-project-bindings.json`。
+- topic-only 项目进入 `graph_build` 时，如果还没有 `researcher/PAPER_SOURCE_INDEX.json`，workflow 会从 manifest / `research_program.goal` 中解析 arXiv ID 或论文题名，先补 workflow-owned source seed，再抓取 Markdown/PDF 并排 PaperNexus batch import。
 
 ## 8. `/auto-research` 和 `/auto-review` 的 deterministic E2E
 
@@ -389,6 +390,56 @@ node scripts/run_auto_workflow_e2e_test.mjs \
 
 `--command` 可以写 `/autoresearch`、`/auto-research`、`/autoreview`、`/auto-review` 或 `full`。真实模式默认使用 `--bootstrap-transport local`，所以不会连接 Discord，也不会把 Discord channel 写成项目绑定。
 
+真实模式默认按时间戳生成隔离 project id，避免旧项目的 runtime queue、session 或 hook retry budget 污染新测试。只有在要复盘同一项目时才使用 `--reuse-project` 或手工指定 `--project-id`。
+
+常用的 live 调试超时参数：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "Generalized Category Discovery" \
+  --bootstrap-timeout-ms 180000 \
+  --project-root-timeout-ms 60000 \
+  --max-no-progress-turns 1
+```
+
+`--bootstrap-timeout-ms` 限制 `/auto-research` / `/auto-review` 启动阶段等待时间；`--project-root-timeout-ms` 限制 bootstrap 返回后等待项目目录写出的时间；`--max-no-progress-turns` 控制真实阶段连续无进展后是否快速失败。provider quota、rate limit、gateway bootstrap 失败会被记录为 summary failure，而不是让测试进程一直挂起。
+
+### 8.1 provider 429 与本地接管 relay
+
+真实 E2E 依赖本机 OpenClaw agent provider。遇到 provider quota / 429 时，embedded runtime 会先使用 OpenClaw 配置中的 `agents.<id>.model.fallbacks` 或 `agents.defaults.model.fallbacks` 重新启动同一个 embedded run。例如本机配置可以把 `bailian/qwen3.5-plus` 放在 `bailian/qwen3.6-plus` 后面作为 fallback。
+
+如果所有 configured fallback 仍然失败，runtime maintenance 会：
+
+- 将关联 runtime session 标为 `needs_repair`。
+- 将关联 queue 标为 `needs_repair` 并写入 `nextRetryAt`，默认冷却 1 小时。
+- 写入 `.openclaw-research/workflow-local-operator-relay.jsonl`，给本地 Codex/operator 一个明确接管任务。
+- 在冷却到期前跳过 replay，避免 background pool 反复消耗 quota。
+
+查看最新接管任务：
+
+```bash
+node scripts/workflow_local_operator_relay.mjs \
+  --project-root "/path/to/AutoResearchProjects/<project-id>" \
+  --latest
+```
+
+机器可读输出：
+
+```bash
+node scripts/workflow_local_operator_relay.mjs \
+  --project-root "/path/to/AutoResearchProjects/<project-id>" \
+  --latest \
+  --json
+```
+
+PaperNexus 相关检查点：
+
+- `PROJECT_MANIFEST.json.paper_ingestion.queued_requests[*].command_text` 应该指向 `skills/researcher/papernexus/scripts/pn_batch_import.py`。
+- topic-only 启动时，`graph/GRAPH_BUILD_SOURCE_CATCHUP.json.bootstrap_source_index_entry_count` 大于 0 说明 source index 是由 no-Discord bootstrap 自动补齐的。
+- `submit` 完成后请求不应直接变成 `completed`；如果远端任务还没完成，应看到下一轮 `wait --timeout 60 --interval 5`。
+- `PAPERNEXUS_PROGRESS.json`、`active_batches`、`batch_items` 和 `completed_papers` 应该随着每次 wait/status 更新。
+- `graph_build -> frontier_mapping` 的最终依据是 `graph_presence_status=ready`，不是 batch wrapper 进程退出。
+
 如果要直接调用底层脚本，也可以运行：
 
 ```bash
@@ -417,7 +468,7 @@ node scripts/run_auto_command_end_to_end.mjs \
    - 用 deterministic fixture 工件做受控回归
    - 仍然生成 PDF 并验证终态，但不代表真实 agent 写作质量
 
-### 8.1 E2E runner 输出
+### 8.2 E2E runner 输出
 
 每次运行都会写入：
 
@@ -435,7 +486,7 @@ node scripts/run_auto_command_end_to_end.mjs \
 - 默认配置 `$HOME/.openclaw/openclaw.json` 可读，或通过 `--profile dev` / `--source-config-path <path>` 指定
 - 对应 agent auth 已配置，否则真实 agent 阶段会在运行中失败
 
-### 8.2 已验证结果
+### 8.3 已验证结果
 
 主题：`Generalized Category Discovery`
 
@@ -455,7 +506,7 @@ node scripts/run_auto_command_end_to_end.mjs \
   - `academic_writer/paper/main.pdf` 存在
   - `E2E_RUN_REPORT.md` 最终为 `final_verdict: pass`
 
-### 8.3 对应测试
+### 8.4 对应测试
 
 仓库里还有一条可重复执行的回归测试：
 

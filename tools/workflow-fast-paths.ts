@@ -16,6 +16,8 @@ import {
   ensureWorkflowProjectRoot,
   getPaperIngestionStateSummary,
   setPaperIngestionState,
+  type PaperIngestionQueuedRequest,
+  type PaperIngestionState,
   type WorkflowGuardPolicy,
 } from "./workflow-guard";
 import {
@@ -27,7 +29,19 @@ import {
 } from "./paper-ingestion-validation";
 import {
   isPaperIngestionExecutableUploadRequest,
+  INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+  isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest,
+  isWorkflowOwnedLiteratureRequisitionRequest,
+  serializePaperIngestionQueuedRequest,
 } from "./workflow-guard-state/paper-ingestion";
+import {
+  buildPapernexusScriptRelativePath,
+  executePapernexusBatchImportRequest,
+  getPapernexusBatchImportArgs,
+  isPapernexusBatchImportLifecycleRequest,
+  type PapernexusBatchExecutionState,
+} from "./papernexus-batch-executor.js";
+import type { PapernexusRemoteAccessConfig } from "./papernexus-secret";
 import {
   buildWorkflowSubagentSessionKey,
   derivePapernexusTaskLabel,
@@ -106,6 +120,23 @@ function asDispatchableWorkflowRole(
     normalized === "cross-reviewer"
     ? (normalized as DispatchableWorkflowRole)
     : null;
+}
+
+function buildPapernexusRemoteAccessConfigFromPolicy(
+  workflowPolicy: WorkflowGuardPolicy
+): PapernexusRemoteAccessConfig {
+  return {
+    apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+    mcpUrl: workflowPolicy.papernexusMcpUrl,
+    mcpTransport: workflowPolicy.papernexusMcpTransport,
+    mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
+    tokenSource: workflowPolicy.papernexusApiTokenSource,
+    tokenEnv: workflowPolicy.papernexusApiTokenEnv,
+    tokenService: workflowPolicy.papernexusApiTokenService,
+    tokenAccount: workflowPolicy.papernexusApiTokenAccount,
+    mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
+    tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+  };
 }
 
 function readAgentIdFromSessionKey(sessionKey: string | null | undefined): string | null {
@@ -407,16 +438,16 @@ const PAPERNEXUS_WRAPPER_SCRIPT_MAP: Record<string, PapernexusWrapperScript> = {
 };
 
 const PAPERNEXUS_WRAPPER_SCRIPT_PATHS: Record<PapernexusWrapperScript, string> = {
-  "pn_stage_sync.py": "skills/papernexus/scripts/pn_stage_sync.py",
-  "pn_import_submit.py": "skills/papernexus/scripts/pn_import_submit.py",
-  "pn_import_queue.py": "skills/papernexus/scripts/pn_import_queue.py",
-  "pn_batch_import.py": "skills/papernexus/scripts/pn_batch_import.py",
-  "pn_paper_index.py": "skills/papernexus/scripts/pn_paper_index.py",
-  "pn_graph_query.py": "skills/papernexus/scripts/pn_graph_query.py",
-  "pn_research_chains.py": "skills/papernexus/scripts/pn_research_chains.py",
-  "pn_paper_refresh.py": "skills/papernexus-paper-refresh/scripts/pn_paper_refresh.py",
-  "pn_main_graph_name.py": "skills/papernexus-main-graph-name/scripts/pn_main_graph_name.py",
-  "pn_idea_catalyst.py": "skills/papernexus-idea-catalyst/scripts/pn_idea_catalyst.py",
+  "pn_stage_sync.py": buildPapernexusScriptRelativePath("pn_stage_sync.py"),
+  "pn_import_submit.py": buildPapernexusScriptRelativePath("pn_import_submit.py"),
+  "pn_import_queue.py": buildPapernexusScriptRelativePath("pn_import_queue.py"),
+  "pn_batch_import.py": buildPapernexusScriptRelativePath("pn_batch_import.py"),
+  "pn_paper_index.py": buildPapernexusScriptRelativePath("pn_paper_index.py"),
+  "pn_graph_query.py": buildPapernexusScriptRelativePath("pn_graph_query.py"),
+  "pn_research_chains.py": buildPapernexusScriptRelativePath("pn_research_chains.py"),
+  "pn_paper_refresh.py": "skills/researcher/papernexus-paper-refresh/scripts/pn_paper_refresh.py",
+  "pn_main_graph_name.py": "skills/researcher/papernexus-main-graph-name/scripts/pn_main_graph_name.py",
+  "pn_idea_catalyst.py": "skills/researcher/papernexus-idea-catalyst/scripts/pn_idea_catalyst.py",
 };
 
 const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
@@ -2387,11 +2418,11 @@ export function buildPapernexusSkillBackgroundCommand(commandText: string): stri
 function isPapernexusImportLifecycleCommand(text: string | null | undefined): boolean {
   const normalized = (text ?? "").toLowerCase();
   return (
-    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_stage_sync\.py\b/.test(normalized) ||
-    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_import_submit\.py\b/.test(normalized) ||
-    (/(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
+    /(?:^|\s)(?:skills\/(?:researcher\/)?papernexus\/)?scripts\/pn_stage_sync\.py\b/.test(normalized) ||
+    /(?:^|\s)(?:skills\/(?:researcher\/)?papernexus\/)?scripts\/pn_import_submit\.py\b/.test(normalized) ||
+    (/(?:^|\s)(?:skills\/(?:researcher\/)?papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
       /\b(submit|status|wait)\b/.test(normalized)) ||
-    (/(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_import_queue\.py\b/.test(normalized) &&
+    (/(?:^|\s)(?:skills\/(?:researcher\/)?papernexus\/)?scripts\/pn_import_queue\.py\b/.test(normalized) &&
       /\b(status|log|wait)\b/.test(normalized))
   );
 }
@@ -2399,7 +2430,7 @@ function isPapernexusImportLifecycleCommand(text: string | null | undefined): bo
 function isPapernexusBatchImportCommand(text: string | null | undefined): boolean {
   const normalized = (text ?? "").toLowerCase();
   return (
-    /(?:^|\s)(?:skills\/papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
+    /(?:^|\s)(?:skills\/(?:researcher\/)?papernexus\/)?scripts\/pn_batch_import\.py\b/.test(normalized) &&
     /\b(submit|status|wait)\b/.test(normalized)
   );
 }
@@ -2607,6 +2638,524 @@ function buildWorkflowOwnedIngestionRequestPrompt(params: {
   return `${lines.join("\n")}\n`;
 }
 
+function buildWorkflowOwnedRequisitionRequestPrompt(params: {
+  requestId: string;
+  triggerKind: string | null;
+  manifestPath: string | null;
+  sharedCorpus: string | null;
+}): string {
+  const lines = [
+    `WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=${params.requestId}`,
+    `WORKFLOW_OWNED_LITERATURE_REQUISITION_REQUEST_ID=${params.requestId}`,
+    "This run was launched by the workflow to consume a queued literature discovery requisition without requiring a Discord foreground handoff.",
+    "Execute the command text as the authoritative requisition instructions: read the packet/scaffold, collect only sources that close the stated evidence gap, stage local Markdown/PDF sources, then materialize and run one real PaperNexus batch import for the staged sources.",
+    "Keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion using this request_id. Move it to running while active, completed only after durable import evidence exists in completed_papers/batch_items or after a requisition-satisfaction report is written and referenced by validation_report_path; otherwise leave it queued/needs_repair with a concrete error.",
+    "Do not mark this requisition completed with zero collected/imported papers unless the no-new-paper decision is backed by a saved requisition-satisfaction report that explains why the current graph already closes the gap.",
+    "After imports finish or exhaust retry budget, rerun /graph-build or record the graph-build reentry requirement so the workflow can refresh graph presence before continuing downstream.",
+  ];
+  if (params.triggerKind) {
+    lines.push(`Trigger kind: ${params.triggerKind}.`);
+  }
+  if (params.manifestPath) {
+    lines.push(`Requisition packet/scaffold path: {PROJ}/${params.manifestPath}.`);
+  }
+  if (params.sharedCorpus) {
+    lines.push(
+      `Use the locked shared corpus ${params.sharedCorpus} for any PaperNexus import produced by this requisition.`
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function hasDirectPapernexusBatchExecutionConfig(
+  request: {
+    args: string[];
+    commandText: string | null;
+  }
+): boolean {
+  const text = [request.commandText, ...request.args].filter(Boolean).join(" ");
+  return (
+    /(?:^|\s)--(?:mcp-url|api-base)(?:\s|=|$)/.test(text) ||
+    Boolean(readString(process.env.PAPERNEXUS_MCP_URL)) ||
+    Boolean(readString(process.env.PAPERNEXUS_API_BASE_URL))
+  );
+}
+
+function readPapernexusArgValue(args: string[], names: string[]): string | null {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    for (const name of names) {
+      if (arg === name) {
+        return readString(args[index + 1]) ?? null;
+      }
+      const prefix = `${name}=`;
+      if (arg.startsWith(prefix)) {
+        return readString(arg.slice(prefix.length)) ?? null;
+      }
+    }
+  }
+  return null;
+}
+
+function papernexusBatchArgsKey(
+  request: Pick<PaperIngestionQueuedRequest, "args" | "commandText">
+): string {
+  return getPapernexusBatchImportArgs(request).join("\u0000");
+}
+
+function readWorkflowOwnedPaperIngestionRequestId(
+  prompt: string | null | undefined
+): string | null {
+  const match =
+    /(?:^|\n)\s*WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=([^\s\n]+)/.exec(
+      prompt ?? ""
+    );
+  return readString(match?.[1]) ?? null;
+}
+
+async function countBatchManifestPapers(params: {
+  projectRoot: string;
+  manifestPath: string | null;
+}): Promise<number | null> {
+  const manifestPath = readString(params.manifestPath);
+  if (!manifestPath) {
+    return null;
+  }
+  const resolvedPath = path.isAbsolute(manifestPath)
+    ? manifestPath
+    : path.join(params.projectRoot, manifestPath);
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(resolvedPath)) ?? null;
+  if (!manifest) {
+    return null;
+  }
+  const arrays = [
+    manifest.papers,
+    manifest.items,
+    manifest.sources,
+    typeof manifest.batch === "object" && manifest.batch
+      ? (manifest.batch as Record<string, unknown>).papers
+      : null,
+    typeof manifest.batch === "object" && manifest.batch
+      ? (manifest.batch as Record<string, unknown>).items
+      : null,
+  ];
+  const firstArray = arrays.find(Array.isArray);
+  return Array.isArray(firstArray) ? firstArray.length : null;
+}
+
+async function resolveDirectPapernexusBatchRequest(params: {
+  projectRoot: string;
+  commandText: string | null;
+  summary: string | null;
+  triggerKind: string | null;
+  extraSystemPrompt?: string | null;
+}): Promise<PaperIngestionQueuedRequest | null> {
+  const commandText = readString(params.commandText);
+  if (!commandText) {
+    return null;
+  }
+  const commandRequest = {
+    args: [],
+    commandText,
+  };
+  const commandArgs = getPapernexusBatchImportArgs(commandRequest);
+  if (commandArgs.length === 0) {
+    return null;
+  }
+  const commandKey = papernexusBatchArgsKey(commandRequest);
+  const manifestPath = readPapernexusArgValue(commandArgs, ["--manifest"]);
+  const ownedRequestId = readWorkflowOwnedPaperIngestionRequestId(
+    params.extraSystemPrompt
+  );
+  const ingestion = await getPaperIngestionStateSummary({
+    projectRoot: params.projectRoot,
+  });
+  const queuedRequests = ingestion.state.queuedRequests;
+  const byOwnedId = ownedRequestId
+    ? queuedRequests.find((request) => request.requestId === ownedRequestId)
+    : null;
+  const byCommand = queuedRequests.find(
+    (request) =>
+      isPapernexusBatchImportLifecycleRequest(request) &&
+      papernexusBatchArgsKey(request) === commandKey
+  );
+  const byManifest = manifestPath
+    ? queuedRequests.find(
+        (request) =>
+          isPapernexusBatchImportLifecycleRequest(request) &&
+          readString(request.manifestPath) === manifestPath
+      )
+    : null;
+  const existing = byOwnedId ?? byCommand ?? byManifest ?? null;
+  if (existing) {
+    return {
+      ...existing,
+      args: existing.args.length > 0 ? existing.args : commandArgs,
+      commandText: existing.commandText ?? commandText,
+      wrapper: existing.wrapper ?? "pn_batch_import.py",
+      manifestPath: existing.manifestPath ?? manifestPath,
+      sharedCorpus:
+        existing.sharedCorpus ??
+        readPapernexusArgValue(commandArgs, ["--corpus", "--shared-corpus"]),
+      summary: existing.summary ?? params.summary,
+      triggerKind: existing.triggerKind ?? params.triggerKind,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  return {
+    requestId: `direct-papernexus-batch-${randomUUID().slice(0, 12)}`,
+    requestKind: "upload_manifest",
+    status: "running",
+    wrapper: "pn_batch_import.py",
+    args: commandArgs,
+    commandText,
+    manifestPath,
+    sharedCorpus: readPapernexusArgValue(commandArgs, [
+      "--corpus",
+      "--shared-corpus",
+    ]),
+    paperCount: await countBatchManifestPapers({
+      projectRoot: params.projectRoot,
+      manifestPath,
+    }),
+    summary: params.summary,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    startedAt: null,
+    finishedAt: null,
+    lastRunId: null,
+    lastSessionKey: null,
+    lastError: null,
+    detail: null,
+    triggerKind: params.triggerKind,
+    progress: null,
+    queueProgress: null,
+    validationStatus: "valid",
+    validationSummary: null,
+    validationReportPath: null,
+    attemptCount: 0,
+    maxAttempts: 3,
+    lastAttemptAt: null,
+    nextRetryAt: null,
+    deadLetterAt: null,
+    deadLetterReason: null,
+  };
+}
+
+async function persistDirectPapernexusBatchExecutionResult(params: {
+  projectRoot: string;
+  projectId: string | null;
+  queueKey?: string | null;
+  source: string;
+  directResult: PapernexusBatchExecutionState;
+}): Promise<BackgroundRunStartResult> {
+  const directResult = params.directResult;
+  const requestPatch = {
+    ...directResult.request,
+    queueProgress:
+      directResult.queueProgress ?? directResult.request.queueProgress,
+  };
+  await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      runtime_status: directResult.runtimeStatus,
+      waiting_reason: directResult.waitingReason,
+      import_task_ids: directResult.importTaskIds,
+      last_import_task_id: directResult.lastImportTaskId,
+      last_import_status: directResult.lastImportStatus,
+      completed_papers: directResult.completedPapers,
+      paper_operations: directResult.paperOperations,
+      active_batches: directResult.activeBatches,
+      batch_items: directResult.batchItems,
+      queued_requests: [serializePaperIngestionQueuedRequest(requestPatch)],
+      repair_required: directResult.repairRequired,
+      repair_reason: directResult.repairReason,
+      last_updated_at: directResult.request.updatedAt,
+    },
+  });
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  await writePapernexusProgressFromManifest({
+    projectRoot: params.projectRoot,
+    manifest,
+    ownerRun: {
+      run_id: directResult.request.lastRunId,
+      session_key: directResult.request.lastSessionKey,
+      queue_key: params.queueKey ?? null,
+      wrapper: directResult.request.wrapper,
+    },
+    updatedAt: directResult.request.updatedAt ?? new Date().toISOString(),
+  });
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "paper_ingestion_direct_batch_import",
+    summary: directResult.request.detail ?? directResult.waitingReason,
+    details: {
+      source: params.source,
+      queueKey: params.queueKey ?? null,
+      requestId: directResult.request.requestId,
+      status: directResult.request.status,
+      runtimeStatus: directResult.runtimeStatus,
+      importTaskCount: directResult.importTaskIds.length,
+      completedPaperCount: directResult.completedPapers.length,
+      batchItemCount: directResult.batchItems.length,
+    },
+  });
+  return {
+    started: true,
+    reason: "started",
+    runId: directResult.request.lastRunId,
+    sessionKey: directResult.request.lastSessionKey,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    summary: directResult.request.detail ?? directResult.waitingReason,
+    reusedIdleSession: false,
+    activeResearcherSessionsInChannel: null,
+    queued: false,
+    queueKey: params.queueKey ?? null,
+  };
+}
+
+async function maybeExecuteDirectPapernexusBatchBackgroundRun(params: {
+  projectRoot: string | null;
+  projectId: string | null;
+  normalizedKind: string;
+  commandText: string | null;
+  summary: string | null;
+  triggerKind: string | null;
+  extraSystemPrompt?: string | null;
+  queueKey?: string | null;
+  source: string;
+  papernexusRemoteAccess?: PapernexusRemoteAccessConfig | null;
+}): Promise<BackgroundRunStartResult | null> {
+  if (!params.projectRoot || !isPapernexusBackgroundKind(params.normalizedKind)) {
+    return null;
+  }
+  if (!readWorkflowOwnedPaperIngestionRequestId(params.extraSystemPrompt)) {
+    return null;
+  }
+  const request = await resolveDirectPapernexusBatchRequest({
+    projectRoot: params.projectRoot,
+    commandText: params.commandText,
+    summary: params.summary,
+    triggerKind: params.triggerKind,
+    extraSystemPrompt: params.extraSystemPrompt,
+  });
+  if (
+    !request ||
+    !isPapernexusBatchImportLifecycleRequest(request) ||
+    !hasDirectPapernexusBatchExecutionConfig(request)
+  ) {
+    return null;
+  }
+  const directResult = await executePapernexusBatchImportRequest({
+    projectRoot: params.projectRoot,
+    request,
+    waitTimeoutSeconds: 60,
+    waitIntervalSeconds: 5,
+    remoteAccess: params.papernexusRemoteAccess,
+  });
+  if (!directResult) {
+    return null;
+  }
+  return persistDirectPapernexusBatchExecutionResult({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    queueKey: params.queueKey,
+    source: params.source,
+    directResult,
+  });
+}
+
+async function maybeTriggerQueuedLiteratureRequisitionRequest(params: {
+  workflowRuntime?: WorkflowRuntimeApi;
+  workflowPolicy: WorkflowGuardPolicy;
+  agentCtx: BackgroundRunAgentContext;
+  snapshot: BackgroundRunSnapshot;
+  triggerKind: string;
+  projectRoot: string;
+  projectId: string | null;
+  paperIngestionState: PaperIngestionState;
+  queuedRequests: PaperIngestionQueuedRequest[];
+  nowIso: string;
+  ensureProjectBinding?: boolean;
+}): Promise<BackgroundRunStartResult | null> {
+  const invalidCompletedCandidate =
+    params.queuedRequests.find((entry) =>
+      isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+        state: params.paperIngestionState,
+        request: entry,
+      })
+    ) ?? null;
+  const requisitionCandidate =
+    params.queuedRequests.find(
+      (entry) =>
+        isWorkflowOwnedLiteratureRequisitionRequest(entry) &&
+        isQueuedPaperIngestionRetryDue(entry, params.nowIso) &&
+        Boolean(entry.commandText)
+    ) ??
+    (invalidCompletedCandidate?.commandText
+      ? {
+          ...invalidCompletedCandidate,
+          status: "needs_repair" as const,
+          finishedAt: null,
+          nextRetryAt: null,
+          deadLetterAt: null,
+          deadLetterReason: null,
+          lastError: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+          detail:
+            INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+        }
+      : null);
+  if (!requisitionCandidate?.commandText) {
+    if (invalidCompletedCandidate) {
+      const repairUpdatedAt = new Date().toISOString();
+      await setPaperIngestionState({
+        projectRoot: params.projectRoot,
+        paperIngestion: {
+          queued_requests: [
+            {
+              request_id: invalidCompletedCandidate.requestId,
+              request_kind: invalidCompletedCandidate.requestKind,
+              wrapper: invalidCompletedCandidate.wrapper,
+              command_text: invalidCompletedCandidate.commandText,
+              manifest_path: invalidCompletedCandidate.manifestPath,
+              shared_corpus: invalidCompletedCandidate.sharedCorpus,
+              paper_count: invalidCompletedCandidate.paperCount,
+              summary: invalidCompletedCandidate.summary,
+              status: "needs_repair",
+              updated_at: repairUpdatedAt,
+              last_error: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+              trigger_kind: invalidCompletedCandidate.triggerKind,
+              detail: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+              validation_status: invalidCompletedCandidate.validationStatus,
+              validation_summary: invalidCompletedCandidate.validationSummary,
+              validation_report_path: invalidCompletedCandidate.validationReportPath,
+              attempt_count: invalidCompletedCandidate.attemptCount,
+              max_attempts: invalidCompletedCandidate.maxAttempts,
+              last_attempt_at: invalidCompletedCandidate.lastAttemptAt,
+              next_retry_at: null,
+              dead_letter_at: null,
+              dead_letter_reason: null,
+            },
+          ],
+          runtime_status: "blocked",
+          waiting_reason: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+          last_updated_at: repairUpdatedAt,
+        },
+      });
+    }
+    return null;
+  }
+
+  const requestPrompt = buildWorkflowOwnedRequisitionRequestPrompt({
+    requestId: requisitionCandidate.requestId,
+    triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
+    manifestPath: requisitionCandidate.manifestPath,
+    sharedCorpus: requisitionCandidate.sharedCorpus,
+  });
+  const result = await startBackgroundWorkflowRun({
+    workflowRuntime: params.workflowRuntime,
+    workflowPolicy: params.workflowPolicy,
+    agentCtx: params.agentCtx,
+    snapshot: {
+      ...params.snapshot,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+    },
+    backgroundRun: {
+      kind: "research_queue",
+      commandText: buildResearchQueueBackgroundCommand(
+        requisitionCandidate.commandText
+      ),
+      summary:
+        requisitionCandidate.summary ??
+        `Workflow-triggered literature requisition ${requisitionCandidate.requestId}.`,
+      projectId: params.projectId ?? undefined,
+      projectRoot: params.projectRoot,
+      ensureProjectBinding: params.ensureProjectBinding !== false,
+      extraSystemPrompt: requestPrompt,
+      dedupeKey: requisitionCandidate.requestId,
+      triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
+    },
+  });
+
+  const launchUpdatedAt = new Date().toISOString();
+  const launchRequest = result.started
+    ? markQueuedPaperIngestionLaunchStarted({
+        request: requisitionCandidate,
+        nowIso: launchUpdatedAt,
+        runId: result.runId,
+        sessionKey: result.sessionKey,
+        triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
+        summary:
+          result.summary ??
+          `Workflow-triggered literature requisition started from ${params.triggerKind}.`,
+      })
+    : result.queued || result.reason === "session_unavailable"
+      ? {
+          ...requisitionCandidate,
+          status:
+            requisitionCandidate.status === "running" ? "running" : "queued",
+          updatedAt: launchUpdatedAt,
+          triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
+          lastError: null,
+          detail:
+            result.summary ??
+            `Workflow queued literature requisition from ${params.triggerKind}; it will start when the background runtime is available.`,
+        }
+      : markQueuedPaperIngestionLaunchFailure({
+          request: requisitionCandidate,
+          nowIso: launchUpdatedAt,
+          error:
+            result.summary ??
+            `Workflow tried to trigger literature requisition from ${params.triggerKind} but it could not start (${result.reason}).`,
+        });
+
+  await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      queued_requests: [
+        {
+          request_id: launchRequest.requestId,
+          request_kind: launchRequest.requestKind,
+          wrapper: launchRequest.wrapper,
+          command_text: launchRequest.commandText,
+          manifest_path: launchRequest.manifestPath,
+          shared_corpus: launchRequest.sharedCorpus,
+          paper_count: launchRequest.paperCount,
+          summary: launchRequest.summary,
+          status: launchRequest.status,
+          updated_at: launchRequest.updatedAt,
+          started_at: launchRequest.startedAt,
+          last_run_id: launchRequest.lastRunId,
+          last_session_key: launchRequest.lastSessionKey,
+          last_error: launchRequest.lastError,
+          trigger_kind: launchRequest.triggerKind,
+          detail: launchRequest.detail,
+          validation_status: launchRequest.validationStatus,
+          validation_summary: launchRequest.validationSummary,
+          validation_report_path: launchRequest.validationReportPath,
+          attempt_count: launchRequest.attemptCount,
+          max_attempts: launchRequest.maxAttempts,
+          last_attempt_at: launchRequest.lastAttemptAt,
+          next_retry_at: launchRequest.nextRetryAt,
+          dead_letter_at: launchRequest.deadLetterAt,
+          dead_letter_reason: launchRequest.deadLetterReason,
+        },
+      ],
+      last_updated_at: launchUpdatedAt,
+    },
+  });
+
+  return result;
+}
+
 export async function maybeTriggerQueuedPaperIngestionRequest(params: {
   workflowRuntime?: WorkflowRuntimeApi;
   workflowPolicy: WorkflowGuardPolicy;
@@ -2638,7 +3187,19 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
         ) ?? null
       : null);
   if (!queuedCandidate || !queuedCandidate.commandText) {
-    return null;
+    return maybeTriggerQueuedLiteratureRequisitionRequest({
+      workflowRuntime: params.workflowRuntime,
+      workflowPolicy: params.workflowPolicy,
+      agentCtx: params.agentCtx,
+      snapshot: params.snapshot,
+      triggerKind: params.triggerKind,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      paperIngestionState: ingestion.state,
+      queuedRequests: ingestion.state.queuedRequests,
+      nowIso: now,
+      ensureProjectBinding: params.ensureProjectBinding,
+    });
   }
 
   const staleRunning = ["launching", "running"].includes(queuedCandidate.status);
@@ -2715,6 +3276,31 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     triggerKind: params.triggerKind,
     sharedCorpus: queuedCandidate.sharedCorpus,
   });
+
+  if (
+    isPapernexusBatchImportLifecycleRequest(validatedRequest) &&
+    hasDirectPapernexusBatchExecutionConfig(validatedRequest)
+  ) {
+    const directResult = await executePapernexusBatchImportRequest({
+      projectRoot: params.projectRoot,
+      request: {
+        ...validatedRequest,
+        triggerKind: validatedRequest.triggerKind ?? params.triggerKind,
+      },
+      waitTimeoutSeconds: 60,
+      waitIntervalSeconds: 5,
+      remoteAccess: buildPapernexusRemoteAccessConfigFromPolicy(params.workflowPolicy),
+    });
+    if (directResult) {
+      return persistDirectPapernexusBatchExecutionResult({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        source: "queued_paper_ingestion_request",
+        directResult,
+      });
+    }
+  }
+
   const result = await startBackgroundWorkflowRun({
     workflowRuntime: params.workflowRuntime,
     workflowPolicy: params.workflowPolicy,
@@ -2737,22 +3323,34 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     },
   });
 
+  const launchUpdatedAt = new Date().toISOString();
   const launchRequest = result.started
     ? markQueuedPaperIngestionLaunchStarted({
         request: validatedRequest,
-        nowIso: new Date().toISOString(),
+        nowIso: launchUpdatedAt,
         runId: result.runId,
         sessionKey: result.sessionKey,
         triggerKind: params.triggerKind,
         summary: `Workflow-triggered upload started from ${params.triggerKind}.`,
       })
-    : markQueuedPaperIngestionLaunchFailure({
-        request: validatedRequest,
-        nowIso: new Date().toISOString(),
-        error:
-          result.summary ??
-          `Workflow tried to trigger upload from ${params.triggerKind} but it remained queued (${result.reason}).`,
-      });
+    : result.queued || result.reason === "session_unavailable"
+      ? {
+          ...validatedRequest,
+          status: validatedRequest.status === "running" ? "running" : "queued",
+          updatedAt: launchUpdatedAt,
+          triggerKind: params.triggerKind,
+          lastError: null,
+          detail:
+            result.summary ??
+            `Workflow queued upload launch from ${params.triggerKind}; it will start when the background runtime is available.`,
+        }
+      : markQueuedPaperIngestionLaunchFailure({
+          request: validatedRequest,
+          nowIso: launchUpdatedAt,
+          error:
+            result.summary ??
+            `Workflow tried to trigger upload from ${params.triggerKind} but it could not start (${result.reason}).`,
+        });
   await setPaperIngestionState({
     projectRoot: params.projectRoot,
     paperIngestion: {
@@ -3093,6 +3691,24 @@ export async function startBackgroundWorkflowRun(params: {
     topic: readString(params.backgroundRun.dedupeKey) ?? topic,
     commandText,
   });
+  const directPapernexusBatchResult =
+    await maybeExecuteDirectPapernexusBatchBackgroundRun({
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
+      normalizedKind,
+      commandText,
+      summary: readString(params.backgroundRun.summary) ?? null,
+      triggerKind: readString(params.backgroundRun.triggerKind) ?? null,
+      extraSystemPrompt: backgroundRunExtraSystemPrompt,
+      queueKey,
+      source: "start_background_run",
+      papernexusRemoteAccess: buildPapernexusRemoteAccessConfigFromPolicy(
+        params.workflowPolicy
+      ),
+    });
+  if (directPapernexusBatchResult) {
+    return directPapernexusBatchResult;
+  }
   const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
     queueKey,
     projectId: resolvedProjectId,

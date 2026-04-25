@@ -106,9 +106,7 @@ function buildLiteratureDiscoveryBatchManifest(params: {
 }) {
   return {
     version: 1,
-    defaults: {
-      corpus: params.sharedCorpus,
-    },
+    defaults: params.sharedCorpus ? { corpus: params.sharedCorpus } : {},
     papers: [],
     literature_discovery: {
       discovery_id:

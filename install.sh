@@ -541,6 +541,12 @@ sync_skill_dir() {
   echo "  -> COPY $label"
 }
 
+is_icloud_duplicate_basename() {
+  local name
+  name="$(basename "$1")"
+  [[ "$name" == *" 2" || "$name" == *" 2."* ]]
+}
+
 papernexus_skill_name_from_frontmatter() {
   local skill_md="$1"
   local name
@@ -854,6 +860,10 @@ sync_papernexus_skills() {
     [[ -f "$skill_md" ]] || continue
     found_any=true
     skill_dir=$(dirname "$skill_md")
+    if is_icloud_duplicate_basename "$skill_dir"; then
+      echo "  -> SKIP $(basename "$skill_dir") (iCloud duplicate skill path)"
+      continue
+    fi
     slug=$(papernexus_skill_slug "$skill_dir")
 
     if [[ -z "$slug" ]]; then
@@ -1218,6 +1228,36 @@ try {
 NODE
 }
 
+quarantine_configured_plugin_duplicates() {
+  local configured_path="$1"
+  local duplicate_path
+  local duplicate_paths=()
+  local trash_dir
+  local count=0
+
+  shopt -s nullglob
+  duplicate_paths=(
+    "$configured_path"/skills/*/*/*\ 2
+    "$configured_path"/skills/*/*/*\ 2.*
+    "$configured_path"/skills/*/*\ 2
+    "$configured_path"/skills/*/*\ 2.*
+  )
+  shopt -u nullglob
+
+  ((${#duplicate_paths[@]} > 0)) || return 0
+
+  trash_dir="$(dirname "$configured_path")/.clawautoresearch-sync-trash/$(date +%Y%m%d%H%M%S)-$$"
+  mkdir -p "$trash_dir"
+  for duplicate_path in "${duplicate_paths[@]}"; do
+    [[ -e "$duplicate_path" ]] || continue
+    count=$((count + 1))
+    mv "$duplicate_path" "$trash_dir/$count-$(basename "$duplicate_path")" 2>/dev/null || rm -rf "$duplicate_path"
+  done
+  if ((count > 0)); then
+    echo "  -> QUARANTINE $count iCloud duplicate skill path(s) before sync: $trash_dir"
+  fi
+}
+
 sync_configured_plugin_load_paths() {
   local config_path="$1"
   local configured_path
@@ -1244,12 +1284,18 @@ sync_configured_plugin_load_paths() {
       continue
     fi
     mkdir -p "$configured_path"
+    quarantine_configured_plugin_duplicates "$configured_path"
     rsync -a --delete \
       --exclude '.git/' \
       --exclude 'node_modules/' \
       --exclude '.openclaw-research/' \
       --exclude '.DS_Store' \
+      --exclude '* 2/' \
       --exclude '* 2.*' \
+      --exclude 'docs/.vitepress/dist/' \
+      --exclude 'docs/.vitepress/cache/' \
+      --exclude 'dist/templates/* [0-9]/' \
+      --exclude 'dist/templates/* [0-9].*/' \
       "$PLUGIN_DIR/" "$configured_path/"
   done < <(configured_plugin_load_paths "$config_path")
 
@@ -1465,6 +1511,10 @@ if $RUN_SKILL_PHASE; then
     for skill_dir in "$skill_src"/*/; do
       [[ -d "$skill_dir" ]] || continue
       skill_name=$(basename "$skill_dir")
+      if is_icloud_duplicate_basename "$skill_name"; then
+        echo "    - SKIP $agent/$skill_name (iCloud duplicate skill path)"
+        continue
+      fi
       dst="$ws_skills/$skill_name"
       if [[ -d "$dst" && "$skill_name" != "self-improving-agent" ]]; then
         if is_papernexus_synced_skill "$agent" "$skill_name"; then
@@ -1512,6 +1562,10 @@ if $RUN_SKILL_PHASE; then
     for skill_dir in "$skill_src"/*/; do
       [[ -d "$skill_dir" ]] || continue
       skill_name=$(basename "$skill_dir")
+      if is_icloud_duplicate_basename "$skill_name"; then
+        echo "  -> SKIP $agent/$skill_name (iCloud duplicate skill path)"
+        continue
+      fi
       dst="$ws_skills/$skill_name"
       force_skill_replace=false
       if is_papernexus_synced_skill "$agent" "$skill_name"; then

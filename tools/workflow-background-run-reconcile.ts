@@ -7,6 +7,8 @@ import {
   type WorkflowRuntimeQueueEntryStatus,
 } from "./workflow-runtime-state.js";
 import {
+  INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+  isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest,
   normalizePaperIngestionState,
   serializePaperIngestionState,
 } from "./workflow-guard-state/paper-ingestion";
@@ -16,6 +18,11 @@ import {
   readPapernexusProgress,
   writePapernexusProgressFromManifest,
 } from "./papernexus-progress";
+import {
+  DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS,
+  isProviderCapacityFailure,
+} from "./provider-capacity.js";
+import { appendWorkflowLocalOperatorRelay } from "./workflow-local-operator-relay.js";
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -139,7 +146,17 @@ function derivePaperIngestionWaitingReason(params: {
   error: string | null;
 }): string | null {
   if (hasDurableInFlightPaperUpload(params.paperIngestion)) {
-    return params.paperIngestion.waitingReason;
+    const activeRequest = params.paperIngestion.queuedRequests.find(
+      (request) =>
+        ["queued", "launching", "running"].includes(request.status) &&
+        (request.detail || request.lastError)
+    );
+    return (
+      activeRequest?.detail ??
+      activeRequest?.lastError ??
+      params.paperIngestion.waitingReason ??
+      "PaperNexus import is still running; waiting for remote import progress before graph verification."
+    );
   }
   if (params.terminalStatus === "completed") {
     return params.graphPresenceStatus && params.graphPresenceStatus !== "ready"
@@ -161,6 +178,7 @@ async function reconcileQueueTerminalState(params: {
   terminalStatus: BackgroundRunTerminalStatus;
   finishedAt: string;
   error: string | null;
+  nextRetryAt?: string | null;
 }): Promise<boolean> {
   if (!params.entry.projectRoot || !params.entry.queueKey) {
     return false;
@@ -192,6 +210,13 @@ async function reconcileQueueTerminalState(params: {
         ...current,
         status: queueStatus,
         lastAttemptedAt: params.finishedAt,
+        lastCheckedAt: params.finishedAt,
+        nextRetryAt:
+          params.terminalStatus === "completed"
+            ? null
+            : queueStatus === "needs_repair"
+              ? params.nextRetryAt ?? current.nextRetryAt ?? null
+              : null,
         lastError:
           params.terminalStatus === "completed"
             ? null
@@ -290,38 +315,37 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
   }
 
   const queueStore = await readWorkflowRuntimeQueueStore(entry.projectRoot);
+  let queueTerminalStatus: BackgroundRunTerminalStatus | null = null;
+  let queueTerminalError: string | null = null;
   if (entry.queueKey) {
     const queueEntry = queueStore.entries.find(
       (candidate) => candidate.queueKey === entry.queueKey
     );
-    const queueTerminalStatus = deriveTerminalStatusFromQueueStatus(queueEntry?.status);
-    if (queueTerminalStatus) {
-      if (queueTerminalStatus === "needs_repair" && !allowNeedsRepair) {
-        return null;
-      }
-      const error =
-        queueTerminalStatus === "completed" ? null : readString(queueEntry?.lastError);
-      if (
-        queueTerminalStatus === "failed" &&
-        isWorkflowRuntimeTrackingMissError(error)
-      ) {
-        return null;
-      }
-      return {
-        terminalStatus: queueTerminalStatus,
-        error,
-        source: "runtime_queue",
-      };
+    queueTerminalStatus = deriveTerminalStatusFromQueueStatus(queueEntry?.status);
+    queueTerminalError =
+      queueTerminalStatus === "completed" ? null : readString(queueEntry?.lastError);
+    if (
+      queueTerminalStatus === "failed" &&
+      isWorkflowRuntimeTrackingMissError(queueTerminalError)
+    ) {
+      queueTerminalStatus = null;
+      queueTerminalError = null;
     }
-  }
-
-  if (entry.kind !== "papernexus_wrapper" || entry.family !== "papernexus") {
-    return null;
   }
 
   const manifestPath = path.join(entry.projectRoot, "PROJECT_MANIFEST.json");
   const manifest = await readManifestRecordIfPresent(manifestPath);
   if (!manifest) {
+    if (queueTerminalStatus) {
+      if (queueTerminalStatus === "needs_repair" && !allowNeedsRepair) {
+        return null;
+      }
+      return {
+        terminalStatus: queueTerminalStatus,
+        error: queueTerminalError,
+        source: "runtime_queue",
+      };
+    }
     return null;
   }
   const paperIngestionRecord = asRecord(manifest.paper_ingestion) ?? {};
@@ -335,6 +359,19 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
   const requestTerminalStatus = deriveTerminalStatusFromQueuedRequestStatus(
     matchedRequest?.status
   );
+  if (
+    matchedRequest &&
+    isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+      state: paperIngestion,
+      request: matchedRequest,
+    })
+  ) {
+    return {
+      terminalStatus: "needs_repair",
+      error: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+      source: "paper_ingestion_request",
+    };
+  }
   if (requestTerminalStatus) {
     if (requestTerminalStatus === "needs_repair" && !allowNeedsRepair) {
       return null;
@@ -347,6 +384,39 @@ export async function inferBackgroundRunTerminalStateFromDurableState(params: {
           : readString(matchedRequest?.lastError),
       source: "paper_ingestion_request",
     };
+  }
+
+  if (
+    matchedRequest &&
+    queueTerminalStatus === "completed" &&
+    isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+      state: paperIngestion,
+      request: {
+        ...matchedRequest,
+        status: "completed",
+      },
+    })
+  ) {
+    return {
+      terminalStatus: "needs_repair",
+      error: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+      source: "paper_ingestion_request",
+    };
+  }
+
+  if (queueTerminalStatus) {
+    if (queueTerminalStatus === "needs_repair" && !allowNeedsRepair) {
+      return null;
+    }
+    return {
+      terminalStatus: queueTerminalStatus,
+      error: queueTerminalError,
+      source: "runtime_queue",
+    };
+  }
+
+  if (entry.kind !== "papernexus_wrapper" || entry.family !== "papernexus") {
+    return null;
   }
 
   const papernexusProgress = await readPapernexusProgress(entry.projectRoot);
@@ -404,11 +474,7 @@ async function reconcilePaperIngestionTerminalState(params: {
   finishedAt: string;
   error: string | null;
 }): Promise<boolean> {
-  if (
-    !params.entry.projectRoot ||
-    params.entry.kind !== "papernexus_wrapper" ||
-    params.entry.family !== "papernexus"
-  ) {
+  if (!params.entry.projectRoot) {
     return false;
   }
   const manifestPath = path.join(params.entry.projectRoot, "PROJECT_MANIFEST.json");
@@ -424,6 +490,8 @@ async function reconcilePaperIngestionTerminalState(params: {
 
   let matched = false;
   let matchedRequestWrapper: string | null = null;
+  let effectiveTerminalStatus = params.terminalStatus;
+  let effectiveError = params.error;
   const queuedRequests = paperIngestion.queuedRequests.map((request) => {
     const matches =
       (request.lastRunId && request.lastRunId === params.entry.runId) ||
@@ -434,17 +502,59 @@ async function reconcilePaperIngestionTerminalState(params: {
     }
     matched = true;
     matchedRequestWrapper = request.wrapper;
+    const completionWouldBeInvalid =
+      effectiveTerminalStatus === "completed" &&
+      isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+        state: paperIngestion,
+        request: {
+          ...request,
+          status: "completed",
+        },
+      });
+    if (completionWouldBeInvalid) {
+      effectiveTerminalStatus = "needs_repair";
+      effectiveError = INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON;
+      return finalizeQueuedPaperIngestionAttempt({
+        request,
+        terminalStatus: "needs_repair",
+        finishedAt: params.finishedAt,
+        error: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+      });
+    }
+    const existingTerminalStatus = deriveTerminalStatusFromQueuedRequestStatus(
+      request.status
+    );
+    if (existingTerminalStatus) {
+      if (
+        isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+          state: paperIngestion,
+          request,
+        })
+      ) {
+        effectiveTerminalStatus = "needs_repair";
+        effectiveError = INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON;
+        return finalizeQueuedPaperIngestionAttempt({
+          request,
+          terminalStatus: "needs_repair",
+          finishedAt: params.finishedAt,
+          error: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+        });
+      }
+      return request;
+    }
     return finalizeQueuedPaperIngestionAttempt({
       request,
-      terminalStatus: params.terminalStatus,
+      terminalStatus: effectiveTerminalStatus,
       finishedAt: params.finishedAt,
-      error: params.error,
+      error: effectiveError,
     });
   });
 
   if (
     !matched &&
-    (!isImportWrapperQueueKey(params.entry.queueKey) ||
+    (params.entry.kind !== "papernexus_wrapper" ||
+      params.entry.family !== "papernexus" ||
+      !isImportWrapperQueueKey(params.entry.queueKey) ||
       hasDurableInFlightPaperUpload(paperIngestion))
   ) {
     return false;
@@ -461,13 +571,13 @@ async function reconcilePaperIngestionTerminalState(params: {
   nextState.runtimeStatus = derivePaperIngestionRuntimeStatus({
     paperIngestion: nextState,
     graphPresenceStatus,
-    terminalStatus: params.terminalStatus,
+    terminalStatus: effectiveTerminalStatus,
   });
   nextState.waitingReason = derivePaperIngestionWaitingReason({
     paperIngestion: nextState,
     graphPresenceStatus,
-    terminalStatus: params.terminalStatus,
-    error: params.error,
+    terminalStatus: effectiveTerminalStatus,
+    error: effectiveError,
   });
   nextState.lastUpdatedAt = params.finishedAt;
 
@@ -515,8 +625,47 @@ export async function reconcileBackgroundRunTerminalState(params: {
     };
   }
   const error = readString(params.error) ?? null;
+  const capacityFailure = isProviderCapacityFailure(error);
+  const terminalStatus: BackgroundRunTerminalStatus =
+    capacityFailure && params.terminalStatus === "failed"
+      ? "needs_repair"
+      : params.terminalStatus;
+  let effectiveTerminalStatus = terminalStatus;
+  let effectiveError = error;
+  if (terminalStatus === "completed") {
+    const manifestPath = path.join(entry.projectRoot, "PROJECT_MANIFEST.json");
+    const manifest = await readManifestRecordIfPresent(manifestPath);
+    const paperIngestionRecord = asRecord(manifest?.paper_ingestion) ?? {};
+    const paperIngestion = normalizePaperIngestionState(paperIngestionRecord);
+    const matchedRequest = paperIngestion.queuedRequests.find(
+      (request) =>
+        (request.lastRunId && request.lastRunId === entry.runId) ||
+        (request.lastSessionKey &&
+          request.lastSessionKey === entry.backgroundSessionKey)
+    );
+    if (
+      matchedRequest &&
+      isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+        state: paperIngestion,
+        request: {
+          ...matchedRequest,
+          status: "completed",
+        },
+      })
+    ) {
+      effectiveTerminalStatus = "needs_repair";
+      effectiveError = INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON;
+    }
+  }
+  const finishedAtMs = Date.parse(params.finishedAt);
+  const cooldownUntil = capacityFailure
+    ? new Date(
+        (Number.isFinite(finishedAtMs) ? finishedAtMs : Date.now()) +
+          DEFAULT_PROVIDER_CAPACITY_COOLDOWN_MS
+      ).toISOString()
+    : null;
   if (
-    params.terminalStatus === "failed" &&
+    terminalStatus === "failed" &&
     isWorkflowRuntimeTrackingMissError(error)
   ) {
     return {
@@ -527,30 +676,72 @@ export async function reconcileBackgroundRunTerminalState(params: {
   const [queuePatched, manifestPatched] = await Promise.all([
     reconcileQueueTerminalState({
       entry,
-      terminalStatus: params.terminalStatus,
+      terminalStatus: effectiveTerminalStatus,
       finishedAt: params.finishedAt,
-      error,
+      error: effectiveError,
+      nextRetryAt: cooldownUntil,
     }),
     reconcilePaperIngestionTerminalState({
       entry,
-      terminalStatus: params.terminalStatus,
+      terminalStatus: effectiveTerminalStatus,
       finishedAt: params.finishedAt,
-      error,
+      error: effectiveError,
     }),
   ]);
+  if (capacityFailure && entry.queueKey) {
+    const queueStore = await readWorkflowRuntimeQueueStore(entry.projectRoot);
+    const queueEntry =
+      queueStore.entries.find((candidate) => candidate.queueKey === entry.queueKey) ??
+      null;
+    await appendWorkflowLocalOperatorRelay({
+      projectRoot: entry.projectRoot,
+      projectId: entry.projectId,
+      idempotencyKey: `provider-capacity:${entry.queueKey}:${cooldownUntil ?? "unknown"}`,
+      queueKey: entry.queueKey,
+      sessionKey: entry.backgroundSessionKey,
+      ownerAgent: queueEntry?.ownerAgent ?? null,
+      stage: queueEntry?.dispatchPayload?.stage ?? null,
+      kind: "provider_capacity_cooldown",
+      summary:
+        "Background workflow run hit provider capacity limits and needs local operator follow-up.",
+      reason:
+        error ??
+        "Background workflow run failed because the configured model provider is at capacity.",
+      cooldownUntil,
+      operatorPrompt: [
+        "Continue this AutoResearch workflow locally without Discord.",
+        `Project root: ${entry.projectRoot}`,
+        entry.projectId ? `Project id: ${entry.projectId}` : null,
+        `Queue key: ${entry.queueKey}`,
+        `Session key: ${entry.backgroundSessionKey}`,
+        queueEntry?.summary ? `Transition summary: ${queueEntry.summary}` : null,
+        "The provider returned a capacity/quota error. Use configured agent model fallbacks when available; otherwise wait until cooldownUntil before replaying the queued transition.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      details: {
+        source: queueEntry?.source ?? null,
+        entryType: queueEntry?.entryType ?? null,
+        kind: queueEntry?.kind ?? entry.kind,
+        family: queueEntry?.family ?? entry.family,
+        runId: entry.runId,
+      },
+    });
+  }
   if (queuePatched || manifestPatched) {
     await appendWorkflowRuntimeEvent({
       projectRoot: entry.projectRoot,
       projectId: entry.projectId,
       kind: "background_run_reconciled",
-      summary: `Background workflow ${entry.runId} reconciled as ${params.terminalStatus}.`,
+      summary: `Background workflow ${entry.runId} reconciled as ${effectiveTerminalStatus}.`,
       details: {
         queueKey: entry.queueKey,
         kind: entry.kind,
         family: entry.family,
         queuePatched,
         manifestPatched,
-        error,
+        error: effectiveError,
+        providerCapacityCooldownUntil: cooldownUntil,
       },
     });
   }

@@ -42,6 +42,75 @@ async function readJson(filePath) {
   }
 }
 
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function cloneRecord(value) {
+  return JSON.parse(JSON.stringify(isRecord(value) ? value : {}));
+}
+
+function expandHomePath(value) {
+  const raw = String(value ?? "").trim();
+  if (raw === "~") {
+    return os.homedir();
+  }
+  if (raw.startsWith("~/")) {
+    return path.join(os.homedir(), raw.slice(2));
+  }
+  return raw;
+}
+
+function normalizeHarnessPluginConfig(config, projectsRoot) {
+  const base = cloneRecord(config);
+  return {
+    ...base,
+    projectsRoot,
+    enableChannelProjectBindings:
+      base.enableChannelProjectBindings === false ? false : true,
+    heartbeatBackgroundChecks:
+      base.heartbeatBackgroundChecks === false ? false : true,
+    enableWorkflowMailbox:
+      base.enableWorkflowMailbox === false ? false : true,
+  };
+}
+
+export function extractClawAutoResearchPluginConfig(openclawConfig) {
+  const entries = isRecord(openclawConfig?.plugins?.entries)
+    ? openclawConfig.plugins.entries
+    : {};
+  const pluginEntry =
+    entries.ClawAutoResearch ??
+    entries["claw-auto-research"] ??
+    entries.openclawResearch ??
+    entries["openclaw-research"] ??
+    null;
+  if (isRecord(pluginEntry?.config)) {
+    return cloneRecord(pluginEntry.config);
+  }
+  if (isRecord(pluginEntry)) {
+    return cloneRecord(pluginEntry);
+  }
+  if (isRecord(openclawConfig?.workflow)) {
+    return cloneRecord(openclawConfig.workflow);
+  }
+  return {};
+}
+
+export async function loadWorkflowHarnessPluginConfig(options = {}) {
+  const sourceConfigPath = expandHomePath(
+    options.sourceConfigPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json")
+  );
+  const sourceConfig = (await readJson(sourceConfigPath)) ?? {};
+  return normalizeHarnessPluginConfig(
+    {
+      ...extractClawAutoResearchPluginConfig(sourceConfig),
+      ...(isRecord(options.overrides) ? options.overrides : {}),
+    },
+    path.resolve(options.projectsRoot ?? process.cwd())
+  );
+}
+
 export async function pathExists(filePath) {
   try {
     await fs.access(filePath);
@@ -123,6 +192,7 @@ export async function dispatchWorkflowCommand(options) {
     runtimeSubagent = undefined,
     backgroundExecutionMode = "fixture",
     logger = null,
+    pluginConfig: rawPluginConfig = null,
   } = options;
 
   const projectRoot = rawProjectRoot ? path.resolve(rawProjectRoot) : null;
@@ -139,20 +209,11 @@ export async function dispatchWorkflowCommand(options) {
   const normalizedCommandName = normalizeWorkflowCommandName(commandName);
   const projectId = projectRoot ? path.basename(projectRoot) : null;
   const backgroundRuns = [];
+  const pluginConfig = normalizeHarnessPluginConfig(rawPluginConfig, projectsRoot);
 
   const api = {
-    config: {
-      projectsRoot,
-      enableChannelProjectBindings: true,
-      heartbeatBackgroundChecks: true,
-      enableWorkflowMailbox: true,
-    },
-    pluginConfig: {
-      projectsRoot,
-      enableChannelProjectBindings: true,
-      heartbeatBackgroundChecks: true,
-      enableWorkflowMailbox: true,
-    },
+    config: pluginConfig,
+    pluginConfig,
     logger: {
       debug(...args) {
         logger?.debug?.(...args);

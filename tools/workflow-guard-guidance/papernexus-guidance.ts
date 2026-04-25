@@ -92,17 +92,17 @@ export function buildPapernexusGuidance(
       );
     } else if (resolvedAccessMode === "remote_mcp") {
       prepend.push(
-        `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus HTTP MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for live graph operations. Authenticate with the configured bearer token source at runtime and do not print or persist the raw token.`
+        `PaperNexus access mode is remote_mcp. Use the configured remote PaperNexus HTTP MCP endpoint at ${params.papernexusMcpUrl ?? "unset"} (${params.papernexusMcpTransport ?? "streamable-http"}) for live graph operations. Let the MCP runtime or MCP-backed wrappers resolve auth internally; do not run commands that print raw tokens, and do not echo, log, or persist the token.`
       );
       prepend.push(
-        "Remote MCP rule: the MCP-first tool mapping is `research_lookup` for query/context/impact/ideas/brainstorm/paper_index, `research_briefing` for research-brief/brainstorm-brief/path-trace/evidence-chain/reflection-chain/theory-brief/storyline-brief, `idea_catalyst` for cross-domain ideation packets, `import_workflow` for queued import/status/progress/log/wait flows, and `refresh_paper_graph` for one already-indexed paper or duplicate group. Prefer those remote HTTP MCP tools or their thin wrappers, and do not treat `pn_graph_query.py` / `pn_research_chains.py` as a separate non-MCP control plane."
+        "Remote MCP rule: `research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`, and `refresh_paper_graph` are MCP tool names, not shell commands to locate with `which`. Call them through the configured PaperNexus MCP server when MCP tools are exposed; use MCP-backed wrappers such as `pn_graph_query.py` / `pn_research_chains.py` only for shell-only fallback or local file staging."
       );
       prepend.push(
         "Remote-only storage rule: do not depend on local PaperNexus storage under `~/.papernexus/papers` or `~/.papernexus/index-store`. Use project-local staging files plus the configured remote MCP endpoint instead."
       );
     } else {
       prepend.push(
-        `PaperNexus access mode is remote_api compatibility mode. Use the configured remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive compatibility work through the queued wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`), and resolve the token at runtime only; do not paste secrets into chat, prompts, or project files.`
+        `PaperNexus access mode is remote_api compatibility mode. Use the configured remote access for shared-graph work: api=${params.papernexusApiBaseUrl ?? "unset"}, token_source=${params.papernexusApiTokenSource ?? "unset"}, token_env=${params.papernexusApiTokenEnv ?? "unset"}, keychain_service=${params.papernexusApiTokenService ?? "unset"}, keychain_account=${params.papernexusApiTokenAccount ?? "unset"}, mineru_http=${params.papernexusMineruHttpUrl ?? "unset"}. Drive compatibility work through the queued wrappers (\`pn_stage_sync.py\`, \`pn_import_submit.py\`, \`pn_import_queue.py\`, \`pn_batch_import.py\`, \`pn_graph_query.py\`, \`pn_research_chains.py\`), and let those wrappers resolve auth internally; do not run token lookup commands yourself, do not print raw tokens, and do not paste secrets into chat, prompts, logs, or project files.`
       );
       prepend.push(
         "Compatibility-mode rule: remote_api is a fallback for environments without remote MCP. If a remote MCP endpoint becomes available, prefer `research_lookup`, `research_briefing`, `idea_catalyst`, and `import_workflow` over direct wrapper-first graph work."

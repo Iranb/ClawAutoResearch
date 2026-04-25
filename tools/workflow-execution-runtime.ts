@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+import {
+  isProviderCapacityFailure,
+  providerCapacityFailureMessage,
+} from "./provider-capacity.js";
 
 type WorkflowExecutionRunParams = {
   sessionKey: string;
@@ -35,6 +41,7 @@ export type WorkflowExecutionSessionInspection = {
   providerOverride: string | null;
   modelOverride: string | null;
   liveModelSwitchPending: boolean;
+  lastError: string | null;
 };
 
 export type WorkflowExecutionRuntimeLike = {
@@ -244,6 +251,48 @@ function resolveAgentConfigRecord(params: {
   );
 }
 
+function collectAgentModelRefs(params: {
+  config: unknown;
+  agentId: string;
+}): string[] {
+  const agents = asRecord(asRecord(params.config)?.agents);
+  const defaultsModel = asRecord(agents?.defaults)?.model;
+  const agentModel = resolveAgentConfigRecord(params)?.model;
+  const primary =
+    readModelPrimaryRef(agentModel) ?? readModelPrimaryRef(defaultsModel);
+  return [
+    primary,
+    ...readModelFallbackRefs(agentModel),
+    ...readModelFallbackRefs(defaultsModel),
+  ].filter((entry): entry is string => Boolean(entry));
+}
+
+function resolveExternalOpenClawConfigPath(): string | null {
+  const explicit =
+    readString(process.env.OPENCLAW_CONFIG_PATH) ??
+    readString(process.env.OPENCLAW_CONFIG);
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  const home = readString(process.env.HOME);
+  return home ? path.join(home, ".openclaw", "openclaw.json") : null;
+}
+
+function readExternalOpenClawModelRefs(agentId: string): string[] {
+  const configPath = resolveExternalOpenClawConfigPath();
+  if (!configPath) {
+    return [];
+  }
+  try {
+    return collectAgentModelRefs({
+      config: JSON.parse(readFileSync(configPath, "utf8")),
+      agentId,
+    });
+  } catch {
+    return [];
+  }
+}
+
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.flatMap((entry) => {
@@ -253,28 +302,124 @@ function readStringArray(value: unknown): string[] {
     : [];
 }
 
-function resolveEmbeddedAgentModelSelection(params: {
+function readModelPrimaryRef(modelConfig: unknown): string | null {
+  const direct = readString(modelConfig);
+  if (direct) {
+    return direct;
+  }
+  return readString(asRecord(modelConfig)?.primary);
+}
+
+function readModelFallbackRefs(modelConfig: unknown): string[] {
+  return readStringArray(asRecord(modelConfig)?.fallbacks);
+}
+
+function resolveEmbeddedAgentModelCandidates(params: {
   config: unknown;
   agentId: string;
-}): { provider: string; model: string; ref: string } | null {
-  const agents = asRecord(asRecord(params.config)?.agents);
-  const defaultsModel = asRecord(asRecord(agents?.defaults)?.model);
-  const agentModel = asRecord(
-    resolveAgentConfigRecord(params)?.model
-  );
+}): Array<{ provider: string; model: string; ref: string }> {
   const candidates = uniqueStrings([
-    readString(agentModel?.primary),
-    readString(defaultsModel?.primary),
-    ...readStringArray(agentModel?.fallbacks),
-    ...readStringArray(defaultsModel?.fallbacks),
+    ...collectAgentModelRefs(params),
+    ...readExternalOpenClawModelRefs(params.agentId),
   ]);
+  const selections: Array<{ provider: string; model: string; ref: string }> = [];
   for (const candidate of candidates) {
     const parsed = splitModelRef(candidate);
     if (parsed) {
-      return parsed;
+      selections.push(parsed);
     }
   }
-  return null;
+  return selections;
+}
+
+function cloneJsonConfig(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function buildConfigForEmbeddedModelCandidate(params: {
+  config: unknown;
+  agentId: string;
+  selection: { provider: string; model: string; ref: string } | null;
+  fallbackRefs: string[];
+}): unknown {
+  if (!params.selection) {
+    return params.config;
+  }
+  const cloned = cloneJsonConfig(params.config);
+  const root = asRecord(cloned);
+  if (!root) {
+    return params.config;
+  }
+  const agents = asRecord(root.agents) ?? {};
+  root.agents = agents;
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  agents.list = list;
+  const expected = params.agentId.toLowerCase();
+  let agentRecord =
+    list
+      .map((entry) => asRecord(entry))
+      .find((entry) => readString(entry?.id)?.toLowerCase() === expected) ?? null;
+  if (!agentRecord) {
+    agentRecord = { id: params.agentId };
+    list.push(agentRecord);
+  }
+  const existingModel = asRecord(agentRecord.model) ?? {};
+  agentRecord.model = {
+    ...existingModel,
+    primary: params.selection.ref,
+    fallbacks: params.fallbackRefs,
+  };
+  return cloned;
+}
+
+function collectEmbeddedErrorTexts(value: unknown, depth = 0): string[] {
+  if (depth > 5 || value == null) {
+    return [];
+  }
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (value instanceof Error) {
+    return [value.message];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectEmbeddedErrorTexts(entry, depth + 1));
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  const texts: string[] = [];
+  const isErrorPayload =
+    record.isError === true ||
+    record.error === true ||
+    readString(record.status)?.toLowerCase() === "error";
+  if (isErrorPayload) {
+    for (const key of ["text", "message", "error", "rawError", "raw_error", "reason"]) {
+      const text = readString(record[key]);
+      if (text) {
+        texts.push(text);
+      }
+    }
+  }
+  for (const key of ["payloads", "content", "items", "replies", "meta", "details"]) {
+    if (key in record) {
+      texts.push(...collectEmbeddedErrorTexts(record[key], depth + 1));
+    }
+  }
+  return texts;
+}
+
+function extractEmbeddedRunErrorMessage(result: unknown): string | null {
+  const texts = uniqueStrings(collectEmbeddedErrorTexts(result));
+  return texts.find((text) => text.length > 0) ?? null;
 }
 
 function resolveEmbeddedWorkspaceDir(params: {
@@ -475,6 +620,12 @@ function inspectPersistedSessionEntry(params: {
     providerOverride: readString(params.entry?.providerOverride),
     modelOverride: readString(params.entry?.modelOverride),
     liveModelSwitchPending: params.entry?.liveModelSwitchPending === true,
+    lastError:
+      readString(params.entry?.lastError) ??
+      readString(params.entry?.last_error) ??
+      readString(params.entry?.error) ??
+      params.fallbackState?.error ??
+      null,
   };
 }
 
@@ -528,11 +679,11 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
           }
         ) ?? path.join(workspaceDir, `${sessionId}.jsonl`);
       const runId = randomUUID();
-      const modelSelection = resolveEmbeddedAgentModelSelection({
+      const modelSelections = resolveEmbeddedAgentModelCandidates({
         config: params.runtimeApi.config,
         agentId,
       });
-      if (!modelSelection) {
+      if (modelSelections.length === 0) {
         params.runtimeApi.logger?.warn?.(
           "workflow.embedded_agent.model_selection_missing",
           {
@@ -543,33 +694,73 @@ function buildEmbeddedWorkflowRuntimeFacade(params: {
           }
         );
       }
+      const modelRunCandidates = modelSelections.length > 0 ? modelSelections : [null];
 
-      const runPromise = runEmbeddedAgent({
-        sessionId,
-        sessionKey,
-        agentId,
-        trigger: runParams.trigger ?? "manual",
-        spawnedBy: readString(runParams.requesterSessionKey) ?? undefined,
-        messageChannel:
-          readString(runParams.messageChannel) ??
-          readString(params.defaultMessageChannel) ??
-          undefined,
-        disableMessageTool: true,
-        forceMessageTool: false,
-        allowGatewaySubagentBinding: false,
-        sessionFile,
-        workspaceDir,
-        agentDir,
-        config: params.runtimeApi.config,
-        provider: modelSelection?.provider,
-        model: modelSelection?.model,
-        prompt: runParams.message,
-        lane: readString(runParams.lane) ?? "nested",
-        extraSystemPrompt:
-          readString(runParams.extraSystemPrompt) ?? undefined,
-        timeoutMs,
-        runId,
-      });
+      const runPromise = (async () => {
+        for (let index = 0; index < modelRunCandidates.length; index += 1) {
+          const modelSelection = modelRunCandidates[index];
+          const candidateFallbackRefs = modelRunCandidates
+            .slice(index + 1)
+            .flatMap((candidate) => (candidate ? [candidate.ref] : []));
+          try {
+            const result = await runEmbeddedAgent({
+              sessionId,
+              sessionKey,
+              agentId,
+              trigger: runParams.trigger ?? "manual",
+              spawnedBy: readString(runParams.requesterSessionKey) ?? undefined,
+              messageChannel:
+                readString(runParams.messageChannel) ??
+                readString(params.defaultMessageChannel) ??
+                undefined,
+              disableMessageTool: true,
+              forceMessageTool: false,
+              allowGatewaySubagentBinding: false,
+              sessionFile,
+              workspaceDir,
+              agentDir,
+              config: buildConfigForEmbeddedModelCandidate({
+                config: params.runtimeApi.config,
+                agentId,
+                selection: modelSelection,
+                fallbackRefs: candidateFallbackRefs,
+              }),
+              provider: modelSelection?.provider,
+              model: modelSelection?.model,
+              prompt: runParams.message,
+              lane: readString(runParams.lane) ?? "nested",
+              extraSystemPrompt:
+                readString(runParams.extraSystemPrompt) ?? undefined,
+              timeoutMs,
+              runId,
+            });
+            const embeddedError = extractEmbeddedRunErrorMessage(result);
+            if (embeddedError) {
+              throw new Error(embeddedError);
+            }
+            return result;
+          } catch (error) {
+            const hasFallback = index < modelRunCandidates.length - 1;
+            if (!hasFallback || !isProviderCapacityFailure(error)) {
+              throw error;
+            }
+            const nextSelection = modelRunCandidates[index + 1];
+            params.runtimeApi.logger?.warn?.(
+              "workflow.embedded_agent.provider_capacity_fallback",
+              {
+                agentId,
+                sessionKey,
+                failedProvider: modelSelection?.provider ?? null,
+                failedModel: modelSelection?.model ?? null,
+                nextProvider: nextSelection?.provider ?? null,
+                nextModel: nextSelection?.model ?? null,
+                error: providerCapacityFailureMessage(error),
+              }
+            );
+          }
+        }
+        throw new Error("Embedded workflow run did not start.");
+      })();
 
       const state: EmbeddedRunState = {
         runId,

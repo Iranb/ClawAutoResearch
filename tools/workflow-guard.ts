@@ -55,6 +55,7 @@ import {
   type GraphPresenceCheckResult,
   type GraphPresenceStatus,
 } from "./graph-presence";
+import { maybeMaterializeGraphBuildPaperSources } from "./graph-build-source-catchup";
 import {
   auditLiteratureCoverage,
   planCitationExpansion,
@@ -9864,6 +9865,7 @@ export async function runWorkflowAutoIterator(params: {
       normalizeWritePackageState,
       assembleWritePackage,
       checkGraphPresenceForWorkflow,
+      materializeGraphBuildPaperSources: maybeMaterializeGraphBuildPaperSources,
       getPreviousStagesForRegression,
       getMissingStageSignals,
       evaluateWorkflowAutoModeRisk,

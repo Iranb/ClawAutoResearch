@@ -642,6 +642,7 @@ export type PaperIngestionWorkflowDecision = {
   reason: string | null;
   graphPresenceReady: boolean;
   requisitionRequestCount: number;
+  invalidCompletedRequisitionRequestCount: number;
   queuedRequestCount: number;
   launchingOrRunningRequestCount: number;
   dormantQueuedRequestCount: number;
@@ -679,6 +680,108 @@ function isDormantRequisitionRequest(request: PaperIngestionQueuedRequest): bool
   );
 }
 
+function isLiteratureDiscoveryRequisitionTrigger(
+  triggerKind: string | null | undefined
+): boolean {
+  const normalized = String(triggerKind ?? "").trim().toLowerCase();
+  return (
+    normalized === "idea_catalyst_requisition" ||
+    normalized === "literature_discovery" ||
+    normalized.endsWith("literature_discovery")
+  );
+}
+
+export function isWorkflowOwnedLiteratureRequisitionRequest(
+  request: PaperIngestionQueuedRequest
+): boolean {
+  return (
+    isPaperIngestionRequisitionRequest(request) &&
+    isLiteratureDiscoveryRequisitionTrigger(request.triggerKind)
+  );
+}
+
+function isIgnorableDormantRequisitionWhenGraphReady(
+  request: PaperIngestionQueuedRequest
+): boolean {
+  return (
+    isDormantRequisitionRequest(request) &&
+    !isLiteratureDiscoveryRequisitionTrigger(request.triggerKind)
+  );
+}
+
+export const INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON =
+  "workflow-owned literature requisition was marked completed without durable import or requisition-satisfaction evidence; keep graph_build blocked and rerun bounded literature discovery before frontier mapping";
+
+function hasDurableCompletedImportEvidence(state: PaperIngestionState): boolean {
+  if (
+    state.completedPapers.length > 0 &&
+    normalizeStage(state.lastImportStatus) === "completed" &&
+    (state.importTaskIds.length > 0 ||
+      state.completedPapers.some((paper) => Boolean(paper.importTaskId)))
+  ) {
+    return true;
+  }
+  if (
+    state.importTaskIds.length > 0 &&
+    (normalizeStage(state.lastImportStatus) === "completed" ||
+      state.paperOperations.some(
+        (operation) =>
+          operation.status === "completed" &&
+          Boolean(operation.importTaskId ?? operation.canonicalId ?? operation.title)
+      ))
+  ) {
+    return true;
+  }
+  if (
+    state.batchItems.some(
+      (item) =>
+        (item.status === "completed" || item.synced) &&
+        Boolean(item.importTaskId ?? item.canonicalId ?? item.paperId ?? item.title)
+    )
+  ) {
+    return true;
+  }
+  return state.activeBatches.some(
+    (batch) => batch.status === "completed" && (batch.completed ?? 0) > 0
+  );
+}
+
+function hasRequisitionSatisfactionEvidence(
+  request: PaperIngestionQueuedRequest
+): boolean {
+  if (!request.validationReportPath) {
+    return false;
+  }
+  return request.validationStatus === "valid" || request.validationStatus === "warning";
+}
+
+export function hasWorkflowOwnedLiteratureRequisitionCompletionEvidence(params: {
+  state: PaperIngestionState;
+  request: PaperIngestionQueuedRequest;
+}): boolean {
+  if (!isWorkflowOwnedLiteratureRequisitionRequest(params.request)) {
+    return true;
+  }
+  if (params.request.status !== "completed") {
+    return true;
+  }
+  return (
+    hasDurableCompletedImportEvidence(params.state) ||
+    hasRequisitionSatisfactionEvidence(params.request)
+  );
+}
+
+export function isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest(params: {
+  state: PaperIngestionState;
+  request: PaperIngestionQueuedRequest;
+}): boolean {
+  return (
+    isWorkflowOwnedLiteratureRequisitionRequest(params.request) &&
+    params.request.status === "completed" &&
+    !hasWorkflowOwnedLiteratureRequisitionCompletionEvidence(params)
+  );
+}
+
 /**
  * 推导论文摄入工作流决策。
  *
@@ -706,8 +809,15 @@ export function derivePaperIngestionWorkflowDecision(params: {
       isPaperIngestionRequisitionRequest(request) &&
       ["queued", "launching", "running", "needs_repair"].includes(request.status)
   );
-  const dormantRequisitionRequests = requisitionRequests.filter(
-    isDormantRequisitionRequest
+  const invalidCompletedRequisitionRequests = params.state.queuedRequests.filter(
+    (request) =>
+      isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+        state: params.state,
+        request,
+      })
+  );
+  const ignorableDormantRequisitionRequests = requisitionRequests.filter(
+    isIgnorableDormantRequisitionWhenGraphReady
   );
   const uploadRequests = params.state.queuedRequests.filter((request) =>
     isPaperIngestionExecutableUploadRequest(request)
@@ -740,15 +850,40 @@ export function derivePaperIngestionWorkflowDecision(params: {
     failedRequests.length +
     failedOperations.length +
     failedBatchItems.length +
-    needsRepairRequests.length;
+    needsRepairRequests.length +
+    invalidCompletedRequisitionRequests.length;
   const hardActiveCount =
     launchingOrRunningRequests.length +
     activeBatches.length +
     activeOperations.length +
     (runtimeActive ? 1 : 0);
 
+  if (invalidCompletedRequisitionRequests.length > 0) {
+    return {
+      action: "repair",
+      blocking: true,
+      reason: INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON,
+      graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
   if (requisitionRequests.length > 0) {
-    if (graphPresenceReady && dormantRequisitionRequests.length === requisitionRequests.length) {
+    if (
+      graphPresenceReady &&
+      ignorableDormantRequisitionRequests.length === requisitionRequests.length
+    ) {
       return {
         action: "continue",
         blocking: false,
@@ -756,10 +891,13 @@ export function derivePaperIngestionWorkflowDecision(params: {
           "graph presence is ready; ignoring dormant queued graph-enrichment requisitions that were never launched",
         graphPresenceReady,
         requisitionRequestCount: requisitionRequests.length,
+        invalidCompletedRequisitionRequestCount:
+          invalidCompletedRequisitionRequests.length,
         queuedRequestCount: queuedRequests.length,
         launchingOrRunningRequestCount: launchingOrRunningRequests.length,
         dormantQueuedRequestCount: dormantQueuedRequests.length,
-        ignoredDormantQueuedRequestCount: dormantQueuedRequests.length,
+        ignoredDormantQueuedRequestCount:
+          dormantQueuedRequests.length + ignorableDormantRequisitionRequests.length,
         needsRepairRequestCount: needsRepairRequests.length,
         failedRequestCount: failedRequests.length,
         activeBatchCount: activeBatches.length,
@@ -774,6 +912,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
         "workflow-owned graph enrichment requisition is still active; keep graph_build on bounded literature collection / staging before frontier mapping",
       graphPresenceReady,
       requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -794,6 +934,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
         "workflow-owned PaperNexus ingestion is running; wait for upload / graph sync completion before frontier mapping",
       graphPresenceReady,
       requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -817,6 +959,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
           "graph presence is ready; ignoring dormant queued PaperNexus requests that were never launched",
         graphPresenceReady,
         requisitionRequestCount: requisitionRequests.length,
+        invalidCompletedRequisitionRequestCount:
+          invalidCompletedRequisitionRequests.length,
         queuedRequestCount: queuedRequests.length,
         launchingOrRunningRequestCount: launchingOrRunningRequests.length,
         dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -835,6 +979,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
         "workflow-owned PaperNexus ingestion is queued; wait for the background import worker to launch or clear the request",
       graphPresenceReady,
       requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -856,6 +1002,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
           "graph presence is ready; ignoring terminal PaperNexus ingestion failures that no longer block the current stage",
         graphPresenceReady,
         requisitionRequestCount: requisitionRequests.length,
+        invalidCompletedRequisitionRequestCount:
+          invalidCompletedRequisitionRequests.length,
         queuedRequestCount: queuedRequests.length,
         launchingOrRunningRequestCount: launchingOrRunningRequests.length,
         dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -874,6 +1022,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
         "workflow-owned PaperNexus ingestion failed or needs repair; rerun a bounded repair/import pass or mark the request terminal before frontier mapping",
       graphPresenceReady,
       requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
       queuedRequestCount: queuedRequests.length,
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
@@ -892,6 +1042,8 @@ export function derivePaperIngestionWorkflowDecision(params: {
     reason: null,
     graphPresenceReady,
     requisitionRequestCount: requisitionRequests.length,
+    invalidCompletedRequisitionRequestCount:
+      invalidCompletedRequisitionRequests.length,
     queuedRequestCount: 0,
     launchingOrRunningRequestCount: 0,
     dormantQueuedRequestCount: 0,

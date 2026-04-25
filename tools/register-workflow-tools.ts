@@ -280,9 +280,11 @@ import {
 import { materializeFileAuditPacket } from "./workflow-hooks/file-audit-runner.js";
 import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
 import {
-  DEFAULT_SHARED_PAPERNEXUS_CORPUS,
+  resolvePapernexusSharedCorpusFallback,
   resolveWorkflowSharedPapernexusCorpus,
+  shouldAutodiscoverRemotePapernexusCorpus,
 } from "./papernexus-shared-corpus";
+import { resolvePaperSourcePathCandidates } from "./paper-source-contract";
 
 type WorkflowSnapshot = Awaited<ReturnType<typeof buildWorkflowSnapshot>>;
 
@@ -437,8 +439,18 @@ function pickTypedPaperIngestionSourcePath(
     readString(record?.localPdfPath) ??
     readString(record?.local_pdf) ??
     readString(record?.localPdf) ??
+    readString(record?.staging_path) ??
+    readString(record?.stagingPath) ??
+    readString(record?.staged_path) ??
+    readString(record?.stagedPath) ??
+    readString(record?.source_staging_path) ??
+    readString(record?.sourceStagingPath) ??
     readString(record?.markdown_path) ??
     readString(record?.markdownPath) ??
+    readString(record?.md_path) ??
+    readString(record?.mdPath) ??
+    readString(record?.source_md_path) ??
+    readString(record?.sourceMdPath) ??
     readString(record?.pdf_path) ??
     readString(record?.pdfPath) ??
     readString(record?.source_path) ??
@@ -601,8 +613,19 @@ async function sourcePathLooksImportable(params: {
   }
   const resolvedPath = path.isAbsolute(sourcePath)
     ? sourcePath
-    : path.resolve(params.projectRoot, sourcePath);
-  return pathExists(resolvedPath);
+    : null;
+  const candidates = resolvedPath
+    ? [resolvedPath]
+    : resolvePaperSourcePathCandidates({
+        projectRoot: params.projectRoot,
+        sourcePath,
+      });
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function collectAutoImportableSourceIndexPapers(params: {
@@ -671,12 +694,12 @@ async function resolveTypedPaperIngestionSourcePath(params: {
     if (path.isAbsolute(normalizedPreferred)) {
       return normalizedPreferred;
     }
-    const candidates = [
-      path.resolve(params.projectRoot, normalizedPreferred),
-      params.sourceIndexPath
-        ? path.resolve(path.dirname(params.sourceIndexPath), normalizedPreferred)
-        : null,
-    ].filter((entry): entry is string => Boolean(entry));
+    const candidates = resolvePaperSourcePathCandidates({
+      projectRoot: params.projectRoot,
+      sourcePath: normalizedPreferred,
+      sourceIndexPath: params.sourceIndexPath,
+      stagingDir: params.stagingDir,
+    });
     for (const candidate of candidates) {
       if (await pathExists(candidate)) {
         return candidate;
@@ -799,22 +822,30 @@ async function maybeMaterializeTypedPaperIngestionRequest(params: {
     }
   }
 
-  const sharedCorpus =
-    resolveWorkflowSharedPapernexusCorpus({
-      candidates: [
-        readString(params.requestPayload.shared_corpus) ??
-          readString(params.requestPayload.sharedCorpus),
-        readString(asObject(manifest.paper_ingestion)?.repair_target_corpus) ??
-          readString(asObject(manifest.paper_ingestion)?.repairTargetCorpus),
-        params.workflowPolicy.papernexusSharedCorpus,
-        readString(graphStatus.corpus_name) ?? readString(graphStatus.corpusName),
-      ],
-      projectId: params.projectId,
-      projectRoot: params.projectRoot,
-      fallback:
-        params.workflowPolicy.papernexusSharedCorpus ??
-        DEFAULT_SHARED_PAPERNEXUS_CORPUS,
-    }) ?? DEFAULT_SHARED_PAPERNEXUS_CORPUS;
+  const explicitSharedCorpus =
+    readString(params.requestPayload.shared_corpus) ??
+    readString(params.requestPayload.sharedCorpus) ??
+    params.workflowPolicy.papernexusSharedCorpus;
+  const sharedCorpus = resolveWorkflowSharedPapernexusCorpus({
+    candidates: [
+      explicitSharedCorpus,
+      readString(asObject(manifest.paper_ingestion)?.repair_target_corpus) ??
+        readString(asObject(manifest.paper_ingestion)?.repairTargetCorpus),
+      readString(graphStatus.corpus_name) ?? readString(graphStatus.corpusName),
+    ],
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    fallback: resolvePapernexusSharedCorpusFallback({
+      configuredSharedCorpus: explicitSharedCorpus,
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      apiBaseUrl: params.workflowPolicy.papernexusApiBaseUrl,
+    }),
+    ignoreLegacyDefault: shouldAutodiscoverRemotePapernexusCorpus({
+      configuredSharedCorpus: explicitSharedCorpus,
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      apiBaseUrl: params.workflowPolicy.papernexusApiBaseUrl,
+    }),
+  });
   const requestId =
     readString(params.requestPayload.request_id) ??
     readString(params.requestPayload.requestId) ??
@@ -894,9 +925,7 @@ async function maybeMaterializeTypedPaperIngestionRequest(params: {
 
   await writeJsonAtomicEnsured(resolvedBatchManifestPath, {
     version: 1,
-    defaults: {
-      corpus: sharedCorpus,
-    },
+    defaults: sharedCorpus ? { corpus: sharedCorpus } : {},
     papers: batchManifestPapers,
     queue_paper_ingestion: {
       request_id: requestId,
@@ -1186,19 +1215,25 @@ function normalizePaperIngestionQueuePayloadForWrapper(params: {
     return params.requestPayload;
   }
 
-  const sharedCorpus =
-    resolveWorkflowSharedPapernexusCorpus({
-      candidates: [
-        readString(params.requestPayload.shared_corpus) ??
-          readString(params.requestPayload.sharedCorpus),
-        params.workflowPolicy.papernexusSharedCorpus,
-      ],
-      projectId: params.projectId,
-      projectRoot: params.projectRoot,
-      fallback:
-        params.workflowPolicy.papernexusSharedCorpus ??
-        DEFAULT_SHARED_PAPERNEXUS_CORPUS,
-    }) ?? DEFAULT_SHARED_PAPERNEXUS_CORPUS;
+  const explicitSharedCorpus =
+    readString(params.requestPayload.shared_corpus) ??
+    readString(params.requestPayload.sharedCorpus) ??
+    params.workflowPolicy.papernexusSharedCorpus;
+  const sharedCorpus = resolveWorkflowSharedPapernexusCorpus({
+    candidates: [explicitSharedCorpus],
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    fallback: resolvePapernexusSharedCorpusFallback({
+      configuredSharedCorpus: explicitSharedCorpus,
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      apiBaseUrl: params.workflowPolicy.papernexusApiBaseUrl,
+    }),
+    ignoreLegacyDefault: shouldAutodiscoverRemotePapernexusCorpus({
+      configuredSharedCorpus: explicitSharedCorpus,
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      apiBaseUrl: params.workflowPolicy.papernexusApiBaseUrl,
+    }),
+  });
   const args = buildBatchImportArgsForPaperIngestionRequest({
     requestPayload: params.requestPayload,
     manifestPath,
