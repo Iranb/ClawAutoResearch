@@ -654,6 +654,182 @@ export type PaperIngestionWorkflowDecision = {
   failedOperationCount: number;
 };
 
+export type GraphBuildPartialReadiness = {
+  ready: boolean;
+  reason: string | null;
+  expectedPaperCount: number | null;
+  presentPaperCount: number | null;
+  missingPaperCount: number | null;
+  coverage: number | null;
+  minCoverage: number;
+  minPresentPapers: number;
+  hardActiveCount: number;
+  terminalFailureCount: number;
+};
+
+function readGraphPresenceCount(
+  record: Record<string, unknown> | null,
+  keys: string[]
+): number | null {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+  }
+  return null;
+}
+
+function readGraphPresenceMissingPaperCount(
+  record: Record<string, unknown> | null
+): number | null {
+  if (!record) {
+    return null;
+  }
+  const explicit = readGraphPresenceCount(record, [
+    "graph_presence_missing_paper_count",
+    "graphPresenceMissingPaperCount",
+    "graph_presence_missing_count",
+    "graphPresenceMissingCount",
+  ]);
+  if (explicit !== null) {
+    return explicit;
+  }
+  const missingPapers = record.graph_presence_missing_papers ?? record.graphPresenceMissingPapers;
+  return Array.isArray(missingPapers) ? missingPapers.length : null;
+}
+
+function clampGraphCoverage(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeMinPresentPapers(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function countHardActivePaperIngestionWork(state: PaperIngestionState): number {
+  const runtimeStatus = normalizePaperIngestionRuntimeStatus(state.runtimeStatus);
+  const runtimeActive =
+    runtimeStatus === "waiting_import" || runtimeStatus === "reconciling";
+  const launchingOrRunningRequests = state.queuedRequests.filter(
+    (request) =>
+      isPaperIngestionExecutableUploadRequest(request) &&
+      (request.status === "launching" || request.status === "running")
+  );
+  const activeBatches = state.activeBatches.filter((batch) =>
+    ["queued", "running"].includes(normalizeStage(batch.status) ?? "")
+  );
+  const activeOperations = state.paperOperations.filter((operation) =>
+    ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+  );
+  const hasConcreteActiveWork =
+    launchingOrRunningRequests.length > 0 ||
+    activeBatches.length > 0 ||
+    activeOperations.length > 0;
+  return (
+    launchingOrRunningRequests.length +
+    activeBatches.length +
+    activeOperations.length +
+    (runtimeActive && hasConcreteActiveWork ? 1 : 0)
+  );
+}
+
+function countTerminalPaperIngestionFailures(state: PaperIngestionState): number {
+  const failedRequests = state.queuedRequests.filter(
+    (request) =>
+      isPaperIngestionExecutableUploadRequest(request) &&
+      (request.status === "failed" || request.status === "needs_repair")
+  );
+  const failedOperations = state.paperOperations.filter((operation) =>
+    ["failed", "timed_out"].includes(normalizeStage(operation.status) ?? "")
+  );
+  const failedBatchItems = state.batchItems.filter((item) =>
+    ["failed", "submit_failed", "timed_out"].includes(normalizeStage(item.status) ?? "")
+  );
+  return failedRequests.length + failedOperations.length + failedBatchItems.length;
+}
+
+export function deriveGraphBuildPartialReadiness(params: {
+  paperIngestion: Record<string, unknown> | null | undefined;
+  state?: PaperIngestionState;
+  graphPresenceStatus?: unknown;
+  minCoverage?: number | null;
+  minPresentPapers?: number | null;
+}): GraphBuildPartialReadiness {
+  const paperIngestion = params.paperIngestion ?? null;
+  const state = params.state ?? normalizePaperIngestionState(paperIngestion);
+  const graphPresenceStatus = normalizeGraphPresenceStatus(
+    params.graphPresenceStatus ??
+      paperIngestion?.graph_presence_status ??
+      paperIngestion?.graphPresenceStatus
+  );
+  const minCoverage = clampGraphCoverage(params.minCoverage);
+  const minPresentPapers = normalizeMinPresentPapers(params.minPresentPapers);
+  const expectedPaperCount = readGraphPresenceCount(paperIngestion, [
+    "graph_presence_expected_papers",
+    "graphPresenceExpectedPapers",
+    "graph_presence_expected",
+    "graphPresenceExpected",
+  ]);
+  const presentPaperCount = readGraphPresenceCount(paperIngestion, [
+    "graph_presence_present_papers",
+    "graphPresencePresentPapers",
+    "graph_presence_present",
+    "graphPresencePresent",
+    "synced_papers",
+    "syncedPapers",
+  ]);
+  const missingPaperCount =
+    readGraphPresenceMissingPaperCount(paperIngestion) ??
+    (expectedPaperCount !== null && presentPaperCount !== null
+      ? Math.max(0, expectedPaperCount - presentPaperCount)
+      : null);
+  const coverage =
+    expectedPaperCount !== null &&
+    expectedPaperCount > 0 &&
+    presentPaperCount !== null
+      ? Math.max(0, Math.min(1, presentPaperCount / expectedPaperCount))
+      : null;
+  const hardActiveCount = countHardActivePaperIngestionWork(state);
+  const terminalFailureCount = countTerminalPaperIngestionFailures(state);
+  const degradedImportAttempted = state.repairRequired || terminalFailureCount > 0;
+  const ready =
+    graphPresenceStatus === "missing_papers" &&
+    degradedImportAttempted &&
+    expectedPaperCount !== null &&
+    expectedPaperCount > 0 &&
+    presentPaperCount !== null &&
+    presentPaperCount >= minPresentPapers &&
+    coverage !== null &&
+    coverage >= minCoverage &&
+    hardActiveCount === 0;
+  return {
+    ready,
+    reason: ready
+      ? `partial graph build is usable: ${presentPaperCount}/${expectedPaperCount} expected paper(s) are present (${Math.round(
+          coverage * 100
+        )}% coverage), so missing papers can be repaired asynchronously`
+      : null,
+    expectedPaperCount,
+    presentPaperCount,
+    missingPaperCount,
+    coverage,
+    minCoverage,
+    minPresentPapers,
+    hardActiveCount,
+    terminalFailureCount,
+  };
+}
+
 function isDormantQueuedRequest(request: PaperIngestionQueuedRequest): boolean {
   return (
     isPaperIngestionExecutableUploadRequest(request) &&

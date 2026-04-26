@@ -96,6 +96,39 @@ type GateEvaluationLike = {
   timedDefaultTriggered: boolean;
 };
 
+function hasOutstandingGraphBuildIngestionWork(
+  manifest: ManifestLike | null | undefined
+): boolean {
+  const state = normalizePaperIngestionState(manifest?.paper_ingestion);
+  if (state.repairRequired || state.reconcileRequired) {
+    return true;
+  }
+  if (
+    ["waiting_import", "reconciling", "blocked"].includes(
+      normalizeStage(state.runtimeStatus) ?? ""
+    )
+  ) {
+    return true;
+  }
+  if (
+    state.queuedRequests.some((request) =>
+      ["queued", "launching", "running", "needs_repair"].includes(request.status)
+    )
+  ) {
+    return true;
+  }
+  if (
+    state.activeBatches.some((batch) =>
+      ["queued", "running"].includes(normalizeStage(batch.status) ?? "")
+    )
+  ) {
+    return true;
+  }
+  return state.paperOperations.some((operation) =>
+    ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+  );
+}
+
 type MailboxQueueResultLike = {
   queued: boolean;
   messageId: string | null;
@@ -1012,7 +1045,8 @@ export async function runWorkflowAutoIteratorImpl(
         normalizeStage(graphPresenceCheck?.status) === "ready" ||
         normalizeStage(asRecord(manifest.paper_ingestion)?.graph_presence_status) ===
           "ready";
-      const sourceCatchup: GraphBuildSourceCatchupResult = graphPresenceReady
+      const sourceCatchup: GraphBuildSourceCatchupResult =
+        graphPresenceReady && !hasOutstandingGraphBuildIngestionWork(manifest)
         ? {
             attempted: false,
             queued: false,

@@ -215,7 +215,7 @@ node scripts/workflow_local_operator_relay.mjs \
 ```
 
 PaperNexus 上传/构图在本地模式下由 workflow worker 直接执行 batch wrapper：
-`pn_batch_import.py submit` 只代表远端 import task 已提交；系统会继续跑 bounded `wait/status`，并把 `active_batches`、`batch_items`、`completed_papers` 和 `queued_requests` 写回 `PROJECT_MANIFEST.json`。只有远端任务完成且 graph presence 验证通过后，`graph_build` 才会进入 `frontier_mapping`。
+`pn_batch_import.py submit` 只代表远端 import task 已提交；系统会继续跑 bounded `wait/status`，并把 `active_batches`、`batch_items`、`completed_papers` 和 `queued_requests` 写回 `PROJECT_MANIFEST.json`。`graph_build` 默认需要 graph presence 验证通过；如果部分论文上传/入图已经终止失败，且已有可用图覆盖率达到降级门槛，workflow 可以带着明确的修复证据进入 `frontier_mapping`，未入图论文保留为后续修复债务。已经进入下游阶段后，如果关键论文缺图且没有终止修复证据，系统仍会回归到 `graph_build`。
 
 更多背景请继续看：
 

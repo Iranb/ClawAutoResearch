@@ -7,6 +7,18 @@ import { materializeReviewPressurePacketImpl } from "../tools/workflow-guard-mat
 import { buildDynamicTasksImpl } from "../tools/workflow-guard-guidance/dynamic-tasks.ts";
 import { buildPapernexusGuidance } from "../tools/workflow-guard-guidance/papernexus-guidance.ts";
 import { buildWritingGuidance } from "../tools/workflow-guard-guidance/writing-guidance.ts";
+import { collectGraphBuildStageMissingSignals } from "../tools/workflow-guard-stages/foundation-stage-signals.ts";
+import {
+  derivePaperIngestionWorkflowDecision,
+  hasActiveWorkflowOwnedPaperUpload,
+  normalizePaperIngestionState,
+} from "../tools/workflow-guard-state/paper-ingestion.ts";
+import {
+  asRecord,
+  normalizeGraphPresenceStatus,
+  normalizeStage,
+  pickString,
+} from "../tools/workflow-guard-core/coercion.ts";
 import {
   getExperimentMemorySummaryImpl,
   recordCitationVerificationImpl,
@@ -29,6 +41,80 @@ test("workflow guard materializer and guidance modules expose dedicated entrypoi
   assert.equal(typeof getExperimentMemorySummaryImpl, "function");
   assert.equal(typeof upsertExperimentLedgerEntryImpl, "function");
   assert.equal(typeof runWorkflowAutoIteratorImpl, "function");
+});
+
+test("graph_build stage accepts partial graph coverage when missing papers are repair-only", async () => {
+  const manifest = {
+    project_id: "partial-graph-demo",
+    current_stage: "graph_build",
+    paper_ingestion: {
+      runtime_status: "blocked",
+      graph_presence_checked_at: "2026-04-26T00:00:00.000Z",
+      graph_presence_status: "missing_papers",
+      graph_presence_expected_papers: 2,
+      graph_presence_present_papers: 1,
+      graph_presence_missing_papers: [
+        { canonical_id: "arxiv:1803.02999", title: "On First-Order Meta-Learning Algorithms" },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-partial",
+          status: "needs_repair",
+          wrapper: "pn_batch_import.py",
+          manifest_path: "researcher/paper-staging/queued-imports/req-partial/batch-import.json",
+          last_error: "backend rejected one source",
+        },
+      ],
+      batch_items: [
+        {
+          canonical_id: "arxiv:2410.11206",
+          status: "completed",
+          synced: true,
+          import_task_id: "task-fixmatch",
+        },
+        {
+          canonical_id: "arxiv:1803.02999",
+          status: "submit_failed",
+          error: "backend rejected one source",
+        },
+      ],
+    },
+  };
+
+  const missing = await collectGraphBuildStageMissingSignals(
+    {
+      projectRoot: "/tmp/partial-graph-demo",
+      manifest,
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      pathExists: async () => true,
+      isNonEmptyDirectory: async () => true,
+      fileHasMeaningfulJsonContent: async () => true,
+      manifestFieldExists: (source, pathSpec) => {
+        let cursor = source;
+        for (const segment of pathSpec) {
+          cursor = cursor && typeof cursor === "object" ? cursor[segment] : undefined;
+        }
+        return cursor !== undefined && cursor !== null;
+      },
+      getExperimentLedgerPath: () => "/tmp/partial-graph-demo/researcher/EXPERIMENT_LEDGER.json",
+      pickString,
+      normalizeResearchProgramState: () => ({}),
+      getResearchProgramOnboardingGaps: () => [],
+      asRecord,
+      normalizeGraphPresenceStatus,
+      normalizePaperIngestionState,
+      hasActiveWorkflowOwnedPaperUpload,
+      derivePaperIngestionWorkflowDecision,
+      summarizeGraphPresenceMissing: () => "arxiv:1803.02999",
+      getBrainstormCycleMissingSignals: async () => [],
+      normalizeStage,
+    }
+  );
+
+  assert.deepEqual(missing, []);
 });
 
 test("buildWritingGuidance surfaces story-first and adversarial review reminders for writer/reviewer roles", () => {

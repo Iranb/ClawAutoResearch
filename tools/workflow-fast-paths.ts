@@ -3234,7 +3234,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     report: validationReport,
     nowIso: now,
   });
-  if (validatedRequest.status === "needs_repair") {
+  if (validationReport.status === "invalid") {
     const blockedRequest = markQueuedPaperIngestionLaunchFailure({
       request: validatedRequest,
       nowIso: now,

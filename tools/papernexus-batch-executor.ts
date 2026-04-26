@@ -411,6 +411,96 @@ function batchStatusFromPayload(payload: BatchImportPayload | null): PaperIngest
   return "running";
 }
 
+function batchItemKey(item: BatchImportItem): string | null {
+  return readString(item.canonicalId) ?? readString(item.paperId) ?? readString(item.title);
+}
+
+function isTerminalFailedBatchStatus(status: unknown): boolean {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return normalized === "failed" || normalized === "submit-failed" || normalized === "submit_failed";
+}
+
+function isUnsubmittedBatchStatus(status: unknown): boolean {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return normalized === "not-submitted" || normalized === "not_submitted";
+}
+
+function mergeSubmitFailureDetails(params: {
+  latest: BatchImportPayload | null;
+  submitted: BatchImportPayload | null;
+}): BatchImportPayload | null {
+  if (!params.latest || !Array.isArray(params.latest.items)) {
+    return params.latest;
+  }
+  const submitItems = Array.isArray(params.submitted?.items) ? params.submitted.items : [];
+  const submitFailuresByKey = new Map<string, BatchImportItem>();
+  for (const item of submitItems) {
+    const key = batchItemKey(item);
+    if (key && isTerminalFailedBatchStatus(item.status)) {
+      submitFailuresByKey.set(key, item);
+    }
+  }
+  if (submitFailuresByKey.size === 0) {
+    return params.latest;
+  }
+  return {
+    ...params.latest,
+    items: params.latest.items.map((item) => {
+      const key = batchItemKey(item);
+      const submitFailure = key ? submitFailuresByKey.get(key) : null;
+      if (!submitFailure) {
+        return item;
+      }
+      return {
+        ...item,
+        ...submitFailure,
+        status: submitFailure.status,
+        error: readString(submitFailure.error) ?? readString(item.error) ?? undefined,
+      };
+    }),
+    summary: params.latest.summary
+      ? {
+          ...params.latest.summary,
+          failed:
+            params.latest.summary.failed ??
+            submitItems.filter((item) => isTerminalFailedBatchStatus(item.status)).length,
+          submitFailed:
+            params.latest.summary.submitFailed ??
+            submitItems.filter((item) => isTerminalFailedBatchStatus(item.status)).length,
+        }
+      : params.latest.summary,
+  };
+}
+
+function hasUnsubmittedBatchItems(payload: BatchImportPayload | null): boolean {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  return items.some(
+    (item) =>
+      isUnsubmittedBatchStatus(item.status) ||
+      (item.submitted === false && !readString(item.taskId))
+  );
+}
+
+function summarizeTerminalBatchFailures(
+  payload: BatchImportPayload | null,
+  fallback: string
+): string {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const failures = items
+    .filter((item) => isTerminalFailedBatchStatus(item.status))
+    .map((item) => {
+      const label = readString(item.canonicalId) ?? readString(item.paperId) ?? readString(item.title) ?? "unknown-paper";
+      const error = readString(item.error);
+      return error ? `${label}: ${error}` : label;
+    });
+  if (failures.length === 0) {
+    return readString(payload?.error) ?? fallback;
+  }
+  return `PaperNexus batch reported failed item(s): ${failures.slice(0, 5).join("; ")}${
+    failures.length > 5 ? "; ..." : ""
+  }`;
+}
+
 function normalizeQueueProgress(value: unknown): PaperIngestionQueueProgress | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -517,6 +607,7 @@ function payloadToStatePatch(params: {
   const failedItems = batchItems.filter(
     (item) => item.status === "failed" || item.status === "submit_failed"
   );
+  const unsubmittedItems = items.filter((item) => isUnsubmittedBatchStatus(item.status));
   const waitingImport = !params.terminal && !params.failed;
   const nextRequest: PaperIngestionQueuedRequest = {
     ...params.request,
@@ -537,7 +628,9 @@ function payloadToStatePatch(params: {
       params.error ??
       (params.terminal
         ? "Workflow-owned PaperNexus batch import completed remotely; graph presence verification is now authoritative."
-        : "Workflow-owned PaperNexus batch import submitted and is still running remotely; the next pass will poll/wait instead of resubmitting."),
+        : unsubmittedItems.length > 0
+          ? "Workflow-owned PaperNexus batch import still has manifest items without remote task ids; the next pass will retry submit for missing task references."
+          : "Workflow-owned PaperNexus batch import submitted and is still running remotely; the next pass will poll/wait instead of resubmitting."),
   };
   if (params.failed) {
     nextRequest.deadLetterAt =
@@ -556,7 +649,9 @@ function payloadToStatePatch(params: {
     waitingReason: params.failed
       ? `PaperNexus batch import failed: ${params.error ?? "unknown error"}`
       : waitingImport
-        ? "PaperNexus remote batch import is still running; workflow will continue with bounded wait/status passes."
+        ? unsubmittedItems.length > 0
+          ? "PaperNexus remote batch import has unsubmitted manifest items; workflow will retry submit instead of treating the batch as terminal failure."
+          : "PaperNexus remote batch import is still running; workflow will continue with bounded wait/status passes."
         : "PaperNexus remote batch import completed; waiting for graph presence verification.",
     activeBatches,
     batchItems,
@@ -593,11 +688,7 @@ function allItemsSynced(payload: BatchImportPayload | null): boolean {
 
 function hasTerminalFailure(payload: BatchImportPayload | null): boolean {
   const items = Array.isArray(payload?.items) ? payload.items : [];
-  return items.some((item) =>
-    ["failed", "submit-failed", "submit_failed", "not-submitted"].includes(
-      String(item.status ?? "").toLowerCase()
-    )
-  );
+  return items.some((item) => isTerminalFailedBatchStatus(item.status));
 }
 
 function commandError(result: CommandResult, fallback: string): string {
@@ -637,6 +728,7 @@ export async function executePapernexusBatchImportRequest(params: {
   const commandOutputs: PapernexusBatchExecutionState["commandOutputs"] = {};
 
   let payload: BatchImportPayload | null = null;
+  let submitPayload: BatchImportPayload | null = null;
   let failed = false;
   let terminal = false;
   let error: string | null = null;
@@ -650,11 +742,14 @@ export async function executePapernexusBatchImportRequest(params: {
       env: commandEnv,
     });
     commandOutputs.submitted = submitted;
-    const submitPayload = parsePayload(submitted);
+    submitPayload = parsePayload(submitted);
     if (submitted.exitCode !== 0) {
       failed = true;
-      error = commandError(submitted, "PaperNexus batch submit failed.");
       payload = submitPayload;
+      error = summarizeTerminalBatchFailures(
+        submitPayload,
+        commandError(submitted, "PaperNexus batch submit failed.")
+      );
     } else {
       payload = submitPayload;
     }
@@ -671,12 +766,20 @@ export async function executePapernexusBatchImportRequest(params: {
       env: commandEnv,
     });
     commandOutputs.waited = waited;
-    const waitPayload = parsePayload(waited);
+    const waitPayload = mergeSubmitFailureDetails({
+      latest: parsePayload(waited),
+      submitted: submitPayload,
+    });
     if (waited.exitCode === 0 && waitPayload) {
       payload = waitPayload;
       terminal = allItemsSynced(waitPayload);
       failed = hasTerminalFailure(waitPayload);
-      error = failed ? "PaperNexus batch wait reached terminal failed items." : null;
+      error = failed
+        ? summarizeTerminalBatchFailures(
+            waitPayload,
+            "PaperNexus batch wait reached terminal failed items."
+          )
+        : null;
     } else {
       const status = await runCommand({
         projectRoot: params.projectRoot,
@@ -686,7 +789,10 @@ export async function executePapernexusBatchImportRequest(params: {
         env: commandEnv,
       });
       commandOutputs.status = status;
-      const statusPayload = parsePayload(status);
+      const statusPayload = mergeSubmitFailureDetails({
+        latest: parsePayload(status),
+        submitted: submitPayload,
+      });
       if (status.exitCode !== 0) {
         failed = true;
         error = commandError(status, "PaperNexus batch status failed after wait timeout.");
@@ -695,17 +801,27 @@ export async function executePapernexusBatchImportRequest(params: {
         payload = statusPayload ?? payload;
         terminal = allItemsSynced(payload);
         failed = hasTerminalFailure(payload) && !terminal;
-        error = failed ? "PaperNexus batch status reported terminal failed items." : null;
+        error = failed
+          ? summarizeTerminalBatchFailures(
+              payload,
+              "PaperNexus batch status reported terminal failed items."
+            )
+          : null;
       }
     }
   }
 
   const nowIso = new Date().toISOString();
+  const retrySubmitMissingItems =
+    !terminal && !failed && hasUnsubmittedBatchItems(payload);
+  const argsForNextPass = retrySubmitMissingItems
+    ? replaceBatchSubcommand(rawArgs, "submit")
+    : waitArgs;
   return {
     ...payloadToStatePatch({
       request: params.request,
       payload,
-      argsForNextPass: terminal || failed ? waitArgs : waitArgs,
+      argsForNextPass,
       nowIso,
       terminal,
       failed,
