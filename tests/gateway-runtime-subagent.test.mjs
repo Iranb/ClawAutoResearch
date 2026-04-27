@@ -34,6 +34,24 @@ test("gateway runtime message carries project context and continuation instructi
   assert.match(message, /Task:\n\/research-pipeline "GCD"/);
 });
 
+test("gateway runtime message keeps non-Researcher agents from rebinding local project context", () => {
+  const message = buildGatewayRuntimeMessage({
+    sessionKey: "agent:orchestrator:local:conversation:e2e",
+    message: "/plan-research",
+    projectRoot: "/tmp/openclaw-e2e/projects/gcd",
+    projectId: "gcd",
+    workspaceDir: "/tmp/openclaw-e2e/projects/gcd",
+    ownerAgent: "orchestrator",
+    requesterSessionKey: "agent:researcher:local:conversation:e2e",
+    messageChannel: "local",
+  });
+
+  assert.match(message, /treat Project root and Project ID above as resolved context/);
+  assert.match(message, /get_channel_project_binding/);
+  assert.doesNotMatch(message, /bind_channel_project with projectRoot/);
+  assert.match(message, /Task:\n\/plan-research/);
+});
+
 test("gateway runtime message preserves a plain task when no runtime context is supplied", () => {
   assert.equal(buildGatewayRuntimeMessage({ message: "/graph-build" }), "/graph-build");
 });

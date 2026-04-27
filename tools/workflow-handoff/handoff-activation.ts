@@ -25,6 +25,16 @@ import {
 import type { WorkflowHandoffIntent } from "./handoff-types";
 
 type ManifestLike = Record<string, unknown>;
+const CLAIMABLE_HANDOFF_STATUSES = new Set([
+  "prepared",
+  "pending",
+  "queued",
+  "dispatching",
+  "dispatched",
+  "delivered",
+  "acknowledged",
+  "stale_claim",
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -162,24 +172,20 @@ function selectClaimableIntentForRole(params: {
     if (intent.toRole !== params.role) {
       return false;
     }
+    const explicitlyRequested =
+      (params.intentId && intent.intentId === params.intentId) ||
+      (params.idempotencyKey && intent.idempotencyKey === params.idempotencyKey) ||
+      (params.pendingHandoffId && intent.intentId === params.pendingHandoffId);
+    if (!explicitlyRequested && !params.pendingHandoffId) {
+      return false;
+    }
     if (intent.status === "claimed") {
-      const explicitlyRequested =
-        (params.intentId && intent.intentId === params.intentId) ||
-        (params.idempotencyKey && intent.idempotencyKey === params.idempotencyKey) ||
-        (params.pendingHandoffId && intent.intentId === params.pendingHandoffId);
       return explicitlyRequested && Boolean(sessionKey) && intent.toSessionKey === sessionKey;
     }
-    return [
-      "prepared",
-      "pending",
-      "queued",
-      "dispatching",
-      "dispatched",
-      "delivered",
-      "acknowledged",
-      "failed",
-      "stale_claim",
-    ].includes(intent.status);
+    if (CLAIMABLE_HANDOFF_STATUSES.has(intent.status)) {
+      return true;
+    }
+    return false;
   });
   if (claimable.length === 0) {
     return null;
@@ -198,10 +204,13 @@ function selectClaimableIntentForRole(params: {
       claimable.find((intent) => intent.intentId === params.pendingHandoffId) ?? null
     );
   }
-  return claimable.sort(
-    (left, right) =>
-      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
-  )[0] ?? null;
+  return claimable.sort((left, right) => {
+    const createdDelta = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    if (createdDelta !== 0) {
+      return createdDelta;
+    }
+    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+  })[0] ?? null;
 }
 
 export async function claimAndActivateWorkflowHandoffForAgent(params: {

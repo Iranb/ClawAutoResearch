@@ -265,8 +265,11 @@ test("dispatchWorkflowTaskToAgent reuses an already active owner session instead
             role: "academic_writer",
             agentId: "academic_writer",
             ownerAgent: "academic_writer",
+            family: "write",
+            kind: "workflow_stage_dispatch",
             projectRoot,
             status: "active",
+            startedAt: "2026-04-14T02:00:00.000Z",
           },
         ],
       },
@@ -325,6 +328,109 @@ test("dispatchWorkflowTaskToAgent reuses an already active owner session instead
   assert.equal(result.sessionKey, "agent:academic_writer:discord:group:paper-lab");
   assert.equal(result.runId, null);
   assert.equal(runCalls, 0);
+});
+
+test("dispatchWorkflowTaskToAgent ignores a preferred owner session after runtime repair", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-repaired-session-")
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const sessionKey = "agent:academic_writer:discord:group:paper-lab";
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "write",
+        owner_agent: "academic_writer",
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-14T02:00:00.000Z",
+        projectId: "demo-project",
+        projectRoot,
+        entries: [
+          {
+            sessionKey,
+            role: "academic_writer",
+            agentId: "academic_writer",
+            ownerAgent: "academic_writer",
+            family: "write",
+            kind: "workflow_stage_dispatch",
+            projectRoot,
+            status: "needs_repair",
+            startedAt: "2026-04-14T02:00:00.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-agent-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-14T02:00:00.000Z",
+        entries: [
+          {
+            role: "academic_writer",
+            sessionKey,
+            sessionId: null,
+            projectId: "demo-project",
+            projectRoot,
+            currentStage: "write",
+            status: "active",
+            source: "workflow_tool",
+            updatedAt: "2026-04-14T02:00:00.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const calls = [];
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "run-after-repair" };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "academic_writer",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "write",
+    summary: "Continue the write stage after repairing the stale session.",
+    requireMailboxAcknowledgement: false,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.strategy, "direct_session");
+  assert.equal(result.sessionKey, sessionKey);
+  assert.equal(result.runId, "run-after-repair");
+  assert.equal(calls.length, 1);
 });
 
 test("dispatchWorkflowTaskToAgent materializes overlong commands into exec packets", async (t) => {
@@ -679,6 +785,55 @@ test("dispatchWorkflowTaskToAgent waits for workflow mailbox acknowledgement whe
   assert.equal(result.acknowledgedByMailbox, true);
   assert.equal(result.attempts[0].acceptedByMailbox, true);
   assert.equal(result.attempts[0].acceptedByTranscript, false);
+});
+
+test("dispatchWorkflowTaskToAgent accepts transcript progress after mailbox ack timeout", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-mailbox-transcript-")
+  );
+  const calls = [];
+  const counts = new Map();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async run(params) {
+        calls.push(params.sessionKey);
+        counts.set(params.sessionKey, (counts.get(params.sessionKey) ?? 0) + 1);
+        return { runId: "run-mailbox-transcript-1" };
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+      async getSessionMessages(params) {
+        const count = counts.get(params.sessionKey) ?? 0;
+        return {
+          messages: Array.from({ length: count > 0 ? 1 : 0 }, (_, i) => ({ id: i })),
+        };
+      },
+    },
+    requesterSessionKey: "agent:researcher:local:conversation:e2e",
+    requesterChannel: "local",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Continue the code stage.",
+    mailboxMessageId: "msg-timeout-1",
+    waitTimeoutMs: 25,
+    retryOnTimeout: true,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.acknowledgedByMailbox, false);
+  assert.equal(result.waitStatus, "timeout");
+  assert.equal(result.attempts[0].acceptedByMailbox, false);
+  assert.equal(result.attempts[0].acceptedByTranscript, true);
+  assert.equal(calls.length, 1);
 });
 
 test("dispatchWorkflowTaskToAgent treats a started run as dispatched even before mailbox acknowledgement lands", async (t) => {

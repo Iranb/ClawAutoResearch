@@ -81,6 +81,7 @@ import {
 import {
   aggregateCodeReviewRound,
   buildCodeReviewPrompt,
+  buildLocalCodeReviewAttempts,
   createCodeReviewRound,
   defaultCodeReviewPanel,
   materializeCodeReviewPacket,
@@ -94,6 +95,7 @@ import {
 import {
   aggregateAutoModeDiscussionRound,
   buildAutoModeDiscussionPrompt,
+  buildLocalAutoModeDiscussionAttempts,
   createAutoModeDiscussionRound,
   defaultAutoModeDiscussionPanel,
   materializeAutoModeDiscussionPacket,
@@ -477,7 +479,10 @@ type AutoCodeReviewAttempt = {
     | "reviewing"
     | "started"
     | "updated"
-    | "launch_failed";
+    | "launch_failed"
+    | "local_static_review_no_runtime"
+    | "local_static_review_runtime_stale"
+    | "local_static_review_launch_failed";
   projectId: string | null;
   projectRoot: string;
   gateId: string | null;
@@ -497,7 +502,10 @@ type AutoModeDiscussionAttempt = {
     | "started"
     | "updated"
     | "resolved"
-    | "round_limit_reached";
+    | "round_limit_reached"
+    | "local_static_discussion_no_runtime"
+    | "local_static_discussion_runtime_stale"
+    | "local_static_discussion_launch_failed";
   projectId: string | null;
   projectRoot: string;
   fingerprint: string | null;
@@ -647,6 +655,62 @@ function slugifyForIdempotency(value: string): string {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function readNonNegativeIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function shouldUseLocalCodeReviewFallback(params: {
+  launchedAt: string | null | undefined;
+  nowMs?: number;
+}): boolean {
+  const fallbackAfterMs = readNonNegativeIntegerEnv(
+    "OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS",
+    180_000
+  );
+  const launchedAtMs = Date.parse(readString(params.launchedAt) ?? "");
+  if (!Number.isFinite(launchedAtMs)) {
+    return fallbackAfterMs === 0;
+  }
+  return (params.nowMs ?? Date.now()) - launchedAtMs >= fallbackAfterMs;
+}
+
+function shouldUseLocalAutoModeDiscussionFallback(params: {
+  launchedAt: string | null | undefined;
+  nowMs?: number;
+}): boolean {
+  const fallbackAfterMs = readNonNegativeIntegerEnv(
+    "OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS",
+    180_000
+  );
+  const launchedAtMs = Date.parse(readString(params.launchedAt) ?? "");
+  if (!Number.isFinite(launchedAtMs)) {
+    return fallbackAfterMs === 0;
+  }
+  return (params.nowMs ?? Date.now()) - launchedAtMs >= fallbackAfterMs;
+}
+
+function isWorkflowRuntimeCapacityFailure(error: unknown): boolean {
+  const message = readString(error)?.toLowerCase() ?? "";
+  return (
+    /429|too many requests|rate limit|rate_limit|quota|allocated quota exceeded|provider capacity|all models failed|timeout|timed out|no readable|failed before returning/.test(
+      message
+    )
+  );
+}
+
+function isCodeReviewRuntimeFailure(error: unknown): boolean {
+  return isWorkflowRuntimeCapacityFailure(error);
+}
+
+function isAutoModeDiscussionRuntimeFailure(error: unknown): boolean {
+  return isWorkflowRuntimeCapacityFailure(error);
 }
 
 function readGateReviewAnnounceResult(params: {
@@ -1314,6 +1378,147 @@ const ACTIVE_AUTO_DISCUSSION_QUEUE_STATUSES = new Set([
   "degraded",
   "needs_repair",
 ]);
+const ACTIVE_WORKFLOW_PANEL_QUEUE_STATUSES = new Set([
+  "queued",
+  "launching",
+  "running",
+  "degraded",
+  "needs_repair",
+]);
+const ACTIVE_WORKFLOW_PANEL_SESSION_STATUSES = new Set([
+  "active",
+  "needs_repair",
+]);
+
+async function retireWorkflowPanelRuntimeAttemptState(params: {
+  projectRoot: string;
+  projectId: string | null;
+  attempts: Array<{
+    queueKey?: string | null;
+    sessionKey?: string | null;
+  }>;
+  source: string;
+  kind: string;
+  reason: string;
+  eventKind: string;
+  diagnosticAction: string;
+  diagnosticSummary: string;
+  logger?: WorkflowCoordinatorLogger;
+}) {
+  const currentAt = nowIso();
+  const requestedQueueKeys = new Set(
+    params.attempts
+      .map((attempt) => readString(attempt.queueKey))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const requestedSessionKeys = new Set(
+    params.attempts
+      .map((attempt) => readString(attempt.sessionKey))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  if (requestedQueueKeys.size === 0 && requestedSessionKeys.size === 0) {
+    return {
+      retiredQueueKeys: [],
+      retiredSessionKeys: [],
+    };
+  }
+
+  const retiredQueueKeys = new Set<string>();
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        if (
+          !requestedQueueKeys.has(entry.queueKey) ||
+          (entry.source !== params.source && entry.kind !== params.kind) ||
+          !ACTIVE_WORKFLOW_PANEL_QUEUE_STATUSES.has(entry.status)
+        ) {
+          return entry;
+        }
+        retiredQueueKeys.add(entry.queueKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          nextRetryAt: null,
+          lastError: entry.lastError ?? params.reason,
+        };
+      }),
+  });
+
+  const retiredSessionKeys: string[] = [];
+  await updateWorkflowRuntimeSessionsStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        const queueMatched =
+          entry.queueKey != null && requestedQueueKeys.has(entry.queueKey);
+        const sessionMatched = requestedSessionKeys.has(entry.sessionKey);
+        if (
+          (!queueMatched && !sessionMatched) ||
+          (entry.kind !== params.kind && entry.family !== "review") ||
+          !ACTIVE_WORKFLOW_PANEL_SESSION_STATUSES.has(entry.status)
+        ) {
+          return entry;
+        }
+        retiredSessionKeys.push(entry.sessionKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+          lastError: entry.lastError ?? params.reason,
+        };
+      }),
+  });
+
+  const retiredQueueKeyList = [...retiredQueueKeys];
+  if (retiredQueueKeyList.length === 0 && retiredSessionKeys.length === 0) {
+    return {
+      retiredQueueKeys: [],
+      retiredSessionKeys: [],
+    };
+  }
+
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: params.eventKind,
+    summary:
+      `Retired ${retiredQueueKeyList.length} ${params.kind} queue entry(s) and ${retiredSessionKeys.length} session(s).`,
+    details: {
+      reason: params.reason,
+      queueKeys: retiredQueueKeyList,
+      sessionKeys: retiredSessionKeys,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "service",
+    action: params.diagnosticAction,
+    status: "completed",
+    summary: params.diagnosticSummary,
+    details: {
+      reason: params.reason,
+      queueKeys: retiredQueueKeyList,
+      sessionKeys: retiredSessionKeys,
+    },
+  });
+  params.logger?.debug?.(params.diagnosticSummary, {
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    reason: params.reason,
+    queueKeys: retiredQueueKeyList,
+    sessionKeys: retiredSessionKeys,
+  });
+  return {
+    retiredQueueKeys: retiredQueueKeyList,
+    retiredSessionKeys,
+  };
+}
 
 function extractAutoModeDiscussionFingerprint(queueKey: string): string | null {
   const parts = queueKey.split(":");
@@ -2180,6 +2385,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
         projectId: params.projectId,
         projectRoot: params.projectRoot,
         projectsRoot: params.workflowPolicy.projectsRoot,
+        workflowRuntime: params.workflowRuntime,
       });
       if (pending.active) {
         return {
@@ -2904,6 +3110,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         queueKey: launchKey,
         projectId: params.projectId ?? null,
         projectRoot: params.projectRoot,
+        workflowRuntime: params.workflowRuntime,
       });
       if (pendingQueueState.active || pendingQueueState.queued) {
         return finalizeAttempt({
@@ -3468,6 +3675,7 @@ async function pollAutoModeDiscussionAttempts(params: {
           projectRoot: params.projectRoot,
           projectId: params.projectId,
           projectsRoot: params.projectsRoot,
+          workflowRuntime: params.workflowRuntime,
         });
         if (pendingQueueState.queued || pendingQueueState.active) {
           return attempt;
@@ -4295,6 +4503,110 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
       });
       const store = await readCodeReviewStore(params.projectRoot);
       const currentRound = store.currentRound;
+      const completeWithLocalCodeReview = async (
+        reason: AutoCodeReviewAttempt["reason"],
+        runtimeAttemptsToRetire = currentRound?.attempts ?? []
+      ) => {
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: runtimeAttemptsToRetire,
+          source: "workflow_auto_code_review",
+          kind: "workflow_auto_code_review",
+          reason: `Local static code review completed because runtime review was unavailable (${reason}).`,
+          eventKind: "auto_code_review_runtime_retired",
+          diagnosticAction: "auto_code_review_runtime_retired",
+          diagnosticSummary:
+            "Retired stale code review runtime state after local static review completed.",
+          logger: params.logger,
+        });
+        const attempts = buildLocalCodeReviewAttempts({
+          packet: packet.packet,
+          packetFingerprint: packet.packetFingerprint,
+          participants: defaultCodeReviewPanel(),
+          reason,
+        });
+        const round = createCodeReviewRound({
+          stage: "code",
+          packetPath: packet.packetPath,
+          packetJsonPath: packet.packetJsonPath,
+          packetFingerprint: packet.packetFingerprint,
+          attempts,
+        });
+        round.aggregate = aggregateCodeReviewRound(
+          round,
+          params.workflowPolicy.autoGate
+        );
+        const aggregate = round.aggregate;
+        round.status = aggregate.status;
+        const nextStore = {
+          schemaVersion: 1 as const,
+          updatedAt: nowIso(),
+          roundsStarted:
+            currentRound?.packetFingerprint === packet.packetFingerprint
+              ? store.roundsStarted
+              : store.roundsStarted + 1,
+          currentRound: round,
+        };
+        await saveCodeReviewStore(params.projectRoot, nextStore);
+        await recordWorkflowReviewRoundResults({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          workflowLine: "experiment",
+          stage: "code",
+          results: round.attempts
+            .filter((attempt) => attempt.result)
+            .map((attempt) => ({
+              reviewerRole: attempt.reviewerRole,
+              verdict:
+                attempt.result?.verdict === "pass"
+                  ? "pass"
+                  : attempt.result?.verdict === "revise"
+                    ? "revise"
+                    : "block",
+              summary:
+                attempt.result?.summary ??
+                `${attempt.reviewerRole} local code review ${attempt.result?.verdict ?? attempt.status}.`,
+              artifactPaths: attempt.result?.reviewedArtifacts ?? [],
+              blockers: [
+                ...(attempt.result?.criticalBlockers ?? []),
+                ...(attempt.result?.majorIssues ?? []),
+              ],
+            })),
+          nextOwnerOnPass: aggregate.approved ? "researcher" : null,
+        });
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          component: "service",
+          action: "local_static_review_completed",
+          status: round.status === "approved" ? "completed" : "blocked",
+          stage: "code",
+          owner: "reviewer",
+          summary:
+            round.status === "approved"
+              ? "Local static code review approved the code packet."
+              : "Local static code review rejected the code packet.",
+          details: {
+            reason,
+            packetFingerprint: packet.packetFingerprint,
+            reviewCount: aggregate.reviewCount,
+            averageScore: aggregate.averageScore,
+            blockerCount: aggregate.blockerCount,
+          },
+        });
+        return finish({
+          launched: false,
+          reason,
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          gateId: "CODE-REVIEW",
+          stage: "code",
+          status: round.status,
+          reviewCount: aggregate.reviewCount,
+          approved: aggregate.approved,
+        });
+      };
       if (
         currentRound?.gateId === "CODE-REVIEW" &&
         currentRound.packetFingerprint === packet.packetFingerprint &&
@@ -4330,17 +4642,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         });
       }
       if (!params.workflowRuntime) {
-        return finish({
-          launched: false,
-          reason: "no_runtime_subagent",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          gateId: "CODE-REVIEW",
-          stage: "code",
-          status: currentRound?.status ?? null,
-          reviewCount: currentRound?.aggregate?.reviewCount ?? 0,
-          approved: false,
-        });
+        return completeWithLocalCodeReview("local_static_review_no_runtime");
       }
 
       if (
@@ -4364,6 +4666,19 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           params.workflowPolicy.autoGate
         );
         nextRound.status = nextRound.aggregate.status;
+        const shouldFallbackToLocalReview =
+          nextRound.attempts.some(
+            (attempt) =>
+              attempt.status === "pending" &&
+              shouldUseLocalCodeReviewFallback({ launchedAt: attempt.launchedAt })
+          ) ||
+          nextRound.attempts.some(
+            (attempt) =>
+              attempt.status === "error" && isCodeReviewRuntimeFailure(attempt.error)
+          );
+        if (shouldFallbackToLocalReview) {
+          return completeWithLocalCodeReview("local_static_review_runtime_stale");
+        }
         const nextStore = {
           ...store,
           updatedAt: nowIso(),
@@ -4371,6 +4686,19 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         };
         await saveCodeReviewStore(params.projectRoot, nextStore);
         if (nextRound.status !== "reviewing") {
+          await retireWorkflowPanelRuntimeAttemptState({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            attempts: nextRound.attempts,
+            source: "workflow_auto_code_review",
+            kind: "workflow_auto_code_review",
+            reason: `Code review round reached terminal state ${nextRound.status}.`,
+            eventKind: "auto_code_review_runtime_retired",
+            diagnosticAction: "auto_code_review_runtime_retired",
+            diagnosticSummary:
+              "Retired code review runtime state after the reviewer round reached a terminal state.",
+            logger: params.logger,
+          });
           await recordWorkflowReviewRoundResults({
             projectRoot: params.projectRoot,
             projectId: params.projectId,
@@ -4473,6 +4801,20 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
             reviewerRole
           ),
       });
+
+      if (
+        attempts.length > 0 &&
+        attempts.every(
+          (attempt) =>
+            attempt.status === "error" &&
+            isCodeReviewRuntimeFailure(attempt.error)
+        )
+      ) {
+        return completeWithLocalCodeReview(
+          "local_static_review_launch_failed",
+          attempts
+        );
+      }
 
       const round = createCodeReviewRound({
         stage: "code",
@@ -4800,6 +5142,47 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             (item): item is string => typeof item === "string" && item.trim().length > 0
           )
         : [];
+      const retireStableAutoModeDiscussionRound = async () => {
+        const stableStore = await readAutoModeDiscussionStore(params.projectRoot);
+        const staleRound = stableStore.currentRound;
+        if (staleRound?.status !== "reviewing") {
+          return;
+        }
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: staleRound.attempts,
+          source: "workflow_auto_discussion",
+          kind: "workflow_auto_discussion",
+          reason:
+            "Auto-mode risk is now stable; the previous runtime discussion round is no longer active.",
+          eventKind: "auto_mode_discussion_runtime_retired",
+          diagnosticAction: "stable_auto_mode_discussion_retired",
+          diagnosticSummary:
+            "Retired stale auto-mode discussion runtime state after risk returned to stable.",
+          logger: params.logger,
+        });
+        await saveAutoModeDiscussionStore(params.projectRoot, {
+          ...stableStore,
+          updatedAt: nowIso(),
+          currentRound: null,
+        });
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          component: "service",
+          action: "stable_auto_mode_discussion_cleared",
+          status: "completed",
+          stage: staleRound.stage,
+          owner: null,
+          summary:
+            "Cleared the stale auto-mode discussion round because the active risk fingerprint became stable.",
+          details: {
+            staleFingerprint: staleRound.packetFingerprint,
+            staleStatus: staleRound.status,
+          },
+        });
+      };
       if (configuredMode === "off") {
         return finish({
           launched: false,
@@ -4822,6 +5205,7 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         });
       }
       if (riskLevel == null || riskLevel === "stable" || !fingerprint) {
+        await retireStableAutoModeDiscussionRound();
         return finish({
           launched: false,
           reason: "stable",
@@ -4863,6 +5247,104 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         activeFingerprint: packet.packetFingerprint,
         logger: params.logger,
       });
+      const completeWithLocalAutoModeDiscussion = async (
+        reason: AutoModeDiscussionAttempt["reason"],
+        runtimeAttemptsToRetire = currentRound?.attempts ?? []
+      ) => {
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: runtimeAttemptsToRetire,
+          source: "workflow_auto_discussion",
+          kind: "workflow_auto_discussion",
+          reason: `Local static auto-mode discussion completed because runtime discussion was unavailable (${reason}).`,
+          eventKind: "auto_mode_discussion_runtime_retired",
+          diagnosticAction: "auto_mode_discussion_runtime_retired",
+          diagnosticSummary:
+            "Retired stale auto-mode discussion runtime state after local static discussion completed.",
+          logger: params.logger,
+        });
+        const attempts = buildLocalAutoModeDiscussionAttempts({
+          packet: packet.packet,
+          packetFingerprint: packet.packetFingerprint,
+          participants: defaultAutoModeDiscussionPanel(),
+          reason,
+        });
+        const round = createAutoModeDiscussionRound({
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel: riskLevel as "caution" | "severe",
+          packetPath: packet.packetPath,
+          packetJsonPath: packet.packetJsonPath,
+          packetFingerprint: packet.packetFingerprint,
+          attempts,
+        });
+        round.aggregate = aggregateAutoModeDiscussionRound(
+          round,
+          params.workflowPolicy.autoGate.quorum
+        );
+        const aggregate = round.aggregate;
+        round.status = aggregate.status;
+        const nextRoundsStarted =
+          currentRound?.packetFingerprint === packet.packetFingerprint
+            ? Math.max(1, roundsStarted)
+            : roundsStarted + 1;
+        const nextStore = {
+          schemaVersion: 1 as const,
+          updatedAt: nowIso(),
+          roundsStartedByFingerprint: {
+            ...store.roundsStartedByFingerprint,
+            [packet.packetFingerprint]: nextRoundsStarted,
+          },
+          currentRound: round,
+        };
+        await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          component: "service",
+          action: "local_static_auto_mode_discussion_completed",
+          status:
+            round.status === "resolved"
+              ? "completed"
+              : round.status === "needs_changes"
+                ? "degraded"
+                : "blocked",
+          stage: round.stage,
+          owner: aggregate.recommendedOwner,
+          summary:
+            round.status === "resolved"
+              ? "Local auto-mode risk discussion allowed the current handoff to continue."
+              : "Local auto-mode risk discussion requested bounded remediation before continuing.",
+          details: {
+            reason,
+            packetFingerprint: packet.packetFingerprint,
+            riskLevel,
+            reviewCount: aggregate.reviewCount,
+            averageConfidence: aggregate.averageConfidence,
+            assessmentCounts: aggregate.assessmentCounts,
+            blockerCount: aggregate.blockers.length,
+          },
+        });
+        return finish({
+          launched: false,
+          reason,
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: round.stage,
+          riskLevel: round.riskLevel,
+          status: round.status,
+          reviewCount: aggregate.reviewCount,
+          roundsStarted: nextRoundsStarted,
+          recommendedOwner: aggregate.recommendedOwner,
+          actionItems: aggregate.actionItems,
+          blockers: aggregate.blockers,
+          summary: aggregate.summary,
+          roundId: round.roundId,
+          packetPath: round.packetPath,
+          resolved: round.status === "resolved",
+        });
+      };
 
       if (
         currentRound?.packetFingerprint === packet.packetFingerprint &&
@@ -4894,25 +5376,9 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         currentRound.status === "reviewing"
       ) {
         if (!params.workflowRuntime) {
-          return finish({
-            launched: false,
-            reason: "no_runtime_subagent",
-            projectId: params.projectId,
-            projectRoot: params.projectRoot,
-            fingerprint: packet.packetFingerprint,
-            stage: currentRound.stage,
-            riskLevel: currentRound.riskLevel,
-            status: currentRound.status,
-            reviewCount: currentRound.aggregate?.reviewCount ?? 0,
-            roundsStarted,
-            recommendedOwner: currentRound.aggregate?.recommendedOwner ?? null,
-            actionItems: currentRound.aggregate?.actionItems ?? [],
-            blockers: currentRound.aggregate?.blockers ?? [],
-            summary: currentRound.aggregate?.summary ?? null,
-            roundId: currentRound.roundId,
-            packetPath: currentRound.packetPath,
-            resolved: false,
-          });
+          return completeWithLocalAutoModeDiscussion(
+            "local_static_discussion_no_runtime"
+          );
         }
         const attempts = await pollAutoModeDiscussionAttempts({
           workflowRuntime: params.workflowRuntime,
@@ -4931,12 +5397,45 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           params.workflowPolicy.autoGate.quorum
         );
         nextRound.status = nextRound.aggregate.status;
+        const shouldFallbackToLocalDiscussion =
+          nextRound.attempts.some(
+            (attempt) =>
+              attempt.status === "pending" &&
+              shouldUseLocalAutoModeDiscussionFallback({
+                launchedAt: attempt.launchedAt,
+              })
+          ) ||
+          nextRound.attempts.some(
+            (attempt) =>
+              attempt.status === "error" &&
+              isAutoModeDiscussionRuntimeFailure(attempt.error)
+          );
+        if (shouldFallbackToLocalDiscussion) {
+          return completeWithLocalAutoModeDiscussion(
+            "local_static_discussion_runtime_stale"
+          );
+        }
         const nextStore = {
           ...store,
           updatedAt: nowIso(),
           currentRound: nextRound,
         };
         await saveAutoModeDiscussionStore(params.projectRoot, nextStore);
+        if (nextRound.status !== "reviewing") {
+          await retireWorkflowPanelRuntimeAttemptState({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            attempts: nextRound.attempts,
+            source: "workflow_auto_discussion",
+            kind: "workflow_auto_discussion",
+            reason: `Auto-mode discussion round reached terminal state ${nextRound.status}.`,
+            eventKind: "auto_mode_discussion_runtime_retired",
+            diagnosticAction: "auto_mode_discussion_runtime_retired",
+            diagnosticSummary:
+              "Retired auto-mode discussion runtime state after the discussion round reached a terminal state.",
+            logger: params.logger,
+          });
+        }
         return finish({
           launched: false,
           reason: nextRound.status === "reviewing" ? "reviewing" : "updated",
@@ -4980,25 +5479,9 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         });
       }
       if (!params.workflowRuntime) {
-        return finish({
-          launched: false,
-          reason: "no_runtime_subagent",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          fingerprint: packet.packetFingerprint,
-          stage: params.autoIteratorResult.stageAfter ?? null,
-          riskLevel,
-          status: null,
-          reviewCount: 0,
-          roundsStarted,
-          recommendedOwner: null,
-          actionItems: [],
-          blockers: [],
-          summary: null,
-          roundId: null,
-          packetPath: packet.packetPath,
-          resolved: false,
-        });
+        return completeWithLocalAutoModeDiscussion(
+          "local_static_discussion_no_runtime"
+        );
       }
 
       const requesterBinding = resolveWorkflowRequesterBinding({
@@ -5186,6 +5669,19 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
             ),
           });
         }
+      }
+      if (
+        attempts.length > 0 &&
+        attempts.every(
+          (attempt) =>
+            attempt.status === "error" &&
+            isAutoModeDiscussionRuntimeFailure(attempt.error)
+        )
+      ) {
+        return completeWithLocalAutoModeDiscussion(
+          "local_static_discussion_launch_failed",
+          attempts
+        );
       }
       const round = createAutoModeDiscussionRound({
         stage: params.autoIteratorResult.stageAfter ?? null,

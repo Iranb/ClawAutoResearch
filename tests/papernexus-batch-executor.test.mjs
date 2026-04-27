@@ -156,3 +156,38 @@ test("PaperNexus batch executor preserves submit-failed item errors across wait 
     "submit_failed"
   );
 });
+
+test("PaperNexus batch executor marks command failures as terminal batch failures", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pn-batch-command-failure-"));
+  const scriptDir = path.join(projectRoot, "scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = scriptDir;
+  await writeFakeBatchScript(scriptDir, {
+    submit: {
+      error: "HTTP 502 for MCP tools/call:",
+      _exitCode: 1,
+    },
+  });
+
+  const result = await executePapernexusBatchImportRequest({
+    projectRoot,
+    request: makeQueuedRequest(),
+    waitTimeoutSeconds: 1,
+    waitIntervalSeconds: 0.1,
+  });
+
+  assert.equal(result?.runtimeStatus, "blocked");
+  assert.equal(result?.repairRequired, true);
+  assert.equal(result?.request.status, "needs_repair");
+  assert.equal(result?.activeBatches[0]?.status, "failed");
+  assert.match(result?.activeBatches[0]?.detail ?? "", /HTTP 502/);
+});

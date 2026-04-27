@@ -41,6 +41,99 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return results;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNumberField(record: Record<string, unknown> | null, keys: string[]): number {
+  if (!record) {
+    return 0;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return 0;
+}
+
+function countRegistryEntries(record: Record<string, unknown> | null): number {
+  const entries = record?.entries;
+  return Array.isArray(entries) ? entries.length : 0;
+}
+
+async function readFigureTableBudget(projectRoot: string): Promise<{
+  frameworkFigureCount: number;
+  experimentTableCount: number;
+}> {
+  const figureRegistry = await readJsonIfExists<Record<string, unknown>>(
+    resolveProjectArtifactPath(projectRoot, "academic_writer/FIGURE_REGISTRY.json")
+  );
+  const tableRegistry = await readJsonIfExists<Record<string, unknown>>(
+    resolveProjectArtifactPath(projectRoot, "academic_writer/TABLE_REGISTRY.json")
+  );
+  return {
+    frameworkFigureCount:
+      readNumberField(figureRegistry, ["frameworkFigureCount", "framework_figure_count"]) ||
+      countRegistryEntries(figureRegistry),
+    experimentTableCount:
+      readNumberField(tableRegistry, ["experimentTableCount", "experiment_table_count"]) ||
+      countRegistryEntries(tableRegistry),
+  };
+}
+
+async function isResolvedBuiltinAutoModeRiskSource(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  source: RevisionControlSource;
+}): Promise<boolean> {
+  if (
+    params.source.sourceType !== "file_audit" ||
+    !params.source.sourceId.startsWith("builtin.auto-mode-risk:")
+  ) {
+    return false;
+  }
+  const summary = params.source.summary ?? "";
+  if (/results_storyline\.status/i.test(summary)) {
+    return readRecord(params.manifest.results_storyline)?.status === "ready";
+  }
+  if (/figure\/table contract/i.test(summary)) {
+    const budget = await readFigureTableBudget(params.projectRoot);
+    if (/framework\/pipeline\/method figure/i.test(summary)) {
+      return budget.frameworkFigureCount >= 1;
+    }
+    if (/experiment\/result tables/i.test(summary)) {
+      return budget.experimentTableCount >= 2;
+    }
+    return budget.frameworkFigureCount >= 1 && budget.experimentTableCount >= 2;
+  }
+  return false;
+}
+
+async function filterResolvedHookSources(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  sources: RevisionControlSource[];
+}): Promise<RevisionControlSource[]> {
+  const filtered: RevisionControlSource[] = [];
+  for (const source of params.sources) {
+    if (
+      await isResolvedBuiltinAutoModeRiskSource({
+        projectRoot: params.projectRoot,
+        manifest: params.manifest,
+        source,
+      })
+    ) {
+      continue;
+    }
+    filtered.push(source);
+  }
+  return filtered;
+}
+
 function buildIssueTrackerSources(
   issueTracker: ReturnType<typeof normalizeReviewIssueTrackerState>
 ): RevisionControlSource[] {
@@ -333,6 +426,11 @@ export async function deriveRevisionControlState(params: {
   const paperStory = normalizePaperStoryState(manifest.paper_story_state);
 
   const hookSummary = buildHookSources(hookStore);
+  hookSummary.sources = await filterResolvedHookSources({
+    projectRoot: params.projectRoot,
+    manifest,
+    sources: hookSummary.sources,
+  });
   const openSources = [
     ...hookSummary.sources,
     ...buildReviewSessionSource(reviewSession),

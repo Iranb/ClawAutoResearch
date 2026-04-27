@@ -1504,7 +1504,7 @@ test("runWorkflowRuntimeMaintenancePass cools down active sessions whose transcr
           endedAt: null,
           updatedAt: Date.now(),
           abortedLastRun: false,
-          providerOverride: null,
+          providerOverride: "openai",
           modelOverride: null,
           liveModelSwitchPending: false,
           lastError: null,
@@ -1527,6 +1527,10 @@ test("runWorkflowRuntimeMaintenancePass cools down active sessions whose transcr
   assert.equal(refreshedEntry?.status, "needs_repair");
   assert.match(refreshedEntry?.lastError ?? "", /allocated quota exceeded/);
   assert.ok(Date.parse(refreshedEntry?.nextRetryAt ?? "") > Date.now());
+
+  const relays = await readWorkflowLocalOperatorRelayEntries(projectRoot);
+  assert.equal(relays.length, 1);
+  assert.equal(relays[0]?.queueKey, queueKey);
 });
 
 test("runWorkflowRuntimeMaintenancePass lets stale recovery repair missing active embedded sessions after stale", async (t) => {

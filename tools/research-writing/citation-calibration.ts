@@ -90,6 +90,7 @@ export async function runCitationCalibration(params: {
   reportMarkdownPath?: string | null;
   replaceArxiv?: boolean;
   syncVerificationReport?: boolean;
+  toolTimeoutSeconds?: number | null;
 }) {
   const projectRoot = path.resolve(params.projectRoot);
   const bibliographyPath =
@@ -114,6 +115,13 @@ export async function runCitationCalibration(params: {
   ];
   if (params.replaceArxiv) {
     command.push("--replace-arxiv");
+  }
+  if (
+    typeof params.toolTimeoutSeconds === "number" &&
+    Number.isFinite(params.toolTimeoutSeconds) &&
+    params.toolTimeoutSeconds > 0
+  ) {
+    command.push("--tool-timeout-seconds", String(Math.max(1, Math.floor(params.toolTimeoutSeconds))));
   }
 
   const calibrationEnv = {

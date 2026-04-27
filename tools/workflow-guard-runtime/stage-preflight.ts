@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import {
   normalizeIdeationContractState,
 } from "../workflow-guard-state/ideation-contract";
+import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
   normalizePaperIngestionState,
   serializePaperIngestionState,
@@ -37,10 +38,17 @@ import { materializeWritingSupportArtifacts } from "../research-writing/material
 import { materializeInnovationSynthesis } from "../research-writing/innovation-synthesis";
 import { materializeWritingHookPolicies } from "../research-writing/hook-policies";
 import { materializeIntermediateArtifactHookPolicies } from "../workflow-intermediate-artifact-hook-policies";
+import { reconcileAuthoringCloseout } from "../authoring-closeout-reconcile";
 import {
   materializeFrontierMappingState,
   shouldMaterializeFrontierMappingState,
 } from "../workflow-guard-materializers/frontier-mapping-materializer";
+import { materializeCodeExperimentBundleImpl } from "../workflow-guard-materializers/code-experiment-bundle-materializer";
+import { materializeLocalCodeReviewFallback } from "../workflow-guard-materializers/code-review-local-materializer";
+import { materializeLocalExperimentExecutionImpl } from "../workflow-guard-materializers/experiment-execution-materializer";
+import { materializeAnalysisArtifactsImpl } from "../workflow-guard-materializers/analysis-artifacts-materializer";
+import { materializePlanStateImpl } from "../workflow-guard-materializers/plan-state-materializer";
+import type { WorkflowAutoGateConfig } from "../workflow-auto-mode";
 import { materializeRevisionControlState } from "../research-writing/revision-control";
 import { materializeSurveyVisualCompiler } from "../research-writing/survey-visual-compiler";
 import { materializeSurveyMethodologyConsistency } from "../research-authoring/survey-methodology-consistency";
@@ -49,7 +57,15 @@ import {
   normalizeInnovationSynthesisState,
   normalizeStoryGapSearchRequisitionState,
 } from "../workflow-guard-state/innovation-synthesis";
-import { normalizeWritePackageState } from "../workflow-guard-state/execution-state";
+import {
+  normalizeOrchestrationState,
+  normalizeReviewIssueTrackerState,
+  normalizeWritePackageState,
+} from "../workflow-guard-state/execution-state";
+import {
+  getResearchProgramPlanValidationErrors,
+  getResearchProgramValidationErrors,
+} from "../workflow-kernel/readiness";
 import { normalizeResultsStorylineState } from "../workflow-guard-state/results-storyline";
 import { normalizeStorylinePlannerState } from "../workflow-guard-state/storyline-planner";
 import { normalizeTitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
@@ -58,6 +74,7 @@ import {
   isNonEmptyDirectory,
   pathExists,
   readJsonIfExists,
+  readTextIfExists,
   writeJsonEnsured,
 } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
@@ -137,6 +154,41 @@ type StagePreflightDeps = {
   materializeFrontierMappingState?: (params: {
     projectRoot: string;
     manifest?: ManifestLike | null;
+  }) => Promise<unknown>;
+  materializePlanState?: (params: {
+    projectRoot: string;
+    planMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeCodeExperimentBundle?: (params: {
+    projectRoot: string;
+    codeMaterialization?: Record<string, unknown>;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeLocalCodeReviewFallback?: (params: {
+    projectRoot: string;
+    projectId?: string | null;
+    autoGate?: WorkflowAutoGateConfig | null;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeLocalExperimentExecution?: (params: {
+    projectRoot: string;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeAnalysisArtifacts?: (params: {
+    projectRoot: string;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  reconcileAuthoringCloseout?: (params: {
+    projectRoot: string;
+    compilePdf?: boolean;
+    autoInjectConferenceCitations?: boolean;
+    currentStageOverride?: string | null;
   }) => Promise<unknown>;
   materializeRevisionControlState?: (params: {
     projectRoot: string;
@@ -238,6 +290,14 @@ const INNOVATION_SYNTHESIS_PREP_STAGES = new Set(["write", "review", "submit"]);
 const RESULTS_STORYLINE_PREP_STAGES = new Set(["write", "review", "submit"]);
 const TITLE_ABSTRACT_INTRO_PREP_STAGES = new Set(["write", "review", "submit"]);
 const CYCLE_MEMORY_PREP_STAGES = new Set(["idea", "review", "write", "submit"]);
+const CODE_EXPERIMENT_BUNDLE_PREP_STAGES = new Set(["code"]);
+const LOCAL_CODE_REVIEW_FALLBACK_PREP_STAGES = new Set(["code"]);
+const LOCAL_EXPERIMENT_EXECUTION_PREP_STAGES = new Set(["experiment"]);
+const LOCAL_ANALYSIS_ARTIFACTS_PREP_STAGES = new Set([
+  "analyze",
+  "review",
+]);
+const LOCAL_AUTHORING_CLOSEOUT_PREP_STAGES = new Set(["write", "submit"]);
 
 function parseTimestampMs(value: string | null | undefined): number | null {
   if (!value) {
@@ -441,6 +501,8 @@ async function shouldMaterializeIdeationContract(params: {
     return true;
   }
   const artifactsMissing = await anyArtifactMissing(params.projectRoot, [
+    "researcher/IDEA_REPORT.md",
+    "researcher/IDEA_AUDIT.md",
     state.graphIdeationPacketPath,
     state.ideaTreePath,
     state.noveltyTreePath,
@@ -461,6 +523,278 @@ async function shouldMaterializeIdeationContract(params: {
     projectRoot: params.projectRoot,
     manifest: params.manifest,
   });
+}
+
+async function shouldMaterializePlanState(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (params.stage !== "plan") {
+    return false;
+  }
+  const ideationState = normalizeIdeationContractState(params.manifest.ideation_contract);
+  if (ideationState.status !== "ready") {
+    return false;
+  }
+  if (
+    await anyArtifactMissing(params.projectRoot, [
+      "orchestrator/PLAN.md",
+      "orchestrator/TODOS.md",
+      "orchestrator/PLAN_AUDIT.md",
+    ])
+  ) {
+    return true;
+  }
+  const researchProgram = normalizeResearchProgramState(params.manifest.research_program);
+  const researchProgramErrors = [
+    ...getResearchProgramValidationErrors(researchProgram),
+    ...getResearchProgramPlanValidationErrors({
+      state: researchProgram,
+      ideationContract: ideationState,
+    }),
+  ];
+  if (researchProgramErrors.length > 0) {
+    return true;
+  }
+  const orchestration = normalizeOrchestrationState(params.manifest.orchestration_state);
+  const orchestrationStatus = normalizeStageValue(orchestration.status);
+  return (
+    !["ready", "running", "waiting", "blocked"].includes(orchestrationStatus ?? "") ||
+    !orchestration.currentOwner ||
+    normalizeStageValue(orchestration.nextTransitionCandidate) !== "code"
+  );
+}
+
+async function hasCompleteExperimentBundle(projectRoot: string): Promise<boolean> {
+  const coderRoot = resolveProjectArtifactPath(projectRoot, "coder") ?? `${projectRoot}/coder`;
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: coderRoot, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+    let entries: Array<{ name: string; isDirectory: () => boolean }>;
+    try {
+      entries = await fs.readdir(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    if (
+      (await pathExists(resolveProjectArtifactPath(current.dir, "train.py") ?? "")) &&
+      (await pathExists(resolveProjectArtifactPath(current.dir, "README.md") ?? "")) &&
+      (await pathExists(
+        resolveProjectArtifactPath(current.dir, "EXPERIMENT_MANIFEST.json") ?? ""
+      ))
+    ) {
+      return true;
+    }
+    if (current.depth >= 3) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "__pycache__") {
+        continue;
+      }
+      queue.push({
+        dir: resolveProjectArtifactPath(current.dir, entry.name) ?? `${current.dir}/${entry.name}`,
+        depth: current.depth + 1,
+      });
+    }
+  }
+  return false;
+}
+
+function localCodeReviewFallbackConfigured(): boolean {
+  const raw = process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
+  if (raw == null || raw.trim().length === 0) {
+    return false;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0;
+}
+
+async function shouldMaterializeLocalCodeReviewFallback(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !LOCAL_CODE_REVIEW_FALLBACK_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  if (!localCodeReviewFallbackConfigured()) {
+    return false;
+  }
+  return hasCompleteExperimentBundle(params.projectRoot);
+}
+
+async function shouldMaterializeCodeExperimentBundle(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !CODE_EXPERIMENT_BUNDLE_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const gateState =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(params.projectRoot, "researcher/GATE_STATE.json")
+    )) ?? {};
+  if (
+    normalizeStageValue(gateState.current_stage) === params.stage &&
+    normalizeStageValue(gateState.gate_status) === "waiting"
+  ) {
+    return false;
+  }
+  const researchProgram = normalizeResearchProgramState(params.manifest.research_program);
+  const activeTracks = researchProgram.tracks.filter(
+    (track) => normalizeStageValue(track.status) === "active"
+  );
+  if (activeTracks.length === 0) {
+    return false;
+  }
+  if (await anyArtifactMissing(params.projectRoot, ["coder/EXPERIMENT_INDEX.md"])) {
+    return true;
+  }
+  return !(await hasCompleteExperimentBundle(params.projectRoot));
+}
+
+async function shouldMaterializeLocalExperimentExecution(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !LOCAL_EXPERIMENT_EXECUTION_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const experimentSearch =
+    params.manifest.experiment_search && typeof params.manifest.experiment_search === "object"
+      ? (params.manifest.experiment_search as Record<string, unknown>)
+      : {};
+  if (
+    normalizeStageValue(experimentSearch.status) === "ready_for_analysis" &&
+    typeof experimentSearch.evaluation_summary_path === "string" &&
+    typeof experimentSearch.plot_pack_path === "string"
+  ) {
+    return false;
+  }
+  const autonomousExecution = normalizeAutonomousExecutionState(
+    params.manifest.autonomous_execution
+  );
+  if (autonomousExecution.experimentLaunchMode === "reviewed_auto") {
+    return false;
+  }
+  const ledger =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        "researcher/EXPERIMENT_LEDGER.json"
+      ) ?? ""
+    )) ?? {};
+  const experiments = Array.isArray(ledger.experiments)
+    ? (ledger.experiments as Array<Record<string, unknown>>)
+    : [];
+  if (experiments.length > 0) {
+    return false;
+  }
+  return await hasCompleteExperimentBundle(params.projectRoot);
+}
+
+async function shouldMaterializeAnalysisArtifacts(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !LOCAL_ANALYSIS_ARTIFACTS_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const experimentSearch =
+    params.manifest.experiment_search && typeof params.manifest.experiment_search === "object"
+      ? (params.manifest.experiment_search as Record<string, unknown>)
+      : {};
+  if (normalizeStageValue(experimentSearch.status) !== "ready_for_analysis") {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  if (
+    params.stage !== "analyze" &&
+    (paperStory.claimSupportStatus === "unsupported" ||
+      paperStory.claimSupportStatus === "partial" ||
+      paperStory.unsupportedClaimCount > 0 ||
+      paperStory.partialClaimCount > 0)
+  ) {
+    return false;
+  }
+  const opportunityScorecard =
+    params.manifest.opportunity_scorecard &&
+    typeof params.manifest.opportunity_scorecard === "object"
+      ? (params.manifest.opportunity_scorecard as Record<string, unknown>)
+      : {};
+  if (normalizeStageValue(opportunityScorecard.verdict) === "worth_top_tier_bet") {
+    const mechanismEvidence =
+      params.manifest.mechanism_evidence &&
+      typeof params.manifest.mechanism_evidence === "object"
+        ? (params.manifest.mechanism_evidence as Record<string, unknown>)
+        : {};
+    const venueCompetition =
+      params.manifest.venue_competition &&
+      typeof params.manifest.venue_competition === "object"
+        ? (params.manifest.venue_competition as Record<string, unknown>)
+        : {};
+    const explicitGraphBlockers = [
+      normalizeStageValue(mechanismEvidence.graph_context_status),
+      normalizeStageValue(venueCompetition.graph_context_status),
+    ].filter((status) => status === "unverified_graph_context" || status === "graph_unavailable");
+    if (explicitGraphBlockers.length > 0) {
+      return false;
+    }
+  }
+
+  const writingContract = normalizeWritingContractState(params.manifest.writing_contract);
+  const requiredArtifacts = [
+    "analyzer/NARRATIVE_REPORT.md",
+    "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+    "analyzer/TRACK_VERDICTS.md",
+    "analyzer/UNSUPPORTED_CLAIMS.md",
+    "analyzer/QUALITY_AUDIT.md",
+    ...(writingContract.proofAppendixRequired
+      ? [
+          "analyzer/THEORY_SUPPORT_NOTE.md",
+          "analyzer/THEORY_STATE.json",
+          "academic_writer/THEORY_APPENDIX_PLAN.md",
+          "academic_writer/paper/sections/appendix_theory.tex",
+        ]
+      : []),
+  ];
+  if (await anyArtifactMissing(params.projectRoot, requiredArtifacts)) {
+    return true;
+  }
+  if (
+    writingContract.proofAppendixRequired &&
+    !(await isNonEmptyDirectory(
+      resolveProjectArtifactPath(params.projectRoot, "analyzer/proof-packets") ?? ""
+    ))
+  ) {
+    return true;
+  }
+  if (paperStory.claimSupportStatus !== "supported" || paperStory.supportedClaimCount < 1) {
+    return true;
+  }
+  const theorySupport = params.manifest.theory_state;
+  if (writingContract.proofAppendixRequired) {
+    const theoryRecord =
+      theorySupport && typeof theorySupport === "object"
+        ? (theorySupport as Record<string, unknown>)
+        : {};
+    if (
+      normalizeStageValue(theoryRecord.status) !== "ready" ||
+      normalizeStageValue(theoryRecord.overall_signal) == null ||
+      theoryRecord.body_ready !== true
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function shouldMaterializeSurveyReviewState(params: {
@@ -1090,12 +1424,291 @@ async function shouldMaterializeTitleAbstractIntroWorkbench(params: {
   return sourceTimestamp !== null && sourceTimestamp > stateTimestamp;
 }
 
+function countBibEntries(source: string | null) {
+  return [...String(source ?? "").matchAll(/@\w+\s*\{/g)].length;
+}
+
+function readManifestStatus(value: unknown, fields: string[]) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  for (const field of fields) {
+    const normalized = normalizeStageValue(record[field]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function readManifestNumber(value: unknown, fields: string[]) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  for (const field of fields) {
+    const raw = record[field];
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return raw;
+    }
+  }
+  return null;
+}
+
+function isExplicitFailureStatus(status: string | null) {
+  return ["blocked", "failed", "fail", "needs_revision", "rejected"].includes(status ?? "");
+}
+
+function hasExplicitAuthoringBlocker(manifest: ManifestLike) {
+  const paperQcStatus = readManifestStatus(manifest.paper_qc, ["status"]);
+  const compileStatus = readManifestStatus(manifest.paper_qc, [
+    "compile_status",
+    "compileStatus",
+  ]);
+  if (isExplicitFailureStatus(paperQcStatus) || isExplicitFailureStatus(compileStatus)) {
+    return true;
+  }
+
+  const figureQcStatus = readManifestStatus(manifest.figure_qc, ["status"]);
+  const captionStatus = readManifestStatus(manifest.figure_qc, [
+    "caption_alignment_status",
+    "captionAlignmentStatus",
+  ]);
+  const textStatus = readManifestStatus(manifest.figure_qc, [
+    "text_alignment_status",
+    "textAlignmentStatus",
+  ]);
+  const selectionStatus = readManifestStatus(manifest.figure_qc, [
+    "selection_status",
+    "selectionStatus",
+  ]);
+  if (
+    isExplicitFailureStatus(figureQcStatus) ||
+    isExplicitFailureStatus(captionStatus) ||
+    isExplicitFailureStatus(textStatus) ||
+    isExplicitFailureStatus(selectionStatus)
+  ) {
+    return true;
+  }
+
+  const citationStatus = readManifestStatus(manifest.citation_integrity, [
+    "verification_status",
+    "verificationStatus",
+  ]);
+  const hallucinatedCitationCount =
+    readManifestNumber(manifest.citation_integrity, [
+      "hallucinated_citation_count",
+      "hallucinatedCitationCount",
+    ]) ?? 0;
+  const citationRecord =
+    manifest.citation_integrity &&
+    typeof manifest.citation_integrity === "object" &&
+    !Array.isArray(manifest.citation_integrity)
+      ? (manifest.citation_integrity as Record<string, unknown>)
+      : {};
+  if (
+    isExplicitFailureStatus(citationStatus) ||
+    hallucinatedCitationCount > 0 ||
+    citationRecord.all_citations_real === false
+  ) {
+    return true;
+  }
+
+  const issueTracker = normalizeReviewIssueTrackerState(manifest.review_issue_tracker);
+  const openMediumOrHigher =
+    issueTracker.openCounts.critical + issueTracker.openCounts.high + issueTracker.openCounts.medium;
+  return openMediumOrHigher > 0;
+}
+
+async function shouldReconcileAuthoringCloseout(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.stage || !LOCAL_AUTHORING_CLOSEOUT_PREP_STAGES.has(params.stage)) {
+    return false;
+  }
+  const writingContract = normalizeWritingContractState(params.manifest.writing_contract);
+  if (writingContract.paperMode === "survey") {
+    return false;
+  }
+  if (
+    params.stage === "write" &&
+    !writingContract.kgStorylineRequired &&
+    writingContract.paperMode !== "conference"
+  ) {
+    return false;
+  }
+  const paperStory = normalizePaperStoryState(params.manifest.paper_story_state);
+  if (paperStory.status !== "ready") {
+    return false;
+  }
+  if (hasExplicitAuthoringBlocker(params.manifest)) {
+    return false;
+  }
+  if (params.stage === "submit") {
+    const externalReview =
+      params.manifest.external_review_state &&
+      typeof params.manifest.external_review_state === "object" &&
+      !Array.isArray(params.manifest.external_review_state)
+        ? (params.manifest.external_review_state as Record<string, unknown>)
+        : {};
+    const externalReviewStatus = readManifestStatus(externalReview, ["status"]);
+    if (
+      externalReviewStatus &&
+      !["missing", "pending", "none", "received"].includes(externalReviewStatus)
+    ) {
+      return false;
+    }
+  }
+  const writePackage = normalizeWritePackageState(params.manifest.write_package);
+  if (
+    !["ready", "assembled", "approved"].includes(normalizeStageValue(writePackage.status) ?? "") &&
+    params.stage !== "write"
+  ) {
+    return false;
+  }
+
+  const mainTexPath =
+    resolveProjectArtifactPath(params.projectRoot, "academic_writer/paper/main.tex") ??
+    `${params.projectRoot}/academic_writer/paper/main.tex`;
+  const refsBibPath =
+    resolveProjectArtifactPath(params.projectRoot, "academic_writer/paper/refs.bib") ??
+    `${params.projectRoot}/academic_writer/paper/refs.bib`;
+  const mainTex = await readTextIfExists(mainTexPath);
+  if (!mainTex || !/\\begin\{document\}/.test(mainTex) || (mainTex.match(/\\section\*?\{/g) ?? []).length < 6) {
+    return true;
+  }
+  const refsBib = await readTextIfExists(refsBibPath);
+  if (countBibEntries(refsBib) < 6) {
+    return true;
+  }
+  const kgPacketPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    writingContract.kgStorylinePacketPath ?? "academic_writer/KG_STORYLINE_PACKET.md"
+  );
+  if (
+    writingContract.kgStorylineRequired &&
+    (writingContract.kgStorylineStatus !== "ready" || !kgPacketPath || !(await pathExists(kgPacketPath)))
+  ) {
+    return true;
+  }
+  if (
+    readManifestStatus(params.manifest.writing_session, ["status", "process_status"]) !==
+    "ready_for_submit"
+  ) {
+    return true;
+  }
+  const citationStatus = readManifestStatus(params.manifest.citation_integrity, [
+    "verification_status",
+    "verificationStatus",
+  ]);
+  const citationRecord =
+    params.manifest.citation_integrity &&
+    typeof params.manifest.citation_integrity === "object" &&
+    !Array.isArray(params.manifest.citation_integrity)
+      ? (params.manifest.citation_integrity as Record<string, unknown>)
+      : {};
+  if (citationStatus !== "verified" || citationRecord.all_citations_real !== true) {
+    return true;
+  }
+  if (params.stage === "submit") {
+    const externalReview =
+      params.manifest.external_review_state &&
+      typeof params.manifest.external_review_state === "object" &&
+      !Array.isArray(params.manifest.external_review_state)
+        ? (params.manifest.external_review_state as Record<string, unknown>)
+        : {};
+    const externalReviewStatus = readManifestStatus(externalReview, ["status"]);
+    if (
+      externalReviewStatus &&
+      !["missing", "pending", "none", "received"].includes(externalReviewStatus)
+    ) {
+      return false;
+    }
+  }
+  const reviewPacketPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "reviewer/REVIEW_PACKET.json"
+  );
+  if (!reviewPacketPath || !(await pathExists(reviewPacketPath))) {
+    return true;
+  }
+  if (readManifestStatus(params.manifest.paragraph_logic_audit, ["status"]) !== "ready") {
+    return true;
+  }
+  if (params.stage === "submit") {
+    const externalReview =
+      params.manifest.external_review_state &&
+      typeof params.manifest.external_review_state === "object" &&
+      !Array.isArray(params.manifest.external_review_state)
+        ? (params.manifest.external_review_state as Record<string, unknown>)
+        : {};
+    const externalReviewStatus = readManifestStatus(externalReview, ["status"]);
+    const externalReviewPath =
+      typeof externalReview.external_review_path === "string"
+        ? externalReview.external_review_path
+        : typeof externalReview.externalReviewPath === "string"
+          ? externalReview.externalReviewPath
+          : null;
+    const reviewResponsePath =
+      typeof externalReview.review_response_path === "string"
+        ? externalReview.review_response_path
+        : typeof externalReview.reviewResponsePath === "string"
+          ? externalReview.reviewResponsePath
+          : null;
+    const externalReviewResolvedPath = resolveProjectArtifactPath(
+      params.projectRoot,
+      externalReviewPath
+    );
+    const reviewResponseResolvedPath = resolveProjectArtifactPath(
+      params.projectRoot,
+      reviewResponsePath
+    );
+    const simulatedReviewResolvedPath = resolveProjectArtifactPath(
+      params.projectRoot,
+      "reviewer/SIMULATED_EXTERNAL_REVIEW.md"
+    );
+    if (
+      externalReviewStatus !== "received" ||
+      typeof externalReview.overall_recommendation !== "string" ||
+      !externalReviewResolvedPath ||
+      !reviewResponseResolvedPath ||
+      !simulatedReviewResolvedPath ||
+      !(await pathExists(externalReviewResolvedPath)) ||
+      !(await pathExists(reviewResponseResolvedPath)) ||
+      !(await pathExists(simulatedReviewResolvedPath))
+    ) {
+      return true;
+    }
+  }
+  const figureRegistry = await readJsonIfExists<Record<string, unknown>>(
+    resolveProjectArtifactPath(params.projectRoot, "academic_writer/FIGURE_REGISTRY.json")
+  );
+  const tableRegistry = await readJsonIfExists<Record<string, unknown>>(
+    resolveProjectArtifactPath(params.projectRoot, "academic_writer/TABLE_REGISTRY.json")
+  );
+  const figureCount =
+    typeof figureRegistry?.totalFigureCount === "number" ? figureRegistry.totalFigureCount : 0;
+  const tableCount =
+    typeof tableRegistry?.totalTableCount === "number" ? tableRegistry.totalTableCount : 0;
+  const frameworkFigureCount =
+    typeof figureRegistry?.frameworkFigureCount === "number"
+      ? figureRegistry.frameworkFigureCount
+      : 0;
+  const experimentTableCount =
+    typeof tableRegistry?.experimentTableCount === "number"
+      ? tableRegistry.experimentTableCount
+      : 0;
+  return figureCount < 5 || tableCount < 4 || frameworkFigureCount < 1 || experimentTableCount < 2;
+}
+
 export async function maybePrepareWorkflowStageContracts(params: {
   projectRoot: string;
   manifest?: ManifestLike | null;
   stage: string | null;
   agentId?: string | null;
   trigger?: string | null;
+  autoGate?: WorkflowAutoGateConfig | null;
   deps: StagePreflightDeps;
 }): Promise<{
   manifest: ManifestLike;
@@ -1167,6 +1780,14 @@ export async function maybePrepareWorkflowStageContracts(params: {
     }
     try {
       const result = await action();
+      if (
+        result &&
+        typeof result === "object" &&
+        !Array.isArray(result) &&
+        (result as Record<string, unknown>).materialized === false
+      ) {
+        return;
+      }
       materializedContracts.push(contract);
       const generatedFiles = extractGeneratedFiles(result);
       if (generatedFiles.length > 0) {
@@ -1253,6 +1874,53 @@ export async function maybePrepareWorkflowStageContracts(params: {
       },
     })
   );
+  await runStep("plan_state", shouldMaterializePlanState, () =>
+    (params.deps.materializePlanState ?? materializePlanStateImpl)({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+      planMaterialization: {
+        basis_stage: params.stage,
+      },
+    })
+  );
+  await runStep("code_experiment_bundle", shouldMaterializeCodeExperimentBundle, () =>
+    (params.deps.materializeCodeExperimentBundle ?? materializeCodeExperimentBundleImpl)({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+      codeMaterialization: {
+        basis_stage: params.stage,
+      },
+    })
+  );
+  await runStep("local_code_review_fallback", shouldMaterializeLocalCodeReviewFallback, () =>
+    (
+      params.deps.materializeLocalCodeReviewFallback ??
+      materializeLocalCodeReviewFallback
+    )({
+      projectRoot,
+      projectId:
+        typeof manifest.project_id === "string"
+          ? manifest.project_id
+          : typeof manifest.projectId === "string"
+            ? manifest.projectId
+            : null,
+      autoGate: params.autoGate ?? null,
+      trigger,
+      agentId: params.agentId ?? null,
+    })
+  );
+  await runStep("local_experiment_execution", shouldMaterializeLocalExperimentExecution, () =>
+    (
+      params.deps.materializeLocalExperimentExecution ??
+      materializeLocalExperimentExecutionImpl
+    )({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
+    })
+  );
   await runStep("storyline_planner", shouldMaterializeStorylinePlanner, () =>
     (params.deps.materializeStorylinePlannerState ?? materializeSurveyStorylinePlanner)({
       projectRoot,
@@ -1275,6 +1943,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
       paperStoryMaterialization: {
         basis_stage: params.stage,
       },
+    })
+  );
+  await runStep("analysis_artifacts", shouldMaterializeAnalysisArtifacts, () =>
+    (
+      params.deps.materializeAnalysisArtifacts ??
+      materializeAnalysisArtifactsImpl
+    )({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
     })
   );
   await runStep("experiment_review_state", shouldMaterializeExperimentReview, () =>
@@ -1385,6 +2063,13 @@ export async function maybePrepareWorkflowStageContracts(params: {
         projectRoot,
         stage: params.stage,
       })
+  );
+  await runStep("authoring_closeout", shouldReconcileAuthoringCloseout, () =>
+    (params.deps.reconcileAuthoringCloseout ?? reconcileAuthoringCloseout)({
+      projectRoot,
+      compilePdf: true,
+      currentStageOverride: params.stage,
+    })
   );
   await runStep("frontier_mapping_state", shouldMaterializeFrontierMappingState, () =>
     (params.deps.materializeFrontierMappingState ?? materializeFrontierMappingState)({

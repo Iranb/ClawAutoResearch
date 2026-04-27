@@ -142,6 +142,22 @@ function ensureTrackEvidencePointers(
   ]).slice(0, 8);
 }
 
+function selectBrainstormSeedOption(state: BrainstormSummary["state"]): BrainstormOption | null {
+  const options = state.rounds.flatMap((round) => round.options);
+  if (options.length === 0) {
+    return null;
+  }
+  return (
+    (state.selectedOptionId
+      ? options.find((option) => option.optionId === state.selectedOptionId)
+      : null) ??
+    (state.selectedOptionTitle
+      ? options.find((option) => option.title === state.selectedOptionTitle)
+      : null) ??
+    options[0]
+  );
+}
+
 export async function materializeIdeationContractImpl(
   params: {
     projectRoot: string;
@@ -170,12 +186,88 @@ export async function materializeIdeationContractImpl(
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "TRACK_REGISTRY.json")
     )) ?? null;
-  const activeTracks = deps.getActiveTracks(trackRegistry);
-  const selectedTrackId =
+  const researchProgramState = normalizeResearchProgramState(manifest.research_program);
+  const graphBasisPaths = normalizeIdeationGraphBasisPaths(
+    asRecord(patch.graphBasisPaths ?? patch.graph_basis_paths) ??
+      serializeIdeationGraphBasisPaths(current.graphBasisPaths)
+  );
+  const requestedBasisStage =
+    normalizeStage(patch.basisStage ?? patch.basis_stage) ??
+    current.basisStage ??
+    brainstormState.basisStage ??
+    "frontier_mapping";
+  const selectedBrainstormOption = selectBrainstormSeedOption(brainstormState);
+  const seedDirectionTitle =
+    selectedBrainstormOption?.title ??
+    brainstormState.selectedOptionTitle ??
+    researchProgramState.goal ??
+    "Graph-grounded research direction";
+  const seedDirectionSummary =
+    selectedBrainstormOption?.summary ??
+    researchProgramState.problemStatement ??
+    "Graph-grounded direction derived from frontier and brainstorm evidence.";
+  const requestedSelectedTrackId =
     pickString(patch, ["selectedTrackId", "selected_track_id", "trackId", "track_id"]) ??
     current.selectedTrackId ??
-    brainstormState.trackId ??
-    pickString(activeTracks[0], ["track_id", "trackId"]);
+    brainstormState.trackId;
+  const rawActiveTracks = deps.getActiveTracks(trackRegistry);
+  const seededTrackId =
+    requestedSelectedTrackId ??
+    (seedDirectionTitle
+      ? `track-${deps.slugifyIdeationLabel(seedDirectionTitle).slice(0, 72)}`
+      : null);
+  const seededTrackScaffold = getTrackScaffoldPaths(seededTrackId);
+  const seedEvidencePointers = uniqueStrings(
+    [
+      graphBasisPaths.frontierReportPath,
+      graphBasisPaths.anchorIndexPath,
+      graphBasisPaths.limitationFrontierPath,
+      graphBasisPaths.transferFrontierPath,
+      graphBasisPaths.compositionFrontierPath,
+      brainstormState.synthesisPacketPath,
+      brainstormState.workingMemoryPath,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+  ).slice(0, 8);
+  const activeTracks =
+    rawActiveTracks.length > 0
+      ? rawActiveTracks
+      : seededTrackId
+        ? [
+            {
+              track_id: seededTrackId,
+              name: seedDirectionTitle,
+              title: seedDirectionTitle,
+              status: "active",
+              question:
+                researchProgramState.problemStatement ??
+                `How can the workflow turn ${seedDirectionTitle} into a testable research contribution?`,
+              hypothesis: seedDirectionSummary,
+              novelty_basis: seedDirectionSummary,
+              evidence_pointers: seedEvidencePointers,
+              linked_graph_nodes: uniqueStrings([
+                "frontier:challenge",
+                "frontier:insight",
+                "frontier:transfer",
+              ]),
+              relation_patterns: uniqueStrings([
+                "frontier_report->ideation_direction",
+                "brainstorm_cycle->active_track",
+                "graph_basis->research_proposal",
+              ]),
+              reasoning_packet_dir: seededTrackScaffold.reasoningPacketDir,
+              working_memory_path:
+                brainstormState.workingMemoryPath ?? seededTrackScaffold.workingMemoryPath,
+              synthesis_packet_path:
+                brainstormState.synthesisPacketPath ?? seededTrackScaffold.synthesisPacketPath,
+              selected_direction_id:
+                brainstormState.selectedOptionId ??
+                `dir-${deps.slugifyIdeationLabel(seedDirectionTitle).slice(0, 72)}`,
+            },
+          ]
+        : [];
+  const selectedTrackId =
+    requestedSelectedTrackId ??
+    pickString(asRecord(activeTracks[0]) ?? {}, ["track_id", "trackId"]);
   const selectedTrack =
     activeTracks.find(
       (track) => pickString(track, ["track_id", "trackId"]) === selectedTrackId
@@ -197,17 +289,7 @@ export async function materializeIdeationContractImpl(
   );
   const selectedTrackEvidence =
     (selectedTrackId ? activeTrackEvidenceById.get(selectedTrackId) ?? null : null) ?? null;
-  const researchProgramState = normalizeResearchProgramState(manifest.research_program);
   const selectedProgramTrack = deps.resolveResearchProgramTrack(manifest, selectedTrackId);
-  const graphBasisPaths = normalizeIdeationGraphBasisPaths(
-    asRecord(patch.graphBasisPaths ?? patch.graph_basis_paths) ??
-      serializeIdeationGraphBasisPaths(current.graphBasisPaths)
-  );
-  const requestedBasisStage =
-    normalizeStage(patch.basisStage ?? patch.basis_stage) ??
-    current.basisStage ??
-    brainstormState.basisStage ??
-    "frontier_mapping";
 
   const [
     frontierReportText,
@@ -930,6 +1012,83 @@ ${deps.renderMarkdownBulletList([
 ])}
 `;
 
+  const ideaEvidencePointers = uniqueStrings(
+    [
+      ...seedEvidencePointers,
+      ...asStringArray(selectedTrack?.evidence_pointers ?? selectedTrack?.evidencePointers),
+      graphBasisPaths.frontierReportPath,
+      graphBasisPaths.anchorIndexPath,
+      graphBasisPaths.transferFrontierPath,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+  ).slice(0, 8);
+  const selectedDirectionRisk = pickString(asRecord(selectedDirection) ?? {}, [
+    "feasibility_risk",
+    "feasibilityRisk",
+  ]);
+
+  const ideaReport = `# Idea Report
+
+## Selected Direction
+- Direction: ${deps.quoteMarkdownText(selectedDirection?.title ?? seedDirectionTitle)}
+- Track: ${deps.quoteMarkdownText(selectedTrackId)}
+- Research goal: ${deps.quoteMarkdownText(longTermGoal)}
+- Problem scope: ${deps.quoteMarkdownText(problemScope)}
+
+## Core Contribution
+${deps.quoteMarkdownText(
+  selectedDirection?.summary ??
+    seedDirectionSummary ??
+    "Use graph-grounded frontier evidence to define a bounded, testable research delta."
+)}
+
+## Graph Grounding
+${deps.renderMarkdownBulletList(
+  uniqueStrings([
+    ...graphIndices.challengeClusters.slice(0, 3).map((entry: string) => `challenge: ${entry}`),
+    ...graphIndices.insightClusters.slice(0, 3).map((entry: string) => `insight: ${entry}`),
+    ...graphIndices.transferBridges.slice(0, 3).map((entry: string) => `transfer: ${entry}`),
+    ...ideaEvidencePointers.slice(0, 4).map((entry) => `evidence: ${entry}`),
+  ])
+)}
+
+## Testable Plan
+${deps.renderMarkdownBulletList([
+  `Implement the smallest delta implied by ${deps.quoteMarkdownText(selectedDirection?.title ?? seedDirectionTitle)}.`,
+  `Compare against ${deps.quoteMarkdownText(baselineReference)} with ${deps.quoteMarkdownText(researchProgramState.primaryMetric)} as the primary metric.`,
+  "Run ablations that separate the graph-grounded innovation from baseline reproduction and narrative polishing.",
+])}
+
+## Active Alternatives
+${deps.renderMarkdownBulletList(
+  top3.map(
+    (candidate) =>
+      `${candidate.title}: score=${candidate.composite_score.toFixed(3)}; action=${
+        candidate.direction_id === resolvedSelectedDirectionId ? "advance" : "reserve"
+      }`
+  )
+)}
+`;
+
+  const ideaAudit = `# Idea Audit
+
+## Verdict
+- Status: ${candidatePool.length > 0 && selectedTrackId ? "ready_for_plan" : "needs_more_grounding"}
+- Selected direction is grounded by ${ideaEvidencePointers.length} graph or brainstorm artifact pointer(s) and ${candidatePool.length} surviving candidate direction(s).
+
+## Checks
+${deps.renderMarkdownBulletList([
+  `Novelty pressure: ${graphIndices.occupiedSolutionZones.length > 0 ? graphIndices.occupiedSolutionZones.join("; ") : "no occupied solution zone blocked the selected direction."}`,
+  `Feasibility risk: ${selectedDirectionRisk ?? candidateScarcityReason ?? "bounded implementation risk should be validated during planning."}`,
+  `Evidence continuity: ${ideaEvidencePointers.join("; ") || "frontier and brainstorm artifacts must remain attached before planning."}`,
+])}
+
+## Required Follow-up
+${deps.renderMarkdownBulletList([
+  "Preserve the active track and graph evidence pointers when entering /plan-research.",
+  "Treat the generated candidate pool as evidence-scarce when the pool status is scarce or below_floor.",
+])}
+`;
+
   const nextState = normalizeIdeationContractState({
     ...serializeIdeationContractState(current),
     ...patch,
@@ -969,6 +1128,8 @@ ${deps.renderMarkdownBulletList([
 
   const generatedFiles: string[] = [];
   const fileSpecs: Array<[string | null, unknown, "json" | "text"]> = [
+    ["researcher/IDEA_REPORT.md", ideaReport, "text"],
+    ["researcher/IDEA_AUDIT.md", ideaAudit, "text"],
     [nextState.graphIdeationPacketPath, graphPacket, "json"],
     [nextState.ideaTreePath, ideaTree, "text"],
     [

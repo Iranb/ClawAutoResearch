@@ -586,7 +586,7 @@ function payloadToStatePatch(params: {
   const activeBatches: PaperIngestionBatchRun[] = [
     {
       manifestPath,
-      status: params.terminal ? batchStatus : "running",
+      status: params.failed || params.terminal ? batchStatus : "running",
       total: summary.total ?? params.request.paperCount,
       submitted: summary.submitted ?? null,
       completed: summary.completed ?? null,

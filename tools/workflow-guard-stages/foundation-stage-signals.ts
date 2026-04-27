@@ -108,9 +108,7 @@ export async function collectGraphBuildStageMissingSignals(
     state: paperIngestionState,
     graphPresenceStatus,
   });
-  const allowPartialGraphReadiness =
-    partialGraphReadiness.ready &&
-    deps.normalizeStage(ctx.manifest?.current_stage) === "graph_build";
+  const allowPartialGraphReadiness = partialGraphReadiness.ready;
   if (
     (ingestionDecision?.blocking && !allowPartialGraphReadiness) ||
     (!ingestionDecision && deps.hasActiveWorkflowOwnedPaperUpload(paperIngestionState))

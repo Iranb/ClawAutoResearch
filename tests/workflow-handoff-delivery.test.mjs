@@ -305,3 +305,60 @@ test("deliverWorkflowHandoffIntent supersedes stale intents when the channel bin
   const store = await readWorkflowHandoffIntentStore(staleProjectRoot);
   assert.equal(store.intents[0].status, "superseded");
 });
+
+test("deliverWorkflowHandoffIntent allows project-local handoffs without Discord binding", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-local-"));
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "no-discord-autoresearch");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify({ project_id: "no-discord-autoresearch" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "no-discord-autoresearch",
+    idempotencyKey: "deliver-project-local-no-binding",
+    toRole: "reviewer",
+    reason: "code_review_required",
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 2,
+    },
+  });
+
+  const result = await deliverWorkflowHandoffIntent({
+    intent: created.intent,
+    bindingPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    runtime: {
+      async nativeDispatch() {
+        return {
+          ok: true,
+          runId: "review-run-1",
+          sessionKey: "agent:reviewer:local:conversation:e2e",
+        };
+      },
+    },
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.intent.status, "dispatched");
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "handoff" &&
+        event.action === "binding_gate_project_local_fallback"
+    )
+  );
+});

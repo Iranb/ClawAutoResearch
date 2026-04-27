@@ -338,19 +338,60 @@ function ensureSlashCommandText(text, fallback) {
   return normalized.startsWith("/") ? normalized : fallback;
 }
 
-function deriveStageCommand(params) {
-  const nextAction = String(
-    params.manifest.next_action ??
-      params.manifest.resume_action ??
-      params.iterator?.nextAction ??
-      params.iterator?.resumeAction ??
-      ""
-  ).trim();
-  if (nextAction.startsWith("/")) {
-    return nextAction;
-  }
+const STAGE_COMMAND_ALLOWLIST = {
+  setup: ["project-init", "research-pipeline", "resume-pipeline", "survey-pipeline"],
+  survey_review: ["survey-pipeline", "review-phase"],
+  graph_build: ["graph-build", "research-pipeline", "survey-graph-build"],
+  frontier_mapping: ["frontier-mapping", "research-pipeline"],
+  idea: ["idea-phase", "innovation-reflection", "research-pipeline"],
+  plan: ["plan-research"],
+  code: ["implement-experiment"],
+  experiment: [
+    "experiment-phase",
+    "parallel-experiments",
+    "run-experiment",
+    "search-experiment",
+    "monitor-experiment",
+  ],
+  analyze: ["analyze-results"],
+  review: ["review-phase"],
+  write: ["paper-phase"],
+  submit: ["paper-phase"],
+  revise: ["resume-pipeline"],
+  done: ["resume-pipeline"],
+};
 
-  const stage = String(params.manifest.current_stage ?? params.iterator?.stageAfter ?? "setup");
+function commandNameFromSlashText(text) {
+  const normalized = String(text ?? "").trim();
+  const match = normalized.match(/^\/([a-z][a-z0-9-]*)\b/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function extractFirstSlashCommandName(text) {
+  const match = String(text ?? "").match(/\/([a-z][a-z0-9-]*)\b/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function stageAllowsCommand(stage, commandText) {
+  const commandName = commandNameFromSlashText(commandText);
+  if (!commandName) {
+    return false;
+  }
+  const allowed = STAGE_COMMAND_ALLOWLIST[String(stage ?? "")] ?? [];
+  return allowed.includes(commandName);
+}
+
+function slashCommandMentionCompatibleWithStage(stage, text) {
+  const commandName = extractFirstSlashCommandName(text);
+  if (!commandName) {
+    return null;
+  }
+  const allowed = STAGE_COMMAND_ALLOWLIST[String(stage ?? "")] ?? [];
+  return allowed.includes(commandName) ? `/${commandName}` : null;
+}
+
+function defaultStageCommand(params) {
+  const stage = String(params.stage ?? "setup");
   const topicArg = JSON.stringify(params.topic);
   if (stage === "setup" || stage === "graph_build" || stage === "frontier_mapping") {
     return params.lane === "survey" ? `/survey-pipeline ${topicArg}` : `/research-pipeline ${topicArg}`;
@@ -365,10 +406,10 @@ function deriveStageCommand(params) {
     return "/plan-research";
   }
   if (stage === "code") {
-    return "/run-experiment";
+    return "/implement-experiment";
   }
   if (stage === "experiment") {
-    return "/monitor-experiment";
+    return "/experiment-phase";
   }
   if (stage === "analyze") {
     return "/analyze-results";
@@ -380,6 +421,52 @@ function deriveStageCommand(params) {
     return "/review-phase";
   }
   return params.lane === "survey" ? `/survey-pipeline ${topicArg}` : `/research-pipeline ${topicArg}`;
+}
+
+export function deriveStageCommand(params) {
+  const stage = String(params.iterator?.stageAfter ?? params.manifest.current_stage ?? "setup");
+  const actionCommand =
+    params.iterator?.recommendedActions?.find(
+      (entry) =>
+        entry &&
+        entry.kind === "drive_stage" &&
+        entry.stage === stage &&
+        typeof entry.command === "string" &&
+        stageAllowsCommand(stage, entry.command)
+    )?.command ?? null;
+  if (actionCommand) {
+    return actionCommand;
+  }
+
+  const iteratorSlash = [params.iterator?.nextAction, params.iterator?.resumeAction]
+    .map((entry) => String(entry ?? "").trim())
+    .find((entry) => stageAllowsCommand(stage, entry));
+  if (iteratorSlash) {
+    return iteratorSlash;
+  }
+
+  const iteratorMention = [params.iterator?.nextAction, params.iterator?.resumeAction]
+    .map((entry) => slashCommandMentionCompatibleWithStage(stage, entry))
+    .find(Boolean);
+  if (iteratorMention) {
+    return iteratorMention;
+  }
+
+  const manifestSlash = [params.manifest.next_action, params.manifest.resume_action]
+    .map((entry) => String(entry ?? "").trim())
+    .find((entry) => entry.startsWith("/") && stageAllowsCommand(stage, entry));
+  if (manifestSlash) {
+    return manifestSlash;
+  }
+
+  const manifestMention = [params.manifest.next_action, params.manifest.resume_action]
+    .map((entry) => slashCommandMentionCompatibleWithStage(stage, entry))
+    .find(Boolean);
+  if (manifestMention) {
+    return manifestMention;
+  }
+
+  return defaultStageCommand({ lane: params.lane, stage, topic: params.topic });
 }
 
 function buildStageExtraBody(params) {
@@ -440,6 +527,32 @@ function buildStageExtraBody(params) {
     );
   }
   return lines.join("\n");
+}
+
+export function buildLiveHandoffWorkflowTaskParams(params) {
+  return {
+    workflowRuntime: params.runtimeSubagent,
+    requesterSessionKey: params.fromSessionKey,
+    requesterChannel: params.transportContext.requesterChannel,
+    fromRole: params.fromRole,
+    toRole: params.owner,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    stage: params.stage,
+    summary:
+      `Complete workflow stage ${params.stage} for project ${params.projectId}. Use the command and workflow state below.`,
+    command: params.command,
+    requireMailboxAcknowledgement: true,
+    extraBody: buildStageExtraBody({
+      lane: params.lane,
+      stage: params.stage,
+      topic: params.topic,
+    }),
+    waitTimeoutMs: params.agentWaitTimeoutMs ?? 90_000,
+    retryOnTimeout: true,
+    enableSpawnFallback: true,
+    autoModeActive: true,
+  };
 }
 
 async function waitForProjectRoot(projectRoot, timeoutMs = 60_000) {
@@ -555,16 +668,32 @@ async function runLiveStageTurn(params) {
       originatingTo: transportContext.originatingTo,
       originatingAccountId: transportContext.accountId,
     });
-    const waited = await runtimeSubagent.waitForRun?.({
-      runId: started.runId,
-      timeoutMs: agentWaitTimeoutMs ?? 120_000,
-    });
-    const progress = await waitForProgress({
+    const waitPromise = runtimeSubagent.waitForRun
+      ? runtimeSubagent
+          .waitForRun({
+            runId: started.runId,
+            timeoutMs: agentWaitTimeoutMs ?? 120_000,
+          })
+          .catch((error) => ({ status: "error", error: errorMessage(error) }))
+      : Promise.resolve({ status: "unavailable" });
+    const progressPromise = waitForProgress({
       projectRoot,
       baselineManifest: manifest,
       timeoutMs: stageTimeoutMs ?? 180_000,
       pollMs: progressPollMs ?? 5_000,
     });
+    const first = await Promise.race([
+      waitPromise.then((waited) => ({ type: "wait", waited })),
+      progressPromise.then((progress) => ({ type: "progress", progress })),
+    ]);
+    const progress =
+      first.type === "progress" && first.progress.progressed
+        ? first.progress
+        : await progressPromise;
+    const waited =
+      first.type === "wait"
+        ? first.waited
+        : { status: "skipped_after_progress" };
     return {
       owner,
       stage,
@@ -606,25 +735,20 @@ async function runLiveStageTurn(params) {
     intent: created.intent,
     runtime: {
       nativeDispatch: async (intent) => {
-        const dispatch = await handoffWorkflowTaskToAgent({
+        const dispatch = await handoffWorkflowTaskToAgent(buildLiveHandoffWorkflowTaskParams({
           runtimeSubagent,
-          requesterSessionKey: fromSessionKey,
-          requesterChannel: transportContext.requesterChannel,
           fromRole,
-          toRole: owner,
+          owner,
           projectRoot,
           projectId,
           stage,
-          summary:
-            `Complete workflow stage ${stage} for project ${projectId}. Use the command and workflow state below.`,
           command,
-          requireMailboxAcknowledgement: true,
-          extraBody: buildStageExtraBody({ lane, stage, topic }),
-          waitTimeoutMs: agentWaitTimeoutMs ?? 90_000,
-          retryOnTimeout: true,
-          enableSpawnFallback: true,
-          autoModeActive: true,
-        });
+          fromSessionKey,
+          transportContext,
+          lane,
+          topic,
+          agentWaitTimeoutMs,
+        }));
         return {
           ok: dispatch.dispatched,
           runId: dispatch.runId,
@@ -998,6 +1122,40 @@ export async function runAutoCommandEndToEndLive(params) {
         projectRoot,
         workflowPolicy,
       }));
+      const manifestAfterIterator = await readManifest(projectRoot);
+      const iteratorChangedStageOrOwner =
+        String(manifestAfterIterator.current_stage ?? "") !==
+          String(manifest.current_stage ?? "") ||
+        String(manifestAfterIterator.owner_agent ?? "") !==
+          String(manifest.owner_agent ?? "");
+      if (iteratorChangedStageOrOwner) {
+        const turn = {
+          owner: String(
+            manifestAfterIterator.owner_agent ??
+              iterator.ownerAfter ??
+              previousRole ??
+              "researcher"
+          ),
+          stage: String(
+            manifestAfterIterator.current_stage ??
+              iterator.stageAfter ??
+              manifest.current_stage ??
+              "setup"
+          ),
+          command: null,
+          intentId: null,
+          progressed: true,
+          progressReason: "auto_iterator_state_change",
+          manifest: manifestAfterIterator,
+        };
+        turns.push(turn);
+        previousRole = turn.owner;
+        noProgressTurns = 0;
+        if (["submit", "done"].includes(String(turn.manifest.current_stage ?? ""))) {
+          break;
+        }
+        continue;
+      }
       const turn = await runLiveStageTurn({
         runtimeSubagent,
         projectRoot,

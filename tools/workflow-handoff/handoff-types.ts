@@ -163,7 +163,6 @@ export const WORKFLOW_HANDOFF_ACTIVE_STATUSES = new Set<WorkflowHandoffStatus>([
   "acknowledged",
   "claimed",
   "activated",
-  "failed",
   "stale_claim",
 ]);
 

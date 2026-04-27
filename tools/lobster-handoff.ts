@@ -91,6 +91,7 @@ type InvokeGatewayToolParams = {
   sessionKey?: string;
   messageChannel?: string | null;
   accountId?: string | null;
+  timeoutMs?: number;
 };
 
 type InvokeGatewayToolDeps = {
@@ -156,6 +157,7 @@ type HandoffWorkflowTaskDeps = {
   invokeLobsterDispatch?: (
     params: InvokeLobsterDispatchParams
   ) => Promise<InvokeLobsterDispatchResult>;
+  fetchImpl?: typeof fetch;
 };
 
 export const DEFAULT_WORKFLOW_LOBSTER_HANDOFF_CONFIG: WorkflowLobsterHandoffConfig = {
@@ -348,6 +350,9 @@ export function classifyWorkflowLobsterFailureReason(
   if (/pipeline_missing|workflow-agent-dispatch\.lobster/i.test(normalized)) {
     return "lobster_pipeline_missing";
   }
+  if (/timed out|timeout|aborterror|aborted/i.test(normalized)) {
+    return "lobster_gateway_timeout";
+  }
   if (/tool execution failed|lobster failed|lobster_invalid_output/i.test(normalized)) {
     return "lobster_tool_error";
   }
@@ -367,6 +372,14 @@ async function invokeGatewayTool(
   deps: InvokeGatewayToolDeps = {}
 ) {
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? Math.max(100, Math.floor(params.timeoutMs))
+      : null;
+  const abortController = timeoutMs ? new AbortController() : null;
+  const timeoutHandle = timeoutMs
+    ? setTimeout(() => abortController?.abort(), timeoutMs)
+    : null;
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
@@ -379,16 +392,29 @@ async function invokeGatewayTool(
   if (params.accountId) {
     headers["x-openclaw-account-id"] = params.accountId;
   }
-  const response = await fetchImpl(`${params.gatewayUrl.replace(/\/+$/, "")}/tools/invoke`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      tool: params.tool,
-      ...(params.action ? { action: params.action } : {}),
-      args: params.args ?? {},
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`${params.gatewayUrl.replace(/\/+$/, "")}/tools/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        tool: params.tool,
+        ...(params.action ? { action: params.action } : {}),
+        args: params.args ?? {},
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      }),
+      ...(abortController ? { signal: abortController.signal } : {}),
+    });
+  } catch (error) {
+    if (abortController?.signal.aborted && timeoutMs) {
+      throw new Error(`OpenClaw tools invoke timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
   let payload: Record<string, unknown>;
   try {
     payload = (await response.json()) as Record<string, unknown>;
@@ -476,7 +502,8 @@ export function shouldUseLobsterForWorkflowHandoff(params: {
 }
 
 async function invokeLobsterDispatchWorkflow(
-  params: InvokeLobsterDispatchParams
+  params: InvokeLobsterDispatchParams,
+  deps: InvokeGatewayToolDeps = {}
 ): Promise<InvokeLobsterDispatchResult> {
   const result = (await invokeGatewayTool({
     gatewayUrl: params.config.gatewayUrl,
@@ -505,7 +532,8 @@ async function invokeLobsterDispatchWorkflow(
     sessionKey: params.requesterSessionKey,
     messageChannel: params.requesterChannel ?? "discord",
     accountId: params.requesterAccountId ?? undefined,
-  })) as LobsterToolEnvelope;
+    timeoutMs: params.config.timeoutMs,
+  }, deps)) as LobsterToolEnvelope;
   return {
     envelope: result,
     dispatch: extractDispatchResultFromEnvelope(result),
@@ -599,19 +627,36 @@ export async function handoffWorkflowTaskToAgent(
   }
 
   try {
-    const invoked = await (deps.invokeLobsterDispatch ?? invokeLobsterDispatchWorkflow)({
-      config: lobsterConfig,
-      requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
-      requesterAccountId: params.requesterAccountId,
-      toRole: params.toRole,
-      subject: params.summary,
-      command: params.command,
-      extraBody: params.extraBody,
-      waitTimeoutMs: params.waitTimeoutMs,
-      retryOnTimeout: params.retryOnTimeout,
-      enableSpawnFallback: params.enableSpawnFallback,
-    });
+    const invoked = deps.invokeLobsterDispatch
+      ? await deps.invokeLobsterDispatch({
+          config: lobsterConfig,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterChannel: params.requesterChannel,
+          requesterAccountId: params.requesterAccountId,
+          toRole: params.toRole,
+          subject: params.summary,
+          command: params.command,
+          extraBody: params.extraBody,
+          waitTimeoutMs: params.waitTimeoutMs,
+          retryOnTimeout: params.retryOnTimeout,
+          enableSpawnFallback: params.enableSpawnFallback,
+        })
+      : await invokeLobsterDispatchWorkflow(
+          {
+            config: lobsterConfig,
+            requesterSessionKey: params.requesterSessionKey,
+            requesterChannel: params.requesterChannel,
+            requesterAccountId: params.requesterAccountId,
+            toRole: params.toRole,
+            subject: params.summary,
+            command: params.command,
+            extraBody: params.extraBody,
+            waitTimeoutMs: params.waitTimeoutMs,
+            retryOnTimeout: params.retryOnTimeout,
+            enableSpawnFallback: params.enableSpawnFallback,
+          },
+          { fetchImpl: deps.fetchImpl }
+        );
     const status = readString(invoked.envelope.status) ?? (invoked.envelope.ok ? "ok" : "error");
     if (status !== "ok" || !invoked.dispatch) {
       const reason =

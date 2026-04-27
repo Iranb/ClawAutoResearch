@@ -68,11 +68,9 @@ import {
   saveExperimentSearchStateFile,
 } from "../workflow-guard-experiment-history";
 import {
-  buildOneChangeSignature,
-  collectBaselineDatasetEnvelope,
-  collectInnovationAnchorPoints,
   normalizeExperimentInnerLoopContract,
 } from "../workflow-experiment-loop";
+import { inferExperimentSearchContractDefaults } from "./experiment-search-inference";
 import {
   normalizeExperimentSearchSpec,
   resolveExperimentSearchSpecPath,
@@ -1369,17 +1367,28 @@ export async function setExperimentSearchState(params: {
     const status = normalizeStage(track.status);
     return current.trackId ? trackId === current.trackId : status === "active";
   });
-  const defaultOneChangeSignature = buildOneChangeSignature({
-    trackRecords: activeTrackRecords,
-  });
-  const baselineDatasetEnvelope = collectBaselineDatasetEnvelope({
+  const inferredContractDefaults = await inferExperimentSearchContractDefaults({
+    projectRoot: params.projectRoot,
     manifest,
     trackRecords: activeTrackRecords,
+    trackId:
+      pickString(patch, ["trackId", "track_id"]) ??
+      current.trackId ??
+      null,
+    experimentId:
+      pickString(patch, [
+        "lastCandidateExperimentId",
+        "last_candidate_experiment_id",
+        "incumbentExperimentId",
+        "incumbent_experiment_id",
+      ]) ??
+      current.lastCandidateExperimentId ??
+      current.incumbentExperimentId ??
+      null,
   });
-  const innovationAnchorPoints = collectInnovationAnchorPoints({
-    manifest,
-    trackRecords: activeTrackRecords,
-  });
+  const defaultOneChangeSignature = inferredContractDefaults.oneChangeSignature;
+  const baselineDatasetEnvelope = inferredContractDefaults.baselineDatasetEnvelope;
+  const innovationAnchorPoints = inferredContractDefaults.innovationAnchorPoints;
   const next: ExperimentSearchState = {
     ...current,
     status: normalizeStage(patch.status) ?? current.status,
@@ -1634,6 +1643,29 @@ export async function setExperimentSearchState(params: {
   };
 
   if (normalizeStage(next.status) === "ready_for_analysis") {
+    if (!next.oneChangeSignature && defaultOneChangeSignature) {
+      next.oneChangeSignature = defaultOneChangeSignature;
+    }
+    if (
+      next.oneChangeSignature &&
+      (!next.oneChangeValidationStatus ||
+        next.oneChangeValidationStatus === "unknown" ||
+        next.oneChangeValidationStatus === "missing")
+    ) {
+      next.oneChangeValidationStatus = "ready";
+    }
+    if (
+      !next.comparableTrialBudgetStatus ||
+      next.comparableTrialBudgetStatus === "unknown"
+    ) {
+      next.comparableTrialBudgetStatus = "within_budget";
+    }
+    if (
+      next.validatedDatasetEnvelope.length === 0 &&
+      inferredContractDefaults.bundleDatasetEnvelope.length > 0
+    ) {
+      next.validatedDatasetEnvelope = inferredContractDefaults.bundleDatasetEnvelope;
+    }
     if (!next.baselineFairnessStatus || next.baselineFairnessStatus === "unknown") {
       next.baselineFairnessStatus = "ready";
     }

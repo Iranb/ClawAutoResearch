@@ -418,10 +418,11 @@ for (const relativePath of requiredPaths) {
 const now = new Date().toISOString();
 const openIncidents = (incidentsStore.entries ?? []).filter((entry) => entry.status !== "resolved");
 const activeHandoffs = (handoffStore.intents ?? []).filter((entry) =>
-  ["pending", "queued", "dispatching", "delivered", "acknowledged", "claimed", "failed", "stale_claim"].includes(
+  ["pending", "queued", "dispatching", "delivered", "acknowledged", "claimed", "activated", "stale_claim"].includes(
     entry.status
   )
 );
+const failedHandoffs = (handoffStore.intents ?? []).filter((entry) => entry.status === "failed");
 const activeRepairs = (repairStore.items ?? []).filter((entry) =>
   ["queued", "claimed", "failed"].includes(entry.status)
 );
@@ -521,6 +522,7 @@ ${JSON.stringify(countBy(repairStore.items ?? [], "status"), null, 2)}
 
 - open incidents: ${openIncidents.length}
 - active handoffs: ${activeHandoffs.length}
+- failed handoffs: ${failedHandoffs.length}
 - active repairs: ${activeRepairs.length}
 - capability warnings: ${(capabilityStore.records ?? []).filter((entry) => entry.confidence === "low" || Date.parse(entry.expiresAt ?? 0) <= Date.now()).length}
 - active write scopes: ${activeWriteScopes.length}
