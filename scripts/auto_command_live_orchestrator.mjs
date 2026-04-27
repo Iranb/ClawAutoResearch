@@ -670,6 +670,19 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error ?? "unknown error");
 }
 
+function gatewayStartupErrorWithLogs(error, isolatedGateway) {
+  const chunks = [errorMessage(error)];
+  const stderr = isolatedGateway?.logs?.stderr;
+  const stdout = isolatedGateway?.logs?.stdout;
+  if (stderr) {
+    chunks.push(`isolated gateway stderr tail:\n${stderr.slice(-4_000)}`);
+  }
+  if (stdout) {
+    chunks.push(`isolated gateway stdout tail:\n${stdout.slice(-2_000)}`);
+  }
+  return new Error(chunks.join("\n\n"));
+}
+
 async function withTimeout(promise, timeoutMs, label) {
   let timeout = null;
   try {
@@ -1079,15 +1092,27 @@ export async function runAutoCommandEndToEndLive(params) {
   const workflowPolicy = getWorkflowGuardPolicy(pluginConfig);
   let gateway = null;
   try {
-    gateway = await createGatewayRuntimeSubagent({
-      profile: params.profile,
-      url: isolatedGateway?.url ?? params.gatewayUrl,
-      token: isolatedGateway?.token ?? params.gatewayToken,
-      startupTimeoutMs: gatewayStartupTimeoutMs,
-      originatingChannel: transportContext.originatingChannel,
-      originatingTo: transportContext.originatingTo,
-      originatingAccountId: transportContext.accountId,
-    });
+    try {
+      gateway = await createGatewayRuntimeSubagent({
+        profile: params.profile,
+        url: isolatedGateway?.url ?? params.gatewayUrl,
+        token: isolatedGateway?.token ?? params.gatewayToken,
+        startupTimeoutMs: gatewayStartupTimeoutMs,
+        originatingChannel: transportContext.originatingChannel,
+        originatingTo: transportContext.originatingTo,
+        originatingAccountId: transportContext.accountId,
+      });
+    } catch (error) {
+      return buildLiveBootstrapFailureResult({
+        phase: "live_gateway_connect_failed",
+        bootstrapTransport,
+        conversationId,
+        commandName,
+        projectId: expectedProjectId,
+        projectRoot: expectedProjectRoot,
+        error: gatewayStartupErrorWithLogs(error, isolatedGateway),
+      });
+    }
     const runtimeSubagent = gateway.runtimeSubagent;
     let bootstrap = null;
     try {

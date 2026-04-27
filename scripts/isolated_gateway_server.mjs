@@ -77,6 +77,98 @@ function clone(obj) {
   return JSON.parse(JSON.stringify(obj ?? {}));
 }
 
+const DEFAULT_STRIPPED_CHANNEL_PLUGIN_IDS = new Set([
+  "discord",
+  "imessage",
+  "openclaw-weixin",
+  "wechat",
+  "weixin",
+]);
+
+function stripExternalChannels(config) {
+  if (!config || typeof config !== "object") {
+    return config;
+  }
+
+  const channelIds = new Set([
+    ...Object.keys(config.channels ?? {}),
+    ...DEFAULT_STRIPPED_CHANNEL_PLUGIN_IDS,
+  ]);
+
+  config.channels = {};
+
+  if (config.plugins?.entries && typeof config.plugins.entries === "object") {
+    for (const pluginId of channelIds) {
+      delete config.plugins.entries[pluginId];
+    }
+  }
+
+  if (Array.isArray(config.bindings)) {
+    config.bindings = config.bindings.filter((entry) => {
+      const channel = entry?.match?.channel;
+      return typeof channel !== "string" || !channelIds.has(channel);
+    });
+  }
+
+  if (config.broadcast && typeof config.broadcast === "object") {
+    config.broadcast = {};
+  }
+
+  const byChannel = config.messages?.queue?.byChannel;
+  if (byChannel && typeof byChannel === "object") {
+    for (const channelId of channelIds) {
+      delete byChannel[channelId];
+    }
+  }
+
+  return config;
+}
+
+export function buildIsolatedGatewayConfig(params = {}) {
+  const sourceConfig = clone(params.sourceConfig);
+  if (!sourceConfig || typeof sourceConfig !== "object") {
+    throw new Error("sourceConfig is required");
+  }
+
+  const port = params.port;
+  const token = params.token;
+  const projectsRoot = params.projectsRoot;
+  const nextConfig =
+    params.disableExternalChannels === false
+      ? sourceConfig
+      : stripExternalChannels(sourceConfig);
+
+  nextConfig.gateway = {
+    ...(nextConfig.gateway ?? {}),
+    mode: "local",
+    bind: "loopback",
+    ...(typeof port === "number" ? { port } : {}),
+    auth: {
+      ...(nextConfig.gateway?.auth ?? {}),
+      mode: "token",
+      ...(token ? { token } : {}),
+    },
+  };
+
+  nextConfig.plugins = nextConfig.plugins ?? {};
+  nextConfig.plugins.entries = nextConfig.plugins.entries ?? {};
+  const currentResearchPlugin = clone(nextConfig.plugins.entries.ClawAutoResearch ?? {});
+  nextConfig.plugins.entries.ClawAutoResearch = {
+    ...currentResearchPlugin,
+    enabled: true,
+    config: {
+      ...(currentResearchPlugin.config ?? {}),
+      ...(params.pluginConfigOverrides ?? {}),
+      ...(projectsRoot ? { projectsRoot } : {}),
+      enableChannelProjectBindings: true,
+      heartbeatBackgroundChecks: true,
+      enableWorkflowMailbox: true,
+    },
+  };
+
+  return nextConfig;
+}
+
 export async function startIsolatedGateway(params = {}) {
   const sourceConfigPath =
     params.sourceConfigPath ??
@@ -93,42 +185,14 @@ export async function startIsolatedGateway(params = {}) {
   const token = params.token ?? `isolated-${randomUUID()}`;
   const projectsRoot = params.projectsRoot ?? path.join(tempRoot, "projects");
 
-  const nextConfig = clone(sourceConfig);
-  if (nextConfig.channels && typeof nextConfig.channels === "object") {
-    delete nextConfig.channels["openclaw-weixin"];
-  }
-  if (
-    nextConfig.plugins?.entries &&
-    typeof nextConfig.plugins.entries === "object"
-  ) {
-    delete nextConfig.plugins.entries["openclaw-weixin"];
-  }
-  nextConfig.gateway = {
-    ...(nextConfig.gateway ?? {}),
-    mode: "local",
-    bind: "loopback",
+  const nextConfig = buildIsolatedGatewayConfig({
+    sourceConfig,
     port,
-    auth: {
-      mode: "token",
-      token,
-    },
-  };
-
-  nextConfig.plugins = nextConfig.plugins ?? {};
-  nextConfig.plugins.entries = nextConfig.plugins.entries ?? {};
-  const currentResearchPlugin = clone(nextConfig.plugins.entries.ClawAutoResearch ?? {});
-  nextConfig.plugins.entries.ClawAutoResearch = {
-    ...currentResearchPlugin,
-    enabled: true,
-    config: {
-      ...(currentResearchPlugin.config ?? {}),
-      ...(params.pluginConfigOverrides ?? {}),
-      projectsRoot,
-      enableChannelProjectBindings: true,
-      heartbeatBackgroundChecks: true,
-      enableWorkflowMailbox: true,
-    },
-  };
+    token,
+    projectsRoot,
+    pluginConfigOverrides: params.pluginConfigOverrides,
+    disableExternalChannels: params.disableExternalChannels,
+  });
 
   await fs.mkdir(stateDir, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
